@@ -1,0 +1,35 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Run every Monday at 2:00 AM UTC
+    - cron: '0 2 * * 1'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout modulus-uw's Main Branch
+      - name: Checkout modulus-uw Repository
+        uses: actions/checkout@v3
+        with:
+          ref: main
+
+      # Step 2: Add Modulus as Upstream Repository
+      - name: Add Upstream Repository
+        run: |
+          git remote add upstream https://github.com/NVIDIA/modulus.git
+          git fetch upstream
+
+      # Step 3: Merge Changes from modulus
+      - name: Merge Changes from modulus
+        id: merge
+        run: |
+          git merge upstream/main || echo "No changes to merge"
+
+      # Step 4: Push Changes to Fork
+      - name: Push Changes to Fork
+        if: ${{ success() && steps.merge.outcome == 'success' }}
+        run: |
+          git push origin main
