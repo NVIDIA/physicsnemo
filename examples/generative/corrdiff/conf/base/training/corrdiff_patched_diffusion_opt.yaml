@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Hyperparameters
+hp:
+
+    training_duration: 200000000
+    # Training duration
+    total_batch_size: 16
+    # Total batch size
+    batch_size_per_gpu: 4
+    # Limit batch size per GPU
+    cbase: null  # TODO check
+    # Channel multiplier
+    cres: 1  # TODO check
+    # Channels per resolution
+
+    ema: 0.5
+    # EMA half-life
+    dropout: 0.13
+    # Dropout probability
+    augment: 0.0
+    # Augment probability
+    # hr_mean_conditioning: False
+    # High-res mean (regression's output) as additional condition
+    # gridtype: "sinusoidal"
+    # can be either linear, sinusoidal, or learnable
+    # N_grid_channels: 4
+
+    lr: 0.0002
+    # Learning rate
+    grad_clip_threshold: 1e5
+    lr_decay: 0.7
+    lr_rampup: 10000
+
+
+
+    patch_shape_x: 448
+    patch_shape_y: 448
+    # Patch size. Patch-based training will be utilized if these dimensions differ from 
+    # img_shape_x and img_shape_y
+    patch_num: 16
+    max_patch_per_gpu: 9
+    # Number of patches extracted from a single sample. The total number of patches is 
+    # defined as patch_num * batch_size_global
+    hr_mean_conditioning: True
+    # High-res mean (regression's output) as additional condition
+    gridtype: "learnable"
+    # can be either linear, sinusoidal, or learnable
+    N_grid_channels: 100
+
+    P_mean: -1.2
+    P_std: 1.2
+    sigma_data: 0.5
+
+
+# Performance
+perf:
+    fp_optimizations: amp-bf16
+    # Floating point mode, one of ["fp32", "fp16", "amp-fp16", "amp-bf16"]
+    # "amp-{fp16,bf16}" activates Automatic Mixed Precision (AMP) with {float16,bfloat16}
+    dataloader_workers: 4
+    # DataLoader worker processes
+    songunet_checkpoint_level: 0 # 0 means no checkpointing
+    # Gradient checkpointing level, value is number of layers to checkpoint
+    # optimization_mode: True
+    use_apex_gn: True
+    torch_compile: True
+    profile_mode: False
+
+
+# I/O
+io:
+    regression_checkpoint_path: /lustre/fsw/portfolios/coreai/users/asui/video-corrdiff-checkpoints/training-state-regression-000513.mdlus
+
+
+    # Where to load the regression checkpoint
+    print_progress_freq: 1000
+    # How often to print progress
+    save_checkpoint_freq: 500000
+    # How often to save the checkpoints, measured in number of processed samples
+    validation_freq: 5000
+    # how often to record the validation loss, measured in number of processed samples
+    validation_steps: 10
+    # how many loss evaluations are used to compute the validation loss per checkpoint 
