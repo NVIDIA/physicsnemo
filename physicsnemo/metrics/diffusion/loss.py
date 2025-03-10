@@ -727,6 +727,503 @@ class ResidualLoss:
 
         return loss
 
+class ResidualLoss_Opt:
+    """
+    Mixture loss function for denoising score matching.
+
+    This class implements a loss function that combines deterministic
+    regression with denoising score matching. It uses a pre-trained regression
+    network to compute residuals before applying the diffusion process.
+
+    Attributes
+    ----------
+    regression_net : torch.nn.Module
+        The regression network used for computing residuals.
+    P_mean : float
+        Mean value for noise level computation.
+    P_std : float
+        Standard deviation for noise level computation.
+    sigma_data : float
+        Standard deviation for data weighting.
+    hr_mean_conditioning : bool
+        Flag indicating whether to use high-resolution mean for conditioning.
+
+    Note
+    ----
+    Reference: Mardani, M., Brenowitz, N., Cohen, Y., Pathak, J., Chen, C.Y.,
+    Liu, C.C., Vahdat, A., Kashinath, K., Kautz, J. and Pritchard, M., 2023.
+    Generative Residual Diffusion Modeling for Km-scale Atmospheric
+    Downscaling. arXiv preprint arXiv:2309.15214.
+    """
+
+    def __init__(
+        self,
+        regression_net: torch.nn.Module,
+        P_mean: float = 0.0,
+        P_std: float = 1.2,
+        sigma_data: float = 0.5,
+        hr_mean_conditioning: bool = False,
+    ):
+        """
+        Arguments
+        ----------
+        regression_net : torch.nn.Module
+            Pre-trained regression network used to compute residuals.
+            Expected signature: `net(zero_input, y_lr,
+            lead_time_label=lead_time_label, augment_labels=augment_labels)` or
+            `net(zero_input, y_lr, augment_labels=augment_labels)`, where:
+                zero_input (torch.Tensor): Zero tensor of shape (B, C_hr, H, W)
+                y_lr (torch.Tensor): Low-resolution input of shape (B, C_lr, H, W)
+                lead_time_label (torch.Tensor, optional): Optional lead time labels
+                augment_labels (torch.Tensor, optional): Optional augmentation labels
+            Returns:
+                torch.Tensor: Predictions of shape (B, C_hr, H, W)
+
+        P_mean : float, optional
+            Mean value for noise level computation, by default 0.0.
+
+        P_std : float, optional
+            Standard deviation for noise level computation, by default 1.2.
+
+        sigma_data : float, optional
+            Standard deviation for data weighting, by default 0.5.
+
+        hr_mean_conditioning : bool, optional
+            Whether to use high-resolution mean for conditioning predicted, by default False.
+            When True, the mean prediction from `regression_net` is channel-wise
+            concatenated with `img_lr` for conditioning.
+        """
+        self.regression_net = regression_net
+        self.P_mean = P_mean
+        self.P_std = P_std
+        self.sigma_data = sigma_data
+        self.hr_mean_conditioning = hr_mean_conditioning
+        self.y_mean = None
+
+    def __call__(
+        self,
+        net: torch.nn.Module,
+        img_clean: Tensor,
+        img_lr: Tensor,
+        patching: Optional[RandomPatching2D] = None,
+        lead_time_label: Optional[Tensor] = None,
+        augment_pipe: Optional[
+            Callable[[Tensor], Tuple[Tensor, Optional[Tensor]]]
+        ] = None,
+    ) -> Tensor:
+        """
+        Calculate and return the loss for denoising score matching.
+
+        This method computes a mixture loss that combines deterministic
+        regression with denoising score matching. It first computes residuals
+        using the regression network, then applies the diffusion process to
+        these residuals.
+
+        In addition to the standard denoising score matching loss, this method
+        also supports optional patching for multi-diffusion. In this case, the spatial
+        dimensions of the input are decomposed into `P` smaller patches of shape
+        (H_patch, W_patch), that are grouped along the batch dimension, and the
+        model is applied to each patch individually. In the following, if `patching`
+        is not provided, then the input is not patched and `P=1` and `(H_patch,
+        W_patch) = (H, W)`. When patching is used, the original non-patched conditioning is
+        interpolated onto a spatial grid of shape `(H_patch, W_patch)` and channel-wise
+        concatenated to the patched conditioning. This ensures that each patch
+        maintains global information from the entire domain.
+
+        The diffusion model `net` is expected to be conditioned on an input with
+        `C_cond` channels, which should be:
+            - `C_cond = C_lr` if `hr_mean_conditioning` is `False` and
+              `patching` is None.
+            - `C_cond = C_hr + C_lr` if `hr_mean_conditioning` is `True` and
+              `patching` is None.
+            - `C_cond = C_hr + 2*C_lr` if `hr_mean_conditioning` is `True` and
+              `patching` is not None.
+            - `C_cond = 2*C_lr` if `hr_mean_conditioning` is `False` and
+              `patching` is not None.
+        Additionally, `C_cond` should also include any embedding channels,
+        such as positional embeddings or time embeddings.
+
+        Note: this loss function does not apply any reduction.
+
+        Parameters
+        ----------
+        net : torch.nn.Module
+            The neural network model for the diffusion process.
+            Expected signature: `net(latent, y_lr, sigma,
+            embedding_selector=embedding_selector, lead_time_label=lead_time_label,
+            augment_labels=augment_labels)`, where:
+                latent (torch.Tensor): Noisy input of shape (B[*P], C_hr, H_patch, W_patch)
+                y_lr (torch.Tensor): Conditioning of shape (B[*P], C_cond, H_patch, W_patch)
+                sigma (torch.Tensor): Noise level of shape (B[*P], 1, 1, 1)
+                embedding_selector (callable, optional): Function to select
+                    positional embeddings. Only used if `patching` is provided.
+                lead_time_label (torch.Tensor, optional): Lead time labels.
+                augment_labels (torch.Tensor, optional): Augmentation labels
+            Returns:
+                torch.Tensor: Predictions of shape (B[*P], C_hr, H_patch, W_patch)
+
+        img_clean : torch.Tensor
+            High-resolution input images of shape (B, C_hr, H, W).
+            Used as ground truth and for data augmentation if 'augment_pipe' is provided.
+
+        img_lr : torch.Tensor
+            Low-resolution input images of shape (B, C_lr, H, W).
+            Used as input to the regression network and conditioning for the
+            diffusion process.
+
+        patching : Optional[RandomPatching2D], optional
+            Patching strategy for processing large images, by default None. See
+            :class:`physicsnemo.utils.patching.RandomPatching2D` for details.
+            When provided, the patching strategy is used for both image patches
+            and positional embeddings selection in the diffusion model `net`.
+            Transforms tensors from shape (B, C, H, W) to (B*P, C, H_patch,
+            W_patch).
+
+        lead_time_label : Optional[torch.Tensor], optional
+            Labels for lead-time aware predictions, by default None.
+            Shape can vary based on model requirements, typically (B,) or scalar.
+
+        augment_pipe : Optional[Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]]
+            Data augmentation function.
+            Expected signature:
+                img_tot (torch.Tensor): Concatenated high and low resolution images
+                    of shape (B, C_hr+C_lr, H, W)
+            Returns:
+                Tuple[torch.Tensor, Optional[torch.Tensor]]:
+                    - Augmented images of shape (B, C_hr+C_lr, H, W)
+                    - Optional augmentation labels
+
+        Returns
+        -------
+        torch.Tensor
+            If patching is not used:
+                A tensor of shape (B, C_hr, H, W) representing the per-sample loss.
+            If patching is used:
+                A tensor of shape (B*P, C_hr, H_patch, W_patch) representing
+                the per-patch loss.
+
+        Raises
+        ------
+        ValueError
+            If patching is provided but is not an instance of RandomPatching2D.
+            If shapes of img_clean and img_lr are incompatible.
+        """
+
+        # Safety check: enforce patching object
+        if patching and not isinstance(patching, RandomPatching2D):
+            raise ValueError("patching must be a 'RandomPatching2D' object.")
+        # Safety check: enforce shapes
+        if (
+            img_clean.shape[0] != img_lr.shape[0]
+            or img_clean.shape[2:] != img_lr.shape[2:]
+        ):
+            raise ValueError(
+                f"Shape mismatch between img_clean {img_clean.shape} and "
+                f"img_lr {img_lr.shape}. "
+                f"Batch size, height and width must match."
+            )
+
+        rnd_normal = torch.randn([img_clean.shape[0], 1, 1, 1], device=img_clean.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
+
+        # augment for conditional generation
+        img_tot = torch.cat((img_clean, img_lr), dim=1)
+        y_tot, augment_labels = (
+            augment_pipe(img_tot) if augment_pipe is not None else (img_tot, None)
+        )
+        y = y_tot[:, : img_clean.shape[1], :, :]
+        y_lr = y_tot[:, img_clean.shape[1] :, :, :]
+        y_lr_res = y_lr.to(memory_format=torch.channels_last)
+        batch_size = y.shape[0]
+
+        # form residual
+        if self.y_mean is None:
+            if lead_time_label is not None:
+                y_mean = self.regression_net(
+                    torch.zeros_like(y, device=img_clean.device),
+                    y_lr_res,
+                    lead_time_label=lead_time_label,
+                    augment_labels=augment_labels,
+                )
+            else:
+                y_mean = self.regression_net(
+                    torch.zeros_like(y, device=img_clean.device),
+                    y_lr_res,
+                    augment_labels=augment_labels,
+                )
+            self.y_mean = y_mean
+
+        y = y - self.y_mean
+
+        if self.hr_mean_conditioning:
+            y_lr = torch.cat((y_mean, y_lr), dim=1)
+
+        # patchified training
+        # conditioning: cat(y_mean, y_lr, input_interp, pos_embd), 4+12+100+4
+        if patching:
+            # Patched residual
+            # (batch_size * patch_num, c_out, patch_shape_y, patch_shape_x)
+            y_patched = patching.apply(input=y)
+            # Patched conditioning on y_lr and interp(img_lr)
+            # (batch_size * patch_num, 2*c_in, patch_shape_y, patch_shape_x)
+            y_lr_patched = patching.apply(input=y_lr, additional_input=img_lr)
+
+            # Function to select the correct positional embedding for each
+            # patch
+            def patch_embedding_selector(emb):
+                # emb: (N_pe, image_shape_y, image_shape_x)
+                # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
+                return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
+
+            y = y_patched.to(memory_format=torch.channels_last)
+            y_lr = y_lr_patched.to(memory_format=torch.channels_last)
+        else:
+            patch_embedding_selector = None
+
+        # Noise
+        rnd_normal = torch.randn([y.shape[0], 1, 1, 1], device=img_clean.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
+
+        # Input + noise
+        latent = y + torch.randn_like(y) * sigma
+
+        if lead_time_label is not None:
+            D_yn = net(
+                latent,
+                y_lr,
+                sigma,
+                embedding_selector=patch_embedding_selector,
+                lead_time_label=lead_time_label,
+                augment_labels=augment_labels,
+            )
+        else:
+            D_yn = net(
+                latent,
+                y_lr,
+                sigma,
+                embedding_selector=patch_embedding_selector,
+                augment_labels=augment_labels,
+            )
+        loss = weight * ((D_yn - y) ** 2)
+
+        return loss
+
+
+class ResLoss_Opt:
+    """
+    Mixture loss function for denoising score matching.
+
+    Parameters
+    ----------
+    P_mean: float, optional
+        Mean value for `sigma` computation, by default -1.2.
+    P_std: float, optional:
+        Standard deviation for `sigma` computation, by default 1.2.
+    sigma_data: float, optional
+        Standard deviation for data, by default 0.5.
+
+    Note
+    ----
+    Reference: Mardani, M., Brenowitz, N., Cohen, Y., Pathak, J., Chen, C.Y.,
+    Liu, C.C.,Vahdat, A., Kashinath, K., Kautz, J. and Pritchard, M., 2023.
+    Generative Residual Diffusion Modeling for Km-scale Atmospheric Downscaling.
+    arXiv preprint arXiv:2309.15214.
+    """
+
+    def __init__(
+        self,
+        regression_net,
+        img_shape_x,
+        img_shape_y,
+        patch_shape_x,
+        patch_shape_y,
+        patch_num,
+        P_mean: float = 0.0,
+        P_std: float = 1.2,
+        sigma_data: float = 0.5,
+        hr_mean_conditioning: bool = False,
+    ):
+        self.unet = regression_net
+        self.P_mean = P_mean
+        self.P_std = P_std
+        self.sigma_data = sigma_data
+        self.img_shape_x = img_shape_x
+        self.img_shape_y = img_shape_y
+        self.patch_shape_x = patch_shape_x
+        self.patch_shape_y = patch_shape_y
+        self.patch_num = patch_num
+        self.hr_mean_conditioning = hr_mean_conditioning
+        self.y_mean = None
+
+    def __call__(self, net, img_clean, img_lr, patch_num_per_iter=-1, labels=None, augment_pipe=None):
+        """
+        Calculate and return the loss for denoising score matching.
+
+        Parameters:
+        ----------
+        net: torch.nn.Module
+            The neural network model that will make predictions.
+
+        img_clean: torch.Tensor
+            Input images (high resolution) to the neural network.
+
+        img_lr: torch.Tensor
+            Input images (low resolution) to the neural network.
+
+        labels: torch.Tensor
+            Ground truth labels for the input images.
+
+        augment_pipe: callable, optional
+            An optional data augmentation function that takes images as input and
+            returns augmented images. If not provided, no data augmentation is applied.
+
+        Returns:
+        -------
+        torch.Tensor
+            A tensor representing the loss calculated based on the network's
+            predictions.
+        """
+        
+        self.patch_num = patch_num_per_iter if patch_num_per_iter != -1 else self.patch_num
+        
+        rnd_normal = torch.randn([img_clean.shape[0], 1, 1, 1], device=img_clean.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
+        
+        # augment for conditional generaiton
+        img_tot = torch.cat((img_clean, img_lr), dim=1)
+        y_tot, augment_labels = (
+            augment_pipe(img_tot) if augment_pipe is not None else (img_tot, None)
+        )
+        y = y_tot[:, : img_clean.shape[1], :, :]
+        y_lr = y_tot[:, img_clean.shape[1] :, :, :]
+        
+        y_lr_res = y_lr.to(memory_format=torch.channels_last)
+
+        # global index
+        b = y.shape[0]
+        Nx = torch.arange(self.img_shape_x,device=img_clean.device).int()
+        Ny = torch.arange(self.img_shape_y,device=img_clean.device).int()
+        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0)[
+            None,
+        ].expand(b, -1, -1, -1)
+
+        if self.y_mean is None:
+            # form residual
+            y_mean = self.unet(
+                torch.zeros_like(y, device=img_clean.device),
+                y_lr_res,
+                sigma,
+                labels,
+                augment_labels=augment_labels,
+            )
+            self.y_mean = y_mean
+        # else:
+        #     y_mean = self.y_mean
+            
+        y = y - self.y_mean
+
+        if self.hr_mean_conditioning:
+            y_lr = torch.cat((self.y_mean, y_lr), dim=1)
+        
+        
+        global_index = None
+        # patchified training
+        # conditioning: cat(y_mean, y_lr, input_interp, pos_embd), 4+12+100+4
+        
+        if (
+            self.img_shape_x != self.patch_shape_x
+            or self.img_shape_y != self.patch_shape_y
+        ):
+            
+            c_in = y_lr.shape[1]
+            c_out = y.shape[1]
+            
+            rnd_normal = torch.randn(
+                [img_clean.shape[0] * self.patch_num, 1, 1, 1], device=img_clean.device
+            )
+            sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+            weight = (sigma**2 + self.sigma_data**2) / (
+                sigma * self.sigma_data
+            ) ** 2
+
+            # global interpolation
+            input_interp = torch.nn.functional.interpolate(
+                img_lr,
+                (self.patch_shape_y, self.patch_shape_x),
+                mode="bilinear",
+            )
+
+            # patch generation from a single sample (not from random samples due to memory consumption of regression)
+            y_new = torch.zeros(
+                b * self.patch_num,
+                c_out,
+                self.patch_shape_y,
+                self.patch_shape_x,
+                device=img_clean.device,
+            ).to(memory_format=torch.channels_last)
+            y_lr_new = torch.zeros(
+                b * self.patch_num,
+                c_in + input_interp.shape[1],
+                self.patch_shape_y,
+                self.patch_shape_x,
+                device=img_clean.device,
+            ).to(memory_format=torch.channels_last)
+            global_index = torch.zeros(
+                b * self.patch_num,
+                2,
+                self.patch_shape_y,
+                self.patch_shape_x,
+                dtype=torch.int,
+                device=img_clean.device,
+            )
+            
+            for i in range(self.patch_num):
+                rnd_x = random.randint(0, self.img_shape_x - self.patch_shape_x)
+                rnd_y = random.randint(0, self.img_shape_y - self.patch_shape_y)
+                y_new[b * i : b * (i + 1),] = y[
+                    :,
+                    :,
+                    rnd_y : rnd_y + self.patch_shape_y,
+                    rnd_x : rnd_x + self.patch_shape_x,
+                ]
+                global_index[b * i : b * (i + 1),] = grid[
+                    :,
+                    :,
+                    rnd_y : rnd_y + self.patch_shape_y,
+                    rnd_x : rnd_x + self.patch_shape_x,
+                ]
+                y_lr_new[b * i : b * (i + 1),] = torch.cat(
+                    (
+                        y_lr[
+                            :,
+                            :,
+                            rnd_y : rnd_y + self.patch_shape_y,
+                            rnd_x : rnd_x + self.patch_shape_x,
+                        ],
+                        input_interp,
+                    ),
+                    1,
+                )
+                
+            y = y_new
+            y_lr = y_lr_new
+        
+        latent = y + torch.randn_like(y) * sigma
+        D_yn = net(
+            latent,
+            y_lr,
+            sigma,
+            labels,
+            global_index=global_index,
+            augment_labels=augment_labels,
+        )
+        
+        loss = weight * ((D_yn - y) ** 2)
+
+        return loss
 
 class VELoss_dfsr:
     """

@@ -821,7 +821,6 @@ class EDMPrecondSuperResolution(Module):
         """
         return torch.cat([c_in * x, img_lr.to(x.dtype)], dim=1)
 
-    @nvtx.annotate(message="EDMPrecondSuperResolution", color="orange")
     def forward(
         self,
         x: torch.Tensor,

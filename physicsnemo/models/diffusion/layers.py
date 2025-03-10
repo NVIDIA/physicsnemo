@@ -24,9 +24,13 @@ from typing import Any, Dict, List
 import numpy as np
 import torch
 from einops import rearrange
-from torch.nn.functional import silu
+from torch.nn.functional import silu, relu, leaky_relu, sigmoid, tanh, gelu, elu
 
 from physicsnemo.models.diffusion import weight_init
+from apex.contrib.group_norm import GroupNorm as ApexGroupNorm
+import nvtx
+import contextlib 
+import torch.cuda.amp as amp
 
 
 class Linear(torch.nn.Module):
@@ -81,9 +85,9 @@ class Linear(torch.nn.Module):
         )
 
     def forward(self, x):
-        x = x @ self.weight.to(x.dtype).t()
+        x = x @ self.weight.t()
         if self.bias is not None:
-            x = x.add_(self.bias.to(x.dtype))
+            x = x.add_(self.bias)
         return x
 
 
@@ -143,9 +147,12 @@ class Conv2d(torch.nn.Module):
         init_mode: str = "kaiming_normal",
         init_weight: float = 1.0,
         init_bias: float = 0.0,
+        fused_conv_bias: bool = False,
     ):
         if up and down:
             raise ValueError("Both 'up' and 'down' cannot be true at the same time.")
+        if not kernel and fused_conv_bias:
+            raise ValueError("Kernel is required when fused_conv_bias is enabled.")
 
         super().__init__()
         self.in_channels = in_channels
@@ -153,6 +160,7 @@ class Conv2d(torch.nn.Module):
         self.up = up
         self.down = down
         self.fused_resample = fused_resample
+        self.fused_conv_bias = fused_conv_bias
         init_kwargs = dict(
             mode=init_mode,
             fan_in=in_channels * kernel * kernel,
@@ -174,12 +182,14 @@ class Conv2d(torch.nn.Module):
         f = torch.as_tensor(resample_filter, dtype=torch.float32)
         f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         self.register_buffer("resample_filter", f if up or down else None)
+        
 
     def forward(self, x):
-        w = self.weight.to(x.dtype) if self.weight is not None else None
-        b = self.bias.to(x.dtype) if self.bias is not None else None
+        #remove this and see whether all tests fails
+        w = self.weight if self.weight is not None else None
+        b = self.bias if self.bias is not None else None
         f = (
-            self.resample_filter.to(x.dtype)
+            self.resample_filter
             if self.resample_filter is not None
             else None
         )
@@ -194,15 +204,27 @@ class Conv2d(torch.nn.Module):
                 stride=2,
                 padding=max(f_pad - w_pad, 0),
             )
-            x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0))
+            if self.fused_conv_bias:
+                x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0), bias=b)
+            else:
+                x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0))
         elif self.fused_resample and self.down and w is not None:
             x = torch.nn.functional.conv2d(x, w, padding=w_pad + f_pad)
-            x = torch.nn.functional.conv2d(
+            if self.fused_conv_bias:
+                x = torch.nn.functional.conv2d(
                 x,
                 f.tile([self.out_channels, 1, 1, 1]),
                 groups=self.out_channels,
                 stride=2,
+                bias=b
             )
+            else:
+                x = torch.nn.functional.conv2d(
+                    x,
+                    f.tile([self.out_channels, 1, 1, 1]),
+                    groups=self.out_channels,
+                    stride=2,
+                )
         else:
             if self.up:
                 x = torch.nn.functional.conv_transpose2d(
@@ -220,13 +242,17 @@ class Conv2d(torch.nn.Module):
                     stride=2,
                     padding=f_pad,
                 )
-            if w is not None:
-                x = torch.nn.functional.conv2d(x, w, padding=w_pad)
-        if b is not None:
+            if w is not None: #ask in corrdiff channel whether w will ever be none
+                if self.fused_conv_bias:
+                    x = torch.nn.functional.conv2d(x, w, padding=w_pad, bias=b)
+                else:
+                    x = torch.nn.functional.conv2d(x, w, padding=w_pad)
+        if b is not None and not self.fused_conv_bias:
             x = x.add_(b.reshape(1, -1, 1, 1))
         return x
 
-
+# @torch._dynamo.disable()
+# @torch._dynamo.allow_in_graph
 class GroupNorm(torch.nn.Module):
     """
     A custom Group Normalization layer implementation.
@@ -262,24 +288,54 @@ class GroupNorm(torch.nn.Module):
         num_groups: int = 32,
         min_channels_per_group: int = 4,
         eps: float = 1e-5,
+        use_apex_gn: bool = False,
+        fused_act: bool = False,
+        act: str = None,
     ):
         super().__init__()
         self.num_groups = min(num_groups, num_channels // min_channels_per_group)
         self.eps = eps
         self.weight = torch.nn.Parameter(torch.ones(num_channels))
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
+        self.use_apex_gn = use_apex_gn
+        self.fused_act = fused_act
+        self.act = act.lower() if act else act
+        self.act_fn = None
+        if self.use_apex_gn:
+            if self.act:
+                self.gn = ApexGroupNorm(
+                    num_groups=self.num_groups,
+                    num_channels=num_channels,
+                    eps=self.eps,
+                    affine=True,
+                    act=self.act
+                    )
+                
+            else:
+                self.gn = ApexGroupNorm(
+                    num_groups=self.num_groups,
+                    num_channels=num_channels,
+                    eps=self.eps,
+                    affine=True,
+                )
+        if self.fused_act:
+            self.act_fn = self.get_activation_function()
 
     def forward(self, x):
-        if self.training:
+        if self.use_apex_gn:
+            x = self.gn(x)
+        elif self.training: #check 
             # Use default torch implementation of GroupNorm for training
             # This does not support channels last memory format
             x = torch.nn.functional.group_norm(
                 x,
                 num_groups=self.num_groups,
-                weight=self.weight.to(x.dtype),
-                bias=self.bias.to(x.dtype),
+                weight=self.weight,
+                bias=self.bias,
                 eps=self.eps,
             )
+            if self.fused_act:
+                x = self.act_fn(x) 
         else:
             # Use custom GroupNorm implementation that supports channels last
             # memory layout for inference
@@ -298,9 +354,30 @@ class GroupNorm(torch.nn.Module):
             x = x * weight + bias
 
             x = x.type(dtype)
+            if self.fused_act:
+                x = self.act_fn(x)
         return x
+    
+    def get_activation_function(self):
+        activation_map = {
+            "silu": silu,
+            "relu": relu,
+            "leaky_relu": leaky_relu,
+            "sigmoid": sigmoid,
+            "tanh": tanh,
+            "gelu": gelu,
+            "elu": elu,
+        }
 
+        act_fn = activation_map.get(self.act, None)
+        if act_fn is None:
+            raise ValueError(f"Unknown activation function: {self.act}")
+        return act_fn
+            
+            
+        
 
+#raised higher order ops error with ddp optimizer
 class AttentionOp(torch.autograd.Function):
     """
     Attention weight computation, i.e., softmax(Q^T * K).
@@ -309,6 +386,7 @@ class AttentionOp(torch.autograd.Function):
     """
 
     @staticmethod
+    # @torch._dynamo.disable()
     def forward(ctx, q, k):
         w = (
             torch.einsum(
@@ -323,6 +401,7 @@ class AttentionOp(torch.autograd.Function):
         return w
 
     @staticmethod
+    # @torch._dynamo.disable()
     def backward(ctx, dw):
         q, k, w = ctx.saved_tensors
         db = torch._softmax_backward_data(
@@ -331,6 +410,7 @@ class AttentionOp(torch.autograd.Function):
             dim=2,
             input_dtype=torch.float32,
         )
+
         dq = torch.einsum("nck,nqk->ncq", k.to(torch.float32), db).to(
             q.dtype
         ) / np.sqrt(k.shape[1])
@@ -404,6 +484,11 @@ class UNetBlock(torch.nn.Module):
         init: Dict[str, Any] = dict(),
         init_zero: Dict[str, Any] = dict(init_weight=0),
         init_attn: Any = None,
+        use_apex_gn: bool = False,
+        fused_act: bool = True,
+        act: str = "silu",
+        fused_conv_bias: bool = True,
+        profile_mode: bool = False
     ):
         super().__init__()
 
@@ -420,8 +505,8 @@ class UNetBlock(torch.nn.Module):
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
-
-        self.norm0 = GroupNorm(num_channels=in_channels, eps=eps)
+        self.profile_mode = profile_mode
+        self.norm0 = GroupNorm(num_channels=in_channels, eps=eps, use_apex_gn=use_apex_gn, fused_act=fused_act, act=act)
         self.conv0 = Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -429,6 +514,7 @@ class UNetBlock(torch.nn.Module):
             up=up,
             down=down,
             resample_filter=resample_filter,
+            fused_conv_bias=fused_conv_bias,
             **init,
         )
         self.affine = Linear(
@@ -436,9 +522,12 @@ class UNetBlock(torch.nn.Module):
             out_features=out_channels * (2 if adaptive_scale else 1),
             **init,
         )
-        self.norm1 = GroupNorm(num_channels=out_channels, eps=eps)
+        if self.adaptive_scale:
+            self.norm1 = GroupNorm(num_channels=out_channels, eps=eps, use_apex_gn=use_apex_gn)
+        else:
+            self.norm1 = GroupNorm(num_channels=out_channels, eps=eps, use_apex_gn=use_apex_gn, act=act, fused_act=fused_act)
         self.conv1 = Conv2d(
-            in_channels=out_channels, out_channels=out_channels, kernel=3, **init_zero
+            in_channels=out_channels, out_channels=out_channels, kernel=3,fused_conv_bias=fused_conv_bias, **init_zero
         )
 
         self.skip = None
@@ -451,56 +540,61 @@ class UNetBlock(torch.nn.Module):
                 up=up,
                 down=down,
                 resample_filter=resample_filter,
+                fused_conv_bias=fused_conv_bias,
                 **init,
             )
 
         if self.num_heads:
-            self.norm2 = GroupNorm(num_channels=out_channels, eps=eps)
+            self.norm2 = GroupNorm(num_channels=out_channels, eps=eps, use_apex_gn=use_apex_gn)
             self.qkv = Conv2d(
                 in_channels=out_channels,
                 out_channels=out_channels * 3,
                 kernel=1,
+                fused_conv_bias=fused_conv_bias,
                 **(init_attn if init_attn is not None else init),
             )
             self.proj = Conv2d(
                 in_channels=out_channels,
                 out_channels=out_channels,
                 kernel=1,
+                fused_conv_bias=fused_conv_bias,
                 **init_zero,
             )
 
     def forward(self, x, emb):
-        torch.cuda.nvtx.range_push("UNetBlock")
-        orig = x
-        x = self.conv0(silu(self.norm0(x)))
+        with nvtx.annotate(message="UNetBlock", color="purple") if self.profile_mode else contextlib.nullcontext():
+            orig = x
+            x = self.conv0(self.norm0(x))
+            params = self.affine(emb).unsqueeze(2).unsqueeze(3)
+            if self.adaptive_scale:
+                scale, shift = params.chunk(chunks=2, dim=1)
+                x = silu(torch.addcmul(shift, self.norm1(x), scale + 1))
+            else:
+                x = self.norm1(x.add_(params))
 
-        params = self.affine(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
-        if self.adaptive_scale:
-            scale, shift = params.chunk(chunks=2, dim=1)
-            x = silu(torch.addcmul(shift, self.norm1(x), scale + 1))
-        else:
-            x = silu(self.norm1(x.add_(params)))
-
-        x = self.conv1(
-            torch.nn.functional.dropout(x, p=self.dropout, training=self.training)
-        )
-        x = x.add_(self.skip(orig) if self.skip is not None else orig)
-        x = x * self.skip_scale
-
-        if self.num_heads:
-            q, k, v = (
-                self.qkv(self.norm2(x))
-                .reshape(
-                    x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3, -1
-                )
-                .unbind(2)
+            x = self.conv1(
+                torch.nn.functional.dropout(x, p=self.dropout, training=self.training)
             )
-            w = AttentionOp.apply(q, k)
-            a = torch.einsum("nqk,nck->ncq", w, v)
-            x = self.proj(a.reshape(*x.shape)).add_(x)
+            x = x.add_(self.skip(orig) if self.skip is not None else orig)
             x = x * self.skip_scale
-        torch.cuda.nvtx.range_pop()
-        return x
+
+            if self.num_heads:
+                q, k, v = (
+                    self.qkv(self.norm2(x))
+                    .reshape(
+                        x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3, -1
+                    )
+                    .unbind(2)
+                )
+                # w = AttentionOp.apply(q, k)
+                # a = torch.einsum("nqk,nck->ncq", w, v)
+                # Compute attention in one step
+                with amp.autocast(enabled=True):
+                    a = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+                x = self.proj(a.reshape(*x.shape)).add_(x)
+                x = x * self.skip_scale
+
+            return x
 
 
 class PositionalEmbedding(torch.nn.Module):
@@ -533,7 +627,7 @@ class PositionalEmbedding(torch.nn.Module):
         )
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
-        x = x.ger(freqs.to(x.dtype))
+        x = x.ger(freqs)
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x
 
@@ -562,6 +656,6 @@ class FourierEmbedding(torch.nn.Module):
         self.register_buffer("freqs", torch.randn(num_channels // 2) * scale)
 
     def forward(self, x):
-        x = x.ger((2 * np.pi * self.freqs).to(x.dtype))
+        x = x.ger((2 * np.pi * self.freqs))
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x

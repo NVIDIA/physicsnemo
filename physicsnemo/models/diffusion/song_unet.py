@@ -38,7 +38,7 @@ from physicsnemo.models.diffusion import (
 )
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
-
+import contextlib 
 
 @dataclass
 class MetaData(ModelMetaData):
@@ -157,6 +157,11 @@ class SongUNet(Module):
         resample_filter: List[int] = [1, 1],
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
+        use_apex_gn: bool = False,
+        fused_act: bool = True,
+        act: str = "silu",
+        fused_conv_bias: bool = True,
+        profile_mode: bool = False
     ):
         valid_embedding_types = ["fourier", "positional", "zero"]
         if embedding_type not in valid_embedding_types:
@@ -197,7 +202,13 @@ class SongUNet(Module):
             init=init,
             init_zero=init_zero,
             init_attn=init_attn,
+            use_apex_gn=use_apex_gn,
+            fused_act=fused_act,
+            act=act,
+            fused_conv_bias=fused_conv_bias,
+            profile_mode=profile_mode
         )
+        self.profile_mode = profile_mode
 
         # for compatibility with older versions that took only 1 dimension
         self.img_resolution = img_resolution
@@ -257,7 +268,7 @@ class SongUNet(Module):
                 cin = cout
                 cout = model_channels
                 self.enc[f"{res}x{res}_conv"] = Conv2d(
-                    in_channels=cin, out_channels=cout, kernel=3, **init
+                    in_channels=cin, out_channels=cout, kernel=3, fused_conv_bias=fused_conv_bias, **init
                 )
             else:
                 self.enc[f"{res}x{res}_down"] = UNetBlock(
@@ -272,7 +283,7 @@ class SongUNet(Module):
                         resample_filter=resample_filter,
                     )
                     self.enc[f"{res}x{res}_aux_skip"] = Conv2d(
-                        in_channels=caux, out_channels=cout, kernel=1, **init
+                        in_channels=caux, out_channels=cout, kernel=1, fused_conv_bias=fused_conv_bias, **init
                     )
                 if encoder_type == "residual":
                     self.enc[f"{res}x{res}_aux_residual"] = Conv2d(
@@ -282,6 +293,7 @@ class SongUNet(Module):
                         down=True,
                         resample_filter=resample_filter,
                         fused_resample=True,
+                        fused_conv_bias=fused_conv_bias,
                         **init,
                     )
                     caux = cout
@@ -328,90 +340,98 @@ class SongUNet(Module):
                         resample_filter=resample_filter,
                     )
                 self.dec[f"{res}x{res}_aux_norm"] = GroupNorm(
-                    num_channels=cout, eps=1e-6
+                    num_channels=cout, eps=1e-6, use_apex_gn=use_apex_gn
                 )
                 self.dec[f"{res}x{res}_aux_conv"] = Conv2d(
-                    in_channels=cout, out_channels=out_channels, kernel=3, **init_zero
+                    in_channels=cout, out_channels=out_channels, kernel=3, fused_conv_bias=fused_conv_bias, **init_zero
+                )
+            # self.checkpoint = lambda block, x, emb: checkpoint(block, x, emb, use_reentrant=False)
+
+            #iterate over the enc and decs, map name to either checpoint or lambda
+            #if torch.compile and checkpointint, raise error
+
+    def forward(self, x, noise_labels, class_labels, augment_labels=None):
+        with nvtx.annotate(message="SongUNet", color="blue") if self.profile_mode else contextlib.nullcontext():
+            if self.embedding_type != "zero":
+                # Mapping.
+                emb = self.map_noise(noise_labels)
+                emb = (
+                    emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)
+                )  # swap sin/cos
+                if self.map_label is not None:
+                    tmp = class_labels
+                    if self.training and self.label_dropout:
+                        tmp = tmp * (
+                            torch.rand([x.shape[0], 1], device=x.device)
+                            >= self.label_dropout
+                        ).to(tmp.dtype)
+                    emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
+                if self.map_augment is not None and augment_labels is not None:
+                    emb = emb + self.map_augment(augment_labels)
+                emb = silu(self.map_layer0(emb))
+                emb = silu(self.map_layer1(emb))
+            else:
+                emb = torch.zeros(
+                    (noise_labels.shape[0], self.emb_channels), device=x.device
                 )
 
-    @nvtx.annotate(message="SongUNet", color="blue")
-    def forward(self, x, noise_labels, class_labels, augment_labels=None):
-        if self.embedding_type != "zero":
-            # Mapping.
-            emb = self.map_noise(noise_labels)
-            emb = (
-                emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)
-            )  # swap sin/cos
-            if self.map_label is not None:
-                tmp = class_labels
-                if self.training and self.label_dropout:
-                    tmp = tmp * (
-                        torch.rand([x.shape[0], 1], device=x.device)
-                        >= self.label_dropout
-                    ).to(tmp.dtype)
-                emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
-            if self.map_augment is not None and augment_labels is not None:
-                emb = emb + self.map_augment(augment_labels)
-            emb = silu(self.map_layer0(emb))
-            emb = silu(self.map_layer1(emb))
-        else:
-            emb = torch.zeros(
-                (noise_labels.shape[0], self.emb_channels), device=x.device
-            )
+            # Encoder.
+            skips = []
+            aux = x
+            for name, block in self.enc.items():
+                with nvtx.annotate(f"SongUNet encoder: {name}", color="blue") if self.profile_mode else contextlib.nullcontext():
+                    if "aux_down" in name:
+                        aux = block(aux)
+                    elif "aux_skip" in name:
+                        x = skips[-1] = x + block(aux)
+                    elif "aux_residual" in name:
+                        x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
+                    elif "_conv" in name:
+                        x = block(x)
+                        if self.additive_pos_embed:
+                            x = x + self.spatial_emb.to(dtype=x.dtype)
+                        skips.append(x)
+                    else:
+                        # For UNetBlocks check if we should use gradient checkpointing
+                        if isinstance(block, UNetBlock):
+                            if x.shape[-1] > self.checkpoint_threshold:
+                                #self.checkpoint = checkpoint?
+                                #else: self.checkpoint  = lambda(block,x,emb:block(x,emb))
+                                x = checkpoint(block, x, emb)
+                            else:
+                                #AssertionError: Only support NHWC layout.
+                                x = block(x, emb)
+                        else:
+                            x = block(x)
+                        skips.append(x)
 
-        # Encoder.
-        skips = []
-        aux = x
-        for name, block in self.enc.items():
-            with nvtx.annotate(f"SongUNet encoder: {name}", color="blue"):
-                if "aux_down" in name:
-                    aux = block(aux)
-                elif "aux_skip" in name:
-                    x = skips[-1] = x + block(aux)
-                elif "aux_residual" in name:
-                    x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
-                elif "_conv" in name:
-                    x = block(x)
-                    if self.additive_pos_embed:
-                        x = x + self.spatial_emb.to(dtype=x.dtype)
-                    skips.append(x)
-                else:
-                    # For UNetBlocks check if we should use gradient checkpointing
-                    if isinstance(block, UNetBlock):
-                        if x.shape[-1] > self.checkpoint_threshold:
-                            x = checkpoint(block, x, emb, use_reentrant=False)
+            # Decoder.
+            aux = None
+            tmp = None
+            for name, block in self.dec.items():
+                with nvtx.annotate(f"SongUNet decoder: {name}", color="blue") if self.profile_mode else contextlib.nullcontext():
+                    if "aux_up" in name:
+                        aux = block(aux)
+                    elif "aux_norm" in name:
+                        tmp = block(x)
+                    elif "aux_conv" in name:
+                        tmp = block(silu(tmp))
+                        aux = tmp if aux is None else tmp + aux
+                    else:
+                        if x.shape[1] != block.in_channels:
+                            x = torch.cat([x, skips.pop()], dim=1)
+                        # check for checkpointing on decoder blocks and up sampling blocks
+                        if (
+                            x.shape[-1] > self.checkpoint_threshold and "_block" in name
+                        ) or (
+                            x.shape[-1] > (self.checkpoint_threshold / 2) and "_up" in name
+                        ):
+                            x = checkpoint(block, x, emb)
                         else:
                             x = block(x, emb)
-                    else:
-                        x = block(x)
-                    skips.append(x)
-
-        # Decoder.
-        aux = None
-        tmp = None
-        for name, block in self.dec.items():
-            with nvtx.annotate(f"SongUNet decoder: {name}", color="blue"):
-                if "aux_up" in name:
-                    aux = block(aux)
-                elif "aux_norm" in name:
-                    tmp = block(x)
-                elif "aux_conv" in name:
-                    tmp = block(silu(tmp))
-                    aux = tmp if aux is None else tmp + aux
-                else:
-                    if x.shape[1] != block.in_channels:
-                        x = torch.cat([x, skips.pop()], dim=1)
-                    # check for checkpointing on decoder blocks and up sampling blocks
-                    if (
-                        x.shape[-1] > self.checkpoint_threshold and "_block" in name
-                    ) or (
-                        x.shape[-1] > (self.checkpoint_threshold / 2) and "_up" in name
-                    ):
-                        x = checkpoint(block, x, emb, use_reentrant=False)
-                    else:
-                        x = block(x, emb)
-        return aux
-
+            return aux
+    
+    
 
 class SongUNetPosEmbd(SongUNet):
     """Extends SongUNet with positional embeddings.
@@ -547,6 +567,13 @@ class SongUNetPosEmbd(SongUNet):
         gridtype: str = "sinusoidal",
         N_grid_channels: int = 4,
         checkpoint_level: int = 0,
+        additive_pos_embed: bool = False,
+        use_apex_gn: bool = False,
+        fused_act: bool = True,
+        act: str = "silu",
+        fused_conv_bias: bool = True,
+        profile_mode: bool = False,
+        
     ):
         super().__init__(
             img_resolution,
@@ -567,13 +594,22 @@ class SongUNetPosEmbd(SongUNet):
             decoder_type,
             resample_filter,
             checkpoint_level,
+            additive_pos_embed,
+            use_apex_gn,
+            fused_act,
+            act,
+            fused_conv_bias,
+            profile_mode
         )
 
         self.gridtype = gridtype
         self.N_grid_channels = N_grid_channels
-        self.pos_embd = self._get_positional_embedding()
+        if self.gridtype == "learnable": 
+            self.pos_embd = self._get_positional_embedding()
+        else:
+            self.register_buffer("pos_embd", self._get_positional_embedding())
 
-    @nvtx.annotate(message="SongUNet", color="blue")
+
     def forward(
         self,
         x,
@@ -583,26 +619,27 @@ class SongUNetPosEmbd(SongUNet):
         embedding_selector: Optional[Callable] = None,
         augment_labels=None,
     ):
-        if embedding_selector is not None and global_index is not None:
-            raise ValueError(
-                "Cannot provide both embedding_selector and global_index. "
-                "embedding_selector is the preferred approach for better efficiency."
-            )
-
-        # Append positional embedding to input conditioning
-        if self.pos_embd is not None:
-            # Select positional embeddings with a selector function
-            if embedding_selector is not None:
-                selected_pos_embd = self.positional_embedding_selector(
-                    x, embedding_selector
+        with nvtx.annotate(message="SongUNetPosEmbd", color="blue") if self.profile_mode else contextlib.nullcontext():
+            if embedding_selector is not None and global_index is not None:
+                raise ValueError(
+                    "Cannot provide both embedding_selector and global_index. "
+                    "embedding_selector is the preferred approach for better efficiency."
                 )
-            # Select positional embeddings using global indices (selects all
-            # embeddings if global_index is None)
-            else:
-                selected_pos_embd = self.positional_embedding_indexing(x, global_index)
-            x = torch.cat((x, selected_pos_embd), dim=1)
 
-        return super().forward(x, noise_labels, class_labels, augment_labels)
+            # Append positional embedding to input conditioning
+            if self.pos_embd is not None:
+                # Select positional embeddings with a selector function
+                if embedding_selector is not None:
+                    selected_pos_embd = self.positional_embedding_selector(
+                        x, embedding_selector
+                    )
+                # Select positional embeddings using global indices (selects all
+                # embeddings if global_index is None)
+                else:
+                    selected_pos_embd = self.positional_embedding_indexing(x, global_index)
+                x = torch.cat((x, selected_pos_embd), dim=1)
+
+                return super().forward(x, noise_labels, class_labels, augment_labels)
 
     def positional_embedding_indexing(
         self,
@@ -657,32 +694,31 @@ class SongUNetPosEmbd(SongUNet):
         """
         # If no global indices are provided, select all embeddings and expand
         # to match the batch size of the input
+        if x.dtype != self.pos_embd.dtype:
+            self.pos_embd = self.pos_embd.to(x.dtype)
+            
         if global_index is None:
-            return (
-                self.pos_embd.to(x.dtype)
-                .to(x.device)[None]
+            selected_pos_embd = (
+                self.pos_embd[None]
                 .expand((x.shape[0], -1, -1, -1))
             )  # (B, N_pe, H, W)
 
-        B = global_index.shape[0]
-        H = global_index.shape[2]
-        W = global_index.shape[3]
-        global_index = torch.reshape(
-            torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
-        )  # (B, 2, H, W) to (2, B*H*W)
-        # Use advanced indexing to select the positional embeddings based on
-        # their y-x coordinates
-        selected_pos_embd = self.pos_embd.to(x.device)[
-            :, global_index[0], global_index[1]
-        ]  # (N_pe, B*H*W)
-        selected_pos_embd = (
-            torch.permute(
-                torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], B, H, W)),
-                (1, 0, 2, 3),
-            )
-            .to(x.device)
-            .to(x.dtype)
-        )  # (B, N_pe, H, W)
+        else:
+            B = global_index.shape[0]
+            X = global_index.shape[2]
+            Y = global_index.shape[3]
+            global_index = torch.reshape(
+                torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
+            )  # (B, 2, X, Y) to (2, B*X*Y)
+            selected_pos_embd = self.pos_embd[
+                :, global_index[0], global_index[1]
+            ]  # (N_pe, B*X*Y)
+            selected_pos_embd = (
+                torch.permute(
+                    torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], B, X, Y)),
+                    (1, 0, 2, 3),
+                )
+            )  # (B, N_pe, X, Y)
         return selected_pos_embd
 
     def positional_embedding_selector(
@@ -733,8 +769,10 @@ class SongUNetPosEmbd(SongUNet):
         :meth:`physicsnemo.utils.patching.BasePatching2D.apply`
             For the base patching method typically used in embedding_selector.
         """
+        if x.dtype != self.pos_embd.dtype:
+            self.pos_embd = self.pos_embd.to(x.dtype)
         return embedding_selector(
-            self.pos_embd.to(x.dtype).to(x.device)
+            self.pos_embd
         )  # (B, N_pe, H, W)
 
     def _get_positional_embedding(self):
@@ -1243,3 +1281,4 @@ class SongUNetPosLtEmbd(SongUNet):
             )
         )  # (lead_time_steps, lead_time_channels, img_shape_y, img_shape_x)
         return grid
+
