@@ -161,7 +161,8 @@ class SongUNet(Module):
         fused_act: bool = True,
         act: str = "silu",
         fused_conv_bias: bool = True,
-        profile_mode: bool = False
+        profile_mode: bool = False,
+        amp_mode: bool = False,
     ):
         valid_embedding_types = ["fourier", "positional", "zero"]
         if embedding_type not in valid_embedding_types:
@@ -206,7 +207,8 @@ class SongUNet(Module):
             fused_act=fused_act,
             act=act,
             fused_conv_bias=fused_conv_bias,
-            profile_mode=profile_mode
+            profile_mode=profile_mode,
+            amp_mode=amp_mode
         )
         self.profile_mode = profile_mode
 
@@ -232,12 +234,12 @@ class SongUNet(Module):
         # Mapping.
         if self.embedding_type != "zero":
             self.map_noise = (
-                PositionalEmbedding(num_channels=noise_channels, endpoint=True)
+                PositionalEmbedding(num_channels=noise_channels, endpoint=True, amp_mode=amp_mode)
                 if embedding_type == "positional"
-                else FourierEmbedding(num_channels=noise_channels)
+                else FourierEmbedding(num_channels=noise_channels, amp_mode=amp_mode)
             )
             self.map_label = (
-                Linear(in_features=label_dim, out_features=noise_channels, **init)
+                Linear(in_features=label_dim, out_features=noise_channels, amp_mode=amp_mode, **init)
                 if label_dim
                 else None
             )
@@ -246,16 +248,17 @@ class SongUNet(Module):
                     in_features=augment_dim,
                     out_features=noise_channels,
                     bias=False,
+                    amp_mode=amp_mode,
                     **init,
                 )
                 if augment_dim
                 else None
             )
             self.map_layer0 = Linear(
-                in_features=noise_channels, out_features=emb_channels, **init
+                in_features=noise_channels, out_features=emb_channels, amp_mode=amp_mode, **init
             )
             self.map_layer1 = Linear(
-                in_features=emb_channels, out_features=emb_channels, **init
+                in_features=emb_channels, out_features=emb_channels, amp_mode=amp_mode, **init
             )
 
         # Encoder.
@@ -268,7 +271,7 @@ class SongUNet(Module):
                 cin = cout
                 cout = model_channels
                 self.enc[f"{res}x{res}_conv"] = Conv2d(
-                    in_channels=cin, out_channels=cout, kernel=3, fused_conv_bias=fused_conv_bias, **init
+                    in_channels=cin, out_channels=cout, kernel=3, fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init
                 )
             else:
                 self.enc[f"{res}x{res}_down"] = UNetBlock(
@@ -281,9 +284,10 @@ class SongUNet(Module):
                         kernel=0,
                         down=True,
                         resample_filter=resample_filter,
+                        amp_mode=amp_mode,
                     )
                     self.enc[f"{res}x{res}_aux_skip"] = Conv2d(
-                        in_channels=caux, out_channels=cout, kernel=1, fused_conv_bias=fused_conv_bias, **init
+                        in_channels=caux, out_channels=cout, kernel=1, fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init
                     )
                 if encoder_type == "residual":
                     self.enc[f"{res}x{res}_aux_residual"] = Conv2d(
@@ -294,6 +298,7 @@ class SongUNet(Module):
                         resample_filter=resample_filter,
                         fused_resample=True,
                         fused_conv_bias=fused_conv_bias,
+                        amp_mode=amp_mode,
                         **init,
                     )
                     caux = cout
@@ -338,17 +343,15 @@ class SongUNet(Module):
                         kernel=0,
                         up=True,
                         resample_filter=resample_filter,
+                        amp_mode=amp_mode,
                     )
                 self.dec[f"{res}x{res}_aux_norm"] = GroupNorm(
-                    num_channels=cout, eps=1e-6, use_apex_gn=use_apex_gn
+                    num_channels=cout, eps=1e-6, use_apex_gn=use_apex_gn, amp_mode=amp_mode,
                 )
                 self.dec[f"{res}x{res}_aux_conv"] = Conv2d(
-                    in_channels=cout, out_channels=out_channels, kernel=3, fused_conv_bias=fused_conv_bias, **init_zero
+                    in_channels=cout, out_channels=out_channels, kernel=3, fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init_zero
                 )
-            # self.checkpoint = lambda block, x, emb: checkpoint(block, x, emb, use_reentrant=False)
 
-            #iterate over the enc and decs, map name to either checpoint or lambda
-            #if torch.compile and checkpointint, raise error
 
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         with nvtx.annotate(message="SongUNet", color="blue") if self.profile_mode else contextlib.nullcontext():
@@ -573,6 +576,7 @@ class SongUNetPosEmbd(SongUNet):
         act: str = "silu",
         fused_conv_bias: bool = True,
         profile_mode: bool = False,
+        amp_mode: bool = False
         
     ):
         super().__init__(
@@ -599,7 +603,8 @@ class SongUNetPosEmbd(SongUNet):
             fused_act,
             act,
             fused_conv_bias,
-            profile_mode
+            profile_mode,
+            amp_mode
         )
 
         self.gridtype = gridtype

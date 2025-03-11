@@ -218,8 +218,9 @@ def main(cfg: DictConfig) -> None:
     if hasattr(cfg.training.perf, "profile_mode"):
         profile_mode = cfg.training.perf.profile_mode
 
-    model_args.update({"use_apex_gn":use_apex_gn, "profile_mode":profile_mode })
-        
+    model_args.update({"use_apex_gn":use_apex_gn, "profile_mode":profile_mode, "amp_mode":enable_amp })
+    
+ 
     if cfg.model.name == "regression":
         model = UNet(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
@@ -392,11 +393,11 @@ def main(cfg: DictConfig) -> None:
                 tick_start_nimg = cur_nimg
                 tick_start_time = time.time()
                 
-                if cur_nimg - start_nimg == 4 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Starting Profiler at {cur_nimg}")
                     torch.cuda.profiler.start()
 
-                if cur_nimg - start_nimg == 6 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 26 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Stoping Profiler at {cur_nimg}")
                     torch.cuda.profiler.stop()
                     
