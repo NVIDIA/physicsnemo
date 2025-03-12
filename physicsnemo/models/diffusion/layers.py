@@ -88,10 +88,10 @@ class Linear(torch.nn.Module):
 
     def forward(self, x):
         if not self.amp_mode:
-            if x.dtype != self.weight.dtype:
-                self.weight = self.weight.to(x.dtype)
-            if x.dtype != self.bias.dtype:
-                self.bias = self.bias.to(x.dtype)
+            if self.weight is not None and x.dtype != self.weight.dtype:
+                self.weight.data = self.weight.to(x.dtype)
+            if self.bias is not None and x.dtype != self.bias.dtype:
+                self.bias.data = self.bias.to(x.dtype)
         x = x @ self.weight.t()
         if self.bias is not None:
             x = x.add_(self.bias)
@@ -197,12 +197,12 @@ class Conv2d(torch.nn.Module):
 
     def forward(self, x):
         if not self.amp_mode:
-            if x.dtype != self.weight.dtype:
-                self.weight = self.weight.to(x.dtype)
-            if x.dtype != self.bias.dtype:
-                self.bias = self.bias.to(x.dtype)
-            if x.dtype != self.resample_filter.dtype:
-                self.resample_filter = self.resample_filter.to(x.dtype)
+            if self.weight is not None and x.dtype != self.weight.dtype:
+                self.weight.data = self.weight.to(x.dtype)
+            if self.bias is not None and x.dtype != self.bias.dtype:
+                self.bias.data = self.bias.to(x.dtype)
+            if self.resample_filter is not None and x.dtype != self.resample_filter.dtype:
+                self.resample_filter.data = self.resample_filter.to(x.dtype)
         w = self.weight if self.weight is not None else None
         b = self.bias if self.bias is not None else None
         f = (
@@ -343,14 +343,14 @@ class GroupNorm(torch.nn.Module):
         if not self.amp_mode:
             if self.use_apex_gn:
                 if x.dtype != self.gn.weight.dtype:
-                    self.gn.weight = self.gn.weight.to(x.dtype)
+                    self.gn.weight.data = self.gn.weight.to(x.dtype)
                 if x.dtype != self.gn.bias.dtype:
-                    self.gn.bias = self.gn.bias.to(x.dtype)
+                    self.gn.bias.data = self.gn.bias.to(x.dtype)
             else:
                 if x.dtype != self.weight.dtype:
-                    self.weight = self.weight.to(x.dtype)
+                    self.weight.data = self.weight.to(x.dtype)
                 if x.dtype != self.bias.dtype:
-                    self.bias = self.bias.to(x.dtype)
+                    self.bias.data = self.bias.to(x.dtype)
         if self.use_apex_gn:
             x = self.gn(x)
         elif self.training: #check 
@@ -618,14 +618,14 @@ class UNetBlock(torch.nn.Module):
                 q, k, v = (
                     self.qkv(self.norm2(x))
                     .reshape(
-                        x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3, -1
+                        x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1
                     )
-                    .unbind(2)
+                    .unbind(3)
                 )
                 # w = AttentionOp.apply(q, k)
                 # a = torch.einsum("nqk,nck->ncq", w, v)
                 # Compute attention in one step
-                with amp.autocast(enabled=True):
+                with amp.autocast(enabled=self.amp_mode):
                     a = torch.nn.functional.scaled_dot_product_attention(q, k, v)
                 x = self.proj(a.reshape(*x.shape)).add_(x)
                 x = x * self.skip_scale
@@ -699,7 +699,7 @@ class FourierEmbedding(torch.nn.Module):
     def forward(self, x):
         if not self.amp_mode:
             if x.dtype != self.freqs.dtype:
-                self.freqs = self.freqs.to(x.dtype)
+                self.freqs.data = self.freqs.to(x.dtype)
         x = x.ger((2 * np.pi * self.freqs))
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x

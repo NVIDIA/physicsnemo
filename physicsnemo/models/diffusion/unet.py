@@ -115,6 +115,7 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
             out_channels=img_out_channels,
             **model_kwargs,
         )
+        
 
     def forward(
         self,

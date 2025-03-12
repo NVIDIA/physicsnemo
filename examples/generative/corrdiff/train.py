@@ -49,7 +49,7 @@ from helpers.train_helpers import (
 )
 import nvtx
 import contextlib 
-
+import pdb
 
 
 torch._dynamo.reset()
@@ -290,7 +290,7 @@ def main(cfg: DictConfig) -> None:
             raise FileNotFoundError(
                 f"Expected this regression checkpoint but not found: {regression_checkpoint_path}"
             )
-        reg_model_args = {"use_apex_gn":use_apex_gn, "profile_mode":profile_mode }
+        reg_model_args = {"use_apex_gn":use_apex_gn, "profile_mode":profile_mode, "amp_mode":enable_amp }
         regression_net = Module.from_checkpoint(regression_checkpoint_path,reg_model_args)
         regression_net.eval().requires_grad_(False).to(dist.device)
         if use_apex_gn:
@@ -383,7 +383,10 @@ def main(cfg: DictConfig) -> None:
     start_nimg = cur_nimg
     input_dtype = torch.float32
     if enable_amp:
-        input_dtype = amp_dtype
+        input_dtype = torch.float32
+    elif fp16:
+        input_dtype = torch.float16
+
         
     #enable profiler:
     with torch.cuda.profiler.profile():
@@ -393,11 +396,11 @@ def main(cfg: DictConfig) -> None:
                 tick_start_nimg = cur_nimg
                 tick_start_time = time.time()
                 
-                if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 4 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Starting Profiler at {cur_nimg}")
                     torch.cuda.profiler.start()
 
-                if cur_nimg - start_nimg == 26 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 6 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Stoping Profiler at {cur_nimg}")
                     torch.cuda.profiler.stop()
                     
@@ -525,11 +528,11 @@ def main(cfg: DictConfig) -> None:
                                     else:
                                         img_clean_valid = (
                                             img_clean_valid.to(dist.device)
-                                            .to(torch.float32)
+                                            .to(input_dtype)
                                             .contiguous()
                                         )
                                         img_lr_valid = (
-                                            img_lr_valid.to(dist.device).to(torch.float32).contiguous()
+                                            img_lr_valid.to(dist.device).to(input_dtype).contiguous()
                                         )
                                         labels_valid = labels_valid.to(dist.device).contiguous()
                                     

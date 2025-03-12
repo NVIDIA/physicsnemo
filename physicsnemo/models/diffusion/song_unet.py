@@ -211,6 +211,7 @@ class SongUNet(Module):
             amp_mode=amp_mode
         )
         self.profile_mode = profile_mode
+        self.amp_mode = amp_mode
 
         # for compatibility with older versions that took only 1 dimension
         self.img_resolution = img_resolution
