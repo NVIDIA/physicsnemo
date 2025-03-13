@@ -217,10 +217,9 @@ def test_song_unet_checkpoint(device):
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
-    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
-        assert common.validate_checkpoint(
-            model_1, model_2, (*[input_image, noise_labels, class_labels],)
-        )
+    assert common.validate_checkpoint(
+        model_1, model_2, (*[input_image, noise_labels, class_labels],),enable_autocast=True
+    )
 
 
 @common.check_ort_version()
@@ -243,11 +242,10 @@ def test_son_unet_deploy(device):
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
 
-    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
-        assert common.validate_onnx_export(
-            model, (*[input_image, noise_labels, class_labels],)
-        )
-    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
-        assert common.validate_onnx_runtime(
-            model, (*[input_image, noise_labels, class_labels],)
-        )
+    assert common.validate_onnx_export(
+        model, (*[input_image, noise_labels, class_labels],)
+    )
+
+    assert common.validate_onnx_runtime(
+        model, (*[input_image, noise_labels, class_labels],)
+    )

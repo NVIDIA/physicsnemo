@@ -31,7 +31,7 @@ from apex.contrib.group_norm import GroupNorm as ApexGroupNorm
 import nvtx
 import contextlib 
 import torch.cuda.amp as amp
-
+import pdb
 
 class Linear(torch.nn.Module):
     """
@@ -353,7 +353,7 @@ class GroupNorm(torch.nn.Module):
                     bias = self.bias.to(x.dtype)
         if self.use_apex_gn:
             x = self.gn(x)
-        elif self.training: #check 
+        elif self.training: 
             # Use default torch implementation of GroupNorm for training
             # This does not support channels last memory format
             x = torch.nn.functional.group_norm(

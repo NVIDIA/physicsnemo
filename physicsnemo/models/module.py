@@ -375,7 +375,8 @@ class Module(torch.nn.Module):
             # Load model arguments and instantiate the model
             with open(local_path.joinpath("args.json"), "r") as f:
                 args = json.load(f)
-            
+            apex_in_ckp = "use_apex_gn" in args["__args__"].keys()
+
             # Merge model_args (adding new keys and updating existing ones)
             if model_args is not None:
                 args["__args__"].update(model_args)
@@ -384,7 +385,8 @@ class Module(torch.nn.Module):
             model_dict = torch.load(
                 local_path.joinpath("model.pt"), map_location=model.device
             )
-            if "use_apex_gn" in args["__args__"].keys() and args["__args__"]["use_apex_gn"]:
+            #TODO: for corrdiff model architecture specifically
+            if not apex_in_ckp and "use_apex_gn" in args["__args__"].keys() and args["__args__"]["use_apex_gn"]:
                 filtered_state_dict = {}
                 for key, value in model_dict.items():
                     filtered_state_dict[key] = value  # Keep the original key
@@ -399,7 +401,6 @@ class Module(torch.nn.Module):
                 model.load_state_dict(filtered_state_dict,strict=False)
             else:
                 model.load_state_dict(model_dict,strict=False)
-
         return model
 
     @staticmethod
