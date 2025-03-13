@@ -377,7 +377,8 @@ class Module(torch.nn.Module):
                 args = json.load(f)
             
             # Merge model_args (adding new keys and updating existing ones)
-            args["__args__"].update(model_args)
+            if model_args is not None:
+                args["__args__"].update(model_args)
             model = cls.instantiate(args)
             # Load the model weights
             model_dict = torch.load(

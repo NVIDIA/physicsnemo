@@ -613,6 +613,7 @@ class EDMPrecond(Module):
         self.sigma_max = sigma_max
         self.sigma_data = sigma_data
 
+
         model_class = getattr(network_module, model_type)
         self.model = model_class(
             img_resolution=img_resolution,

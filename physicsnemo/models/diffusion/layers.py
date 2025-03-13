@@ -87,14 +87,16 @@ class Linear(torch.nn.Module):
         )
 
     def forward(self, x):
+        weight,bias = self.weight,self.bias
+        # pdb.set_trace()
         if not self.amp_mode:
-            if self.weight is not None and x.dtype != self.weight.dtype:
-                self.weight.data = self.weight.to(x.dtype)
-            if self.bias is not None and x.dtype != self.bias.dtype:
-                self.bias.data = self.bias.to(x.dtype)
-        x = x @ self.weight.t()
+            if self.weight is not None and self.weight.dtype != x.dtype:
+                weight = self.weight.to(x.dtype)
+            if self.bias is not None and self.bias.dtype != x.dtype:
+                bias = self.bias.to(x.dtype)
+        x = x @ weight.t()
         if self.bias is not None:
-            x = x.add_(self.bias)
+            x = x.add_(bias)
         return x
 
 
@@ -196,18 +198,20 @@ class Conv2d(torch.nn.Module):
         
 
     def forward(self, x):
+        weight,bias,resample_filter = self.weight,self.bias,self.resample_filter
         if not self.amp_mode:
-            if self.weight is not None and x.dtype != self.weight.dtype:
-                self.weight.data = self.weight.to(x.dtype)
-            if self.bias is not None and x.dtype != self.bias.dtype:
-                self.bias.data = self.bias.to(x.dtype)
-            if self.resample_filter is not None and x.dtype != self.resample_filter.dtype:
-                self.resample_filter.data = self.resample_filter.to(x.dtype)
-        w = self.weight if self.weight is not None else None
-        b = self.bias if self.bias is not None else None
+            if self.weight is not None and self.weight.dtype != x.dtype:
+                weight = self.weight.to(x.dtype)
+            if self.bias is not None and self.bias.dtype != x.dtype:
+                bias = self.bias.to(x.dtype)
+            if self.resample_filter is not None and self.resample_filter.dtype != x.dtype:
+                resample_filter = self.resample_filter.to(x.dtype)
+                
+        w = weight if weight is not None else None
+        b = bias if bias is not None else None
         f = (
-            self.resample_filter
-            if self.resample_filter is not None
+            resample_filter
+            if resample_filter is not None
             else None
         )
         w_pad = w.shape[-1] // 2 if w is not None else 0
@@ -340,17 +344,13 @@ class GroupNorm(torch.nn.Module):
             self.act_fn = self.get_activation_function()
 
     def forward(self, x):
+        weight,bias = self.weight,self.bias
         if not self.amp_mode:
-            if self.use_apex_gn:
-                if x.dtype != self.gn.weight.dtype:
-                    self.gn.weight.data = self.gn.weight.to(x.dtype)
-                if x.dtype != self.gn.bias.dtype:
-                    self.gn.bias.data = self.gn.bias.to(x.dtype)
-            else:
-                if x.dtype != self.weight.dtype:
-                    self.weight.data = self.weight.to(x.dtype)
-                if x.dtype != self.bias.dtype:
-                    self.bias.data = self.bias.to(x.dtype)
+            if not self.use_apex_gn:
+                if weight.dtype != x.dtype:
+                    weight = self.weight.to(x.dtype)
+                if bias.dtype != x.dtype:
+                    bias = self.bias.to(x.dtype)
         if self.use_apex_gn:
             x = self.gn(x)
         elif self.training: #check 
@@ -359,8 +359,8 @@ class GroupNorm(torch.nn.Module):
             x = torch.nn.functional.group_norm(
                 x,
                 num_groups=self.num_groups,
-                weight=self.weight,
-                bias=self.bias,
+                weight=weight,
+                bias=bias,
                 eps=self.eps,
             )
             if self.fused_act:
@@ -377,8 +377,8 @@ class GroupNorm(torch.nn.Module):
             x = (x - mean) * (var + self.eps).rsqrt()
             x = rearrange(x, "b g c h w -> b (g c) h w")
 
-            weight = rearrange(self.weight, "c -> 1 c 1 1")
-            bias = rearrange(self.bias, "c -> 1 c 1 1")
+            weight = rearrange(weight, "c -> 1 c 1 1")
+            bias = rearrange(bias, "c -> 1 c 1 1")
             x = x * weight + bias
 
             if self.fused_act:
@@ -599,7 +599,7 @@ class UNetBlock(torch.nn.Module):
             x = self.conv0(self.norm0(x))
             params = self.affine(emb).unsqueeze(2).unsqueeze(3)
             if not self.amp_mode:
-                if x.dtype != params.dtype:
+                if params.dtype != x.dtype:
                     params = params.to(x.dtype)
     
             if self.adaptive_scale:
@@ -626,8 +626,8 @@ class UNetBlock(torch.nn.Module):
                 # a = torch.einsum("nqk,nck->ncq", w, v)
                 # Compute attention in one step
                 with amp.autocast(enabled=self.amp_mode):
-                    a = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-                x = self.proj(a.reshape(*x.shape)).add_(x)
+                    attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+                x = self.proj(attn.reshape(*x.shape)).add_(x)
                 x = x * self.skip_scale
 
             return x
@@ -665,7 +665,7 @@ class PositionalEmbedding(torch.nn.Module):
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
         if not self.amp_mode:
-            if x.dtype != freqs.dtype:
+            if freqs.dtype != x.dtype:
                 freqs = freqs.to(x.dtype)
         x = x.ger(freqs)
         x = torch.cat([x.cos(), x.sin()], dim=1)
@@ -697,9 +697,11 @@ class FourierEmbedding(torch.nn.Module):
         self.amp_mode = amp_mode
 
     def forward(self, x):
+        freqs = self.freqs
         if not self.amp_mode:
             if x.dtype != self.freqs.dtype:
-                self.freqs.data = self.freqs.to(x.dtype)
-        x = x.ger((2 * np.pi * self.freqs))
+                freqs = self.freqs.to(x.dtype)
+                
+        x = x.ger((2 * np.pi * freqs))
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x
