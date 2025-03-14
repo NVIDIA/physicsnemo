@@ -19,12 +19,16 @@ Model architecture layers used in the paper "Elucidating the Design Space of
 Diffusion-Based Generative Models".
 """
 
+import contextlib
 from typing import Any, Dict, List
 
 import numpy as np
+import nvtx
 import torch
+import torch.cuda.amp as amp
+from apex.contrib.group_norm import GroupNorm as ApexGroupNorm
 from einops import rearrange
-from torch.nn.functional import silu, relu, leaky_relu, sigmoid, tanh, gelu, elu
+from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
 from physicsnemo.models.diffusion import weight_init
 from apex.contrib.group_norm import GroupNorm as ApexGroupNorm
@@ -70,7 +74,7 @@ class Linear(torch.nn.Module):
         init_mode: str = "kaiming_normal",
         init_weight: int = 1,
         init_bias: int = 0,
-        amp_mode: bool = False
+        amp_mode: bool = False,
     ):
         super().__init__()
         self.in_features = in_features
@@ -87,7 +91,7 @@ class Linear(torch.nn.Module):
         )
 
     def forward(self, x):
-        weight,bias = self.weight,self.bias
+        weight, bias = self.weight, self.bias
         # pdb.set_trace()
         if not self.amp_mode:
             if self.weight is not None and self.weight.dtype != x.dtype:
@@ -162,9 +166,10 @@ class Conv2d(torch.nn.Module):
         if up and down:
             raise ValueError("Both 'up' and 'down' cannot be true at the same time.")
         if not kernel and fused_conv_bias:
-            print("Warning: Kernel is required when fused_conv_bias is enabled. Setting fused_conv_bias to False.")
-            fused_conv_bias = False 
-
+            print(
+                "Warning: Kernel is required when fused_conv_bias is enabled. Setting fused_conv_bias to False."
+            )
+            fused_conv_bias = False
 
         super().__init__()
         self.in_channels = in_channels
@@ -195,25 +200,23 @@ class Conv2d(torch.nn.Module):
         f = torch.as_tensor(resample_filter, dtype=torch.float32)
         f = f.ger(f).unsqueeze(0).unsqueeze(1) / f.sum().square()
         self.register_buffer("resample_filter", f if up or down else None)
-        
 
     def forward(self, x):
-        weight,bias,resample_filter = self.weight,self.bias,self.resample_filter
+        weight, bias, resample_filter = self.weight, self.bias, self.resample_filter
         if not self.amp_mode:
             if self.weight is not None and self.weight.dtype != x.dtype:
                 weight = self.weight.to(x.dtype)
             if self.bias is not None and self.bias.dtype != x.dtype:
                 bias = self.bias.to(x.dtype)
-            if self.resample_filter is not None and self.resample_filter.dtype != x.dtype:
+            if (
+                self.resample_filter is not None
+                and self.resample_filter.dtype != x.dtype
+            ):
                 resample_filter = self.resample_filter.to(x.dtype)
-                
+
         w = weight if weight is not None else None
         b = bias if bias is not None else None
-        f = (
-            resample_filter
-            if resample_filter is not None
-            else None
-        )
+        f = resample_filter if resample_filter is not None else None
         w_pad = w.shape[-1] // 2 if w is not None else 0
         f_pad = (f.shape[-1] - 1) // 2 if f is not None else 0
 
@@ -226,19 +229,21 @@ class Conv2d(torch.nn.Module):
                 padding=max(f_pad - w_pad, 0),
             )
             if self.fused_conv_bias:
-                x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0), bias=b)
+                x = torch.nn.functional.conv2d(
+                    x, w, padding=max(w_pad - f_pad, 0), bias=b
+                )
             else:
                 x = torch.nn.functional.conv2d(x, w, padding=max(w_pad - f_pad, 0))
         elif self.fused_resample and self.down and w is not None:
             x = torch.nn.functional.conv2d(x, w, padding=w_pad + f_pad)
             if self.fused_conv_bias:
                 x = torch.nn.functional.conv2d(
-                x,
-                f.tile([self.out_channels, 1, 1, 1]),
-                groups=self.out_channels,
-                stride=2,
-                bias=b
-            )
+                    x,
+                    f.tile([self.out_channels, 1, 1, 1]),
+                    groups=self.out_channels,
+                    stride=2,
+                    bias=b,
+                )
             else:
                 x = torch.nn.functional.conv2d(
                     x,
@@ -263,7 +268,7 @@ class Conv2d(torch.nn.Module):
                     stride=2,
                     padding=f_pad,
                 )
-            if w is not None: #ask in corrdiff channel whether w will ever be none
+            if w is not None:  # ask in corrdiff channel whether w will ever be none
                 if self.fused_conv_bias:
                     x = torch.nn.functional.conv2d(x, w, padding=w_pad, bias=b)
                 else:
@@ -330,9 +335,9 @@ class GroupNorm(torch.nn.Module):
                     num_channels=num_channels,
                     eps=self.eps,
                     affine=True,
-                    act=self.act
-                    )
-                
+                    act=self.act,
+                )
+
             else:
                 self.gn = ApexGroupNorm(
                     num_groups=self.num_groups,
@@ -344,7 +349,7 @@ class GroupNorm(torch.nn.Module):
             self.act_fn = self.get_activation_function()
 
     def forward(self, x):
-        weight,bias = self.weight,self.bias
+        weight, bias = self.weight, self.bias
         if not self.amp_mode:
             if not self.use_apex_gn:
                 if weight.dtype != x.dtype:
@@ -353,7 +358,7 @@ class GroupNorm(torch.nn.Module):
                     bias = self.bias.to(x.dtype)
         if self.use_apex_gn:
             x = self.gn(x)
-        elif self.training: 
+        elif self.training:
             # Use default torch implementation of GroupNorm for training
             # This does not support channels last memory format
             x = torch.nn.functional.group_norm(
@@ -364,7 +369,7 @@ class GroupNorm(torch.nn.Module):
                 eps=self.eps,
             )
             if self.fused_act:
-                x = self.act_fn(x) 
+                x = self.act_fn(x)
         else:
             # Use custom GroupNorm implementation that supports channels last
             # memory layout for inference
@@ -384,8 +389,12 @@ class GroupNorm(torch.nn.Module):
             if self.fused_act:
                 x = self.act_fn(x)
         return x
-    
+
     def get_activation_function(self):
+        """
+        Get activation function given string input
+        """
+
         activation_map = {
             "silu": silu,
             "relu": relu,
@@ -400,9 +409,7 @@ class GroupNorm(torch.nn.Module):
         if act_fn is None:
             raise ValueError(f"Unknown activation function: {self.act}")
         return act_fn
-            
-            
-        
+
 
 class AttentionOp(torch.autograd.Function):
     """
@@ -532,7 +539,14 @@ class UNetBlock(torch.nn.Module):
         self.adaptive_scale = adaptive_scale
         self.profile_mode = profile_mode
         self.amp_mode = amp_mode
-        self.norm0 = GroupNorm(num_channels=in_channels, eps=eps, use_apex_gn=use_apex_gn, fused_act=fused_act, act=act, amp_mode=amp_mode)
+        self.norm0 = GroupNorm(
+            num_channels=in_channels,
+            eps=eps,
+            use_apex_gn=use_apex_gn,
+            fused_act=fused_act,
+            act=act,
+            amp_mode=amp_mode,
+        )
         self.conv0 = Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -551,11 +565,28 @@ class UNetBlock(torch.nn.Module):
             **init,
         )
         if self.adaptive_scale:
-            self.norm1 = GroupNorm(num_channels=out_channels, eps=eps, use_apex_gn=use_apex_gn, amp_mode=amp_mode)
+            self.norm1 = GroupNorm(
+                num_channels=out_channels,
+                eps=eps,
+                use_apex_gn=use_apex_gn,
+                amp_mode=amp_mode,
+            )
         else:
-            self.norm1 = GroupNorm(num_channels=out_channels, eps=eps, use_apex_gn=use_apex_gn, act=act, fused_act=fused_act, amp_mode=amp_mode)
+            self.norm1 = GroupNorm(
+                num_channels=out_channels,
+                eps=eps,
+                use_apex_gn=use_apex_gn,
+                act=act,
+                fused_act=fused_act,
+                amp_mode=amp_mode,
+            )
         self.conv1 = Conv2d(
-            in_channels=out_channels, out_channels=out_channels, kernel=3,fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init_zero
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel=3,
+            fused_conv_bias=fused_conv_bias,
+            amp_mode=amp_mode,
+            **init_zero,
         )
 
         self.skip = None
@@ -575,7 +606,12 @@ class UNetBlock(torch.nn.Module):
             )
 
         if self.num_heads:
-            self.norm2 = GroupNorm(num_channels=out_channels, eps=eps, use_apex_gn=use_apex_gn, amp_mode=amp_mode)
+            self.norm2 = GroupNorm(
+                num_channels=out_channels,
+                eps=eps,
+                use_apex_gn=use_apex_gn,
+                amp_mode=amp_mode,
+            )
             self.qkv = Conv2d(
                 in_channels=out_channels,
                 out_channels=out_channels * 3,
@@ -594,14 +630,16 @@ class UNetBlock(torch.nn.Module):
             )
 
     def forward(self, x, emb):
-        with nvtx.annotate(message="UNetBlock", color="purple") if self.profile_mode else contextlib.nullcontext():
+        with nvtx.annotate(
+            message="UNetBlock", color="purple"
+        ) if self.profile_mode else contextlib.nullcontext():
             orig = x
             x = self.conv0(self.norm0(x))
             params = self.affine(emb).unsqueeze(2).unsqueeze(3)
             if not self.amp_mode:
                 if params.dtype != x.dtype:
                     params = params.to(x.dtype)
-    
+
             if self.adaptive_scale:
                 scale, shift = params.chunk(chunks=2, dim=1)
                 x = silu(torch.addcmul(shift, self.norm1(x), scale + 1))
@@ -650,7 +688,11 @@ class PositionalEmbedding(torch.nn.Module):
     """
 
     def __init__(
-        self, num_channels: int, max_positions: int = 10000, endpoint: bool = False, amp_mode: bool = False
+        self,
+        num_channels: int,
+        max_positions: int = 10000,
+        endpoint: bool = False,
+        amp_mode: bool = False,
     ):
         super().__init__()
         self.num_channels = num_channels
@@ -701,7 +743,7 @@ class FourierEmbedding(torch.nn.Module):
         if not self.amp_mode:
             if x.dtype != self.freqs.dtype:
                 freqs = self.freqs.to(x.dtype)
-                
+
         x = x.ger((2 * np.pi * freqs))
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x

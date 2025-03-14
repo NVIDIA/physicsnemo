@@ -482,8 +482,12 @@ def test_call_method_residualloss_with_lt_unet_hr_mean_conditioning(device):
 
 # ResLoss Opt tests
 
-def res_loss_opt_fake_net(latent, y_lr, sigma, labels, global_index=None, augment_labels=None):
+
+def res_loss_opt_fake_net(
+    latent, y_lr, sigma, labels, global_index=None, augment_labels=None
+):
     return torch.tensor([1.0])
+
 
 def test_resloss_opt_initialization():
     # Mock the model loading
@@ -493,7 +497,7 @@ def test_resloss_opt_initialization():
         img_shape_y=256,
         patch_shape_x=256,
         patch_shape_y=256,
-        patch_num=1
+        patch_num=1,
     )
     assert loss_func.P_mean == 0.0
     assert loss_func.P_std == 1.2
@@ -506,13 +510,14 @@ def test_resloss_opt_initialization():
         patch_shape_x=256,
         patch_shape_y=256,
         patch_num=1,
-        P_mean=-2.0, 
-        P_std=2.0, 
-        sigma_data=0.3
+        P_mean=-2.0,
+        P_std=2.0,
+        sigma_data=0.3,
     )
     assert loss_func.P_mean == -2.0
     assert loss_func.P_std == 2.0
     assert loss_func.sigma_data == 0.3
+
 
 def test_resloss_opt_call_method():
     loss_func = ResidualLoss_Opt(
@@ -522,9 +527,9 @@ def test_resloss_opt_call_method():
         patch_shape_x=256,
         patch_shape_y=256,
         patch_num=1,
-        P_mean=-2.0, 
-        P_std=2.0, 
-        sigma_data=0.3
+        P_mean=-2.0,
+        P_std=2.0,
+        sigma_data=0.3,
     )
 
     img_clean = torch.tensor([[[[1.0]]]])
@@ -543,6 +548,7 @@ def test_resloss_opt_call_method():
         res_loss_opt_fake_net, img_clean, img_lr, labels, mock_augment_pipe
     )
     assert isinstance(loss_value_with_augmentation, torch.Tensor)
+
 
 # VELoss_dfsr tests
 

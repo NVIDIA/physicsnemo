@@ -36,15 +36,19 @@ def test_song_unet_global_indexing(device):
     batch_shape_y = 64
     # Construct the DDM++ UNet model
 
-    model = UNet(
-        img_resolution=128,
-        in_channels=2 + N_pos,
-        out_channels=2,
-        gridtype="test",
-        N_grid_channels=N_pos,
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model = (
+        UNet(
+            img_resolution=128,
+            in_channels=2 + N_pos,
+            out_channels=2,
+            gridtype="test",
+            N_grid_channels=N_pos,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
     input_image = torch.ones([1, 2, batch_shape_x, batch_shape_y]).to(device)
     noise_labels = noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
@@ -69,13 +73,17 @@ def test_song_unet_constructor(device):
     in_channels = 2
     out_channels = 2
     N_pos = 4
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model = (
+        UNet(
+            img_resolution=img_resolution,
+            in_channels=in_channels + N_pos,
+            out_channels=out_channels,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
@@ -84,13 +92,17 @@ def test_song_unet_constructor(device):
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
 
     # test rectangular shape
-    model = UNet(
-        img_resolution=[img_resolution, img_resolution * 2],
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,        
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model = (
+        UNet(
+            img_resolution=[img_resolution, img_resolution * 2],
+            in_channels=in_channels + N_pos,
+            out_channels=out_channels,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, out_channels, img_resolution, img_resolution * 2]).to(
@@ -109,19 +121,23 @@ def test_song_unet_position_embedding(device):
     out_channels = 2
     # NCSN++
     N_pos = 100
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels + N_pos,
-        out_channels=out_channels,
-        embedding_type="fourier",
-        channel_mult_noise=2,
-        encoder_type="residual",
-        resample_filter=[1, 3, 3, 1],
-        gridtype="learnable",
-        N_grid_channels=N_pos,
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model = (
+        UNet(
+            img_resolution=img_resolution,
+            in_channels=in_channels + N_pos,
+            out_channels=out_channels,
+            embedding_type="fourier",
+            channel_mult_noise=2,
+            encoder_type="residual",
+            resample_filter=[1, 3, 3, 1],
+            gridtype="learnable",
+            N_grid_channels=N_pos,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
@@ -130,14 +146,18 @@ def test_song_unet_position_embedding(device):
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
     assert model.pos_embd.shape == (100, img_resolution, img_resolution)
 
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        N_grid_channels=40,
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model = (
+        UNet(
+            img_resolution=img_resolution,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            N_grid_channels=40,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
     assert model.pos_embd.shape == (40, img_resolution, img_resolution)
 
 
@@ -155,7 +175,7 @@ def test_fails_if_grid_is_invalid():
             gridtype="linear",
             N_grid_channels=20,
             use_apex_gn=True,
-            amp_mode=True
+            amp_mode=True,
         ).to(memory_format=torch.channels_last)
 
     with pytest.raises(ValueError):
@@ -166,7 +186,7 @@ def test_fails_if_grid_is_invalid():
             gridtype="sinusoidal",
             N_grid_channels=11,
             use_apex_gn=True,
-            amp_mode=True
+            amp_mode=True,
         ).to(memory_format=torch.channels_last)
 
 
@@ -175,17 +195,21 @@ def test_song_unet_optims(device):
     """Test Song UNet optimizations"""
 
     def setup_model():
-        model = UNet(
-            img_resolution=16,
-            in_channels=6,
-            out_channels=2,
-            embedding_type="fourier",
-            channel_mult_noise=2,
-            encoder_type="residual",
-            resample_filter=[1, 3, 3, 1],
-            use_apex_gn=True,
-            amp_mode=True
-        ).to(device).to(memory_format=torch.channels_last)
+        model = (
+            UNet(
+                img_resolution=16,
+                in_channels=6,
+                out_channels=2,
+                embedding_type="fourier",
+                channel_mult_noise=2,
+                encoder_type="residual",
+                resample_filter=[1, 3, 3, 1],
+                use_apex_gn=True,
+                amp_mode=True,
+            )
+            .to(device)
+            .to(memory_format=torch.channels_last)
+        )
         noise_labels = torch.randn([1]).to(device)
         class_labels = torch.randint(0, 1, (1, 1)).to(device)
         input_image = torch.ones([1, 2, 16, 16]).to(device)
@@ -214,27 +238,38 @@ def test_song_unet_optims(device):
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
     # Construct FNO models
-    model_1 = UNet(
-        img_resolution=16,
-        in_channels=6,
-        out_channels=2,
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model_1 = (
+        UNet(
+            img_resolution=16,
+            in_channels=6,
+            out_channels=2,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
 
-    model_2 = UNet(
-        img_resolution=16,
-        in_channels=6,
-        out_channels=2,
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model_2 = (
+        UNet(
+            img_resolution=16,
+            in_channels=6,
+            out_channels=2,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
 
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
     assert common.validate_checkpoint(
-        model_1, model_2, (*[input_image, noise_labels, class_labels],),enable_autocast=True
+        model_1,
+        model_2,
+        (*[input_image, noise_labels, class_labels],),
+        enable_autocast=True,
     )
 
 
@@ -242,17 +277,21 @@ def test_song_unet_checkpoint(device):
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_son_unet_deploy(device):
     """Test Song UNet deployment support"""
-    model = UNet(
-        img_resolution=16,
-        in_channels=6,
-        out_channels=2,
-        embedding_type="fourier",
-        channel_mult_noise=2,
-        encoder_type="residual",
-        resample_filter=[1, 3, 3, 1],
-        use_apex_gn=True,
-        amp_mode=True
-    ).to(device).to(memory_format=torch.channels_last)
+    model = (
+        UNet(
+            img_resolution=16,
+            in_channels=6,
+            out_channels=2,
+            embedding_type="fourier",
+            channel_mult_noise=2,
+            encoder_type="residual",
+            resample_filter=[1, 3, 3, 1],
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
 
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)

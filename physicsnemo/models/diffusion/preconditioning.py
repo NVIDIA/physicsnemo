@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import List, Literal, Tuple, Union
 
 import numpy as np
-import nvtx
 import torch
 
 from physicsnemo.models.meta import ModelMetaData
@@ -612,7 +611,6 @@ class EDMPrecond(Module):
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.sigma_data = sigma_data
-
 
         model_class = getattr(network_module, model_type)
         self.model = model_class(

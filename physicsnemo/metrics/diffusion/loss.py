@@ -1057,7 +1057,15 @@ class ResLoss_Opt:
         self.hr_mean_conditioning = hr_mean_conditioning
         self.y_mean = None
 
-    def __call__(self, net, img_clean, img_lr, patch_num_per_iter=-1, labels=None, augment_pipe=None):
+    def __call__(
+        self,
+        net,
+        img_clean,
+        img_lr,
+        patch_num_per_iter=-1,
+        labels=None,
+        augment_pipe=None,
+    ):
         """
         Calculate and return the loss for denoising score matching.
 
@@ -1085,13 +1093,15 @@ class ResLoss_Opt:
             A tensor representing the loss calculated based on the network's
             predictions.
         """
-        
-        self.patch_num = patch_num_per_iter if patch_num_per_iter != -1 else self.patch_num
-        
+
+        self.patch_num = (
+            patch_num_per_iter if patch_num_per_iter != -1 else self.patch_num
+        )
+
         rnd_normal = torch.randn([img_clean.shape[0], 1, 1, 1], device=img_clean.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
         weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
-        
+
         # augment for conditional generaiton
         img_tot = torch.cat((img_clean, img_lr), dim=1)
         y_tot, augment_labels = (
@@ -1099,13 +1109,13 @@ class ResLoss_Opt:
         )
         y = y_tot[:, : img_clean.shape[1], :, :]
         y_lr = y_tot[:, img_clean.shape[1] :, :, :]
-        
+
         y_lr_res = y_lr.to(memory_format=torch.channels_last)
 
         # global index
         b = y.shape[0]
-        Nx = torch.arange(self.img_shape_x,device=img_clean.device).int()
-        Ny = torch.arange(self.img_shape_y,device=img_clean.device).int()
+        Nx = torch.arange(self.img_shape_x, device=img_clean.device).int()
+        Ny = torch.arange(self.img_shape_y, device=img_clean.device).int()
         grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0)[
             None,
         ].expand(b, -1, -1, -1)
@@ -1122,25 +1132,24 @@ class ResLoss_Opt:
             self.y_mean = y_mean
         # else:
         #     y_mean = self.y_mean
-            
+
         y = y - self.y_mean
 
         if self.hr_mean_conditioning:
             y_lr = torch.cat((self.y_mean, y_lr), dim=1)
-        
-        
+
         global_index = None
         # patchified training
         # conditioning: cat(y_mean, y_lr, input_interp, pos_embd), 4+12+100+4
-        
+
         if (
             self.img_shape_x != self.patch_shape_x
             or self.img_shape_y != self.patch_shape_y
         ):
-            
+
             c_in = y_lr.shape[1]
             c_out = y.shape[1]
-            
+
             rnd_normal = torch.randn(
                 [img_clean.shape[0] * self.patch_num, 1, 1, 1], device=img_clean.device
             )
@@ -1179,7 +1188,7 @@ class ResLoss_Opt:
                 dtype=torch.int,
                 device=img_clean.device,
             )
-            
+
             for i in range(self.patch_num):
                 rnd_x = random.randint(0, self.img_shape_x - self.patch_shape_x)
                 rnd_y = random.randint(0, self.img_shape_y - self.patch_shape_y)
@@ -1207,10 +1216,10 @@ class ResLoss_Opt:
                     ),
                     1,
                 )
-                
+
             y = y_new
             y_lr = y_lr_new
-        
+
         latent = y + torch.randn_like(y) * sigma
         D_yn = net(
             latent,
@@ -1220,10 +1229,11 @@ class ResLoss_Opt:
             global_index=global_index,
             augment_labels=augment_labels,
         )
-        
+
         loss = weight * ((D_yn - y) ** 2)
 
         return loss
+
 
 class VELoss_dfsr:
     """

@@ -19,6 +19,7 @@ Model architectures used in the paper "Elucidating the Design Space of
 Diffusion-Based Generative Models".
 """
 
+import contextlib
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Union
 
@@ -208,7 +209,7 @@ class SongUNet(Module):
             act=act,
             fused_conv_bias=fused_conv_bias,
             profile_mode=profile_mode,
-            amp_mode=amp_mode
+            amp_mode=amp_mode,
         )
         self.profile_mode = profile_mode
         self.amp_mode = amp_mode
@@ -235,12 +236,19 @@ class SongUNet(Module):
         # Mapping.
         if self.embedding_type != "zero":
             self.map_noise = (
-                PositionalEmbedding(num_channels=noise_channels, endpoint=True, amp_mode=amp_mode)
+                PositionalEmbedding(
+                    num_channels=noise_channels, endpoint=True, amp_mode=amp_mode
+                )
                 if embedding_type == "positional"
                 else FourierEmbedding(num_channels=noise_channels, amp_mode=amp_mode)
             )
             self.map_label = (
-                Linear(in_features=label_dim, out_features=noise_channels, amp_mode=amp_mode, **init)
+                Linear(
+                    in_features=label_dim,
+                    out_features=noise_channels,
+                    amp_mode=amp_mode,
+                    **init,
+                )
                 if label_dim
                 else None
             )
@@ -256,10 +264,16 @@ class SongUNet(Module):
                 else None
             )
             self.map_layer0 = Linear(
-                in_features=noise_channels, out_features=emb_channels, amp_mode=amp_mode, **init
+                in_features=noise_channels,
+                out_features=emb_channels,
+                amp_mode=amp_mode,
+                **init,
             )
             self.map_layer1 = Linear(
-                in_features=emb_channels, out_features=emb_channels, amp_mode=amp_mode, **init
+                in_features=emb_channels,
+                out_features=emb_channels,
+                amp_mode=amp_mode,
+                **init,
             )
 
         # Encoder.
@@ -272,7 +286,12 @@ class SongUNet(Module):
                 cin = cout
                 cout = model_channels
                 self.enc[f"{res}x{res}_conv"] = Conv2d(
-                    in_channels=cin, out_channels=cout, kernel=3, fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init
+                    in_channels=cin,
+                    out_channels=cout,
+                    kernel=3,
+                    fused_conv_bias=fused_conv_bias,
+                    amp_mode=amp_mode,
+                    **init,
                 )
             else:
                 self.enc[f"{res}x{res}_down"] = UNetBlock(
@@ -288,7 +307,12 @@ class SongUNet(Module):
                         amp_mode=amp_mode,
                     )
                     self.enc[f"{res}x{res}_aux_skip"] = Conv2d(
-                        in_channels=caux, out_channels=cout, kernel=1, fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init
+                        in_channels=caux,
+                        out_channels=cout,
+                        kernel=1,
+                        fused_conv_bias=fused_conv_bias,
+                        amp_mode=amp_mode,
+                        **init,
                     )
                 if encoder_type == "residual":
                     self.enc[f"{res}x{res}_aux_residual"] = Conv2d(
@@ -347,15 +371,24 @@ class SongUNet(Module):
                         amp_mode=amp_mode,
                     )
                 self.dec[f"{res}x{res}_aux_norm"] = GroupNorm(
-                    num_channels=cout, eps=1e-6, use_apex_gn=use_apex_gn, amp_mode=amp_mode,
+                    num_channels=cout,
+                    eps=1e-6,
+                    use_apex_gn=use_apex_gn,
+                    amp_mode=amp_mode,
                 )
                 self.dec[f"{res}x{res}_aux_conv"] = Conv2d(
-                    in_channels=cout, out_channels=out_channels, kernel=3, fused_conv_bias=fused_conv_bias, amp_mode=amp_mode, **init_zero
+                    in_channels=cout,
+                    out_channels=out_channels,
+                    kernel=3,
+                    fused_conv_bias=fused_conv_bias,
+                    amp_mode=amp_mode,
+                    **init_zero,
                 )
 
-
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
-        with nvtx.annotate(message="SongUNet", color="blue") if self.profile_mode else contextlib.nullcontext():
+        with nvtx.annotate(
+            message="SongUNet", color="blue"
+        ) if self.profile_mode else contextlib.nullcontext():
             if self.embedding_type != "zero":
                 # Mapping.
                 emb = self.map_noise(noise_labels)
@@ -369,7 +402,9 @@ class SongUNet(Module):
                             torch.rand([x.shape[0], 1], device=x.device)
                             >= self.label_dropout
                         ).to(tmp.dtype)
-                    emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
+                    emb = emb + self.map_label(
+                        tmp * np.sqrt(self.map_label.in_features)
+                    )
                 if self.map_augment is not None and augment_labels is not None:
                     emb = emb + self.map_augment(augment_labels)
                 emb = silu(self.map_layer0(emb))
@@ -383,7 +418,9 @@ class SongUNet(Module):
             skips = []
             aux = x
             for name, block in self.enc.items():
-                with nvtx.annotate(f"SongUNet encoder: {name}", color="blue") if self.profile_mode else contextlib.nullcontext():
+                with nvtx.annotate(
+                    f"SongUNet encoder: {name}", color="blue"
+                ) if self.profile_mode else contextlib.nullcontext():
                     if "aux_down" in name:
                         aux = block(aux)
                     elif "aux_skip" in name:
@@ -399,11 +436,11 @@ class SongUNet(Module):
                         # For UNetBlocks check if we should use gradient checkpointing
                         if isinstance(block, UNetBlock):
                             if x.shape[-1] > self.checkpoint_threshold:
-                                #self.checkpoint = checkpoint?
-                                #else: self.checkpoint  = lambda(block,x,emb:block(x,emb))
+                                # self.checkpoint = checkpoint?
+                                # else: self.checkpoint  = lambda(block,x,emb:block(x,emb))
                                 x = checkpoint(block, x, emb)
                             else:
-                                #AssertionError: Only support NHWC layout.
+                                # AssertionError: Only support NHWC layout.
                                 x = block(x, emb)
                         else:
                             x = block(x)
@@ -413,7 +450,9 @@ class SongUNet(Module):
             aux = None
             tmp = None
             for name, block in self.dec.items():
-                with nvtx.annotate(f"SongUNet decoder: {name}", color="blue") if self.profile_mode else contextlib.nullcontext():
+                with nvtx.annotate(
+                    f"SongUNet decoder: {name}", color="blue"
+                ) if self.profile_mode else contextlib.nullcontext():
                     if "aux_up" in name:
                         aux = block(aux)
                     elif "aux_norm" in name:
@@ -428,14 +467,14 @@ class SongUNet(Module):
                         if (
                             x.shape[-1] > self.checkpoint_threshold and "_block" in name
                         ) or (
-                            x.shape[-1] > (self.checkpoint_threshold / 2) and "_up" in name
+                            x.shape[-1] > (self.checkpoint_threshold / 2)
+                            and "_up" in name
                         ):
                             x = checkpoint(block, x, emb)
                         else:
                             x = block(x, emb)
             return aux
-    
-    
+
 
 class SongUNetPosEmbd(SongUNet):
     """Extends SongUNet with positional embeddings.
@@ -577,8 +616,7 @@ class SongUNetPosEmbd(SongUNet):
         act: str = "silu",
         fused_conv_bias: bool = True,
         profile_mode: bool = False,
-        amp_mode: bool = False
-        
+        amp_mode: bool = False,
     ):
         super().__init__(
             img_resolution,
@@ -605,16 +643,15 @@ class SongUNetPosEmbd(SongUNet):
             act,
             fused_conv_bias,
             profile_mode,
-            amp_mode
+            amp_mode,
         )
 
         self.gridtype = gridtype
         self.N_grid_channels = N_grid_channels
-        if self.gridtype == "learnable": 
+        if self.gridtype == "learnable":
             self.pos_embd = self._get_positional_embedding()
         else:
             self.register_buffer("pos_embd", self._get_positional_embedding())
-
 
     def forward(
         self,
@@ -702,7 +739,7 @@ class SongUNetPosEmbd(SongUNet):
         # to match the batch size of the input
         if x.dtype != self.pos_embd.dtype:
             self.pos_embd = self.pos_embd.to(x.dtype)
-            
+
         if global_index is None:
             selected_pos_embd = (
                 self.pos_embd[None]
@@ -719,11 +756,9 @@ class SongUNetPosEmbd(SongUNet):
             selected_pos_embd = self.pos_embd[
                 :, global_index[0], global_index[1]
             ]  # (N_pe, B*X*Y)
-            selected_pos_embd = (
-                torch.permute(
-                    torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], B, X, Y)),
-                    (1, 0, 2, 3),
-                )
+            selected_pos_embd = torch.permute(
+                torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], B, X, Y)),
+                (1, 0, 2, 3),
             )  # (B, N_pe, X, Y)
         return selected_pos_embd
 
@@ -1287,4 +1322,3 @@ class SongUNetPosLtEmbd(SongUNet):
             )
         )  # (lead_time_steps, lead_time_channels, img_shape_y, img_shape_x)
         return grid
-
