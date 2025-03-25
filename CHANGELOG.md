@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added version checks to ensure compatibility with older PyTorch for distributed utilities and ShardTensor
+- Added version checks to ensure compatibility with older PyTorch for distributed
+  utilities and ShardTensor
 
 ### Fixed
 
