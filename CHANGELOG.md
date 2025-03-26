@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix `EntryPoint` errors
+- `EntryPoint` error that occured during physicsnemo checkpoint loading
 
 ## [1.0.0] - 2025-03-18
 
