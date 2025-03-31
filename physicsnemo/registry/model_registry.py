@@ -18,7 +18,20 @@ import warnings
 from importlib.metadata import EntryPoint, entry_points
 from typing import List, Union
 
-import physicsnemo
+# NOTE: This is for backport compatibility, some entry points seem to be using this old class
+# Exact cause of this is unknown but it seems to be related to multiple versions
+# of importlib being present in the environment
+ENTRY_POINT_CLASSES = [
+    EntryPoint,
+]
+try:
+    from importlib_metadata import EntryPoint as EntryPointOld  # noqa: E402
+
+    ENTRY_POINT_CLASSES.append(EntryPointOld)
+except ImportError:
+    pass
+
+import physicsnemo  # noqa: E402
 
 
 # This model registry follows conventions similar to fsspec,
@@ -120,7 +133,7 @@ class ModelRegistry:
 
         model = self._model_registry.get(name)
         if model is not None:
-            if isinstance(model, EntryPoint):
+            if isinstance(model, tuple(ENTRY_POINT_CLASSES)):
                 model = model.load()
             return model
 

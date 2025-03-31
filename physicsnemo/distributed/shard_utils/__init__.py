@@ -14,8 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from physicsnemo.utils.version_check import check_module_requirements
 
-def register_shard_wrappers():
+# Prevent importing this module if the minimum version of pytorch is not met.
+try:
+    check_module_requirements("physicsnemo.distributed.shard_tensor")
 
-    from .conv_patches import generic_conv_nd_wrapper
-    from .natten_patches import na2d_wrapper
+    def register_shard_wrappers():
+        from .conv_patches import generic_conv_nd_wrapper
+        from .natten_patches import na2d_wrapper
+
+except ImportError:
+    pass

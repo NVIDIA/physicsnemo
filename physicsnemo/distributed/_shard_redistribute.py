@@ -21,24 +21,30 @@ import torch
 import torch.distributed as dist
 import torch.distributed._functional_collectives as funcol
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor._dtensor_spec import (
+
+from physicsnemo.distributed.autograd import (
+    all_gather_v,
+)
+from physicsnemo.utils.version_check import check_module_requirements
+
+# This is to make sure the torch minimum version is installed.
+check_module_requirements("physicsnemo.distributed.shard_tensor")
+
+from torch.distributed.tensor._dtensor_spec import (  # noqa: E402
     TensorMeta,
 )
-from torch.distributed.tensor._redistribute import (
+from torch.distributed.tensor._redistribute import (  # noqa: E402
     _gen_transform_infos,
 )
-from torch.distributed.tensor.placement_types import (
+from torch.distributed.tensor.placement_types import (  # noqa: E402
     Partial,
     Placement,
     Replicate,
     Shard,
 )
 
-import physicsnemo.distributed.shard_tensor as shard_tensor
-from physicsnemo.distributed._shard_tensor_spec import ShardTensorSpec
-from physicsnemo.distributed.autograd import (
-    all_gather_v,
-)
+import physicsnemo.distributed.shard_tensor as shard_tensor  # noqa: E402
+from physicsnemo.distributed._shard_tensor_spec import ShardTensorSpec  # noqa: E402
 
 # TODO:
 # DTensor makes assumptions about sharding sizes.

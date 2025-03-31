@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
+## [1.0.1] - 2025-03-25
+
+### Added
+
+- Added version checks to ensure compatibility with older PyTorch for distributed
+  utilities and ShardTensor
+
+### Fixed
+
+- `EntryPoint` error that occured during physicsnemo checkpoint loading
+
 ## [1.0.0] - 2025-03-18
 
 ### Added

@@ -14,5 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ._reductions import sharded_mean_wrapper
-from ._tensor_ops import unbind_rules
+from physicsnemo.utils.version_check import check_module_requirements
+
+# Prevent importing this module if the minimum version of pytorch is not met.
+try:
+    check_module_requirements("physicsnemo.distributed.shard_tensor")
+
+    from ._reductions import sharded_mean_wrapper
+    from ._tensor_ops import unbind_rules
+
+except ImportError:
+    pass

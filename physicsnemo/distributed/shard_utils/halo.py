@@ -14,12 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
+
+from physicsnemo.utils.version_check import check_module_requirements
+
+check_module_requirements("physicsnemo.distributed.shard_tensor")
 
 
 def halo_unpadding_1d(

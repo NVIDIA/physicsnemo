@@ -15,7 +15,11 @@
 # limitations under the License.
 
 
-from ._shard_tensor_spec import ShardTensorSpec
+# There is a minimum version of pytorch required for shard tensor.
+# 2.6.0+ works
+# 2.5.X and lower does not work
+from physicsnemo.utils.version_check import check_module_requirements
+
 from .autograd import all_gather_v, gather_v, indexed_all_to_all_v, scatter_v
 from .config import ProcessGroupConfig, ProcessGroupNode
 
@@ -25,25 +29,30 @@ from .manager import (
     PhysicsNeMoUndefinedGroupError,
     PhysicsNeMoUninitializedDistributedManagerWarning,
 )
-from .shard_tensor import ShardTensor, scatter_tensor
 from .utils import (
     mark_module_as_shared,
     reduce_loss,
     unmark_module_as_shared,
 )
 
+try:
+    check_module_requirements("physicsnemo.distributed.shard_tensor")
 
-def register_custom_ops():
-    # These imports will register the custom ops with the ShardTensor class.
-    # It's done here to avoid an import cycle.
-    from .custom_ops import (
-        sharded_mean_wrapper,
-        unbind_rules,
-    )
-    from .shard_utils import register_shard_wrappers
+    # In minumum versions are met, we can import the shard tensor and spec.
 
-    register_shard_wrappers()
+    from ._shard_tensor_spec import ShardTensorSpec
+    from .shard_tensor import ShardTensor, scatter_tensor
 
+    def register_custom_ops():
+        # These imports will register the custom ops with the ShardTensor class.
+        # It's done here to avoid an import cycle.
+        from .custom_ops import (
+            sharded_mean_wrapper,
+            unbind_rules,
+        )
+        from .shard_utils import register_shard_wrappers
 
-# Custom ops are not ready to be enabled yet:
-# register_custom_ops()
+        register_shard_wrappers()
+
+except ImportError:
+    pass

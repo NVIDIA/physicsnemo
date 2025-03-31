@@ -19,15 +19,23 @@ from typing import Any, Tuple, Union
 
 import torch
 import wrapt
-from torch.distributed.tensor.placement_types import Shard
 
-from physicsnemo.distributed import ShardTensor
-from physicsnemo.distributed.shard_utils.patch_core import (
+from physicsnemo.utils.version_check import check_module_requirements
+
+check_module_requirements("physicsnemo.distributed.shard_tensor")
+
+from torch.distributed.tensor.placement_types import Shard  # noqa: E402
+
+from physicsnemo.distributed import ShardTensor  # noqa: E402
+from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
     MissingShardPatch,
     UndeterminedShardingError,
 )
 
-from .halo import halo_padding_1d, halo_unpadding_1d
+from .halo import (  # noqa: E402
+    halo_padding_1d,
+    halo_unpadding_1d,
+)
 
 __all__ = ["na2d_wrapper"]
 
