@@ -34,10 +34,10 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/NVIDIA/modulus"
-Documentation = "https://docs.nvidia.com/modulus/#core"
-Issues = "https://github.com/NVIDIA/modulus/issues"
-Changelog = "https://github.com/NVIDIA/modulus/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/NVIDIA/physicsnemo"
+Documentation = "https://docs.nvidia.com/physicsnemo/index.html#core"
+Issues = "https://github.com/NVIDIA/physicsnemo/issues"
+Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 launch = [
