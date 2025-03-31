@@ -45,7 +45,7 @@ def mock_ncfile():
 @import_or_fail("cftime")
 def test_init(mock_ncfile, pytestconfig):
 
-    from modulus.utils.corrdiff import NetCDFWriter
+    from physicsnemo.utils.corrdiff import NetCDFWriter
 
     lat = np.array([[1.0, 2.0], [3.0, 4.0]])
     lon = np.array([[5.0, 6.0], [7.0, 8.0]])
@@ -92,7 +92,7 @@ def test_init(mock_ncfile, pytestconfig):
 @import_or_fail("cftime")
 def test_write_input(mock_ncfile, pytestconfig):
 
-    from modulus.utils.corrdiff import NetCDFWriter
+    from physicsnemo.utils.corrdiff import NetCDFWriter
 
     lat = np.array([[1.0, 2.0], [3.0, 4.0]])
     lon = np.array([[5.0, 6.0], [7.0, 8.0]])
@@ -116,7 +116,7 @@ def test_write_input(mock_ncfile, pytestconfig):
 @import_or_fail("cftime")
 def test_write_truth(mock_ncfile, pytestconfig):
 
-    from modulus.utils.corrdiff import NetCDFWriter
+    from physicsnemo.utils.corrdiff import NetCDFWriter
 
     lat = np.array([[1.0, 2.0], [3.0, 4.0]])
     lon = np.array([[5.0, 6.0], [7.0, 8.0]])
@@ -140,7 +140,7 @@ def test_write_truth(mock_ncfile, pytestconfig):
 @import_or_fail("cftime")
 def test_write_prediction(mock_ncfile, pytestconfig):
 
-    from modulus.utils.corrdiff import NetCDFWriter
+    from physicsnemo.utils.corrdiff import NetCDFWriter
 
     lat = np.array([[1.0, 2.0], [3.0, 4.0]])
     lon = np.array([[5.0, 6.0], [7.0, 8.0]])
@@ -167,7 +167,7 @@ def test_write_prediction(mock_ncfile, pytestconfig):
 @import_or_fail("cftime")
 def test_write_time(mock_ncfile, pytestconfig):
 
-    from modulus.utils.corrdiff import NetCDFWriter
+    from physicsnemo.utils.corrdiff import NetCDFWriter
 
     lat = np.array([[1.0, 2.0], [3.0, 4.0]])
     lon = np.array([[5.0, 6.0], [7.0, 8.0]])

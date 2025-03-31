@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.pix2pix import Pix2Pix
+from physicsnemo.models.pix2pix import Pix2Pix
 
 from . import common
 

@@ -4,7 +4,7 @@ This example demonstrates how to train the MeshGraphNet model to learn the flow 
 of Stokes flow and further
 improve the accuary of the model predictions by physics-informed inference. This example
 also demonstrates how to use physics utilites from
-[Modulus-Sym](https://github.com/NVIDIA/modulus-sym) to introduce physics-based
+[PhysicsNeMo-Sym](https://github.com/NVIDIA/physicsnemo-sym) to introduce physics-based
 constraints.
 
 ## Problem overview
@@ -84,7 +84,7 @@ of the samples from the test dataset.](../../../docs/img/stokes.png)
 ## Getting Started
 
 The dataset for this example is not publicly available. To get access, please reach out
-to the [NVIDIA Modulus team](simnet-team@nvidia.com).
+to the [NVIDIA PhysicsNeMo team](simnet-team@nvidia.com).
 
 This example requires the `pyvista` and `vtk` libraries. Install with
 
@@ -150,8 +150,8 @@ python pi_fine_tuning.py
 The fine-tuning step involves training of a PINN model to first refine the
 predictions of the MeshGraphNet model followed by an inference of the PINN model.
 
-If you are running this fine-tuning outside of the Modulus container, install Modulus Sym
-using the instructions from [here](https://github.com/NVIDIA/modulus-sym?tab=readme-ov-file#pypi)
+If you are running this fine-tuning outside of the PhysicsNeMo container, install
+PhysicsNeMo Sym using the instructions from [here](https://github.com/NVIDIA/physicsnemo-sym?tab=readme-ov-file#pypi)
 
 This will save the predictions for the test dataset in `.vtp` format in the `results`
 directory. Use Paraview to open and explore the results.

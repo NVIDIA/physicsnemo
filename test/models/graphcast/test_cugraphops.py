@@ -34,7 +34,7 @@ def test_cugraphops(
     pytestconfig, recomp_act, concat_trick, num_channels=2, res_h=21, res_w=10
 ):
     """Test cugraphops"""
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     if recomp_act and not common.utils.is_fusion_available("FusionDefinition"):
         pytest.skip("nvfuser module is not available or has incorrect version")

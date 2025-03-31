@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import torch
 
-from modulus.models.layers.interpolation import interpolation
+from physicsnemo.models.layers.interpolation import interpolation
 
 
 @pytest.mark.parametrize("mem_speed_trade", [True, False])

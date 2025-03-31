@@ -16,7 +16,7 @@
 
 import matplotlib.pyplot as plt
 from torch import FloatTensor
-from modulus.launch.logging import LaunchLogger
+from physicsnemo.launch.logging import LaunchLogger
 
 
 class GridValidator:

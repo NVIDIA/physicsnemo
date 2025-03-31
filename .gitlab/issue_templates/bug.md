@@ -1,6 +1,6 @@
 # Bug
 
-For technical questions please refer to our [forum](https://forums.developer.nvidia.com/c/physics-simulation/modulus-physics-ml-model-framework/443).
+For technical questions please refer to our [forum](https://forums.developer.nvidia.com/t/welcome-to-the-physicsnemo-ml-model-framework-forum/178556).
 
 Before submitting an issue, please review the existing issues to avoid duplicates.
 
@@ -35,12 +35,12 @@ python collect_env.py
 - GPU models and configuration:
 - Versions of any other relevant libraries:
 
-## Modulus Info
+## PhysicsNeMo Info
 
 Please fill out the list below:
 
-- Modulus version:
-- How Modulus is used (Docker image/ bare-metal installation):
+- PhysicsNeMo version:
+- How PhysicsNeMo is used (Docker image/ bare-metal installation):
 - (If using OptiX) OptiX version:
 - Exact command to reproduce:
-- (If using Modulus Docker image): Exact docker-run command:
+- (If using PhysicsNeMo Docker image): Exact docker-run command:

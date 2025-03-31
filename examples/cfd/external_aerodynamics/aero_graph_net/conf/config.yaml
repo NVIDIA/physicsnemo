@@ -89,7 +89,7 @@ loggers:
   wandb:
     _target_: loggers.WandBLogger
     project: car-cfd # aero-graph-net
-    entity: modulus
+    entity: physicsnemo
     name: agn
     group:
     mode: disabled

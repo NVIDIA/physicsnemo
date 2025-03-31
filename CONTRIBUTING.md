@@ -1,10 +1,10 @@
-# Modulus (Beta) Contribution Guide
+# PhysicsNeMo Contribution Guide
 
 ## Introduction
 
-Welcome to Project Modulus! We're excited you're here and want to contribute.
+Welcome to Project PhysicsNeMo! We're excited you're here and want to contribute.
 This documentation is intended for individuals and institutions interested in
-contributing to Modulus. Modulus is an open-source project and, as such, its
+contributing to PhysicsNeMo. PhysicsNeMo is an open-source project and, as such, its
 success relies on its community of contributors willing to keep improving it.
 Your contribution will be a valued addition to the code base; we simply ask
 that you read this page and understand our contribution process, whether you
@@ -13,24 +13,24 @@ contributor.
 
 ### Communicate with Us
 
-We are happy to talk with you about your needs for Modulus and your ideas for
+We are happy to talk with you about your needs for PhysicsNeMo and your ideas for
 contributing to the project. One way to do this is to create an issue discussing
 your thoughts. It might be that a very similar feature is under development or
 already exists, so an issue is a great starting point. If you are looking for an
 issue to resolve that will help, refer to the
-[issue](https://github.com/NVIDIA/modulus/issues) section.
-If you are considering collaborating with NVIDIA Modulus team to enhance Modulus, fill this
-[proposal form](https://forms.gle/fYsbZEtgRWJUQ3oQ9) and
+[issue](https://github.com/NVIDIA/physicsnemo/issues) section.
+If you are considering collaborating with NVIDIA PhysicsNeMo team to enhance PhysicsNeMo,
+fill this [proposal form](https://forms.gle/fYsbZEtgRWJUQ3oQ9) and
 we will get back to you.
 
-## Contribute to Modulus-Core
+## Contribute to PhysicsNeMo-Core
 
 ### Pull Requests
 
 Developer workflow for code contributions is as follows:
 
 1. Developers must first [fork](https://help.github.com/en/articles/fork-a-repo)
-the [upstream](https://github.com/NVIDIA/Modulus) Modulus repository.
+the [upstream](https://github.com/NVIDIA/physicsnemo) PhysicsNeMo repository.
 
 2. Git clone the forked repository and push changes to the personal fork.
 
@@ -42,7 +42,7 @@ to merge the changes from a branch of the fork into a selected branch of upstrea
     - Exercise caution when selecting the source and target branches for the PR.
     - Ensure that you update the [`CHANGELOG.md`](CHANGELOG.md) to reflect your contributions.
     - Creation of a PR creation kicks off CI and a code review process.
-    - Atleast one Modulus engineer will be assigned for the review.
+    - Atleast one PhysicsNeMo engineer will be assigned for the review.
 
 4. The PR will be accepted and the corresponding issue closed after adequate review and
 testing has been completed. Note that every PR should correspond to an open issue and
@@ -132,11 +132,11 @@ committing your changes:
 
 ### Pre-commit
 
-For Modulus development, [pre-commit](https://pre-commit.com/) is **required**.
+For PhysicsNeMo development, [pre-commit](https://pre-commit.com/) is **required**.
 This will not only help developers pass the CI pipeline, but also accelerate reviews.
 Contributions that have not used pre-commit will *not be reviewed*.
 
-To install `pre-commit` follow the below steps inside the Modulus repository folder:
+To install `pre-commit` follow the below steps inside the PhysicsNeMo repository folder:
 
 ```bash
 pip install pre-commit
@@ -190,7 +190,7 @@ The pipeline has following stages:
       --ignore-regex MetaData \
       -vv \
       --color \
-      ./modulus/
+      ./physicsnemo/
     ```
 
 3. `lint`
@@ -198,7 +198,7 @@ The pipeline has following stages:
     Linters will perform static analysis to check the style, complexity, errors and more.
     For markdown files `markdownlint` is used, its suggested to use the vscode,
     neovim or sublime [extensions](https://github.com/DavidAnson/markdownlint#related).
-    Modulus uses [Ruff](https://docs.astral.sh/ruff/) for linting of various types.
+    PhysicsNeMo uses [Ruff](https://docs.astral.sh/ruff/) for linting of various types.
     Currently we use flake8/pycodestyle (`E`), Pyflakes (`F`), flake8-bandit (`S`),
     isort (`I`), and performance 'PERF' rules with the isort rules being fixable.
 
@@ -215,8 +215,8 @@ The pipeline has following stages:
     To run pytest locally you can simply run `pytest` inside the `test` folder.
 
     While writing these tests, we encourage you to make use of the
-    [`@nfs_data_or_fail`](https://github.com/NVIDIA/modulus/blob/main/test/pytest_utils.py#L92)
-    and the [`@import_of_fail`](https://github.com/NVIDIA/modulus/blob/main/test/pytest_utils.py#L25)
+    [`@nfs_data_or_fail`](https://github.com/NVIDIA/physicsnemo/blob/main/test/pytest_utils.py#L92)
+    and the [`@import_of_fail`](https://github.com/NVIDIA/physicsnemo/blob/main/test/pytest_utils.py#L25)
     decorators to appropriately skip your tests for developers and users not having your
     test specific datasets and dependencies respectively. The CI has these datasets and
     dependencies so your tests will get executed during CI.
@@ -231,7 +231,7 @@ The pipeline has following stages:
     Refer [doctest](https://docs.python.org/3/library/doctest.html) for more information.
     If your MR fails this test, check your changes and the docstrings.
     To run doctest locally, you can simply run `pytest --doctest-modules` inside the
-    `modulus` folder.
+    `physicsnemo` folder.
 
 7. `coverage`
     Checks if your code additions have sufficient coverage.

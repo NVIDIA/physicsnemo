@@ -20,7 +20,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 
-from modulus.metrics.climate.loss import MSE_SSIM, SSIM
+from physicsnemo.metrics.climate.loss import MSE_SSIM, SSIM
 
 
 @dataclass

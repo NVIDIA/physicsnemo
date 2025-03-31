@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.pangu import Pangu
+from physicsnemo.models.pangu import Pangu
 
 from . import common
 

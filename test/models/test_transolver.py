@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.transolver import Transolver
+from physicsnemo.models.transolver import Transolver
 
 from . import common
 

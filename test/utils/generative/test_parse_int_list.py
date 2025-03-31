@@ -20,7 +20,7 @@ from pytest_utils import import_or_fail
 @import_or_fail("cftime")
 def test_parse_int_list(pytestconfig):
 
-    from modulus.utils.generative import parse_int_list
+    from physicsnemo.utils.generative import parse_int_list
 
     # Test parsing a simple comma-separated list
     input_str = "1,2,5,7,10"

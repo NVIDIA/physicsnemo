@@ -25,7 +25,7 @@ from pytest_utils import import_or_fail
 def test_coordinate_transform(latlon, pytestconfig):
     """Test coordinate transformation from latlon to xyz and back."""
 
-    from modulus.utils.graphcast.graph_utils import latlon2xyz, xyz2latlon
+    from physicsnemo.utils.graphcast.graph_utils import latlon2xyz, xyz2latlon
 
     latlon = torch.tensor([latlon], dtype=torch.float)
     xyz = latlon2xyz(latlon)

@@ -21,11 +21,11 @@ import sys
 import hydra
 import numpy as np
 import torch as th
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 from hydra.utils import instantiate
 
-from modulus import Module
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo import Module
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 from pathlib import Path
 
@@ -79,7 +79,7 @@ def train(cfg):
     cfg.model["n_constants"] = n_constants
     cfg.model["decoder_input_channels"] = decoder_input_channels
 
-    # convert Hydra cfg to pure dicts so they can be saved using modulus
+    # convert Hydra cfg to pure dicts so they can be saved using physicsnemo
     model = instantiate(cfg.model, _convert_="all")
     model.batch_size = cfg.batch_size
     model.learning_rate = cfg.learning_rate

@@ -1,12 +1,12 @@
 # [imports]
 import torch
 
-import modulus
-from modulus.datapipes.benchmarks.darcy import Darcy2D
-from modulus.launch.logging import LaunchLogger, PythonLogger
-from modulus.launch.logging.mlflow import initialize_mlflow
-from modulus.metrics.general.mse import mse
-from modulus.models.fno.fno import FNO
+import physicsnemo
+from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.metrics.general.mse import mse
+from physicsnemo.models.fno.fno import FNO
 
 # [imports]
 
@@ -40,11 +40,11 @@ logger = PythonLogger("main")  # General python logger
 
 # Initialize the MLFlow logger
 initialize_mlflow(
-    experiment_name="Modulus Tutorials",
-    experiment_desc="Simple Modulus Tutorials",
-    run_name="Modulus MLFLow Tutorial",
-    run_desc="Modulus Tutorial Training",
-    user_name="Modulus User",
+    experiment_name="PhysicsNeMo Tutorials",
+    experiment_desc="Simple PhysicsNeMo Tutorials",
+    run_name="PhysicsNeMo MLFLow Tutorial",
+    run_desc="PhysicsNeMo Tutorial Training",
+    user_name="PhysicsNeMo User",
     mode="offline",
 )
 LaunchLogger.initialize(use_mlflow=True)

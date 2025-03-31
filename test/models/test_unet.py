@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.unet import UNet
+from physicsnemo.models.unet import UNet
 
 from . import common
 

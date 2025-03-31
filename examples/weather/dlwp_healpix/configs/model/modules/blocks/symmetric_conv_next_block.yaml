@@ -17,7 +17,7 @@
 defaults:
   - /model/modules/activations@activation: capped_gelu
 
-_target_: modulus.models.dlwp_healpix_layers.healpix_blocks.SymmetricConvNeXtBlock
+_target_: physicsnemo.models.dlwp_healpix_layers.healpix_blocks.SymmetricConvNeXtBlock
 _recursive_: true
 in_channels: 3
 out_channels: 1

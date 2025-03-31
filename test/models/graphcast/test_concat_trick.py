@@ -32,7 +32,7 @@ from utils import fix_random_seeds  # noqa: E402
 def test_concat_trick(pytestconfig, recomp_act, num_channels=2, res_h=11, res_w=20):
     """Test concat trick"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     if recomp_act and not common.utils.is_fusion_available("FusionDefinition"):
         pytest.skip("nvfuser module is not available or has incorrect version")

@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from modulus.models.layers.spectral_layers import (
+from physicsnemo.models.layers.spectral_layers import (
     calc_latent_derivatives,
     fourier_derivatives,
 )

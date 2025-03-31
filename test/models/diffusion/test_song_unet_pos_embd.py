@@ -25,7 +25,7 @@ sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
 
 import common
 
-from modulus.models.diffusion import SongUNetPosEmbd as UNet
+from physicsnemo.models.diffusion import SongUNetPosEmbd as UNet
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])

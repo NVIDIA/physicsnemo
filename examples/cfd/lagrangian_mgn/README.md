@@ -2,7 +2,7 @@
 
 This is an example of MeshGraphNet for particle-based simulation, based on the
 [Learning to Simulate](https://sites.google.com/view/learning-to-simulate/)
-work. It demonstrates how to use Modulus to train a Graph Neural Network (GNN)
+work. It demonstrates how to use PhysicsNeMo to train a Graph Neural Network (GNN)
 to simulate Lagrangian fluids, solids, and deformable materials.
 
 ## Problem overview
@@ -145,15 +145,23 @@ Once the model is trained, run the following command:
 ```bash
 python inference.py +experiment=water \
     data.data_dir=/data/Water \
-    data.test.num_sequences=1 \
+    data.test.num_sequences=4 \
     resume_dir=/data/models/lmgn/water \
     output=/data/models/lmgn/water/inference
 ```
 
 Use the `resume_dir` parameter to specify the location of the model checkpoints.
 
-This will save the predictions for the test dataset as `.gif` files in the
+This will save the predictions for the test dataset as animated `.gif` files in the
 `/data/models/lmgn/water/inference/animations` directory.
+
+The script will also generate an `error.png` file,
+which displays a visualization of the rollout error.
+
+The results may resemble one of the following, depending on the
+material selected for training the model:
+
+![Inference Examples](../../../docs/img/lagrangian_meshgraphnet_multi.png "Inference Examples")
 
 ## References
 

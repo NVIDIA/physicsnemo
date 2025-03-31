@@ -23,7 +23,7 @@ import re
 
 import numpy as np
 import torch
-from modulus.utils.generative.utils import EasyDict, profiled_function
+from physicsnemo.utils.generative.utils import EasyDict, profiled_function
 
 # ----------------------------------------------------------------------------
 

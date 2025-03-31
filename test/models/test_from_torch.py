@@ -20,8 +20,8 @@ from dataclasses import dataclass
 import pytest
 import torch
 
-from modulus.models.module import ModelMetaData, Module
-from modulus.registry import ModelRegistry
+from physicsnemo.models.module import ModelMetaData, Module
+from physicsnemo.registry import ModelRegistry
 
 from . import common
 
@@ -62,9 +62,9 @@ def test_from_torch_forward(device):
     """Test forward pass from PyTorch"""
     torch.manual_seed(0)
 
-    # Construct CustomModulusModel
-    CustomModulusModel = Module.from_torch(CustomModel, CustomMetaData())
-    model = CustomModulusModel(in_features=32, out_features=8).to(device)
+    # Construct CustomPhysicsNeMoModel
+    CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
+    model = CustomPhysicsNeMoModel(in_features=32, out_features=8).to(device)
 
     bsize = 8
     invar = torch.randn(bsize, 32).to(device)
@@ -77,8 +77,8 @@ def test_from_torch_forward(device):
 def test_from_torch_constructor(device):
     """Test constructor from PyTorch"""
 
-    CustomModulusModel = Module.from_torch(CustomModel, CustomMetaData())
-    model = CustomModulusModel(in_features=8, out_features=4).to(device)
+    CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
+    model = CustomPhysicsNeMoModel(in_features=8, out_features=4).to(device)
 
     assert isinstance(model, Module)
 
@@ -92,9 +92,9 @@ def test_from_torch_optims(device):
 
     def setup_model():
         """Set up fresh model and inputs for each optim test"""
-        # Construct CustomModulusModel
-        CustomModulusModel = Module.from_torch(CustomModel, CustomMetaData())
-        model = CustomModulusModel(in_features=32, out_features=8).to(device)
+        # Construct CustomPhysicsNeMoModel
+        CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
+        model = CustomPhysicsNeMoModel(in_features=32, out_features=8).to(device)
 
         bsize = random.randint(1, 16)
         invar = torch.randn(bsize, 32).to(device)
@@ -125,11 +125,11 @@ def test_from_torch_optims(device):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_checkpoint(device):
     """Test checkpoint save/load from PyTorch"""
-    # Construct CustomModulusModel
-    CustomModulusModel = Module.from_torch(CustomModel, CustomMetaData())
-    model_1 = CustomModulusModel(in_features=4, out_features=4).to(device)
+    # Construct CustomPhysicsNeMoModel
+    CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
+    model_1 = CustomPhysicsNeMoModel(in_features=4, out_features=4).to(device)
 
-    model_2 = CustomModulusModel(in_features=4, out_features=4).to(device)
+    model_2 = CustomPhysicsNeMoModel(in_features=4, out_features=4).to(device)
 
     bsize = random.randint(1, 16)
     invar = torch.randn(bsize, 4).to(device)
@@ -142,9 +142,9 @@ def test_from_torch_checkpoint(device):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_deploy(device):
     """Test deployment support from PyTorch"""
-    # Construct CustomModulusModel
-    CustomModulusModel = Module.from_torch(CustomModel, CustomMetaData())
-    model = CustomModulusModel(in_features=4, out_features=4).to(device)
+    # Construct CustomPhysicsNeMoModel
+    CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
+    model = CustomPhysicsNeMoModel(in_features=4, out_features=4).to(device)
 
     bsize = random.randint(1, 4)
     invar = torch.randn(bsize, 4).to(device)

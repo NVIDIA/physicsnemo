@@ -22,10 +22,10 @@ from dgl import DGLGraph
 import torch
 from torch import Tensor
 
-import modulus.models.meshgraphnet.meshgraphnet as mgn
+import physicsnemo.models.meshgraphnet.meshgraphnet as mgn
 
-from modulus.models.layers.activations import get_activation
-from modulus.models.meta import ModelMetaData
+from physicsnemo.models.layers.activations import get_activation
+from physicsnemo.models.meta import ModelMetaData
 
 
 @dataclass
@@ -47,7 +47,7 @@ class MetaData(ModelMetaData):
 class AeroGraphNet(mgn.MeshGraphNet):
     """A variant of MeshGraphNet model that also predicts a drag coefficient.
 
-    This model is based on a standard Modulus `MeshGraphNet` model
+    This model is based on a standard PhysicsNeMo `MeshGraphNet` model
     with additional output, C_d (drag coefficient).
     """
 

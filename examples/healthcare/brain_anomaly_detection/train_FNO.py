@@ -14,10 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import modulus
-import modulus.sym
-from modulus.sym.hydra import to_absolute_path
-from modulus.sym.distributed.manager import DistributedManager
+import physicsnemo
+import physicsnemo.sym
+from physicsnemo.sym.hydra import to_absolute_path
+from physicsnemo.sym.distributed.manager import DistributedManager
 
 import torch
 import numpy as np
@@ -28,12 +28,12 @@ import h5py
 import numpy as np
 import hydra
 from omegaconf import DictConfig
-from modulus.models.fno import FNO
+from physicsnemo.models.fno import FNO
 from torch.utils.data import Dataset, DataLoader
-from modulus.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 from torch.nn import MSELoss
 from torch.optim import Adam, lr_scheduler
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 import torch.nn.functional as F
 
 

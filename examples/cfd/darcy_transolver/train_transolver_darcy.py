@@ -22,13 +22,13 @@ from torch.nn import MSELoss
 from utils.testloss import TestLoss
 from torch.optim import Adam, lr_scheduler
 
-from modulus.models.transolver import Transolver
-from modulus.datapipes.benchmarks.darcy import Darcy2D
-from modulus.distributed import DistributedManager
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import PythonLogger, LaunchLogger
-from modulus.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.models.transolver import Transolver
+from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
 
@@ -50,7 +50,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
         user_name="Haixu Wu, Huakun Luo, Haowen Wang",
         mode="offline",
     )
-    LaunchLogger.initialize(use_mlflow=True)  # Modulus launch logger
+    LaunchLogger.initialize(use_mlflow=True)  # PhysicsNeMo launch logger
 
     # define model, loss, optimiser, scheduler, data loader
     model = Transolver(

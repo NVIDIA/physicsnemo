@@ -20,10 +20,10 @@ import hydra
 import numpy as np
 import torch
 from hydra.utils import to_absolute_path
-from modulus.datapipes.gnn.stokes_dataset import StokesDataset
-from modulus.launch.logging import PythonLogger
-from modulus.launch.utils import load_checkpoint
-from modulus.models.meshgraphnet import MeshGraphNet
+from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
+from physicsnemo.launch.logging import PythonLogger
+from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.models.meshgraphnet import MeshGraphNet
 from omegaconf import DictConfig
 
 from utils import relative_lp_error

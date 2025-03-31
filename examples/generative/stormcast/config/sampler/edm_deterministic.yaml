@@ -16,7 +16,7 @@
 
 
 # Sampler args 
-# Below are passed as kwargs to modulus.utils.generative.determinisitic_sampler
+# Below are passed as kwargs to physicsnemo.utils.generative.determinisitic_sampler
 # Also supports stochastic sampling via S_churn and related args.
 # See EDM paper for details (https://arxiv.org/abs/2206.00364)
 

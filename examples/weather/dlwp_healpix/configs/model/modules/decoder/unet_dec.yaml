@@ -20,7 +20,7 @@ defaults:
   - /model/modules/blocks@recurrent_block: null
   - /model/modules/blocks@output_layer: output_layer
 
-_target_: modulus.models.dlwp_healpix_layers.healpix_decoder.UNetDecoder
+_target_: physicsnemo.models.dlwp_healpix_layers.healpix_decoder.UNetDecoder
 _recursive_: false
 n_channels:
   - 90

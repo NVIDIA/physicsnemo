@@ -41,8 +41,8 @@ import numpy as np
 from matplotlib import animation
 from omegaconf import DictConfig
 
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     LaunchLogger,
     PythonLogger,
     RankZeroLoggingWrapper,
@@ -484,7 +484,7 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    LaunchLogger.initialize()  # Modulus launch logger
+    LaunchLogger.initialize()  # PhysicsNeMo launch logger
     logger = PythonLogger("main")  # General python logger
     logger.file_logging()
 

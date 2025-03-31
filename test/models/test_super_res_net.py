@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.srrn import SRResNet
+from physicsnemo.models.srrn import SRResNet
 
 from . import common
 

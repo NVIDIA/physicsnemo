@@ -42,8 +42,8 @@ from dgl.data.utils import save_graphs
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
-from modulus.datapipes.cae.readers import read_vtp
-from modulus.sym.geometry.tessellation import Tessellation
+from physicsnemo.datapipes.cae.readers import read_vtp
+from physicsnemo.sym.geometry.tessellation import Tessellation
 
 
 def convert_to_triangular_mesh(

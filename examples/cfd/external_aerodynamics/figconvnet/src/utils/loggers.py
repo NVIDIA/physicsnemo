@@ -41,7 +41,7 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 from src.utils import rank0
 

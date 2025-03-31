@@ -36,7 +36,7 @@ dgl = pytest.importorskip("dgl")
 def test_meshgraphnet_forward(device, pytestconfig):
     """Test mehsgraphnet forward pass"""
 
-    from modulus.models.meshgraphnet import MeshGraphNet
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     torch.manual_seed(0)
     dgl.seed(0)
@@ -70,7 +70,7 @@ def test_meshgraphnet_forward(device, pytestconfig):
 def test_mehsgraphnet_constructor(device, pytestconfig):
     """Test mehsgraphnet constructor options"""
 
-    from modulus.models.meshgraphnet import MeshGraphNet
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     # Define dictionary of constructor args
     arg_list = [
@@ -127,7 +127,7 @@ def test_mehsgraphnet_constructor(device, pytestconfig):
 def test_meshgraphnet_optims(device, pytestconfig):
     """Test meshgraphnet optimizations"""
 
-    from modulus.models.meshgraphnet import MeshGraphNet
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     def setup_model():
         """Set up fresh model and inputs for each optim test"""
@@ -166,7 +166,7 @@ def test_meshgraphnet_optims(device, pytestconfig):
 def test_meshgraphnet_checkpoint(device, pytestconfig):
     """Test meshgraphnet checkpoint save/load"""
 
-    from modulus.models.meshgraphnet import MeshGraphNet
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     # Construct MGN model
     model_1 = MeshGraphNet(
@@ -205,7 +205,7 @@ def test_meshgraphnet_checkpoint(device, pytestconfig):
 def test_meshgraphnet_deploy(device, pytestconfig):
     """Test mesh-graph net deployment support"""
 
-    from modulus.models.meshgraphnet import MeshGraphNet
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     # Construct MGN model
     model = MeshGraphNet(

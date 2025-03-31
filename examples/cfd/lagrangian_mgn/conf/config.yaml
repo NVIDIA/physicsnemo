@@ -87,7 +87,7 @@ loggers:
   wandb:
     _target_: loggers.WandBLogger
     project: meshgraphnet
-    entity: modulus
+    entity: physicsnemo
     name: l-mgn
     group: l-mgn
     mode: disabled
@@ -95,6 +95,9 @@ loggers:
     id:
     wandb_key:
     watch_model: false
+  tensorboard:
+    _target_: loggers.TensorBoardLogger
+    log_dir: ${output}/tensorboard
 
 inference:
   frame_skip: 1

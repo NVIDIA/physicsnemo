@@ -23,7 +23,7 @@ import pytest
 import torch
 from pytest_utils import import_or_fail, nfsdata_or_fail
 
-from modulus.metrics.climate.healpix_loss import (
+from physicsnemo.metrics.climate.healpix_loss import (
     BaseMSE,
     OceanMSE,
     WeightedMSE,

@@ -23,14 +23,14 @@ import matplotlib.pyplot as plt
 from torch.nn.parallel import DistributedDataParallel
 from omegaconf import DictConfig
 
-from modulus.models.afno import AFNO
-from modulus.datapipes.climate import ERA5HDF5Datapipe
-from modulus.distributed import DistributedManager
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.models.afno import AFNO
+from physicsnemo.datapipes.climate import ERA5HDF5Datapipe
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 
-from modulus.launch.logging import LaunchLogger, PythonLogger
-from modulus.launch.logging.mlflow import initialize_mlflow
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
 try:
     from apex import optimizers
@@ -99,20 +99,20 @@ def main(cfg: DictConfig) -> None:
 
     # Initialize loggers
     # initialize_wandb(
-    #     project="Modulus-Launch-Dev",
-    #     entity="Modulus",
+    #     project="PhysicsNeMo-Launch-Dev",
+    #     entity="PhysicsNeMo",
     #     name="FourCastNet-Training",
     #     group="FCN-DDP-Group",
     # )
     initialize_mlflow(
-        experiment_name="Modulus-Launch-Dev",
-        experiment_desc="Modulus launch development",
+        experiment_name="PhysicsNeMo-Launch-Dev",
+        experiment_desc="PhysicsNeMo launch development",
         run_name="FCN-Training",
         run_desc="FCN ERA5 Training",
-        user_name="Modulus User",
+        user_name="PhysicsNeMo User",
         mode="offline",
     )
-    LaunchLogger.initialize(use_mlflow=cfg.use_mlflow)  # Modulus launch logger
+    LaunchLogger.initialize(use_mlflow=cfg.use_mlflow)  # PhysicsNeMo launch logger
     logger = PythonLogger("main")  # General python logger
 
     datapipe = ERA5HDF5Datapipe(
@@ -232,7 +232,7 @@ def main(cfg: DictConfig) -> None:
         scheduler.step()
 
         if (epoch % 5 == 0 or epoch == 1) and dist.rank == 0:
-            # Use Modulus Launch checkpoint
+            # Use PhysicsNeMo Launch checkpoint
             save_checkpoint(
                 to_absolute_path(cfg.ckpt_path),
                 models=fcn_model,

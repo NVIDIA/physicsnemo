@@ -29,9 +29,9 @@ from dataset import ImageFolderDataset
 from omegaconf import DictConfig
 from misc import open_url
 
-from modulus.metrics.diffusion import calculate_fid_from_inception_stats
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.metrics.diffusion import calculate_fid_from_inception_stats
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 def calculate_inception_stats(

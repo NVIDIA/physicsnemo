@@ -62,7 +62,7 @@ cugraphops_processor: false # If true, uses cugraphops backend for the processor
 cugraphops_decoder: false   # If true, uses cugraphops backend for the decoder.
 recompute_activation: true  # If true, recomputes activation in backward to save memory. Currently, only SiLU is supported.
 use_apex: true              # If true, uses Apex for fused Adam optimizer, typically resulting in 10-20% faster training iterations.
-                            # Apex is pre-installed in Modulus containers.
+                            # Apex is pre-installed in PhysicsNeMo containers.
 
 # ┌───────────────────────────────────────────┐
 # │           Dataset Configuration           │

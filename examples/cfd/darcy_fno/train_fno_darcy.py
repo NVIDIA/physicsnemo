@@ -21,13 +21,13 @@ from math import ceil
 from torch.nn import MSELoss
 from torch.optim import Adam, lr_scheduler
 
-from modulus.models.fno import FNO
-from modulus.datapipes.benchmarks.darcy import Darcy2D
-from modulus.distributed import DistributedManager
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import PythonLogger, LaunchLogger
-from modulus.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.models.fno import FNO
+from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
 
@@ -38,7 +38,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
 
     This training script demonstrates how to set up a data-driven model for a 2D Darcy flow
     using Fourier Neural Operators (FNO) and acts as a benchmark for this type of operator.
-    Training data is generated in-situ via the Darcy2D data loader from Modulus. Darcy2D
+    Training data is generated in-situ via the Darcy2D data loader from PhysicsNeMo. Darcy2D
     continuously generates data previously unseen by the model, i.e. the model is trained
     over a single epoch of a training set consisting of
     (cfg.training.max_pseudo_epochs*cfg.training.pseudo_epoch_sample_size) unique samples.
@@ -58,7 +58,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
         user_name="Gretchen Ross",
         mode="offline",
     )
-    LaunchLogger.initialize(use_mlflow=True)  # Modulus launch logger
+    LaunchLogger.initialize(use_mlflow=True)  # PhysicsNeMo launch logger
 
     # define model, loss, optimiser, scheduler, data loader
     model = FNO(

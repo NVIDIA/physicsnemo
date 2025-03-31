@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from modulus.models.layers import SirenLayer
+from physicsnemo.models.layers import SirenLayer
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])

@@ -23,7 +23,7 @@ import zipfile
 import numpy as np
 import PIL.Image
 import torch
-from modulus.utils.generative import EasyDict
+from physicsnemo.utils.generative import EasyDict
 
 try:
     import pyspng

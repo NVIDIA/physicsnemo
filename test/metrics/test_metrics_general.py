@@ -20,14 +20,14 @@ import numpy as np
 import pytest
 import torch
 
-import modulus.metrics.general.calibration as cal
-import modulus.metrics.general.crps as crps
-import modulus.metrics.general.ensemble_metrics as em
-import modulus.metrics.general.entropy as ent
-import modulus.metrics.general.histogram as hist
-import modulus.metrics.general.power_spectrum as ps
-import modulus.metrics.general.wasserstein as w
-from modulus.distributed.manager import DistributedManager
+import physicsnemo.metrics.general.calibration as cal
+import physicsnemo.metrics.general.crps as crps
+import physicsnemo.metrics.general.ensemble_metrics as em
+import physicsnemo.metrics.general.entropy as ent
+import physicsnemo.metrics.general.histogram as hist
+import physicsnemo.metrics.general.power_spectrum as ps
+import physicsnemo.metrics.general.wasserstein as w
+from physicsnemo.distributed.manager import DistributedManager
 
 Tensor = torch.Tensor
 

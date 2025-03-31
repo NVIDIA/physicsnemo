@@ -28,15 +28,15 @@ from omegaconf import DictConfig
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 
-from modulus.datapipes.gnn.vortex_shedding_dataset import VortexSheddingDataset
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.datapipes.gnn.vortex_shedding_dataset import VortexSheddingDataset
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.models.meshgraphnet import MeshGraphNet
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.models.meshgraphnet import MeshGraphNet
 
 
 class MGNTrainer:
@@ -174,8 +174,8 @@ def main(cfg: DictConfig) -> None:
 
     # Initialize loggers.
     initialize_wandb(
-        project="Modulus-Launch",
-        entity="Modulus",
+        project="PhysicsNeMo-Launch",
+        entity="PhysicsNeMo",
         name="Vortex_Shedding-Training",
         group="Vortex_Shedding-DDP-Group",
         mode=cfg.wandb_mode,

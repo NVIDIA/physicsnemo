@@ -21,17 +21,22 @@ import numpy as np
 import os
 
 import matplotlib.pyplot as plt
-from modulus.sym.hydra import to_absolute_path
+from physicsnemo.sym.hydra import to_absolute_path
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
-from modulus.models.fno import FNO
-from modulus.launch.logging import LaunchLogger
-from modulus.launch.utils.checkpoint import save_checkpoint
+from physicsnemo.models.fno import FNO
+from physicsnemo.launch.logging import LaunchLogger
+from physicsnemo.launch.utils.checkpoint import save_checkpoint
 
 from train_utils.datasets import DataLoader2D_swe
 from swe_nl_pde import SWE_NL
-from train_utils.losses import swe_loss, ic_loss, pino_loss_swe_nonlin, modulus_fourier
+from train_utils.losses import (
+    swe_loss,
+    ic_loss,
+    pino_loss_swe_nonlin,
+    physicsnemo_fourier,
+)
 from train_utils.plot import plot_predictions, generate_movie
 
 
@@ -79,8 +84,8 @@ def test_step(model, dataloader, log, cfg, swe_nl_node, device, option):
                     u_weight=cfg.loss.u_loss,
                     v_weight=cfg.loss.v_loss,
                 )
-            elif cfg.loss.derivative == "modulus":
-                loss_pde = modulus_fourier(
+            elif cfg.loss.derivative == "physicsnemo":
+                loss_pde = physicsnemo_fourier(
                     out,
                     swe_nl_node,
                     h_weight=cfg.loss.h_loss,
@@ -229,7 +234,7 @@ def main(cfg: DictConfig):
                 out = out[..., :-padding, :]
                 s0 = x[..., 0, -1]
 
-                # Compute PDE loss using 'modulus' functions or method from 'original' paper
+                # Compute PDE loss using 'physicsnemo' functions or method from 'original' paper
                 if cfg.loss.derivative == "original":
                     loss_pde = pino_loss_swe_nonlin(
                         out,
@@ -239,8 +244,8 @@ def main(cfg: DictConfig):
                         u_weight=cfg.loss.u_loss,
                         v_weight=cfg.loss.v_loss,
                     )
-                elif cfg.loss.derivative == "modulus":
-                    loss_pde = modulus_fourier(
+                elif cfg.loss.derivative == "physicsnemo":
+                    loss_pde = physicsnemo_fourier(
                         out,
                         swe_nl_node,
                         h_weight=cfg.loss.h_loss,

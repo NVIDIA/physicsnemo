@@ -128,7 +128,7 @@ you can register the necessary gradient hooks for this operation by simply calli
 `mark_module_as_shared`.
 
 ```python
-from modulus.distributed import mark_module_as_shared
+from physicsnemo.distributed import mark_module_as_shared
 
 ...
 
@@ -170,8 +170,8 @@ For more information, have a look at the corresponding documentations of these
 methods and classes.
 
 ```python
-from modulus.distributed import DistributedManager
-from modulus.models.gnn_layers import CuGraphCSC
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.models.gnn_layers import CuGraphCSC
 
 ...
 

@@ -22,7 +22,7 @@ from pytest_utils import import_or_fail
 @import_or_fail("cftime")
 def test_format_time(pytestconfig):
 
-    from modulus.utils.generative import format_time
+    from physicsnemo.utils.generative import format_time
 
     assert format_time(59) == "59s"
     assert format_time(60) == "1m 00s"
@@ -38,7 +38,7 @@ def test_format_time(pytestconfig):
 @import_or_fail("cftime")
 def test_format_time_brief(pytestconfig):
 
-    from modulus.utils.generative import format_time_brief
+    from physicsnemo.utils.generative import format_time_brief
 
     assert format_time_brief(59) == "59s"
     assert format_time_brief(60) == "1m 00s"

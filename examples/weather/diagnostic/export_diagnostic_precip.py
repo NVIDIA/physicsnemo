@@ -17,7 +17,7 @@
 import hydra
 from omegaconf import OmegaConf
 
-from modulus.launch.utils import load_checkpoint
+from physicsnemo.launch.utils import load_checkpoint
 
 from diagnostic import data, distribute, export, models
 

@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from modulus.sym.eq.pde import PDE
+from physicsnemo.sym.eq.pde import PDE
 from sympy import Symbol, Function, Number
 
 
 class SWE_NL(PDE):
-    """SWE Nonlinear PDE using Modulus Sym"""
+    """SWE Nonlinear PDE using PhysicsNeMo Sym"""
 
     name = "SWE_NL"
 

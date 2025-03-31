@@ -26,7 +26,7 @@ from pytest_utils import import_or_fail, nfsdata_or_fail
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -110,7 +110,7 @@ def scaling_double_dict():
 @nfsdata_or_fail
 def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
 
-    from modulus.datapipes.healpix.couplers import (
+    from physicsnemo.datapipes.healpix.couplers import (
         ConstantCoupler,
     )
 
@@ -246,7 +246,7 @@ def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
 @nfsdata_or_fail
 def test_TrailingAverageCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
 
-    from modulus.datapipes.healpix.couplers import (
+    from physicsnemo.datapipes.healpix.couplers import (
         TrailingAverageCoupler,
     )
 
@@ -414,7 +414,7 @@ def test_CoupledTimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.coupledtimeseries_dataset import (
+    from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
 
@@ -526,7 +526,7 @@ def test_CoupledTimeSeriesDataset_get_constants(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.coupledtimeseries_dataset import (
+    from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
 
@@ -576,7 +576,7 @@ def test_CoupledTimeSeriesDataset_get_constants(
 def test_CoupledTimeSeriesDataset_len(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.coupledtimeseries_dataset import (
+    from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
 
@@ -664,7 +664,7 @@ def test_CoupledTimeSeriesDataset_len(
 def test_CoupledTimeSeriesDataset_get(
     data_dir, dataset_name, scaling_double_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.coupledtimeseries_dataset import (
+    from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
 
@@ -841,7 +841,7 @@ def test_CoupledTimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )
 
@@ -951,7 +951,7 @@ def test_CoupledTimeSeriesDataModule_get_constants(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )
 
@@ -1048,7 +1048,7 @@ def test_CoupledTimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )
 
@@ -1125,7 +1125,7 @@ def test_CoupledTimeSeriesDataModule_get_dataloaders(
 def test_CoupledTimeSeriesDataModule_get_coupled_vars(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )
 
@@ -1207,7 +1207,7 @@ def test_CoupledTimeSeriesDataModule_get_coupled_vars(
 def test_CoupledTimeSeriesDataset_next_integration(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.coupledtimeseries_dataset import (
+    from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
 

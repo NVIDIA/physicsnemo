@@ -20,7 +20,7 @@ import onnx
 import pytest
 import torch
 
-import modulus
+import physicsnemo
 
 try:
     import onnxruntime as ort
@@ -30,7 +30,7 @@ except ImportError:
 from pathlib import Path
 from typing import Tuple
 
-from modulus.deploy.onnx import export_to_onnx_stream, run_onnx_inference
+from physicsnemo.deploy.onnx import export_to_onnx_stream, run_onnx_inference
 
 from .utils import compare_output
 
@@ -56,7 +56,7 @@ def check_ort_version():
 
 @torch.no_grad()
 def validate_onnx_export(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
 ) -> bool:
     """Check network's ONNX export works
@@ -65,8 +65,8 @@ def validate_onnx_export(
 
     Parameters
     ----------
-    model_1 : modulus.Module
-        Modulus model to save checkpoint from
+    model_1 : physicsnemo.Module
+        PhysicsNeMo model to save checkpoint from
     in_args : Tuple[Tensor], optional
         Input arguments, by default ()
 
@@ -117,7 +117,7 @@ def validate_onnx_export(
 
 @torch.no_grad()
 def validate_onnx_runtime(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor, ...] = (),
     rtol: float = 1e-3,
     atol: float = 1e-3,
@@ -131,8 +131,8 @@ def validate_onnx_runtime(
 
     Parameters
     ----------
-    model_1 : modulus.Module
-        Modulus model to save checkpoint from
+    model_1 : physicsnemo.Module
+        PhysicsNeMo model to save checkpoint from
     in_args : Tuple[Tensor], optional
         Input arguments, by default ()
     rtol : float, optional

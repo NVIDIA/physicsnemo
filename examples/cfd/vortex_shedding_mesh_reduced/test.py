@@ -22,8 +22,8 @@ import wandb as wb
 from tqdm import tqdm
 
 from constants import Constants
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )

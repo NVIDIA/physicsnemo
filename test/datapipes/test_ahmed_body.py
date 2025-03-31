@@ -35,7 +35,7 @@ def data_dir():
 def test_ahmed_body_constructor(data_dir, device, pytestconfig):
 
     # _nfsdata_or_fail(pytestconfig)
-    from modulus.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
+    from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
 
     # construct dataset
     dataset = AhmedBodyDataset(

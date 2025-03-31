@@ -19,10 +19,10 @@ from pathlib import Path
 import pytest
 import torch
 
-import modulus
+import physicsnemo
 
 
-class MockModel(modulus.Module):
+class MockModel(physicsnemo.Module):
     """Fake model"""
 
     def __init__(self, layer_size=16):
@@ -31,7 +31,7 @@ class MockModel(modulus.Module):
         self.layer = torch.nn.Linear(layer_size, layer_size)
 
 
-class NewMockModel(modulus.Module):
+class NewMockModel(physicsnemo.Module):
     """Fake model"""
 
     def __init__(self, layer_size=16):
@@ -43,7 +43,7 @@ class NewMockModel(modulus.Module):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("LoadModel", [MockModel, NewMockModel])
 def test_from_checkpoint_custom(device, LoadModel):
-    """Test checkpointing custom modulus module"""
+    """Test checkpointing custom physicsnemo module"""
     torch.manual_seed(0)
 
     # Construct Mock Model and save it

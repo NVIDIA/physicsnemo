@@ -15,9 +15,9 @@
 # limitations under the License.
 
 import torch
-from modulus.models import Module
-from modulus.models.diffusion import EDMPrecond, StormCastUNet
-from modulus.utils.generative import deterministic_sampler
+from physicsnemo.models import Module
+from physicsnemo.models.diffusion import EDMPrecond, StormCastUNet
+from physicsnemo.utils.generative import deterministic_sampler
 
 
 def get_preconditioned_architecture(
@@ -118,7 +118,7 @@ def regression_loss_fn(
     the EDMLoss and the same training loop can be used to train both regression and diffusion models
 
     Args:
-        net: modulus.models.diffusion.StormCastUNet
+        net: physicsnemo.models.diffusion.StormCastUNet
         images: Target data, shape [batch_size, target_channels, w, h]
         condition: input to the model, shape=[batch_size, condition_channel, w, h]
         class_labels: unused (applied to match EDMLoss signature)

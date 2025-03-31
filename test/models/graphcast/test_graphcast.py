@@ -35,7 +35,7 @@ te_version = "2.0.6"
 def test_graphcast_forward(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test graphcast forward pass"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     model_kwds = {
         "mesh_level": 1,
@@ -66,7 +66,7 @@ def test_graphcast_constructor(
 ):
     """Test graphcast constructor options"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     # Define dictionary of constructor args
     arg_list = [
@@ -114,7 +114,7 @@ def test_graphcast_te_constructor(
 ):
     """Test graphcast constructor options with graph transformer processor"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     device = "cuda:0"  # TE requires cuda
 
@@ -167,7 +167,7 @@ def test_graphcast_te_constructor(
 def test_graphcast_constructor_backward_compatibility(device, pytestconfig):
     """Test graphcast constructor for backward compatibility for multimesh_level -> mesh_level"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     # Define dictionary of constructor args
     kw_args = {
@@ -193,7 +193,7 @@ def test_graphcast_constructor_backward_compatibility(device, pytestconfig):
 def test_GraphCast_optims(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test GraphCast optimizations"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     def setup_model():
         """Set up fresh model and inputs for each optim test"""
@@ -236,7 +236,7 @@ def test_GraphCast_optims(device, pytestconfig, num_channels=2, res_h=10, res_w=
 def test_GraphCast_te_optims(pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test GraphCast optimizations with graph transformer processor"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     device = "cuda:0"
 
@@ -286,7 +286,7 @@ def test_GraphCast_te_optims(pytestconfig, num_channels=2, res_h=10, res_w=20):
 def test_graphcast_checkpoint(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test GraphCast checkpoint save/load"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     model_kwds = {
         "mesh_level": 1,
@@ -318,7 +318,7 @@ def test_graphcast_checkpoint(device, pytestconfig, num_channels=2, res_h=10, re
 def test_graphcast_checkpoint_te(pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test GraphCast checkpoint save/load with graph transformer processor"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     device = "cuda:0"
 
@@ -358,7 +358,7 @@ def test_graphcast_checkpoint_te(pytestconfig, num_channels=2, res_h=10, res_w=2
 def test_GraphCast_deploy(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test GraphCast deployment support"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     model_kwds = {
         "mesh_level": 1,
@@ -387,7 +387,7 @@ def test_GraphCast_deploy(device, pytestconfig, num_channels=2, res_h=10, res_w=
 def test_GraphCast_deploy_te(pytestconfig, num_channels=2, res_h=10, res_w=20):
     """Test GraphCast deployment support with graph transformer processor"""
 
-    from modulus.models.graphcast.graph_cast_net import GraphCastNet
+    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
     device = "cuda:0"
 

@@ -17,7 +17,7 @@
 import torch
 from torch import Tensor
 
-from modulus.utils.graphcast.graph_utils import deg2rad
+from physicsnemo.utils.graphcast.graph_utils import deg2rad
 
 
 def normalized_grid_cell_area(lat: Tensor, unit="deg") -> Tensor:

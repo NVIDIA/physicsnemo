@@ -18,7 +18,7 @@ import torch
 from pytest_utils import import_or_fail
 from torch.testing import assert_close
 
-import modulus
+import physicsnemo
 
 from . import common
 
@@ -29,8 +29,8 @@ HIDDEN_C = [IN_C, 4, 4, 4]
 MLP_C = [8, 8]
 
 
-def _create_model() -> modulus.Module:
-    from modulus.models.figconvnet.figconvunet import FIGConvUNet
+def _create_model() -> physicsnemo.Module:
+    from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
 
     return FIGConvUNet(
         IN_C,
@@ -49,7 +49,7 @@ def test_figconvunet_eval(pytestconfig):
     torch.manual_seed(0)
 
     model = _create_model().to(device)
-    assert isinstance(model, modulus.Module)
+    assert isinstance(model, physicsnemo.Module)
     model.eval()
 
     batch_size = 1

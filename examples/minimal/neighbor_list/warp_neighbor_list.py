@@ -16,7 +16,7 @@
 
 import torch
 
-from modulus.utils.neighbor_list import radius_search
+from physicsnemo.utils.neighbor_list import radius_search
 from utils import Meter
 
 try:

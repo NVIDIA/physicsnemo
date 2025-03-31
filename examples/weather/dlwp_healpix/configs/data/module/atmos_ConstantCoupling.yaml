@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: modulus.datapipes.healpix.data_modules.CoupledTimeSeriesDataModule
+_target_: physicsnemo.datapipes.healpix.data_modules.CoupledTimeSeriesDataModule
 src_directory: ${data.src_directory}
 dst_directory: ${data.dst_directory}
 dataset_name: ${data.dataset_name}

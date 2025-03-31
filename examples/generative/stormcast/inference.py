@@ -19,9 +19,9 @@ import torch
 from datetime import datetime
 import pandas as pd
 import hydra
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 from omegaconf import DictConfig
-from modulus.models import Module
+from physicsnemo.models import Module
 
 from datasets import dataset_classes
 from utils.io import (

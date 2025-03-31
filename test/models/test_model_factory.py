@@ -19,8 +19,8 @@ from contextlib import contextmanager
 import pytest
 import torch
 
-from modulus.models import Module
-from modulus.registry import ModelRegistry
+from physicsnemo.models import Module
+from physicsnemo.registry import ModelRegistry
 
 
 class MockModel(Module):

@@ -3,7 +3,7 @@
   "copyright_file": "copyright.txt",
   "dir": "../../",
   "exclude-dir": [
-      "../../modulus/internal",
+      "../../physicsnemo/internal",
       "../../docs/"
     ],
   "include-ext": [

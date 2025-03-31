@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.afno import ModAFNO
+from physicsnemo.models.afno import ModAFNO
 
 from . import common
 

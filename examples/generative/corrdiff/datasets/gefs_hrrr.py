@@ -31,7 +31,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import xarray as xr
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 from typing import List, Tuple, Union
 from .base import ChannelMetadata, DownscalingDataset
 import json

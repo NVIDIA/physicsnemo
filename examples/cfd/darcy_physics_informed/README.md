@@ -8,7 +8,7 @@ Numerical derivatives (PINO).
 
 This is an extension of the 2D darcy flow data-driven problem. In addition to the
 data loss, we will demonstrate the use of physics constranints, specifically
-the equation residual loss. [Modulus Sym](https://github.com/NVIDIA/modulus-sym)
+the equation residual loss. [PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
 has utilities tailored for physics-informed machine learning. It also presents an
 abstracted APIs that allows users to think and model the problem from the lens of
 equations, constraints, etc. In this example, we will only levarage the physics-informed
@@ -16,7 +16,7 @@ utilites to see how we can add physics to an existing data-driven model with eas
 still maintaining the flexibility to define our own training loop and other details.
 For a more abstracted definition of these type of problems, where the training loop
 definition and other things is taken care of implictily, you may refer
-[Modulus Sym](https://github.com/NVIDIA/modulus-sym)
+[PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
 
 ## Dataset
 
@@ -42,7 +42,7 @@ field and the input to the trunk network is the x, y coordinates.
 The output of the model is the pressure field. Having the mapping between the pressure field
 and the input x and y through a fully-differentiable network will allow us to compute
 the gradients of the pressure field w.r.t input x and y through automatic differentiation
-through Modulus sym utils.
+through PhysicsNeMo sym utils.
 
 In the second case, we will use just FNO and then compute the derivatives in a PINO style,
 using Numerical differentiation. Both approaches are viable ways to introduce physics in
@@ -50,12 +50,12 @@ the loss function and the use of one over the other can change from case-to-case
 With this example, we intend to demonstrate both such cases so that the users can compare
 and contrast the two approaches.
 
-In this example we will use the `PDE` class from Modulus-Sym to symbolically define
+In this example we will use the `PDE` class from PhysicsNeMo-Sym to symbolically define
 the PDEs and use the `PhysicsInformer` utility to introduce the PDE
 constraints. Defining the PDEs sympolically is very convinient and most natural way to
 define these PDEs and allows us to print the equations to check for correctness.
 This also abstracts out the
-complexity of converting the equation into a pytorch representation. Modulus Sym also
+complexity of converting the equation into a pytorch representation. PhysicsNeMo Sym also
 provides several complex, well tested PDEs like 3D Navier-Stokes, Linear elasticity,
 Electromagnetics, etc. pre-defined which can be used directly in physics-informing
 applications.
@@ -78,8 +78,8 @@ darcy_physics_informed_fno.py
 
 ### Note
 
-If you are running this example outside of the Modulus container, install Modulus Sym using
-the instructions from [here](https://github.com/NVIDIA/modulus-sym?tab=readme-ov-file#pypi)
+If you are running this example outside of the PhysicsNeMo container, install
+PhysicsNeMo Sym using the instructions from [here](https://github.com/NVIDIA/physicsnemo-sym?tab=readme-ov-file#pypi)
 
 ## References
 

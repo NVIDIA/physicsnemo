@@ -17,7 +17,7 @@
 import torch
 import torch.nn.functional as F
 import numpy as np
-from modulus.models.layers.spectral_layers import fourier_derivatives
+from physicsnemo.models.layers.spectral_layers import fourier_derivatives
 
 
 class LpLoss(object):
@@ -221,8 +221,8 @@ def pino_loss_swe_nonlin(
     return loss_f
 
 
-def modulus_fdm_swe_nonlin(h, u, v, pde_node, D=1, device=0):
-    "Calculate fourier derivatives using modulus"
+def physicsnemo_fdm_swe_nonlin(h, u, v, pde_node, D=1, device=0):
+    "Calculate fourier derivatives using physicsnemo"
     batchsize = u.size(0)
     nx = u.size(1)
     ny = u.size(2)
@@ -245,7 +245,7 @@ def modulus_fdm_swe_nonlin(h, u, v, pde_node, D=1, device=0):
     u_t = (u[:, 2:, ...] - u[:, :-2, ...]) / (2 * dt)
     v_t = (v[:, 2:, ...] - v[:, :-2, ...]) / (2 * dt)
 
-    # Compute fourier derivatives using modulus
+    # Compute fourier derivatives using physicsnemo
     _, f_ddu = fourier_derivatives(u, [1.0, 1.0])
     _, f_ddv = fourier_derivatives(v, [1.0, 1.0])
     f_dhu, _ = fourier_derivatives(hu, [1.0, 1.0])
@@ -270,7 +270,7 @@ def modulus_fdm_swe_nonlin(h, u, v, pde_node, D=1, device=0):
     huv_x = f_dhuv[:, 1 : nt - 1, :nx, :ny]
     huv_y = f_dhuv[:, nt + 1 : 2 * nt - 1, :nx, :ny]
 
-    # Compute PDEs using Modulus-Sym
+    # Compute PDEs using PhysicsNeMo-Sym
     pde_Dh = pde_node[0].evaluate({"h__t": h_t, "hu__x": hu_x, "hv__y": hv_y})
     pde_Du = pde_node[1].evaluate(
         {
@@ -300,8 +300,10 @@ def modulus_fdm_swe_nonlin(h, u, v, pde_node, D=1, device=0):
     return Dh, Du, Dv
 
 
-def modulus_fourier(s, pde_node, h_weight=1.0, u_weight=1.0, v_weight=1.0, device=0):
-    "Calculate PDE Loss using modulus_fdm_swe_nonlin with Modulus functions"
+def physicsnemo_fourier(
+    s, pde_node, h_weight=1.0, u_weight=1.0, v_weight=1.0, device=0
+):
+    "Calculate PDE Loss using physicsnemo_fdm_swe_nonlin with PhysicsNeMo functions"
     batchsize = s.size(0)
     nx = s.size(1)
     ny = s.size(2)
@@ -312,7 +314,7 @@ def modulus_fourier(s, pde_node, h_weight=1.0, u_weight=1.0, v_weight=1.0, devic
     u = s[..., 1]
     v = s[..., 2]
 
-    Dh, Du, Dv = modulus_fdm_swe_nonlin(h, u, v, pde_node, device=device)
+    Dh, Du, Dv = physicsnemo_fdm_swe_nonlin(h, u, v, pde_node, device=device)
     Dh *= h_weight
     Du *= u_weight
     Dv *= v_weight

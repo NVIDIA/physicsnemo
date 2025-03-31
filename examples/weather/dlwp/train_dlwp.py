@@ -26,16 +26,16 @@ import torch.nn.functional as F
 from omegaconf import DictConfig
 
 from era5_hdf5 import ERA5HDF5Datapipe
-from modulus.distributed import DistributedManager
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 
-from modulus.models.dlwp import DLWP
+from physicsnemo.models.dlwp import DLWP
 
 from cube_sphere_plotter_no_subplots import cube_sphere_plotter
-from modulus.launch.logging import LaunchLogger, PythonLogger
-from modulus.launch.logging.mlflow import initialize_mlflow
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-import modulus.utils.zenith_angle as zenith_angle
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+import physicsnemo.utils.zenith_angle as zenith_angle
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from hydra.utils import to_absolute_path
 
@@ -265,11 +265,11 @@ def main(cfg: DictConfig) -> None:
     dist = DistributedManager()
 
     initialize_mlflow(
-        experiment_name="Modulus-Launch-Dev",
-        experiment_desc="Modulus launch development",
+        experiment_name="PhysicsNeMo-Launch-Dev",
+        experiment_desc="PhysicsNeMo launch development",
         run_name="DLWP-Training",
         run_desc="DLWP ERA5 Training",
-        user_name="Modulus User",
+        user_name="PhysicsNeMo User",
         mode="offline",
     )
     LaunchLogger.initialize(use_mlflow=True)

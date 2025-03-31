@@ -16,7 +16,7 @@
 
 from typing import Union
 
-from modulus import Module
+from physicsnemo import Module
 
 
 default_model_params = {

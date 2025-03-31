@@ -18,13 +18,13 @@ import pytest
 import torch
 from pytest_utils import import_or_fail
 
-from modulus.models.diffusion.preconditioning import (
+from physicsnemo.models.diffusion.preconditioning import (
     EDMPrecond,
     EDMPrecondSR,
     VEPrecond_dfsr,
     VEPrecond_dfsr_cond,
 )
-from modulus.models.module import Module
+from physicsnemo.models.module import Module
 
 
 @pytest.mark.parametrize("scale_cond_input", [True, False])
@@ -61,7 +61,7 @@ def test_EDMPrecondSR_forward(scale_cond_input):
 @import_or_fail("termcolor")
 def test_EDMPrecondSR_serialization(tmp_path, pytestconfig):
 
-    from modulus.launch.utils import load_checkpoint, save_checkpoint
+    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
     module = EDMPrecondSR(8, 1, 1, 1, scale_cond_input=False)
     model_path = tmp_path / "output.mdlus"

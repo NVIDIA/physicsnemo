@@ -17,7 +17,7 @@
 defaults:
   - activation: null
 
-_target_: modulus.models.dlwp_healpix_layers.healpix_blocks.BasicConvBlock
+_target_: physicsnemo.models.dlwp_healpix_layers.healpix_blocks.BasicConvBlock
 in_channels: 3
 out_channels: 2
 kernel_size: 1

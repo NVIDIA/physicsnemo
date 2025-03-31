@@ -18,8 +18,8 @@ from typing import Tuple
 
 import torch
 
-from modulus import Module
-from modulus.distributed import DistributedManager
+from physicsnemo import Module
+from physicsnemo.distributed import DistributedManager
 
 
 def distribute_model(model: Module) -> Tuple[Module, DistributedManager]:
@@ -27,12 +27,12 @@ def distribute_model(model: Module) -> Tuple[Module, DistributedManager]:
 
     Parameters
     ----------
-    model: modulus.Module
+    model: physicsnemo.Module
         The model to be distributed
 
     Returns
     -------
-    (model: modulus.Module, dist: modulus.distributed.DistributedManager)
+    (model: physicsnemo.Module, dist: physicsnemo.distributed.DistributedManager)
         A tuple of the local copy of the distributed model and the
         DistributedManager object.
     """

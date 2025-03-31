@@ -33,14 +33,14 @@ import torchinfo
 
 import warp as wp
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 from src.utils import rank0
 from src.utils.average_meter import AverageMeter, AverageMeterDict, Timer
 from src.utils.loggers import init_logger
 from src.utils.seed import set_seed
 from src.utils.signal_handlers import SignalHandler
-from modulus.models.figconvnet.geometries import GridFeaturesMemoryFormat
+from physicsnemo.models.figconvnet.geometries import GridFeaturesMemoryFormat
 
 
 logger = logging.getLogger("figconv")

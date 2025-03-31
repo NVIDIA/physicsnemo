@@ -22,8 +22,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-import modulus  # noqa: F401 for docs
-import modulus.models.layers as layers
+import physicsnemo  # noqa: F401 for docs
+import physicsnemo.models.layers as layers
 from .spectral_layers import (
     FactorizedSpectralConv1d,
     FactorizedSpectralConv2d,
@@ -31,9 +31,9 @@ from .spectral_layers import (
     FactorizedSpectralConv4d,
 )
 
-from modulus.models.meta import ModelMetaData
-from modulus.models.mlp import FullyConnected
-from modulus.models.module import Module
+from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.models.module import Module
 
 # ===================================================================
 # ===================================================================
@@ -928,7 +928,7 @@ class TFNO(nn.Module):
     Example
     -------
     >>> # define the 2d TFNO model
-    >>> model = modulus.models.fno.TFNO(
+    >>> model = physicsnemo.models.fno.TFNO(
     ...     in_channels=4,
     ...     out_channels=3,
     ...     decoder_layers=2,

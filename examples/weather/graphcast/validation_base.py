@@ -18,7 +18,7 @@ import os
 import torch
 import matplotlib.pyplot as plt
 
-from modulus.datapipes.climate import ERA5HDF5Datapipe
+from physicsnemo.datapipes.climate import ERA5HDF5Datapipe
 
 from train_utils import prepare_input
 

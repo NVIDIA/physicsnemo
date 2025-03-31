@@ -1,11 +1,11 @@
 # [imports]
 import torch
 
-import modulus
-from modulus.datapipes.benchmarks.darcy import Darcy2D
-from modulus.launch.logging import LaunchLogger, PythonLogger
-from modulus.metrics.general.mse import mse
-from modulus.models.fno.fno import FNO
+import physicsnemo
+from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.metrics.general.mse import mse
+from physicsnemo.models.fno.fno import FNO
 
 # [imports]
 

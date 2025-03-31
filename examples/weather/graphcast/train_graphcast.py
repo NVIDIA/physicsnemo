@@ -32,25 +32,25 @@ torch._dynamo.config.suppress_errors = True  # TODO check if this can be removed
 # import modules
 import os
 
-from modulus.models.graphcast.graph_cast_net import GraphCastNet
-from modulus.utils.graphcast.loss import (
+from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
+from physicsnemo.utils.graphcast.loss import (
     CellAreaWeightedLossFunction,
     GraphCastLossFunction,
 )
-from modulus.launch.logging import (
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
 from train_utils import count_trainable_params, prepare_input
 from loss.utils import normalized_grid_cell_area
 from train_base import BaseTrainer
 from validation_base import Validation
-from modulus.datapipes.climate import ERA5HDF5Datapipe, SyntheticWeatherDataLoader
-from modulus.distributed import DistributedManager
-from modulus.utils.graphcast.data_utils import StaticData
+from physicsnemo.datapipes.climate import ERA5HDF5Datapipe, SyntheticWeatherDataLoader
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils.graphcast.data_utils import StaticData
 
 import hydra
 from hydra.utils import to_absolute_path
@@ -332,7 +332,7 @@ def main(cfg: DictConfig) -> None:
     if dist.rank == 0:
         initialize_wandb(
             project="GraphCast",
-            entity="Modulus",
+            entity="PhysicsNeMo",
             name=f"GraphCast-{HydraConfig.get().job.name}",
             group="group",
             mode=cfg.wb_mode,

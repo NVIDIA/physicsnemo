@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.fengwu import Fengwu
+from physicsnemo.models.fengwu import Fengwu
 
 from . import common
 

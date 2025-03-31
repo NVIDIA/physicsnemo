@@ -3,9 +3,9 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nvidia-modulus"
+name = "nvidia-physicsnemo"
 authors = [
-  { name="NVIDIA Modulus Team"},
+  { name="NVIDIA PhysicsNeMo Team"},
 ]
 description = "A deep learning framework for AI-driven multi-physics systems"
 readme = "README.md"
@@ -79,6 +79,10 @@ storage = [
     "multi-storage-client>=0.14.0",
 ]
 
+shardtensor = [
+    "wrapt>=1.15.0",
+]
+
 all = [
     "h5py>=3.7.0",
     "netcdf4>=1.6.3",
@@ -94,19 +98,19 @@ all = [
     "shapely>=2.0.6",
     "pytz>=2023.3",
     "nvtx>=0.2.8",
-    "nvidia-modulus[launch]",
-    "nvidia-modulus[dev]",
-    "nvidia-modulus[makani]",
-    "nvidia-modulus[fignet]",
-    "nvidia-modulus[storage]",
+    "nvidia-physicsnemo[launch]",
+    "nvidia-physicsnemo[dev]",
+    "nvidia-physicsnemo[makani]",
+    "nvidia-physicsnemo[fignet]",
+    "nvidia-physicsnemo[storage]",
 ]
 
 
 [tool.setuptools.dynamic]
-version = {attr = "modulus.__version__"}
+version = {attr = "physicsnemo.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["modulus", "modulus.*"]
+include = ["physicsnemo", "physicsnemo.*"]
 
 [tool.ruff]
 # Enable flake8/pycodestyle (`E`), Pyflakes (`F`), flake8-bandit (`S`),
@@ -119,7 +123,7 @@ fixable = ["I"]
 ignore = ["E501", "S311"]
 
 # Exclude the examples and experimental folders
-exclude = ["examples", "modulus/experimental"]
+exclude = ["examples", "physicsnemo/experimental"]
 
 [tool.ruff.per-file-ignores]
 # Ignore `F401` (import violations) in all `__init__.py` files, and in `docs/*.py`.
@@ -129,19 +133,19 @@ exclude = ["examples", "modulus/experimental"]
 # Ignore `S101` (assertions) in all `test` files.
 "test/*.py" = ["S101"]
 
-[project.entry-points."modulus.models"]
-AFNO = "modulus.models.afno:AFNO"
-DLWP = "modulus.models.dlwp:DLWP"
-FNO = "modulus.models.fno:FNO"
-GraphCastNet = "modulus.models.graphcast:GraphCastNet"
-MeshGraphNet = "modulus.models.meshgraphnet:MeshGraphNet"
-FullyConnected = "modulus.models.mlp:FullyConnected"
-Pix2Pix = "modulus.models.pix2pix:Pix2Pix"
-One2ManyRNN = "modulus.models.rnn:One2ManyRNN"
-SRResNet = "modulus.models.srrn:SRResNet"
-Pangu = "modulus.models.pangu:Pangu"
-Fengwu = "modulus.models.fengwu:Fengwu"
-SwinRNN = "modulus.models.swinvrnn:SwinRNN"
-EDMPrecondSR = "modulus.models.diffusion:EDMPrecondSR"
-UNet = "modulus.models.diffusion:UNet"
+[project.entry-points."physicsnemo.models"]
+AFNO = "physicsnemo.models.afno:AFNO"
+DLWP = "physicsnemo.models.dlwp:DLWP"
+FNO = "physicsnemo.models.fno:FNO"
+GraphCastNet = "physicsnemo.models.graphcast:GraphCastNet"
+MeshGraphNet = "physicsnemo.models.meshgraphnet:MeshGraphNet"
+FullyConnected = "physicsnemo.models.mlp:FullyConnected"
+Pix2Pix = "physicsnemo.models.pix2pix:Pix2Pix"
+One2ManyRNN = "physicsnemo.models.rnn:One2ManyRNN"
+SRResNet = "physicsnemo.models.srrn:SRResNet"
+Pangu = "physicsnemo.models.pangu:Pangu"
+Fengwu = "physicsnemo.models.fengwu:Fengwu"
+SwinRNN = "physicsnemo.models.swinvrnn:SwinRNN"
+EDMPrecondSR = "physicsnemo.models.diffusion:EDMPrecondSR"
+UNet = "physicsnemo.models.diffusion:UNet"
 

@@ -48,7 +48,7 @@ def test_mesh_utils(tmp_path, pytestconfig):
 
     import vtk
 
-    from modulus.utils.mesh import (
+    from physicsnemo.utils.mesh import (
         combine_vtp_files,
         convert_tesselated_files_in_directory,
     )
@@ -182,10 +182,10 @@ def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
 
     from stl import mesh
 
-    from modulus.utils.mesh import (
+    from physicsnemo.utils.mesh import (
         sdf_to_stl,
     )
-    from modulus.utils.sdf import signed_distance_field
+    from physicsnemo.utils.sdf import signed_distance_field
 
     bunny_mesh = mesh.Mesh.from_file(str(download_stl))
 

@@ -21,10 +21,10 @@ import pytest
 import torch
 import torch.nn as nn
 
-from modulus.distributed import DistributedManager
-from modulus.models.mlp import FullyConnected
-from modulus.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
-from modulus.utils.capture import _StaticCapture
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
+from physicsnemo.utils.capture import _StaticCapture
 
 optimizers = pytest.importorskip("apex.optimizers")
 
@@ -232,7 +232,7 @@ def test_capture_errors():
     try:
         StaticCaptureEvaluateNoGrad(model=model)
         raise AssertionError(
-            "Static capture should error if model is not Modulus.Module"
+            "Static capture should error if model is not PhysicsNeMo.Module"
         )
     except ValueError:
         pass

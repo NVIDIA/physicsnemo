@@ -25,17 +25,17 @@ from torch.optim import lr_scheduler
 from torch.nn.parallel import DistributedDataParallel
 from omegaconf import OmegaConf
 
-from modulus.models.fno import FNO
-from modulus.distributed import DistributedManager
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import (
+from physicsnemo.models.fno import FNO
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import (
     PythonLogger,
     LaunchLogger,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.sym.hydra import to_absolute_path
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.sym.hydra import to_absolute_path
 
-from losses import LossMHD, LossMHD_Modulus
+from losses import LossMHD, LossMHD_PhysicsNeMo
 from torch.optim import AdamW
 from dataloaders import Dedalus2DDataset, MHDDataloader
 from utils.plot_utils import plot_predictions_mhd, plot_predictions_mhd_plotly
@@ -52,7 +52,7 @@ def main(cfg: DictConfig) -> None:
 
     This training script demonstrates how to set up a data-driven model for a 2D Darcy flow
     using Fourier Neural Operators (FNO) and acts as a benchmark for this type of operator.
-    Training data is generated in-situ via the Darcy2D data loader from Modulus. Darcy2D
+    Training data is generated in-situ via the Darcy2D data loader from PhysicsNeMo. Darcy2D
     continuously generates data previously unseen by the model, i.e. the model is trained
     over a single epoch of a training set consisting of
     (cfg.training.max_pseudo_epochs*cfg.training.pseudo_epoch_sample_size) unique samples.
@@ -79,7 +79,7 @@ def main(cfg: DictConfig) -> None:
         results_dir=wandb_dir,
     )
 
-    LaunchLogger.initialize(use_wandb=cfg.use_wandb)  # Modulus launch logger
+    LaunchLogger.initialize(use_wandb=cfg.use_wandb)  # PhysicsNeMo launch logger
 
     # Load config file parameters
     model_params = cfg.model_params
@@ -194,8 +194,8 @@ def main(cfg: DictConfig) -> None:
     )
 
     # Construct Loss class
-    if cfg.derivative == "modulus":
-        mhd_loss = LossMHD_Modulus(**loss_params)
+    if cfg.derivative == "physicsnemo":
+        mhd_loss = LossMHD_PhysicsNeMo(**loss_params)
     elif cfg.derivative == "original":
         mhd_loss = LossMHD(**loss_params)
 

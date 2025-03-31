@@ -21,9 +21,9 @@ import torch._dynamo
 import nvtx
 import numpy as np
 import netCDF4 as nc
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from modulus import Module
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo import Module
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from einops import rearrange
@@ -31,8 +31,8 @@ from torch.distributed import gather
 
 
 from hydra.utils import to_absolute_path
-from modulus.utils.generative import deterministic_sampler, stochastic_sampler
-from modulus.utils.corrdiff import (
+from physicsnemo.utils.generative import deterministic_sampler, stochastic_sampler
+from physicsnemo.utils.corrdiff import (
     NetCDFWriter,
     get_time_from_range,
     regression_step,

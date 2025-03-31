@@ -20,8 +20,8 @@ from typing import List, Union
 
 import numpy as np
 
-from modulus import Module
-from modulus.datapipes.climate import ClimateDataSourceSpec, ClimateDatapipe
+from physicsnemo import Module
+from physicsnemo.datapipes.climate import ClimateDataSourceSpec, ClimateDatapipe
 
 
 def export_diagnostic_e2mip(

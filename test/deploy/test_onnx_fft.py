@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.onnx
 import torch.onnx.utils
 
-import modulus.models.layers.fft as fft
+import physicsnemo.models.layers.fft as fft
 
 try:
     import onnxruntime as ort
@@ -34,7 +34,7 @@ from typing import Tuple
 
 from ort_utils import check_ort_version
 
-from modulus.deploy.onnx import export_to_onnx_stream, run_onnx_inference
+from physicsnemo.deploy.onnx import export_to_onnx_stream, run_onnx_inference
 
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: modulus.datapipes.gnn.drivaernet_dataset.DrivAerNetDataset
+_target_: physicsnemo.datapipes.gnn.drivaernet_dataset.DrivAerNetDataset
 _convert_: all
 
 name: ???

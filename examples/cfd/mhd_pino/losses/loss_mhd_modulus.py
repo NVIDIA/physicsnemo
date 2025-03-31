@@ -20,11 +20,11 @@ import torch.nn.functional as F
 import math
 from .losses import LpLoss, fourier_derivatives_lap, fourier_derivatives_ptot
 from .mhd_pde import MHD_PDE
-from modulus.models.layers.spectral_layers import fourier_derivatives
+from physicsnemo.models.layers.spectral_layers import fourier_derivatives
 
 
-class LossMHD_Modulus(object):
-    "Calculate loss for MHD equations with magnetic field, using modulus derivatives"
+class LossMHD_PhysicsNeMo(object):
+    "Calculate loss for MHD equations with magnetic field, using physicsnemo derivatives"
 
     def __init__(
         self,

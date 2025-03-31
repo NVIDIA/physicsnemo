@@ -27,7 +27,7 @@ milestones: [25, 50, 75, 100, 125, 150]
 batchsize: 1
 
 loss:
-  derivative: 'modulus' #option to calculate derivatives using 'original' paper or through 'modulus'
+  derivative: 'physicsnemo' #option to calculate derivatives using 'original' paper or through 'physicsnemo'
   ic_loss: 5.0
   f_loss: 1.0
   xy_loss: 10.0

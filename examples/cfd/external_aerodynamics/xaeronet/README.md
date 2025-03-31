@@ -86,7 +86,7 @@ To train the XAeroNet-S model, follow these steps:
 
 4. Run `combine_stl_solids.py`. The STL files in the DriveML dataset consist of multiple
    solids. Those should be combined into a single solid to properly generate a surface point
-   cloud using the Modulus Tesselated geometry module.
+   cloud using the PhysicsNeMo Tesselated geometry module.
 
 5. Run `preprocessing.py`. This will prepare and save the partitioned graphs.
 

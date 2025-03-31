@@ -23,14 +23,14 @@ import matplotlib.pyplot as plt
 from torch.nn.parallel import DistributedDataParallel
 from omegaconf import DictConfig, OmegaConf
 
-from modulus.models.pangu import Pangu
-from modulus.datapipes.climate import ERA5HDF5Datapipe
-from modulus.distributed import DistributedManager
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.models.pangu import Pangu
+from physicsnemo.datapipes.climate import ERA5HDF5Datapipe
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 
-from modulus.launch.logging import LaunchLogger, PythonLogger
-from modulus.launch.logging.mlflow import initialize_mlflow
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
 try:
     from apex import optimizers
@@ -124,10 +124,10 @@ def main(cfg: DictConfig) -> None:
         experiment_desc=cfg.experiment_desc,
         run_name="Pangu-trainng",
         run_desc=cfg.experiment_desc,
-        user_name="Modulus User",
+        user_name="PhysicsNeMo User",
         mode="offline",
     )
-    LaunchLogger.initialize(use_mlflow=True)  # Modulus launch logger
+    LaunchLogger.initialize(use_mlflow=True)  # PhysicsNeMo launch logger
     logger = PythonLogger("main")  # General python logger
 
     number_channels_pangu = 4 + 5 * 13
@@ -308,7 +308,7 @@ def main(cfg: DictConfig) -> None:
         scheduler.step()
 
         if (epoch % 5 == 0 or epoch == 1) and dist.rank == 0:
-            # Use Modulus Launch checkpoint
+            # Use PhysicsNeMo Launch checkpoint
             save_checkpoint(
                 "./checkpoints",
                 models=pangu_model,

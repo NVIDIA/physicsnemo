@@ -27,8 +27,8 @@ hydra: # Hydra config
   output_subdir: hydra  # Default is .hydra which causes files not being uploaded in W&B.
 
 data: # Input directory for training and validation data
-  input_dir: /lustre/rranade/modulus_dev/data/volume_data/
-  input_dir_val: /lustre/rranade/modulus_dev/data/volume_data_val/
+  input_dir: /lustre/rranade/physicsnemo_dev/data/volume_data/
+  input_dir_val: /lustre/rranade/physicsnemo_dev/data/volume_data_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25 , -0.32]
     max: [8.5 , 2.25  , 3.00]
@@ -103,7 +103,7 @@ train: # Training configurable parameters
   sampler:
     shuffle: true
     drop_last: false
-  checkpoint_dir: /lustre/rranade/modulus_dev/modulus_forked/modulus/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/3/models/
+  checkpoint_dir: /lustre/rranade/physicsnemo_dev/physicsnemo_forked/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/3/models/
   
 val: # Validation configurable parameters
   dataloader:
@@ -120,6 +120,6 @@ eval: # Testing configurable parameters
 
 data_processor: # Data processor configurable parameters
   kind: drivaer_aws # must be either drivesim or drivaer_aws
-  output_dir: /lustre/rranade/modulus_dev/data/volume_data/
+  output_dir: /lustre/rranade/physicsnemo_dev/data/volume_data/
   input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
   num_processors: 12

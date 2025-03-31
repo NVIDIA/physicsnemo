@@ -24,7 +24,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import wandb
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 
 def init_python_logging(config: DictConfig, rank: int = 0) -> None:

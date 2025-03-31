@@ -17,7 +17,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from modulus.metrics.general.power_spectrum import power_spectrum
+from physicsnemo.metrics.general.power_spectrum import power_spectrum
 
 
 def ps1d_plots(generated, target, fields, diffusion_channels):

@@ -23,13 +23,13 @@ from torch import Tensor
 matplotlib.use("Agg")  # use non-interactive backend
 import matplotlib.pyplot as plt
 
-from modulus.models.figconvnet.figconvunet import FIGConvUNet
+from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
 
-from modulus.models.figconvnet.geometries import (
+from physicsnemo.models.figconvnet.geometries import (
     GridFeaturesMemoryFormat,
 )
 
-from modulus.models.figconvnet.components.reductions import REDUCTION_TYPES
+from physicsnemo.models.figconvnet.components.reductions import REDUCTION_TYPES
 
 from src.utils.visualization import fig_to_numpy
 from src.utils.eval_funcs import eval_all_metrics

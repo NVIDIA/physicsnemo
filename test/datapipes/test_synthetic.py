@@ -22,7 +22,7 @@ from pytest_utils import import_or_fail
 @import_or_fail("h5py")
 @pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_dataloader_setup(device, pytestconfig):
-    from modulus.datapipes.climate import (
+    from physicsnemo.datapipes.climate import (
         SyntheticWeatherDataLoader,
         SyntheticWeatherDataset,
     )
@@ -48,7 +48,7 @@ def test_dataloader_setup(device, pytestconfig):
 def test_dataloader_iteration(device, pytestconfig):
     """Test the iteration over batches in the DataLoader."""
 
-    from modulus.datapipes.climate import (
+    from physicsnemo.datapipes.climate import (
         SyntheticWeatherDataLoader,
     )
 
@@ -79,7 +79,7 @@ def test_dataloader_iteration(device, pytestconfig):
 def test_dataloader_length(device, pytestconfig):
     """Test the length of the DataLoader to ensure it is correct based on the dataset and batch size."""
 
-    from modulus.datapipes.climate import (
+    from physicsnemo.datapipes.climate import (
         SyntheticWeatherDataLoader,
     )
 

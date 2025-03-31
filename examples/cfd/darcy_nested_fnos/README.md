@@ -2,7 +2,7 @@
 
 This example demonstrates how to set up a data-driven model for a
 2D Darcy flow using
-the Nested Fourier Neural Operator (FNO) architecture inside of Modulus.
+the Nested Fourier Neural Operator (FNO) architecture inside of PhysicsNeMo.
 Training progress can be tracked through
 [MLFlow](https://mlflow.org/docs/latest/index.html).
 This case is parallelised to run in multi-GPU settings.

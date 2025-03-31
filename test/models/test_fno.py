@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.fno import FNO
+from physicsnemo.models.fno import FNO
 
 from . import common
 

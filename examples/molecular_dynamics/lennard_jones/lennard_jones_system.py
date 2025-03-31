@@ -24,12 +24,12 @@ import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 import torch.nn.functional as F
-from modulus.models.meshgraphnet import MeshGraphNet
+from physicsnemo.models.meshgraphnet import MeshGraphNet
 import matplotlib.pyplot as plt
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
 from torch.nn.parallel import DistributedDataParallel
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 from utils import (
     create_datasets,

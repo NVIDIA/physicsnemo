@@ -28,7 +28,7 @@ import h5py
 import numpy as np
 import scipy.io
 import torch
-from modulus.sym.hydra import to_absolute_path
+from physicsnemo.sym.hydra import to_absolute_path
 from torch.utils.data import Dataset
 
 # list of FNO dataset url ids on drive: https://drive.google.com/drive/folders/1UnbQh2WWc6knEHbLn-ZaXrKUZhp7pjt-

@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-## StormCast: Kilometer-Scale Convection Allowing Model Emulation using Generative Diffusion Modeling
+# StormCast: Kilometer-Scale Convection Allowing Model Emulation using Generative Diffusion Modeling
 
 ## Problem overview
 
@@ -31,7 +31,7 @@ Much like other data-driven weather models, StormCast can make longer forecasts 
 ## Getting started
 
 ### Preliminaries
-Start by installing Modulus (if not already installed) and copying this folder (`examples/generative/stormcast`) to a system with a GPU available. Also, prepare a combined HRRR/ERA5 dataset in the form specified in `utils/data_loader_hrrr_era5.py` (**Note: subsequent versions of this example will include more detailed dataset preparation instructions**).
+Start by installing PhysicsNeMo (if not already installed) and copying this folder (`examples/generative/stormcast`) to a system with a GPU available. Also, prepare a combined HRRR/ERA5 dataset in the form specified in `utils/data_loader_hrrr_era5.py` (**Note: subsequent versions of this example will include more detailed dataset preparation instructions**).
 
 ### Configuration basics
 
@@ -52,7 +52,7 @@ More extensive configuration modifications can be made by creating a new top-lev
 
 Note any diffusion model you train will need a pretrained regression model to use, so there are two config items that must be defined to train a diffusion model:
   1. `model.use_regession_net = True`
-  2. `model.regression_weights` set to the path of a Modulus (`.mdlus`) checkpoint with model weights for the regression model. These are saved in the checkpoints directory during training.
+  2. `model.regression_weights` set to the path of a PhysicsNeMo (`.mdlus`) checkpoint with model weights for the regression model. These are saved in the checkpoints directory during training.
 
 Once again, the reference `diffusion.yaml` top-level config shows an example of how to specify these settings.
 
@@ -103,7 +103,7 @@ To run inference, simply do:
 python inference.py --config-name <your_inference_config>
 ```
 
-This will load regression and diffusion models from directories specified by `inference.regression_checkpoint` and `inference.diffusion_checkpoint` respectively; each of these should be a path to a Modulus checkpoint (`.mdlus` file) from your training runs. The `inference.py` script will use these models to run a forecast and save outputs as a `zarr` file along with a few plots saved as `png` files. We also recommend bringing your checkpoints to [earth2studio](https://github.com/NVIDIA/earth2studio)
+This will load regression and diffusion models from directories specified by `inference.regression_checkpoint` and `inference.diffusion_checkpoint` respectively; each of these should be a path to a PhysicsNeMo checkpoint (`.mdlus` file) from your training runs. The `inference.py` script will use these models to run a forecast and save outputs as a `zarr` file along with a few plots saved as `png` files. We also recommend bringing your checkpoints to [earth2studio](https://github.com/NVIDIA/earth2studio)
 for further analysis and visualizations.
 
 
@@ -118,7 +118,8 @@ in a region over the Central US with spatial extent 1536km x 1920km.
 
 A custom dataset object is defined in `utils/data_loader_hrrr_era5.py`, which loads temporally-aligned samples from HRRR and ERA5, interpolated to the same grid and normalized appropriately. This data pipeline requries the HRRR and ERA5 data to abide by a specific `zarr` format and for other datasets, you will need to create a custom datapipe. The table below lists the variables used to train StormCast -- in total there are 26 ERA5 variables used and 99 HRRR variables (along with 2 static HRRR invariants, the land/water mask and orography).
 
-#### ERA5 Variables
+### ERA5 Variables
+
 | Parameter                             | Pressure Levels (hPa)     | Height Levels (m) |
 |---------------------------------------|---------------------------|--------------------|
 | Zonal Wind (u)                        | 1000, 850, 500, 250       | 10                 |
@@ -131,7 +132,8 @@ A custom dataset object is defined in `utils/data_loader_hrrr_era5.py`, which lo
 | Surface Pressure (sp)                 | Surface                   | -                  |
 
 
-#### HRRR Variables
+### HRRR Variables
+
 | Parameter                             | Hybrid Model Levels (Index)                               | Height Levels (m) |
 |---------------------------------------|-----------------------------------------------------------|--------------------|
 | Zonal Wind (u)                        | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 20, 25, 30    | 10                 |

@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: modulus.datapipes.gnn.lagrangian_dataset.LagrangianDataset
+_target_: physicsnemo.datapipes.gnn.lagrangian_dataset.LagrangianDataset
 _convert_: all
 
 # Note: values that are not set will be populated from dataset metadata.

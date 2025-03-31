@@ -24,11 +24,11 @@ import hydra
 from omegaconf import DictConfig
 from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
-from modulus.models.rnn.rnn_one2many import One2ManyRNN
+from physicsnemo.models.rnn.rnn_one2many import One2ManyRNN
 import torch.nn.functional as F
 from typing import Union
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 from pyevtk.hl import imageToVTK
 

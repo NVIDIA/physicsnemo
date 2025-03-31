@@ -22,12 +22,12 @@ from os.path import join
 from omegaconf import DictConfig, open_dict
 from torch.utils.data import DataLoader
 
-from modulus.models.mlp import FullyConnected
-from modulus.models.fno import FNO
-from modulus.utils import StaticCaptureEvaluateNoGrad
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger
-from modulus.launch.utils import load_checkpoint
+from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.models.fno import FNO
+from physicsnemo.utils import StaticCaptureEvaluateNoGrad
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger
+from physicsnemo.launch.utils import load_checkpoint
 
 from utils import NestedDarcyDataset, PlotNestedDarcy
 

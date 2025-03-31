@@ -23,14 +23,14 @@ import wandb as wb
 from torch.cuda.amp import GradScaler
 
 from constants import Constants
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.launch.utils import load_checkpoint
-from modulus.models.mesh_reduced.mesh_reduced import Mesh_Reduced
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.models.mesh_reduced.mesh_reduced import Mesh_Reduced
 from train_sequence import Sequence_Trainer
 
 C = Constants()

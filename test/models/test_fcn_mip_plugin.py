@@ -24,8 +24,8 @@ import pytest
 import torch
 from pytest_utils import import_or_fail, nfsdata_or_fail
 
-from modulus.models.dlwp import DLWP
-from modulus.utils.filesystem import Package
+from physicsnemo.models.dlwp import DLWP
+from physicsnemo.utils.filesystem import Package
 
 
 @pytest.fixture
@@ -85,12 +85,12 @@ def save_checkpoint(model, check_point_path, del_device_buffer=False):
 #         "nettype": "sfno",
 #         "add_zenith": True,
 #     }
-#     from modulus.utils.sfno.YParams import ParamsBase
+#     from physicsnemo.utils.sfno.YParams import ParamsBase
 
 #     params = ParamsBase()
 #     params.update_params(config)
 
-#     from modulus.models.sfno.sfnonet import SphericalFourierNeuralOperatorNet
+#     from physicsnemo.models.sfno.sfnonet import SphericalFourierNeuralOperatorNet
 
 #     model = SphericalFourierNeuralOperatorNet(params)
 
@@ -111,7 +111,7 @@ def save_checkpoint(model, check_point_path, del_device_buffer=False):
 # def test_sfno(tmp_path, pytestconfig):
 #     """Test SFNO plugin"""
 
-#     from modulus.models.fcn_mip_plugin import sfno
+#     from physicsnemo.models.fcn_mip_plugin import sfno
 
 #     package = save_untrained_sfno(tmp_path)
 
@@ -154,7 +154,7 @@ def save_untrained_dlwp(path):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_dlwp(tmp_path, batch_size, device, pytestconfig):
 
-    from modulus.models.fcn_mip_plugin import dlwp
+    from physicsnemo.models.fcn_mip_plugin import dlwp
 
     package = save_untrained_dlwp(tmp_path)
     source_dir = "/data/nfs/modulus-data/plugin_data/dlwp/"
@@ -174,7 +174,7 @@ def test_dlwp(tmp_path, batch_size, device, pytestconfig):
 def test__CozZenWrapper(batch_size, pytestconfig):
     """Test Cosine Zenith wrapper"""
 
-    from modulus.models.fcn_mip_plugin import _CosZenWrapper
+    from physicsnemo.models.fcn_mip_plugin import _CosZenWrapper
 
     class Id(torch.nn.Module):
         def forward(self, x):

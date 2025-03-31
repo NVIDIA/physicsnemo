@@ -20,7 +20,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-import modulus.models.layers as layers
+import physicsnemo.models.layers as layers
 
 
 class SpectralConv4d(nn.Module):
@@ -305,7 +305,7 @@ def test_spec_conv_4d(device):
         in_channels, out_channels, fno_modes, fno_modes, fno_modes, fno_modes
     ).to(device)
     torch.manual_seed(0)
-    spec_conv_modulus = layers.SpectralConv4d(
+    spec_conv_physicsnemo = layers.SpectralConv4d(
         in_channels, out_channels, fno_modes, fno_modes, fno_modes, fno_modes
     ).to(device)
 
@@ -314,5 +314,5 @@ def test_spec_conv_4d(device):
     ).to(device)
     with torch.no_grad():
         assert torch.allclose(
-            spec_conv_orig(invar), spec_conv_modulus(invar), rtol=1e-06, atol=1e-06
+            spec_conv_orig(invar), spec_conv_physicsnemo(invar), rtol=1e-06, atol=1e-06
         ), "SpectralConv4d output not identical to that of refrence layer"

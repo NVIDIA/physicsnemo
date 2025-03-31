@@ -58,7 +58,7 @@ mpirun -np <#GPUs> python train.py
 
 Once the model is trained, you can use the inference.py script to compute the
 model inference. For generating the Signed Distance Field and geometry for the
-inference, we make use of the utilities from Modulus-Sym.
+inference, we make use of the utilities from PhysicsNeMo-Sym.
 
 ### Training of Physics-Informed model
 
@@ -80,5 +80,5 @@ This example was developed as a part of collaboration between NVIDIA and Wistron
 
 ## Resources
 
-1. [Wistron Uses NVIDIA Omniverse and NVIDIA Modulus to Build Digital Twin Platform, Transforming Factory Planning and Operations](https://www.wistron.com/en/Newsroom/2024-03-19-1)
-2. [Model Innovators: How Digital Twins Are Making Industries More Efficient](https://blogs.nvidia.com/blog/digital-twins-modulus-wistron/)
+1. [Wistron Uses NVIDIA Omniverse and NVIDIA PhysicsNeMo to Build Digital Twin Platform, Transforming Factory Planning and Operations](https://www.wistron.com/en/Newsroom/2024-03-19-1)
+2. [Model Innovators: How Digital Twins Are Making Industries More Efficient](https://blogs.nvidia.com/blog/digital-twins-nvidia-physicsnemo-wistron/)

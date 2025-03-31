@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 from pytz import utc
 
-from modulus.utils.zenith_angle import (
+from physicsnemo.utils.zenith_angle import (
     _datetime_to_julian_century,
     _timestamp_to_julian_century,
     cos_zenith_angle,

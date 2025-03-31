@@ -19,11 +19,11 @@
 defaults:
   - ahmed  # use Ahmed experiment as a base and change only required parameters.
 
-_target_: modulus.datapipes.gnn.bsms.BistrideMultiLayerGraphDataset
+_target_: physicsnemo.datapipes.gnn.bsms.BistrideMultiLayerGraphDataset
 
 # TODO(akamenev): is there a way to avoid duplication of configs?
 dataset:
-  _target_: modulus.datapipes.gnn.ahmed_body_dataset.AhmedBodyDataset
+  _target_: physicsnemo.datapipes.gnn.ahmed_body_dataset.AhmedBodyDataset
   _convert_: all
 
   name: ${..name}

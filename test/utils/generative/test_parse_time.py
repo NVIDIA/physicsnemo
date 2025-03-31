@@ -37,7 +37,7 @@ def test_datetime_yaml():
 def test_convert_to_cftime(pytestconfig):
     """test parse time"""
 
-    from modulus.utils.generative import convert_datetime_to_cftime
+    from physicsnemo.utils.generative import convert_datetime_to_cftime
 
     dt = datetime.datetime(2011, 1, 1)
     expected = cftime.DatetimeGregorian(2011, 1, 1)

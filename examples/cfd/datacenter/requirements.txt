@@ -1,4 +1,4 @@
 vtk
 omegaconf
 hydra-core
-nvidia-modulus.sym
+nvidia-physicsnemo.sym

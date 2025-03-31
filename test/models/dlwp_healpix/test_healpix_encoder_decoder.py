@@ -30,7 +30,7 @@ from pytest_utils import import_or_fail
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetEncoder_initialize(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,  # for convolutional layer
         MaxPool,  # for downsampling
         UNetEncoder,
@@ -75,7 +75,7 @@ def test_UNetEncoder_initialize(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetEncoder_forward(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,  # for convolutional layer
         MaxPool,  # for downsampling
         UNetEncoder,
@@ -125,7 +125,7 @@ def test_UNetEncoder_forward(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetEncoder_reset(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,  # for convolutional layer
         MaxPool,  # for downsampling
         UNetEncoder,
@@ -163,7 +163,7 @@ def test_UNetEncoder_reset(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetDecoder_initilization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,  # for the output layer
         ConvGRUBlock,  # for the recurrent layer
         ConvNeXtBlock,  # for convolutional layer
@@ -232,7 +232,7 @@ def test_UNetDecoder_initilization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetDecoder_forward(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,  # for the output layer
         ConvGRUBlock,  # for the recurrent layer
         ConvNeXtBlock,  # for convolutional layer
@@ -320,7 +320,7 @@ def test_UNetDecoder_forward(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetDecoder_reset(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,  # for the output layer
         ConvGRUBlock,  # for the recurrent layer
         ConvNeXtBlock,  # for convolutional layer

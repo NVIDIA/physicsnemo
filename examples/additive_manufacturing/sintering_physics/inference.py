@@ -47,13 +47,13 @@ from graph_dataset import GraphDataset
 from omegaconf import DictConfig
 from utils import _combine_std, _read_metadata, Stats, cast
 
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     LaunchLogger,
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.models.vfgn.graph_network_modules import LearnedSimulator
+from physicsnemo.models.vfgn.graph_network_modules import LearnedSimulator
 
 
 def Inference(rank_zero_logger, dist, cfg):
@@ -294,7 +294,7 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     # tf.disable_v2_behavior()
-    LaunchLogger.initialize()  # Modulus launch logger
+    LaunchLogger.initialize()  # PhysicsNeMo launch logger
     logger = PythonLogger("main")  # General python logger
     logger.file_logging()
 

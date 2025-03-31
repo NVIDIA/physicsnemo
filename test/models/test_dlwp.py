@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 
-from modulus.models.dlwp import DLWP
+from physicsnemo.models.dlwp import DLWP
 
 from . import common
 

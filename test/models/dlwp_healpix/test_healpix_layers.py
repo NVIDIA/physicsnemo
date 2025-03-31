@@ -42,7 +42,7 @@ class MulX(torch.nn.Module):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixFoldFaces_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixFoldFaces,
     )
 
@@ -54,7 +54,7 @@ def test_HEALPixFoldFaces_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixFoldFaces_forward(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixFoldFaces,
     )
 
@@ -75,7 +75,7 @@ def test_HEALPixFoldFaces_forward(device, pytestconfig):
 @import_or_fail("hydra")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixUnfoldFaces_initialization(device, pytestconfig):
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixUnfoldFaces,
     )
 
@@ -87,7 +87,7 @@ def test_HEALPixUnfoldFaces_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixUnfoldFaces_forward(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixUnfoldFaces,
     )
 
@@ -119,7 +119,7 @@ HEALPixPadding_testdata = [
 @pytest.mark.parametrize("device,padding", HEALPixPadding_testdata)
 def test_HEALPixPadding_initialization(device, padding, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixPadding,
     )
 
@@ -131,7 +131,7 @@ def test_HEALPixPadding_initialization(device, padding, pytestconfig):
 @pytest.mark.parametrize("device,padding", HEALPixPadding_testdata)
 def test_HEALPixPadding_forward(device, padding, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixPadding,
     )
 
@@ -176,7 +176,7 @@ HEALPixLayer_testdata = [
 @import_or_fail("hydra")
 @pytest.mark.parametrize("device,multiplier", HEALPixLayer_testdata)
 def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixLayer,
     )
 
@@ -188,7 +188,7 @@ def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
 @pytest.mark.parametrize("device,multiplier", HEALPixLayer_testdata)
 def test_HEALPixLayer_forward(device, multiplier, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         HEALPixLayer,
     )
 

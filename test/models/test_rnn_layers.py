@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from modulus.models.rnn.layers import (
+from physicsnemo.models.rnn.layers import (
     _ConvLayer,
     _ConvResidualBlock,
     _TransposeConvLayer,

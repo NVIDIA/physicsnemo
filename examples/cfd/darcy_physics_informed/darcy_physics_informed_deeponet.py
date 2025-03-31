@@ -23,14 +23,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from hydra.utils import to_absolute_path
-from modulus.launch.logging import LaunchLogger
-from modulus.launch.utils.checkpoint import save_checkpoint
-from modulus.models.fno import FNO
-from modulus.models.mlp import FullyConnected
-from modulus.sym.eq.pdes.diffusion import Diffusion
-from modulus.sym.eq.phy_informer import PhysicsInformer
-from modulus.sym.key import Key
-from modulus.sym.models.arch import Arch
+from physicsnemo.launch.logging import LaunchLogger
+from physicsnemo.launch.utils.checkpoint import save_checkpoint
+from physicsnemo.models.fno import FNO
+from physicsnemo.models.mlp import FullyConnected
+from physicsnemo.sym.eq.pdes.diffusion import Diffusion
+from physicsnemo.sym.eq.phy_informer import PhysicsInformer
+from physicsnemo.sym.key import Key
+from physicsnemo.sym.models.arch import Arch
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
@@ -80,28 +80,28 @@ def validation_step(graph, dataloader, epoch):
 
 class MdlsSymWrapper(Arch):
     """
-    Wrapper model to convert Modulus model to Modulus-Sym model.
+    Wrapper model to convert PhysicsNeMo model to PhysicsNeMo-Sym model.
 
-    Modulus Sym relies on the inputs/outputs of the model being dictionary of tensors.
+    PhysicsNeMo Sym relies on the inputs/outputs of the model being dictionary of tensors.
     This wrapper converts the input dictionary of tensors to a tensor inputs that can
-    be processed by the Modulus model that operate on tensors. Appropriate
+    be processed by the PhysicsNeMo model that operate on tensors. Appropriate
     transformations are performed in the forward pass of the model to translate between
     these two input/output definitions.
 
     These transformations can differ based on the models. For e.g. typically for a fully
     connected network, the input tensors are combined by concatenating them along
-    appropriate dimension before passing them as an input to the Modulus model.
+    appropriate dimension before passing them as an input to the PhysicsNeMo model.
     During the output, the process is reversed, the output tensor from pytorch model is
     split across appropriate dimensions and then converted to a dictionary with
     appropriate keys to produce the final output.
 
     Having the model wrapped in a wrapper like this allows gradient computation using
-    the Modulus Sym's optimized gradient computing backend.
+    the PhysicsNeMo Sym's optimized gradient computing backend.
 
-    For more details on Modulus Sym models, refer:
-    https://docs.nvidia.com/deeplearning/modulus/modulus-core/tutorials/simple_training_example.html#using-custom-models-in-modulus
+    For more details on PhysicsNeMo Sym models, refer:
+    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/simple_training_example.html#using-custom-models-in-physicsnemo
     For more details on Key class, refer:
-    https://docs.nvidia.com/deeplearning/modulus/modulus-sym/api/modulus.sym.html#module-modulus.sym.key
+    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.html#module-physicsnemo.sym.key
     """
 
     def __init__(

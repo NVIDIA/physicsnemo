@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.mlp import FullyConnected
+from physicsnemo.models.mlp import FullyConnected
 
 from . import common
 

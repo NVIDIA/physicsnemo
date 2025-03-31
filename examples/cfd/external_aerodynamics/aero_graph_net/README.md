@@ -50,7 +50,7 @@ consist of 7.2 million mesh points on average, but we use the surface mesh as th
 to training which is roughly around 70k mesh nodes.
 
 To request access to the full dataset, please reach out to the
-[NVIDIA Modulus team](mailto:modulus-team@nvidia.com).
+[NVIDIA PhysicsNeMo team](mailto:physicsnemo-team@nvidia.com).
 
 ### DrivAerNet
 
@@ -68,7 +68,7 @@ which is instrumental for learning from mesh-based data using GNNs.
 
 ### Bistride Multiscale (BSMS) MGN
 
-Modulus BSMS MGN implementation is based on the BSMS GNN paper [[6](#references)].
+PhysicsNeMo BSMS MGN implementation is based on the BSMS GNN paper [[6](#references)].
 The model has two major building blocks:
 
 1. Bi-Stride Pooling and Adjacency Enhancement which precomputes different levels of meshes
@@ -159,7 +159,7 @@ pip install sparse_dot_mkl
 ### Ahmed Body training
 
 The Ahmed Body dataset for this example is not publicly available. To get access,
-please reach out to the [NVIDIA Modulus team](mailto:modulus-team@nvidia.com).
+please reach out to the [NVIDIA PhysicsNeMo team](mailto:physicsnemo-team@nvidia.com).
 
 To train the model, run
 

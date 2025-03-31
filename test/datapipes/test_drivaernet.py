@@ -33,7 +33,7 @@ def data_dir():
 @pytest.mark.parametrize("cache_graph", [True, False])
 def test_drivaernet_init(data_dir, cache_graph, tmp_path, pytestconfig):
 
-    from modulus.datapipes.gnn.drivaernet_dataset import DrivAerNetDataset
+    from physicsnemo.datapipes.gnn.drivaernet_dataset import DrivAerNetDataset
 
     cache_dir = tmp_path / "cache" if cache_graph else None
     # Construct dataset

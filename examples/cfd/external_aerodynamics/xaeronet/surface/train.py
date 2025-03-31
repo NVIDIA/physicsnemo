@@ -43,9 +43,9 @@ from torch.cuda.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from omegaconf import DictConfig
 
-from modulus.distributed import DistributedManager
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.models.meshgraphnet import MeshGraphNet
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.models.meshgraphnet import MeshGraphNet
 
 # Get the absolute path to the parent directory
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -77,7 +77,7 @@ def main(cfg: DictConfig) -> None:
         writer = SummaryWriter(log_dir="tensorboard")
         initialize_wandb(
             project="aws_drivaer",
-            entity="Modulus",
+            entity="PhysicsNeMo",
             name="aws_drivaer",
             mode="disabled",
             group="group",

@@ -20,11 +20,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from hydra.utils import to_absolute_path
-from modulus.launch.logging import LaunchLogger
-from modulus.launch.utils.checkpoint import save_checkpoint
-from modulus.models.fno import FNO
-from modulus.sym.eq.pdes.diffusion import Diffusion
-from modulus.sym.eq.phy_informer import PhysicsInformer
+from physicsnemo.launch.logging import LaunchLogger
+from physicsnemo.launch.utils.checkpoint import save_checkpoint
+from physicsnemo.models.fno import FNO
+from physicsnemo.sym.eq.pdes.diffusion import Diffusion
+from physicsnemo.sym.eq.phy_informer import PhysicsInformer
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 

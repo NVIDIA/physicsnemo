@@ -29,10 +29,10 @@ import hydra
 import torch
 from omegaconf import DictConfig
 from training_loop import training_loop
-from modulus.utils.generative.utils import EasyDict, construct_class_by_name
+from physicsnemo.utils.generative.utils import EasyDict, construct_class_by_name
 
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 try:
     from apex.optimizers import FusedAdam
@@ -185,14 +185,14 @@ def main(cfg: DictConfig) -> None:
 
     # Preconditioning & loss function.
     if cfg.precond == "vp":
-        c.network_kwargs.class_name = "modulus.models.diffusion.VPPrecond"
-        c.loss_kwargs.class_name = "modulus.metrics.diffusion.VPLoss"
+        c.network_kwargs.class_name = "physicsnemo.models.diffusion.VPPrecond"
+        c.loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VPLoss"
     elif cfg.precond == "ve":
-        c.network_kwargs.class_name = "modulus.models.diffusion.VEPrecond"
-        c.loss_kwargs.class_name = "modulus.metrics.diffusion.VELoss"
+        c.network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond"
+        c.loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss"
     elif cfg.precond == "edm":
-        c.network_kwargs.class_name = "modulus.models.diffusion.EDMPrecond"
-        c.loss_kwargs.class_name = "modulus.metrics.diffusion.EDMLoss"
+        c.network_kwargs.class_name = "physicsnemo.models.diffusion.EDMPrecond"
+        c.loss_kwargs.class_name = "physicsnemo.metrics.diffusion.EDMLoss"
     # elif cfg.precond == 'unetregression':
     #     c.network_kwargs.class_name = 'training.networks.UNet'
     #     c.loss_kwargs.class_name = 'training.loss.RegressionLoss'
@@ -204,12 +204,12 @@ def main(cfg: DictConfig) -> None:
     #     c.loss_kwargs.class_name = 'training.loss.ResLoss'
     elif cfg.precond == "dfsr":
         # Configure model for fluid data super-resolution
-        c.network_kwargs.class_name = "modulus.models.diffusion.VEPrecond_dfsr"
-        c.loss_kwargs.class_name = "modulus.metrics.diffusion.VELoss_dfsr"
+        c.network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond_dfsr"
+        c.loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss_dfsr"
     elif cfg.precond == "dfsr_cond":
         # Configure model for physics-informed conditional fluid data super-resolution
-        c.network_kwargs.class_name = "modulus.models.diffusion.VEPrecond_dfsr_cond"
-        c.loss_kwargs.class_name = "modulus.metrics.diffusion.VELoss_dfsr"
+        c.network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond_dfsr_cond"
+        c.loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss_dfsr"
 
     # Network options.
     if cfg.cbase is not None:
@@ -251,7 +251,7 @@ def main(cfg: DictConfig) -> None:
             raise ValueError("transfer and resume cannot be specified at the same time")
         c.resume_pkl = cfg.transfer
         c.ema_rampup_ratio = None
-    elif cfg.resume is not None:  # TODO replace prints with Modulus logger
+    elif cfg.resume is not None:  # TODO replace prints with PhysicsNeMo logger
         print("gets into elif cfg.resume is not None ...")
         match = re.fullmatch(r"training-state-(\d+).pt", os.path.basename(cfg.resume))
         print("match", match)
@@ -279,7 +279,7 @@ def main(cfg: DictConfig) -> None:
     # c.data_config = cfg.data_config
     # c.task = cfg.task
 
-    # Print options.  # TODO replace prints with Modulus logger
+    # Print options.  # TODO replace prints with PhysicsNeMo logger
     logger0.info("Training options:")
     logger0.info(json.dumps(c, indent=2))
     logger0.info(f"Output directory:        {c.run_dir}")

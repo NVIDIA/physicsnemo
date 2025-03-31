@@ -43,7 +43,7 @@ def test_model_entry_points(model_name, pytestconfig):
     # Get all the models exposed by the package
     models = {
         entry_point.name: entry_point
-        for entry_point in entry_points(group="modulus.models")
+        for entry_point in entry_points(group="physicsnemo.models")
     }
 
     # Assert that the model is among them

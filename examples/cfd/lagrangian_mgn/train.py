@@ -27,8 +27,8 @@ import torch
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
 from loggers import CompositeLogger, ExperimentLogger, get_gpu_info, init_python_logging
 
@@ -155,7 +155,7 @@ class MGNTrainer:
             loss_acc_norm = loss_acc_norm.sum() / num_nz
 
             with torch.no_grad():
-                pos, vel = self.dataset.unpack_inputs(graph)
+                pos, vel, _ = self.dataset.unpack_inputs(graph)
                 # Use the integrator to get the next position and velocity.
                 pred_pos, pred_vel = self.dataset.time_integrator(
                     position=pos,
@@ -247,6 +247,7 @@ def main(cfg: DictConfig) -> None:
             logger.info(f"Saved model on rank {dist.rank}")
         start = time.time()
     logger.info("Training completed!")
+    elogger.close()
 
 
 if __name__ == "__main__":

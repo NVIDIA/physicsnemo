@@ -19,9 +19,9 @@ from typing import Callable, Iterable, Tuple, Union
 
 import torch
 
-from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-from modulus.datapipes.climate.utils import invariant
-from modulus.distributed import DistributedManager
+from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+from physicsnemo.datapipes.climate.utils import invariant
+from physicsnemo.distributed import DistributedManager
 
 
 def setup_datapipes(

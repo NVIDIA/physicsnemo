@@ -45,12 +45,12 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 
-from modulus.distributed import DistributedManager
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
-from modulus.datapipes.cae.domino_datapipe import DoMINODataPipe
-from modulus.models.domino.model import DoMINO
-from modulus.utils.domino.utils import *
+from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
+from physicsnemo.models.domino.model import DoMINO
+from physicsnemo.utils.domino.utils import *
 
 
 def relative_loss_fn(output, target, padded_value=-10):

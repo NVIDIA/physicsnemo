@@ -50,13 +50,13 @@ from utils import (
     weighted_square_error,
 )
 
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     LaunchLogger,
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.models.vfgn.graph_network_modules import LearnedSimulator
+from physicsnemo.models.vfgn.graph_network_modules import LearnedSimulator
 
 physical_devices = tf.config.list_physical_devices("GPU")
 try:
@@ -728,7 +728,7 @@ def main(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     # tf.disable_v2_behavior()
-    LaunchLogger.initialize()  # Modulus launch logger
+    LaunchLogger.initialize()  # PhysicsNeMo launch logger
     logger = PythonLogger("main")  # General python logger
     logger.file_logging()
 

@@ -1,8 +1,8 @@
 # [imports]
 import torch
 
-import modulus
-from modulus.models.fno.fno import FNO
+import physicsnemo
+from physicsnemo.models.fno.fno import FNO
 
 # [imports]
 
@@ -27,7 +27,7 @@ model.save("untrained_checkpoint.mdlus")
 # Inference code
 
 # The parameters to instantitate the model will be loaded from the checkpoint
-model_inf = modulus.Module.from_checkpoint("untrained_checkpoint.mdlus").to("cuda")
+model_inf = physicsnemo.Module.from_checkpoint("untrained_checkpoint.mdlus").to("cuda")
 
 # put the model in evaluation mode
 model_inf.eval()

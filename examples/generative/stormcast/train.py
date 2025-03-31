@@ -23,8 +23,8 @@ import torch
 import wandb
 import glob
 from omegaconf import DictConfig, OmegaConf
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 from utils.trainer import training_loop
 
@@ -50,7 +50,7 @@ def main(cfg: DictConfig) -> None:
         resume = cfg.training.resume_checkpoint
         if not os.path.isfile(resume) or not resume.endswith(".pt"):
             raise ValueError(
-                "training.resume_checkpoint must point to a modulus .pt checkpoint from a previous training run"
+                "training.resume_checkpoint must point to a physicsnemo .pt checkpoint from a previous training run"
             )
 
     # If run directory already exists, then resume training from last checkpoint

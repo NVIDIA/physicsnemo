@@ -29,12 +29,24 @@ RUN apt-get update && \
 
 ENV _CUDA_COMPAT_TIMEOUT=90
 
-# Install other dependencies
-RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0" "pyspng>=0.1.0"
-RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio>=2.28.1" "moviepy>=1.0.3" "tqdm>=4.60.0" "gcsfs==2024.2.0"
+# copy physicsnemo source
+COPY . /physicsnemo/
 
-# copy modulus source
-COPY . /modulus/
+# Install pyspng for arm64
+ARG PYSPNG_ARM64_WHEEL
+ENV PYSPNG_ARM64_WHEEL=${PYSPNG_ARM64_WHEEL:-unknown}
+
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$PYSPNG_ARM64_WHEEL" != "unknown" ]; then \
+        echo "Custom pyspng wheel for $TARGETPLATFORM exists, installing!" && \
+        pip install --no-cache-dir /physicsnemo/deps/${PYSPNG_ARM64_WHEEL}; \
+    else \
+        echo "No custom wheel for pyspng found. Installing pyspng for: $TARGETPLATFORM from pypi" && \
+        pip install --no-cache-dir "pyspng>=0.1.0"; \
+    fi
+
+# Install other dependencies
+RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
+RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio>=2.28.1" "moviepy>=1.0.3" "tqdm>=4.60.0" "gcsfs==2024.2.0"
 
 # Install Numcodecs (This needs a separate install because Numcodecs ARM pip install has issues)
 # A fix is being added here: https://github.com/zarr-developers/numcodecs/pull/315 but the public release is not ready yet.
@@ -46,7 +58,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         pip install --no-cache-dir numcodecs; \
     elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$NUMCODECS_ARM64_WHEEL" != "unknown" ]; then \
         echo "Numcodecs wheel for $TARGETPLATFORM exists, installing!" && \
-        pip install --force-reinstall --no-cache-dir /modulus/deps/${NUMCODECS_ARM64_WHEEL}; \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${NUMCODECS_ARM64_WHEEL}; \
     else \
         echo "Numcodecs wheel for $TARGETPLATFORM is not present. Will attempt to install from PyPi index, but might fail" && \
         pip install --no-cache-dir numcodecs; \
@@ -58,7 +70,7 @@ ENV VTK_ARM64_WHEEL=${VTK_ARM64_WHEEL:-unknown}
 
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$VTK_ARM64_WHEEL" != "unknown" ]; then \
         echo "VTK wheel $VTK_ARM64_WHEEL for $TARGETPLATFORM exists, installing!" && \
-        pip install --no-cache-dir /modulus/deps/${VTK_ARM64_WHEEL}; \
+        pip install --no-cache-dir /physicsnemo/deps/${VTK_ARM64_WHEEL}; \
     elif [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Installing vtk for: $TARGETPLATFORM" && \
         pip install --no-cache-dir "vtk>=9.2.6"; \
@@ -82,10 +94,10 @@ ENV DGLBACKEND=$DGL_BACKEND
 ARG DGL_ARM64_WHEEL
 ENV DGL_ARM64_WHEEL=${DGL_ARM64_WHEEL:-unknown}
 
-# TODO: this is a workaround as dgl is not yet shipping arm compatible wheels for CUDA 12.x: https://github.com/NVIDIA/modulus/issues/432
+# TODO: this is a workaround as dgl is not yet shipping arm compatible wheels for CUDA 12.x: https://github.com/NVIDIA/physicsnemo/issues/432
 RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$DGL_ARM64_WHEEL" != "unknown" ]; then \
         echo "Custom DGL wheel $DGL_ARM64_WHEEL for $TARGETPLATFORM exists, installing!" && \
-        pip install --no-cache-dir --no-deps /modulus/deps/${DGL_ARM64_WHEEL}; \
+        pip install --no-cache-dir --no-deps /physicsnemo/deps/${DGL_ARM64_WHEEL}; \
     elif [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Installing DGL for: $TARGETPLATFORM" && \
         pip install --no-cache-dir --no-deps dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html; \
@@ -107,13 +119,13 @@ ENV ONNXRUNTIME_ARM64_WHEEL=${ONNXRUNTIME_ARM64_WHEEL:-unknown}
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         pip install "onnxruntime-gpu>1.19.0"; \
     elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$ONNXRUNTIME_ARM64_WHEEL" != "unknown" ]; then \
-	pip install --no-cache-dir --no-deps /modulus/deps/${ONNXRUNTIME_ARM64_WHEEL}; \
+	pip install --no-cache-dir --no-deps /physicsnemo/deps/${ONNXRUNTIME_ARM64_WHEEL}; \
     else \
         echo "Skipping onnxruntime_gpu install."; \
     fi
 
 # cleanup of stage
-RUN rm -rf /modulus/
+RUN rm -rf /physicsnemo/
 
 # CI image
 FROM builder as ci
@@ -123,13 +135,13 @@ ARG TARGETPLATFORM
 # TODO: Remove hacky downgrade of netCDF4 package. netCDF4 v1.7.1 has following 
 # issue: https://github.com/Unidata/netcdf4-python/issues/1343
 # This workaround is only added for the CI systems which run pytest only once. 
-# For more details, refer: https://github.com/NVIDIA/modulus/issues/608
+# For more details, refer: https://github.com/NVIDIA/physicsnemo/issues/608
 RUN pip install --no-cache-dir "netcdf4>=1.6.3,<1.7.1"
 
 RUN pip install --no-cache-dir "mlflow>=2.1.1"
 
-COPY . /modulus/
-RUN cd /modulus/ && pip install -e .[makani,fignet] && pip uninstall nvidia-modulus -y
+COPY . /physicsnemo/
+RUN cd /physicsnemo/ && pip install -e .[makani,fignet] && pip uninstall nvidia-physicsnemo -y
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Installing tensorflow and warp-lang for: $TARGETPLATFORM" && \
         pip install --no-cache-dir "tensorflow>=2.9.0" "warp-lang>=0.6.0"; \
@@ -142,15 +154,15 @@ RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==
 RUN pip install --no-cache-dir --no-deps -e git+https://github.com/NVIDIA/modulus-makani.git@v0.1.0#egg=makani
 
 # Install torch-scatter, torch-cluster, and pyg
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/modulus/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl" ]; then \
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl" ]; then \
         echo "Installing torch_scatter and for: $TARGETPLATFORM" && \
-        pip install --force-reinstall --no-cache-dir /modulus/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl; \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl; \
     else \
         echo "No custom wheel present, skipping"; \
     fi
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/modulus/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl" ]; then \
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl" ]; then \
         echo "Installing torch_cluster and for: $TARGETPLATFORM" && \
-        pip install --force-reinstall --no-cache-dir /modulus/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl; \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl; \
     else \
         echo "No custom wheel present, skipping"; \
     fi
@@ -160,20 +172,20 @@ RUN pip install --no-cache-dir "torch_geometric==2.5.3"
 RUN pip install --no-cache-dir "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely" "numpy<2.0"
 
 # cleanup of stage
-RUN rm -rf /modulus/
+RUN rm -rf /physicsnemo/
 
 # Deployment image
 FROM builder as deploy
-COPY . /modulus/
-RUN cd /modulus/ && pip install .
+COPY . /physicsnemo/
+RUN cd /physicsnemo/ && pip install .
 RUN pip install --no-cache-dir "protobuf==3.20.3"
 
 # Set Git Hash as a environment variable
-ARG MODULUS_GIT_HASH
-ENV MODULUS_GIT_HASH=${MODULUS_GIT_HASH:-unknown}
+ARG PHYSICSNEMO_GIT_HASH
+ENV PHYSICSNEMO_GIT_HASH=${PHYSICSNEMO_GIT_HASH:-unknown}
 
 # Clean up
-RUN rm -rf /modulus/
+RUN rm -rf /physicsnemo/
 
 # Docs image
 FROM deploy as docs

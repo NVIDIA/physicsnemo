@@ -33,7 +33,7 @@
 # This example was adopted from torch-harmonics and modified to
 # highlight the usage of GraphCast on the example of training
 # a neural solver for the Shallow-Water-Equations (SWE) and
-# to showcase the utilities in Modulus when it comes to
+# to showcase the utilities in PhysicsNeMo when it comes to
 # distributing a model in a tensor-parallel.
 
 import argparse
@@ -58,13 +58,13 @@ import matplotlib.pyplot as plt
 
 from shallow_water_pde_dataset import ShallowWaterPDEDataset
 
-from modulus.distributed import (
+from physicsnemo.distributed import (
     DistributedManager,
     mark_module_as_shared,
     ProcessGroupConfig,
     ProcessGroupNode,
 )
-from modulus.models.graphcast.graph_cast_net import GraphCastNet
+from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
 
 logger = logging.getLogger(__name__)

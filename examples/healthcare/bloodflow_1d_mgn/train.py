@@ -20,21 +20,21 @@ import time, os
 import numpy as np
 import hydra
 
-from modulus.distributed.manager import DistributedManager
-from modulus.models.meshgraphnet import MeshGraphNet
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.models.meshgraphnet import MeshGraphNet
 
-# from modulus.datapipes.gnn.mgn_dataset import MGNDataset
+# from physicsnemo.datapipes.gnn.mgn_dataset import MGNDataset
 import generate_dataset as gd
 from generate_dataset import generate_normalized_graphs
 from generate_dataset import train_test_split
 from generate_dataset import Bloodflow1DDataset
 
-from modulus.launch.logging import (
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 import json
 from omegaconf import DictConfig
 

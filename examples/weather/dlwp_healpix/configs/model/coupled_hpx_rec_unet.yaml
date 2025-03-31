@@ -18,7 +18,7 @@ defaults:
   - modules/encoder@encoder: rec_unet_enc
   - modules/decoder@decoder: rec_unet_dec
 
-_target_: modulus.models.dlwp_healpix.HEALPixRecUNet
+_target_: physicsnemo.models.dlwp_healpix.HEALPixRecUNet
 _recursive_: false
 presteps: 1
 input_time_dim: ${data.input_time_dim}

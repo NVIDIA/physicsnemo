@@ -20,7 +20,7 @@ from typing import Tuple, Union
 
 import torch
 
-import modulus
+import physicsnemo
 
 from .utils import compare_output
 
@@ -67,7 +67,7 @@ def save_output(output: Union[Tensor, Tuple[Tensor, ...]], file_name: Path):
 
 @torch.no_grad()
 def validate_forward_accuracy(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
     rtol: float = 1e-3,
     atol: float = 1e-3,
@@ -82,8 +82,8 @@ def validate_forward_accuracy(
 
     Parameters
     ----------
-    model : modulus.Module
-        Modulus module
+    model : physicsnemo.Module
+        PhysicsNeMo module
     in_args : Tuple[Tensor], optional
         Input arguments, by default ()
     rtol : float, optional

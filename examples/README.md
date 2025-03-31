@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-# NVIDIA Modulus Examples
+# NVIDIA PhysicsNeMo Examples
 
 ## Introduction
 
@@ -14,14 +14,14 @@ such models can help solve real world problems.
 |[Darcy Flow](./cfd/darcy_fno/)|Introductory example for learning basics of data-driven models on Physics-ML datasets|
 |[Darcy Flow (Data + Physics)](./cfd/darcy_physics_informed/)|Data-driven training with physics-based constraints|
 |[Lid Driven Cavity Flow](./cfd/ldc_pinns/)|Purely physics-driven (no external simulation/experimental data) training|
-|[Vortex Shedding](./cfd/vortex_shedding_mgn/)|Introductory example for learning the basics of MeshGraphNets in Modulus|
+|[Vortex Shedding](./cfd/vortex_shedding_mgn/)|Introductory example for learning the basics of MeshGraphNets in PhysicsNeMo|
 |[Medium-range global weather forecast using FCN-AFNO](./weather/fcn_afno/)|Introductory example on training data-driven models for global weather forecasting (auto-regressive model)|
 |[Lagrangian Fluid Flow](./cfd/lagrangian_mgn/)|Introductory example for data-driven training on Lagrangian meshes|
 |[Stokes Flow (Physics Informed Fine-Tuning)](./cfd/stokes_mgn/)|Data-driven training followed by physics-based fine-tuning|
 
 ## Domain-specific examples
 
-The several examples inside Modulus can be classified based on their domains as below:
+The several examples inside PhysicsNeMo can be classified based on their domains as below:
 
 > **NOTE:**  The below classification is not exhaustive by any means!
     One can classify single example into multiple domains and we encourage
@@ -94,7 +94,7 @@ The several examples inside Modulus can be classified based on their domains as 
 ## Additional examples
 
 In addition to the examples in this repo, more Physics-ML usecases and examples
-can be referenced from the [Modulus-Sym examples](https://github.com/NVIDIA/modulus-sym/blob/main/examples/README.md).
+can be referenced from the [PhysicsNeMo-Sym examples](https://github.com/NVIDIA/physicsnemo-sym/blob/main/examples/README.md).
 
 ## NVIDIA support
 
@@ -106,5 +106,5 @@ For stable examples, please refer the tagged versions.
 
 We're posting these examples on GitHub to better support the community, facilitate
 feedback, as well as collect and implement contributions using
-[GitHub issues](https://github.com/NVIDIA/modulus/issues) and pull requests.
+[GitHub issues](https://github.com/NVIDIA/physicsnemo/issues) and pull requests.
 We welcome all contributions!

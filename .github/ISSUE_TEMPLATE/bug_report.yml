@@ -14,7 +14,7 @@
 # limitations under the License.
 
 name: Bug Report
-description: File a bug report for Modulus (Core)
+description: File a bug report for PhysicsNeMo (Core)
 title: "🐛[BUG]: "
 labels: ["bug", "? - Needs Triage"]
 
@@ -22,15 +22,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to help Modulus and fill out this bug report!
-        - By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/NVIDIA/modulus/blob/main/CONTRIBUTING.md)
-        - You also confirm that you have searched the [open bugs](https://github.com/NVIDIA/modulus/issues) and have found no duplicates for this request
+        Thanks for taking the time to help PhysicsNeMo and fill out this bug report!
+        - By submitting this issue, you agree to follow our [Code of Conduct](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md)
+        - You also confirm that you have searched the [open bugs](https://github.com/NVIDIA/physicsnemo/issues) and have found no duplicates for this request
 
   - type: input
     id: version
     attributes:
       label: Version
-      description: What version of Modulus are you running?
+      description: What version of PhysicsNeMo are you running?
       placeholder: "example: 0.9.0"
     validations:
       required: true

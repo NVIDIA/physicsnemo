@@ -3,7 +3,7 @@
 # Transolver for Darcy Flow
 
 This example demonstrates how to set up a data-driven model for a 2D Darcy flow using
-the Transolver inside of Modulus.
+the Transolver inside of PhysicsNeMo.
 
 <p align="center">
 <img src="../../../docs/img/transolver.png" />
@@ -14,7 +14,7 @@ This example runs on a single GPU.
 
 ## Getting Started
 
-To train the model following modulus's settings, simply run
+To train the model following physicsnemo's settings, simply run
 
 ```bash
 python train_transolver_darcy.py

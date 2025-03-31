@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# from modulus.models.mlp import FullyConnected
+# from physicsnemo.models.mlp import FullyConnected
 # import torch
-# from modulus.module.derivatives import DerivWrapper
+# from physicsnemo.module.derivatives import DerivWrapper
 
 # net = FullyConnected(
 #     in_features=2,

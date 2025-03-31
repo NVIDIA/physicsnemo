@@ -24,7 +24,7 @@ from pytest_utils import import_or_fail, nfsdata_or_fail
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 omegaconf = pytest.importorskip("omegaconf")
 np = pytest.importorskip("numpy")
@@ -96,7 +96,7 @@ def scaling_double_dict():
 @import_or_fail("netCDF4")
 @nfsdata_or_fail
 def test_open_time_series_on_the_fly(create_path, pytestconfig):
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         open_time_series_dataset_classic_on_the_fly,
     )
 
@@ -124,7 +124,7 @@ def test_open_time_series_on_the_fly(create_path, pytestconfig):
 @nfsdata_or_fail
 def test_open_time_series(data_dir, dataset_name, pytestconfig):
     # check for failure of non-existant dataset
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         open_time_series_dataset_classic_prebuilt,
     )
 
@@ -142,7 +142,7 @@ def test_open_time_series(data_dir, dataset_name, pytestconfig):
 @nfsdata_or_fail
 def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
 
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         create_time_series_dataset_classic,
     )
 
@@ -209,7 +209,7 @@ def test_TimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
+    from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
     # open our test dataset
     ds_path = Path(data_dir, dataset_name + ".zarr")
@@ -306,7 +306,7 @@ def test_TimeSeriesDataset_initialization(
 def test_TimeSeriesDataset_get_constants(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
+    from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
     # open our test dataset
     ds_path = Path(data_dir, dataset_name + ".zarr")
@@ -331,7 +331,7 @@ def test_TimeSeriesDataset_get_constants(
 @import_or_fail("netCDF4")
 @nfsdata_or_fail
 def test_TimeSeriesDataset_len(data_dir, dataset_name, scaling_dict, pytestconfig):
-    from modulus.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
+    from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
     # open our test dataset
     ds_path = Path(data_dir, dataset_name + ".zarr")
@@ -378,7 +378,7 @@ def test_TimeSeriesDataset_len(data_dir, dataset_name, scaling_dict, pytestconfi
 def test_TimeSeriesDataset_get(
     data_dir, dataset_name, scaling_double_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
+    from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
     # open our test dataset
     ds_path = Path(data_dir, dataset_name + ".zarr")
@@ -488,7 +488,7 @@ def test_TimeSeriesDataset_get(
 def test_TimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         TimeSeriesDataModule,
     )
 
@@ -577,7 +577,7 @@ def test_TimeSeriesDataModule_initialization(
 def test_TimeSeriesDataModule_get_constants(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         TimeSeriesDataModule,
     )
 
@@ -656,7 +656,7 @@ def test_TimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
 
-    from modulus.datapipes.healpix.data_modules import (
+    from physicsnemo.datapipes.healpix.data_modules import (
         TimeSeriesDataModule,
     )
 

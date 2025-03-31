@@ -18,15 +18,15 @@ import hydra
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger
-from modulus.models.fno import FNO
-from modulus.models.mlp.fully_connected import FullyConnected
-from modulus.sym.eq.pdes.navier_stokes import NavierStokes
-from modulus.sym.eq.phy_informer import PhysicsInformer
-from modulus.sym.geometry.geometry_dataloader import GeometryDatapipe
-from modulus.sym.geometry.primitives_2d import Rectangle
-from modulus.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger
+from physicsnemo.models.fno import FNO
+from physicsnemo.models.mlp.fully_connected import FullyConnected
+from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes
+from physicsnemo.sym.eq.phy_informer import PhysicsInformer
+from physicsnemo.sym.geometry.geometry_dataloader import GeometryDatapipe
+from physicsnemo.sym.geometry.primitives_2d import Rectangle
+from physicsnemo.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
 from omegaconf import DictConfig
 from sympy import Abs, Eq, Symbol
 from torch.nn import MSELoss

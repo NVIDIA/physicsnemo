@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from modulus.metrics.diffusion import calculate_fid_from_inception_stats
+from physicsnemo.metrics.diffusion import calculate_fid_from_inception_stats
 
 
 def test_fid_calculation():

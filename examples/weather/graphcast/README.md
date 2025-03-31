@@ -1,7 +1,7 @@
 # GraphCast for weather forecasting
 
 A re-implementation of the DeepMind's
-[GraphCast](https://arxiv.org/abs/2212.12794) model in Modulus.
+[GraphCast](https://arxiv.org/abs/2212.12794) model in PhysicsNeMo.
 
 ## Problem overview
 
@@ -138,12 +138,12 @@ formore details.
 
 - Fused Adam optimizer: This implementation supports using Adam optimizer with fused
 kernels from the
-[Apex](https://github.com/NVIDIA/apex) package. Apex is pre-installed in the Modulus
+[Apex](https://github.com/NVIDIA/apex) package. Apex is pre-installed in the PhysicsNeMo
 docker containers.
 
 - Fused layer norm: This implementation supports using layernorm with fused kernels
 from the [Transformer Engine](https://github.com/NVIDIA/TransformerEngine) package.
-Transformer Engine is pre-installed in the Modulus docker containers.
+Transformer Engine is pre-installed in the PhysicsNeMo docker containers.
 
 - [Cugraph-ops](https://docs.rapids.ai/api/cugraph/nightly/graph_support/cugraphops_support/)
 backend: cugraph-ops aims to be a low-level,

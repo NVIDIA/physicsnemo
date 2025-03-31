@@ -17,7 +17,7 @@
 defaults:
   - mgn  # use MGN model as a base and change only required parameters.
 
-_target_: modulus.models.meshgraphnet.BiStrideMeshGraphNet
+_target_: physicsnemo.models.meshgraphnet.BiStrideMeshGraphNet
 
 num_mesh_levels: 2
 bistride_unet_levels: 1

@@ -19,7 +19,7 @@ repos:
     rev: 22.10.0
     hooks:
     - id: black
-      exclude: "(docs|modulus/experimental)"
+      exclude: "(docs|physicsnemo/experimental)"
 
 -   repo: https://github.com/econchick/interrogate
     rev: 1.7.0
@@ -31,7 +31,7 @@ repos:
           "--ignore-magic", "--fail-under=99", "--exclude=['setup.py', 'test', 'build', 'docs']",  
           "--ignore-regex=['forward', 'backward', 'reset_parameters', 'extra_repr', 'MetaData', 'apply_activation','exec_activation']", 
           "--color", "--"]
-      exclude: ^modulus/internal/|^modulus/experimental/|^docs/
+      exclude: ^physicsnemo/internal/|^physicsnemo/experimental/|^docs/
 
 -   repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.35.0

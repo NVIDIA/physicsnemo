@@ -9,7 +9,7 @@ coverage run \
 coverage run \
 --rcfile='coverage.docstring.rc' \
 -m pytest \
---doctest-modules ../modulus/
+--doctest-modules ../physicsnemo/
 
 coverage combine --data-file=.coverage
 coverage report --omit=*test*

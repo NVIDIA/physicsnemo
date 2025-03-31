@@ -26,11 +26,11 @@ from .losses import (
 )
 from .mhd_pde import MHD_PDE
 from .loss_mhd import LossMHD
-from modulus.models.layers.spectral_layers import fourier_derivatives
+from physicsnemo.models.layers.spectral_layers import fourier_derivatives
 
 
-class LossMHDVecPot_Modulus(LossMHD):
-    "Calculate loss for MHD equations with vector potential, using modulus derivatives"
+class LossMHDVecPot_PhysicsNeMo(LossMHD):
+    "Calculate loss for MHD equations with vector potential, using physicsnemo derivatives"
 
     def __init__(
         self,

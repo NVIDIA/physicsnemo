@@ -16,7 +16,7 @@
 
 import torch
 
-from modulus.metrics.diffusion import (
+from physicsnemo.metrics.diffusion import (
     EDMLoss,
     RegressionLossCE,
     VELoss,

@@ -49,11 +49,11 @@ from torch.utils.data import DataLoader, Dataset
 import vtk
 from vtk.util import numpy_support
 
-from modulus.distributed import DistributedManager
-from modulus.datapipes.cae.domino_datapipe import DoMINODataPipe
-from modulus.models.domino.model import DoMINO
-from modulus.utils.domino.utils import *
-from modulus.utils.sdf import signed_distance_field
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
+from physicsnemo.models.domino.model import DoMINO
+from physicsnemo.utils.domino.utils import *
+from physicsnemo.utils.sdf import signed_distance_field
 
 AIR_DENSITY = 1.205
 STREAM_VELOCITY = 30.00

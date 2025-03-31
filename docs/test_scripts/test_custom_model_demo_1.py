@@ -5,9 +5,9 @@ import torch
 # [pytorch model]
 import torch.nn as nn
 
-import modulus
-from modulus.datapipes.benchmarks.darcy import Darcy2D
-from modulus.metrics.general.mse import mse
+import physicsnemo
+from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+from physicsnemo.metrics.general.mse import mse
 
 
 class UNet(nn.Module):
@@ -45,14 +45,14 @@ class UNet(nn.Module):
 
 # [pytorch model]
 
-# [modulus model]
+# [physicsnemo model]
 
 from dataclasses import dataclass
 
 import torch.nn as nn
 
-from modulus.models.meta import ModelMetaData
-from modulus.models.module import Module
+from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.models.module import Module
 
 
 @dataclass
@@ -67,14 +67,14 @@ class MdlsUNetMetaData(ModelMetaData):
 
 MdlsUNet = Module.from_torch(UNet, meta=MdlsUNetMetaData)
 
-# [modulus model]
+# [physicsnemo model]
 
-# [modulus sym model]
+# [physicsnemo sym model]
 
 from typing import Dict, Optional
 
-from modulus.sym.key import Key
-from modulus.sym.models.arch import Arch
+from physicsnemo.sym.key import Key
+from physicsnemo.sym.models.arch import Arch
 
 
 class MdlsSymUNet(Arch):
@@ -102,14 +102,14 @@ class MdlsSymUNet(Arch):
         return self.split_output(out, self.output_key_dict, dim=1)
 
 
-# [modulus sym model]
+# [physicsnemo sym model]
 
 
 # [code]
 
 import time
 
-from modulus.utils import StaticCaptureTraining
+from physicsnemo.utils import StaticCaptureTraining
 
 normaliser = {
     "permeability": (1.25, 0.75),

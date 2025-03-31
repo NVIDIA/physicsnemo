@@ -25,16 +25,16 @@ from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 
-from modulus.models.fno import FNO
-from modulus.distributed import DistributedManager
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import (
+from physicsnemo.models.fno import FNO
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
     LaunchLogger,
 )
-from modulus.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
 from utils import NestedDarcyDataset, GridValidator
 
 
@@ -70,7 +70,7 @@ def InitializeLoggers(cfg: DictConfig) -> Tuple[DistributedManager, PythonLogger
         user_name="Gretchen Ross",
         mode="offline",
     )
-    LaunchLogger.initialize(use_mlflow=True)  # Modulus launch logger
+    LaunchLogger.initialize(use_mlflow=True)  # PhysicsNeMo launch logger
 
     return dist, RankZeroLoggingWrapper(logger, dist)
 

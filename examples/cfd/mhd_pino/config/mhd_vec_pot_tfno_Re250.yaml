@@ -19,7 +19,7 @@
 load_ckpt: False
 use_wandb: True
 output_dir: './checkpoints/MHDVecPot_TFNO/MHDVecPot_TFNO_PINO_Re250/figures/'
-derivative: 'original' # use 'modulus' or 'original' method to take derivatives
+derivative: 'original' # use 'physicsnemo' or 'original' method to take derivatives
 
 ###################
 ## Model options

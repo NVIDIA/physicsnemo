@@ -43,7 +43,7 @@ def test_data():
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_ConvGRUBlock_initialization(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvGRUBlock,
     )
 
@@ -56,7 +56,7 @@ def test_ConvGRUBlock_initialization(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_ConvGRUBlock_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvGRUBlock,
     )
 
@@ -80,7 +80,7 @@ def test_ConvGRUBlock_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_ConvNeXtBlock_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,
     )
 
@@ -102,7 +102,7 @@ def test_ConvNeXtBlock_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_ConvNeXtBlock_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,
     )
 
@@ -131,7 +131,7 @@ def test_ConvNeXtBlock_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_DoubleConvNeXtBlock_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         DoubleConvNeXtBlock,
     )
 
@@ -159,7 +159,7 @@ def test_DoubleConvNeXtBlock_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_DoubleConvNeXtBlock_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         DoubleConvNeXtBlock,
     )
 
@@ -195,7 +195,7 @@ def test_DoubleConvNeXtBlock_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_SymmetricConvNeXtBlock_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         SymmetricConvNeXtBlock,
     )
 
@@ -220,7 +220,7 @@ def test_SymmetricConvNeXtBlock_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_SymmetricConvNeXtBlock_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         SymmetricConvNeXtBlock,
     )
 
@@ -244,7 +244,7 @@ def test_SymmetricConvNeXtBlock_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_Multi_SymmetricConvNeXtBlock_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         Multi_SymmetricConvNeXtBlock,
     )
 
@@ -262,7 +262,7 @@ def test_Multi_SymmetricConvNeXtBlock_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_Multi_SymmetricConvNeXtBlock_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         Multi_SymmetricConvNeXtBlock,
     )
 
@@ -288,7 +288,7 @@ def test_Multi_SymmetricConvNeXtBlock_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_BasicConvBlock_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,
     )
 
@@ -315,7 +315,7 @@ def test_BasicConvBlock_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_BasicConvBlock_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,
     )
 
@@ -341,7 +341,7 @@ def test_BasicConvBlock_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_MaxPool_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         MaxPool,
     )
 
@@ -353,7 +353,7 @@ def test_MaxPool_initialization(device, pytestconfig):
 @import_or_fail("hydra")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_MaxPool_forward(device, test_data, pytestconfig):
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         MaxPool,
     )
 
@@ -374,7 +374,7 @@ def test_MaxPool_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_AvgPool_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         AvgPool,
     )
 
@@ -387,7 +387,7 @@ def test_AvgPool_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_AvgPool_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         AvgPool,
     )
 
@@ -410,7 +410,7 @@ def test_AvgPool_forward(device, test_data, pytestconfig):
 @import_or_fail("hydra")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_TransposedConvUpsample_initialization(device, pytestconfig):
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         TransposedConvUpsample,  #
     )
 
@@ -427,7 +427,7 @@ def test_TransposedConvUpsample_initialization(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_TransposedConvUpsample_forward(device, test_data, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         TransposedConvUpsample,
     )
 
@@ -459,7 +459,7 @@ def test_TransposedConvUpsample_forward(device, test_data, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_Interpolate_initialization(device, pytestconfig):
 
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         Interpolate,
     )
 
@@ -472,7 +472,7 @@ def test_Interpolate_initialization(device, pytestconfig):
 @import_or_fail("hydra")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_Interpolate_forward(device, pytestconfig):
-    from modulus.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix_layers import (
         Interpolate,
     )
 

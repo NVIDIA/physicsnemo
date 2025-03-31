@@ -22,7 +22,7 @@ configured in config.yaml in the data_processing tab.
 """
 
 from openfoam_datapipe import OpenFoamDataset
-from modulus.utils.domino.utils import *
+from physicsnemo.utils.domino.utils import *
 import multiprocessing
 import hydra, time
 from hydra.utils import to_absolute_path

@@ -90,22 +90,22 @@ def compute_gradients(mesh: pv.PolyData, scalars: List[str]) -> pv.PolyData:
     return mesh
 
 
-def modulus_geometry_interpolator(
-    mesh: pv.PolyData, modulus_geometry, num_samples: int
+def physicsnemo_geometry_interpolator(
+    mesh: pv.PolyData, physicsnemo_geometry, num_samples: int
 ) -> Dict[str, np.ndarray]:
     """
-    Interpolate mesh results on the boundary of a modulus geometry object
+    Interpolate mesh results on the boundary of a physicsnemo geometry object
 
     Args:
         mesh (pv.PolyData): Input mesh
-        modulus_geometry : Modulus Geometry
+        physicsnemo_geometry : PhysicsNeMo Geometry
         num_samples (int): Number of samples
 
     Returns:
         Dict[str, np.ndarray]: Samples with interpolated data
     """
 
-    samples = modulus_geometry.sample_boundary(num_samples)
+    samples = physicsnemo_geometry.sample_boundary(num_samples)
 
     coords = np.concatenate((samples["x"], samples["y"]), axis=1)
     for k in mesh.point_data.keys():
@@ -124,21 +124,21 @@ def modulus_geometry_interpolator(
     return samples
 
 
-def modulus_geometry_interior_interpolator(
-    mesh: pv.PolyData, modulus_geometry, num_samples: int
+def physicsnemo_geometry_interior_interpolator(
+    mesh: pv.PolyData, physicsnemo_geometry, num_samples: int
 ) -> Dict[str, np.ndarray]:
     """
-    Interpolate mesh results in the interior of a modulus geometry object
+    Interpolate mesh results in the interior of a physicsnemo geometry object
 
     Args:
         mesh (pv.PolyData): Input mesh
-        modulus_geometry: Modulus Geometry
+        physicsnemo_geometry: PhysicsNeMo Geometry
         num_samples (int): Number of samples
 
     Returns:
         Dict[str, np.ndarray]: Samples with interpolated data
     """
-    samples = modulus_geometry.sample_interior(num_samples)
+    samples = physicsnemo_geometry.sample_interior(num_samples)
 
     coords = np.concatenate((samples["x"], samples["y"]), axis=1)
     for k in mesh.point_data.keys():

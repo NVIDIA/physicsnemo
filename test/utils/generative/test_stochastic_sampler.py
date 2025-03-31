@@ -46,7 +46,7 @@ class MockNet:
 @import_or_fail("cftime")
 def test_stochastic_sampler(pytestconfig):
 
-    from modulus.utils.generative import stochastic_sampler
+    from physicsnemo.utils.generative import stochastic_sampler
 
     net = MockNet()
     latents = torch.randn(2, 3, 448, 448)  # Mock latents
@@ -127,7 +127,7 @@ def test_stochastic_sampler(pytestconfig):
 @import_or_fail("cftime")
 def test_image_fuse_basic(pytestconfig):
 
-    from modulus.utils.generative import image_fuse
+    from physicsnemo.utils.generative import image_fuse
 
     # Basic test: No overlap, no boundary, one patch
     batch_size = 1
@@ -157,7 +157,7 @@ def test_image_fuse_basic(pytestconfig):
 @import_or_fail("cftime")
 def test_image_fuse_with_boundary(pytestconfig):
 
-    from modulus.utils.generative import image_fuse
+    from physicsnemo.utils.generative import image_fuse
 
     # Test with boundary pixels
     batch_size = 1
@@ -189,7 +189,7 @@ def test_image_fuse_with_boundary(pytestconfig):
 @import_or_fail("cftime")
 def test_image_fuse_with_multiple_batches(pytestconfig):
 
-    from modulus.utils.generative import image_fuse
+    from physicsnemo.utils.generative import image_fuse
 
     # Test with multiple batches
     batch_size = 2
@@ -238,7 +238,7 @@ def test_image_fuse_with_multiple_batches(pytestconfig):
 @import_or_fail("cftime")
 def test_image_batching_basic(pytestconfig):
 
-    from modulus.utils.generative import image_batching
+    from physicsnemo.utils.generative import image_batching
 
     # Test with no overlap, no boundary, no input_interp
     batch_size = 1
@@ -269,7 +269,7 @@ def test_image_batching_basic(pytestconfig):
 def test_image_batching_with_boundary(pytestconfig):
     # Test with boundary pixels, no overlap, no input_interp
 
-    from modulus.utils.generative import image_batching
+    from physicsnemo.utils.generative import image_batching
 
     batch_size = 1
     img_shape_x = img_shape_y = 4
@@ -299,7 +299,7 @@ def test_image_batching_with_boundary(pytestconfig):
 def test_image_batching_with_input_interp(pytestconfig):
     # Test with input_interp tensor
 
-    from modulus.utils.generative import image_batching
+    from physicsnemo.utils.generative import image_batching
 
     batch_size = 1
     img_shape_x = img_shape_y = 4

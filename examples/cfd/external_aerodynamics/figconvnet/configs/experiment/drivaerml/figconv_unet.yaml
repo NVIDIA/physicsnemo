@@ -50,7 +50,7 @@ lr_scheduler:
 
 loggers:
   wandb:
-    entity: modulus
+    entity: physicsnemo
     project_name: car-cfd
     group_name: fignet-drivaerml
     run_name: FIGConvNet-level2-16,16,16-res250-150-100-pool-max-2-aabb-20x18x26-ks5-np32768-b8x2

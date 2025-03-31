@@ -57,7 +57,7 @@ simulated data.  We observe that the error in each of these cases is relatively 
 
 We will demonstrate the use of data loss and physics constraints,
 specifically the equation residual loss, to create accurate predictions.
-[Modulus Sym](https://github.com/NVIDIA/modulus-sym)
+[PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
 has utilities tailored for physics-informed machine learning. It also presents
 abstracted APIs that allow users to think and model the problem from the lens of
 equations, constraints, etc. In this example, we will only leverage the physics-informed
@@ -65,7 +65,7 @@ utilities to see how we can add physics to an existing data-driven model with ea
 still maintaining the flexibility to define our own training loop and other details.
 For a more abstracted definition of these type of problems, where the training loop
 definition and other things is taken care of implicitly, you may refer
-[Modulus Sym](https://github.com/NVIDIA/modulus-sym)
+[PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
 
 ## Dataset
 
@@ -107,14 +107,14 @@ equations into the loss function. We will also use a tensor factorized Fourier N
 Operator (TFNO) in the same pipeline. The only difference with a TFNO model
 is that the weights are factorized using TensorLy.
 
-In this example, we will also use the `PDE` class from Modulus-Sym to symbolically define
+In this example, we will also use the `PDE` class from PhysicsNeMo-Sym to symbolically define
 the PDEs. This is very convinient and most natural way to define these PDEs and allows
 us to print the equations to check for correctness. This also abstracts out the
-complexity of converting the equation into a pytorch representation. Modulus Sym also
+complexity of converting the equation into a pytorch representation. PhysicsNeMo Sym also
 provides several complex, well-tested PDEs like 3D Navier-Stokes, Linear elasticity,
 Electromagnetics, etc. pre-defined which can be used directly in physics-informing
 applications. We will also give you the option to choose between the
-derivative functions from Modulus-Sym or from the original paper.  
+derivative functions from PhysicsNeMo-Sym or from the original paper.  
 
 ## Getting Started
 

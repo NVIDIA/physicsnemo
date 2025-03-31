@@ -28,13 +28,13 @@ Datasets used for model training and sampling can be downloaded via the followin
 
 
 ## Running the Experiments
-Download the high res and low res data and save the data files to the subdirectory ``modulus/examples/generative/diffusion/Kolmogorov_2D_data/``.
+Download the high res and low res data and save the data files to the subdirectory ``physicsnemo/examples/generative/diffusion/Kolmogorov_2D_data/``.
 
-- Note: The directory from which the downloaded dataset files are loaded is specified in the configuration yaml files at ``modulus/examples/generative/diffusion/conf/``. In the case when the default relative file location in a yaml file cannot be correctly recognized, please replace the relative location with the absolute location. For example, in the configuration file `modulus/examples/generative/diffusion/conf/config_dfsr_train.yaml`, Line 24, the value of the key 'data' can be changed to an absolute file directory of the dataset file, e.g., ``/<directory of modulus>/examples/generative/diffusion/Kolmogorov_2D_data/kf_2d_re1000_256_40seed.npy``
+- Note: The directory from which the downloaded dataset files are loaded is specified in the configuration yaml files at ``physicsnemo/examples/generative/diffusion/conf/``. In the case when the default relative file location in a yaml file cannot be correctly recognized, please replace the relative location with the absolute location. For example, in the configuration file `physicsnemo/examples/generative/diffusion/conf/config_dfsr_train.yaml`, Line 24, the value of the key 'data' can be changed to an absolute file directory of the dataset file, e.g., ``/<directory of physicsnemo>/examples/generative/diffusion/Kolmogorov_2D_data/kf_2d_re1000_256_40seed.npy``
 
 <b>Step 1 - Model Training</b>
 
-In directory ``modulus/examples/generative/diffusion/``, run:
+In directory ``physicsnemo/examples/generative/diffusion/``, run:
 
 (without physics-informed conditioning)
 
@@ -52,7 +52,7 @@ python train.py --config-name=config_dfsr_cond_train
 
 <b>Step 2 - Super-resolution</b>
 
-In directory ``modulus/examples/generative/diffusion/``, run:
+In directory ``physicsnemo/examples/generative/diffusion/``, run:
 
 (without physics-informed conditioning)
 

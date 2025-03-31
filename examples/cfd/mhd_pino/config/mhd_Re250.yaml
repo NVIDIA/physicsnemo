@@ -19,7 +19,7 @@
 load_ckpt: False
 use_wandb: True
 output_dir: './checkpoints/MHD/MHD_PINO_Re250/figures/'
-derivative: 'modulus' # use 'modulus' or 'original' method to take derivatives
+derivative: 'physicsnemo' # use 'physicsnemo' or 'original' method to take derivatives
 
 ###################
 ## Model options

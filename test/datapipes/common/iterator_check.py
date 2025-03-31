@@ -16,19 +16,19 @@
 
 import logging
 
-import modulus
+import physicsnemo
 
 logger = logging.getLogger("__name__")
 
 
 def check_datapipe_iterable(
-    datapipe: "modulus.Datapipe", nr_iterations: int = 3
+    datapipe: "physicsnemo.Datapipe", nr_iterations: int = 3
 ) -> bool:
     """Checks if datapipe is iterable
 
     Parameters
     ----------
-    datapipe : modulus.Datapipe
+    datapipe : physicsnemo.Datapipe
         datapipe to check if iterable
     nr_iterations : int
         number of iterations to check datapipe iterable

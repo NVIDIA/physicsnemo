@@ -34,7 +34,7 @@ def _bvh_query_distance(
     Computes the signed distance from each point in the given array `points`
     to the mesh represented by `mesh`,within the maximum distance `max_dist`,
     and stores the result in the array `sdf`.
-    It is different from the `signed_distance_field` in `modulus.utils.sdf`
+    It is different from the `signed_distance_field` in `physicsnemo.utils.sdf`
     as it uses the winding number method to compute the signed distance.
 
     Parameters:

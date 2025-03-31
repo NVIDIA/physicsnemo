@@ -19,10 +19,10 @@ from pathlib import Path
 import pytest
 import torch
 
-import modulus
+import physicsnemo
 
 
-class MockModel(modulus.Module):
+class MockModel(physicsnemo.Module):
     """Fake model"""
 
     def __init__(self, input_size=16, output_size=16, **other_kwargs):
@@ -36,7 +36,7 @@ class MockModel(modulus.Module):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("LoadModel", [MockModel])
 def test_kwargs(device, LoadModel):
-    """Test checkpointing custom modulus module"""
+    """Test checkpointing custom physicsnemo module"""
     torch.manual_seed(0)
 
     # Construct Mock Model and save it

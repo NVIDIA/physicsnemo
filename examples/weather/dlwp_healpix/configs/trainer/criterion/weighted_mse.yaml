@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: modulus.metrics.climate.healpix_loss.WeightedMSE
+_target_: physicsnemo.metrics.climate.healpix_loss.WeightedMSE
 
 weights:
   - 1.0

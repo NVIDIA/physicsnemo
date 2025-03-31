@@ -18,12 +18,12 @@ import numpy as np
 import pytest
 import torch
 
-import modulus.metrics.climate.efi as efi
-import modulus.metrics.climate.reduction as clim_red
-import modulus.metrics.general.histogram as hist
-import modulus.metrics.general.reduction as gen_red
-from modulus.metrics.climate.acc import acc
-from modulus.metrics.general.mse import mse, rmse
+import physicsnemo.metrics.climate.efi as efi
+import physicsnemo.metrics.climate.reduction as clim_red
+import physicsnemo.metrics.general.histogram as hist
+import physicsnemo.metrics.general.reduction as gen_red
+from physicsnemo.metrics.climate.acc import acc
+from physicsnemo.metrics.general.mse import mse, rmse
 
 Tensor = torch.Tensor
 

@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.swinvrnn import SwinRNN
+from physicsnemo.models.swinvrnn import SwinRNN
 
 from . import common
 

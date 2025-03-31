@@ -40,15 +40,15 @@ except:
 from collections import OrderedDict
 from typing import Dict, Optional
 
-from modulus.launch.logging import (
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.models.meshgraphnet import MeshGraphNet
-from modulus.sym.eq.pde import PDE
-from modulus.sym.eq.phy_informer import PhysicsInformer
-from modulus.sym.eq.spatial_grads.spatial_grads import compute_connectivity_tensor
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.sym.eq.pde import PDE
+from physicsnemo.sym.eq.phy_informer import PhysicsInformer
+from physicsnemo.sym.eq.spatial_grads.spatial_grads import compute_connectivity_tensor
 from sympy import Function, Number, Symbol
 
 from utils import get_dataset, relative_lp_error
@@ -166,10 +166,10 @@ class PhysicsInformedFineTuner:
 
         self.node_pde = Stokes(nu=self.nu, dim=2)
 
-        # note: this example uses the PhysicsInformer class from Modulus Sym to
-        # construct the computational graph. This allows you to leverage Modulus Sym's
+        # note: this example uses the PhysicsInformer class from PhysicsNeMo Sym to
+        # construct the computational graph. This allows you to leverage PhysicsNeMo Sym's
         # optimized derivative backend to compute the derivatives, along with other
-        # benefits like symbolic definition of PDEs and leveraging the PDEs from Modulus
+        # benefits like symbolic definition of PDEs and leveraging the PDEs from PhysicsNeMo
         # Sym's PDE module.
 
         self.phy_informer = PhysicsInformer(
@@ -374,8 +374,8 @@ def main(cfg: DictConfig) -> None:
 
     # initialize loggers
     initialize_wandb(
-        project="Modulus-Launch",
-        entity="Modulus",
+        project="PhysicsNeMo-Launch",
+        entity="PhysicsNeMo",
         name="Stokes-Physics-Informed-Fine-Tuning",
         group="Stokes-DDP-Group",
         mode=cfg.wandb_mode,

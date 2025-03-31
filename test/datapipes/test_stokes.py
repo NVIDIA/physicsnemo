@@ -34,7 +34,7 @@ def data_dir():
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_stokes_constructor(data_dir, device, pytestconfig):
     # _nfsdata_or_fail(pytestconfig)
-    from modulus.datapipes.gnn.stokes_dataset import StokesDataset
+    from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
 
     # construct dataset
     dataset = StokesDataset(

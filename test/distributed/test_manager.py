@@ -14,15 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
 import pytest
 import torch
+from distributed_utils_for_testing import modify_environment
 
-from modulus.distributed import (
+from physicsnemo.distributed import (
     DistributedManager,
-    ModulusUndefinedGroupError,
-    ModulusUninitializedDistributedManagerWarning,
+    PhysicsNeMoUndefinedGroupError,
+    PhysicsNeMoUninitializedDistributedManagerWarning,
     ProcessGroupConfig,
     ProcessGroupNode,
 )
@@ -33,256 +32,268 @@ distributed_test = pytest.mark.skipif(
 
 
 def test_manager():
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    DistributedManager.initialize()
-    print(DistributedManager())
+    with modify_environment(
+        RANK=0,
+        WORLD_SIZE=1,
+        MASTER_ADDR="localhost",
+        MASTER_PORT=str(12355),
+        LOCAL_RANK="0",
+    ):
 
-    manager = DistributedManager()
+        DistributedManager.initialize()
+        print(DistributedManager())
 
-    assert manager.is_initialized()
-    assert (
-        manager.distributed == torch.distributed.is_available()
-    ), "Manager should be in serial mode"
-    assert manager.rank == 0
-    assert manager.world_size == 1
-    assert manager.local_rank == 0
+        manager = DistributedManager()
 
-    DistributedManager.cleanup()
-    del os.environ["RANK"]
-    del os.environ["WORLD_SIZE"]
+        assert manager.is_initialized()
+        assert (
+            manager.distributed == torch.distributed.is_available()
+        ), "Manager should be in serial mode"
+        assert manager.rank == 0
+        assert manager.world_size == 1
+        assert manager.local_rank == 0
+
+        DistributedManager.cleanup()
 
 
 def test_manager_slurm():
+
     # Test distributed manager with Slurm variables
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-    os.environ["SLURM_PROCID"] = "0"
-    os.environ["SLURM_NPROCS"] = "1"
-    os.environ["SLURM_LOCALID"] = "0"
-    os.environ["SLURM_LAUNCH_NODE_IPADDR"] = "localhost"
-    DistributedManager.initialize()
+    with modify_environment(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="12345",
+        SLURM_PROCID="0",
+        SLURM_NPROCS="1",
+        SLURM_LOCALID="0",
+        SLURM_LAUNCH_NODE_IPADDR="localhost",
+    ):
+        DistributedManager.initialize()
 
-    manager = DistributedManager()
+        manager = DistributedManager()
 
-    assert manager.is_initialized()
-    assert manager.rank == 0
-    assert manager.world_size == 1
-    assert manager.local_rank == 0
-    DistributedManager.cleanup()
-    del os.environ["SLURM_PROCID"]
-    del os.environ["SLURM_NPROCS"]
-    del os.environ["SLURM_LOCALID"]
-    del os.environ["SLURM_LAUNCH_NODE_IPADDR"]
+        assert manager.is_initialized()
+        assert manager.rank == 0
+        assert manager.world_size == 1
+        assert manager.local_rank == 0
+        DistributedManager.cleanup()
 
 
 def test_manager_ompi():
-    # Test distributed manager with openMPI variables
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-    os.environ["OMPI_COMM_WORLD_RANK"] = "0"
-    os.environ["OMPI_COMM_WORLD_SIZE"] = "1"
-    os.environ["OMPI_COMM_WORLD_LOCAL_RANK"] = "0"
-    DistributedManager.initialize()
 
-    manager = DistributedManager()
+    with modify_environment(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="12345",
+        OMPI_COMM_WORLD_RANK="0",
+        OMPI_COMM_WORLD_SIZE="1",
+        OMPI_COMM_WORLD_LOCAL_RANK="0",
+    ):
+        # Test distributed manager with openMPI variables
+        DistributedManager.initialize()
 
-    assert manager.is_initialized()
-    assert manager.rank == 0
-    assert manager.world_size == 1
-    assert manager.local_rank == 0
-    DistributedManager.cleanup()
-    del os.environ["OMPI_COMM_WORLD_RANK"]
-    del os.environ["OMPI_COMM_WORLD_SIZE"]
-    del os.environ["OMPI_COMM_WORLD_LOCAL_RANK"]
+        manager = DistributedManager()
+
+        assert manager.is_initialized()
+        assert manager.rank == 0
+        assert manager.world_size == 1
+        assert manager.local_rank == 0
+        DistributedManager.cleanup()
 
 
 def test_manager_specified_initialization():
     # PyTorch env vars
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    os.environ["LOCAL_RANK"] = "0"
+    with modify_environment(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="12345",
+        RANK="0",
+        WORLD_SIZE="1",
+        LOCAL_RANK="0",
+    ):
 
-    # SLURM env vars
-    os.environ["SLURM_PROCID"] = "0"
-    os.environ["SLURM_NPROCS"] = "1"
-    os.environ["SLURM_LOCALID"] = "0"
-    os.environ["SLURM_LAUNCH_NODE_IPADDR"] = "localhost"
+        with modify_environment(
+            SLURM_PROCID="0",
+            SLURM_NPROCS="1",
+            SLURM_LOCALID="0",
+            SLURM_LAUNCH_NODE_IPADDR="localhost",
+            PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD="SLURM",
+        ):
+            DistributedManager.initialize()
 
-    # OpenMPI env vars
-    os.environ["OMPI_COMM_WORLD_RANK"] = "0"
-    os.environ["OMPI_COMM_WORLD_SIZE"] = "1"
-    os.environ["OMPI_COMM_WORLD_LOCAL_RANK"] = "0"
+            # Test SLURM initialization
+            # os.environ[""] = "SLURM"
+            DistributedManager.initialize()
+            manager = DistributedManager()
+            assert manager.is_initialized()
+            assert manager._initialization_method == "slurm"
+            assert (
+                manager.distributed == torch.distributed.is_available()
+            ), "Manager should be in serial mode"
+            assert manager.rank == 0
+            assert manager.world_size == 1
+            assert manager.local_rank == 0
+            DistributedManager.cleanup()
 
-    # Test SLURM initialization
-    os.environ["MODULUS_DISTRIBUTED_INITIALIZATION_METHOD"] = "SLURM"
-    DistributedManager.initialize()
-    manager = DistributedManager()
-    assert manager.is_initialized()
-    assert manager._initialization_method == "slurm"
-    assert (
-        manager.distributed == torch.distributed.is_available()
-    ), "Manager should be in serial mode"
-    assert manager.rank == 0
-    assert manager.world_size == 1
-    assert manager.local_rank == 0
-    DistributedManager.cleanup()
-
-    # Test OpenMPI initialization
-    os.environ["MODULUS_DISTRIBUTED_INITIALIZATION_METHOD"] = "OPENMPI"
-    DistributedManager.initialize()
-    manager = DistributedManager()
-    assert manager.is_initialized()
-    assert manager._initialization_method == "openmpi"
-    assert (
-        manager.distributed == torch.distributed.is_available()
-    ), "Manager should be in serial mode"
-    assert manager.rank == 0
-    assert manager.world_size == 1
-    assert manager.local_rank == 0
-    DistributedManager.cleanup()
-
-    del os.environ["RANK"]
-    del os.environ["WORLD_SIZE"]
-    del os.environ["LOCAL_RANK"]
+        # Test OpenMPI initialization
+        # OpenMPI env vars
+        with modify_environment(
+            OMPI_COMM_WORLD_RANK="0",
+            OMPI_COMM_WORLD_SIZE="1",
+            OMPI_COMM_WORLD_LOCAL_RANK="0",
+            PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD="OPENMPI",
+        ):
+            DistributedManager.initialize()
+            manager = DistributedManager()
+            assert manager.is_initialized()
+            assert manager._initialization_method == "openmpi"
+            assert (
+                manager.distributed == torch.distributed.is_available()
+            ), "Manager should be in serial mode"
+            assert manager.rank == 0
+            assert manager.world_size == 1
+            assert manager.local_rank == 0
+            DistributedManager.cleanup()
 
 
 def test_manager_singleton():
     # Test distributed manager singleton functions as expected
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "45678"
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    DistributedManager.initialize()
+    with modify_environment(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="45678",
+        RANK="0",
+        WORLD_SIZE="1",
+        LOCAL_RANK="0",
+    ):
 
-    manager_1 = DistributedManager()
-    manager_1.broadcast_buffers = True
-    manager_1.find_unused_parameters = True
-    manager_2 = DistributedManager()
+        DistributedManager.initialize()
 
-    # Compare attributes
-    assert manager_1.rank == manager_2.rank
-    assert manager_1.world_size == manager_2.world_size
-    assert manager_1.local_rank == manager_2.local_rank
-    assert manager_1.device == manager_2.device
-    assert manager_1.distributed == manager_2.distributed
-    assert manager_1.cuda == manager_2.cuda
-    assert manager_1.group_names == manager_2.group_names
-    assert manager_1.group() == manager_2.group()
-    assert manager_1.group_size() == manager_2.group_size()
-    assert manager_1.group_rank() == manager_2.group_rank()
-    assert manager_1.group_name() == manager_2.group_name()
-    assert manager_1.broadcast_buffers == manager_2.broadcast_buffers
-    assert manager_1.find_unused_parameters == manager_2.find_unused_parameters
-    DistributedManager.cleanup()
-    del os.environ["RANK"]
-    del os.environ["WORLD_SIZE"]
+        manager_1 = DistributedManager()
+        manager_1.broadcast_buffers = True
+        manager_1.find_unused_parameters = True
+        manager_2 = DistributedManager()
+
+        # Compare attributes
+        assert manager_1.rank == manager_2.rank
+        assert manager_1.world_size == manager_2.world_size
+        assert manager_1.local_rank == manager_2.local_rank
+        assert manager_1.device == manager_2.device
+        assert manager_1.distributed == manager_2.distributed
+        assert manager_1.cuda == manager_2.cuda
+        assert manager_1.group_names == manager_2.group_names
+        assert manager_1.group() == manager_2.group()
+        assert manager_1.group_size() == manager_2.group_size()
+        assert manager_1.group_rank() == manager_2.group_rank()
+        assert manager_1.group_name() == manager_2.group_name()
+        assert manager_1.broadcast_buffers == manager_2.broadcast_buffers
+        assert manager_1.find_unused_parameters == manager_2.find_unused_parameters
+        DistributedManager.cleanup()
 
 
 def test_manager_uninitialized_instantiation():
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
+    with modify_environment(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="12345",
+        RANK="0",
+        WORLD_SIZE="1",
+        LOCAL_RANK="0",
+    ):
 
-    assert not DistributedManager.is_initialized()
+        assert not DistributedManager.is_initialized()
 
-    with pytest.raises(ModulusUninitializedDistributedManagerWarning):
-        DistributedManager()
+        with pytest.raises(PhysicsNeMoUninitializedDistributedManagerWarning):
+            DistributedManager()
 
-    DistributedManager._shared_state = {}
-    del os.environ["RANK"]
-    del os.environ["WORLD_SIZE"]
+        DistributedManager._shared_state = {}
 
 
 def test_manager_undefined_group_query():
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    DistributedManager.initialize()
+    with modify_environment(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="12345",
+        RANK="0",
+        WORLD_SIZE="1",
+        LOCAL_RANK="0",
+    ):
 
-    manager = DistributedManager()
+        DistributedManager.initialize()
 
-    assert manager.is_initialized()
+        manager = DistributedManager()
 
-    with pytest.raises(ModulusUndefinedGroupError):
-        manager.group("undefined_group")
-    with pytest.raises(ModulusUndefinedGroupError):
-        manager.group_size("undefined_group")
-    with pytest.raises(ModulusUndefinedGroupError):
-        manager.group_rank("undefined_group")
+        assert manager.is_initialized()
 
-    DistributedManager.cleanup()
-    del os.environ["RANK"]
-    del os.environ["WORLD_SIZE"]
+        with pytest.raises(PhysicsNeMoUndefinedGroupError):
+            manager.group("undefined_group")
+        with pytest.raises(PhysicsNeMoUndefinedGroupError):
+            manager.group_size("undefined_group")
+        with pytest.raises(PhysicsNeMoUndefinedGroupError):
+            manager.group_rank("undefined_group")
+
+        DistributedManager.cleanup()
 
 
 @distributed_test
 def test_manager_single_process_subgroups():
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(12355)
+    with modify_environment(
+        RANK="0",
+        WORLD_SIZE="1",
+        MASTER_ADDR="localhost",
+        MASTER_PORT=str(12375),
+        LOCAL_RANK="0",
+    ):
 
-    DistributedManager.initialize()
+        DistributedManager.initialize()
 
-    verbose = False
+        verbose = False
 
-    # Create model parallel process group
-    DistributedManager.create_process_subgroup("model_parallel", 1, verbose=verbose)
-    # Create data parallel process group for DDP allreduce
-    DistributedManager.create_orthogonal_process_group(
-        "data_parallel", "model_parallel", verbose=verbose
-    )
+        # Create model parallel process group
+        DistributedManager.create_process_subgroup("model_parallel", 1, verbose=verbose)
+        # Create data parallel process group for DDP allreduce
+        DistributedManager.create_orthogonal_process_group(
+            "data_parallel", "model_parallel", verbose=verbose
+        )
 
-    manager = DistributedManager()
+        manager = DistributedManager()
 
-    # Test that trivial case of a single GPU still works
-    assert manager.rank == 0
-    assert manager.group_rank(name="model_parallel") == 0
-    assert manager.group_rank(name="data_parallel") == 0
-    assert manager.group_size("model_parallel") == 1
-    assert manager.group_size("data_parallel") == 1
-    DistributedManager.cleanup()
-    del os.environ["RANK"]
-    del os.environ["WORLD_SIZE"]
+        # Test that trivial case of a single GPU still works
+        assert manager.rank == 0
+        assert manager.group_rank(name="model_parallel") == 0
+        assert manager.group_rank(name="data_parallel") == 0
+        assert manager.group_size("model_parallel") == 1
+        assert manager.group_size("data_parallel") == 1
+        DistributedManager.cleanup()
 
 
 def run_process_groups(rank, model_parallel_size, verbose):
-    os.environ["RANK"] = f"{rank}"
-    os.environ["WORLD_SIZE"] = f"{model_parallel_size}"
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(12355)
+    with modify_environment(
+        RANK=f"{rank}",
+        WORLD_SIZE=f"{model_parallel_size}",
+        MASTER_ADDR="localhost",
+        MASTER_PORT=str(12365),
+        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
+    ):
 
-    DistributedManager.initialize()
+        DistributedManager.initialize()
 
-    # Create model parallel process group
-    DistributedManager.create_process_subgroup(
-        "model_parallel", int(model_parallel_size), verbose=verbose
-    )
-    # Create data parallel process group for DDP allreduce
-    DistributedManager.create_orthogonal_process_group(
-        "data_parallel", "model_parallel", verbose=verbose
-    )
+        # Create model parallel process group
+        DistributedManager.create_process_subgroup(
+            "model_parallel", int(model_parallel_size), verbose=verbose
+        )
+        # Create data parallel process group for DDP allreduce
+        DistributedManager.create_orthogonal_process_group(
+            "data_parallel", "model_parallel", verbose=verbose
+        )
 
-    manager = DistributedManager()
+        manager = DistributedManager()
 
-    assert manager.rank == rank
-    assert manager.rank == manager.group_rank(name="model_parallel")
-    assert 0 == manager.group_rank(name="data_parallel")
-    DistributedManager.cleanup()
+        assert manager.rank == rank
+        assert manager.rank == manager.group_rank(name="model_parallel")
+        assert 0 == manager.group_rank(name="data_parallel")
+        DistributedManager.cleanup()
 
 
 @pytest.mark.multigpu
 def test_process_groups():
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
-    model_parallel_size = 2
+    model_parallel_size = num_gpus
     verbose = False  # Change to True for debug
 
     torch.multiprocessing.set_start_method("spawn", force=True)
@@ -297,64 +308,75 @@ def test_process_groups():
 
 
 def run_process_groups_from_config(rank, model_parallel_size, verbose):
-    os.environ["RANK"] = f"{rank}"
-    os.environ["WORLD_SIZE"] = f"{model_parallel_size}"
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(12355)
+    with modify_environment(
+        RANK=f"{rank}",
+        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
+        WORLD_SIZE=f"{model_parallel_size}",
+        MASTER_ADDR="localhost",
+        MASTER_PORT="13246",
+    ):
 
-    DistributedManager.initialize()
+        DistributedManager.initialize()
+        dm = DistributedManager()
+        assert dm.is_initialized()
 
-    # Create world group that contains all processes that are part of this job
-    world = ProcessGroupNode("world")
+        # Create world group that contains all processes that are part of this job
+        world = ProcessGroupNode("world")
 
-    # Create the process group config with the highest level process group
-    config = ProcessGroupConfig(world)
+        # Create the process group config with the highest level process group
+        config = ProcessGroupConfig(world)
 
-    # Create model and data parallel sub-groups
-    config.add_node(ProcessGroupNode("model_parallel"), parent="world")
-    config.add_node(ProcessGroupNode("data_parallel"), parent="world")
+        # Create model and data parallel sub-groups
+        config.add_node(ProcessGroupNode("model_parallel"), parent="world")
+        config.add_node(ProcessGroupNode("data_parallel"), parent="world")
 
-    # Create spatial and channel parallel sub-groups
-    config.add_node(ProcessGroupNode("spatial_parallel"), parent="model_parallel")
-    config.add_node(ProcessGroupNode("channel_parallel"), parent="model_parallel")
+        # Create spatial and channel parallel sub-groups
+        config.add_node(ProcessGroupNode("spatial_parallel"), parent="model_parallel")
+        config.add_node(ProcessGroupNode("channel_parallel"), parent="model_parallel")
 
-    # Set leaf group sizes
-    group_sizes = {"channel_parallel": 1, "spatial_parallel": 2, "data_parallel": 1}
-    config.set_leaf_group_sizes(group_sizes)  # Updates all parent group sizes too
+        # Set leaf group sizes
+        group_sizes = {
+            "channel_parallel": 1,
+            "spatial_parallel": model_parallel_size,
+            "data_parallel": 1,
+        }
+        config.set_leaf_group_sizes(group_sizes)  # Updates all parent group sizes too
 
-    assert (
-        config.get_node("model_parallel").size == 2
-    ), "Incorrect size for 'model_parallel' parent node"
+        assert (
+            config.get_node("model_parallel").size == model_parallel_size
+        ), "Incorrect size for 'model_parallel' parent node"
 
-    assert config.get_node("world").size == 2, "Incorrect size for 'world' parent node"
+        assert (
+            config.get_node("world").size == model_parallel_size
+        ), "Incorrect size for 'world' parent node"
 
-    # Create model parallel process group
-    DistributedManager.create_groups_from_config(config, verbose=verbose)
+        # Create model parallel process group
+        DistributedManager.create_groups_from_config(config, verbose=verbose)
 
-    manager = DistributedManager()
+        manager = DistributedManager()
 
-    assert manager.rank == rank
+        assert manager.rank == rank
 
-    # Test that model_parallel and spatial_parallel span all the processes
-    assert manager.rank == manager.group_rank(name="model_parallel")
-    assert manager.rank == manager.group_rank(name="spatial_parallel")
+        # Test that model_parallel and spatial_parallel span all the processes
+        assert manager.rank == manager.group_rank(name="model_parallel")
+        assert manager.rank == manager.group_rank(name="spatial_parallel")
 
-    # Test orthogonal data_parallel group, only one total model_parallel group so
-    # data_parallel rank should always be 0
-    assert 0 == manager.group_rank(name="data_parallel")
+        # Test orthogonal data_parallel group, only one total model_parallel group so
+        # data_parallel rank should always be 0
+        assert 0 == manager.group_rank(name="data_parallel")
 
-    # Test channel_parallel group, group with size 1, so rank must be 0
-    assert 0 == manager.group_rank(name="channel_parallel")
+        # Test channel_parallel group, group with size 1, so rank must be 0
+        assert 0 == manager.group_rank(name="channel_parallel")
 
-    # Cleanup process groups
-    DistributedManager.cleanup()
+        # Cleanup process groups
+        DistributedManager.cleanup()
 
 
 @pytest.mark.multigpu
 def test_process_groups_from_config():
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
-    model_parallel_size = 2
+    model_parallel_size = num_gpus
     verbose = False  # Change to True for debug
 
     torch.multiprocessing.set_start_method("spawn", force=True)

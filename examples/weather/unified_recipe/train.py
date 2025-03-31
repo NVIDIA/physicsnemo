@@ -42,16 +42,16 @@ except:
         + "See https://github.com/nvidia/apex for install details."
     )
 
-from modulus import Module
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo import Module
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import (
     LaunchLogger,
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.mlflow import initialize_mlflow
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
+from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils import StaticCaptureEvaluateNoGrad, StaticCaptureTraining
 
 from seq_zarr_datapipe import SeqZarrDatapipe
 from model_packages import save_inference_model_package
@@ -89,10 +89,10 @@ def main(cfg: DictConfig) -> None:
         experiment_desc=cfg.experiment_desc,
         run_name=f"{cfg.model.name}-trainng",
         run_desc=cfg.experiment_desc,
-        user_name="Modulus User",
+        user_name="PhysicsNeMo User",
         mode="offline",
     )
-    LaunchLogger.initialize(use_mlflow=True)  # Modulus launch logger
+    LaunchLogger.initialize(use_mlflow=True)  # PhysicsNeMo launch logger
     logger = PythonLogger("main")  # General python logger
 
     # Initialize model
@@ -438,7 +438,7 @@ def main(cfg: DictConfig) -> None:
 
             # Save checkpoint
             if (epoch % 5 == 0 or epoch == 1) and dist.rank == 0:
-                # Use Modulus Launch checkpoint
+                # Use PhysicsNeMo Launch checkpoint
                 save_checkpoint(
                     "./checkpoints",
                     models=[model, predicted_batch_norm, unpredicted_batch_norm],

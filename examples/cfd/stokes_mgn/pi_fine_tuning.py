@@ -40,16 +40,16 @@ except:
 from collections import OrderedDict
 from typing import Dict
 
-from modulus.launch.logging import (
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.models.mlp.fully_connected import FullyConnected
-from modulus.sym.eq.pde import PDE
-from modulus.sym.eq.phy_informer import PhysicsInformer
-from modulus.sym.key import Key
-from modulus.sym.models.arch import Arch
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.models.mlp.fully_connected import FullyConnected
+from physicsnemo.sym.eq.pde import PDE
+from physicsnemo.sym.eq.phy_informer import PhysicsInformer
+from physicsnemo.sym.key import Key
+from physicsnemo.sym.models.arch import Arch
 from sympy import Function, Number, Symbol
 
 from utils import get_dataset, relative_lp_error
@@ -151,9 +151,9 @@ class DNN(torch.nn.Module):
 
 class MdlsSymDNN(Arch):
     """
-    Wrapper model to convert PyTorch model to Modulus-Sym model.
+    Wrapper model to convert PyTorch model to PhysicsNeMo-Sym model.
 
-    Modulus Sym relies on the inputs/outputs of the model being dictionary of tensors.
+    PhysicsNeMo Sym relies on the inputs/outputs of the model being dictionary of tensors.
     This wrapper converts the input dictionary of tensors to a single tensor by
     concatenating them along appropriate dimension before passing them as an input to
     the pytorch model. During the output, the process is reversed,
@@ -163,10 +163,10 @@ class MdlsSymDNN(Arch):
     The model arguments thus become a list of `Key` objects that informs the model
     about the input and output dimensionality of the pytorch model.
 
-    For more details on Modulus Sym models, refer:
-    https://docs.nvidia.com/deeplearning/modulus/modulus-core/tutorials/simple_training_example.html#using-custom-models-in-modulus
+    For more details on PhysicsNeMo Sym models, refer:
+    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/simple_training_example.html#using-custom-models-in-physicsnemo
     For more details on Key class, refer:
-    https://docs.nvidia.com/deeplearning/modulus/modulus-sym/api/modulus.sym.html#module-modulus.sym.key
+    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.html#module-physicsnemo.sym.key
     """
 
     def __init__(
@@ -185,7 +185,7 @@ class MdlsSymDNN(Arch):
 
     def forward(self, dict_tensor: Dict[str, torch.Tensor]):
         # Use concat_input method of the Arch class to convert dict of tensors to
-        # a single multi-dimensional tensor. Ref: https://github.com/NVIDIA/modulus-sym/blob/main/modulus/sym/models/arch.py#L251
+        # a single multi-dimensional tensor. Ref: https://github.com/NVIDIA/physicsnemo-sym/blob/main/physicsnemo/sym/models/arch.py#L251
         x = self.concat_input(
             dict_tensor,
             self.input_key_dict,
@@ -194,7 +194,7 @@ class MdlsSymDNN(Arch):
         )
         out = self.mdls_model(x)
         # Use split_output method of the Arch class to convert a single muli-dimensional
-        # tensor to a dict of tensors. Ref: https://github.com/NVIDIA/modulus-sym/blob/main/modulus/sym/models/arch.py#L381
+        # tensor to a dict of tensors. Ref: https://github.com/NVIDIA/physicsnemo-sym/blob/main/physicsnemo/sym/models/arch.py#L381
         return self.split_output(out, self.output_key_dict, dim=1)
 
 
@@ -247,10 +247,10 @@ class PhysicsInformedFineTuner:
 
         self.node_pde = Stokes(nu=self.nu, dim=2)
 
-        # note: this example uses the PhysicsInformer class from Modulus Sym to
-        # construct the computational graph. This allows you to leverage Modulus Sym's
+        # note: this example uses the PhysicsInformer class from PhysicsNeMo Sym to
+        # construct the computational graph. This allows you to leverage PhysicsNeMo Sym's
         # optimized derivative backend to compute the derivatives, along with other
-        # benefits like symbolic definition of PDEs and leveraging the PDEs from Modulus
+        # benefits like symbolic definition of PDEs and leveraging the PDEs from PhysicsNeMo
         # Sym's PDE module.
 
         self.phy_informer = PhysicsInformer(
@@ -421,8 +421,8 @@ def main(cfg: DictConfig) -> None:
 
     # initialize loggers
     initialize_wandb(
-        project="Modulus-Launch",
-        entity="Modulus",
+        project="PhysicsNeMo-Launch",
+        entity="PhysicsNeMo",
         name="Stokes-Physics-Informed-Fine-Tuning",
         group="Stokes-DDP-Group",
         mode=cfg.wandb_mode,

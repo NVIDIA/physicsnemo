@@ -16,7 +16,7 @@
 
 import functools
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 
 def rank0(func):

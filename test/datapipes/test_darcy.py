@@ -29,7 +29,7 @@ Tensor = torch.Tensor
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_constructor(device, pytestconfig):
 
-    from modulus.datapipes.benchmarks.darcy import Darcy2D
+    from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
     # construct data pipe
     datapipe = Darcy2D(
@@ -54,7 +54,7 @@ def test_darcy_2d_constructor(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_device(device, pytestconfig):
 
-    from modulus.datapipes.benchmarks.darcy import Darcy2D
+    from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
     # construct data pipe
     datapipe = Darcy2D(
@@ -84,7 +84,7 @@ def test_darcy_2d_device(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_shape(resolution, batch_size, device, pytestconfig):
 
-    from modulus.datapipes.benchmarks.darcy import Darcy2D
+    from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
     # construct data pipe
     datapipe = Darcy2D(
@@ -123,7 +123,7 @@ def test_darcy_2d_shape(resolution, batch_size, device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_darcy_cudagraphs(device, pytestconfig):
 
-    from modulus.datapipes.benchmarks.darcy import Darcy2D
+    from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
     # Preprocess function to convert dataloader output into Tuple of tensors
     def input_fn(data) -> Tuple[Tensor, ...]:

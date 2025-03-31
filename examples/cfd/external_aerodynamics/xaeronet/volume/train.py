@@ -35,15 +35,15 @@ import torch
 import numpy as np
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from modulus.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.logging.wandb import initialize_wandb
 import json
 import wandb as wb
 import hydra
 
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
-from modulus.distributed import DistributedManager
-from modulus.models.unet import UNet
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.models.unet import UNet
 from torch.cuda.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from hydra.utils import to_absolute_path
@@ -82,7 +82,7 @@ def main(cfg: DictConfig) -> None:
         writer = SummaryWriter(log_dir="tensorboard")
         initialize_wandb(
             project="aws_drivaer",
-            entity="Modulus",
+            entity="PhysicsNeMo",
             name="aws_drivaer",
             mode="disabled",
             group="group",

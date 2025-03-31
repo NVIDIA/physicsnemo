@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: modulus.metrics.climate.healpix_loss.OceanMSE
+_target_: physicsnemo.metrics.climate.healpix_loss.OceanMSE
 
 lsm_file: /datasets/healpix/HPX32/hpx32_1950-2022_3h_sst_coupled.zarr
 

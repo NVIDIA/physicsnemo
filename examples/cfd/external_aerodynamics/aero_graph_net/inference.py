@@ -29,8 +29,8 @@ import torch
 
 from omegaconf import DictConfig
 
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.utils import load_checkpoint
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.utils import load_checkpoint
 
 from loggers import init_python_logging
 from utils import batch_as_dict

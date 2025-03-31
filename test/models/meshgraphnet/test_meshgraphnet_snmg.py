@@ -26,19 +26,19 @@ import torch
 from meshgraphnet.utils import get_random_graph
 from pytest_utils import import_or_fail
 
-from modulus.distributed import DistributedManager, mark_module_as_shared
+from physicsnemo.distributed import DistributedManager, mark_module_as_shared
 
 torch.backends.cuda.matmul.allow_tf32 = False
 
 
 def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme):
-    from modulus.models.gnn_layers import (
+    from physicsnemo.models.gnn_layers import (
         partition_graph_by_coordinate_bbox,
         partition_graph_nodewise,
         partition_graph_with_id_mapping,
     )
-    from modulus.models.gnn_layers.utils import CuGraphCSC
-    from modulus.models.meshgraphnet.meshgraphnet import MeshGraphNet
+    from physicsnemo.models.gnn_layers.utils import CuGraphCSC
+    from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNet
 
     os.environ["RANK"] = f"{rank}"
     os.environ["WORLD_SIZE"] = f"{world_size}"

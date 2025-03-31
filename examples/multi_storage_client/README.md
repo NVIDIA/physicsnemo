@@ -71,7 +71,7 @@ python
 
 ## Update Existing Code Path with MSC
 
-For other Modulus’s examples, where Zarr is commonly used in training workflows,
+For other PhysicsNeMo’s examples, where Zarr is commonly used in training workflows,
 migrating to MSC is a straightforward process involving only configuration changes.
 For example, in the [Corrdiff](../generative/corrdiff/) training example, data
 currently accessed from the file system can be updated to MSC by modifying the

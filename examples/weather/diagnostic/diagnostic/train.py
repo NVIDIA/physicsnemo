@@ -25,11 +25,11 @@ try:
 except ImportError:
     warnings.warn("Apex is not installed, defaulting to PyTorch optimizers.")
 
-from modulus import Module
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import LaunchLogger, PythonLogger
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo import Module
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 
 
 class Trainer:
@@ -140,7 +140,7 @@ class Trainer:
             (self.epoch % self.checkpoint_every == 0) or (self.epoch == self.max_epoch)
         )
         if checkpoint_epoch and self.dist_manager.rank == 0:
-            # Save Modulus Launch checkpoint
+            # Save PhysicsNeMo Launch checkpoint
             self.save_checkpoint()
 
     @torch.no_grad()

@@ -22,7 +22,7 @@ import threading
 import torch
 
 # distributed stuff
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 from torch.cuda import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
@@ -31,7 +31,7 @@ from tqdm import tqdm
 # custom
 from utils import write_checkpoint
 
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 class Trainer:
@@ -116,7 +116,7 @@ class Trainer:
             raise NotImplementedError(
                 'Attribute error encountered in call to criterio.setup(). \
                 Could be that criterion is not compatable with custom loss dlwp training. See \
-                "modulus/metrics/climate/healpix_loss.py" for proper criterion implementation examples.'
+                "physicsnemo/metrics/climate/healpix_loss.py" for proper criterion implementation examples.'
             )
 
         # opportunity for custom loss classes to get everything in order

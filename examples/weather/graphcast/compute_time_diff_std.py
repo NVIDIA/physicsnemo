@@ -16,8 +16,8 @@
 
 import torch
 import os
-from modulus.datapipes.climate import ERA5HDF5Datapipe
-from modulus.distributed import DistributedManager
+from physicsnemo.datapipes.climate import ERA5HDF5Datapipe
+from physicsnemo.distributed import DistributedManager
 
 import hydra
 from hydra.utils import to_absolute_path

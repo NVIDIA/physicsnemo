@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.layers import WeightFactLinear
+from physicsnemo.models.layers import WeightFactLinear
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])

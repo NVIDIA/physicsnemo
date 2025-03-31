@@ -19,7 +19,7 @@ import json
 from omegaconf import OmegaConf
 import numpy as np
 
-from modulus import Module
+from physicsnemo import Module
 
 
 def save_inference_model_package(
@@ -51,7 +51,7 @@ def save_inference_model_package(
 
     Parameters
     ----------
-    model : modulus.Module
+    model : physicsnemo.Module
         Model to save model card for.
     cfg : DictConfig
         DictConfig with model and data parameters.

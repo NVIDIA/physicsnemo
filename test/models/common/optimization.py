@@ -20,7 +20,7 @@ from typing import Tuple
 
 import torch
 
-import modulus
+import physicsnemo
 
 from .utils import compare_output, dummy_loss_fn
 
@@ -30,7 +30,7 @@ logger = logging.getLogger("__name__")
 
 @torch.no_grad()
 def validate_jit(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
     rtol: float = 1e-5,
     atol: float = 1e-5,
@@ -43,8 +43,8 @@ def validate_jit(
 
     Parameters
     ----------
-    model : modulus.Module
-        Modulus module
+    model : physicsnemo.Module
+        PhysicsNeMo module
     in_args : Tuple[Tensor], optional
         Input arguments, by default ()
     rtol : float, optional
@@ -73,7 +73,7 @@ def validate_jit(
 
 
 def validate_cuda_graphs(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
     rtol: float = 1e-5,
     atol: float = 1e-5,
@@ -87,8 +87,8 @@ def validate_cuda_graphs(
 
     Parameters
     ----------
-    model : modulus.Module
-        Modulus module
+    model : physicsnemo.Module
+        PhysicsNeMo module
     in_args : Tuple[Tensor], optional
         Input arguments, keywords not supported, by default ()
     rtol : float, optional
@@ -133,7 +133,7 @@ def validate_cuda_graphs(
 
 
 def validate_amp(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
     iterations: int = 3,
 ) -> bool:
@@ -143,8 +143,8 @@ def validate_amp(
 
     Parameters
     ----------
-    model : modulus.Module
-        Modulus module
+    model : physicsnemo.Module
+        PhysicsNeMo module
     in_args : Tuple[Tensor], optional
         Input arguments, keywords not supported, by default ()
     iterations: int, optional
@@ -197,7 +197,7 @@ def validate_torch_fx() -> bool:
 
 
 def validate_combo_optims(
-    model: modulus.Module,
+    model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
     iterations: int = 2,
     warmup_length: int = 11,
@@ -210,8 +210,8 @@ def validate_combo_optims(
 
     Parameters
      ----------
-     model : modulus.Module
-         Modulus module
+     model : physicsnemo.Module
+         PhysicsNeMo module
      in_args : Tuple[Tensor], optional
          Input arguments, keywords not supported, by default ()
      iterations : int, optional

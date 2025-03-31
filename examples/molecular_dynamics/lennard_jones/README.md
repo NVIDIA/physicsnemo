@@ -1,8 +1,8 @@
 # Molecular Dynamics using GNNs
 
-This example demonstrates how to leverage the optimized model implementations in Modulus
+This example demonstrates how to leverage the optimized model implementations in PhysicsNeMo
 for different domains. This example showcases how you can leverage the MeshGraphNet
-model in Modulus for developing a DL model for predicting forces/potential for a Lennard
+model in PhysicsNeMo for developing a DL model for predicting forces/potential for a Lennard
 Jones System as described in the [paper here](https://arxiv.org/abs/2112.03383).
 
 ## Problem overview
@@ -23,7 +23,7 @@ The model uses a MeshGraphNet model for the prediction of forces. Since all the 
 in this system are of same type (i.e. Argon), the node encoder is dropped.
 The graph edges are generated based on nearest-neighbor search.
 
-![Results from Modulus training for the LJ system.](../../../docs/img/lj_system_modulus_results.png)
+![Results from PhysicsNeMo training for the LJ system.](../../../docs/img/lj_system_physicsnemo_results.png)
 
 ## Getting Started
 

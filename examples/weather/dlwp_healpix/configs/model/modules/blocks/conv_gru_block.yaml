@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: modulus.models.dlwp_healpix_layers.healpix_blocks.ConvGRUBlock
+_target_: physicsnemo.models.dlwp_healpix_layers.healpix_blocks.ConvGRUBlock
 _recursive_: false
 in_channels: 3
 kernel_size: 1

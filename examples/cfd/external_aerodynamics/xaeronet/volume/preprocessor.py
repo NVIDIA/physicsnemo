@@ -38,7 +38,7 @@ from multiprocessing import Pool
 from tqdm import tqdm
 from pyvista.core import _vtk_core as _vtk
 from vtk import vtkDataSetTriangleFilter
-from modulus.datapipes.cae.readers import read_vtp, read_vtu, read_stl
+from physicsnemo.datapipes.cae.readers import read_vtp, read_vtu, read_stl
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 

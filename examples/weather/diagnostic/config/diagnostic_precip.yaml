@@ -65,4 +65,4 @@ logging:
   mlflow:
     use_mlflow: True
     experiment_name: "Diagnostic precipitation model"
-    user_name: "Modulus User"
+    user_name: "PhysicsNeMo User"

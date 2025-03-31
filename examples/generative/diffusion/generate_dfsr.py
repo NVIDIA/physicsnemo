@@ -28,8 +28,8 @@ import tqdm
 from omegaconf import DictConfig
 from utils import StackedRandomGenerator, open_url
 
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from utils import EasyDict, construct_class_by_name
 import copy
 import logging
@@ -773,11 +773,11 @@ def main(cfg: DictConfig) -> None:
     # Preconditioning & loss function.
     loss_kwargs = EasyDict()
     if cfg.precond == "dfsr":
-        network_kwargs.class_name = "modulus.models.diffusion.VEPrecond_dfsr"
-        loss_kwargs.class_name = "modulus.metrics.diffusion.VELoss_dfsr"
+        network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond_dfsr"
+        loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss_dfsr"
     elif cfg.precond == "dfsr_cond":
-        network_kwargs.class_name = "modulus.models.diffusion.VEPrecond_dfsr_cond"
-        loss_kwargs.class_name = "modulus.metrics.diffusion.VELoss_dfsr_cond"
+        network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond_dfsr_cond"
+        loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss_dfsr_cond"
     loss_fn = construct_class_by_name(**loss_kwargs)  # training.loss.(VP|VE|EDM)Loss
 
     # Network options.

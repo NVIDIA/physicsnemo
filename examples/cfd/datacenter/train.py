@@ -14,21 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from modulus.datapipes.cae.mesh_datapipe import MeshDatapipe
-from modulus.distributed import DistributedManager
+from physicsnemo.datapipes.cae.mesh_datapipe import MeshDatapipe
+from physicsnemo.distributed import DistributedManager
 import vtk
-from modulus.models.unet import UNet
+from physicsnemo.models.unet import UNet
 import matplotlib.pyplot as plt
 from omegaconf import DictConfig
 import torch
 import hydra
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.launch.logging import PythonLogger, LaunchLogger
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
-from modulus.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from apex import optimizers
 import os
 import numpy as np

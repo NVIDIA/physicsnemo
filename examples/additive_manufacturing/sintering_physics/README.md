@@ -54,9 +54,9 @@ For more sample parts simulation:
 <img src="../../../docs/img/vfgn_doc/busbar.gif" width="560" />
 </p>
 
-## Setup with Modulus package
+## Setup with PhysicsNeMo package
 
-- Download Modulus, make or install
+- Download PhysicsNeMo, make or install
 
 - Find the matching torch-scatter version with torch and cuda version enabled:
   - i.e. pip install torch-scatter-f `https://data.pyg.org/whl/torch-2.2.0%2Bcu121/torch_scatter-2.1.2%2Bpt22cu121-cp311-cp311-linux_x86_64.whl`

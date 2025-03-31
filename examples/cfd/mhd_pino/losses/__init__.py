@@ -17,5 +17,5 @@
 from .losses import LpLoss
 from .loss_mhd import LossMHD
 from .loss_mhd_vec_pot import LossMHDVecPot
-from .loss_mhd_modulus import LossMHD_Modulus
-from .loss_mhd_vec_pot_modulus import LossMHDVecPot_Modulus
+from .loss_mhd_physicsnemo import LossMHD_PhysicsNeMo
+from .loss_mhd_vec_pot_physicsnemo import LossMHDVecPot_PhysicsNeMo

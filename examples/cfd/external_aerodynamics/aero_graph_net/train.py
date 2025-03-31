@@ -31,8 +31,8 @@ import torch
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
 
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
 from loggers import CompositeLogger, ExperimentLogger, init_python_logging
 from utils import batch_as_dict

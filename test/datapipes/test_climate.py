@@ -88,8 +88,8 @@ def test_climate_hdf5_constructor(
     pytestconfig,
 ):
 
-    from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-    from modulus.datapipes.climate.utils import invariant
+    from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+    from physicsnemo.datapipes.climate.utils import invariant
 
     # construct data pipe
     spec = ClimateDataSourceSpec(
@@ -200,8 +200,8 @@ def test_climate_hdf5_device(
     pytestconfig,
 ):
 
-    from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-    from modulus.datapipes.climate.utils import invariant
+    from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+    from physicsnemo.datapipes.climate.utils import invariant
 
     # construct data pipe
     spec = ClimateDataSourceSpec(
@@ -249,8 +249,8 @@ def test_climate_hdf5_shape(
     pytestconfig,
 ):
 
-    from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-    from modulus.datapipes.climate.utils import invariant
+    from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+    from physicsnemo.datapipes.climate.utils import invariant
 
     # construct data pipe
     spec = ClimateDataSourceSpec(
@@ -339,8 +339,8 @@ def test_era5_hdf5_sequence(
     pytestconfig,
 ):
 
-    from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-    from modulus.datapipes.climate.utils import invariant
+    from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+    from physicsnemo.datapipes.climate.utils import invariant
 
     # construct data pipe
     spec = ClimateDataSourceSpec(
@@ -392,8 +392,8 @@ def test_era5_hdf5_shuffle(
     pytestconfig,
 ):
 
-    from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-    from modulus.datapipes.climate.utils import invariant
+    from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+    from physicsnemo.datapipes.climate.utils import invariant
 
     # construct data pipe
     spec = ClimateDataSourceSpec(
@@ -445,8 +445,8 @@ def test_era5_hdf5_cudagraphs(
     pytestconfig,
 ):
 
-    from modulus.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
-    from modulus.datapipes.climate.utils import invariant
+    from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
+    from physicsnemo.datapipes.climate.utils import invariant
 
     # Preprocess function to convert dataloader output into Tuple of tensors
     def input_fn(data) -> Tensor:

@@ -23,12 +23,12 @@ import PIL.Image
 import torch
 import tqdm
 from omegaconf import DictConfig
-from modulus.utils.generative.utils import StackedRandomGenerator
+from physicsnemo.utils.generative.utils import StackedRandomGenerator
 
 from misc import open_url
 
-from modulus.distributed import DistributedManager
-from modulus.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 
 def sampler(

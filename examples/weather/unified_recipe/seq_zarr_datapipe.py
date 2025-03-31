@@ -32,8 +32,8 @@ except ImportError:
         + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
     )
 
-from modulus.datapipes.datapipe import Datapipe
-from modulus.datapipes.meta import DatapipeMetaData
+from physicsnemo.datapipes.datapipe import Datapipe
+from physicsnemo.datapipes.meta import DatapipeMetaData
 
 Tensor = torch.Tensor
 

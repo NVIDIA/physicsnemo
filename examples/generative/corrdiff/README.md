@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-## Generative Correction Diffusion Model (CorrDiff) for Km-scale Atmospheric Downscaling
+# Generative Correction Diffusion Model (CorrDiff) for Km-scale Atmospheric Downscaling
 
 ## Problem overview
 
@@ -21,7 +21,7 @@ weather forecasts.
 To build custom CorrDiff versions, you can get started by training the "Mini" version of CorrDiff, which uses smaller training samples and a smaller network to reduce training costs from thousands of GPU hours to around 10 hours on A100 GPUs while still producing reasonable results. It also includes a simple data loader that can be used as a baseline for training CorrDiff on custom datasets.
 
 ### Preliminaries
-Start by installing Modulus (if not already installed) and copying this folder (`examples/generative/corrdiff`) to a system with a GPU available. Also download the CorrDiff-Mini dataset from [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/resources/modulus_datasets-hrrr_mini).
+Start by installing PhysicsNeMo (if not already installed) and copying this folder (`examples/generative/corrdiff`) to a system with a GPU available. Also download the CorrDiff-Mini dataset from [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/resources/modulus_datasets-hrrr_mini).
 
 ### Configuration basics
 

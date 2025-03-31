@@ -25,7 +25,7 @@ import torch as th
 logger = logging.getLogger(__name__)
 
 
-# TODO switch over to modulus checkpoint system
+# TODO switch over to physicsnemo checkpoint system
 def write_checkpoint(
     model,
     optimizer,

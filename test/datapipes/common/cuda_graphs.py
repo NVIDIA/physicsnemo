@@ -19,7 +19,7 @@ from typing import Callable, Tuple, Union
 
 import torch
 
-import modulus
+import physicsnemo
 
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")
@@ -59,7 +59,7 @@ class MiniNetwork(torch.nn.Module):
 
 
 def check_cuda_graphs(
-    datapipe: "modulus.Datapipe",
+    datapipe: "physicsnemo.Datapipe",
     input_fn: Union[Callable, None] = None,
     iterations: int = 5,
     warmup_length: int = 3,
@@ -68,8 +68,8 @@ def check_cuda_graphs(
 
     Parameters
     ----------
-    datapipe : modulus.Datapipe
-        Modulus data pipe to test
+    datapipe : physicsnemo.Datapipe
+        PhysicsNeMo data pipe to test
     input_fn : Union[Callable, None], optional
         Input pre-processing function to produce a tuple of tensors for model inputs, by default None
     iterations : int, optional

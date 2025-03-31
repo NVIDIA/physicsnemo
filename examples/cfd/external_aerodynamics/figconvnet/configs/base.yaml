@@ -82,7 +82,7 @@ loggers:
   wandb:
     project_name: car-cfd
     run_name: default
-    entity: modulus # nvr-ai-algo
+    entity: physicsnemo # nvr-ai-algo
     group_name:
     mode: online
 

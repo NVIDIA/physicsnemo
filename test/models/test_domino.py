@@ -62,7 +62,7 @@ def validate_domino(
 def test_domino_forward(device, pytestconfig):
     """Test domino forward pass"""
 
-    from modulus.models.domino.model import DoMINO
+    from physicsnemo.models.domino.model import DoMINO
 
     torch.manual_seed(0)
 

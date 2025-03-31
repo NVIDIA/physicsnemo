@@ -25,19 +25,19 @@ from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from constants import Constants
-from modulus.datapipes.gnn.vortex_shedding_re300_1000_dataset import (
+from physicsnemo.datapipes.gnn.vortex_shedding_re300_1000_dataset import (
     LatentDataset,
     VortexSheddingRe300To1000Dataset,
 )
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.models.mesh_reduced.mesh_reduced import Mesh_Reduced
-from modulus.models.mesh_reduced.temporal_model import Sequence_Model
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.models.mesh_reduced.mesh_reduced import Mesh_Reduced
+from physicsnemo.models.mesh_reduced.temporal_model import Sequence_Model
 
 C = Constants()
 
@@ -281,8 +281,8 @@ if __name__ == "__main__":
 
     # initialize loggers
     initialize_wandb(
-        project="Modulus-Launch",
-        entity="Modulus",
+        project="PhysicsNeMo-Launch",
+        entity="PhysicsNeMo",
         name="Vortex_Shedding-Training",
         group="Vortex_Shedding-DDP-Group",
         mode=C.wandb_mode,

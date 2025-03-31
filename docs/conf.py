@@ -25,11 +25,11 @@ import os
 
 import sphinx_rtd_theme
 
-from modulus import __version__ as version
+from physicsnemo import __version__ as version
 
-project = "NVIDIA Modulus"
-copyright = "2023, NVIDIA Modulus Team"
-author = "NVIDIA Modulus Team"
+project = "NVIDIA PhysicsNeMo"
+copyright = "2023, NVIDIA PhysicsNeMo Team"
+author = "NVIDIA PhysicsNeMo Team"
 release = version
 
 # -- General configuration ---------------------------------------------------

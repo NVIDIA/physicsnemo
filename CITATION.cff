@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "NVIDIA Modulus: An open-source framework for physics-based deep learning in science and engineering"
+title: "NVIDIA PhysicsNeMo: An open-source framework for physics-based deep learning in science and engineering"
 date-released: "2023-02-24"
 authors:
-  - name: "Modulus Contributors"
-repository-code: "https://github.com/NVIDIA/modulus"
+  - name: "PhysicsNeMo Contributors"
+repository-code: "https://github.com/NVIDIA/physicsnemo"

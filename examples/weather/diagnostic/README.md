@@ -1,22 +1,22 @@
-# Diagnostic models in Modulus (precipitation)
+# Diagnostic models in PhysicsNeMo (precipitation)
 
 This example contains code for training diagnostic models (models predicting an
-additional variable from the atmospheric state) using Modulus. It shows how to use
-Modulus to train a diagnostic model predicting precipitation from ERA-5 data.
+additional variable from the atmospheric state) using PhysicsNeMo. It shows how to use
+PhysicsNeMo to train a diagnostic model predicting precipitation from ERA-5 data.
 
 ## Installation
 
-### Installing Modulus
+### Installing PhysicsNeMo
 
-You need [Modulus](https://github.com/NVIDIA/modulus) installed on your Python
-environment, installed with the `launch` extras. If installing from the Modulus
-repository, install Modulus by running:
+You need [PhysicsNeMo](https://github.com/NVIDIA/physicsnemo) installed on your Python
+environment, installed with the `launch` extras. If installing from the PhysicsNeMo
+repository, install PhysicsNeMo by running:
 
 ```bash
 pip install .[launch]
 ```
 
-in the Modulus directory.
+in the PhysicsNeMo directory.
 
 ## Preparing the data files
 

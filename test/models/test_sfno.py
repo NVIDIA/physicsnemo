@@ -19,8 +19,8 @@ import pytest
 import torch
 from pytest_utils import import_or_fail
 
-import modulus
-from modulus.registry import ModelRegistry
+import physicsnemo
+from physicsnemo.registry import ModelRegistry
 
 from . import common
 
@@ -28,7 +28,7 @@ IN_OUT_SHAPE = [32, 32]
 INP_CHANS = 2
 
 
-def _create_model() -> modulus.Module:
+def _create_model() -> physicsnemo.Module:
     registry = ModelRegistry()
     sfno_type = registry.factory("SFNO")
 
@@ -51,7 +51,7 @@ def test_sfno_forward(pytestconfig, device):
     torch.manual_seed(0)
 
     model = _create_model().to(device)
-    assert isinstance(model, modulus.Module)
+    assert isinstance(model, physicsnemo.Module)
 
     bsize = 2
     invar = torch.randn(bsize, INP_CHANS, *IN_OUT_SHAPE).to(device)

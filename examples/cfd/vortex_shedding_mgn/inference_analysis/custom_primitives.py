@@ -16,10 +16,14 @@
 
 from sympy import Symbol, Abs, sign
 import numpy as np
-from modulus.sym.geometry.geometry import Geometry, csg_curve_naming
-from modulus.sym.geometry.curve import SympyCurve
-from modulus.sym.geometry.parameterization import Parameterization, Parameter, Bounds
-from modulus.sym.geometry.helper import _sympy_sdf_to_sdf
+from physicsnemo.sym.geometry.geometry import Geometry, csg_curve_naming
+from physicsnemo.sym.geometry.curve import SympyCurve
+from physicsnemo.sym.geometry.parameterization import (
+    Parameterization,
+    Parameter,
+    Bounds,
+)
+from physicsnemo.sym.geometry.helper import _sympy_sdf_to_sdf
 
 
 class Point2D(Geometry):

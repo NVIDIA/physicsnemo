@@ -29,7 +29,7 @@ def ahmed_data_dir():
 
 @import_or_fail("sparse_dot_mkl")
 def test_bsms_init(pytestconfig):
-    from modulus.datapipes.gnn.bsms import BistrideMultiLayerGraph
+    from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraph
 
     torch.manual_seed(1)
 
@@ -60,8 +60,8 @@ def test_bsms_init(pytestconfig):
 
 @import_or_fail("sparse_dot_mkl")
 def test_bsms_ahmed_dataset(pytestconfig, ahmed_data_dir):
-    from modulus.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
-    from modulus.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
+    from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
+    from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
 
     split = "train"
     # Construct multi-scale dataset out of standard Ahmed Body dataset.
@@ -87,8 +87,8 @@ def test_bsms_ahmed_dataset(pytestconfig, ahmed_data_dir):
 
 @import_or_fail("sparse_dot_mkl")
 def test_bsms_ahmed_dataset_caching(pytestconfig, ahmed_data_dir, tmp_path):
-    from modulus.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
-    from modulus.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
+    from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
+    from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
 
     split = "train"
     # Construct multi-scale dataset out of standard Ahmed Body dataset.

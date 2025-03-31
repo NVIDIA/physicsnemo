@@ -20,7 +20,7 @@ import pytest
 import torch
 from pytest_utils import import_or_fail
 
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 
 def get_random_graph(device):
@@ -128,11 +128,13 @@ def run_test_distributed_graph(
     use_torchrun: bool = False,
 ):
 
-    from modulus.models.gnn_layers import (
+    from physicsnemo.models.gnn_layers import (
         DistributedGraph,
         partition_graph_by_coordinate_bbox,
     )
-    from modulus.models.graphcast.graph_cast_net import get_lat_lon_partition_separators
+    from physicsnemo.models.graphcast.graph_cast_net import (
+        get_lat_lon_partition_separators,
+    )
 
     if not use_torchrun:
         os.environ["RANK"] = f"{rank}"

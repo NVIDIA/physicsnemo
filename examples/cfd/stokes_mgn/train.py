@@ -31,15 +31,15 @@ try:
 except:
     pass
 
-from modulus.datapipes.gnn.stokes_dataset import StokesDataset
-from modulus.distributed.manager import DistributedManager
-from modulus.launch.logging import (
+from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
+from physicsnemo.distributed.manager import DistributedManager
+from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from modulus.launch.logging.wandb import initialize_wandb
-from modulus.launch.utils import load_checkpoint, save_checkpoint
-from modulus.models.meshgraphnet import MeshGraphNet
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.models.meshgraphnet import MeshGraphNet
 
 from utils import relative_lp_error
 
@@ -206,8 +206,8 @@ def main(cfg: DictConfig) -> None:
 
     # initialize loggers
     initialize_wandb(
-        project="Modulus-Launch",
-        entity="Modulus",
+        project="PhysicsNeMo-Launch",
+        entity="PhysicsNeMo",
         name="Stokes-Training",
         group="Stokes-DDP-Group",
         mode=cfg.wandb_mode,

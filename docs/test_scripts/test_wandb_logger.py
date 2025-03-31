@@ -1,11 +1,12 @@
 # [imports]
 import torch
 
-import modulus
-from modulus.datapipes.benchmarks.darcy import Darcy2D
-from modulus.launch.logging import LaunchLogger, PythonLogger, initialize_wandb
-from modulus.metrics.general.mse import mse
-from modulus.models.fno.fno import FNO
+import physicsnemo
+from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.metrics.general.mse import mse
+from physicsnemo.models.fno.fno import FNO
 
 # [imports]
 
@@ -39,9 +40,9 @@ logger = PythonLogger("main")  # General python logger
 
 # Initialize the MLFlow logger
 initialize_wandb(
-    project="Modulus Tutorials",
-    name="Simple Modulus Tutorials",
-    entity="Modulus MLFLow Tutorial",
+    project="PhysicsNeMo Tutorials",
+    name="Simple PhysicsNeMo Tutorials",
+    entity="PhysicsNeMo MLFLow Tutorial",
     mode="offline",
 )
 LaunchLogger.initialize(use_wandb=True)

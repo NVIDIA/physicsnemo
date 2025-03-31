@@ -19,7 +19,7 @@ from typing import Tuple, Union
 
 import torch
 
-import modulus  # noqa: F401 for docs
+import physicsnemo  # noqa: F401 for docs
 
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")

@@ -1,4 +1,4 @@
-# Modulus Pull Request
+# PhysicsNeMo Pull Request
 
 ## Description
 <!-- Provide a standalone description of changes in this PR. -->
@@ -7,10 +7,10 @@
 
 ## Checklist
 
-- [ ] I am familiar with the [Contributing Guidelines](https://github.com/NVIDIA/modulus/blob/main/CONTRIBUTING.md).
+- [ ] I am familiar with the [Contributing Guidelines](https://github.com/NVIDIA/physicsnemo/blob/main/CONTRIBUTING.md).
 - [ ] New or existing tests cover these changes.
 - [ ] The documentation is up to date with these changes.
-- [ ] The [CHANGELOG.md](https://github.com/NVIDIA/modulus/blob/main/CHANGELOG.md) is
+- [ ] The [CHANGELOG.md](https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md) is
 up to date with these changes.
 
 ## Dependencies

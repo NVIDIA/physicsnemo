@@ -14,12 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from modulus.sym.eq.pde import PDE
+from physicsnemo.sym.eq.pde import PDE
 from sympy import Symbol, Function, Number
 
 
 class MHD_PDE(PDE):
-    """MHD PDEs using Modulus Sym"""
+    """MHD PDEs using PhysicsNeMo Sym"""
 
     name = "MHD_PDE"
 

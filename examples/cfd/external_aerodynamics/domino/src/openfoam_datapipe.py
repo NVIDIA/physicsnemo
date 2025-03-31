@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import pyvista as pv
 import vtk
-from modulus.utils.domino.utils import *
+from physicsnemo.utils.domino.utils import *
 from torch.utils.data import Dataset
 
 AIR_DENSITY = 1.205

@@ -19,7 +19,7 @@ import random
 import pytest
 import torch
 
-from modulus.models.layers.activations import (
+from physicsnemo.models.layers.activations import (
     CappedGELU,
     CappedLeakyReLU,
     Identity,
@@ -137,7 +137,7 @@ def test_activation_capped_gelu(device):
 def test_activation_fused_silu(device):
     """Test fused SiLU implementation"""
 
-    from modulus.models.layers.fused_silu import (
+    from physicsnemo.models.layers.fused_silu import (
         FusedSiLU,
         FusedSiLU_deriv_1,
         FusedSiLU_deriv_2,

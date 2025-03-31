@@ -28,10 +28,10 @@ import numpy as np
 from omegaconf import DictConfig
 import torch
 
-from modulus.models.meshgraphnet import MeshGraphNet
-from modulus.datapipes.gnn.vortex_shedding_dataset import VortexSheddingDataset
-from modulus.launch.logging import PythonLogger
-from modulus.launch.utils import load_checkpoint
+from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.datapipes.gnn.vortex_shedding_dataset import VortexSheddingDataset
+from physicsnemo.launch.logging import PythonLogger
+from physicsnemo.launch.utils import load_checkpoint
 
 
 class MGNRollout:
@@ -196,7 +196,7 @@ class MGNRollout:
         self.ax[0].add_patch(navy_box)  # Add a navy box to the first subplot
         self.ax[0].tripcolor(triang, y_star, vmin=np.min(y_star), vmax=np.max(y_star))
         self.ax[0].triplot(triang, "ko-", ms=0.5, lw=0.3)
-        self.ax[0].set_title("Modulus MeshGraphNet Prediction", color="white")
+        self.ax[0].set_title("PhysicsNeMo MeshGraphNet Prediction", color="white")
         self.ax[1].cla()
         self.ax[1].set_aspect("equal")
         self.ax[1].set_axis_off()
