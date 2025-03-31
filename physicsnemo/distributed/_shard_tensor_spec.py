@@ -20,11 +20,17 @@ from typing import Optional, Tuple
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh
-from torch.distributed.tensor._dtensor_spec import (
+
+from physicsnemo.utils.version_check import check_module_requirements
+
+check_module_requirements("physicsnemo.distributed.shard_tensor")
+
+
+from torch.distributed.tensor._dtensor_spec import (  # noqa: E402
     DTensorSpec,
     TensorMeta,
 )
-from torch.distributed.tensor.placement_types import (
+from torch.distributed.tensor.placement_types import (  # noqa: E402
     Placement,
     Shard,
 )

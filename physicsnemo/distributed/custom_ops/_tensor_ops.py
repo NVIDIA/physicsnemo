@@ -15,16 +15,27 @@
 # limitations under the License.
 
 import torch
-from torch.distributed.tensor._dtensor_spec import DTensorSpec, TensorMeta
-from torch.distributed.tensor._op_schema import (
+
+from physicsnemo.utils.version_check import check_module_requirements
+
+check_module_requirements("physicsnemo.distributed.shard_tensor")
+
+
+from torch.distributed.tensor._dtensor_spec import DTensorSpec, TensorMeta  # noqa: E402
+from torch.distributed.tensor._op_schema import (  # noqa: E402
     OpSchema,
     OutputSharding,
     RuntimeSchemaInfo,
 )
-from torch.distributed.tensor._ops.utils import register_prop_rule
-from torch.distributed.tensor.placement_types import Partial, Replicate, Shard
+from torch.distributed.tensor._ops.utils import register_prop_rule  # noqa: E402
+from torch.distributed.tensor.placement_types import (  # noqa: E402
+    Partial,
+    Replicate,
+    Shard,
+)
 
-from physicsnemo.distributed._shard_tensor_spec import (
+# noqa: E402
+from physicsnemo.distributed._shard_tensor_spec import (  # noqa: E402
     _stride_from_contiguous_shape_C_style,
 )
 

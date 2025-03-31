@@ -141,7 +141,7 @@ class Module(torch.nn.Module):
         >>> from physicsnemo.models import Module
         >>> from physicsnemo.registry import ModelRegistry
         >>> registry = ModelRegistry()
-        >>> model_entry = registry.factory('FullyConnected').load()
+        >>> model_entry = registry.factory('FullyConnected')
         >>> fcn = model_entry(**{'in_features': 10})
         >>> fcn
         FullyConnected(

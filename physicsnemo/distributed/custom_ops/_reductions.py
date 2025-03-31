@@ -17,12 +17,17 @@
 from typing import Iterable
 
 import torch
-from torch.distributed.tensor.placement_types import (
+
+from physicsnemo.utils.version_check import check_module_requirements
+
+check_module_requirements("physicsnemo.distributed.shard_tensor")
+
+from torch.distributed.tensor.placement_types import (  # noqa: E402
     Partial,
     Shard,
 )
 
-from physicsnemo.distributed.shard_tensor import ShardTensor
+from physicsnemo.distributed.shard_tensor import ShardTensor  # noqa: E402
 
 aten = torch.ops.aten
 

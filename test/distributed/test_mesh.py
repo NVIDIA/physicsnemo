@@ -22,6 +22,16 @@ from distributed_utils_for_testing import modify_environment
 from physicsnemo.distributed import (
     DistributedManager,
 )
+from physicsnemo.utils.version_check import check_module_requirements
+
+try:
+    check_module_requirements("device_mesh")
+except ImportError:
+    pytest.skip(
+        "Skipping test because device_mesh is not available",
+        allow_module_level=True,
+    )
+
 
 distributed_test = pytest.mark.skipif(
     not torch.distributed.is_available(), reason="PyTorch distributed not available"

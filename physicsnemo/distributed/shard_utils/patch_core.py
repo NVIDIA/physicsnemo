@@ -14,9 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # File for common tools in shard patching
 from collections.abc import Iterable
+
+from physicsnemo.utils.version_check import check_module_requirements
+
+check_module_requirements("physicsnemo.distributed.shard_tensor")
 
 
 class UndeterminedShardingError(Exception):
