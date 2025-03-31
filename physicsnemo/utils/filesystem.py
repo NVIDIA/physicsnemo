@@ -23,8 +23,8 @@ import urllib.request
 import zipfile
 
 import fsspec
-import fsspec.utils
 import fsspec.implementations.cached
+import fsspec.utils
 import requests
 import s3fs
 from tqdm import tqdm
