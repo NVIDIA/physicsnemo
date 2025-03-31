@@ -14,4 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .checkpoint import load_checkpoint, save_checkpoint, get_checkpoint_dir
+from .checkpoint import get_checkpoint_dir, load_checkpoint, save_checkpoint
