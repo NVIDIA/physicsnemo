@@ -171,6 +171,9 @@ RUN pip install --no-cache-dir "torch_geometric==2.5.3"
 # Install scikit-image and stl
 RUN pip install --no-cache-dir "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely" "numpy<2.0"
 
+# Install MSC
+RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.14.0"
+
 # cleanup of stage
 RUN rm -rf /physicsnemo/
 
