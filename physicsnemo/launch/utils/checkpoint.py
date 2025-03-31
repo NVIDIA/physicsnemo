@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, re
+import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, NewType, Optional, Union
 
@@ -28,7 +29,7 @@ import physicsnemo
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger
 from physicsnemo.utils.capture import _StaticCapture
-from physicsnemo.utils.filesystem import _download_cached, LOCAL_CACHE
+from physicsnemo.utils.filesystem import LOCAL_CACHE, _download_cached
 
 optimizer = NewType("optimizer", torch.optim)
 scheduler = NewType("scheduler", _LRScheduler)
@@ -334,8 +335,8 @@ def load_checkpoint(
     if fs.exists(path):
         if fs.isfile(path):
             raise FileNotFoundError(
-            f"Provided checkpoint directory {path} is a file, not directory"
-        )
+                f"Provided checkpoint directory {path} is a file, not directory"
+            )
     else:
         checkpoint_logging.warning(
             f"Provided checkpoint directory {path} does not exist, skipping load"
@@ -416,8 +417,22 @@ def load_checkpoint(
 
     return epoch
 
-# Get a checkpoint directory based on a given base directory and model name
+
 def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
+    """Get a checkpoint directory based on a given base directory and model name
+
+    Parameters
+    ----------
+    base_dir : str
+        Path to the base directory where checkpoints are stored
+    model_name: str, optional
+        Name of the model which is generating the checkpoint
+
+    Returns
+    -------
+    str
+        Checkpoint directory
+    """
     top_level_dir = f"checkpoints_{model_name}"
     protocol = fsspec.utils.get_protocol(base_dir)
     if protocol == "msc":
@@ -425,9 +440,8 @@ def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
             base_dir += "/"
         return base_dir + top_level_dir
     else:
-        return os.path.join(
-            base_dir, top_level_dir
-        )
+        return os.path.join(base_dir, top_level_dir)
+
 
 # Read via cache and return the cached path for non-file protocols, otherwise just return the path
 def _cache_if_needed(path: str) -> str:
@@ -435,4 +449,8 @@ def _cache_if_needed(path: str) -> str:
     if protocol == "file":
         return path
     else:
-        return _download_cached(path, recursive=False, local_cache_path=os.path.join(LOCAL_CACHE, f"checkpoint_pid_{os.getpid()}"))
+        return _download_cached(
+            path,
+            recursive=False,
+            local_cache_path=os.path.join(LOCAL_CACHE, f"checkpoint_pid_{os.getpid()}"),
+        )

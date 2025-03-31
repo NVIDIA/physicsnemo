@@ -16,8 +16,9 @@
 
 
 import os
-import zarr
 from pathlib import Path
+
+import zarr
 
 
 # Verifies that a Zarr file in a publicly accessible S3 bucket can be read using MSC (Multi-Storage Client).
@@ -30,8 +31,10 @@ def test_msc_read():
     os.environ["MSC_CONFIG"] = f"{current_dir}/msc_config_public_read.yaml"
 
     # Open a publicly accessible zarr file in an S3 bucket
-    zarr_group = zarr.open("msc://cmip6-pds/CMIP6/ScenarioMIP/NOAA-GFDL/GFDL-ESM4/ssp119/r1i1p1f1/day/tas/gr1/v20180701", mode='r')
-    
+    zarr_group = zarr.open(
+        "msc://cmip6-pds/CMIP6/ScenarioMIP/NOAA-GFDL/GFDL-ESM4/ssp119/r1i1p1f1/day/tas/gr1/v20180701",
+        mode="r",
+    )
+
     # Verify the group has content
     assert len(zarr_group) > 0
-

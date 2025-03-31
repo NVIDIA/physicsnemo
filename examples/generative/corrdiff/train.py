@@ -25,7 +25,11 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.metrics.diffusion import RegressionLoss, ResLoss, RegressionLossCE
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint, get_checkpoint_dir
+from physicsnemo.launch.utils import (
+    load_checkpoint,
+    save_checkpoint,
+    get_checkpoint_dir,
+)
 from datasets.dataset import init_train_valid_datasets_from_config
 from helpers.train_helpers import (
     set_patch_shape,
@@ -66,7 +70,9 @@ def main(cfg: DictConfig) -> None:
     enable_amp = fp_optimizations.startswith("amp")
     amp_dtype = torch.float16 if (fp_optimizations == "amp-fp16") else torch.bfloat16
     logger.info(f"Saving the outputs in {os.getcwd()}")
-    checkpoint_dir = get_checkpoint_dir(str(cfg.training.io.get("checkpoint_dir", ".")), cfg.model.name)
+    checkpoint_dir = get_checkpoint_dir(
+        str(cfg.training.io.get("checkpoint_dir", ".")), cfg.model.name
+    )
     if cfg.training.hp.batch_size_per_gpu == "auto":
         cfg.training.hp.batch_size_per_gpu = (
             cfg.training.hp.total_batch_size // dist.world_size

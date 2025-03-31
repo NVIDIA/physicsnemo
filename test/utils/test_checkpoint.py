@@ -14,22 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import shutil
+from pathlib import Path
 from typing import Callable
 
 import boto3
 import fsspec
-import os
 import pytest
 import torch
 import torch.nn as nn
 from moto import mock_aws
-from pathlib import Path
 from pytest_utils import import_or_fail
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
-from physicsnemo.models import Module
 
 
 @pytest.fixture(params=["./checkpoints", "msc://checkpoint-test/checkpoints"])
@@ -76,10 +75,12 @@ def test_model_checkpointing(
     """Test checkpointing util for model"""
 
     from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+
     # Set up the mock with IAM credentials for access. These should match those in
     # the MSC Config file (./msc_config_checkpoint.yaml).
     os.environ["AWS_ACCESS_KEY_ID"] = "access-key-id"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "secret-access-key"
+    # Credentials for testing only
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "secret-access-key"  # noqa: S105
 
     # Ensure default region is set to match the MSC Config file.
     os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
@@ -109,7 +110,6 @@ def test_model_checkpointing(
         models=[mlp_model_1, mlp_model_2],
         metadata={"model_type": "MLP"},
     )
-
 
     # Load twin set of models for importing weights
     mlp_model_1 = model_generator(8).to(device)
@@ -153,9 +153,20 @@ def test_model_checkpointing(
 
 def test_get_checkpoint_dir():
     from physicsnemo.launch.utils import get_checkpoint_dir
+
     assert get_checkpoint_dir(".", "model") == "./checkpoints_model"
     assert get_checkpoint_dir("./", "model") == "./checkpoints_model"
-    assert get_checkpoint_dir("/Users/auser", "model") == "/Users/auser/checkpoints_model"
-    assert get_checkpoint_dir("/Users/auser/", "model") == "/Users/auser/checkpoints_model"
-    assert get_checkpoint_dir("msc://test_profile/bucket", "model") == "msc://test_profile/bucket/checkpoints_model"
-    assert get_checkpoint_dir("msc://test_profile/bucket/", "model") == "msc://test_profile/bucket/checkpoints_model"
+    assert (
+        get_checkpoint_dir("/Users/auser", "model") == "/Users/auser/checkpoints_model"
+    )
+    assert (
+        get_checkpoint_dir("/Users/auser/", "model") == "/Users/auser/checkpoints_model"
+    )
+    assert (
+        get_checkpoint_dir("msc://test_profile/bucket", "model")
+        == "msc://test_profile/bucket/checkpoints_model"
+    )
+    assert (
+        get_checkpoint_dir("msc://test_profile/bucket/", "model")
+        == "msc://test_profile/bucket/checkpoints_model"
+    )
