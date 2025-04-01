@@ -148,7 +148,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
     elif [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         echo "Installing tensorflow and warp-lang for: $TARGETPLATFORM is not supported presently"; \
     fi
-RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==6.5.0" "protobuf==3.20.3"
+RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==6.5.0" "protobuf==3.20.3" "moto[s3]>=5.0.28"
 
 # TODO(akamenev): install Makani via direct URL, see comments in pyproject.toml.
 RUN pip install --no-cache-dir --no-deps -e git+https://github.com/NVIDIA/modulus-makani.git@v0.1.0#egg=makani
