@@ -148,7 +148,7 @@ mpirun -np 2 python train.py \
 
 ## References
 
-1. [Factorized Implicit Global Convolution for Automotive Computational Fluid Dynamics Prediction](https://arxiv.org/abs/TODO)
+1. [Factorized Implicit Global Convolution for Automotive Computational Fluid Dynamics Prediction](https://arxiv.org/abs/2502.04317)
 2. [Some Salient Features Of The Time-Averaged Ground Vehicle Wake](https://doi.org/10.4271/840300)
 3. [Ahmed body wiki](https://www.cfd-online.com/Wiki/Ahmed_body)
 4. [DrivAerNet: A Parametric Car Dataset for Data-Driven Aerodynamic Design and Graph-Based Drag Prediction](https://arxiv.org/abs/2403.08055)
