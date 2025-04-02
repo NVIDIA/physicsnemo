@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import glob
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, NewType, Optional, Union
 
+import fsspec
+import fsspec.utils
 import torch
 from torch.cuda.amp import GradScaler
 from torch.optim.lr_scheduler import _LRScheduler
@@ -27,6 +29,7 @@ import physicsnemo
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger
 from physicsnemo.utils.capture import _StaticCapture
+from physicsnemo.utils.filesystem import LOCAL_CACHE, _download_cached
 
 optimizer = NewType("optimizer", torch.optim)
 scheduler = NewType("scheduler", _LRScheduler)
@@ -86,10 +89,13 @@ def _get_checkpoint_filename(
         else 0
     )
 
-    # Input file name
-    checkpoint_filename = str(
-        Path(path).resolve() / f"{base_name}.{model_parallel_rank}"
-    )
+    # Determine input file name. Get absolute file path if Posix path.
+    # pathlib does not support custom schemes (eg: msc://...) so only perform resolve() for Posix.
+    protocol = fsspec.utils.get_protocol(path)
+    fs = fsspec.filesystem(protocol)
+    if protocol == "file":
+        path = str(Path(path).resolve())
+    checkpoint_filename = f"{path}/{base_name}.{model_parallel_rank}"
 
     # File extension for PhysicsNeMo models or PyTorch models
     file_extension = ".mdlus" if model_type == "mdlus" else ".pt"
@@ -101,20 +107,21 @@ def _get_checkpoint_filename(
     # Otherwise try loading the latest epoch or rolling checkpoint
     else:
         file_names = [
-            Path(fname).name
-            for fname in glob.glob(
-                checkpoint_filename + "*" + file_extension, recursive=False
-            )
+            fname for fname in fs.glob(checkpoint_filename + "*" + file_extension)
         ]
 
         if len(file_names) > 0:
             # If checkpoint from a null index save exists load that
             # This is the most likely line to error since it will fail with
             # invalid checkpoint names
+
+            # Remove protocol prefix if present to allow generic matching
+            _, path_without_protocol = fsspec.core.split_protocol(path)
             file_idx = [
                 int(
                     re.sub(
-                        f"^{base_name}.{model_parallel_rank}.|" + file_extension,
+                        f"^{path_without_protocol}/{base_name}.{model_parallel_rank}.|"
+                        + file_extension,
                         "",
                         fname,
                     )
@@ -212,8 +219,11 @@ def save_checkpoint(
     metadata : Optional[Dict[str, Any]], optional
         Additional metadata to save, by default None
     """
-    # Create checkpoint directory if it does not exist
-    if not Path(path).is_dir():
+    protocol = fsspec.utils.get_protocol(path)
+    fs = fsspec.filesystem(protocol)
+    # Create checkpoint directory if it does not exist.
+    # Only applicable to Posix filesystems ("file" protocol), not object stores.
+    if protocol == "file" and not Path(path).is_dir():
         checkpoint_logging.warning(
             f"Output directory {path} does not exist, will " "attempt to create"
         )
@@ -239,7 +249,8 @@ def save_checkpoint(
             if isinstance(model, physicsnemo.models.Module):
                 model.save(file_name)
             else:
-                torch.save(model.state_dict(), file_name)
+                with fs.open(file_name, "wb") as fp:
+                    torch.save(model.state_dict(), fp)
             checkpoint_logging.success(f"Saved model state dictionary: {file_name}")
 
     # == Saving training checkpoint ==
@@ -270,10 +281,11 @@ def save_checkpoint(
 
     # Save checkpoint to memory
     if bool(checkpoint_dict):
-        torch.save(
-            checkpoint_dict,
-            output_filename,
-        )
+        with fs.open(output_filename, "wb") as fp:
+            torch.save(
+                checkpoint_dict,
+                fp,
+            )
         checkpoint_logging.success(f"Saved training checkpoint: {output_filename}")
 
 
@@ -318,8 +330,14 @@ def load_checkpoint(
     int
         Loaded epoch
     """
+    fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
     # Check if checkpoint directory exists
-    if not Path(path).is_dir():
+    if fs.exists(path):
+        if fs.isfile(path):
+            raise FileNotFoundError(
+                f"Provided checkpoint directory {path} is a file, not directory"
+            )
+    else:
         checkpoint_logging.warning(
             f"Provided checkpoint directory {path} does not exist, skipping load"
         )
@@ -340,7 +358,7 @@ def load_checkpoint(
             file_name = _get_checkpoint_filename(
                 path, name, index=epoch, model_type=model_type
             )
-            if not Path(file_name).exists():
+            if not fs.exists(file_name):
                 checkpoint_logging.error(
                     f"Could not find valid model file {file_name}, skipping load"
                 )
@@ -349,21 +367,22 @@ def load_checkpoint(
             if isinstance(model, physicsnemo.models.Module):
                 model.load(file_name)
             else:
-                model.load_state_dict(torch.load(file_name, map_location=device))
-
+                file_to_load = _cache_if_needed(file_name)
+                model.load_state_dict(torch.load(file_to_load, map_location=device))
             checkpoint_logging.success(
                 f"Loaded model state dictionary {file_name} to device {device}"
             )
 
     # == Loading training checkpoint ==
     checkpoint_filename = _get_checkpoint_filename(path, index=epoch, model_type="pt")
-    if not Path(checkpoint_filename).is_file():
+    if not fs.exists(checkpoint_filename):
         checkpoint_logging.warning(
             "Could not find valid checkpoint file, skipping load"
         )
         return 0
 
-    checkpoint_dict = torch.load(checkpoint_filename, map_location=device)
+    file_to_load = _cache_if_needed(checkpoint_filename)
+    checkpoint_dict = torch.load(file_to_load, map_location=device)
     checkpoint_logging.success(
         f"Loaded checkpoint file {checkpoint_filename} to device {device}"
     )
@@ -397,3 +416,41 @@ def load_checkpoint(
         metadata_dict[key] = value
 
     return epoch
+
+
+def get_checkpoint_dir(base_dir: str, model_name: str) -> str:
+    """Get a checkpoint directory based on a given base directory and model name
+
+    Parameters
+    ----------
+    base_dir : str
+        Path to the base directory where checkpoints are stored
+    model_name: str, optional
+        Name of the model which is generating the checkpoint
+
+    Returns
+    -------
+    str
+        Checkpoint directory
+    """
+    top_level_dir = f"checkpoints_{model_name}"
+    protocol = fsspec.utils.get_protocol(base_dir)
+    if protocol == "msc":
+        if not base_dir.endswith("/"):
+            base_dir += "/"
+        return base_dir + top_level_dir
+    else:
+        return os.path.join(base_dir, top_level_dir)
+
+
+# Read via cache and return the cached path for non-file protocols, otherwise just return the path
+def _cache_if_needed(path: str) -> str:
+    protocol = fsspec.utils.get_protocol(path)
+    if protocol == "file":
+        return path
+    else:
+        return _download_cached(
+            path,
+            recursive=False,
+            local_cache_path=os.path.join(LOCAL_CACHE, f"checkpoint_pid_{os.getpid()}"),
+        )

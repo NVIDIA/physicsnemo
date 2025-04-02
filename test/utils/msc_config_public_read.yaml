@@ -14,4 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .checkpoint import get_checkpoint_dir, load_checkpoint, save_checkpoint
+
+# This is an example MSC configuration file for accessing the CMIP6 archive on AWS:
+# https://registry.opendata.aws/cmip6/
+profiles:
+  cmip6-pds:
+    storage_provider:
+      type: s3
+      options:
+        region_name: us-west-2
+        base_path: cmip6-pds
+        signature_version: UNSIGNED
+cache:
+  location: /tmp/.cache
+  size_mb: 5000
+
