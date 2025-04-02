@@ -139,6 +139,8 @@ def training_loop(cfg):
     # load pretrained regression net if training diffusion
     if use_regression_net:
         regression_net = Module.from_checkpoint(cfg.model.regression_weights)
+        if cfg.training.compile_model:
+            regression_net = torch.compile(regression_net)
         regression_net = regression_net.to(device)
     else:
         regression_net = None
@@ -184,6 +186,8 @@ def training_loop(cfg):
         loss_fn = regression_loss_fn
     elif cfg.training.loss == "edm":
         loss_fn = EDMLoss(P_mean=cfg.model.P_mean)
+    if cfg.training.compile_model:
+        loss_fn = torch.compile(loss_fn)
     optimizer = torch.optim.Adam(net.parameters(), lr=cfg.training.lr)
     augment_pipe = None
     ddp = torch.nn.parallel.DistributedDataParallel(
