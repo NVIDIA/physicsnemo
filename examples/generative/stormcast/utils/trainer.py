@@ -94,6 +94,7 @@ def training_loop(cfg):
     logger0.info("Loading dataset...")
 
     dataset_cls = dataset_classes[cfg.dataset.name]
+    del cfg.dataset.name
 
     dataset_train = dataset_cls(cfg.dataset, train=True)
     dataset_valid = dataset_cls(cfg.dataset, train=False)
@@ -159,6 +160,8 @@ def training_loop(cfg):
         invariant_tensor = torch.from_numpy(invariant_array).to(device)
         invariant_tensor = invariant_tensor.unsqueeze(0)
         invariant_tensor = invariant_tensor.repeat(local_batch_size, 1, 1, 1)
+    else:
+        invariant_tensor = None
 
     logger0.info(f"background_channels {background_channels}")
     logger0.info(f"state_channels {state_channels}")
