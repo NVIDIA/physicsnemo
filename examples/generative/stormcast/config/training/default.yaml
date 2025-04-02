@@ -28,8 +28,8 @@ resume_checkpoint: null # Specify a path to a training checkpoint to resume from
 
 # Logging frequency
 print_progress_freq: 100 # How often to print progress, measured in number of training steps
-checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
-validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+checkpoint_freq: 1000 # How often to save the checkpoints, measured in number of training steps
+validation_freq: 1000 # how often to record the validation loss, measured in number of training steps
 
 # Optimization hyperparameters
 batch_size: 64 # Total training batch size -- must be >= (and divisble by) number of GPUs being used

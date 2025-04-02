@@ -282,6 +282,9 @@ def training_loop(cfg):
         done = total_steps >= total_train_steps
 
         # Perform validation step
+        valid_time = (
+            val_loss
+        ) = -1  # set as placeholders until validation is actually done
         if total_steps % cfg.training.validation_freq == 0:
             valid_start = time.time()
             batch = next(valid_dataset_iterator)
