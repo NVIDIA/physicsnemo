@@ -24,6 +24,7 @@ import zipfile
 
 import fsspec
 import fsspec.implementations.cached
+import fsspec.utils
 import requests
 import s3fs
 from tqdm import tqdm
@@ -46,7 +47,7 @@ def _get_fs(path):
     if path.startswith("s3://"):
         return s3fs.S3FileSystem(client_kwargs=dict(endpoint_url="https://pbss.s8k.io"))
     else:
-        return fsspec.filesystem("file")
+        return fsspec.filesystem(fsspec.utils.get_protocol(path))
 
 
 def _download_ngc_model_file(path: str, out_path: str, timeout: int = 300) -> str:
@@ -175,8 +176,8 @@ def _download_cached(
     # TODO watch for race condition here
     if not os.path.exists(cache_path):
         logger.debug("Downloading %s to cache: %s", path, cache_path)
-        if path.startswith("s3://"):
-            fs = _get_fs(path)
+        if url.scheme in ("s3", "msc"):
+            fs = fsspec.filesystem(fsspec.utils.get_protocol(path))
             fs.get(path, cache_path, recursive=recursive)
         elif path.startswith("ngc://models/"):
             path = _download_ngc_model_file(path, cache_path)

@@ -14,4 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .checkpoint import get_checkpoint_dir, load_checkpoint, save_checkpoint
+
+# This is an example MSC configuration file for testing checkpoint logic.
+profiles:
+  checkpoint-test:
+    storage_provider:
+      type: s3
+      options:
+        region_name: us-east-1
+        base_path: checkpoint-test-bucket
+    credentials_provider:
+      type: S3Credentials
+      options:
+        access_key: "access-key-id"
+        secret_key: "secret-access-key"
