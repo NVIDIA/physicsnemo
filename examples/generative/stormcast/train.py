@@ -36,8 +36,6 @@ def main(cfg: DictConfig) -> None:
     # Initialize
     DistributedManager.initialize()
     dist = DistributedManager()
-    logger = PythonLogger("main")
-    logger0 = RankZeroLoggingWrapper(logger, dist)  # Log only from rank 0
 
     # Random seed.
     if cfg.training.seed < 0:
@@ -45,12 +43,14 @@ def main(cfg: DictConfig) -> None:
         torch.distributed.broadcast(seed, src=0)
         cfg.training.seed = int(seed)
 
-    # Resume from specified checkpoint, if provided
-    if cfg.training.resume_checkpoint is not None:
-        resume = cfg.training.resume_checkpoint
-        if not os.path.isfile(resume) or not resume.endswith(".pt"):
+    # Start from specified checkpoint, if provided
+    if cfg.training.initial_weights is not None:
+        weights_path = cfg.training.initial_weights
+        if not os.path.isfile(weights_path) or not (
+            weights_path.endswith(".mdlus") or weights_path.endswith(".pt")
+        ):
             raise ValueError(
-                "training.resume_checkpoint must point to a physicsnemo .pt checkpoint from a previous training run"
+                "training.initial_weights must point to a physicsnemo .mdlus or .pt checkpoint from a previous training run"
             )
 
     # If run directory already exists, then resume training from last checkpoint
@@ -60,15 +60,6 @@ def main(cfg: DictConfig) -> None:
             glob.glob(os.path.join(cfg.training.rundir, "checkpoints/checkpoint*.pt"))
         )
         if training_states:
-            logger0.info(
-                "Resuming training from previous run_dir: " + cfg.training.rundir
-            )
-            last_training_state = training_states[-1]
-            cfg.training.resume_checkpoint = last_training_state
-            logger0.info(
-                "Resuming training from previous checkpoint file: "
-                + last_training_state
-            )
             wandb_resume = True
 
     # Setup wandb, if enabled

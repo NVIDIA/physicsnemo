@@ -123,7 +123,6 @@ def training_loop(cfg):
         drop_last=True,
         pin_memory=torch.cuda.is_available(),
     )
-
     valid_data_loader = torch.utils.data.DataLoader(
         dataset=dataset_valid,
         batch_size=local_batch_size,
@@ -195,15 +194,29 @@ def training_loop(cfg):
     )
 
     # Resume training from previous snapshot.
-    total_steps = 0
-    if resume_checkpoint is not None:
-        logger0.info(f'Resuming training state from "{resume_checkpoint}"...')
+    ckpt_path = os.path.join(cfg.training.rundir, f"checkpoints_{net_name}")
+    logger0.info(f'Trying to resume training state from "{ckpt_path}"...')
+    total_steps = load_checkpoint(
+        path=ckpt_path,
+        models=net,
+        optimizer=optimizer,
+        epoch=None
+        if cfg.training.resume_checkpoint == "latest"
+        else cfg.training.resume_checkpoint,
+    )
 
-        total_steps = load_checkpoint(
-            path=os.path.join(cfg.training.rundir, f"checkpoints_{net_name}"),
-            models=net,
-            optimizer=optimizer,
-        )
+    if total_steps == 0:
+        logger0.info(f"No resumable training state found.")
+        init_weights = cfg.training.initial_weights
+        if init_weights is None:
+            logger0.info(f"Starting training from scratch...")
+        else:
+            logger0.info(f"Starting training from weights saved in {init_weights}...")
+            if init_weights.endswith(".mdlus"):
+                net.load(init_weights)
+            elif init_weights.endswith(".pt"):
+                model_dict = torch.load(init_weights, map_location=net.device)
+                net.load_state(model_dict, strict=True)
 
     # Train.
     logger0.info(
@@ -215,6 +228,8 @@ def training_loop(cfg):
     train_start = time.time()
     avg_train_loss = 0
     train_steps = 0
+    valid_time = -1  # set as placeholders until validation is actually done
+    val_loss = -1
     while not done:
         # Compute & accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
@@ -282,9 +297,6 @@ def training_loop(cfg):
         done = total_steps >= total_train_steps
 
         # Perform validation step
-        valid_time = (
-            val_loss
-        ) = -1  # set as placeholders until validation is actually done
         if total_steps % cfg.training.validation_freq == 0:
             valid_start = time.time()
             batch = next(valid_dataset_iterator)
