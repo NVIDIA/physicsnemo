@@ -101,7 +101,12 @@ def diffusion_model_forward(model, condition, shape, sampler_args={}):
 def regression_model_forward(model, output, input, invariant_tensor):
     """Helper function to run regression model forward pass in inference"""
 
-    x = torch.cat([output, input, invariant_tensor], dim=1)
+    x = (
+        [output, input]
+        if invariant_tensor is None
+        else [output, input, invariant_tensor]
+    )
+    x = torch.cat(x, dim=1)
 
     return model(x)
 
