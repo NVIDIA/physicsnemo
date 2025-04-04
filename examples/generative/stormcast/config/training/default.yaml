@@ -22,6 +22,7 @@ run_id: '0' # Unique ID to use for this training run
 rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiement outputs will be saved
 num_data_workers: 4 # Number of dataloader worker threads per proc
 log_to_wandb: False # Whether or not to log to Weights & Biases (requires wandb account)
+wandb_mode: "online" # logging mode, "online" or "offline"
 seed: -1 # Specify a random seed by setting this to an int > 0
 cudnn_benchmark: True # Enable/disable CuDNN benchmark mode
 resume_checkpoint: "latest" # epoch number to continue training from, or "latest" for the latest checkpoint

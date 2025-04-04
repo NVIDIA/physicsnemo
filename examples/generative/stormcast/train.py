@@ -24,7 +24,6 @@ import wandb
 import glob
 from omegaconf import DictConfig, OmegaConf
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 from utils.trainer import training_loop
 
@@ -53,14 +52,15 @@ def main(cfg: DictConfig) -> None:
                 "training.initial_weights must point to a physicsnemo .mdlus or .pt checkpoint from a previous training run"
             )
 
-    # If run directory already exists, then resume training from last checkpoint
+    # If checkpoint directory already exists, then resume training from last checkpoint
     wandb_resume = False
-    if os.path.exists(cfg.training.rundir):
-        training_states = sorted(
-            glob.glob(os.path.join(cfg.training.rundir, "checkpoints/checkpoint*.pt"))
-        )
-        if training_states:
-            wandb_resume = True
+    os.makedirs(cfg.training.rundir, exist_ok=True)
+    net_name = "regression" if cfg.training.loss == "regression" else "diffusion"
+    training_states = glob.glob(
+        os.path.join(cfg.training.rundir, f"checkpoints_{net_name}/checkpoint*.pt")
+    )
+    if training_states:
+        wandb_resume = True
 
     # Setup wandb, if enabled
     if dist.rank == 0 and cfg.training.log_to_wandb:
@@ -72,7 +72,7 @@ def main(cfg: DictConfig) -> None:
             project=project,
             entity=entity,
             resume=wandb_resume,
-            mode="online",
+            mode=cfg.training.wandb_mode,
         )
 
     # Train.
