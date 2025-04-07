@@ -317,6 +317,12 @@ model from the ``.mdlus`` file.
    inputs to the ``__init__`` function. It is highly recommended that all PhysicsNeMo
    models be developed with this requirement in mind.
 
+.. note::
+   Using ``Module.from_checkpoint`` will not work if the model has any buffers or
+   parameters that are registered outside of the model's ``__init__`` function due to
+   the above requirement. In that case, one should use ``Module.load``, or ensure 
+   that all model parameters and buffers are registered inside ``__init__``.
+
 
 PhysicsNeMo Model Registry and Entry Points
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
