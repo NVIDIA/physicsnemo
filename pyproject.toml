@@ -10,7 +10,7 @@ authors = [
 description = "A deep learning framework for AI-driven multi-physics systems"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache 2.0"}
+license = "Apache-2.0"
 dependencies = [
     "certifi>=2023.7.22",
     "fsspec>=2023.1.0",
@@ -28,7 +28,6 @@ dependencies = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
 ]
 dynamic = ["version"]
