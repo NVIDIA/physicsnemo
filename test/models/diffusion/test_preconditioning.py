@@ -20,27 +20,24 @@ from pytest_utils import import_or_fail
 
 from physicsnemo.models.diffusion.preconditioning import (
     EDMPrecond,
-    EDMPrecondSR,
+    EDMPrecondSuperResolution,
     VEPrecond_dfsr,
     VEPrecond_dfsr_cond,
 )
 from physicsnemo.models.module import Module
 
 
-@pytest.mark.parametrize("scale_cond_input", [True, False])
-def test_EDMPrecondSR_forward(scale_cond_input):
+def test_EDMPrecondSuperResolution_forward():
     b, c_target, x, y = 1, 3, 8, 8
     c_cond = 4
 
     # Create an instance of the preconditioner
-    model = EDMPrecondSR(
+    model = EDMPrecondSuperResolution(
         img_resolution=x,
-        img_channels=c_target,
         img_in_channels=c_cond,
         img_out_channels=c_target,
         use_fp16=False,
         model_type="SongUNet",
-        scale_cond_input=scale_cond_input,
     )
 
     latents = torch.ones((b, c_target, x, y))
@@ -59,15 +56,15 @@ def test_EDMPrecondSR_forward(scale_cond_input):
 
 
 @import_or_fail("termcolor")
-def test_EDMPrecondSR_serialization(tmp_path, pytestconfig):
+def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig):
 
     from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
-    module = EDMPrecondSR(8, 1, 1, 1, scale_cond_input=False)
+    module = EDMPrecondSuperResolution(8, 1, 1)
     model_path = tmp_path / "output.mdlus"
     module.save(model_path.as_posix())
     loaded = Module.from_checkpoint(model_path.as_posix())
-    assert isinstance(loaded, EDMPrecondSR)
+    assert isinstance(loaded, EDMPrecondSuperResolution)
     save_checkpoint(path=tmp_path, models=module, epoch=1)
     epoch = load_checkpoint(path=tmp_path)
     assert epoch == 1

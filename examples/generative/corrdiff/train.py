@@ -19,18 +19,26 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
+import wandb
+from hydra.core.hydra_config import HydraConfig
+
 from physicsnemo import Module
-from physicsnemo.models.diffusion import UNet, EDMPrecondSR
+from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-from physicsnemo.metrics.diffusion import RegressionLoss, ResLoss, RegressionLossCE
+
+from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE
+from physicsnemo.utils.patching import RandomPatching2D
+
+from physicsnemo.launch.logging.wandb import initialize_wandb
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.launch.utils import (
     load_checkpoint,
     save_checkpoint,
     get_checkpoint_dir,
 )
-from datasets.dataset import init_train_valid_datasets_from_config
+
+from datasets.dataset import init_train_valid_datasets_from_config, register_dataset
+
 from helpers.train_helpers import (
     set_patch_shape,
     set_seed,
@@ -39,6 +47,23 @@ from helpers.train_helpers import (
     handle_and_clip_gradients,
     is_time_for_periodic_task,
 )
+
+
+def checkpoint_list(path, suffix=".mdlus"):
+    """Helper function to return sorted list, in ascending order, of checkpoints in a path"""
+    checkpoints = []
+    for file in os.listdir(path):
+        if file.endswith(suffix):
+            # Split the filename and extract the index
+            try:
+                index = int(file.split(".")[-2])
+                checkpoints.append((index, file))
+            except ValueError:
+                continue
+
+    # Sort by index and return filenames
+    checkpoints.sort(key=lambda x: x[0])
+    return [file for _, file in checkpoints]
 
 
 # Train the CorrDiff model using the configurations in "conf/config_training.yaml"
@@ -54,10 +79,24 @@ def main(cfg: DictConfig) -> None:
         writer = SummaryWriter(log_dir="tensorboard")
     logger = PythonLogger("main")  # General python logger
     logger0 = RankZeroLoggingWrapper(logger, dist)  # Rank 0 logger
+    initialize_wandb(
+        project="Modulus-Launch",
+        entity="Modulus",
+        name=f"CorrDiff-Training-{HydraConfig.get().job.name}",
+        group="CorrDiff-DDP-Group",
+        mode=cfg.wandb.mode,
+        config=OmegaConf.to_container(cfg),
+        results_dir=cfg.wandb.results_dir,
+    )
 
     # Resolve and parse configs
     OmegaConf.resolve(cfg)
     dataset_cfg = OmegaConf.to_container(cfg.dataset)  # TODO needs better handling
+
+    # Register custom dataset if specified in config
+    register_dataset(cfg.dataset.type)
+    logger0.info(f"Using dataset: {cfg.dataset.type}")
+
     if hasattr(cfg, "validation"):
         train_test_split = True
         validation_dataset_cfg = OmegaConf.to_container(cfg.validation)
@@ -86,7 +125,7 @@ def main(cfg: DictConfig) -> None:
     data_loader_kwargs = {
         "pin_memory": True,
         "num_workers": cfg.training.perf.dataloader_workers,
-        "prefetch_factor": 2,
+        "prefetch_factor": 2 if cfg.training.perf.dataloader_workers > 0 else None,
     }
     (
         dataset,
@@ -126,75 +165,31 @@ def main(cfg: DictConfig) -> None:
         patch_shape_x = None
         patch_shape_y = None
     patch_shape = (patch_shape_y, patch_shape_x)
-    img_shape, patch_shape = set_patch_shape(img_shape, patch_shape)
-    if patch_shape != img_shape:
+    use_patching, img_shape, patch_shape = set_patch_shape(img_shape, patch_shape)
+    if use_patching:
+        # Utility to perform patches extraction and batching
+        patching = RandomPatching2D(
+            img_shape=img_shape,
+            patch_shape=patch_shape,
+            patch_num=getattr(cfg.training.hp, "patch_num", 1),
+        )
         logger0.info("Patch-based training enabled")
     else:
+        patching = None
         logger0.info("Patch-based training disabled")
     # interpolate global channel if patch-based model is used
-    if img_shape[1] != patch_shape[1]:
+    if use_patching:
         img_in_channels += dataset_channels
 
     # Instantiate the model and move to device.
-    if cfg.model.name not in (
-        "regression",
-        "lt_aware_ce_regression",
-        "diffusion",
-        "patched_diffusion",
-        "lt_aware_patched_diffusion",
-    ):
-        raise ValueError("Invalid model")
     model_args = {  # default parameters for all networks
         "img_out_channels": img_out_channels,
         "img_resolution": list(img_shape),
         "use_fp16": fp16,
+        "checkpoint_level": songunet_checkpoint_level,
     }
-    standard_model_cfgs = {  # default parameters for different network types
-        "regression": {
-            "img_channels": 4,
-            "N_grid_channels": 4,
-            "embedding_type": "zero",
-            "checkpoint_level": songunet_checkpoint_level,
-        },
-        "lt_aware_ce_regression": {
-            "img_channels": 4,
-            "N_grid_channels": 4,
-            "embedding_type": "zero",
-            "lead_time_channels": 4,
-            "lead_time_steps": 9,
-            "prob_channels": prob_channels,
-            "checkpoint_level": songunet_checkpoint_level,
-            "model_type": "SongUNetPosLtEmbd",
-        },
-        "diffusion": {
-            "img_channels": img_out_channels,
-            "gridtype": "sinusoidal",
-            "N_grid_channels": 4,
-            "checkpoint_level": songunet_checkpoint_level,
-        },
-        "patched_diffusion": {
-            "img_channels": img_out_channels,
-            "gridtype": "learnable",
-            "N_grid_channels": 100,
-            "checkpoint_level": songunet_checkpoint_level,
-        },
-        "lt_aware_patched_diffusion": {
-            "img_channels": img_out_channels,
-            "gridtype": "learnable",
-            "N_grid_channels": 100,
-            "lead_time_channels": 20,
-            "lead_time_steps": 9,
-            "checkpoint_level": songunet_checkpoint_level,
-            "model_type": "SongUNetPosLtEmbd",
-        },
-    }
-    model_args.update(standard_model_cfgs[cfg.model.name])
-    if cfg.model.name in (
-        "diffusion",
-        "patched_diffusion",
-        "lt_aware_patched_diffusion",
-    ):
-        model_args["scale_cond_input"] = cfg.model.scale_cond_input
+    if cfg.model.name == "lt_aware_ce_regression":
+        model_args["prob_channels"] = prob_channels
     if hasattr(cfg.model, "model_args"):  # override defaults from config file
         model_args.update(OmegaConf.to_container(cfg.model.model_args))
     if cfg.model.name == "regression":
@@ -210,19 +205,35 @@ def main(cfg: DictConfig) -> None:
             **model_args,
         )
     elif cfg.model.name == "lt_aware_patched_diffusion":
-        model = EDMPrecondSR(
+        model = EDMPrecondSuperResolution(
             img_in_channels=img_in_channels
             + model_args["N_grid_channels"]
             + model_args["lead_time_channels"],
             **model_args,
         )
-    else:  # diffusion or patched diffusion
-        model = EDMPrecondSR(
+    elif cfg.model.name == "diffusion":
+        model = EDMPrecondSuperResolution(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
+    elif cfg.model.name == "patched_diffusion":
+        model = EDMPrecondSuperResolution(
+            img_in_channels=img_in_channels + model_args["N_grid_channels"],
+            **model_args,
+        )
+    else:
+        raise ValueError(f"Invalid model: {cfg.model.name}")
 
     model.train().requires_grad_(True).to(dist.device)
+
+    # Check if regression model is used with patching
+    if (
+        cfg.model.name in ["regression", "lt_aware_ce_regression"]
+        and patching is not None
+    ):
+        raise ValueError(
+            f"Regression model ({cfg.model.name}) cannot be used with patch-based training. "
+        )
 
     # Enable distributed data parallel if applicable
     if dist.world_size > 1:
@@ -233,9 +244,14 @@ def main(cfg: DictConfig) -> None:
             output_device=dist.device,
             find_unused_parameters=dist.find_unused_parameters,
         )
+    if cfg.wandb.watch_model and dist.rank == 0:
+        wandb.watch(model)
 
     # Load the regression checkpoint if applicable
-    if hasattr(cfg.training.io, "regression_checkpoint_path"):
+    if (
+        hasattr(cfg.training.io, "regression_checkpoint_path")
+        and cfg.training.io.regression_checkpoint_path is not None
+    ):
         regression_checkpoint_path = to_absolute_path(
             cfg.training.io.regression_checkpoint_path
         )
@@ -248,19 +264,13 @@ def main(cfg: DictConfig) -> None:
         logger0.success("Loaded the pre-trained regression model")
 
     # Instantiate the loss function
-    patch_num = getattr(cfg.training.hp, "patch_num", 1)
     if cfg.model.name in (
         "diffusion",
         "patched_diffusion",
         "lt_aware_patched_diffusion",
     ):
-        loss_fn = ResLoss(
+        loss_fn = ResidualLoss(
             regression_net=regression_net,
-            img_shape_x=img_shape[1],
-            img_shape_y=img_shape[0],
-            patch_shape_x=patch_shape[1],
-            patch_shape_y=patch_shape[0],
-            patch_num=patch_num,
             hr_mean_conditioning=cfg.model.hr_mean_conditioning,
         )
     elif cfg.model.name == "regression":
@@ -317,17 +327,20 @@ def main(cfg: DictConfig) -> None:
         optimizer.zero_grad(set_to_none=True)
         loss_accum = 0
         for _ in range(num_accumulation_rounds):
-            img_clean, img_lr, labels, *lead_time_label = next(dataset_iterator)
+            img_clean, img_lr, *lead_time_label = next(dataset_iterator)
             img_clean = img_clean.to(dist.device).to(torch.float32).contiguous()
             img_lr = img_lr.to(dist.device).to(torch.float32).contiguous()
-            labels = labels.to(dist.device).contiguous()
             loss_fn_kwargs = {
                 "net": model,
                 "img_clean": img_clean,
                 "img_lr": img_lr,
-                "labels": labels,
                 "augment_pipe": None,
             }
+            # Sample new random patches for this iteration and add patching to
+            # loss arguments
+            if patching is not None:
+                patching.reset_patch_indices()
+                loss_fn_kwargs.update({"patching": patching})
             if lead_time_label:
                 lead_time_label = lead_time_label[0].to(dist.device).contiguous()
                 loss_fn_kwargs.update({"lead_time_label": lead_time_label})
@@ -355,6 +368,12 @@ def main(cfg: DictConfig) -> None:
             writer.add_scalar("training_loss", average_loss, cur_nimg)
             writer.add_scalar(
                 "training_loss_running_mean", average_loss_running_mean, cur_nimg
+            )
+            wandb.log(
+                {
+                    "training_loss": average_loss,
+                    "training_loss_running_mean": average_loss_running_mean,
+                }
             )
 
         ptt = is_time_for_periodic_task(
@@ -400,7 +419,7 @@ def main(cfg: DictConfig) -> None:
             ):
                 with torch.no_grad():
                     for _ in range(cfg.training.io.validation_steps):
-                        img_clean_valid, img_lr_valid, labels_valid = next(
+                        img_clean_valid, img_lr_valid, *lead_time_label_valid = next(
                             validation_dataset_iterator
                         )
 
@@ -412,14 +431,20 @@ def main(cfg: DictConfig) -> None:
                         img_lr_valid = (
                             img_lr_valid.to(dist.device).to(torch.float32).contiguous()
                         )
-                        labels_valid = labels_valid.to(dist.device).contiguous()
-                        loss_valid = loss_fn(
-                            net=model,
-                            img_clean=img_clean_valid,
-                            img_lr=img_lr_valid,
-                            labels=labels_valid,
-                            augment_pipe=None,
-                        )
+                        loss_valid_kwargs = {
+                            "net": model,
+                            "img_clean": img_clean_valid,
+                            "img_lr": img_lr_valid,
+                            "augment_pipe": None,
+                        }
+                        if lead_time_label_valid:
+                            lead_time_label_valid = (
+                                lead_time_label_valid[0].to(dist.device).contiguous()
+                            )
+                            loss_valid_kwargs.update(
+                                {"lead_time_label": lead_time_label_valid}
+                            )
+                        loss_valid = loss_fn(**loss_valid_kwargs)
                         loss_valid = (
                             (loss_valid.sum() / batch_size_per_gpu).cpu().item()
                         )
@@ -438,6 +463,11 @@ def main(cfg: DictConfig) -> None:
                     if dist.rank == 0:
                         writer.add_scalar(
                             "validation_loss", average_valid_loss, cur_nimg
+                        )
+                        wandb.log(
+                            {
+                                "validation_loss": average_valid_loss,
+                            }
                         )
 
         if is_time_for_periodic_task(
@@ -470,7 +500,8 @@ def main(cfg: DictConfig) -> None:
                 f"peak_gpu_mem_reserved_gb {(torch.cuda.max_memory_reserved(dist.device) / 2**30):<6.2f}"
             ]
             logger0.info(" ".join(fields))
-            torch.cuda.reset_peak_memory_stats()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
 
         # Save checkpoints
         if dist.world_size > 1:
@@ -489,6 +520,14 @@ def main(cfg: DictConfig) -> None:
                 optimizer=optimizer,
                 epoch=cur_nimg,
             )
+
+            # Retain only the recent n checkpoints, if desired
+            if cfg.training.io.save_n_recent_checkpoints > 0:
+                for suffix in [".mdlus", ".pt"]:
+                    ckpts = checkpoint_list(checkpoint_dir, suffix=suffix)
+                    while len(ckpts) > cfg.training.io.save_n_recent_checkpoints:
+                        os.remove(os.path.join(checkpoint_dir, ckpts[0]))
+                        ckpts = ckpts[1:]
 
     # Done.
     logger0.info("Training Completed.")

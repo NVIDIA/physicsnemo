@@ -15,22 +15,73 @@
 # limitations under the License.
 
 hydra:
-  job:
-    chdir: true
-    name: gefs_hrrr_generation
-  run:
-    dir: output/${hydra:job.name}
+    job:
+          chdir: false
+          name: generate_gefs_hrrr
+    run:
+          dir: ./outputs/${hydra:job.name}
+    searchpath:
+          - pkg://conf/base # Do not modify
 
-# Get defaults
+# Base parameters for dataset, model, and generation
 defaults:
 
-  # Dataset
-  - dataset/gefs_hrrr
+    - dataset: gefs_hrrr
+    # The dataset type for training.
+    # Accepted values:
+    #   `gefs_hrrr`: full GEFS-HRRR dataset for continental US.
+    #   `hrrr_mini`: smaller HRRR dataset (continental US), for fast experiments.
+    #   `cwb`: full CWB dataset for Taiwan.
+    #   `custom`: user-defined dataset. Parameters need to be specified below.
 
-  # Sampler
-  - sampler/stochastic
-  #- sampler/deterministic
+    - generation: patched
+    # The base generation parameters.
+    # Accepted values:
+    #     `patched`: base parameters for a patch-based model
+    #     `non_patched`: base parameters for a non-patched model
 
-  # Generation
-  - generation/patched_based_gefs_hrrr
-    #- generation/patched_based
+
+# Dataset parameters. Used for `custom` dataset type.
+# Modify or add below parameters that should be passed as argument to the
+# user-defined dataset class.
+dataset:
+    data_path: ./data
+    # Path to .nc data file
+    stats_path: ./data/stats.json
+    # Path to json stats file
+
+
+# Generation parameters to specialize
+generation:
+    num_ensembles: 1
+    # int, number of ensembles to generate per input
+    seed_batch_size: 1
+    # int, size of the batched inference
+    patch_shape_x: 448
+    patch_shape_y: 448
+    # int, patch size. Only used for `generation: patched`. For custom dataset,
+    # this should be determined based on an autocorrelation plot.
+    times:
+        - "2024011212f00"
+        - "2024011212f03"
+        - "2024011212f06"
+        - "2024011212f09"
+        - "2024011212f12"
+        - "2024011212f15"
+        - "2024011212f18"
+        - "2024011212f21"
+        - "2024011212f24"
+    # List[str], time stamps in ISO 8601 format. Replace and list desired target
+    # time stamps.
+    has_lead_time: True
+
+    io:
+        res_ckpt_filename: <diffusion_checkpoint.mdlus> 
+        # Path to checkpoint file for the diffusion model  
+        reg_ckpt_filename: <regression_checkpoint.mdlus>
+        # Path to checkpoint filename for the mean predictor model
+
+# Parameters for wandb logging
+wandb:
+    mode: offline
+    # Configure whether to use wandb: "offline", "online", "disabled"

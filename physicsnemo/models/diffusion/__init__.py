@@ -29,7 +29,7 @@ from .dhariwal_unet import DhariwalUNet
 from .unet import UNet, StormCastUNet
 from .preconditioning import (
     EDMPrecond,
-    EDMPrecondSR,
+    EDMPrecondSuperResolution,
     VEPrecond,
     VPPrecond,
     iDDPMPrecond,

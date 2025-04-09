@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+hydra:
+    job:
+          chdir: false
+          name: generate_hrrr_mini
+    run:
+          dir: ./outputs/${hydra:job.name}
+    searchpath:
+          - pkg://conf/base # Do not modify
+
+# Base parameters for dataset, model, and generation
+defaults:
+
+    - dataset: hrrr_mini
+    # The dataset type for training.
+    # Accepted values:
+    #   `gefs_hrrr`: full GEFS-HRRR dataset for continental US.
+    #   `hrrr_mini`: smaller HRRR dataset (continental US), for fast experiments.
+    #   `cwb`: full CWB dataset for Taiwan.
+    #   `custom`: user-defined dataset. Parameters need to be specified below.
+
+    - generation: non_patched
+    # The base generation parameters.
+    # Accepted values:
+    #     `patched`: base parameters for a patch-based model
+    #     `non_patched`: base parameters for a non-patched model
+
+
+# Dataset parameters. Used for `custom` dataset type.
+# Modify or add below parameters that should be passed as argument to the
+# user-defined dataset class.
+dataset:
+    data_path: ./data/corrdiff-mini/hrrr_mini_train.nc
+    # Path to .nc data file
+    stats_path: ./data/corrdiff-mini/stats.json
+    # Path to json stats file
+
+# Generation parameters to specialize
+generation:
+    num_ensembles: 2
+    # int, number of ensembles to generate per input
+    seed_batch_size: 1
+    # int, size of the batched inference
+    times:
+        - 2020-02-02T00:00:00
+    # List[str], time stamps in ISO 8601 format. Replace and list desired target
+    # time stamps.
+    io:
+        res_ckpt_filename: <diffusion_checkpoint.mdlus> 
+        # Path to checkpoint file for the diffusion model  
+        reg_ckpt_filename: <regression_checkpoint.mdlus>
+        # Path to checkpoint filename for the mean predictor model
+
+# Parameters for wandb logging
+wandb:
+    mode: offline
+    # Configure whether to use wandb: "offline", "online", "disabled"

@@ -17,6 +17,8 @@
 from typing import Iterable, Tuple, Union
 import copy
 import torch
+import importlib.util
+from pathlib import Path
 
 from physicsnemo.utils.generative import InfiniteSampler
 from physicsnemo.distributed import DistributedManager
@@ -30,6 +32,59 @@ known_datasets = {
     "hrrr_mini": hrrrmini.HRRRMiniDataset,
     "gefs_hrrr": gefs_hrrr.HrrrForecastGEFSDataset,
 }
+
+
+def register_dataset(dataset_spec: str) -> None:
+    """
+    Register a new dataset class from a file path specification.
+
+    Parameters
+    ----------
+    dataset_spec : str
+        String specification in the format "path_to_file.py::dataset_class"
+
+    Raises
+    ------
+    ValueError
+        If the dataset_spec format is invalid or if the file doesn't exist
+    ImportError
+        If the dataset class cannot be imported
+    """
+    if dataset_spec in known_datasets:
+        return  # Dataset already registered
+    try:
+        file_path, class_name = dataset_spec.split("::")
+    except ValueError:
+        raise ValueError(
+            "Invalid dataset specification. Expected format: "
+            "'path_to_file.py::dataset_class'"
+        )
+    if class_name in known_datasets:
+        return  # Dataset already registered
+
+    # Convert to Path and validate
+    file_path = Path(file_path)
+    if not file_path.exists():
+        raise ValueError(f"Dataset file not found: {file_path}")
+    if not file_path.suffix == ".py":
+        raise ValueError(f"Dataset file must be a Python file: {file_path}")
+
+    # Import the module and get the class
+    spec = importlib.util.spec_from_file_location(file_path.stem, str(file_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load spec for {file_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    try:
+        dataset_class = getattr(module, class_name)
+    except AttributeError:
+        raise ImportError(f"Could not find dataset class '{class_name}' in {file_path}")
+
+    # Register the dataset
+    known_datasets[dataset_spec] = dataset_class
+    return
 
 
 def init_train_valid_datasets_from_config(
