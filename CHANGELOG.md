@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- ERA5 download example updated to use current file format convention and
+  restricts global statistics computation to the training set
+
 ### Deprecated
 
 ### Removed
