@@ -36,15 +36,13 @@ def test_unet_forwards(device):
     res, inc, outc = 64, 2, 3
     model = UNet(
         img_resolution=res,
-        img_channels=inc,
         img_in_channels=inc,
         img_out_channels=outc,
         model_type="SongUNet",
     ).to(device)
     input_image = torch.ones([1, inc, res, res]).to(device)
     lr_image = torch.randn([1, outc, res, res]).to(device)
-    sigma = torch.randn([1]).to(device)
-    output = model(x=input_image, img_lr=lr_image, sigma=sigma)
+    output = model(x=input_image, img_lr=lr_image)
     assert output.shape == (1, outc, res, res)
 
     # Construct the StormCastUNet model
@@ -66,16 +64,14 @@ def test_unet_optims(device):
 
         model = UNet(
             img_resolution=res,
-            img_channels=inc,
             img_in_channels=inc,
             img_out_channels=outc,
             model_type="SongUNet",
         ).to(device)
         input_image = torch.ones([1, inc, res, res]).to(device)
         lr_image = torch.randn([1, outc, res, res]).to(device)
-        sigma = torch.randn([1]).to(device)
 
-        return model, [input_image, lr_image, sigma]
+        return model, [input_image, lr_image]
 
     # Check AMP
     model, invar = setup_model()
@@ -101,14 +97,12 @@ def test_unet_checkpoint(device):
     res, inc, outc = 64, 2, 3
     model_1 = UNet(
         img_resolution=res,
-        img_channels=inc,
         img_in_channels=inc,
         img_out_channels=outc,
         model_type="SongUNet",
     ).to(device)
     model_2 = UNet(
         img_resolution=res,
-        img_channels=inc,
         img_in_channels=inc,
         img_out_channels=outc,
         model_type="SongUNet",
@@ -116,10 +110,7 @@ def test_unet_checkpoint(device):
 
     input_image = torch.ones([1, inc, res, res]).to(device)
     lr_image = torch.randn([1, outc, res, res]).to(device)
-    sigma = torch.randn([1]).to(device)
-    assert common.validate_checkpoint(
-        model_1, model_2, (*[input_image, lr_image, sigma],)
-    )
+    assert common.validate_checkpoint(model_1, model_2, (*[input_image, lr_image],))
 
     # Construct StormCastUNet models
     res, inc, outc = 64, 2, 3

@@ -40,6 +40,14 @@ Filesystem utils
 Generative utils
 ----------------
 
+.. automodule:: physicsnemo.utils.generative.deterministic_sampler
+    :members:
+    :show-inheritance:
+
+.. automodule:: physicsnemo.utils.generative.stochastic_sampler
+    :members:
+    :show-inheritance:
+
 .. automodule:: physicsnemo.utils.generative.utils
     :members:
     :show-inheritance:
@@ -62,4 +70,11 @@ Weather / Climate utils
     :show-inheritance:
 
 .. automodule:: physicsnemo.utils.zenith_angle
+    :show-inheritance:
+
+Patching utils
+--------------
+
+.. automodule:: physicsnemo.utils.patching
+    :members:
     :show-inheritance:

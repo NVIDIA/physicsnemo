@@ -20,18 +20,13 @@ Diffusion-Based Generative Models".
 """
 
 import importlib
-import warnings
 from dataclasses import dataclass
-from typing import List, Union
+from typing import List, Literal, Tuple, Union
 
 import numpy as np
 import nvtx
 import torch
 
-from physicsnemo.models.diffusion import (
-    DhariwalUNet,  # noqa: F401 for globals
-    SongUNet,  # noqa: F401 for globals
-)
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -694,10 +689,10 @@ class EDMPrecond(Module):
 
 
 @dataclass
-class EDMPrecondSRMetaData(ModelMetaData):
-    """EDMPrecondSR meta data"""
+class EDMPrecondSuperResolutionMetaData(ModelMetaData):
+    """EDMPrecondSuperResolution meta data"""
 
-    name: str = "EDMPrecondSR"
+    name: str = "EDMPrecondSuperResolution"
     # Optimization
     jit: bool = False
     cuda_graphs: bool = False
@@ -713,33 +708,50 @@ class EDMPrecondSRMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class EDMPrecondSR(Module):
+class EDMPrecondSuperResolution(Module):
     """
     Improved preconditioning proposed in the paper "Elucidating the Design Space of
-    Diffusion-Based Generative Models" (EDM) for super-resolution tasks
+    Diffusion-Based Generative Models" (EDM).
+
+    This is a variant of `EDMPrecond` that is specifically designed for super-resolution
+    tasks. It wraps a neural network that predicts the denoised high-resolution image
+    given a noisy high-resolution image, and additional conditioning that includes a
+    low-resolution image, and a noise level.
 
     Parameters
     ----------
-    img_resolution : int
-        Image resolution.
-    img_channels : int
-        Number of color channels.
+    img_resolution : Union[int, Tuple[int, int]]
+        Spatial resolution `(H, W)` of the image. If a single int is provided,
+        the image is assumed to be square.
     img_in_channels : int
-        Number of input color channels.
+        Number of input channels in the low-resolution input image.
     img_out_channels : int
-        Number of output color channels.
-    use_fp16 : bool
-        Execute the underlying model at FP16 precision?, by default False.
-    sigma_min : float
-        Minimum supported noise level, by default 0.0.
-    sigma_max : float
-        Maximum supported noise level, by default inf.
-    sigma_data : float
+        Number of output channels in the high-resolution output image.
+    use_fp16 : bool, optional
+        Whether to use half-precision floating point (FP16) for model execution,
+        by default False.
+    model_type : str, optional
+        Class name of the underlying model. Must be one of the following:
+        'SongUNet', 'SongUNetPosEmbd', 'SongUNetPosLtEmbd', 'DhariwalUNet'.
+        Defaults to 'SongUNetPosEmbd'.
+    sigma_data : float, optional
         Expected standard deviation of the training data, by default 0.5.
-    model_type :str
-        Class name of the underlying model, by default "SongUNetPosEmbd".
+    sigma_min : float, optional
+        Minimum supported noise level, by default 0.0.
+    sigma_max : float, optional
+        Maximum supported noise level, by default inf.
     **model_kwargs : dict
-        Keyword arguments for the underlying model.
+        Keyword arguments passed to the underlying model `__init__` method.
+
+    See Also
+    --------
+    For information on model types and their usage:
+    :class:`~physicsnemo.models.diffusion.SongUNet`: Basic U-Net for diffusion models
+    :class:`~physicsnemo.models.diffusion.SongUNetPosEmbd`: U-Net with positional embeddings
+    :class:`~physicsnemo.models.diffusion.SongUNetPosLtEmbd`: U-Net with positional and lead-time embeddings
+
+    Please refer to the documentation of these classes for details on how to call
+    and use these models directly.
 
     Note
     ----
@@ -755,28 +767,26 @@ class EDMPrecondSR(Module):
 
     def __init__(
         self,
-        img_resolution,
-        img_channels,
-        img_in_channels,
-        img_out_channels,
-        use_fp16=False,
+        img_resolution: Union[int, Tuple[int, int]],
+        img_in_channels: int,
+        img_out_channels: int,
+        use_fp16: bool = False,
+        model_type: Literal[
+            "SongUNetPosEmbd", "SongUNetPosLtEmbd", "SongUNet", "DhariwalUNet"
+        ] = "SongUNetPosEmbd",
+        sigma_data: float = 0.5,
         sigma_min=0.0,
         sigma_max=float("inf"),
-        sigma_data=0.5,
-        model_type="SongUNetPosEmbd",
-        scale_cond_input=True,
-        **model_kwargs,
+        **model_kwargs: dict,
     ):
-        super().__init__(meta=EDMPrecondSRMetaData)
+        super().__init__(meta=EDMPrecondSuperResolutionMetaData)
         self.img_resolution = img_resolution
-        self.img_channels = img_channels  # TODO: this is not used, remove it
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
         self.use_fp16 = use_fp16
+        self.sigma_data = sigma_data
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
-        self.sigma_data = sigma_data
-        self.scale_cond_input = scale_cond_input
 
         model_class = getattr(network_module, model_type)
         self.model = model_class(
@@ -785,38 +795,74 @@ class EDMPrecondSR(Module):
             out_channels=img_out_channels,
             **model_kwargs,
         )  # TODO needs better handling
-        self.scaling_fn = self._get_scaling_fn()
-
-    def _get_scaling_fn(self):
-        if self.scale_cond_input:
-            warnings.warn(
-                "scale_cond_input=True does not properly scale the conditional input. "
-                "(see https://github.com/NVIDIA/modulus/issues/229). "
-                "This setup will be deprecated. "
-                "Please set scale_cond_input=False.",
-                DeprecationWarning,
-            )
-            return self._legacy_scaling_fn
-        else:
-            return self._scaling_fn
+        self.scaling_fn = self._scaling_fn
 
     @staticmethod
-    def _scaling_fn(x, img_lr, c_in):
+    def _scaling_fn(
+        x: torch.Tensor, img_lr: torch.Tensor, c_in: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Scale input tensors by first scaling the high-resolution tensor and then
+        concatenating with the low-resolution tensor.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy high-resolution image of shape (B, C_hr, H, W).
+        img_lr : torch.Tensor
+            Low-resolution image of shape (B, C_lr, H, W).
+        c_in : torch.Tensor
+            Scaling factor of shape (B, 1, 1, 1).
+
+        Returns
+        -------
+        torch.Tensor
+            Scaled and concatenated tensor of shape (B, C_in+C_out, H, W).
+        """
         return torch.cat([c_in * x, img_lr.to(x.dtype)], dim=1)
 
-    @staticmethod
-    def _legacy_scaling_fn(x, img_lr, c_in):
-        return c_in * torch.cat([x, img_lr.to(x.dtype)], dim=1)
-
-    @nvtx.annotate(message="EDMPrecondSR", color="orange")
+    @nvtx.annotate(message="EDMPrecondSuperResolution", color="orange")
     def forward(
         self,
-        x,
-        img_lr,
-        sigma,
-        force_fp32=False,
-        **model_kwargs,
-    ):
+        x: torch.Tensor,
+        img_lr: torch.Tensor,
+        sigma: torch.Tensor,
+        force_fp32: bool = False,
+        **model_kwargs: dict,
+    ) -> torch.Tensor:
+        """
+        Forward pass of the EDMPrecondSuperResolution model wrapper.
+
+        This method applies the EDM preconditioning to compute the denoised image
+        from a noisy high-resolution image and low-resolution conditioning image.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy high-resolution image of shape (B, C_hr, H, W). The number of
+            channels `C_hr` should be equal to `img_out_channels`.
+        img_lr : torch.Tensor
+            Low-resolution conditioning image of shape (B, C_lr, H, W). The number
+            of channels `C_lr` should be equal to `img_in_channels`.
+        sigma : torch.Tensor
+            Noise level of shape (B) or (B, 1) or (B, 1, 1, 1).
+        force_fp32 : bool, optional
+            Whether to force FP32 precision regardless of the `use_fp16` attribute,
+            by default False.
+        **model_kwargs : dict
+            Additional keyword arguments to pass to the underlying model
+            `self.model` forward method.
+
+        Returns
+        -------
+        torch.Tensor
+            Denoised high-resolution image of shape (B, C_hr, H, W).
+
+        Raises
+        ------
+        ValueError
+            If the model output dtype doesn't match the expected dtype.
+        """
         # Concatenate input channels
         x = x.to(torch.float32)
         sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
@@ -853,10 +899,23 @@ class EDMPrecondSR(Module):
         return D_x
 
     @staticmethod
-    def round_sigma(sigma: Union[float, List, torch.Tensor]):
+    def round_sigma(sigma: Union[float, List, torch.Tensor]) -> torch.Tensor:
         """
         Convert a given sigma value(s) to a tensor representation.
-        See EDMPrecond.round_sigma
+
+        Parameters
+        ----------
+        sigma : Union[float, List, torch.Tensor]
+            Sigma value(s) to convert.
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor representation of sigma values.
+
+        See Also
+        --------
+        EDMPrecond.round_sigma
         """
         return EDMPrecond.round_sigma(sigma)
 
@@ -910,7 +969,8 @@ class VEPrecond_dfsr(torch.nn.Module):
         self.img_channels = img_channels
         self.label_dim = label_dim
         self.use_fp16 = use_fp16
-        self.model = globals()[model_type](
+        model_class = getattr(network_module, model_type)
+        self.model = model_class(
             img_resolution=img_resolution,
             in_channels=self.img_channels,
             out_channels=img_channels,
@@ -1009,7 +1069,8 @@ class VEPrecond_dfsr_cond(torch.nn.Module):
         self.img_channels = img_channels
         self.label_dim = label_dim
         self.use_fp16 = use_fp16
-        self.model = globals()[model_type](
+        model_class = getattr(network_module, model_type)
+        self.model = model_class(
             img_resolution=img_resolution,
             in_channels=model_kwargs["model_channels"] * 2,
             out_channels=img_channels,

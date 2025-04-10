@@ -14,15 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 
 from physicsnemo.metrics.diffusion import (
     EDMLoss,
+    RegressionLoss,
     RegressionLossCE,
+    ResidualLoss,
     VELoss,
     VELoss_dfsr,
     VPLoss,
 )
+from physicsnemo.models.diffusion import EDMPrecondSuperResolution, UNet
+from physicsnemo.utils.patching import RandomPatching2D
 
 # VPLoss tests
 
@@ -53,15 +58,10 @@ def test_sigma_method():
     assert sigma_vals.shape == t.shape
 
 
-def fake_net(y, sigma, labels, augment_labels=None):
-    return torch.tensor([1.0])
-
-
-def fake_condition_net(y, sigma, condition, class_labels=None, augment_labels=None):
-    return torch.tensor([1.0])
-
-
 def test_call_method_vp():
+    def fake_net(y, sigma, labels, augment_labels=None):
+        return torch.tensor([1.0])
+
     loss_func = VPLoss()
 
     images = torch.tensor([[[[1.0]]]])
@@ -97,6 +97,9 @@ def test_veloss_initialization():
 def test_call_method_ve():
     loss_func = VELoss()
 
+    def fake_net(y, sigma, labels, augment_labels=None):
+        return torch.tensor([1.0])
+
     images = torch.tensor([[[[1.0]]]])
     labels = None
 
@@ -130,6 +133,12 @@ def test_edmloss_initialization():
 
 
 def test_call_method_edm():
+    def fake_condition_net(y, sigma, condition, class_labels=None, augment_labels=None):
+        return torch.tensor([1.0])
+
+    def fake_net(y, sigma, labels, augment_labels=None):
+        return torch.tensor([1.0])
+
     loss_func = EDMLoss()
 
     img = torch.tensor([[[[1.0]]]])
@@ -155,79 +164,79 @@ def test_call_method_edm():
 # RegressionLoss tests
 
 
-# def test_regressionloss_initialization():
-#     loss_func = RegressionLoss()
-#     assert loss_func.P_mean == -1.2
-#     assert loss_func.P_std == 1.2
-#     assert loss_func.sigma_data == 0.5
+def test_call_method_regressionloss():
 
-#     loss_func = RegressionLoss(P_mean=-2.0, P_std=2.0, sigma_data=0.3)
-#     assert loss_func.P_mean == -2.0
-#     assert loss_func.P_std == 2.0
-#     assert loss_func.sigma_data == 0.3
+    # With a fake network
+
+    def fake_net(input, y_lr, augment_labels=None, force_fp32=False):
+        return torch.tensor([1.0])
+
+    loss_func = RegressionLoss()
+
+    img_clean = torch.tensor([[[[1.0]]]])
+    img_lr = torch.tensor([[[[0.5]]]])
+
+    # Without augmentation
+    loss_value = loss_func(fake_net, img_clean, img_lr)
+    assert isinstance(loss_value, torch.Tensor)
+
+    # With augmentation
+    def mock_augment_pipe(imgs):
+        return imgs, None
+
+    loss_value_with_augmentation = loss_func(
+        fake_net, img_clean, img_lr, mock_augment_pipe
+    )
+    assert isinstance(loss_value_with_augmentation, torch.Tensor)
 
 
-# def fake_net(input, y_lr, sigma, labels, augment_labels=None):
-#     return torch.tensor([1.0])
+# More realistic test with a UNet model
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_call_method_regressionloss_with_unet(device):
 
+    res, inc, outc = 64, 2, 3
+    model = UNet(
+        img_resolution=res,
+        img_in_channels=inc,
+        img_out_channels=outc,
+        model_type="SongUNet",
+    ).to(device)
+    img_clean = torch.ones([1, outc, res, res]).to(device)
+    img_lr = torch.randn([1, inc, res, res]).to(device)
+    loss_func = RegressionLoss()
+    loss_value = loss_func(model, img_clean, img_lr)
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == img_clean.shape
 
-# def test_call_method():
-#     loss_func = RegressionLoss()
-
-#     img_clean = torch.tensor([[[[1.0]]]])
-#     img_lr = torch.tensor([[[[0.5]]]])
-#     labels = None
-
-#     # Without augmentation
-#     loss_value = loss_func(fake_net, img_clean, img_lr, labels)
-#     assert isinstance(loss_value, torch.Tensor)
-
-#     # With augmentation
-#     def mock_augment_pipe(imgs):
-#         return imgs, None
-
-#     loss_value_with_augmentation = loss_func(
-#         fake_net, img_clean, img_lr, labels, mock_augment_pipe
-#     )
-#     assert isinstance(loss_value_with_augmentation, torch.Tensor)
 
 # RegressionLossCE tests
 
 
 def test_regressionlossce_initialization():
     loss_func = RegressionLossCE()
-    assert loss_func.P_mean == -1.2
-    assert loss_func.P_std == 1.2
-    assert loss_func.sigma_data == 0.5
     assert loss_func.prob_channels == [4, 5, 6, 7, 8]
 
-    loss_func = RegressionLossCE(
-        P_mean=-2.0, P_std=2.0, sigma_data=0.3, prob_channels=[1, 2, 3, 4]
-    )
-    assert loss_func.P_mean == -2.0
-    assert loss_func.P_std == 2.0
-    assert loss_func.sigma_data == 0.3
+    loss_func = RegressionLossCE(prob_channels=[1, 2, 3, 4])
     assert loss_func.prob_channels == [1, 2, 3, 4]
 
 
-def leadtime_fake_net(
-    input, y_lr, sigma, labels, lead_time_label=None, augment_labels=None
-):
-    return torch.zeros(1, 4, 29, 29)
+def test_call_method_regressionlossce():
+    def leadtime_fake_net(input, y_lr, lead_time_label=None, augment_labels=None):
+        return torch.zeros(1, 4, 29, 29)
 
-
-def test_call_method():
     prob_channels = [0, 2]
     loss_func = RegressionLossCE(prob_channels=prob_channels)
 
     img_clean = torch.zeros(1, 4, 29, 29)
     img_lr = torch.zeros(1, 4, 29, 29)
-    labels = None
     lead_time_label = None
 
     # Without augmentation
     loss_value = loss_func(
-        leadtime_fake_net, img_clean, img_lr, lead_time_label, labels
+        leadtime_fake_net,
+        img_clean,
+        img_lr,
+        lead_time_label,
     )
     assert isinstance(loss_value, torch.Tensor)
     assert loss_value.shape == (1, 3, 29, 29)
@@ -237,96 +246,238 @@ def test_call_method():
         return imgs, None
 
     loss_value_with_augmentation = loss_func(
-        leadtime_fake_net, img_clean, img_lr, lead_time_label, labels, mock_augment_pipe
+        leadtime_fake_net, img_clean, img_lr, lead_time_label, mock_augment_pipe
     )
     assert isinstance(loss_value_with_augmentation, torch.Tensor)
     assert loss_value.shape == (1, 3, 29, 29)
 
 
-# MixtureLoss tests
+# More realistic test with a UNet model and lead-time conditioning
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_call_method_regressionlossce_with_unet(device):
+    res, inc, outc = 64, 3, 4
+    N_pos, lead_time_channels = 2, 4
+    prob_channels = [0, 2]
+    model = UNet(
+        img_resolution=res,
+        img_in_channels=inc + N_pos + lead_time_channels,
+        img_out_channels=outc,
+        model_type="SongUNetPosLtEmbd",
+        gridtype="test",
+        lead_time_channels=lead_time_channels,
+        prob_channels=prob_channels,
+        N_grid_channels=N_pos,
+    ).to(device)
+
+    img_clean = torch.ones([1, outc, res, res]).to(device)
+    img_lr = torch.randn([1, inc, res, res]).to(device)
+    lead_time_label = torch.tensor(8).to(device)
+
+    loss_func = RegressionLossCE(prob_channels=prob_channels)
+    loss_value = loss_func(model, img_clean, img_lr, lead_time_label=lead_time_label)
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == (1, outc - len(prob_channels) + 1, res, res)
 
 
-# def test_mixtureloss_initialization():
-#     loss_func = MixtureLoss()
-#     assert loss_func.P_mean == -1.2
-#     assert loss_func.P_std == 1.2
-#     assert loss_func.sigma_data == 0.5
-
-#     loss_func = MixtureLoss(P_mean=-2.0, P_std=2.0, sigma_data=0.3)
-#     assert loss_func.P_mean == -2.0
-#     assert loss_func.P_std == 2.0
-#     assert loss_func.sigma_data == 0.3
+# ResidualLoss tests
 
 
-# def fake_net(latent, y_lr, sigma, labels, augment_labels=None):
-#     return torch.tensor([1.0])
+def test_residualloss_initialization():
+    # Mock regression network
+    regression_net = torch.nn.Linear(1, 1)
+
+    # Test default parameters
+    loss_func = ResidualLoss(
+        regression_net=regression_net,
+    )
+    assert loss_func.P_mean == 0.0
+    assert loss_func.P_std == 1.2
+    assert loss_func.sigma_data == 0.5
+    assert loss_func.hr_mean_conditioning is False
+
+    # Test custom parameters
+    loss_func = ResidualLoss(
+        regression_net=regression_net,
+        P_mean=1.0,
+        P_std=2.0,
+        sigma_data=0.3,
+        hr_mean_conditioning=True,
+    )
+    assert loss_func.P_mean == 1.0
+    assert loss_func.P_std == 2.0
+    assert loss_func.sigma_data == 0.3
+    assert loss_func.hr_mean_conditioning is True
 
 
-# def test_call_method():
-#     loss_func = MixtureLoss()
+def test_residualloss_call_method():
+    def fake_residual_net(
+        x,
+        img_lr,
+        sigma,
+        labels=None,
+        global_index=None,
+        embedding_selector=None,
+        augment_labels=None,
+    ):
+        return torch.zeros_like(x)
 
-#     img_clean = torch.tensor([[[[1.0]]]])
-#     img_lr = torch.tensor([[[[0.5]]]])
-#     labels = None
+    # Mock regression network that returns scaled input
+    class DummyRegNet(torch.nn.Module):
+        def forward(self, x, *args, **kwargs):
+            return 0.9 * x
 
-#     # Without augmentation
-#     loss_value = loss_func(fake_net, img_clean, img_lr, labels)
-#     assert isinstance(loss_value, torch.Tensor)
+    regression_net = DummyRegNet()
+    loss_func = ResidualLoss(
+        regression_net=regression_net,
+    )
 
-#     # With augmentation
-#     def mock_augment_pipe(imgs):
-#         return imgs, None
+    # Create test inputs
+    batch_size = 2
+    channels = 3
+    img_clean = torch.randn(batch_size, channels, 32, 32)
+    img_lr = torch.randn(batch_size, channels, 32, 32)
 
-#     loss_value_with_augmentation = loss_func(
-#         fake_net, img_clean, img_lr, labels, mock_augment_pipe
-#     )
-#     assert isinstance(loss_value_with_augmentation, torch.Tensor)
+    # Test without patching or augmentation
+    loss_value = loss_func(fake_residual_net, img_clean, img_lr)
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == (batch_size, channels, 32, 32)
+
+    # Test with augmentation
+    def mock_augment_pipe(imgs):
+        return imgs, None
+
+    loss_value_with_augmentation = loss_func(
+        fake_residual_net, img_clean, img_lr, augment_pipe=mock_augment_pipe
+    )
+    assert isinstance(loss_value_with_augmentation, torch.Tensor)
+    assert loss_value_with_augmentation.shape == (batch_size, channels, 32, 32)
+
+    # Test with patching
+    patch_num = 4
+    patch_shape = (16, 16)
+    patching = RandomPatching2D(
+        img_shape=(32, 32), patch_shape=patch_shape, patch_num=patch_num
+    )
+    loss_value_with_patching = loss_func(
+        fake_residual_net, img_clean, img_lr, patching=patching
+    )
+    assert isinstance(loss_value_with_patching, torch.Tensor)
+    # Shape should be (batch_size * patch_num, channels, patch_shape_y, patch_shape_x)
+    expected_shape = (batch_size * patch_num, channels, patch_shape[0], patch_shape[1])
+    assert loss_value_with_patching.shape == expected_shape
+
+    # Test error on invalid patching object
+    with pytest.raises(ValueError):
+        loss_func(
+            fake_residual_net, img_clean, img_lr, patching="invalid patching object"
+        )
 
 
-# ResLoss tests
+# More realistic test with a UNet model
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_call_method_residualloss_with_unet(device):
+
+    res, inc, outc = 64, 2, 3
+    N_pos = 2
+    regression_model = UNet(
+        img_resolution=res,
+        img_in_channels=inc + N_pos,
+        img_out_channels=outc,
+        model_type="SongUNetPosEmbd",
+        N_grid_channels=N_pos,
+        gridtype="test",
+    ).to(device)
+    diffusion_model = EDMPrecondSuperResolution(
+        img_resolution=res,
+        img_in_channels=inc + N_pos,
+        img_out_channels=outc,
+        model_type="SongUNetPosEmbd",
+        N_grid_channels=N_pos,
+        gridtype="test",
+    ).to(device)
+
+    img_clean = torch.ones([1, outc, res, res]).to(device)
+    img_lr = torch.randn([1, inc, res, res]).to(device)
+
+    # Without hr_mean_conditioning
+    loss_func = ResidualLoss(
+        regression_net=regression_model, hr_mean_conditioning=False
+    )
+    loss_value = loss_func(diffusion_model, img_clean, img_lr)
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == img_clean.shape
 
 
-# def test_resloss_initialization():
-#     # Mock the model loading
-#     ResLoss.unet = torch.nn.Linear(1, 1).cuda()
+# Test with UNets and hr_mean_conditioning
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_call_method_residualloss_with_unet_hr_mean_conditioning(device):
+    res, inc, outc = 64, 2, 3
+    N_pos = 2
+    regression_model = UNet(
+        img_resolution=res,
+        img_in_channels=inc + N_pos,
+        img_out_channels=outc,
+        model_type="SongUNetPosEmbd",
+        N_grid_channels=N_pos,
+        gridtype="test",
+    ).to(device)
+    diffusion_model = EDMPrecondSuperResolution(
+        img_resolution=res,
+        img_in_channels=inc + N_pos + outc,
+        img_out_channels=outc,
+        model_type="SongUNetPosEmbd",
+        N_grid_channels=N_pos,
+        gridtype="test",
+    ).to(device)
 
-#     loss_func = ResLoss()
-#     assert loss_func.P_mean == 0.0
-#     assert loss_func.P_std == 1.2
-#     assert loss_func.sigma_data == 0.5
+    img_clean = torch.ones([1, outc, res, res]).to(device)
+    img_lr = torch.randn([1, inc, res, res]).to(device)
 
-#     loss_func = ResLoss(P_mean=-2.0, P_std=2.0, sigma_data=0.3)
-#     assert loss_func.P_mean == -2.0
-#     assert loss_func.P_std == 2.0
-#     assert loss_func.sigma_data == 0.3
-
-
-# def fake_net(latent, y_lr, sigma, labels, augment_labels=None):
-#     return torch.tensor([1.0])
+    # With hr_mean_conditioning
+    loss_func = ResidualLoss(regression_net=regression_model, hr_mean_conditioning=True)
+    loss_value = loss_func(diffusion_model, img_clean, img_lr)
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == img_clean.shape
 
 
-# def test_call_method():
-#     # Mock the model loading
-#     ResLoss.unet = torch.nn.Linear(1, 1).cuda()
+# Test with UNets, hr_mean_conditioning, and lead-time aware embedding
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_call_method_residualloss_with_lt_unet_hr_mean_conditioning(device):
+    res, inc, outc = 64, 2, 3
+    N_pos, lead_time_channels = 2, 4
+    prob_channels = [0, 2]
+    regression_model = UNet(
+        img_resolution=res,
+        img_in_channels=inc + N_pos + lead_time_channels,
+        img_out_channels=outc,
+        model_type="SongUNetPosLtEmbd",
+        N_grid_channels=N_pos,
+        gridtype="test",
+        lead_time_channels=lead_time_channels,
+        prob_channels=prob_channels,
+    ).to(device)
+    diffusion_model = EDMPrecondSuperResolution(
+        img_resolution=res,
+        img_in_channels=inc + outc + N_pos + lead_time_channels,
+        img_out_channels=outc,
+        model_type="SongUNetPosLtEmbd",
+        N_grid_channels=N_pos,
+        gridtype="test",
+        lead_time_channels=lead_time_channels,
+        prob_channels=prob_channels,
+    ).to(device)
 
-#     loss_func = ResLoss()
+    img_clean = torch.ones([1, outc, res, res]).to(device)
+    img_lr = torch.randn([1, inc, res, res]).to(device)
+    lead_time_label = torch.tensor(8).to(device)
 
-#     img_clean = torch.tensor([[[[1.0]]]])
-#     img_lr = torch.tensor([[[[0.5]]]])
-#     labels = None
-
-#     # Without augmentation
-#     loss_value = loss_func(fake_net, img_clean, img_lr, labels)
-#     assert isinstance(loss_value, torch.Tensor)
-
-#     # With augmentation
-#     def mock_augment_pipe(imgs):
-#         return imgs, None
-
-#     loss_value_with_augmentation = loss_func(
-#         fake_net, img_clean, img_lr, labels, mock_augment_pipe
-#     )
-#     assert isinstance(loss_value_with_augmentation, torch.Tensor)
+    # With hr_mean_conditioning
+    loss_func = ResidualLoss(regression_net=regression_model, hr_mean_conditioning=True)
+    loss_value = loss_func(
+        diffusion_model, img_clean, img_lr, lead_time_label=lead_time_label
+    )
+    assert isinstance(loss_value, torch.Tensor)
+    assert loss_value.shape == img_clean.shape
 
 
 # VELoss_dfsr tests
@@ -366,6 +517,9 @@ def test_get_beta_schedule_method():
 
 
 def test_call_method_ve_dfsr():
+    def fake_net(y, sigma, labels, augment_labels=None):
+        return torch.tensor([1.0])
+
     loss_func = VELoss_dfsr()
 
     images = torch.tensor([[[[1.0]]]])

@@ -20,7 +20,7 @@ from .loss import (
     EDMLossSR,
     RegressionLoss,
     RegressionLossCE,
-    ResLoss,
+    ResidualLoss,
     VELoss,
     VELoss_dfsr,
     VPLoss,

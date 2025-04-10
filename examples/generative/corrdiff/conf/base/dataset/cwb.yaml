@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Dataset type. Do not modify.
+type: cwb
+# Path to data file. Must be overridden.
+data_path: ???
+# Indices of input channels
+in_channels: [0, 1, 2, 3, 4, 9, 10, 11, 12, 17, 18, 19]
+# Indices of output channels
+out_channels: [0, 1, 2, 3]
+# Shape of the image
+img_shape_x: 448
+img_shape_y: 448
+# Add grid coordinates to the image
+add_grid: true
+# Factor to downscale the image
+ds_factor: 4
+# Path to min and max values of the data
+min_path: null
+max_path: null
+# Path to global means of the data
+global_means_path: null
+# Path to global stds of the data
+global_stds_path: null
