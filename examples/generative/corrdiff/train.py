@@ -279,6 +279,8 @@ def main(cfg: DictConfig) -> None:
             broadcast_buffers=True,
             output_device=dist.device,
             find_unused_parameters=True,  # dist.find_unused_parameters,
+            bucket_cap_mb = 35,
+            gradient_as_bucket_view = True,
         )
     if cfg.wandb.watch_model and dist.rank == 0:
         wandb.watch(model)
@@ -369,7 +371,7 @@ def main(cfg: DictConfig) -> None:
 
     # Instantiate the optimizer
     optimizer = torch.optim.Adam(
-        params=model.parameters(), lr=cfg.training.hp.lr, betas=[0.9, 0.999], eps=1e-8
+        params=model.parameters(), lr=cfg.training.hp.lr, betas=[0.9, 0.999], eps=1e-8, fused=True
     )
 
     # Record the current time to measure the duration of subsequent operations.
