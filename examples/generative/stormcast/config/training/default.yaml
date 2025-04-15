@@ -22,20 +22,27 @@ run_id: '0' # Unique ID to use for this training run
 rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Path where experiement outputs will be saved
 num_data_workers: 4 # Number of dataloader worker threads per proc
 log_to_wandb: False # Whether or not to log to Weights & Biases (requires wandb account)
+wandb_mode: "online" # logging mode, "online" or "offline"
 seed: -1 # Specify a random seed by setting this to an int > 0
 cudnn_benchmark: True # Enable/disable CuDNN benchmark mode
-resume_checkpoint: null # Specify a path to a training checkpoint to resume from
+resume_checkpoint: "latest" # epoch number to continue training from, or "latest" for the latest checkpoint
+initial_weights: null # if not null, a .mdlus checkpoint to load weights at the start of training; no effect if training continues from a checkpoint
 
 # Logging frequency
-print_progress_freq: 5 # How often to print progress, measured in number of training steps
-checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
-validation_freq: 5 # how often to record the validation loss, measured in number of training steps
+print_progress_freq: 100 # How often to print progress, measured in number of training steps
+checkpoint_freq: 1000 # How often to save the checkpoints, measured in number of training steps
+validation_freq: 1000 # how often to record the validation loss, measured in number of training steps
 
 # Optimization hyperparameters
-batch_size: 1 # Total training batch size -- must be >= (and divisble by) number of GPUs being used
+batch_size: 64 # Total training batch size -- must be >= (and divisble by) number of GPUs being used
+batch_size_per_gpu: "auto" # Batch size on each GPU, set to an int to force smaller local batch with gradient accumulation
 lr: 4E-4 # Initial learning rate
 lr_rampup_steps: 1000 # Number of training steps over which to perform linear LR warmup
-total_train_steps: 20 # Number of total training steps
+total_train_steps: 16000 # Number of total training steps, 16000 with batch size 64 corresponds to StormCast paper regression
 clip_grad_norm: -1 # Threshold for gradient clipping, set to -1 to disable
 loss: 'regression' # Loss type; use 'regression' or 'edm' for the regression and diffusion, respectively
+fp_optimizations: fp32 # Floating point mode, one of ["fp32", "amp-fp16", "amp-bf16"]
+compile_model: False # use torch.compile to compile model
 
+# Validation options
+validation_plot_variables: ["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]

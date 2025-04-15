@@ -16,33 +16,15 @@
 
 # Defaults
 defaults:
+  - regression
 
-  # Dataset
-  - dataset/hrrr_era5
-
-  # Model
-  - model/stormcast
-
-  # Training
-  - training/default
-
-  # Sampler
-  - sampler/edm_deterministic
-
-  # Hydra
-  - hydra/default
-
-  - _self_
-
-# Diffusion model specific changes
-model:
-  use_regression_net: True
-  regression_weights: "stormcast_checkpoints/regression/StormCastUNet.0.0.mdlus"
-  previous_step_conditioning: True
-  spatial_pos_embed: True
+# Minimal training config with frequent printouts and checkpoint saving.
+# Can be used to test that training runs without errors.
+# Do not use for real training runs.
 
 training:
-  loss: 'edm'
-  total_train_steps: 450000 # use more training samples for diffusion training; follows StormCast paper
-  checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
-  validation_freq: 10000 # how often to record the validation loss, measured in number of training steps
+  print_progress_freq: 5 # How often to print progress, measured in number of training steps
+  checkpoint_freq: 5 # How often to save the checkpoints, measured in number of training steps
+  validation_freq: 5 # how often to record the validation loss, measured in number of training steps
+  batch_size: 2
+  total_train_steps: 20

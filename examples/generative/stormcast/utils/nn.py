@@ -25,7 +25,7 @@ def get_preconditioned_architecture(
     target_channels: int,
     conditional_channels: int = 0,
     spatial_embedding: bool = True,
-    hrrr_resolution: tuple = (512, 640),
+    img_resolution: tuple = (512, 640),
     attn_resolutions: list = [],
 ):
     """
@@ -35,14 +35,14 @@ def get_preconditioned_architecture(
         target_channels: The number of channels in the target
         conditional_channels: The number of channels in the conditioning
         spatial_embedding: whether or not to use the additive spatial embedding in the U-Net
-        hrrr_resolution: resolution of HRRR data (U-Net inputs/outputs)
+        img_resolution: resolution of the data (U-Net inputs/outputs)
         attn_resolutions: resolution of internal U-Net stages to use self-attention
     Returns:
         EDMPrecond or StormCastUNet: a wrapped torch module net(x+n, sigma, condition, class_labels) -> x
     """
     if name == "diffusion":
         return EDMPrecond(
-            img_resolution=hrrr_resolution,
+            img_resolution=img_resolution,
             img_channels=target_channels + conditional_channels,
             img_out_channels=target_channels,
             model_type="SongUNet",
@@ -53,7 +53,7 @@ def get_preconditioned_architecture(
 
     elif name == "regression":
         return StormCastUNet(
-            img_resolution=hrrr_resolution,
+            img_resolution=img_resolution,
             img_in_channels=conditional_channels,
             img_out_channels=target_channels,
             model_type="SongUNet",
@@ -64,30 +64,49 @@ def get_preconditioned_architecture(
         )
 
 
-def diffusion_model_forward(
-    model, hrrr_0, diffusion_channel_indices, invariant_tensor, sampler_args={}
+def build_network_condition_and_target(
+    background, state, invariant_tensor, regression_net=None, train_regression_unet=True
 ):
+    assert not (train_regression_unet and (regression_net is not None))
+    target = state[1]
+    if regression_net is not None:
+        # Inference regression model
+        with torch.no_grad():
+            reg_out = regression_model_forward(
+                regression_net, state[0], background, invariant_tensor
+            )
+            condition = torch.cat((state[0], reg_out), dim=1)
+            target = target - reg_out
+
+    elif train_regression_unet:
+        condition = torch.cat((state[0], background), dim=1)
+        reg_out = None
+
+    if invariant_tensor is not None:
+        condition = torch.cat((condition, invariant_tensor), dim=1)
+
+    return (condition, target, reg_out)
+
+
+def diffusion_model_forward(model, condition, shape, sampler_args={}):
     """Helper function to run diffusion model sampling"""
 
-    b, c, h, w = hrrr_0[:, diffusion_channel_indices, :, :].shape
+    latents = torch.randn(*shape, device=condition.device, dtype=condition.dtype)
 
-    latents = torch.randn(b, c, h, w, device=hrrr_0.device, dtype=hrrr_0.dtype)
-
-    if b > 1 and invariant_tensor.shape[0] != b:
-        invariant_tensor = invariant_tensor.expand(b, -1, -1, -1)
-    condition = torch.cat((hrrr_0, invariant_tensor), dim=1)
-
-    output_images = deterministic_sampler(
+    return deterministic_sampler(
         model, latents=latents, img_lr=condition, **sampler_args
     )
 
-    return output_images
 
-
-def regression_model_forward(model, hrrr, era5, invariant_tensor):
+def regression_model_forward(model, output, input, invariant_tensor):
     """Helper function to run regression model forward pass in inference"""
 
-    x = torch.cat([hrrr, era5, invariant_tensor], dim=1)
+    x = (
+        [output, input]
+        if invariant_tensor is None
+        else [output, input, invariant_tensor]
+    )
+    x = torch.cat(x, dim=1)
 
     return model(x)
 
