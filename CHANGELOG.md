@@ -11,9 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added ReGen score-based data assimilation example
+- General purpose patching API for patch-based diffusion
+- New positional embedding selection strategy for CorrDiff SongUNet models
 - Added Multi-Storage Client to allow checkpointing to/from Object Storage
 
 ### Changed
+
+- Simplified CorrDiff config files, updated default values
+- Refactored CorrDiff losses and samplers to use the patching API
+- Support for non-square images and patches in patch-based diffusion
 
 ### Deprecated
 

@@ -21,12 +21,15 @@ import torch._dynamo
 import nvtx
 import numpy as np
 import netCDF4 as nc
+import contextlib
+
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.patching import GridPatching2D
 from physicsnemo import Module
+
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from einops import rearrange
 from torch.distributed import gather
 
 
@@ -45,6 +48,7 @@ from helpers.generate_helpers import (
     save_images,
 )
 from helpers.train_helpers import set_patch_shape
+from datasets.dataset import register_dataset
 
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_generate")
@@ -85,6 +89,11 @@ def main(cfg: DictConfig) -> None:
 
     # Create dataset object
     dataset_cfg = OmegaConf.to_container(cfg.dataset)
+
+    # Register dataset (if custom dataset)
+    register_dataset(cfg.dataset.type)
+    logger0.info(f"Using dataset: {cfg.dataset.type}")
+
     if "has_lead_time" in cfg.generation:
         has_lead_time = cfg.generation["has_lead_time"]
     else:
@@ -96,19 +105,23 @@ def main(cfg: DictConfig) -> None:
     img_out_channels = len(dataset.output_channels())
 
     # Parse the patch shape
-    if hasattr(cfg.generation, "patch_shape_x"):  # TODO better config handling
+    if cfg.generation.patching:
         patch_shape_x = cfg.generation.patch_shape_x
-    else:
-        patch_shape_x = None
-    if hasattr(cfg.generation, "patch_shape_y"):
         patch_shape_y = cfg.generation.patch_shape_y
     else:
-        patch_shape_y = None
+        patch_shape_x, patch_shape_y = None, None
     patch_shape = (patch_shape_y, patch_shape_x)
-    img_shape, patch_shape = set_patch_shape(img_shape, patch_shape)
-    if patch_shape != img_shape:
+    use_patching, img_shape, patch_shape = set_patch_shape(img_shape, patch_shape)
+    if use_patching:
+        patching = GridPatching2D(
+            img_shape=img_shape,
+            patch_shape=patch_shape,
+            boundary_pix=cfg.generation.boundary_pix,
+            overlap_pix=cfg.generation.overlap_pix,
+        )
         logger0.info("Patch-based training enabled")
     else:
+        patching = None
         logger0.info("Patch-based training disabled")
 
     # Parse the inference mode
@@ -164,44 +177,27 @@ def main(cfg: DictConfig) -> None:
             solver=cfg.sampler.solver,
         )
     elif cfg.sampler.type == "stochastic":
-        sampler_fn = partial(
-            stochastic_sampler,
-            img_shape=img_shape[1],
-            patch_shape=patch_shape[1],
-            boundary_pix=cfg.sampler.boundary_pix,
-            overlap_pix=cfg.sampler.overlap_pix,
-        )
+        sampler_fn = partial(stochastic_sampler, patching=patching)
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
 
     # Main generation definition
     def generate_fn():
-        img_shape_y, img_shape_x = img_shape
         with nvtx.annotate("generate_fn", color="green"):
-            if cfg.generation.sample_res == "full":
-                image_lr_patch = image_lr
-            else:
-                torch.cuda.nvtx.range_push("rearrange")
-                image_lr_patch = rearrange(
-                    image_lr,
-                    "b c (h1 h) (w1 w) -> (b h1 w1) c h w",
-                    h1=img_shape_y // patch_shape[0],
-                    w1=img_shape_x // patch_shape[1],
-                )
-                torch.cuda.nvtx.range_pop()
-            image_lr_patch = image_lr_patch.to(memory_format=torch.channels_last)
+            # (1, C, H, W)
+            img_lr = image_lr.to(memory_format=torch.channels_last)
 
             if net_reg:
                 with nvtx.annotate("regression_model", color="yellow"):
                     image_reg = regression_step(
                         net=net_reg,
-                        img_lr=image_lr_patch,
+                        img_lr=img_lr,
                         latents_shape=(
                             cfg.generation.seed_batch_size,
                             img_out_channels,
                             img_shape[0],
                             img_shape[1],
-                        ),
+                        ),  # (batch_size, C, H, W)
                         lead_time_label=lead_time_label,
                     )
             if net_res:
@@ -213,16 +209,15 @@ def main(cfg: DictConfig) -> None:
                     image_res = diffusion_step(
                         net=net_res,
                         sampler_fn=sampler_fn,
-                        seed_batch_size=cfg.generation.seed_batch_size,
                         img_shape=img_shape,
                         img_out_channels=img_out_channels,
                         rank_batches=rank_batches,
-                        img_lr=image_lr_patch.expand(
+                        img_lr=img_lr.expand(
                             cfg.generation.seed_batch_size, -1, -1, -1
                         ).to(memory_format=torch.channels_last),
                         rank=dist.rank,
                         device=device,
-                        hr_mean=mean_hr,
+                        mean_hr=mean_hr,
                         lead_time_label=lead_time_label,
                     )
             if cfg.generation.inference_mode == "regression":
@@ -232,13 +227,6 @@ def main(cfg: DictConfig) -> None:
             else:
                 image_out = image_reg + image_res
 
-            if cfg.generation.sample_res != "full":
-                image_out = rearrange(
-                    image_out,
-                    "(b h1 w1) c h w -> b c (h1 h) (w1 w)",
-                    h1=img_shape_y // patch_shape[0],
-                    w1=img_shape_x // patch_shape[1],
-                )
             # Gather tensors on rank 0
             if dist.world_size > 1:
                 if dist.rank == 0:
@@ -279,8 +267,18 @@ def main(cfg: DictConfig) -> None:
         # add attributes
         f.cfg = str(cfg)
 
-    with torch.cuda.profiler.profile():
-        with torch.autograd.profiler.emit_nvtx():
+    torch_cuda_profiler = (
+        torch.cuda.profiler.profile()
+        if torch.cuda.is_available()
+        else contextlib.nullcontext()
+    )
+    torch_nvtx_profiler = (
+        torch.autograd.profiler.emit_nvtx()
+        if torch.cuda.is_available()
+        else contextlib.nullcontext()
+    )
+    with torch_cuda_profiler:
+        with torch_nvtx_profiler:
 
             data_loader = torch.utils.data.DataLoader(
                 dataset=dataset, sampler=sampler, batch_size=1, pin_memory=True
@@ -302,11 +300,29 @@ def main(cfg: DictConfig) -> None:
                 )
                 writer_threads = []
 
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+            # Create timer objects only if CUDA is available
+            use_cuda_timing = torch.cuda.is_available()
+            if use_cuda_timing:
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+            else:
+                # Dummy no-op functions for CPU case
+                class DummyEvent:
+                    def record(self):
+                        pass
+
+                    def synchronize(self):
+                        pass
+
+                    def elapsed_time(self, _):
+                        return 0
+
+                start = end = DummyEvent()
 
             times = dataset.time()
-            for image_tar, image_lr, index, *lead_time_label in iter(data_loader):
+            for index, (image_tar, image_lr, *lead_time_label) in enumerate(
+                iter(data_loader)
+            ):
                 time_index += 1
                 if dist.rank == 0:
                     logger0.info(f"starting index: {time_index}")
@@ -339,15 +355,17 @@ def main(cfg: DictConfig) -> None:
                             image_tar.cpu(),
                             image_lr.cpu(),
                             time_index,
-                            index[0],
+                            index,
                             has_lead_time,
                         )
                     )
             end.record()
             end.synchronize()
-            elapsed_time = start.elapsed_time(end) / 1000.0  # Convert ms to s
+            elapsed_time = (
+                start.elapsed_time(end) / 1000.0 if use_cuda_timing else 0
+            )  # Convert ms to s
             timed_steps = time_index + 1 - warmup_steps
-            if dist.rank == 0:
+            if dist.rank == 0 and use_cuda_timing:
                 average_time_per_batch_element = elapsed_time / timed_steps / batch_size
                 logger.info(
                     f"Total time to run {timed_steps} steps and {batch_size} members = {elapsed_time} s"

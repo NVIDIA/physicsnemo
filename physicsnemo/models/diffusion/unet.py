@@ -16,6 +16,7 @@
 
 import importlib
 from dataclasses import dataclass
+from typing import List, Literal, Tuple, Union
 
 import torch
 
@@ -45,31 +46,35 @@ class MetaData(ModelMetaData):
 
 class UNet(Module):  # TODO a lot of redundancy, need to clean up
     """
-    U-Net Wrapper for CorrDiff.
+    U-Net Wrapper for CorrDiff deterministic regression model.
 
     Parameters
     -----------
-    img_resolution : int
-        The resolution of the input/output image.
-    img_channels : int
-         Number of color channels.
+    img_resolution : Union[int, Tuple[int, int]]
+        The resolution of the input/output image. If a single int is provided,
+        then the image is assumed to be square.
     img_in_channels : int
-        Number of input color channels.
+        Number of channels in the input image.
     img_out_channels : int
-        Number of output color channels.
+        Number of channels in the output image.
     use_fp16: bool, optional
-        Execute the underlying model at FP16 precision?, by default False.
-    sigma_min: float, optional
-        Minimum supported noise level, by default 0.
-    sigma_max: float, optional
-        Maximum supported noise level, by default float('inf').
-    sigma_data: float, optional
-        Expected standard deviation of the training data, by default 0.5.
+        Execute the underlying model at FP16 precision, by default False.
     model_type: str, optional
-        Class name of the underlying model, by default 'DhariwalUNet'.
+        Class name of the underlying model. Must be one of the following:
+        'SongUNet', 'SongUNetPosEmbd', 'SongUNetPosLtEmbd', 'DhariwalUNet'.
+        Defaults to 'SongUNetPosEmbd'.
     **model_kwargs : dict
-        Keyword arguments for the underlying model.
+        Keyword arguments passed to the underlying model `__init__` method.
 
+    See Also
+    --------
+    For information on model types and their usage:
+    :class:`~physicsnemo.models.diffusion.SongUNet`: Basic U-Net for diffusion models
+    :class:`~physicsnemo.models.diffusion.SongUNetPosEmbd`: U-Net with positional embeddings
+    :class:`~physicsnemo.models.diffusion.SongUNetPosLtEmbd`: U-Net with positional and lead-time embeddings
+
+    Please refer to the documentation of these classes for details on how to call
+    and use these models directly.
 
     References
     ----------
@@ -81,35 +86,28 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
 
     def __init__(
         self,
-        img_resolution,
-        img_channels,
-        img_in_channels,
-        img_out_channels,
-        use_fp16=False,
-        sigma_min=0,
-        sigma_max=float("inf"),
-        sigma_data=0.5,
-        model_type="SongUNetPosEmbd",
-        **model_kwargs,
+        img_resolution: Union[int, Tuple[int, int]],
+        img_in_channels: int,
+        img_out_channels: int,
+        use_fp16: bool = False,
+        model_type: Literal[
+            "SongUNetPosEmbd", "SongUNetPosLtEmbd", "SongUNet", "DhariwalUNet"
+        ] = "SongUNetPosEmbd",
+        **model_kwargs: dict,
     ):
         super().__init__(meta=MetaData)
-
-        self.img_channels = img_channels
 
         # for compatibility with older versions that took only 1 dimension
         if isinstance(img_resolution, int):
             self.img_shape_x = self.img_shape_y = img_resolution
         else:
-            self.img_shape_x = img_resolution[0]
-            self.img_shape_y = img_resolution[1]
+            self.img_shape_y = img_resolution[0]
+            self.img_shape_x = img_resolution[1]
 
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
 
         self.use_fp16 = use_fp16
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-        self.sigma_data = sigma_data
         model_class = getattr(network_module, model_type)
         self.model = model_class(
             img_resolution=img_resolution,
@@ -118,13 +116,46 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
             **model_kwargs,
         )
 
-    def forward(self, x, img_lr, sigma, force_fp32=False, **model_kwargs):
+    def forward(
+        self,
+        x: torch.Tensor,
+        img_lr: torch.Tensor,
+        force_fp32: bool = False,
+        **model_kwargs: dict,
+    ) -> torch.Tensor:
+        """
+        Forward pass of the UNet wrapper model.
+
+        This method concatenates the input tensor with the low-resolution conditioning tensor
+        and passes the result through the underlying model.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            The input tensor, typically zero-filled, of shape (B, C_hr, H, W).
+        img_lr : torch.Tensor
+            Low-resolution conditioning image of shape (B, C_lr, H, W).
+        force_fp32 : bool, optional
+            Whether to force FP32 precision regardless of the `use_fp16` attribute,
+            by default False.
+        **model_kwargs : dict
+            Additional keyword arguments to pass to the underlying model
+            `self.model` forward method.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor (prediction) of shape (B, C_hr, H, W).
+
+        Raises
+        ------
+        ValueError
+            If the model output dtype doesn't match the expected dtype.
+        """
         # SR: concatenate input channels
         if img_lr is not None:
             x = torch.cat((x, img_lr), dim=1)
 
-        x = x.to(torch.float32)
-        sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
         dtype = (
             torch.float16
             if (self.use_fp16 and not force_fp32 and x.device.type == "cuda")
@@ -133,29 +164,27 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
 
         F_x = self.model(
             x.to(dtype),  # (c_in * x).to(dtype),
-            torch.zeros(
-                sigma.numel(), dtype=sigma.dtype, device=sigma.device
-            ),  # c_noise.flatten()
+            torch.zeros(x.shape[0], dtype=dtype, device=x.device),  # c_noise.flatten()
             class_labels=None,
             **model_kwargs,
         )
 
         if (F_x.dtype != dtype) and not torch.is_autocast_enabled():
             raise ValueError(
-                f"Expected the dtype to be {dtype}, but got {F_x.dtype} instead."
+                f"Expected the dtype to be {dtype}, " f"but got {F_x.dtype} instead."
             )
 
-        # skip connection - for SR there's size mismatch bwtween input and output
+        # skip connection
         D_x = F_x.to(torch.float32)
         return D_x
 
-    def round_sigma(self, sigma):
+    def round_sigma(self, sigma: Union[float, List, torch.Tensor]) -> torch.Tensor:
         """
         Convert a given sigma value(s) to a tensor representation.
 
         Parameters
         ----------
-        sigma : Union[float list, torch.Tensor]
+        sigma : Union[float, List, torch.Tensor]
             The sigma value(s) to convert.
 
         Returns
@@ -189,7 +218,7 @@ class StormCastUNet(Module):
     sigma_data: float, optional
         Expected standard deviation of the training data, by default 0.5.
     model_type: str, optional
-        Class name of the underlying model, by default 'DhariwalUNet'.
+        Class name of the underlying model, by default 'SongUNet'.
     **model_kwargs : dict
         Keyword arguments for the underlying model.
 

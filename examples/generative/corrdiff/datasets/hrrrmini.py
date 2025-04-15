@@ -70,7 +70,7 @@ class HRRRMiniDataset(DownscalingDataset):
         )
 
     def __getitem__(self, idx):
-        """Return the data sample (output, input, 0) at index idx."""
+        """Return the data sample (output, input) at index idx."""
         x = self.upsample(self.input[idx].copy())
 
         # add invariants to input
@@ -82,7 +82,7 @@ class HRRRMiniDataset(DownscalingDataset):
 
         x = self.normalize_input(x)
         y = self.normalize_output(y)
-        return (y, x, 0)
+        return (y, x)
 
     def __len__(self):
         return self.input.shape[0]

@@ -126,6 +126,8 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
     Expects data to be stored under directory specified by 'location'
         GEFS under <root_dir>/gefs/
         HRRR under <root_dir>/hrrr/
+    Within each directory, there should be one zarr file per
+    year containing the data of interest.
     """
 
     def __init__(
@@ -142,7 +144,7 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         train_years: Iterable[int] = (2020, 2021, 2022, 2023),
         valid_years: Iterable[int] = (2024,),
         hrrr_window: Union[Tuple[Tuple[int, int], Tuple[int, int]], None] = None,
-        sample_shape: Tuple[int, int] = None,
+        sample_shape: Tuple[int, int] = [-1, -1],
         ds_factor: int = 1,
         shard: bool = False,
         overfit: bool = False,
@@ -468,7 +470,7 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         return (y_end - y_start, x_end - x_start)
 
     def _get_crop_box(self):
-        if self.sample_shape == None:
+        if self.sample_shape == [-1, -1]:
             return self.hrrr_window
 
         ((y_start, y_end), (x_start, x_end)) = self.hrrr_window
@@ -480,10 +482,11 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         return ((y0, y1), (x0, x1))
 
     def __getitem__(self, global_idx):
+        """Return a tuple of:
+        - hrrr_field: High-resolution HRRR output data
+        - gefs_field: Low-resolution GEFS input data
+        - lead_time_label: Lead time
         """
-        Return data as a dict (so we can potentially add extras, metadata, etc if desired
-        """
-        torch.cuda.nvtx.range_push("hrrr_dataloader:get")
         if self.overfit:
             global_idx = 42
         time_index = self._global_idx_to_datetime(global_idx)
@@ -505,7 +508,7 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         )
         gefs_sample = self.normalize_input(gefs_sample)
         torch.cuda.nvtx.range_pop()
-        return hrrr_sample, gefs_sample, global_idx, int(time_index[-2:]) // 3
+        return hrrr_sample, gefs_sample, int(time_index[-2:]) // 3
 
     def _global_idx_to_datetime(self, global_idx):
         """

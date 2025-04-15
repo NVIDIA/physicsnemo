@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+    - base_all
+
+# Hyperparameters
+hp:
+    training_duration: 1000000
+    # Training duration based on the number of processed samples
+    total_batch_size: 1
+    # Total batch size
+    batch_size_per_gpu: 1
+    # Batch size per GPU
+
+perf:
+    songunet_checkpoint_level: 2
+
+# I/O
+io:
+    print_progress_freq: 1
+    # How often to print progress
+    save_checkpoint_freq: 5
+    # How often to save the checkpoints, measured in number of processed samples
