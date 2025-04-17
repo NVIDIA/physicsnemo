@@ -713,6 +713,7 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
         del os.environ["MASTER_ADDR"]
         del os.environ["MASTER_PORT"]
 
+
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
 
@@ -875,4 +876,3 @@ def test_power_spectrum(device):
     assert (power[0, 0] < 1e-6).sum() > (
         power[0, 0].numel() * 0.9
     )  # Most bins are zero
-

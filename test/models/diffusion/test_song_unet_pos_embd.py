@@ -242,6 +242,7 @@ def test_fails_if_grid_is_invalid():
             N_grid_channels=11,
         )
 
+
 # Skip CPU tests because too slow
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims(device):
@@ -276,6 +277,7 @@ def test_song_unet_optims(device):
     # Check Combo
     model, invar = setup_model()
     assert common.validate_combo_optims(model, (*invar,))
+
 
 # Skip CPU tests because too slow
 @pytest.mark.parametrize("device", ["cuda:0"])
