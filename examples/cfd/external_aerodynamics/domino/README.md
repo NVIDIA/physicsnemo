@@ -36,7 +36,8 @@ dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
 To train and test the DoMINO model on AWS dataset, follow these steps:
 
-1. Download the DrivAer ML dataset using the provided `download_aws_dataset.sh` script.
+1. Download the DrivAer ML dataset using the provided `download_aws_dataset.sh` script or
+   using the [Hugging Face repo](https://huggingface.co/datasets/neashton/drivaerml).
 
 2. Specify the configuration settings in `conf/config.yaml`.
 
