@@ -15,7 +15,24 @@
 # limitations under the License.
 
 import pytest
+import time
+from collections import defaultdict
 
+file_timings = defaultdict(float)
+
+# Total time per file
+file_timings = defaultdict(float)
+
+def pytest_runtest_logreport(report):
+    if report.when == "call":
+        # report.nodeid format: path::TestClass::test_name
+        filename = report.nodeid.split("::")[0]
+        file_timings[filename] += report.duration
+
+def pytest_sessionfinish(session, exitstatus):
+    print("\n=== Test durations by file ===")
+    for filename, duration in sorted(file_timings.items(), key=lambda x: x[1], reverse=True):
+        print(f"{filename}: {duration:.2f} seconds")
 
 def pytest_addoption(parser):
     parser.addoption(
