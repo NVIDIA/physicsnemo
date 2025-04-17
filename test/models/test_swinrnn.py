@@ -23,6 +23,7 @@ from physicsnemo.models.swinvrnn import SwinRNN
 
 from . import common
 
+
 # Skip CPU tests because too slow
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_swinrnn_forward(device):
