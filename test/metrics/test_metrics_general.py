@@ -789,8 +789,7 @@ def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
 def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
     one = torch.ones([1], device=device, dtype=torch.float32)
 
-    # Reduced number of samples from 100_000 to 10_000
-    x = torch.randn((10_000, 10, 10), device=device, dtype=torch.float32)
+    x = torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)
     bin_edges, bin_counts = hist.histogram(x, bins=30)
     entropy = ent.entropy_from_counts(bin_counts, bin_edges, normalized=False)
     assert entropy.shape == (10, 10)
@@ -812,18 +811,18 @@ def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
         )
 
     # Test Maximum Entropy
-    x = torch.rand((10_000, 10, 10), device=device, dtype=torch.float32)
+    x = torch.rand((100_000, 10, 10), device=device, dtype=torch.float32)
     bin_edges, bin_counts = hist.histogram(x, bins=30)
     entropy = ent.entropy_from_counts(bin_counts, bin_edges, normalized=True)
     assert entropy.shape == (10, 10)
     assert torch.allclose(entropy, one, rtol=rtol, atol=atol)
 
     # Test Relative Entropy
-    x = torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)
+    x = torch.randn((100_000, 10, 10), device=device, dtype=torch.float32)
     bin_edges, x_bin_counts = hist.histogram(x, bins=30)
-    x1 = torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)
+    x1 = torch.randn((100_000, 10, 10), device=device, dtype=torch.float32)
     _, x1_bin_counts = hist.histogram(x1, bins=bin_edges)
-    x2 = 0.1 * torch.randn((10_000, 10, 10), device=device, dtype=torch.float32)
+    x2 = 0.1 * torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)
     _, x2_bin_counts = hist.histogram(x2, bins=bin_edges)
 
     rel_ent_1 = ent.relative_entropy_from_counts(x_bin_counts, x1_bin_counts, bin_edges)
