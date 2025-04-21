@@ -53,8 +53,6 @@ __all__ = ["ball_query_layer_wrapper"]
 def ring_ball_query(
     points1: ShardTensor,
     points2: ShardTensor,
-    lengths1: Union[torch.Tensor, ShardTensor],
-    lengths2: Union[torch.Tensor, ShardTensor],
     bq_kwargs: Any,
 ) -> Tuple[ShardTensor, ShardTensor, ShardTensor]:
     """
@@ -90,8 +88,6 @@ def ring_ball_query(
     # Now, get the inputs locally:
     local_points1 = points1.to_local()
     local_points2 = points2.to_local()
-    # local_lengths1 = lengths1.to_local()
-    # local_lengths2 = lengths2.to_local()
 
     # Get the shard sizes for the point cloud going around the ring.
     # We've already checked that the mesh is 1D so call the '0' index.
@@ -101,8 +97,6 @@ def ring_ball_query(
     mapping_shard, num_neighbors_shard, outputs_shard = RingBallQuery.apply(
         local_points1,
         local_points2,
-        lengths1,
-        lengths2,
         mesh,
         ring_config,
         p2_shard_sizes,
@@ -276,8 +270,6 @@ class RingBallQuery(torch.autograd.Function):
         ctx: torch.autograd.function.FunctionCtx,
         points1: torch.Tensor,
         points2: torch.Tensor,
-        lengths1: torch.Tensor,
-        lengths2: torch.Tensor,
         mesh: Any,
         ring_config: RingPassingConfig,
         shard_sizes: list,
@@ -448,8 +440,6 @@ class RingBallQuery(torch.autograd.Function):
             None,
             None,
             None,
-            None,
-            None,
         )
 
 
@@ -496,11 +486,7 @@ def ball_query_layer_wrapper(
         Tuple of (mapping, num_neighbors, outputs) as torch.Tensor or ShardTensor
     """
 
-    points1, points2, lengths1, lengths2, bq_kwargs = repackage_ball_query_args(
-        *args, **kwargs
-    )
-
-    print(bq_kwargs)
+    points1, points2, bq_kwargs = repackage_ball_query_args(*args, **kwargs)
 
     # If inputs are ShardTensors, handle them appropriately
     if all(isinstance(t, ShardTensor) for t in (points1, points2)):
@@ -522,7 +508,7 @@ def ball_query_layer_wrapper(
         if isinstance(points2_placement, Shard):
             # We need a ring
             mapping, num_neighbors, outputs = ring_ball_query(
-                points1, points2, lengths1, lengths2, bq_kwargs
+                points1, points2, bq_kwargs
             )
         else:
             # No ring is needed
@@ -534,8 +520,6 @@ def ball_query_layer_wrapper(
             mapping, num_neighbors, outputs = ball_query_layer(
                 local_p1,
                 local_p2,
-                lengths1,
-                lengths2,
                 **bq_kwargs,
             )
 
@@ -553,7 +537,7 @@ def ball_query_layer_wrapper(
 
     # If inputs are regular torch tensors, just call the original function
     elif all(isinstance(t, torch.Tensor) for t in (points1, points2)):
-        return ball_query_layer(points1, points2, lengths1, lengths2, **bq_kwargs)
+        return ball_query_layer(points1, points2, **bq_kwargs)
 
     # If inputs are mixed types, raise an error
     else:
@@ -565,8 +549,6 @@ def ball_query_layer_wrapper(
 def repackage_ball_query_args(
     points1: Union[torch.Tensor, ShardTensor],
     points2: Union[torch.Tensor, ShardTensor],
-    lengths1: Union[torch.Tensor, ShardTensor],
-    lengths2: Union[torch.Tensor, ShardTensor],
     k: int,
     radius: float,
     hash_grid: wp.HashGrid,
@@ -597,8 +579,6 @@ def repackage_ball_query_args(
         Tuple containing:
         - points1 tensor
         - points2 tensor
-        - lengths1 tensor
-        - lengths2 tensor
         - Dict of ball query configuration parameters
     """
     # Extract any additional parameters that might be in kwargs
@@ -613,4 +593,4 @@ def repackage_ball_query_args(
     if kwargs:
         return_kwargs.update(kwargs)
 
-    return points1, points2, lengths1, lengths2, return_kwargs
+    return points1, points2, return_kwargs

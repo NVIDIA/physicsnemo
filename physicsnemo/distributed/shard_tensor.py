@@ -541,6 +541,9 @@ class ShardTensor(DTensor):
         )
         return _ToTorchTensor.apply(redist_res, grad_placements)
 
+    def backward(self, *args, **kwargs):
+        return self.to_local().backward(*args, **kwargs)
+
 
 def scatter_tensor(
     tensor: torch.Tensor,

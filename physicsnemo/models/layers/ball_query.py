@@ -304,7 +304,9 @@ class BallQueryLayer(torch.nn.Module):
         self.hash_grid = wp.HashGrid(grid_size, grid_size, grid_size)
 
     def forward(self, points1, points2):
-        return BallQuery.apply(
+        # Why not just call the function directly?
+        # Using a functional interface makes a distributed interception easier.
+        return ball_query_layer(
             points1,
             points2,
             self.k,
