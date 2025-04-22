@@ -118,13 +118,10 @@ def signed_distance_field(
     # If cupy arrays come in, we have to convert them to numpy arrays:
     return_cupy = False
     if isinstance(mesh_vertices, cp.ndarray):
-        mesh_vertices = mesh_vertices.get()
         return_cupy = True
     if isinstance(mesh_indices, cp.ndarray):
-        mesh_indices = mesh_indices.get()
         return_cupy = True
     if isinstance(input_points, cp.ndarray):
-        input_points = input_points.get()
         return_cupy = True
 
     # Convert numpy to warp arrays:
@@ -135,7 +132,6 @@ def signed_distance_field(
 
     mesh = wp.Mesh(mesh_vertices, mesh_indices)
 
-    # sdf_points = wp.array(input_points, dtype=wp.vec3)
     sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=sdf_points.device)
     sdf_hit_point = wp.zeros(
         shape=sdf_points.shape, dtype=wp.vec3f, device=sdf_points.device

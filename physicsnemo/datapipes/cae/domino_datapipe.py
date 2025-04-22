@@ -513,6 +513,10 @@ class DoMINODataPipe(Dataset):
 
         xp = self.array_provider
 
+        # Make sure the mesh_indices_flattened is an integer array:
+        if mesh_indices_flattened.dtype != xp.int32:
+            mesh_indices_flattened = mesh_indices_flattened.astype(xp.int32)
+
         length_scale = xp.amax(xp.amax(stl_vertices, 0) - xp.amin(stl_vertices, 0))
 
         center_of_mass = calculate_center_of_mass(stl_centers, stl_sizes)
