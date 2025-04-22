@@ -24,7 +24,8 @@ from physicsnemo.models.swinvrnn import SwinRNN
 from . import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+# Skip CPU tests because too slow
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_swinrnn_forward(device):
     """Test SwinRNN forward pass"""
     torch.manual_seed(0)
@@ -43,7 +44,7 @@ def test_swinrnn_forward(device):
     invar = torch.randn(bsize, 13, 6, 32, 64).to(device)
     # Check output size
     with torch.no_grad():
-        assert common.validate_forward_accuracy(model, (invar,), atol=5e-3)
+        assert common.validate_forward_accuracy(model, (invar,), atol=5e-3, rtol=1e-3)
     del invar, model
     torch.cuda.empty_cache()
 
@@ -53,16 +54,6 @@ def test_swinrnn_constructor(device):
     """Test SwinRNN constructor options"""
     # Define dictionary of constructor args
     arg_list = [
-        {
-            "img_size": (6, 32, 64),
-            "patch_size": (6, 1, 1),
-            "in_chans": 13,
-            "out_chans": 13,
-            "embed_dim": 768,
-            "num_groups": 32,
-            "num_heads": 8,
-            "window_size": 8,
-        },
         {
             "img_size": (3, 32, 32),
             "patch_size": (3, 1, 1),

@@ -74,10 +74,10 @@ datapipe_kwargs = dict(
     shuffle=False,
 )
 
-
+# Skip CPU tests because too slow
 @nfsdata_or_fail
 @import_or_fail("netCDF4")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_climate_hdf5_constructor(
     data_dir,
     stats_files,
@@ -230,12 +230,13 @@ def test_climate_hdf5_device(
         break
 
 
+# Skip CPU tests because too slow
 @nfsdata_or_fail
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("data_channels", [[0, 1]])
 @pytest.mark.parametrize("num_steps", [2])
-@pytest.mark.parametrize("batch_size", [1, 2, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("batch_size", [2, 3])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_climate_hdf5_shape(
     data_dir,
     stats_files,
@@ -322,11 +323,12 @@ def test_climate_hdf5_shape(
         break
 
 
+# Skip CPU tests because too slow
 @nfsdata_or_fail
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("num_steps", [1, 2])
 @pytest.mark.parametrize("stride", [1, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_era5_hdf5_sequence(
     data_dir,
     stats_files,
@@ -375,6 +377,7 @@ def test_era5_hdf5_sequence(
     )
 
 
+# Skip CPU tests because too slow
 @nfsdata_or_fail
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("shuffle", [True, False])

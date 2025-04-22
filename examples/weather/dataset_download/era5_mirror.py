@@ -196,6 +196,8 @@ class ERA5Mirror:
 
         # Download the data
         ds = self.download_chunk(variable, year, month, hours, pressure_level)
+        if "valid_time" in ds.dims:
+            ds = ds.rename({"valid_time": "time"})
 
         # Create the Zarr path
         zarr_path = self.variable_to_zarr_name(variable, pressure_level)
