@@ -203,13 +203,13 @@ class ConstantCoupler:
             :, :, :, self.coupled_channel_indices, :, :
         ].permute(2, 0, 3, 1, 4, 5)
         self.preset_coupled_fields = th.empty(
-            [self.coupled_integration_dim, self.batch_size, self.timevar_dim]
+            [self.coupled_integration_dim, coupled_fields.shape[1], self.timevar_dim]
             + list(self.spatial_dims)
         )
         # we use a constant set of values so we just copy time 0
         for i in range(len(self.preset_coupled_fields)):
             self.preset_coupled_fields[i, :, :, :, :, :] = coupled_fields[
-                0, :, -1, :, :, :
+                0, :, -1:, :, :, :
             ]
         # flag for construct integrated coupling method to use this array
         self.coupled_mode = True
