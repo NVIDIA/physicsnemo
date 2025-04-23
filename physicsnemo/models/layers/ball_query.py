@@ -277,9 +277,7 @@ class BallQueryLayer(torch.nn.Module):
         self.hash_grid = wp.HashGrid(grid_size, grid_size, grid_size)
 
     def forward(
-        self,
-        points1: torch.Tensor,
-        points2: torch.Tensor
+        self, points1: torch.Tensor, points2: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Performs ball query operation to find neighboring points within a specified radius.

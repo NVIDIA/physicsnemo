@@ -451,6 +451,7 @@ class GeometryRep(nn.Module):
 
         return encoding_g
 
+
 class NNBasisFunctions(nn.Module):
     """Basis function layer for point clouds"""
 
