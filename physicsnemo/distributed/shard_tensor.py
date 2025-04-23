@@ -379,8 +379,6 @@ class ShardTensor(DTensor):
 
         dispatch_res = DTensor._op_dispatcher.dispatch(func, args, kwargs or {})
 
-        # dispatch_res = ShardTensor._op_dispatcher.dispatch(func, args, kwargs or {})
-
         # Return a shard tensor instead of a dtensor.
         # ShardTensor inherits from DTensor and can lazy-init from for efficiency
         if isinstance(dispatch_res, DTensor):
@@ -542,6 +540,20 @@ class ShardTensor(DTensor):
         return _ToTorchTensor.apply(redist_res, grad_placements)
 
     def backward(self, *args, **kwargs):
+
+        # Before calling backward, we need to resolve any partial placements.
+        new_placements = []
+        needs_redistribute = False
+        for placement in self._spec.placements:
+            if placement.is_partial():
+                new_placements.append(Replicate())
+                needs_redistribute = True
+            else:
+                new_placements.append(placement)
+
+        if needs_redistribute:
+            self = self.redistribute(placements=new_placements)
+
         return self.to_local().backward(*args, **kwargs)
 
 

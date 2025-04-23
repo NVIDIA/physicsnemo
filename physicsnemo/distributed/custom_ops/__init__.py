@@ -21,7 +21,7 @@ try:
     check_module_requirements("physicsnemo.distributed.shard_tensor")
 
     from ._reductions import sharded_mean_wrapper
-    from ._tensor_ops import select_rules, unbind_rules
+    from ._tensor_ops import select_backward_rules, select_rules, unbind_rules
 
 except ImportError:
     pass
