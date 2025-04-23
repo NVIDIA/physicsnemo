@@ -33,6 +33,8 @@ import re
 import torch
 import torchinfo
 
+from typing import Literal
+
 import apex
 import numpy as np
 import hydra
@@ -52,9 +54,10 @@ from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 from physicsnemo.datapipes.cae.domino_datapipe import (
+    DoMINODataPipe,
     compute_scaling_factors,
     create_domino_dataset,
-    domino_collate_fn,
+    # domino_collate_fn,
 )
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
@@ -91,6 +94,28 @@ def mse_loss_fn(output, target, padded_value=-10):
     masked_truth = torch.sum(((target) ** 2.0) * mask, (0, 1)) / torch.sum(mask, (0, 1))
     loss = torch.mean(masked_loss)
     return loss
+
+
+def loss_fn(
+    output: torch.Tensor,
+    target: torch.Tensor,
+    loss_type: Literal["mse", "rmse"],
+    padded_value: float = -10,
+):
+    mask = abs(target - padded_value) > 1e-3
+
+    if loss_type == "rmse":
+        dims = (0, 1)
+    else:
+        dims = None
+
+    num = torch.sum(mask * (output - target) ** 2.0, dims)
+    if loss_type == "rmse":
+        denom = torch.sum(mask * target**2.0, dims)
+    else:
+        denom = torch.sum(mask)
+
+    return torch.mean(num / denom)
 
 
 def mse_loss_fn_surface(output, target, normals, padded_value=-10):
@@ -182,6 +207,31 @@ def relative_loss_fn_surface(output, target, normals, padded_value=-10):
     )
     loss = loss / 4
     return loss
+
+
+def loss_fn_surface(output, target, loss_type: Literal["mse", "rmse"]):
+
+    # Separate the scalar and vector components:
+    output_scalar, output_vector = torch.split(output, [1, 3], dim=2)
+    target_scalar, target_vector = torch.split(target, [1, 3], dim=2)
+
+    numerator = torch.mean((output_scalar - target_scalar) ** 2.0)
+    vector_diff_sq = torch.mean((target_vector - output_vector) ** 2.0, (0, 1))
+    if loss_type == "mse":
+        masked_loss_pres = numerator
+        masked_loss_ws = torch.sum(vector_diff_sq)
+    else:
+        denom = torch.mean((target_scalar) ** 2.0)
+        masked_loss_pres = numerator / denom
+
+        # Compute the mean diff**2 of the vector component, leave the last dimension:
+        masked_loss_ws_num = vector_diff_sq
+        masked_loss_ws_denom = torch.mean((target_vector) ** 2.0, (0, 1))
+        masked_loss_ws = torch.sum(masked_loss_ws_num / masked_loss_ws_denom)
+
+    loss = masked_loss_pres + masked_loss_ws
+
+    return loss / 4.0
 
 
 def relative_loss_fn_area(
@@ -312,22 +362,65 @@ def mse_loss_fn_area(
     return loss
 
 
-def integral_loss_fn(output, target, area, normals, padded_value=-10):
-    vel_inlet = 30.0  # Get this from the dataset
-    mask = abs(target - padded_value) > 1e-3
-    area = torch.unsqueeze(area, -1)
-    output_true = target * mask * area * (vel_inlet) ** 2.0
-    output_pred = output * mask * area * (vel_inlet) ** 2.0
+def loss_fn_area(
+    output,
+    target,
+    normals,
+    area,
+    area_scaling_factor,
+    loss_type: Literal["mse", "rmse"],
+):
 
-    output_true[:, :, 0] = output_true[:, :, 0] * normals[:, :, 0]
-    output_pred[:, :, 0] = output_pred[:, :, 0] * normals[:, :, 0]
+    scale_factor = 1.0  # Get this from the dataset
+    area = area * area_scaling_factor
+    area_scale_factor = area * scale_factor**2.0
 
-    masked_pred = torch.sum(output_pred, (1))
-    masked_truth = torch.sum(output_true, (1))
+    # Separate the scalar and vector components.
+    target_scalar, target_vector = torch.split(
+        target * area_scale_factor, [1, 3], dim=2
+    )
+    output_scalar, output_vector = torch.split(
+        output * area_scale_factor, [1, 3], dim=2
+    )
 
-    loss = (masked_pred - masked_truth) ** 2.0
-    loss = torch.mean(loss)
-    return loss
+    # Apply the normals to the scalar components (only [:,:,0]):
+    normals, _ = torch.split(normals, [1, normals.shape[-1] - 1], dim=2)
+    target_scalar = target_scalar * normals
+    output_scalar = output_scalar * normals
+
+    # Compute the mean diff**2 of the scalar component:
+    masked_loss_pres = torch.mean(((output_scalar - target_scalar) ** 2.0), dim=(0, 1))
+    if loss_type == "rmse":
+        masked_loss_pres /= torch.mean(target_scalar**2.0, dim=(0, 1))
+
+    # Compute the mean diff**2 of the vector component, leave the last dimension:
+    masked_loss_ws = torch.mean((target_vector - output_vector) ** 2.0, (0, 1))
+
+    if loss_type == "rmse":
+        masked_loss_ws /= torch.mean((target_vector) ** 2.0, (0, 1))
+
+    # Combine the scalar and vector components:
+    loss_c = 0.25 * (masked_loss_pres + torch.sum(masked_loss_ws))
+
+    return loss_c
+
+
+# def integral_loss_fn(output, target, area, normals, padded_value=-10):
+#     vel_inlet = 30.0  # Get this from the dataset
+#     mask = abs(target - padded_value) > 1e-3
+
+#     output_true = target * mask * area * (vel_inlet) ** 2.0
+#     output_pred = output * mask * area * (vel_inlet) ** 2.0
+
+#     output_true[:, :, 0] = output_true[:, :, 0] * normals[:, :, 0]
+#     output_pred[:, :, 0] = output_pred[:, :, 0] * normals[:, :, 0]
+
+#     masked_pred = torch.sum(output_pred, (1))
+#     masked_truth = torch.sum(output_true, (1))
+
+#     loss = (masked_pred - masked_truth) ** 2.0
+#     loss = torch.mean(loss)
+#     return loss
 
 
 def integral_loss_fn_new(output, target, area, normals, padded_value=-10):
@@ -339,7 +432,7 @@ def integral_loss_fn_new(output, target, area, normals, padded_value=-10):
 def lift_loss_fn(output, target, area, normals, padded_value=-10):
     vel_inlet = 30.0  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
-    area = torch.unsqueeze(area, -1)
+
     output_true = target * mask * area * (vel_inlet) ** 2.0
     output_pred = output * mask * area * (vel_inlet) ** 2.0
 
@@ -360,7 +453,6 @@ def lift_loss_fn(output, target, area, normals, padded_value=-10):
 def drag_loss_fn(output, target, area, normals, padded_value=-10):
     vel_inlet = 30.0  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
-    area = torch.unsqueeze(area, -1)
     output_true = target * mask * area * (vel_inlet) ** 2.0
     output_pred = output * mask * area * (vel_inlet) ** 2.0
 
@@ -382,6 +474,7 @@ def validation_step(
     dataloader,
     model,
     device,
+    logger,
     use_sdf_basis=False,
     use_surface_normals=False,
     integral_scaling_factor=1.0,
@@ -397,7 +490,7 @@ def validation_step(
             with autocast(enabled=True):
 
                 prediction_vol, prediction_surf = model(sampled_batched)
-
+                total_loss_terms = []
                 if prediction_vol is not None:
                     target_vol = sampled_batched["volume_fields"]
                     if loss_fn_type.loss_type == "rmse":
@@ -409,11 +502,22 @@ def validation_step(
                             mse_loss_fn(prediction_vol, target_vol, padded_value=-10)
                             * vol_loss_scaling
                         )
+                    alternate_loss_vol = loss_fn(
+                        prediction_vol,
+                        target_vol,
+                        loss_fn_type.loss_type,
+                        padded_value=-10,
+                    )
+                    total_loss_terms.append(alternate_loss_vol)
+                    logger.info(
+                        f"loss_fn_vol agreement: {torch.allclose(loss_norm_vol, alternate_loss_vol)}"
+                    )
 
                 if prediction_surf is not None:
                     target_surf = sampled_batched["surface_fields"]
                     surface_normals = sampled_batched["surface_normals"]
                     surface_areas = sampled_batched["surface_areas"]
+                    surface_areas = torch.unsqueeze(surface_areas, -1)
                     if loss_fn_type.loss_type == "rmse":
                         loss_norm_surf = relative_loss_fn_surface(
                             prediction_surf,
@@ -460,6 +564,37 @@ def validation_step(
                         )
                     ) * integral_scaling_factor  # * 0.0
 
+                    alternate_loss_surf = loss_fn_surface(
+                        prediction_surf,
+                        target_surf,
+                        loss_fn_type.loss_type,
+                    )
+                    alternate_loss_surf_area = loss_fn_area(
+                        prediction_surf,
+                        target_surf,
+                        surface_normals,
+                        surface_areas,
+                        area_scaling_factor=loss_fn_type.area_weighing_factor,
+                        loss_type=loss_fn_type.loss_type,
+                    )
+                    if loss_fn_type.loss_type == "mse":
+                        alternate_loss_surf = alternate_loss_surf * surf_loss_scaling
+                        alternate_loss_surf_area = (
+                            alternate_loss_surf_area * surf_loss_scaling
+                        )
+
+                    total_loss_terms.append(0.5 * alternate_loss_surf)
+                    total_loss_terms.append(0.5 * alternate_loss_surf_area)
+                    total_loss_terms.append(loss_integral)
+                    logger.info(
+                        f"loss_fn_surface agreement: {torch.allclose(alternate_loss_surf, loss_norm_surf)}"
+                    )
+                    logger.info(
+                        f"loss_fn_area agreement: {torch.allclose(alternate_loss_surf_area, loss_norm_surf_area)}"
+                    )
+
+                    total_loss = sum(total_loss_terms)
+
                 if prediction_surf is not None and prediction_vol is not None:
                     vloss = (
                         loss_norm_vol
@@ -475,6 +610,9 @@ def validation_step(
                         + 1.0 * loss_integral
                         + 0.5 * loss_norm_surf_area
                     )
+                logger.info(
+                    f"total loss agreement: {torch.allclose(total_loss, vloss)}"
+                )
 
             running_vloss += vloss
 
@@ -514,27 +652,35 @@ def train_epoch(
         with autocast(enabled=True):
             with nvtx.range("Model Forward Pass"):
                 prediction_vol, prediction_surf = model(sampled_batched)
-
+            total_loss_terms = []
             nvtx.range_push("Loss Calculation")
             if prediction_vol is not None:
                 target_vol = sampled_batched["volume_fields"]
                 if loss_fn_type.loss_type == "rmse":
-                    loss_norm_vol = relative_loss_fn(
+                    loss_norm_vol = relative_loss_fn(  # done
                         prediction_vol, target_vol, padded_value=-10
                     )
                 else:
-                    loss_norm_vol = (
+                    loss_norm_vol = (  # done
                         mse_loss_fn(prediction_vol, target_vol, padded_value=-10)
                         * vol_loss_scaling
                     )
+                alternate_loss_vol = loss_fn(
+                    prediction_vol, target_vol, loss_fn_type.loss_type, padded_value=-10
+                )
+                total_loss_terms.append(alternate_loss_vol)
+                logger.info(
+                    f"loss_fn_vol agreement: {torch.allclose(loss_norm_vol, alternate_loss_vol)}"
+                )
 
             if prediction_surf is not None:
 
                 target_surf = sampled_batched["surface_fields"]
                 surface_areas = sampled_batched["surface_areas"]
+                surface_areas = torch.unsqueeze(surface_areas, -1)
                 surface_normals = sampled_batched["surface_normals"]
                 if loss_fn_type.loss_type == "rmse":
-                    loss_norm_surf = relative_loss_fn_surface(
+                    loss_norm_surf = relative_loss_fn_surface(  # done
                         prediction_surf, target_surf, surface_normals, padded_value=-10
                     )
                     loss_norm_surf_area = relative_loss_fn_area(
@@ -566,6 +712,36 @@ def train_epoch(
                         )
                         * surf_loss_scaling
                     )
+                alternate_loss_surf = loss_fn_surface(
+                    prediction_surf,
+                    target_surf,
+                    loss_fn_type.loss_type,
+                )
+                alternate_loss_surf_area = loss_fn_area(
+                    prediction_surf,
+                    target_surf,
+                    surface_normals,
+                    surface_areas,
+                    area_scaling_factor=loss_fn_type.area_weighing_factor,
+                    loss_type=loss_fn_type.loss_type,
+                )
+
+                if loss_fn_type.loss_type == "mse":
+                    alternate_loss_surf = alternate_loss_surf * surf_loss_scaling
+                    alternate_loss_surf_area = (
+                        alternate_loss_surf_area * surf_loss_scaling
+                    )
+
+                total_loss_terms.append(0.5 * alternate_loss_surf)
+                total_loss_terms.append(0.5 * alternate_loss_surf_area)
+
+                logger.info(
+                    f"loss_fn_surface agreement: {torch.allclose(alternate_loss_surf, loss_norm_surf)}"
+                )
+                logger.info(
+                    f"loss_fn_area agreement: {torch.allclose(alternate_loss_surf_area, loss_norm_surf_area)}"
+                )
+
                 loss_integral = (
                     integral_loss_fn_new(
                         prediction_surf,
@@ -575,6 +751,8 @@ def train_epoch(
                         padded_value=-10,
                     )
                 ) * integral_scaling_factor  # * 0.0
+                total_loss_terms.append(loss_integral)
+                total_loss = sum(total_loss_terms)
 
             if prediction_vol is not None and prediction_surf is not None:
                 loss_norm = (
@@ -591,6 +769,9 @@ def train_epoch(
                     + 1.0 * loss_integral
                     + 0.5 * loss_norm_surf_area
                 )
+            logger.info(
+                f"total loss agreement: {torch.allclose(total_loss, loss_norm)}"
+            )
             nvtx.range_pop()
 
         loss = loss_norm
@@ -739,13 +920,11 @@ def main(cfg: DictConfig) -> None:
         train_dataset,
         sampler=train_sampler,
         **cfg.train.dataloader,
-        collate_fn=domino_collate_fn,
     )
     val_dataloader = DataLoader(
         val_dataset,
         sampler=val_sampler,
         **cfg.val.dataloader,
-        collate_fn=domino_collate_fn,
     )
 
     model = DoMINO(
@@ -861,6 +1040,7 @@ def main(cfg: DictConfig) -> None:
             dataloader=val_dataloader,
             model=model,
             device=dist.device,
+            logger=logger,
             use_sdf_basis=cfg.model.use_sdf_in_basis_func,
             use_surface_normals=cfg.model.use_surface_normals,
             integral_scaling_factor=initial_integral_factor,
