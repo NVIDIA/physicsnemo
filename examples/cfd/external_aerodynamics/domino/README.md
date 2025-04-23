@@ -20,6 +20,9 @@ by sampling random neighboring points within the same sub-region. The local-geom
 encoding and the computational stencil are aggregrated to predict the solutions on the
 discrete points.
 
+A preprint describing additional details about the model architecture can be found here
+[paper](https://arxiv.org/abs/2501.13350).
+
 ## Dataset
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
@@ -42,13 +45,16 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 2. Specify the configuration settings in `conf/config.yaml`.
 
 3. Run `process_data.py`. This will process VTP/VTU files and save them as npy for faster
- processing in DoMINO datapipe. Modify data_processor key in config file. The processed
-  dataset should be divided into 2 directories, for training and validation.
+ processing in DoMINO datapipe. Modify data_processor key in config file. Additionally, run
+ `cache_data.py` if using caching to decrease training time. The final processed dataset
+ should be divided and saved into 2 directories, for training and validation. Specify these
+ directories in `conf/config.yaml`
 
-4. Run `train.py` to start the training. Modify data, train and model keys in config file.
+4. Run `train.py` to start the training. Modify data, train and model keys in config file. 
+  If using cached data then use `conf/cached.yaml` instead of `conf/config.yaml`.
 
 5. Run `test.py` to test on `.vtp` / `.vtu`. Predictions are written to the same file.
- Modify eval key in config file to specify checkpoint, input and output directory.
+  Modify eval key in config file to specify checkpoint, input and output directory.
 
 6. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
@@ -70,17 +76,36 @@ To enable retraining the DoMINO model from a pre-trained checkpoint, follow the 
 5. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
 
+## DoMINO model inference on STLs
+
+The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
+ checkpoint. Follow the steps outlined below:
+
+1. Run the `inference_on_stl.py` script to perform inference on an STL.
+
+2. Specify the STL paths, velocity inlets, stencil size and model checkpoint
+ path in the script.
+
+3. The volume predictions are carried out on points sampled in a bounding box around STL.
+
+4. The surface predictions are carried out on the STL surface. The drag and lift
+ accuracy will depend on the resolution of the STL.
+
 ## Guidelines for training DoMINO model
 
 1. The DoMINO model allows for training both volume and surface fields using a single model
  but currently the recommendation is to train the volume and surface models separately. This
   can be controlled through the config file.
+
 2. MSE loss for both volume and surface model gives the best results.
+
 3. The surface and volume variable names can change but currently the code only
  supports the variables in that specific order. For example, Pressure, wall-shear
   and turb-visc for surface and velocity, pressure and turb-visc for volume.
+
 4. Bounding box is configurable and will depend on the usecase. The presets are
  suitable for the AWS DriveAer-ML dataset.
+
 5. Integral loss factor is currently set to 0.0 as it adversely impacts the training.
 
 The DoMINO model architecture is used to support the Real Time Wind Tunnel OV Blueprint

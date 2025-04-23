@@ -111,29 +111,25 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
 
             # Normalize based on computational domain
             geo_centers_vol = 2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
-            encoding_g_vol = model.module.geo_rep(geo_centers_vol, p_grid, sdf_grid)
+            encoding_g_vol = model.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
             # Normalize based on BBox around surface (car)
             geo_centers_surf = (
                 2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
             )
-            encoding_g_surf = model.module.geo_rep(
+            encoding_g_surf = model.geo_rep_surface1(
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
+            encoding_g_vol += encoding_g_surf
 
         if output_features_surf is not None:
             # Represent geometry on bounding box
             geo_centers_surf = (
                 2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
             )
-            encoding_g_surf = model.module.geo_rep(
+            encoding_g_surf = model.geo_rep_surface(
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
-
-        geo_encoding = 0.5 * encoding_g_surf
-        # Average the encodings
-        if output_features_vol is not None:
-            geo_encoding += 0.5 * encoding_g_vol
 
         if output_features_vol is not None:
             # First calculate volume predictions if required
@@ -166,8 +162,8 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     pos_normals_com_batch = pos_volume_center_of_mass[
                         :, start_idx:end_idx
                     ]
-                    geo_encoding_local = model.module.geo_encoding_local(
-                        geo_encoding, volume_mesh_centers_batch, p_grid
+                    geo_encoding_local = model.geo_encoding_local(
+                        0.5 * encoding_g_vol, volume_mesh_centers_batch, p_grid, mode="volume"
                     )
                     if cfg.model.use_sdf_in_basis_func:
                         pos_encoding = torch.cat(
@@ -180,16 +176,16 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         )
                     else:
                         pos_encoding = pos_normals_com_batch
-                    pos_encoding = model.module.position_encoder(
+                    pos_encoding = model.position_encoder(
                         pos_encoding, eval_mode="volume"
                     )
-                    tpredictions_batch = model.module.calculate_solution(
+                    tpredictions_batch = model.calculate_solution(
                         volume_mesh_centers_batch,
                         geo_encoding_local,
                         pos_encoding,
                         stream_velocity,
                         air_density,
-                        num_sample_points=20,
+                        num_sample_points=cfg.eval.stencil_size,
                         eval_mode="volume",
                     )
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
@@ -237,9 +233,6 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
 
             start_time = time.time()
 
-            surface_areas = torch.unsqueeze(surface_areas, -1)
-            surface_neighbors_areas = torch.unsqueeze(surface_neighbors_areas, -1)
-
             for p in range(subdomain_points + 1):
                 start_idx = p * point_batch_size
                 end_idx = (p + 1) * point_batch_size
@@ -262,17 +255,17 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     pos_surface_center_of_mass_batch = pos_surface_center_of_mass[
                         :, start_idx:end_idx
                     ]
-                    geo_encoding_local = model.module.geo_encoding_local_surface(
-                        0.5 * encoding_g_surf, surface_mesh_centers_batch, s_grid
+                    geo_encoding_local = model.geo_encoding_local(
+                        0.5 * encoding_g_surf, surface_mesh_centers_batch, s_grid, mode="surface"
                     )
                     pos_encoding = pos_surface_center_of_mass_batch
-                    pos_encoding = model.module.position_encoder(
+                    pos_encoding = model.position_encoder(
                         pos_encoding, eval_mode="surface"
                     )
 
                     if cfg.model.surface_neighbors:
                         tpredictions_batch = (
-                            model.module.calculate_solution_with_neighbors(
+                            model.calculate_solution_with_neighbors(
                                 surface_mesh_centers_batch,
                                 geo_encoding_local,
                                 pos_encoding,
@@ -286,7 +279,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                             )
                         )
                     else:
-                        tpredictions_batch = model.module.calculate_solution(
+                        tpredictions_batch = model.calculate_solution(
                             surface_mesh_centers_batch,
                             geo_encoding_local,
                             pos_encoding,
@@ -347,17 +340,23 @@ def main(cfg: DictConfig):
         num_surf_vars = None
 
     vol_save_path = os.path.join(
-        "outputs", cfg.project.name, "volume_scaling_factors.npy"
+        cfg.eval.scaling_param_path, "volume_scaling_factors.npy"
     )
     surf_save_path = os.path.join(
-        "outputs", cfg.project.name, "surface_scaling_factors.npy"
+        cfg.eval.scaling_param_path, "surface_scaling_factors.npy"
     )
-    if os.path.exists(vol_save_path) and os.path.exists(surf_save_path):
+    if os.path.exists(vol_save_path):
         vol_factors = np.load(vol_save_path)
-        surf_factors = np.load(surf_save_path)
     else:
         vol_factors = None
+
+    if os.path.exists(surf_save_path):
+        surf_factors = np.load(surf_save_path)
+    else:
         surf_factors = None
+
+    print("Vol factors:", vol_factors)
+    print("Surf factors:", surf_factors)
 
     model = DoMINO(
         input_features=3,
@@ -387,6 +386,7 @@ def main(cfg: DictConfig):
             gradient_as_bucket_view=True,
             static_graph=True,
         )
+        model = model.module
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
@@ -473,7 +473,7 @@ def main(cfg: DictConfig):
 
             interp_func = KDTree(surface_coordinates)
             dd, ii = interp_func.query(
-                surface_coordinates, k=cfg.model.num_surface_neighbors
+                surface_coordinates, k=cfg.eval.stencil_size+1
             )
 
             surface_neighbors = surface_coordinates[ii]
@@ -711,7 +711,36 @@ def main(cfg: DictConfig):
                 surface_fields[:, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
                 - surface_fields[:, 1] * surface_sizes[:, 0]
             )
-            print(dirname, force_x_pred, force_x_true)
+
+            force_y_pred = np.sum(
+                prediction_surf[0, :, 0] * surface_normals[:, 1] * surface_sizes[:, 0]
+                - prediction_surf[0, :, 2] * surface_sizes[:, 0]
+            )
+            force_y_true = np.sum(
+                surface_fields[:, 0] * surface_normals[:, 1] * surface_sizes[:, 0]
+                - surface_fields[:, 2] * surface_sizes[:, 0]
+            )
+
+            force_z_pred = np.sum(
+                prediction_surf[0, :, 0] * surface_normals[:, 2] * surface_sizes[:, 0]
+                - prediction_surf[0, :, 3] * surface_sizes[:, 0]
+            )
+            force_z_true = np.sum(
+                surface_fields[:, 0] * surface_normals[:, 2] * surface_sizes[:, 0]
+                - surface_fields[:, 3] * surface_sizes[:, 0]
+            )
+            print("Drag=", dirname, force_x_pred, force_x_true)
+            print("Lift=", dirname, force_z_pred, force_z_true)
+            print("Side=", dirname, force_y_pred, force_y_true)
+
+            l2_gt = np.sum(np.square(surface_fields), (0))
+            l2_error = np.sum(np.square(prediction_surf[0] - surface_fields), (0))
+
+            print(
+                "Surface L-2 norm:",
+                dirname,
+                np.sqrt(l2_error) / np.sqrt(l2_gt),
+            )
 
         if prediction_vol is not None:
             target_vol = volume_fields
@@ -732,10 +761,8 @@ def main(cfg: DictConfig):
             l2_gt = np.sum(np.square(target_vol), (0))
             l2_error = np.sum(np.square(prediction_vol - target_vol), (0))
             print(
-                "L-2 norm:",
+                "Volume L-2 norm:",
                 dirname,
-                np.sqrt(l2_error),
-                np.sqrt(l2_gt),
                 np.sqrt(l2_error) / np.sqrt(l2_gt),
             )
 

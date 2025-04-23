@@ -44,13 +44,33 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
+from nvtx import annotate as nvtx_annotate
+import torch.cuda.nvtx as nvtx
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
-from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
+from physicsnemo.datapipes.cae.domino_datapipe import (
+    compute_scaling_factors,
+    create_domino_dataset,
+    domino_collate_fn,
+)
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
+
+# This is included for GPU memory tracking:
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+import time
+
+# Initialize NVML
+nvmlInit()
+
+
+from physicsnemo.utils.profiling import profile, Profiler
+
+# Profiler().enable("line_profiler")
+# Profiler().initialize()
 
 
 def relative_loss_fn(output, target, padded_value=-10):
@@ -164,9 +184,11 @@ def relative_loss_fn_surface(output, target, normals, padded_value=-10):
     return loss
 
 
-def relative_loss_fn_area(output, target, normals, area, padded_value=-10):
+def relative_loss_fn_area(
+    output, target, normals, area, area_scaling_factor, padded_value=-10
+):
     scale_factor = 1.0  # Get this from the dataset
-    area = area * 10**4
+    area = area * area_scaling_factor
     ws_pred = torch.sqrt(
         output[:, :, 1:2] ** 2.0 + output[:, :, 2:3] ** 2.0 + output[:, :, 3:4] ** 2.0
     )
@@ -230,9 +252,11 @@ def relative_loss_fn_area(output, target, normals, area, padded_value=-10):
     return loss
 
 
-def mse_loss_fn_area(output, target, normals, area, padded_value=-10):
+def mse_loss_fn_area(
+    output, target, normals, area, area_scaling_factor, padded_value=-10
+):
     scale_factor = 1.0  # Get this from the dataset
-    area = area * 10**4
+    area = area * area_scaling_factor
     ws_pred = torch.sqrt(
         output[:, :, 1:2] ** 2.0 + output[:, :, 2:3] ** 2.0 + output[:, :, 3:4] ** 2.0
     )
@@ -325,12 +349,8 @@ def lift_loss_fn(output, target, area, normals, padded_value=-10):
     wz_true = output_true[:, :, -1]
     wz_pred = output_pred[:, :, -1]
 
-    masked_pred = torch.sum(pres_pred + wz_pred, (1)) / (
-        torch.sum(area) * (vel_inlet) ** 2.0
-    )
-    masked_truth = torch.sum(pres_true + wz_true, (1)) / (
-        torch.sum(area) * (vel_inlet) ** 2.0
-    )
+    masked_pred = torch.mean(pres_pred + wz_pred, (1))
+    masked_truth = torch.mean(pres_true + wz_true, (1))
 
     loss = (masked_pred - masked_truth) ** 2.0
     loss = torch.mean(loss)
@@ -350,12 +370,8 @@ def drag_loss_fn(output, target, area, normals, padded_value=-10):
     wx_true = output_true[:, :, 1]
     wx_pred = output_pred[:, :, 1]
 
-    masked_pred = torch.sum(pres_pred + wx_pred, (1)) / (
-        torch.sum(area) * (vel_inlet) ** 2.0
-    )
-    masked_truth = torch.sum(pres_true + wx_true, (1)) / (
-        torch.sum(area) * (vel_inlet) ** 2.0
-    )
+    masked_pred = torch.mean(pres_pred + wx_pred, (1))
+    masked_truth = torch.mean(pres_true + wx_true, (1))
 
     loss = (masked_pred - masked_truth) ** 2.0
     loss = torch.mean(loss)
@@ -369,73 +385,96 @@ def validation_step(
     use_sdf_basis=False,
     use_surface_normals=False,
     integral_scaling_factor=1.0,
-    loss_fn_type="mse",
+    loss_fn_type=None,
+    vol_loss_scaling=None,
+    surf_loss_scaling=None,
 ):
     running_vloss = 0.0
     with torch.no_grad():
         for i_batch, sample_batched in enumerate(dataloader):
             sampled_batched = dict_to_device(sample_batched, device)
 
-            prediction_vol, prediction_surf = model(sampled_batched)
+            with autocast(enabled=True):
 
-            if prediction_vol is not None:
-                target_vol = sampled_batched["volume_fields"]
-                if loss_fn_type == "rmse":
-                    loss_norm_vol = relative_loss_fn(
-                        prediction_vol, target_vol, padded_value=-10
-                    )
-                else:
-                    loss_norm_vol = mse_loss_fn(
-                        prediction_vol, target_vol, padded_value=-10
-                    )
+                prediction_vol, prediction_surf = model(sampled_batched)
 
-            if prediction_surf is not None:
-                target_surf = sampled_batched["surface_fields"]
-                surface_normals = sampled_batched["surface_normals"]
-                surface_areas = sampled_batched["surface_areas"]
-                if loss_fn_type == "rmse":
-                    loss_norm_surf = relative_loss_fn_surface(
-                        prediction_surf, target_surf, surface_normals, padded_value=-10
-                    )
-                    loss_norm_surf_area = relative_loss_fn_area(
-                        prediction_surf,
-                        target_surf,
-                        surface_normals,
-                        surface_areas,
-                        padded_value=-10,
-                    )
-                else:
-                    loss_norm_surf = mse_loss_fn_surface(
-                        prediction_surf, target_surf, surface_normals, padded_value=-10
-                    )
-                    loss_norm_surf_area = mse_loss_fn_area(
-                        prediction_surf,
-                        target_surf,
-                        surface_normals,
-                        surface_areas,
-                        padded_value=-10,
-                    )
-                loss_integral = (
-                    integral_loss_fn_new(
-                        prediction_surf,
-                        target_surf,
-                        surface_areas,
-                        surface_normals,
-                        padded_value=-10,
-                    )
-                ) * integral_scaling_factor
+                if prediction_vol is not None:
+                    target_vol = sampled_batched["volume_fields"]
+                    if loss_fn_type.loss_type == "rmse":
+                        loss_norm_vol = relative_loss_fn(
+                            prediction_vol, target_vol, padded_value=-10
+                        )
+                    else:
+                        loss_norm_vol = (
+                            mse_loss_fn(prediction_vol, target_vol, padded_value=-10)
+                            * vol_loss_scaling
+                        )
 
-            if prediction_surf is not None and prediction_vol is not None:
-                vloss = (
-                    loss_norm_vol
-                    + 0.5 * loss_norm_surf
-                    + loss_integral
-                    + 0.5 * loss_norm_surf_area
-                )
-            elif prediction_vol is not None:
-                vloss = loss_norm_vol
-            elif prediction_surf is not None:
-                vloss = 0.5 * loss_norm_surf + loss_integral + 0.5 * loss_norm_surf_area
+                if prediction_surf is not None:
+                    target_surf = sampled_batched["surface_fields"]
+                    surface_normals = sampled_batched["surface_normals"]
+                    surface_areas = sampled_batched["surface_areas"]
+                    if loss_fn_type.loss_type == "rmse":
+                        loss_norm_surf = relative_loss_fn_surface(
+                            prediction_surf,
+                            target_surf,
+                            surface_normals,
+                            padded_value=-10,
+                        )
+                        loss_norm_surf_area = relative_loss_fn_area(
+                            prediction_surf,
+                            target_surf,
+                            surface_normals,
+                            surface_areas,
+                            area_scaling_factor=loss_fn_type.area_weighing_factor,
+                            padded_value=-10,
+                        )
+                    else:
+                        loss_norm_surf = (
+                            mse_loss_fn_surface(
+                                prediction_surf,
+                                target_surf,
+                                surface_normals,
+                                padded_value=-10,
+                            )
+                            * surf_loss_scaling
+                        )
+                        loss_norm_surf_area = (
+                            mse_loss_fn_area(
+                                prediction_surf,
+                                target_surf,
+                                surface_normals,
+                                surface_areas,
+                                area_scaling_factor=loss_fn_type.area_weighing_factor,
+                                padded_value=-10,
+                            )
+                            * surf_loss_scaling
+                        )
+                    loss_integral = (
+                        integral_loss_fn_new(
+                            prediction_surf,
+                            target_surf,
+                            surface_areas,
+                            surface_normals,
+                            padded_value=-10,
+                        )
+                    ) * integral_scaling_factor  # * 0.0
+
+                if prediction_surf is not None and prediction_vol is not None:
+                    vloss = (
+                        loss_norm_vol
+                        + 0.5 * loss_norm_surf
+                        + 1.0 * loss_integral
+                        + 0.5 * loss_norm_surf_area
+                    )
+                elif prediction_vol is not None:
+                    vloss = loss_norm_vol
+                elif prediction_surf is not None:
+                    vloss = (
+                        0.5 * loss_norm_surf
+                        + 1.0 * loss_integral
+                        + 0.5 * loss_norm_surf_area
+                    )
 
             running_vloss += vloss
 
@@ -444,38 +483,49 @@ def validation_step(
     return avg_vloss
 
 
+@profile
 def train_epoch(
     dataloader,
     model,
     optimizer,
     scaler,
     tb_writer,
+    logger,
+    gpu_handle,
     epoch_index,
     device,
     integral_scaling_factor,
     loss_fn_type,
+    vol_loss_scaling=None,
+    surf_loss_scaling=None,
 ):
+
+    dist = DistributedManager()
 
     running_loss = 0.0
     last_loss = 0.0
     loss_interval = 1
 
+    gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
     for i_batch, sample_batched in enumerate(dataloader):
 
         sampled_batched = dict_to_device(sample_batched, device)
 
-        with autocast(enabled=False):
-            prediction_vol, prediction_surf = model(sampled_batched)
+        with autocast(enabled=True):
+            with nvtx.range("Model Forward Pass"):
+                prediction_vol, prediction_surf = model(sampled_batched)
 
+            nvtx.range_push("Loss Calculation")
             if prediction_vol is not None:
                 target_vol = sampled_batched["volume_fields"]
-                if loss_fn_type == "rmse":
+                if loss_fn_type.loss_type == "rmse":
                     loss_norm_vol = relative_loss_fn(
                         prediction_vol, target_vol, padded_value=-10
                     )
                 else:
-                    loss_norm_vol = mse_loss_fn(
-                        prediction_vol, target_vol, padded_value=-10
+                    loss_norm_vol = (
+                        mse_loss_fn(prediction_vol, target_vol, padded_value=-10)
+                        * vol_loss_scaling
                     )
 
             if prediction_surf is not None:
@@ -483,7 +533,7 @@ def train_epoch(
                 target_surf = sampled_batched["surface_fields"]
                 surface_areas = sampled_batched["surface_areas"]
                 surface_normals = sampled_batched["surface_normals"]
-                if loss_fn_type == "rmse":
+                if loss_fn_type.loss_type == "rmse":
                     loss_norm_surf = relative_loss_fn_surface(
                         prediction_surf, target_surf, surface_normals, padded_value=-10
                     )
@@ -492,18 +542,29 @@ def train_epoch(
                         target_surf,
                         surface_normals,
                         surface_areas,
+                        area_scaling_factor=loss_fn_type.area_weighing_factor,
                         padded_value=-10,
                     )
                 else:
-                    loss_norm_surf = mse_loss_fn_surface(
-                        prediction_surf, target_surf, surface_normals, padded_value=-10
+                    loss_norm_surf = (
+                        mse_loss_fn_surface(
+                            prediction_surf,
+                            target_surf,
+                            surface_normals,
+                            padded_value=-10,
+                        )
+                        * surf_loss_scaling
                     )
-                    loss_norm_surf_area = mse_loss_fn_area(
-                        prediction_surf,
-                        target_surf,
-                        surface_normals,
-                        surface_areas,
-                        padded_value=-10,
+                    loss_norm_surf_area = (
+                        mse_loss_fn_area(
+                            prediction_surf,
+                            target_surf,
+                            surface_normals,
+                            surface_areas,
+                            area_scaling_factor=loss_fn_type.area_weighing_factor,
+                            padded_value=-10,
+                        )
+                        * surf_loss_scaling
                     )
                 loss_integral = (
                     integral_loss_fn_new(
@@ -513,21 +574,24 @@ def train_epoch(
                         surface_normals,
                         padded_value=-10,
                     )
-                ) * integral_scaling_factor
+                ) * integral_scaling_factor  # * 0.0
 
             if prediction_vol is not None and prediction_surf is not None:
                 loss_norm = (
                     loss_norm_vol
                     + 0.5 * loss_norm_surf
-                    + loss_integral
+                    + 1.0 * loss_integral
                     + 0.5 * loss_norm_surf_area
                 )
             elif prediction_vol is not None:
                 loss_norm = loss_norm_vol
             elif prediction_surf is not None:
                 loss_norm = (
-                    0.5 * loss_norm_surf + loss_integral + 0.5 * loss_norm_surf_area
+                    0.5 * loss_norm_surf
+                    + 1.0 * loss_integral
+                    + 0.5 * loss_norm_surf_area
                 )
+            nvtx.range_pop()
 
         loss = loss_norm
         loss = loss / loss_interval
@@ -540,243 +604,64 @@ def train_epoch(
         # Gather data and report
         running_loss += loss.item()
 
-        if prediction_vol is not None and prediction_surf is not None:
-            print(
-                f"Device {device}, batch processed: {i_batch + 1}, loss volume: {loss_norm_vol:.5f} \
-            , loss surface: {loss_norm_surf:.5f}, loss integral: {loss_integral:.5f}, loss surface area: {loss_norm_surf_area:.5f}"
-            )
-        elif prediction_vol is not None:
-            print(
-                f"Device {device}, batch processed: {i_batch + 1}, loss volume: {loss_norm_vol:.5f}"
-            )
-        elif prediction_surf is not None:
-            print(
-                f"Device {device}, batch processed: {i_batch + 1} \
-            , loss surface: {loss_norm_surf:.5f}, loss integral: {loss_integral:.5f}, loss surface area: {loss_norm_surf_area:.5f}"
-            )
+        gpu_end_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+        gpu_memory_used = gpu_end_info.used / (1024**3)
+        gpu_memory_delta = (gpu_end_info.used - gpu_start_info.used) / (1024**3)
+
+        logging_string = f"Device {device}, batch processed: {i_batch + 1}\n"
+        if prediction_vol is not None:
+            logging_string += f"  loss volume: {loss_norm_vol:.5f}\n"
+        if prediction_surf is not None:
+            logging_string += f"  loss surface: {loss_norm_surf:.5f}\n"
+            logging_string += f"  loss integral: {loss_integral:.5f}\n"
+            logging_string += f"  loss surface area: {loss_norm_surf_area:.5f}\n"
+        logging_string += f"  GPU memory used: {gpu_memory_used} Gb\n"
+        logging_string += f"  GPU memory delta: {gpu_memory_delta} Gb\n"
+        logger.info(logging_string)
+        gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+
+        # if prediction_vol is not None and prediction_surf is not None:
+        #     logger.info(
+        #         f"Device {device}, batch processed: {i_batch + 1}, loss volume: {loss_norm_vol:.5f} \
+        #     , loss surface: {loss_norm_surf:.5f}, loss integral: {loss_integral:.5f}, loss surface area: {loss_norm_surf_area:.5f}"
+        #     )
+        # elif prediction_vol is not None:
+        #     logger.info(
+        #         f"Device {device}, batch processed: {i_batch + 1}, loss volume: {loss_norm_vol:.5f}"
+        #     )
+        # elif prediction_surf is not None:
+        #     logger.info(
+        #         f"Device {device}, batch processed: {i_batch + 1} \
+        #     , loss surface: {loss_norm_surf:.5f}, loss integral: {loss_integral:.5f}, loss surface area: {loss_norm_surf_area:.5f}"
+        #     )
 
     last_loss = running_loss / (i_batch + 1)  # loss per batch
-    print(f" Device {device},  batch: {i_batch + 1}, loss norm: {loss:.5f}")
-    tb_x = epoch_index * len(dataloader) + i_batch + 1
-    tb_writer.add_scalar("Loss/train", last_loss, tb_x)
+    if dist.rank == 0:
+        logger.info(f" Device {device},  batch: {i_batch + 1}, loss norm: {loss:.5f}")
+        tb_x = epoch_index * len(dataloader) + i_batch + 1
+        tb_writer.add_scalar("Loss/train", last_loss, tb_x)
 
     return last_loss
 
 
-def compute_scaling_factors(cfg: DictConfig):
-
-    model_type = cfg.model.model_type
-
-    if model_type == "volume" or model_type == "combined":
-        vol_save_path = os.path.join(
-            "outputs", cfg.project.name, "volume_scaling_factors.npy"
-        )
-        if not os.path.exists(vol_save_path):
-            input_path = cfg.data.input_dir
-
-            volume_variable_names = list(cfg.variables.volume.solution.keys())
-
-            fm_dict = DoMINODataPipe(
-                input_path,
-                phase="train",
-                grid_resolution=cfg.model.interp_res,
-                volume_variables=volume_variable_names,
-                surface_variables=None,
-                normalize_coordinates=True,
-                sampling=False,
-                sample_in_bbox=True,
-                volume_points_sample=cfg.model.volume_points_sample,
-                geom_points_sample=cfg.model.geom_points_sample,
-                positional_encoding=cfg.model.positional_encoding,
-                model_type=cfg.model.model_type,
-                bounding_box_dims=cfg.data.bounding_box,
-                bounding_box_dims_surf=cfg.data.bounding_box_surface,
-                compute_scaling_factors=True,
-            )
-
-            # Calculate mean
-            if cfg.model.normalization == "mean_std_scaling":
-                for j in range(len(fm_dict)):
-                    d_dict = fm_dict[j]
-                    vol_fields = d_dict["volume_fields"]
-
-                    if vol_fields is not None:
-                        if j == 0:
-                            vol_fields_sum = np.mean(vol_fields, 0)
-                        else:
-                            vol_fields_sum += np.mean(vol_fields, 0)
-                    else:
-                        vol_fields_sum = 0.0
-
-                vol_fields_mean = vol_fields_sum / len(fm_dict)
-
-                for j in range(len(fm_dict)):
-                    d_dict = fm_dict[j]
-                    vol_fields = d_dict["volume_fields"]
-
-                    if vol_fields is not None:
-                        if j == 0:
-                            vol_fields_sum_square = np.mean(
-                                (vol_fields - vol_fields_mean) ** 2.0, 0
-                            )
-                        else:
-                            vol_fields_sum_square += np.mean(
-                                (vol_fields - vol_fields_mean) ** 2.0, 0
-                            )
-                    else:
-                        vol_fields_sum_square = 0.0
-
-                vol_fields_std = np.sqrt(vol_fields_sum_square / len(fm_dict))
-
-                vol_scaling_factors = [vol_fields_mean, vol_fields_std]
-
-            if cfg.model.normalization == "min_max_scaling":
-                for j in range(len(fm_dict)):
-                    d_dict = fm_dict[j]
-                    vol_fields = d_dict["volume_fields"]
-
-                    if vol_fields is not None:
-                        vol_mean = np.mean(vol_fields, 0)
-                        vol_std = np.std(vol_fields, 0)
-                        vol_idx = mean_std_sampling(
-                            vol_fields, vol_mean, vol_std, tolerance=12.0
-                        )
-                        vol_fields_sampled = np.delete(vol_fields, vol_idx, axis=0)
-                        if j == 0:
-                            vol_fields_max = np.amax(vol_fields_sampled, 0)
-                            vol_fields_min = np.amin(vol_fields_sampled, 0)
-                        else:
-                            vol_fields_max1 = np.amax(vol_fields_sampled, 0)
-                            vol_fields_min1 = np.amin(vol_fields_sampled, 0)
-
-                            for k in range(vol_fields.shape[-1]):
-                                if vol_fields_max1[k] > vol_fields_max[k]:
-                                    vol_fields_max[k] = vol_fields_max1[k]
-
-                                if vol_fields_min1[k] < vol_fields_min[k]:
-                                    vol_fields_min[k] = vol_fields_min1[k]
-                    else:
-                        vol_fields_max = 0.0
-                        vol_fields_min = 0.0
-
-                    if j > 20:
-                        break
-                vol_scaling_factors = [vol_fields_max, vol_fields_min]
-            np.save(vol_save_path, vol_scaling_factors)
-
-    if model_type == "surface" or model_type == "combined":
-        surf_save_path = os.path.join(
-            "outputs", cfg.project.name, "surface_scaling_factors.npy"
-        )
-
-        if not os.path.exists(surf_save_path):
-            input_path = cfg.data.input_dir
-
-            volume_variable_names = list(cfg.variables.volume.solution.keys())
-            surface_variable_names = list(cfg.variables.surface.solution.keys())
-
-            fm_dict = DoMINODataPipe(
-                input_path,
-                phase="train",
-                grid_resolution=cfg.model.interp_res,
-                volume_variables=None,
-                surface_variables=surface_variable_names,
-                normalize_coordinates=True,
-                sampling=False,
-                sample_in_bbox=True,
-                volume_points_sample=cfg.model.volume_points_sample,
-                geom_points_sample=cfg.model.geom_points_sample,
-                positional_encoding=cfg.model.positional_encoding,
-                model_type=cfg.model.model_type,
-                bounding_box_dims=cfg.data.bounding_box,
-                bounding_box_dims_surf=cfg.data.bounding_box_surface,
-                compute_scaling_factors=True,
-            )
-
-            # Calculate mean
-            if cfg.model.normalization == "mean_std_scaling":
-                for j in range(len(fm_dict)):
-                    d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"]
-
-                    if surf_fields is not None:
-                        if j == 0:
-                            surf_fields_sum = np.mean(surf_fields, 0)
-                        else:
-                            surf_fields_sum += np.mean(surf_fields, 0)
-                    else:
-                        surf_fields_sum = 0.0
-
-                surf_fields_mean = surf_fields_sum / len(fm_dict)
-
-                for j in range(len(fm_dict)):
-                    d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"]
-
-                    if surf_fields is not None:
-                        if j == 0:
-                            surf_fields_sum_square = np.mean(
-                                (surf_fields - surf_fields_mean) ** 2.0, 0
-                            )
-                        else:
-                            surf_fields_sum_square += np.mean(
-                                (surf_fields - surf_fields_mean) ** 2.0, 0
-                            )
-                    else:
-                        surf_fields_sum_square = 0.0
-
-                surf_fields_std = np.sqrt(surf_fields_sum_square / len(fm_dict))
-
-                surf_scaling_factors = [surf_fields_mean, surf_fields_std]
-
-            if cfg.model.normalization == "min_max_scaling":
-                for j in range(len(fm_dict)):
-                    d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"]
-
-                    if surf_fields is not None:
-                        surf_mean = np.mean(surf_fields, 0)
-                        surf_std = np.std(surf_fields, 0)
-                        surf_idx = mean_std_sampling(
-                            surf_fields, surf_mean, surf_std, tolerance=12.0
-                        )
-                        surf_fields_sampled = np.delete(surf_fields, surf_idx, axis=0)
-                        if j == 0:
-                            surf_fields_max = np.amax(surf_fields_sampled, 0)
-                            surf_fields_min = np.amin(surf_fields_sampled, 0)
-                        else:
-                            surf_fields_max1 = np.amax(surf_fields_sampled, 0)
-                            surf_fields_min1 = np.amin(surf_fields_sampled, 0)
-
-                            for k in range(surf_fields.shape[-1]):
-                                if surf_fields_max1[k] > surf_fields_max[k]:
-                                    surf_fields_max[k] = surf_fields_max1[k]
-
-                                if surf_fields_min1[k] < surf_fields_min[k]:
-                                    surf_fields_min[k] = surf_fields_min1[k]
-                    else:
-                        surf_fields_max = 0.0
-                        surf_fields_min = 0.0
-
-                    if j > 20:
-                        break
-
-                surf_scaling_factors = [surf_fields_max, surf_fields_min]
-            np.save(surf_save_path, surf_scaling_factors)
-
-
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-    compute_scaling_factors(cfg)
-    input_path = cfg.data.input_dir
-    input_path_val = cfg.data.input_dir_val
-    model_type = cfg.model.model_type
 
     # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()
 
-    print(f"Config summary:\n{OmegaConf.to_yaml(cfg, sort_keys=True)}")
+    gpu_handle = nvmlDeviceGetHandleByIndex(dist.device.index)
+
+    compute_scaling_factors(
+        cfg, cfg.data_processor.output_dir, use_cache=cfg.data_processor.use_cache
+    )
+    model_type = cfg.model.model_type
+
+    logger = PythonLogger("Train")
+    logger = RankZeroLoggingWrapper(logger, dist)
+
+    logger.info(f"Config summary:\n{OmegaConf.to_yaml(cfg, sort_keys=True)}")
 
     num_vol_vars = 0
     volume_variable_names = []
@@ -809,55 +694,31 @@ def main(cfg: DictConfig) -> None:
     surf_save_path = os.path.join(
         "outputs", cfg.project.name, "surface_scaling_factors.npy"
     )
-    if os.path.exists(vol_save_path) and os.path.exists(surf_save_path):
+    if os.path.exists(vol_save_path):
         vol_factors = np.load(vol_save_path)
-        surf_factors = np.load(surf_save_path)
     else:
         vol_factors = None
+
+    if os.path.exists(surf_save_path):
+        surf_factors = np.load(surf_save_path)
+    else:
         surf_factors = None
 
-    train_dataset = DoMINODataPipe(
-        input_path,
-        phase="train",
-        grid_resolution=cfg.model.interp_res,
-        volume_variables=volume_variable_names,
-        surface_variables=surface_variable_names,
-        normalize_coordinates=True,
-        sampling=True,
-        sample_in_bbox=True,
-        volume_points_sample=cfg.model.volume_points_sample,
-        surface_points_sample=cfg.model.surface_points_sample,
-        geom_points_sample=cfg.model.geom_points_sample,
-        positional_encoding=cfg.model.positional_encoding,
-        volume_factors=vol_factors,
-        surface_factors=surf_factors,
-        scaling_type=cfg.model.normalization,
-        model_type=cfg.model.model_type,
-        bounding_box_dims=cfg.data.bounding_box,
-        bounding_box_dims_surf=cfg.data.bounding_box_surface,
-        num_surface_neighbors=cfg.model.num_surface_neighbors,
+    train_dataset = create_domino_dataset(
+        cfg,
+        "train",
+        volume_variable_names,
+        surface_variable_names,
+        vol_factors,
+        surf_factors,
     )
-
-    val_dataset = DoMINODataPipe(
-        input_path_val,
-        phase="val",
-        grid_resolution=cfg.model.interp_res,
-        volume_variables=volume_variable_names,
-        surface_variables=surface_variable_names,
-        normalize_coordinates=True,
-        sampling=True,
-        sample_in_bbox=True,
-        volume_points_sample=cfg.model.volume_points_sample,
-        surface_points_sample=cfg.model.surface_points_sample,
-        geom_points_sample=cfg.model.geom_points_sample,
-        positional_encoding=cfg.model.positional_encoding,
-        volume_factors=vol_factors,
-        surface_factors=surf_factors,
-        scaling_type=cfg.model.normalization,
-        model_type=cfg.model.model_type,
-        bounding_box_dims=cfg.data.bounding_box,
-        bounding_box_dims_surf=cfg.data.bounding_box_surface,
-        num_surface_neighbors=cfg.model.num_surface_neighbors,
+    val_dataset = create_domino_dataset(
+        cfg,
+        "val",
+        volume_variable_names,
+        surface_variable_names,
+        vol_factors,
+        surf_factors,
     )
 
     train_sampler = DistributedSampler(
@@ -875,9 +736,17 @@ def main(cfg: DictConfig) -> None:
     )
 
     train_dataloader = DataLoader(
-        train_dataset, sampler=train_sampler, **cfg.train.dataloader
+        train_dataset,
+        sampler=train_sampler,
+        **cfg.train.dataloader,
+        collate_fn=domino_collate_fn,
     )
-    val_dataloader = DataLoader(val_dataset, sampler=val_sampler, **cfg.val.dataloader)
+    val_dataloader = DataLoader(
+        val_dataset,
+        sampler=val_sampler,
+        **cfg.val.dataloader,
+        collate_fn=domino_collate_fn,
+    )
 
     model = DoMINO(
         input_features=3,
@@ -888,7 +757,7 @@ def main(cfg: DictConfig) -> None:
     model = torch.compile(model, disable=True)  # TODO make this configurable
 
     # Print model summary (structure and parmeter count).
-    print(f"Model summary:\n{torchinfo.summary(model, verbose=0, depth=2)}\n")
+    logger.info(f"Model summary:\n{torchinfo.summary(model, verbose=0, depth=2)}\n")
 
     if dist.world_size > 1:
         model = DistributedDataParallel(
@@ -901,9 +770,10 @@ def main(cfg: DictConfig) -> None:
             static_graph=True,
         )
 
-    optimizer = apex.optimizers.FusedAdam(model.parameters(), lr=0.001)
+    # optimizer = apex.optimizers.FusedAdam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=[50, 100, 150, 200, 250, 300, 350, 400], gamma=0.5
+        optimizer, milestones=[100, 200, 300, 400, 500, 600, 700, 800], gamma=0.5
     )
 
     # Initialize the scaler for mixed precision
@@ -950,26 +820,41 @@ def main(cfg: DictConfig) -> None:
     initial_integral_factor_orig = cfg.model.integral_loss_scaling_factor
 
     for epoch in range(init_epoch, cfg.train.epochs):
-        start_time = time.time()
-        print(f"Device {dist.device}, epoch {epoch_number}:")
+        start_time = time.perf_counter()
+        logger.info(f"Device {dist.device}, epoch {epoch_number}:")
 
         train_sampler.set_epoch(epoch)
         val_sampler.set_epoch(epoch)
 
         initial_integral_factor = initial_integral_factor_orig
 
+        if epoch > 250:
+            surface_scaling_loss = 1.0 * cfg.model.surf_loss_scaling
+        else:
+            surface_scaling_loss = cfg.model.surf_loss_scaling
+
         model.train(True)
+        epoch_start_time = time.perf_counter()
         avg_loss = train_epoch(
             dataloader=train_dataloader,
             model=model,
             optimizer=optimizer,
             scaler=scaler,
             tb_writer=writer,
+            logger=logger,
+            gpu_handle=gpu_handle,
             epoch_index=epoch,
             device=dist.device,
             integral_scaling_factor=initial_integral_factor,
             loss_fn_type=cfg.model.loss_function,
+            vol_loss_scaling=cfg.model.vol_loss_scaling,
+            surf_loss_scaling=surface_scaling_loss,
         )
+        epoch_end_time = time.perf_counter()
+        logger.info(
+            f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time} seconds"
+        )
+        epoch_end_time = time.perf_counter()
 
         model.eval()
         avg_vloss = validation_step(
@@ -980,10 +865,12 @@ def main(cfg: DictConfig) -> None:
             use_surface_normals=cfg.model.use_surface_normals,
             integral_scaling_factor=initial_integral_factor,
             loss_fn_type=cfg.model.loss_function,
+            vol_loss_scaling=cfg.model.vol_loss_scaling,
+            surf_loss_scaling=surface_scaling_loss,
         )
 
         scheduler.step()
-        print(
+        logger.info(
             f"Device {dist.device} "
             f"LOSS train {avg_loss:.5f} "
             f"valid {avg_vloss:.5f} "
@@ -994,7 +881,10 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0:
             writer.add_scalars(
                 "Training vs. Validation Loss",
-                {"Training": avg_loss, "Validation": avg_vloss},
+                {
+                    "Training": avg_loss,
+                    # "Validation": avg_vloss
+                },
                 epoch_number,
             )
             writer.flush()
@@ -1005,20 +895,21 @@ def main(cfg: DictConfig) -> None:
 
         if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
             best_vloss = avg_vloss
-            # if dist.rank == 0:
-            save_checkpoint(
-                to_absolute_path(best_model_path),
-                models=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
-                epoch=str(
-                    best_vloss.item()
-                ),  # hacky way of using epoch to store metadata
+        #     # if dist.rank == 0:
+        #     save_checkpoint(
+        #         to_absolute_path(best_model_path),
+        #         models=model,
+        #         optimizer=optimizer,
+        #         scheduler=scheduler,
+        #         scaler=scaler,
+        #         epoch=str(
+        #             best_vloss.item()
+        #         ),  # hacky way of using epoch to store metadata
+        #     )
+        if dist.rank == 0:
+            print(
+                f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.perf_counter() - start_time}"
             )
-        print(
-            f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.time() - start_time}"
-        )
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
             save_checkpoint(

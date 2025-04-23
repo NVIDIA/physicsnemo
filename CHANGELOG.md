@@ -107,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross entropy loss.
 - Option to offload checkpoints to further reduce memory usage
 - Added StormCast model training and simple inference to examples
+- Multi-scale geometry features for DoMINO model.
 
 ### Changed
 

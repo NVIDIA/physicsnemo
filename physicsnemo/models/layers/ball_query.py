@@ -116,8 +116,8 @@ class BallQuery(torch.autograd.Function):
         ctx,
         points1: torch.Tensor,
         points2: torch.Tensor,
-        lengths1: torch.Tensor,
-        lengths2: torch.Tensor,
+        # lengths1: torch.Tensor,
+        # lengths2: torch.Tensor,
         k: int,
         radius: float,
         hash_grid: wp.HashGrid,
@@ -133,8 +133,8 @@ class BallQuery(torch.autograd.Function):
         ctx.points2 = wp.from_torch(
             points2[0], dtype=wp.vec3, requires_grad=points2.requires_grad
         )
-        ctx.lengths1 = wp.from_torch(lengths1, dtype=wp.int32, requires_grad=False)
-        ctx.lengths2 = wp.from_torch(lengths2, dtype=wp.int32, requires_grad=False)
+        # ctx.lengths1 = wp.from_torch(lengths1, dtype=wp.int32, requires_grad=False)
+        # ctx.lengths2 = wp.from_torch(lengths2, dtype=wp.int32, requires_grad=False)
         ctx.k = k
         ctx.radius = radius
 
@@ -179,6 +179,8 @@ class BallQuery(torch.autograd.Function):
         # Build the grid
         ctx.hash_grid.build(ctx.points2, radius)
 
+        ctx.dim = [ctx.points1.shape[0]]
+
         # Run the kernel to get mapping
         wp.launch(
             BallQuery.ball_query,
@@ -193,7 +195,7 @@ class BallQuery(torch.autograd.Function):
                 ctx.mapping,
                 ctx.num_neighbors,
             ],
-            dim=[ctx.points1.shape[0]],
+            dim=ctx.dim,
         )
 
         # Run the kernel to get outputs
@@ -207,7 +209,7 @@ class BallQuery(torch.autograd.Function):
             outputs=[
                 ctx.outputs,
             ],
-            dim=[ctx.points1.shape[0]],
+            dim=ctx.dim,
         )
 
         return (
@@ -222,7 +224,7 @@ class BallQuery(torch.autograd.Function):
         grad_mapping: torch.Tensor,
         grad_num_neighbors: torch.Tensor,
         grad_outputs: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, None, None, None, None, None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, None, None, None]:
         # Map incoming torch grads to our output variable
         ctx.outputs.grad = wp.from_torch(grad_outputs, dtype=wp.float32)
 
@@ -241,7 +243,7 @@ class BallQuery(torch.autograd.Function):
             adj_outputs=[
                 ctx.outputs.grad,
             ],
-            dim=[ctx.points1.shape[0]],
+            dim=ctx.dim,
             adjoint=True,
         )
 
@@ -249,8 +251,8 @@ class BallQuery(torch.autograd.Function):
         return (
             wp.to_torch(ctx.points1.grad).unsqueeze(0),
             wp.to_torch(ctx.points2.grad).unsqueeze(0),
-            None,
-            None,
+            # None,
+            # None,
             None,
             None,
             None,
@@ -277,9 +279,7 @@ class BallQueryLayer(torch.nn.Module):
     def forward(
         self,
         points1: torch.Tensor,
-        points2: torch.Tensor,
-        lengths1: torch.Tensor,
-        lengths2: torch.Tensor,
+        points2: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Performs ball query operation to find neighboring points within a specified radius.
@@ -290,10 +290,6 @@ class BallQueryLayer(torch.nn.Module):
         Args:
             points1: Tensor of shape (batch_size, num_points1, 3) containing query points
             points2: Tensor of shape (batch_size, num_points2, 3) containing points to search
-            lengths1: Tensor of shape (batch_size,) containing the actual number of points in each
-                      batch element of points1
-            lengths2: Tensor of shape (batch_size,) containing the actual number of points in each
-                      batch element of points2
 
         Returns:
             tuple containing:
@@ -304,8 +300,8 @@ class BallQueryLayer(torch.nn.Module):
         return BallQuery.apply(
             points1,
             points2,
-            lengths1,
-            lengths2,
+            # lengths1,
+            # lengths2,
             self.k,
             self.radius,
             self.hash_grid,
@@ -329,8 +325,8 @@ if __name__ == "__main__":
     points1 = torch.rand(n, p1, d, device="cuda", requires_grad=True)
 
     points2 = torch.rand(n, p2, d, device="cuda", requires_grad=True)
-    lengths1 = torch.full((n,), p1, dtype=torch.int32).cuda()
-    lengths2 = torch.full((n,), p2, dtype=torch.int32).cuda()
+    # lengths1 = torch.full((n,), p1, dtype=torch.int32).cuda()
+    # lengths2 = torch.full((n,), p2, dtype=torch.int32).cuda()
     k = 256  # maximum number of neighbors
     radius = 0.1
 
@@ -342,8 +338,8 @@ if __name__ == "__main__":
         mapping, num_neighbors, outputs = layer(
             points1,
             points2,
-            lengths1,
-            lengths2,
+            # lengths1,
+            # lengths2,
         )
 
     for i in range(20):
@@ -351,14 +347,14 @@ if __name__ == "__main__":
         p2 += 100
         points1 = torch.rand(n, p1, d, device="cuda", requires_grad=False)
         points2 = torch.rand(n, p2, d, device="cuda", requires_grad=False)
-        lengths1 = torch.full((n,), p1, dtype=torch.int32).cuda()
-        lengths2 = torch.full((n,), p2, dtype=torch.int32).cuda()
+        # lengths1 = torch.full((n,), p1, dtype=torch.int32).cuda()
+        # lengths2 = torch.full((n,), p2, dtype=torch.int32).cuda()
 
         mapping, num_neighbors, outputs = layer(
             points1,
             points2,
-            lengths1,
-            lengths2,
+            # lengths1,
+            # lengths2,
         )
 
     # Perform matrix multiplication as comparison for timing
@@ -376,7 +372,8 @@ if __name__ == "__main__":
     # Test optimization
     for i in range(100):
         optimizer.zero_grad()
-        mapping, num_neighbors, outputs = layer(points1, points2, lengths1, lengths2)
+        # mapping, num_neighbors, outputs = layer(points1, points2, lengths1, lengths2)
+        mapping, num_neighbors, outputs = layer(points1, points2)
 
         loss = (points1.unsqueeze(2) - outputs).pow(2).sum()
         loss.backward()

@@ -74,8 +74,7 @@ def test_domino_forward(device, pytestconfig):
             class geo_conv:
                 base_neurons: int = 32
                 base_neurons_out: int = 1
-                radius_short: float = 0.1
-                radius_long: float = 0.5
+                radii: Sequence = (0.1, 0.5)
                 hops: int = 1
 
             @dataclass
@@ -94,8 +93,8 @@ def test_domino_forward(device, pytestconfig):
         @dataclass
         class geometry_local:
             base_layer: int = 128
-            neighbors_in_radius: int = 64
-            radius: float = 0.05
+            neighbors_in_radius: Sequence = (64,)
+            radii: Sequence = (0.05,)
 
         @dataclass
         class nn_basis_functions:
@@ -139,6 +138,8 @@ def test_domino_forward(device, pytestconfig):
     bsize = 1
     nx, ny, nz = model_params.interp_res
     num_neigh = model_params.num_surface_neighbors
+    radii = model_params.geometry_rep.geo_conv.radii
+    print(radii)
 
     pos_normals_closest_vol = torch.randn(bsize, 100, 3).to(device)
     pos_normals_com_vol = torch.randn(bsize, 100, 3).to(device)
