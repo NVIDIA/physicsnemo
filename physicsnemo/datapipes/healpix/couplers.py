@@ -171,7 +171,7 @@ class ConstantCoupler:
         #
         # for example 'z1000' is in 'z1000-48H'
         channel_indices = [
-            i for i, oc in enumerate(output_channels) for v in self.variables if oc in v
+            i for i, oc in enumerate(output_channels) for v in self.variables if oc == v.split('-')[0]
         ]
         self.coupled_channel_indices = channel_indices
 
@@ -431,7 +431,7 @@ class TrailingAverageCoupler:
         #
         # for example 'z1000' is in 'z1000-48H'
         channel_indices = [
-            i for i, oc in enumerate(output_channels) for v in self.variables if oc in v
+            i for i, oc in enumerate(output_channels) for v in self.variables if oc == v.split('-')[0]
         ]
         self.coupled_channel_indices = channel_indices
 
