@@ -162,7 +162,6 @@ def main(cfg: DictConfig) -> None:
         prob_channels = dataset.get_prob_channel_index()
     else:
         prob_channels = None
-
     # Parse the patch shape
     if (
         cfg.model.name == "patched_diffusion"
@@ -348,11 +347,6 @@ def main(cfg: DictConfig) -> None:
     if cfg.model.name == "patched_diffusion" and len(patch_nums_iter)>1:
         loss_fn = ResidualLoss_Opt(
             regression_net=regression_net,
-            img_shape_x=img_shape[1],
-            img_shape_y=img_shape[0],
-            patch_shape_x=patch_shape[1],
-            patch_shape_y=patch_shape[0],
-            patch_num=patch_num,
             hr_mean_conditioning=cfg.model.hr_mean_conditioning,
         )
     elif cfg.model.name in (
@@ -415,11 +409,11 @@ def main(cfg: DictConfig) -> None:
                 tick_start_nimg = cur_nimg
                 tick_start_time = time.time()
 
-                if cur_nimg - start_nimg == 4 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 14 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Starting Profiler at {cur_nimg}")
                     torch.cuda.profiler.start()
 
-                if cur_nimg - start_nimg == 6 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 16 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Stoping Profiler at {cur_nimg}")
                     torch.cuda.profiler.stop()
 
@@ -432,7 +426,7 @@ def main(cfg: DictConfig) -> None:
                             f"accumulation round {n_i}", color="Magenta"
                         ):
                             with nvtx.annotate(f"loading data", color="green"):
-                                img_clean, img_lr, labels, *lead_time_label = next(
+                                img_clean, img_lr, *lead_time_label = next(
                                     dataset_iterator
                                 )
                                 if use_apex_gn:
@@ -446,7 +440,6 @@ def main(cfg: DictConfig) -> None:
                                         dtype=input_dtype,
                                         non_blocking=True,
                                     ).to(memory_format=torch.channels_last)
-                                    labels = labels.to(dist.device, non_blocking=True)
                                 else:
                                     img_clean = (
                                         img_clean.to(dist.device)
@@ -458,15 +451,13 @@ def main(cfg: DictConfig) -> None:
                                         .to(input_dtype)
                                         .contiguous()
                                     )
-                                    labels = labels.to(dist.device).contiguous()
                             loss_fn_kwargs = {
                                 "net": model,
                                 "img_clean": img_clean,
                                 "img_lr": img_lr,
-                                "labels": labels,
                                 "augment_pipe": None,
                             }
-                            
+
                             if lead_time_label:
                                 lead_time_label = (
                                     lead_time_label[0].to(dist.device).contiguous()
@@ -570,7 +561,7 @@ def main(cfg: DictConfig) -> None:
                         ):
                             with torch.no_grad():
                                 for _ in range(cfg.training.io.validation_steps):
-                                    img_clean_valid, img_lr_valid, labels_valid = next(
+                                    img_clean_valid, img_lr_valid, *lead_time_label_valid = next(
                                         validation_dataset_iterator
                                     )
 
@@ -585,9 +576,6 @@ def main(cfg: DictConfig) -> None:
                                             dtype=input_dtype,
                                             non_blocking=True,
                                         ).to(memory_format=torch.channels_last)
-                                        labels_valid = labels_valid.to(
-                                            dist.device, non_blocking=True
-                                        )
 
                                     else:
                                         img_clean_valid = (
@@ -600,17 +588,20 @@ def main(cfg: DictConfig) -> None:
                                             .to(input_dtype)
                                             .contiguous()
                                         )
-                                        labels_valid = labels_valid.to(
-                                            dist.device
-                                        ).contiguous()
 
-                                    loss_fn_valid_kwargs = {
+                                    loss_valid_kwargs = {
                                         "net": model,
                                         "img_clean": img_clean_valid,
                                         "img_lr": img_lr_valid,
-                                        "labels": labels_valid,
                                         "augment_pipe": None,
                                     }
+                                    if lead_time_label_valid:
+                                        lead_time_label_valid = (
+                                            lead_time_label_valid[0].to(dist.device).contiguous()
+                                        )
+                                        loss_valid_kwargs.update(
+                                            {"lead_time_label": lead_time_label_valid}
+                                        )
                                     if isinstance(loss_fn, ResidualLoss_Opt):   
                                         loss_fn.y_mean = None
 
@@ -621,7 +612,7 @@ def main(cfg: DictConfig) -> None:
                                             loss_fn_kwargs.update({"patching": patching}) 
                                         # pdb.set_trace()
                                         with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
-                                            loss_valid = loss_fn(**loss_fn_valid_kwargs)
+                                            loss_valid = loss_fn(**loss_valid_kwargs)
 
                                         loss_valid = (
                                             (loss_valid.sum() / batch_size_per_gpu)
