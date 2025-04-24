@@ -853,10 +853,14 @@ class DoMINO(nn.Module):
                 geo_encoding = torch.reshape(
                     encoding_g[:, j], (batch_size, 1, nx * ny * nz)
                 )
-                geo_encoding = geo_encoding.expand(
-                    batch_size, volume_mesh_centers.shape[1], geo_encoding.shape[2]
-                )
-                geo_encoding_sampled = torch.gather(geo_encoding, 2, mapping) * mask
+                # geo_encoding = geo_encoding.expand(
+                #     batch_size, volume_mesh_centers.shape[1], geo_encoding.shape[2]
+                # )
+                # geo_encoding_sampled = torch.gather(geo_encoding, 2, mapping) * mask
+                geo_encoding_sampled = torch.index_select(geo_encoding, 2, mapping.flatten())
+                geo_encoding_sampled = torch.reshape(geo_encoding_sampled, mask.shape)
+                geo_encoding_sampled = geo_encoding_sampled * mask
+                
                 encoding_g_inner.append(geo_encoding_sampled)
 
             encoding_g_inner = torch.cat(encoding_g_inner, axis=2)
