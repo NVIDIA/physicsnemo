@@ -16,25 +16,19 @@
 
 """
 This code contains the DoMINO model architecture.
-The DoMINO class contains an architecture to model both surface and 
-volume quantities together as well as separately (controlled using 
+The DoMINO class contains an architecture to model both surface and
+volume quantities together as well as separately (controlled using
 the config.yaml file)
 """
 
-from typing import Sequence
-
 import math
+from typing import Literal
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Literal
-
 from physicsnemo.models.layers.ball_query import BallQueryLayer
-
-# from physicsnemo.models.meta import ModelMetaData
-# from physicsnemo.models.module import Module
 
 
 def fourier_encode(coords, num_freqs):
