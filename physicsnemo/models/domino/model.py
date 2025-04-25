@@ -725,8 +725,8 @@ class DoMINO(nn.Module):
     ...            "volume_mesh_centers": volume_coordinates,
     ...            "volume_min_max": vol_grid_max_min,
     ...            "surface_min_max": surf_grid_max_min,
-    ...             "stream_velocity": stream_velocity,
-    ...             "air_density": air_density,
+    ...            "stream_velocity": stream_velocity,
+    ...            "air_density": air_density,
     ...        }
     >>> output = model(input_dict)
     Module ...
