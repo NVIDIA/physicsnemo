@@ -722,7 +722,7 @@ class DoMINO(nn.Module):
     >>> surface_normals = torch.randn(bsize, 100, 3).to(device)
     >>> surface_neighbors_normals = torch.randn(bsize, 100, num_neigh, 3).to(device)
     >>> surface_sizes = torch.randn(bsize, 100, 3).to(device)
-    >>> surface_neighbors_areas = torch.randn(bsize, 100, num_neigh, 3).to(device)
+    >>> surface_neighbors_areas = torch.randn(bsize, 100, num_neigh).to(device)
     >>> volume_coordinates = torch.randn(bsize, 100, 3).to(device)
     >>> vol_grid_max_min = torch.randn(bsize, 2, 3).to(device)
     >>> surf_grid_max_min = torch.randn(bsize, 2, 3).to(device)
