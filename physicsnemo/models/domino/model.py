@@ -78,7 +78,6 @@ class BQWarp(nn.Module):
 
     def __init__(
         self,
-        input_features: int,
         grid_resolution=None,
         radius: float = 0.25,
         neighbors_in_radius: int = 10,
@@ -87,7 +86,6 @@ class BQWarp(nn.Module):
         Initialize the BQWarp layer.
 
         Args:
-            input_features: Number of feature dimensions for input points
             grid_resolution: Resolution of the grid in each dimension [nx, ny, nz]
             radius: Radius for ball query operation
             neighbors_in_radius: Maximum number of neighbors to return within radius
@@ -360,7 +358,6 @@ class GeometryRep(nn.Module):
         for j, p in enumerate(radii):
             self.bq_warp.append(
                 BQWarp(
-                    input_features=input_features,
                     grid_resolution=model_parameters.interp_res,
                     radius=radii[j],
                 )
@@ -904,7 +901,6 @@ class DoMINO(nn.Module):
 
             self.surface_bq_warp.append(
                 BQWarp(
-                    input_features=input_features,
                     grid_resolution=model_parameters.interp_res,
                     radius=self.surface_radius[ct],
                     neighbors_in_radius=self.surface_neighbors_in_radius[ct],
@@ -940,7 +936,6 @@ class DoMINO(nn.Module):
 
             self.volume_bq_warp.append(
                 BQWarp(
-                    input_features=input_features,
                     grid_resolution=model_parameters.interp_res,
                     radius=self.volume_radius[ct],
                     neighbors_in_radius=self.volume_neighbors_in_radius[ct],
