@@ -390,7 +390,7 @@ def main(cfg: DictConfig):
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
-    num_files = int(len(dirnames) / 8)
+    num_files = int(len(dirnames) / dist.world_size)
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path

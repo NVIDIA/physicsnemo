@@ -198,7 +198,6 @@ class GeoConvOut(nn.Module):
         )
 
         mask = abs(x - 0) > 1e-6
-
         x = self.activation(self.fc1(x))
         x = self.activation(self.fc2(x))
         x = F.tanh(self.fc3(x))
@@ -510,10 +509,18 @@ class ParameterModel(nn.Module):
             model_parameters: Configuration parameters for the model
         """
         super(ParameterModel, self).__init__()
-        self.input_features = input_features
+        self.fourier_features = model_parameters.fourier_features
+        self.num_modes = model_parameters.num_modes
+
+        if self.fourier_features:
+            input_features_calculated = (
+                input_features + input_features * self.num_modes * 2
+            )
+        else:
+            input_features_calculated = input_features
 
         base_layer = model_parameters.base_layer
-        self.fc1 = nn.Linear(self.input_features, base_layer)
+        self.fc1 = nn.Linear(input_features_calculated, base_layer)
         self.fc2 = nn.Linear(base_layer, int(base_layer))
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
         self.bn1 = nn.BatchNorm1d(base_layer)
@@ -532,13 +539,15 @@ class ParameterModel(nn.Module):
         Returns:
             Tensor containing encoded parameter representation
         """
-        params = x
+        if self.fourier_features:
+            params = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
+        else:
+            params = x
         params = self.activation(self.fc1(params))
         params = self.activation(self.fc2(params))
         params = self.fc3(params)
 
         return params
-
 
 class AggregationModel(nn.Module):
     """
@@ -1059,12 +1068,11 @@ class DoMINO(nn.Module):
                 geo_encoding = torch.reshape(
                     encoding_g[:, j], (batch_size, 1, nx * ny * nz)
                 )
-                geo_encoding = geo_encoding.expand(
-                    batch_size, volume_mesh_centers.shape[1], geo_encoding.shape[2]
-                )
-                geo_encoding_sampled = torch.gather(geo_encoding, 2, mapping) * mask
+                geo_encoding_sampled = torch.index_select(geo_encoding, 2, mapping.flatten())
+                geo_encoding_sampled = torch.reshape(geo_encoding_sampled, mask.shape)
+                geo_encoding_sampled = geo_encoding_sampled * mask
+                
                 encoding_g_inner.append(geo_encoding_sampled)
-
             encoding_g_inner = torch.cat(encoding_g_inner, axis=2)
             encoding_g_inner = point_conv[p](encoding_g_inner)
             encoding_outer.append(encoding_g_inner)
@@ -1294,13 +1302,11 @@ class DoMINO(nn.Module):
             geo_centers_surf = (
                 2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
             )
+            
             encoding_g_surf = self.geo_rep_surface1(
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
-
-            # for _ in range(1):
-            #     encoding_g_surf = self.surf_to_vol_conv2(self.activation(self.surf_to_vol_conv1(encoding_g_surf)))
-
+            
             encoding_g_vol += encoding_g_surf
 
             # SDF on volume mesh nodes
