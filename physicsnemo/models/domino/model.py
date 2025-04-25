@@ -225,30 +225,24 @@ class GeoProcessor(nn.Module):
         self.conv1 = nn.Conv3d(
             input_filters, base_filters, kernel_size=3, padding="same"
         )
-        self.conv_bn1 = nn.BatchNorm3d(int(base_filters))
         self.conv2 = nn.Conv3d(
             base_filters, 2 * base_filters, kernel_size=3, padding="same"
         )
-        self.conv_bn2 = nn.BatchNorm3d(int(2 * base_filters))
         self.conv3 = nn.Conv3d(
             2 * base_filters, 4 * base_filters, kernel_size=3, padding="same"
         )
-        self.conv_bn3 = nn.BatchNorm3d(int(4 * base_filters))
         self.conv3_1 = nn.Conv3d(
             4 * base_filters, 4 * base_filters, kernel_size=3, padding="same"
         )
         self.conv4 = nn.Conv3d(
             4 * base_filters, 2 * base_filters, kernel_size=3, padding="same"
         )
-        self.conv_bn4 = nn.BatchNorm3d(int(2 * base_filters))
         self.conv5 = nn.Conv3d(
             4 * base_filters, base_filters, kernel_size=3, padding="same"
         )
-        self.conv_bn5 = nn.BatchNorm3d(int(base_filters))
         self.conv6 = nn.Conv3d(
             2 * base_filters, input_filters, kernel_size=3, padding="same"
         )
-        self.conv_bn6 = nn.BatchNorm3d(int(input_filters))
         self.conv7 = nn.Conv3d(
             2 * input_filters, input_filters, kernel_size=3, padding="same"
         )
@@ -257,7 +251,6 @@ class GeoProcessor(nn.Module):
         self.max_pool = nn.MaxPool3d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
         self.activation = F.relu
-        self.batch_norm = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -278,22 +271,16 @@ class GeoProcessor(nn.Module):
         # Encoder
         x0 = x
         x = self.conv1(x)
-        if self.batch_norm:
-            x = self.conv_bn1(x)
         x = self.activation(x)
         x = self.max_pool(x)
 
         x1 = x
         x = self.conv2(x)
-        if self.batch_norm:
-            x = self.conv_bn2(x)
         x = self.activation(x)
         x = self.max_pool(x)
 
         x2 = x
         x = self.conv3(x)
-        if self.batch_norm:
-            x = self.conv_bn3(x)
         x = self.activation(x)
         x = self.max_pool(x)
 
@@ -302,22 +289,16 @@ class GeoProcessor(nn.Module):
 
         # Decoder
         x = self.conv4(x)
-        if self.batch_norm:
-            x = self.conv_bn4(x)
         x = self.activation(x)
         x = self.upsample(x)
         x = torch.cat((x, x2), axis=1)
 
         x = self.conv5(x)
-        if self.batch_norm:
-            x = self.conv_bn5(x)
         x = self.activation(x)
         x = self.upsample(x)
         x = torch.cat((x, x1), axis=1)
 
         x = self.conv6(x)
-        if self.batch_norm:
-            x = self.conv_bn6(x)
         x = self.activation(x)
         x = self.upsample(x)
         x = torch.cat((x, x0), axis=1)
