@@ -50,7 +50,7 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
  should be divided and saved into 2 directories, for training and validation. Specify these
  directories in `conf/config.yaml`
 
-4. Run `train.py` to start the training. Modify data, train and model keys in config file. 
+4. Run `train.py` to start the training. Modify data, train and model keys in config file.
   If using cached data then use `conf/cached.yaml` instead of `conf/config.yaml`.
 
 5. Run `test.py` to test on `.vtp` / `.vtu`. Predictions are written to the same file.
