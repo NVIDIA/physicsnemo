@@ -199,9 +199,15 @@ def loss_fn_area(
     return loss
 
 
-def integral_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
-    drag_loss = drag_loss_fn(output, target, area, normals, stream_velocity, padded_value=-10)
-    lift_loss = lift_loss_fn(output, target, area, normals, stream_velocity, padded_value=-10)
+def integral_loss_fn(
+    output, target, area, normals, stream_velocity=None, padded_value=-10
+):
+    drag_loss = drag_loss_fn(
+        output, target, area, normals, stream_velocity, padded_value=-10
+    )
+    lift_loss = lift_loss_fn(
+        output, target, area, normals, stream_velocity, padded_value=-10
+    )
     return lift_loss + drag_loss
 
 
@@ -244,6 +250,7 @@ def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
     loss = (masked_pred - masked_truth) ** 2.0
     loss = torch.mean(loss)
     return loss
+
 
 def validation_step(
     dataloader,
@@ -691,10 +698,7 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0:
             writer.add_scalars(
                 "Training vs. Validation Loss",
-                {
-                    "Training": avg_loss,
-                    "Validation": avg_vloss
-                },
+                {"Training": avg_loss, "Validation": avg_vloss},
                 epoch_number,
             )
             writer.flush()
@@ -706,9 +710,7 @@ def main(cfg: DictConfig) -> None:
         if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
             best_vloss = avg_vloss
 
-        print(
-            f"Device { dist.device}, Best val loss {best_vloss}"
-        )
+        print(f"Device { dist.device}, Best val loss {best_vloss}")
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
             save_checkpoint(

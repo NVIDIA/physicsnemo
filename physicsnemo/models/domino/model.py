@@ -549,6 +549,7 @@ class ParameterModel(nn.Module):
 
         return params
 
+
 class AggregationModel(nn.Module):
     """
     Neural network module to aggregate local geometry encoding with basis functions.
@@ -1068,10 +1069,12 @@ class DoMINO(nn.Module):
                 geo_encoding = torch.reshape(
                     encoding_g[:, j], (batch_size, 1, nx * ny * nz)
                 )
-                geo_encoding_sampled = torch.index_select(geo_encoding, 2, mapping.flatten())
+                geo_encoding_sampled = torch.index_select(
+                    geo_encoding, 2, mapping.flatten()
+                )
                 geo_encoding_sampled = torch.reshape(geo_encoding_sampled, mask.shape)
                 geo_encoding_sampled = geo_encoding_sampled * mask
-                
+
                 encoding_g_inner.append(geo_encoding_sampled)
             encoding_g_inner = torch.cat(encoding_g_inner, axis=2)
             encoding_g_inner = point_conv[p](encoding_g_inner)
@@ -1302,11 +1305,11 @@ class DoMINO(nn.Module):
             geo_centers_surf = (
                 2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
             )
-            
+
             encoding_g_surf = self.geo_rep_surface1(
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
-            
+
             encoding_g_vol += encoding_g_surf
 
             # SDF on volume mesh nodes

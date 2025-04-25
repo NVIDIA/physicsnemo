@@ -41,12 +41,8 @@ def main(cfg: DictConfig) -> None:
     DistributedManager.initialize()
     dist = DistributedManager()
 
-    vol_save_path = os.path.join(
-        cfg.project_dir, "volume_scaling_factors.npy"
-    )
-    surf_save_path = os.path.join(
-        cfg.project_dir, "surface_scaling_factors.npy"
-    )
+    vol_save_path = os.path.join(cfg.project_dir, "volume_scaling_factors.npy")
+    surf_save_path = os.path.join(cfg.project_dir, "surface_scaling_factors.npy")
     if os.path.exists(vol_save_path):
         vol_factors = np.load(vol_save_path)
     else:

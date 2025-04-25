@@ -163,7 +163,10 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         :, start_idx:end_idx
                     ]
                     geo_encoding_local = model.geo_encoding_local(
-                        0.5 * encoding_g_vol, volume_mesh_centers_batch, p_grid, mode="volume"
+                        0.5 * encoding_g_vol,
+                        volume_mesh_centers_batch,
+                        p_grid,
+                        mode="volume",
                     )
                     if cfg.model.use_sdf_in_basis_func:
                         pos_encoding = torch.cat(
@@ -256,7 +259,10 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         :, start_idx:end_idx
                     ]
                     geo_encoding_local = model.geo_encoding_local(
-                        0.5 * encoding_g_surf, surface_mesh_centers_batch, s_grid, mode="surface"
+                        0.5 * encoding_g_surf,
+                        surface_mesh_centers_batch,
+                        s_grid,
+                        mode="surface",
                     )
                     pos_encoding = pos_surface_center_of_mass_batch
                     pos_encoding = model.position_encoder(
@@ -264,19 +270,17 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     )
 
                     if cfg.model.surface_neighbors:
-                        tpredictions_batch = (
-                            model.calculate_solution_with_neighbors(
-                                surface_mesh_centers_batch,
-                                geo_encoding_local,
-                                pos_encoding,
-                                surface_mesh_neighbors_batch,
-                                surface_normals_batch,
-                                surface_neighbors_normals_batch,
-                                surface_areas_batch,
-                                surface_neighbors_areas_batch,
-                                stream_velocity,
-                                air_density,
-                            )
+                        tpredictions_batch = model.calculate_solution_with_neighbors(
+                            surface_mesh_centers_batch,
+                            geo_encoding_local,
+                            pos_encoding,
+                            surface_mesh_neighbors_batch,
+                            surface_normals_batch,
+                            surface_neighbors_normals_batch,
+                            surface_areas_batch,
+                            surface_neighbors_areas_batch,
+                            stream_velocity,
+                            air_density,
                         )
                     else:
                         tpredictions_batch = model.calculate_solution(
@@ -472,9 +476,7 @@ def main(cfg: DictConfig):
             surface_coordinates = np.array(mesh.cell_centers().points, dtype=np.float32)
 
             interp_func = KDTree(surface_coordinates)
-            dd, ii = interp_func.query(
-                surface_coordinates, k=cfg.eval.stencil_size+1
-            )
+            dd, ii = interp_func.query(surface_coordinates, k=cfg.eval.stencil_size + 1)
 
             surface_neighbors = surface_coordinates[ii]
             surface_neighbors = surface_neighbors[:, 1:]

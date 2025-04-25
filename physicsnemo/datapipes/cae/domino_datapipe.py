@@ -567,7 +567,7 @@ class DoMINODataPipe(Dataset):
         # geom_centers = self.array_provider.float32(geom_centers)
 
         surf_grid_max_min = xp.stack([s_min, s_max])
-        
+
         return_dict = {
             "length_scale": length_scale,
             "surf_grid": surf_grid,
