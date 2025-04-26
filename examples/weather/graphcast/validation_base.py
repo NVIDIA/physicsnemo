@@ -82,7 +82,9 @@ class Validation:
             "num_samples_per_year": self.num_samples_per_year_train,
             "device": self.dist.device,
         }
-        for i, data in enumerate(self.val_datapipe):
+        val_data_iter = iter(itertools.islice(self.val_datapipe, len(self.val_datapipe)))
+        for i in range(len(self.val_datapipe)):
+            data = next(val_data_iter)
             invar = data[0]["invar"]
             outvar = data[0]["outvar"][0]
             try:
