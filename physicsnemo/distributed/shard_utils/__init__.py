@@ -23,6 +23,7 @@ try:
     def register_shard_wrappers():
         from .attention_patches import sdpa_wrapper
         from .conv_patches import generic_conv_nd_wrapper
+        from .index_ops import index_select_wrapper
         from .natten_patches import na2d_wrapper
         from .normalization_patches import group_norm_wrapper
         from .point_cloud_ops import ball_query_layer_wrapper
