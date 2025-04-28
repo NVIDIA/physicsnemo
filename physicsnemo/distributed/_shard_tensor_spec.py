@@ -476,7 +476,9 @@ def _infer_shard_tensor_spec_from_local_chunks(
             if mesh_rank is not None:
                 inferred_local_shape = shard_shapes_by_dim[mesh_dim][mesh_rank]
                 if inferred_local_shape != local_chunk.shape:
-                    sharding_shapes = "infer"
+                    raise ValueError(
+                        f"Rank {dist.get_rank()} expected local shape {inferred_local_shape} does not match tensor's local shape {local_chunk.shape}"
+                    )
 
         if sharding_shapes == "infer":
             # To avoid H2D transfers, this method will use CPU-based RPC functions

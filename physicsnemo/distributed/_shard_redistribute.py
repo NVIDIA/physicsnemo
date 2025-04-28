@@ -140,7 +140,8 @@ def _select_slice_from_replicate(
 
     # Split the tensor:
     if sizes is None:
-        chunks = torch.tensor_split(local_tensor, mesh_size, dim=tensor_dim)
+        # Use chunk, not split, when dividing without a plan
+        chunks = torch.chunk(local_tensor, mesh_size, dim=tensor_dim)
     else:
         # Convert sizes to cumulative sum using basic Python
         chunk_starts = []
@@ -179,7 +180,7 @@ def _to_new_shard_dim(
 
     # First, we need to split the tensor along the target dimension:
     if size_hint is None:
-        chunks = torch.tensor_split(local_tensor, mesh_size, dim=target_dim)
+        chunks = torch.chunk(local_tensor, mesh_size, dim=target_dim)
     else:
         chunk_starts = list(accumulate(size_hint))
         chunks = torch.tensor_split(local_tensor, chunk_starts[:-1], dim=target_dim)
