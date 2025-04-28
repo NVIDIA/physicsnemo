@@ -118,7 +118,7 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
 
     tmp_dir = tmp_path / "temp_data"
     tmp_dir.mkdir()
-    _create_random_vtp_vtu_mesh(num_points=20, num_triangles=40, dir=tmp_dir)
+    _create_random_vtp_vtu_mesh(num_points=10, num_triangles=20, dir=tmp_dir)
     datapipe_vtp = MeshDatapipe(
         data_dir=tmp_dir,
         variables=["RandomFeatures"],
@@ -134,8 +134,8 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
 
     assert len(datapipe_vtp) == 1
     for data in datapipe_vtp:
-        assert data[0]["vertices"].shape == (1, 20, 3)
-        assert data[0]["x"].shape == (1, 20, 1)
+        assert data[0]["vertices"].shape == (1, 10, 3)
+        assert data[0]["x"].shape == (1, 10, 1)
 
     datapipe_vtu = MeshDatapipe(
         data_dir=tmp_dir,
@@ -152,8 +152,8 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
 
     assert len(datapipe_vtu) == 1
     for data in datapipe_vtu:
-        assert data[0]["vertices"].shape == (1, 20, 3)
-        assert data[0]["x"].shape == (1, 20, 1)
+        assert data[0]["vertices"].shape == (1, 10, 3)
+        assert data[0]["x"].shape == (1, 10, 1)
 
 
 # @nfsdata_or_fail

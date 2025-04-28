@@ -18,22 +18,18 @@ import os
 import glob
 import torch
 import numpy as np
-from torch.utils.data import Dataset
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.distributed import DistributedManager
 from datetime import datetime, timedelta
 import dask
 import xarray as xr
 
+from .dataset import StormCastDataset
 
 logger = PythonLogger("dataset")
 
 
-def worker_init(wrk_id):
-    np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
-
-
-class HrrrEra5Dataset(Dataset):
+class HrrrEra5Dataset(StormCastDataset):
     """
     Paired dataset object serving time-synchronized pairs of ERA5 and HRRR samples
     Expects data to be stored under directory specified by 'location' with the
@@ -81,38 +77,53 @@ class HrrrEra5Dataset(Dataset):
         self.conus_dataset_name = params.conus_dataset_name
         self.boundary_padding_pixels = params.boundary_padding_pixels
         self._get_files_stats()
+
+        self.kept_era5_channels = (
+            self.era5_channels
+            if params.kept_era5_channels == "all"
+            else params.kept_era5_channels
+        )
+        self.kept_hrrr_channels = (
+            self.hrrr_channels
+            if params.kept_hrrr_channels == "all"
+            else params.kept_hrrr_channels
+        )
+        kept_era5_idx = [self.era5_channels.index(c) for c in self.kept_era5_channels]
+        kept_hrrr_idx = [self.hrrr_channels.index(c) for c in self.kept_hrrr_channels]
+
         self.hrrr_stats = self.params.hrrr_stats
         self.means_hrrr = np.load(
             os.path.join(
                 self.location, self.conus_dataset_name, self.hrrr_stats, "means.npy"
             )
-        )[:, None, None]
+        )[kept_hrrr_idx, None, None]
         self.stds_hrrr = np.load(
             os.path.join(
                 self.location, self.conus_dataset_name, self.hrrr_stats, "stds.npy"
             )
-        )[:, None, None]
+        )[kept_hrrr_idx, None, None]
         self.means_era5 = np.load(
             os.path.join(self.location, "era5", "stats", "means.npy")
-        )[:, None, None]
+        )[kept_era5_idx, None, None]
         self.stds_era5 = np.load(
             os.path.join(self.location, "era5", "stats", "stds.npy")
-        )[:, None, None]
+        )[kept_era5_idx, None, None]
         self.invariants = params.invariants
 
-    def _get_hrrr_channel_names(self):
+    def background_channels(self):
+        """Metadata for the background channels. A list of channel names, one for each channel"""
+        return self.kept_era5_channels
 
-        base_hrrr_channels = self.hrrr_channels
-        kept_hrrr_channels = base_hrrr_channels
+    def state_channels(self):
+        """Metadata for the state channels. A list of channel names, one for each channel"""
+        return self.kept_hrrr_channels
 
-        if len(self.params.exclude_channels) > 0:
-            kept_hrrr_channels = [
-                x for x in base_hrrr_channels if x not in self.params.exclude_channels
-            ]
+    def image_shape(self):
+        """Get the (height, width) of the data (same for input and output)."""
+        return tuple(self.params.hrrr_img_size)
 
-        return base_hrrr_channels, kept_hrrr_channels
-
-    def _get_invariants(self):
+    def get_invariants(self):
+        """Return invariants used for training, or None if no invariants are used."""
 
         invariants = xr.open_zarr(
             os.path.join(self.location, self.conus_dataset_name, "invariants.zarr")
@@ -174,7 +185,7 @@ class HrrrEra5Dataset(Dataset):
         self.n_years = len(self.era5_paths)
 
         with xr.open_zarr(self.era5_paths[0], consolidated=True) as ds:
-            self.era5_channels = ds.channel
+            self.era5_channels = list(ds.channel.values)
             self.era5_lat = ds.latitude
             self.era5_lon = ds.longitude
 
@@ -316,11 +327,33 @@ class HrrrEra5Dataset(Dataset):
 
         return len(self.valid_samples)
 
-    def _normalize_era5(self, img):
+    def normalize_background(self, x: np.ndarray) -> np.ndarray:
+        """Convert background from physical units to normalized data."""
         if self.normalize:
-            img -= self.means_era5
-            img /= self.stds_era5
-        return torch.as_tensor(img)
+            x -= self.means_era5
+            x /= self.stds_era5
+        return x
+
+    def denormalize_background(self, x: np.ndarray) -> np.ndarray:
+        """Convert background from normalized data to physical units."""
+        if self.normalize:
+            x *= self.stds_era5
+            x += self.means_era5
+        return x
+
+    def normalize_state(self, x: np.ndarray) -> np.ndarray:
+        """Convert state from physical units to normalized data."""
+        if self.normalize:
+            x -= self.means_hrrr
+            x /= self.stds_hrrr
+        return x
+
+    def denormalize_state(self, x: np.ndarray) -> np.ndarray:
+        """Convert state from normalized data to physical units."""
+        if self.normalize:
+            x *= self.stds_hrrr
+            x += self.means_hrrr
+        return x
 
     def _get_era5(self, ts_inp, ts_tar):
         """
@@ -332,33 +365,13 @@ class HrrrEra5Dataset(Dataset):
         )
 
         inp_field = (
-            ds_inp.sel(time=ts_inp, channel=self.era5_channels)
-            .interp(latitude=self.era5_lat, longitude=self.era5_lon)
-            .data.values
-        )
-        tar_field = (
-            ds_inp.sel(time=ts_tar, channel=self.era5_channels)
+            ds_inp.sel(time=ts_inp, channel=self.kept_era5_channels)
             .interp(latitude=self.era5_lat, longitude=self.era5_lon)
             .data.values
         )
 
-        inp, tar = self._normalize_era5(inp_field), self._normalize_era5(tar_field)
-
-        return inp, tar
-
-    def _normalize_hrrr(self, img):
-
-        if self.normalize:
-            img -= self.means_hrrr
-            img /= self.stds_hrrr
-
-        if len(self.params.exclude_channels) > 0:
-            drop_channel_indices = [
-                self.hrrr_channels.index(x) for x in self.params.exclude_channels
-            ]
-            img = np.delete(img, drop_channel_indices, axis=0)
-
-        return torch.as_tensor(img)
+        inp = self.normalize_background(inp_field)
+        return torch.as_tensor(inp)
 
     def _get_hrrr(self, ts_inp, ts_tar):
         """
@@ -368,12 +381,12 @@ class HrrrEra5Dataset(Dataset):
             self.ds_hrrr, self.hrrr_paths, ts_inp, ts_tar
         )
 
-        inp_field = ds_inp.sel(time=ts_inp).HRRR.values
-        tar_field = ds_tar.sel(time=ts_tar).HRRR.values
+        inp_field = ds_inp.sel(time=ts_inp, channel=self.kept_hrrr_channels).HRRR.values
+        tar_field = ds_tar.sel(time=ts_tar, channel=self.kept_hrrr_channels).HRRR.values
 
-        inp, tar = self._normalize_hrrr(inp_field), self._normalize_hrrr(tar_field)
+        inp, tar = self.normalize_state(inp_field), self.normalize_state(tar_field)
 
-        return inp, tar
+        return torch.as_tensor(inp), torch.as_tensor(tar)
 
     def __getitem__(self, global_idx):
         """
@@ -383,8 +396,8 @@ class HrrrEra5Dataset(Dataset):
         era5_pair = self._get_era5(*time_pair)
         hrrr_pair = self._get_hrrr(*time_pair)
         return {
-            "era5": era5_pair,
-            "hrrr": hrrr_pair,
+            "background": era5_pair,
+            "state": hrrr_pair,
         }
 
     def _global_idx_to_datetime(self, global_idx):

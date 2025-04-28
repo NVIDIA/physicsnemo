@@ -28,6 +28,9 @@ initial_time: "2022-11-04T21:00:00" # datetime to intialize forecast with (YYYY-
 n_steps: 12 # number of steps (in units of 1hr timesteps) to forecast
 
 # I/O
-plot_var_hrrr: "refc" # HRRR variable to plot
-plot_var_era5: "t2m" # ERA5 variable to plot
-output_hrrr_channels: [] # HRRR variables to save to disk (empty list == all channels saved)
+plot_var_state: "refc" # state variable to plot
+plot_var_background: "t2m" # background variable to plot
+output_state_channels: [] # state variables to save to disk (empty list == all channels saved)
+save_vertical_vars: ["u", "v", "t", "q", "z", "p", "w"] # variables with multiple vertical levels
+save_vertical_levels: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "13", "15", "20", "25", "30", "35", "40"] # level names for vertical variables
+save_horizontal_vars: ["msl", "refc", "u10m", "v10m"] # single-level variables

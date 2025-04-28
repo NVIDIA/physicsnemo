@@ -751,10 +751,8 @@ class dominoInference:
     def load_volume_scaling_factors(self):
         vol_factors = np.array(
             [
-                [2.2642279,  2.2397292,  1.8689916,  0.7547227],
-                [
-                    -1.2899836, -2.2787743, -1.866153 , -2.7116761
-                ],
+                [2.2642279, 2.2397292, 1.8689916, 0.7547227],
+                [-1.2899836, -2.2787743, -1.866153, -2.7116761],
             ],
             dtype=np.float32,
         )
@@ -766,8 +764,8 @@ class dominoInference:
     def load_surface_scaling_factors(self):
         surf_factors = np.array(
             [
-                [0.8215038 ,  0.01063187,  0.01514608,  0.01327803],
-                [-2.1505525 , -0.01865184, -0.01514422, -0.0121509],
+                [0.8215038, 0.01063187, 0.01514608, 0.01327803],
+                [-2.1505525, -0.01865184, -0.01514422, -0.0121509],
             ],
             dtype=np.float32,
         )
@@ -779,7 +777,9 @@ class dominoInference:
         stl_files = get_filenames(self.stl_path)
         mesh_stl = combine_stls(self.stl_path, stl_files)
         if self.cfg.eval.refine_stl:
-            mesh_stl = mesh_stl.subdivide(nsub=2, subfilter='linear')#.smooth(n_iter=20)
+            mesh_stl = mesh_stl.subdivide(
+                nsub=2, subfilter="linear"
+            )  # .smooth(n_iter=20)
         stl_vertices = mesh_stl.points
         length_scale = np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0))
         stl_centers = mesh_stl.cell_centers().points
@@ -1112,12 +1112,16 @@ class dominoInference:
             with autocast(enabled=True):
                 inner_time = time.time()
                 start_event.record()
-                volume_mesh_centers, pos_normals_com, pos_normals_closest, sdf_nodes, scaling_factors = (
-                    self.ifp.sample_points_in_volume(
-                        num_points_vol=point_batch_size,
-                        max_min=self.bounding_box_min_max,
-                        center_of_mass=self.center_of_mass,
-                    )
+                (
+                    volume_mesh_centers,
+                    pos_normals_com,
+                    pos_normals_closest,
+                    sdf_nodes,
+                    scaling_factors,
+                ) = self.ifp.sample_points_in_volume(
+                    num_points_vol=point_batch_size,
+                    max_min=self.bounding_box_min_max,
+                    center_of_mass=self.center_of_mass,
                 )
                 end_event.record()
                 end_event.synchronize()
@@ -1127,7 +1131,7 @@ class dominoInference:
                 volume_coordinates[:, start_idx:end_idx] = volume_mesh_centers
 
                 start_event.record()
-                
+
                 volume_solutions_batch = self.compute_solution_in_volume(
                     geo_encoding,
                     volume_mesh_centers,
@@ -1304,19 +1308,25 @@ class dominoInference:
         if self.dist.world_size == 1:
             encoding_g_vol = model.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
         else:
-            encoding_g_vol = model.module.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
+            encoding_g_vol = model.module.geo_rep_volume(
+                geo_centers_vol, p_grid, sdf_grid
+            )
 
         geo_centers_surf = 2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
 
         if self.dist.world_size == 1:
-            encoding_g_surf = model.geo_rep_surface(geo_centers_surf, s_grid, sdf_surf_grid)
+            encoding_g_surf = model.geo_rep_surface(
+                geo_centers_surf, s_grid, sdf_surf_grid
+            )
         else:
             encoding_g_surf = model.module.geo_rep_surface(
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
 
         if self.dist.world_size == 1:
-            encoding_g_surf1 = model.geo_rep_surface1(geo_centers_surf, s_grid, sdf_surf_grid)
+            encoding_g_surf1 = model.geo_rep_surface1(
+                geo_centers_surf, s_grid, sdf_surf_grid
+            )
         else:
             encoding_g_surf1 = model.module.geo_rep_surface1(
                 geo_centers_surf, s_grid, sdf_surf_grid
@@ -1517,11 +1527,15 @@ if __name__ == "__main__":
         reader.Update()
         polydata_surf = reader.GetOutput()
 
-        surfParam_vtk = numpy_support.numpy_to_vtk(out_dict["pressure_surface"][0].cpu().numpy())
+        surfParam_vtk = numpy_support.numpy_to_vtk(
+            out_dict["pressure_surface"][0].cpu().numpy()
+        )
         surfParam_vtk.SetName(f"Pressure")
         polydata_surf.GetCellData().AddArray(surfParam_vtk)
 
-        surfParam_vtk = numpy_support.numpy_to_vtk(out_dict["wall-shear-stress"][0].cpu().numpy())
+        surfParam_vtk = numpy_support.numpy_to_vtk(
+            out_dict["wall-shear-stress"][0].cpu().numpy()
+        )
         surfParam_vtk.SetName(f"Wall-shear-stress")
         polydata_surf.GetCellData().AddArray(surfParam_vtk)
 

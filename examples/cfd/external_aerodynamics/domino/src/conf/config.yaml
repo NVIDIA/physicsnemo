@@ -114,6 +114,8 @@ model:
   parameter_model:
     base_layer: 512
     scaling_params: [30.0, 1.226] # [inlet_velocity, air_density]
+    fourier_features: true
+    num_modes: 5
 
 train: # Training configurable parameters
   epochs: 1000

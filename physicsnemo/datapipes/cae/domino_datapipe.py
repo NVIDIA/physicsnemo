@@ -510,6 +510,9 @@ class DoMINODataPipe(Dataset):
         stl_centers = data_dict["stl_centers"]
         mesh_indices_flattened = data_dict["stl_faces"]
         stl_sizes = data_dict["stl_areas"]
+        idx = np.where(stl_sizes > 0.0)
+        stl_sizes = stl_sizes[idx]
+        stl_centers = stl_centers[idx]
 
         xp = self.array_provider
 
@@ -564,7 +567,7 @@ class DoMINODataPipe(Dataset):
         # geom_centers = self.array_provider.float32(geom_centers)
 
         surf_grid_max_min = xp.stack([s_min, s_max])
-        
+
         return_dict = {
             "length_scale": length_scale,
             "surf_grid": surf_grid,
@@ -596,6 +599,12 @@ class DoMINODataPipe(Dataset):
         surface_normals = data_dict["surface_normals"]
         surface_sizes = data_dict["surface_areas"]
         surface_fields = data_dict["surface_fields"]
+
+        idx = np.where(surface_sizes > 0)
+        surface_sizes = surface_sizes[idx]
+        surface_fields = surface_fields[idx]
+        surface_normals = surface_normals[idx]
+        surface_coordinates = surface_coordinates[idx]
 
         xp = self.array_provider
 

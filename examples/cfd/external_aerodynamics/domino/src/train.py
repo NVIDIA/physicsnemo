@@ -166,9 +166,8 @@ def loss_fn_area(
     Returns:
         Area-weighted loss as a scalar tensor
     """
-    scale_factor = 1.0  # Get this from the dataset
     area = area * area_scaling_factor
-    area_scale_factor = area * scale_factor**2.0
+    area_scale_factor = area
 
     # Separate the scalar and vector components.
     target_scalar, target_vector = torch.split(
@@ -200,14 +199,20 @@ def loss_fn_area(
     return loss
 
 
-def integral_loss_fn_new(output, target, area, normals, padded_value=-10):
-    drag_loss = drag_loss_fn(output, target, area, normals, padded_value=-10)
-    lift_loss = lift_loss_fn(output, target, area, normals, padded_value=-10)
+def integral_loss_fn(
+    output, target, area, normals, stream_velocity=None, padded_value=-10
+):
+    drag_loss = drag_loss_fn(
+        output, target, area, normals, stream_velocity, padded_value=-10
+    )
+    lift_loss = lift_loss_fn(
+        output, target, area, normals, stream_velocity, padded_value=-10
+    )
     return lift_loss + drag_loss
 
 
-def lift_loss_fn(output, target, area, normals, padded_value=-10):
-    vel_inlet = 30.0  # Get this from the dataset
+def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
+    vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
 
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -227,8 +232,8 @@ def lift_loss_fn(output, target, area, normals, padded_value=-10):
     return loss
 
 
-def drag_loss_fn(output, target, area, normals, padded_value=-10):
-    vel_inlet = 30.0  # Get this from the dataset
+def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
+    vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
     output_true = target * mask * area * (vel_inlet) ** 2.0
     output_pred = output * mask * area * (vel_inlet) ** 2.0
@@ -283,14 +288,16 @@ def validation_step(
                     target_surf = sampled_batched["surface_fields"]
                     surface_normals = sampled_batched["surface_normals"]
                     surface_areas = sampled_batched["surface_areas"]
+                    stream_velocity = sampled_batched["stream_velocity"]
                     surface_areas = torch.unsqueeze(surface_areas, -1)
 
                     loss_integral = (
-                        integral_loss_fn_new(
+                        integral_loss_fn(
                             prediction_surf,
                             target_surf,
                             surface_areas,
                             surface_normals,
+                            stream_velocity,
                             padded_value=-10,
                         )
                     ) * integral_scaling_factor  # * 0.0
@@ -374,6 +381,7 @@ def train_epoch(
                 surface_areas = sampled_batched["surface_areas"]
                 surface_areas = torch.unsqueeze(surface_areas, -1)
                 surface_normals = sampled_batched["surface_normals"]
+                stream_velocity = sampled_batched["stream_velocity"]
                 alternate_loss_surf = loss_fn_surface(
                     prediction_surf,
                     target_surf,
@@ -397,11 +405,12 @@ def train_epoch(
                 total_loss_terms.append(0.5 * alternate_loss_surf)
                 total_loss_terms.append(0.5 * alternate_loss_surf_area)
                 loss_integral = (
-                    integral_loss_fn_new(
+                    integral_loss_fn(
                         prediction_surf,
                         target_surf,
                         surface_areas,
                         surface_normals,
+                        stream_velocity,
                         padded_value=-10,
                     )
                 ) * integral_scaling_factor  # * 0.0
@@ -689,10 +698,7 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0:
             writer.add_scalars(
                 "Training vs. Validation Loss",
-                {
-                    "Training": avg_loss,
-                    # "Validation": avg_vloss
-                },
+                {"Training": avg_loss, "Validation": avg_vloss},
                 epoch_number,
             )
             writer.flush()
@@ -703,21 +709,8 @@ def main(cfg: DictConfig) -> None:
 
         if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
             best_vloss = avg_vloss
-        #     # if dist.rank == 0:
-        #     save_checkpoint(
-        #         to_absolute_path(best_model_path),
-        #         models=model,
-        #         optimizer=optimizer,
-        #         scheduler=scheduler,
-        #         scaler=scaler,
-        #         epoch=str(
-        #             best_vloss.item()
-        #         ),  # hacky way of using epoch to store metadata
-        #     )
-        if dist.rank == 0:
-            print(
-                f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.perf_counter() - start_time}"
-            )
+
+        print(f"Device { dist.device}, Best val loss {best_vloss}")
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
             save_checkpoint(
