@@ -384,7 +384,7 @@ def perform_convolution(
     bias: Optional[torch.nn.Parameter],
     input_spec: "ShardTensorSpec",
     conv_kwargs: Dict[str, Any],
-) -> ShardTensor:
+) -> torch.Tensor:
     """Apply a convolution operation using the PartialConvND autograd function.
 
     Args:
@@ -418,7 +418,7 @@ class PartialConvND(torch.autograd.Function):
         bias: Optional[torch.nn.Parameter],
         input_spec: "ShardTensorSpec",
         conv_kwargs: Dict[str, Any],
-    ) -> "ShardTensor":
+    ) -> torch.Tensor:
         """Forward pass of the distributed convolution.
 
         Args:
@@ -438,6 +438,7 @@ class PartialConvND(torch.autograd.Function):
         # Save local tensors to avoid distributed dispatch in backward pass
         ctx.save_for_backward(inputs, weights, bias)
 
+        # print type of inputs
         ctx.conv_kwargs = conv_kwargs
         # Perform local convolution on this shard
         local_chunk = aten.convolution.default(inputs, weights, bias, **conv_kwargs)
@@ -449,14 +450,14 @@ class PartialConvND(torch.autograd.Function):
         #     sharding_shapes="infer",
         # )
 
-        # ctx.requires_input_grad = inputs.requires_grad
+        ctx.requires_input_grad = inputs.requires_grad
         # return output
         return local_chunk
 
     @staticmethod
     @profile
     def backward(
-        ctx, grad_output: "ShardTensor"
+        ctx, grad_output: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], None, None]:
         """Backward pass for distributed convolution.
 
@@ -478,10 +479,14 @@ class PartialConvND(torch.autograd.Function):
             bias is not None,  # bias gradient if bias exists
         )
 
+        # Cast, in case the precision is off:
+        weight = weight.to(dtype=grad_output.dtype)
+        bias = bias.to(dtype=grad_output.dtype) if bias is not None else None
+        local_chunk = local_chunk.to(dtype=grad_output.dtype)
         # Compute local gradients
-        local_grad_output = grad_output._local_tensor
+        # local_grad_output = grad_output._local_tensor
         grad_input, grad_weight, grad_bias = aten.convolution_backward(
-            local_grad_output,
+            grad_output,
             local_chunk,
             weight,
             bias,
