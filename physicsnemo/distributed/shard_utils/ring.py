@@ -97,8 +97,11 @@ def perform_ring_iteration(
     local_size = dist.get_world_size(group=local_group)
 
     # Point-to-point communication
-    id_for_send = local_rank + 1 if local_rank < local_size - 1 else 0
-    id_for_recv = local_rank - 1 if local_rank > 0 else local_size - 1
+    local_id_for_send = local_rank + 1 if local_rank < local_size - 1 else 0
+    local_id_for_recv = local_rank - 1 if local_rank > 0 else local_size - 1
+
+    id_for_send = dist.get_global_rank(group=local_group, group_rank=local_id_for_send)
+    id_for_recv = dist.get_global_rank(group=local_group, group_rank=local_id_for_recv)
 
     if ring_config.ring_direction == "reverse":
         # Swap

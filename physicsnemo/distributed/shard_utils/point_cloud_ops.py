@@ -305,7 +305,9 @@ class RingBallQuery(torch.autograd.Function):
         # For the first iteration, use local tensors
         current_p1, current_p2 = (points1, points2)
 
-        rank = dist.get_rank(group=ctx.mesh.get_group(0))
+        mesh_rank = mesh.get_local_rank()
+
+        # Get all the ranks in the mesh:
         world_size = ring_config.mesh_size
 
         # Store results from each rank to merge in the correct order
@@ -319,8 +321,7 @@ class RingBallQuery(torch.autograd.Function):
 
         for i in range(world_size):
 
-            # Calculate which source rank this data is from
-            source_rank = (rank - i) % world_size
+            source_rank = (mesh_rank - i) % world_size
 
             # local_mapping, local_num_neighbors, local_outputs = ball_query_layer(
             #     current_p1, current_p2, current_l1, current_l2, **bq_kwargs
@@ -396,9 +397,6 @@ class RingBallQuery(torch.autograd.Function):
         Returns:
             Gradients for inputs (currently not implemented)
         """
-        # mesh = ctx.mesh
-        # ring_config = ctx.ring_config
-        # world_size = ring_config.mesh_size
 
         (
             points1,
@@ -407,9 +405,6 @@ class RingBallQuery(torch.autograd.Function):
             current_num_neighbors,
             current_outputs,
         ) = ctx.saved_tensors
-        # k = ctx.k
-        # radius = ctx.radius
-        # hash_grid = ctx.hash_grid
 
         # We need to do a ring again in the backward direction.
         # The backward pass is computed locally, and then the gradients
@@ -427,10 +422,6 @@ class RingBallQuery(torch.autograd.Function):
             num_neighbors_grad,
             outputs_grad,
         )
-        print(f"local_p2_grad: {local_p2_grad}")
-        # print(f"mapping_grad: {mapping_grad}")
-        # print(f"num_neighbors_grad: {num_neighbors_grad}")
-        # print(f"outputs_grad: {outputs_grad}")
         local_p1_grad = torch.zeros_like(points1)
 
         return (
