@@ -200,7 +200,7 @@ def loss_fn_area(
 
 
 def integral_loss_fn(
-    output, target, area, normals, stream_velocity=None, padded_value=-10
+    output, target, area, normals, stream_velocity=30.0, padded_value=-10
 ):
     drag_loss = drag_loss_fn(
         output, target, area, normals, stream_velocity, padded_value=-10
@@ -211,7 +211,7 @@ def integral_loss_fn(
     return lift_loss + drag_loss
 
 
-def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
+def lift_loss_fn(output, target, area, normals, stream_velocity=30.0, padded_value=-10):
     vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
 
@@ -232,7 +232,7 @@ def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
     return loss
 
 
-def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
+def drag_loss_fn(output, target, area, normals, stream_velocity=30.0, padded_value=-10):
     vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -288,7 +288,7 @@ def validation_step(
                     target_surf = sampled_batched["surface_fields"]
                     surface_normals = sampled_batched["surface_normals"]
                     surface_areas = sampled_batched["surface_areas"]
-                    stream_velocity = sampled_batched["stream_velocity"]
+                    stream_velocity = sampled_batched["global_params_reference"][0, 0]
                     surface_areas = torch.unsqueeze(surface_areas, -1)
 
                     loss_integral = (
@@ -506,6 +506,14 @@ def main(cfg: DictConfig) -> None:
     else:
         num_surf_vars = None
 
+    global_features = 0
+    global_params_names = list(cfg.variables.global_parameters.keys())
+    for param in global_params_names:
+        if cfg.variables.global_parameters[param].type == "vector":
+            global_features += len(cfg.variables.global_parameters[param].reference)
+        else:
+            global_features += 1
+
     vol_save_path = os.path.join(
         "outputs", cfg.project.name, "volume_scaling_factors.npy"
     )
@@ -527,6 +535,7 @@ def main(cfg: DictConfig) -> None:
         "train",
         volume_variable_names,
         surface_variable_names,
+        global_params_names,
         vol_factors,
         surf_factors,
     )
@@ -535,6 +544,7 @@ def main(cfg: DictConfig) -> None:
         "val",
         volume_variable_names,
         surface_variable_names,
+        global_params_names,
         vol_factors,
         surf_factors,
     )
@@ -568,6 +578,7 @@ def main(cfg: DictConfig) -> None:
         input_features=3,
         output_features_vol=num_vol_vars,
         output_features_surf=num_surf_vars,
+        global_features=global_features,
         model_parameters=cfg.model,
     ).to(dist.device)
     model = torch.compile(model, disable=True)  # TODO make this configurable

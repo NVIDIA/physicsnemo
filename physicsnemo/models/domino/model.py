@@ -739,6 +739,7 @@ class DoMINO(nn.Module):
         input_features: int,
         output_features_vol: int | None = None,
         output_features_surf: int | None = None,
+        global_features: int = 2,
         model_parameters=None,
     ):
         """
@@ -757,7 +758,7 @@ class DoMINO(nn.Module):
         self.input_features = input_features
         self.output_features_vol = output_features_vol
         self.output_features_surf = output_features_surf
-
+        self.global_features = global_features
         if self.output_features_vol is None and self.output_features_surf is None:
             raise ValueError(
                 "At least one of `output_features_vol` or `output_features_surf` must be specified"
@@ -785,7 +786,7 @@ class DoMINO(nn.Module):
             # Defining the parameter model
             base_layer_p = model_parameters.parameter_model.base_layer
             self.parameter_model = ParameterModel(
-                input_features=2, model_parameters=model_parameters.parameter_model
+                input_features=self.global_features, model_parameters=model_parameters.parameter_model
             )
         else:
             base_layer_p = 0
@@ -1070,8 +1071,8 @@ class DoMINO(nn.Module):
         surface_neighbors_normals,
         surface_areas,
         surface_neighbors_areas,
-        inlet_velocity,
-        air_density,
+        global_params_values,
+        global_params_reference,
     ):
         """Function to approximate solution given the neighborhood information"""
         num_variables = self.num_variables_surf
@@ -1080,24 +1081,18 @@ class DoMINO(nn.Module):
         num_sample_points = surface_mesh_neighbors.shape[2] + 1
 
         if self.encode_parameters:
-            inlet_velocity = torch.unsqueeze(inlet_velocity, 1)
-            inlet_velocity = inlet_velocity.expand(
-                inlet_velocity.shape[0],
-                surface_mesh_centers.shape[1],
-                inlet_velocity.shape[2],
-            )
-            inlet_velocity = inlet_velocity / self.param_scaling_factors[0]
-
-            air_density = torch.unsqueeze(air_density, 1)
-            air_density = air_density.expand(
-                air_density.shape[0],
-                surface_mesh_centers.shape[1],
-                air_density.shape[2],
-            )
-            air_density = air_density / self.param_scaling_factors[1]
-
-            params = torch.cat((inlet_velocity, air_density), axis=-1)
-            param_encoding = self.parameter_model(params)
+            processed_parameters = []
+            for k, param in enumerate(global_params_values):
+                param = torch.unsqueeze(param, 1)
+                param = param.expand(
+                    param.shape[0],
+                    surface_mesh_centers.shape[1],
+                    param.shape[2],
+                )
+                param = param / global_params_reference[k]
+                processed_parameters.append(param)
+            processed_parameters = torch.cat(processed_parameters, axis=-1)
+            param_encoding = self.parameter_model(processed_parameters)
 
         if self.use_surface_normals:
             if not self.use_surface_area:
@@ -1172,8 +1167,8 @@ class DoMINO(nn.Module):
         volume_mesh_centers,
         encoding_g,
         encoding_node,
-        inlet_velocity,
-        air_density,
+        global_params_values,
+        global_params_reference,
         eval_mode,
         num_sample_points=10,
         noise_intensity=50,
@@ -1189,22 +1184,18 @@ class DoMINO(nn.Module):
             agg_model = self.agg_model_surf
 
         if self.encode_parameters:
-            inlet_velocity = torch.unsqueeze(inlet_velocity, 1)
-            inlet_velocity = inlet_velocity.expand(
-                inlet_velocity.shape[0],
-                volume_mesh_centers.shape[1],
-                inlet_velocity.shape[2],
-            )
-            inlet_velocity = inlet_velocity / self.param_scaling_factors[0]
-
-            air_density = torch.unsqueeze(air_density, 1)
-            air_density = air_density.expand(
-                air_density.shape[0], volume_mesh_centers.shape[1], air_density.shape[2]
-            )
-            air_density = air_density / self.param_scaling_factors[1]
-
-            params = torch.cat((inlet_velocity, air_density), axis=-1)
-            param_encoding = self.parameter_model(params)
+            processed_parameters = []
+            for k, param in enumerate(global_params_values):
+                param = torch.unsqueeze(param, 1)
+                param = param.expand(
+                    param.shape[0],
+                    volume_mesh_centers.shape[1],
+                    param.shape[2],
+                )
+                param = param / global_params_reference[k]
+                processed_parameters.append(param)
+            processed_parameters = torch.cat(processed_parameters, axis=-1)
+            param_encoding = self.parameter_model(processed_parameters)
 
         for f in range(num_variables):
             for p in range(num_sample_points):
@@ -1261,8 +1252,8 @@ class DoMINO(nn.Module):
         surf_min = data_dict["surface_min_max"][:, 0]
 
         # Parameters
-        stream_velocity = data_dict["stream_velocity"]
-        air_density = data_dict["air_density"]
+        global_params_values = data_dict["global_params_values"]
+        global_params_reference = data_dict["global_params_reference"]
 
         if self.output_features_vol is not None:
             # Represent geometry on computational grid
@@ -1337,8 +1328,8 @@ class DoMINO(nn.Module):
                 volume_mesh_centers,
                 encoding_g_vol,
                 encoding_node_vol,
-                stream_velocity,
-                air_density,
+                global_params_values,
+                global_params_reference,
                 eval_mode="volume",
             )
         else:
@@ -1367,8 +1358,8 @@ class DoMINO(nn.Module):
                     surface_mesh_centers,
                     encoding_g_surf,
                     encoding_node_surf,
-                    stream_velocity,
-                    air_density,
+                    global_params_values,
+                    global_params_reference,
                     eval_mode="surface",
                     num_sample_points=1,
                     noise_intensity=500,
@@ -1383,8 +1374,8 @@ class DoMINO(nn.Module):
                     surface_neighbors_normals,
                     surface_areas,
                     surface_neighbors_areas,
-                    stream_velocity,
-                    air_density,
+                    global_params_values,
+                    global_params_reference,
                 )
         else:
             output_surf = None

@@ -179,6 +179,9 @@ class DoMINODataConfig:
     volume_factors: Optional[Sequence] = None
     bounding_box_dims: Optional[Union[BoundingBox, Sequence]] = None
 
+    # Global parameters:
+    global_params_names: Optional[Sequence] = ("inlet_velocity", "air_density")
+
     grid_resolution: Union[Sequence, ArrayType] = (256, 96, 64)
     normalize_coordinates: bool = False
     sample_in_bbox: bool = False
@@ -318,10 +321,9 @@ class DoMINODataPipe(Dataset):
         # Always read these keys
         self.keys_to_read = ["stl_coordinates", "stl_centers", "stl_faces", "stl_areas"]
         with self.device_context:
-            xp = self.array_provider
             self.keys_to_read_if_available = {
-                "stream_velocity": xp.asarray(30.00),
-                "air_density": xp.asarray(1.205),
+                "global_params_values": {"inlet_velocity": [30.0], "air_density": 1.205},
+                "global_params_reference": {"inlet_velocity": [30.0], "air_density": 1.205},
             }
         self.volume_keys = ["volume_mesh_centers", "volume_fields"]
         self.surface_keys = [
@@ -497,13 +499,29 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_combined(self, data_dict):
+        xp = self.array_provider
 
         # Pull these out and force to fp32:
         with self.device_context:
-            STREAM_VELOCITY = data_dict["stream_velocity"].astype(
-                self.array_provider.float32
-            )
-            AIR_DENSITY = data_dict["air_density"].astype(self.array_provider.float32)
+            global_params_values_list = []
+            global_params_reference_list = []
+            for name in self.config.global_params_names:
+                value = data_dict["global_params_values"][name]
+                reference_value = data_dict["global_params_reference"][name]
+
+                if isinstance(value, (list, tuple, np.ndarray)):
+                    global_params_values_list.extend(value)
+                else:
+                    global_params_values_list.append(value)
+
+                if isinstance(reference_value, (list, tuple, np.ndarray)):
+                    global_params_reference_list.extend(reference_value)
+                else:
+                    global_params_reference_list.append(reference_value)
+            
+            global_params_values = xp.array(global_params_values_list, dtype=xp.float32)
+            global_params_reference = xp.array(global_params_reference_list, dtype=xp.float32)
+        
 
         # Pull these pieces out of the data_dict for manipulation
         stl_vertices = data_dict["stl_coordinates"]
@@ -514,7 +532,6 @@ class DoMINODataPipe(Dataset):
         stl_sizes = stl_sizes[idx]
         stl_centers = stl_centers[idx]
 
-        xp = self.array_provider
 
         # Make sure the mesh_indices_flattened is an integer array:
         if mesh_indices_flattened.dtype != xp.int32:
@@ -573,10 +590,8 @@ class DoMINODataPipe(Dataset):
             "surf_grid": surf_grid,
             "sdf_surf_grid": sdf_surf_grid,
             "surface_min_max": surf_grid_max_min,
-            "stream_velocity": xp.expand_dims(
-                xp.array(STREAM_VELOCITY, dtype=xp.float32), -1
-            ),
-            "air_density": xp.expand_dims(xp.array(AIR_DENSITY, dtype=xp.float32), -1),
+            "global_params_values": xp.expand_dims(global_params_values, -1),
+            "global_params_reference": xp.expand_dims(global_params_reference, -1),
             "geometry_coordinates": geom_centers,
         }
 
@@ -1379,7 +1394,7 @@ class CachedDoMINODataset(Dataset):
 
 
 def create_domino_dataset(
-    cfg, phase, volume_variable_names, surface_variable_names, vol_factors, surf_factors
+    cfg, phase, volume_variable_names, surface_variable_names, global_params_names, vol_factors, surf_factors
 ):
     if phase == "train":
         input_path = cfg.data.input_dir
@@ -1406,6 +1421,7 @@ def create_domino_dataset(
             grid_resolution=cfg.model.interp_res,
             volume_variables=volume_variable_names,
             surface_variables=surface_variable_names,
+            global_params_names=global_params_names,
             normalize_coordinates=True,
             sampling=True,
             sample_in_bbox=True,
