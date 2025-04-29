@@ -289,6 +289,7 @@ class RandomPatching2D(BasePatching2D):
             self.patch_shape[1],
             device=input.device,
         )
+        out = out.to(memory_format=torch.channels_last if input.is_contiguous(memory_format=torch.channels_last) else torch.contiguous_format)
         if additional_input is not None:
             add_input_interp = torch.nn.functional.interpolate(
                 input=additional_input, size=self.patch_shape, mode="bilinear"

@@ -64,6 +64,8 @@ class Linear(torch.nn.Module):
         A scaling factor to multiply with the initialized weights. By default 1.
     init_bias : float, optional
         A scaling factor to multiply with the initialized biases. By default 0.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     """
 
     def __init__(
@@ -145,6 +147,10 @@ class Conv2d(torch.nn.Module):
         A scaling factor to multiply with the initialized weights. By default 1.0.
     init_bias : float, optional
         A scaling factor to multiply with the initialized biases. By default 0.0.
+    fused_conv_bias: bool, optional
+        A boolean flag indicating whether bias will be passed as a parameter of conv2d. By default False.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     """
 
     def __init__(
@@ -300,7 +306,15 @@ class GroupNorm(torch.nn.Module):
     eps : float, optional
         A small number added to the variance to prevent division by zero, by default
         1e-5.
-
+    use_apex_gn : bool, optional
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        Need to set this as False on cpu. Defaults to False.
+    fused_act : bool, optional  
+        Whether to fuse the activation function with GroupNorm. Defaults to False.
+    act : str, optional  
+        The activation function to use when fusing activation with GroupNorm. Defaults to None.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     Notes
     -----
     If `num_channels` is not divisible by `num_groups`, the actual number of groups
@@ -318,6 +332,9 @@ class GroupNorm(torch.nn.Module):
         act: str = None,
         amp_mode: bool = False,
     ):
+        if fused_act and act is None:
+            raise ValueError("'act' must be specified when 'fused_act' is set to True.")
+        
         super().__init__()
         self.num_groups = min(num_groups, num_channels // min_channels_per_group)
         self.eps = eps
@@ -494,6 +511,17 @@ class UNetBlock(torch.nn.Module):
     init_attn : dict, optional
         Initialization parameters specific to attention mechanism layers.
         Defaults to 'init' if not provided.
+    use_apex_gn : bool, optional
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        Need to set this as False on cpu. Defaults to False.
+    act : str, optional  
+        The activation function to use when fusing activation with GroupNorm. Defaults to None.
+    fused_conv_bias: bool, optional
+        A boolean flag indicating whether bias will be passed as a parameter of conv2d. By default False.
+    profile_mode:
+        A boolean flag indicating whether to enable all nvtx annotations during profiling.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     """
 
     def __init__(
@@ -516,7 +544,6 @@ class UNetBlock(torch.nn.Module):
         init_zero: Dict[str, Any] = dict(init_weight=0),
         init_attn: Any = None,
         use_apex_gn: bool = False,
-        fused_act: bool = True,
         act: str = "silu",
         fused_conv_bias: bool = False,
         profile_mode: bool = False,
@@ -543,7 +570,7 @@ class UNetBlock(torch.nn.Module):
             num_channels=in_channels,
             eps=eps,
             use_apex_gn=use_apex_gn,
-            fused_act=fused_act,
+            fused_act=True,
             act=act,
             amp_mode=amp_mode,
         )
@@ -577,7 +604,7 @@ class UNetBlock(torch.nn.Module):
                 eps=eps,
                 use_apex_gn=use_apex_gn,
                 act=act,
-                fused_act=fused_act,
+                fused_act=True,
                 amp_mode=amp_mode,
             )
         self.conv1 = Conv2d(
@@ -684,6 +711,8 @@ class PositionalEmbedding(torch.nn.Module):
         Maximum number of positions for the embeddings, by default 10000.
     endpoint : bool, optional
         If True, the embedding considers the endpoint. By default False.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
 
     """
 
@@ -731,6 +760,8 @@ class FourierEmbedding(torch.nn.Module):
     scale : int, optional
         A scale factor applied to the random frequencies, controlling their range
         and thereby the frequency of oscillations in the embedding space. By default 16.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     """
 
     def __init__(self, num_channels: int, scale: int = 16, amp_mode: bool = False):

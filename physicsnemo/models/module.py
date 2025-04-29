@@ -24,6 +24,7 @@ import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+import copy
 
 import torch
 
@@ -31,6 +32,7 @@ import physicsnemo
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.registry import ModelRegistry
 from physicsnemo.utils.filesystem import _download_cached, _get_fs
+from physicsnemo.models.util_compatibility import convert_ckp_apex
 
 
 class Module(torch.nn.Module):
@@ -376,40 +378,22 @@ class Module(torch.nn.Module):
             # Load model arguments and instantiate the model
             with open(local_path.joinpath("args.json"), "r") as f:
                 args = json.load(f)
-            apex_in_ckp = "use_apex_gn" in args["__args__"].keys()
-
+                
+            ckp_args = copy.deepcopy(args)
+            
             # Merge model_args (adding new keys and updating existing ones)
             if model_args is not None:
                 args["__args__"].update(model_args)
+                
             model = cls.instantiate(args)
+            
             # Load the model weights
             model_dict = torch.load(
                 local_path.joinpath("model.pt"), map_location=model.device
             )
-            # TODO: for corrdiff model architecture specifically
-            if (
-                not apex_in_ckp
-                and "use_apex_gn" in args["__args__"].keys()
-                and args["__args__"]["use_apex_gn"]
-            ):
-                filtered_state_dict = {}
-                for key, value in model_dict.items():
-                    filtered_state_dict[key] = value  # Keep the original key
-                    # Duplicate weight/bias for Apex GroupNorm (without removing the original)
-                    for norm_layer in ["norm0", "norm1", "norm2", "aux_norm"]:
-                        if f"{norm_layer}.weight" in key:
-                            new_key = key.replace(
-                                f"{norm_layer}.weight", f"{norm_layer}.gn.weight"
-                            )
-                            filtered_state_dict[new_key] = value  # Duplicate weight
-                        elif f"{norm_layer}.bias" in key:
-                            new_key = key.replace(
-                                f"{norm_layer}.bias", f"{norm_layer}.gn.bias"
-                            )
-                            filtered_state_dict[new_key] = value  # Duplicate bias
-                model.load_state_dict(filtered_state_dict, strict=False)
-            else:
-                model.load_state_dict(model_dict, strict=False)
+            
+            model_dict = convert_ckp_apex(ckp_args,model_args,model_dict)
+            model.load_state_dict(model_dict, strict=False)
         return model
 
     @staticmethod

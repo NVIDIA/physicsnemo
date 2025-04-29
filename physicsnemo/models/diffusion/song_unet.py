@@ -114,6 +114,15 @@ class SongUNet(Module):
     additive_pos_embed : bool, optional
         If True, adds a learned positional embedding after the first convolution layer.
         Used in StormCast model. By default False.
+    use_apex_gn : bool, optional
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        Need to set this as False on cpu. Defaults to False.
+    act : str, optional  
+        The activation function to use when fusing activation with GroupNorm. Defaults to None.
+    profile_mode:
+        A boolean flag indicating whether to enable all nvtx annotations during profiling.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
 
     Reference
     ----------
@@ -159,9 +168,7 @@ class SongUNet(Module):
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
         use_apex_gn: bool = False,
-        fused_act: bool = True,
         act: str = "silu",
-        fused_conv_bias: bool = True,
         profile_mode: bool = False,
         amp_mode: bool = False,
     ):
@@ -205,9 +212,8 @@ class SongUNet(Module):
             init_zero=init_zero,
             init_attn=init_attn,
             use_apex_gn=use_apex_gn,
-            fused_act=fused_act,
             act=act,
-            fused_conv_bias=fused_conv_bias,
+            fused_conv_bias=True,
             profile_mode=profile_mode,
             amp_mode=amp_mode,
         )
@@ -289,7 +295,7 @@ class SongUNet(Module):
                     in_channels=cin,
                     out_channels=cout,
                     kernel=3,
-                    fused_conv_bias=fused_conv_bias,
+                    fused_conv_bias=True,
                     amp_mode=amp_mode,
                     **init,
                 )
@@ -310,7 +316,7 @@ class SongUNet(Module):
                         in_channels=caux,
                         out_channels=cout,
                         kernel=1,
-                        fused_conv_bias=fused_conv_bias,
+                        fused_conv_bias=True,
                         amp_mode=amp_mode,
                         **init,
                     )
@@ -322,7 +328,7 @@ class SongUNet(Module):
                         down=True,
                         resample_filter=resample_filter,
                         fused_resample=True,
-                        fused_conv_bias=fused_conv_bias,
+                        fused_conv_bias=True,
                         amp_mode=amp_mode,
                         **init,
                     )
@@ -380,7 +386,7 @@ class SongUNet(Module):
                     in_channels=cout,
                     out_channels=out_channels,
                     kernel=3,
-                    fused_conv_bias=fused_conv_bias,
+                    fused_conv_bias=True,
                     amp_mode=amp_mode,
                     **init_zero,
                 )
@@ -543,7 +549,19 @@ class SongUNetPosEmbd(SongUNet):
     checkpoint_level : int, optional
         Number of layers that should use gradient checkpointing (0 disables checkpointing).
         Higher values trade memory for computation. By default 0.
-
+    additive_pos_embed : bool, optional
+        If True, adds a learned positional embedding after the first convolution layer.
+        Used in StormCast model. By default False.
+    use_apex_gn : bool, optional
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        Need to set this as False on cpu. Defaults to False.
+    act : str, optional  
+        The activation function to use when fusing activation with GroupNorm. Defaults to None.
+    profile_mode:
+        A boolean flag indicating whether to enable all nvtx annotations during profiling.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
+        
     Note
     -----
     Equivalent to the original implementation by Song et al., available at
@@ -612,9 +630,7 @@ class SongUNetPosEmbd(SongUNet):
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
         use_apex_gn: bool = False,
-        fused_act: bool = True,
         act: str = "silu",
-        fused_conv_bias: bool = True,
         profile_mode: bool = False,
         amp_mode: bool = False,
     ):
@@ -639,9 +655,7 @@ class SongUNetPosEmbd(SongUNet):
             checkpoint_level,
             additive_pos_embed,
             use_apex_gn,
-            fused_act,
             act,
-            fused_conv_bias,
             profile_mode,
             amp_mode,
         )

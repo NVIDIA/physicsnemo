@@ -26,7 +26,7 @@ from physicsnemo import Module
 from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
 from physicsnemo.distributed import DistributedManager
 
-from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE, ResidualLoss_Opt
+from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE
 from physicsnemo.utils.patching import RandomPatching2D
 
 from physicsnemo.launch.logging.wandb import initialize_wandb
@@ -326,6 +326,7 @@ def main(cfg: DictConfig) -> None:
     patch_num = getattr(cfg.training.hp, "patch_num", 1)
     max_patch_per_gpu = getattr(cfg.training.hp, "max_patch_per_gpu", 1)
 
+    
     # calculate patch per iter
     if hasattr(cfg.training.hp, "max_patch_per_gpu") and max_patch_per_gpu > 1:
         max_patch_num_per_iter = min(
@@ -343,13 +344,18 @@ def main(cfg: DictConfig) -> None:
         )
     else:
         patch_nums_iter = [patch_num]
+        
+    use_patch_grad_acc = False
+    if len(patch_nums_iter) > 1:
+        use_patch_grad_acc = True
+
     # Instantiate the loss function
-    if cfg.model.name == "patched_diffusion" and len(patch_nums_iter)>1:
-        loss_fn = ResidualLoss_Opt(
-            regression_net=regression_net,
-            hr_mean_conditioning=cfg.model.hr_mean_conditioning,
-        )
-    elif cfg.model.name in (
+    # if cfg.model.name == "patched_diffusion" and len(patch_nums_iter)>1:
+    #     loss_fn = ResidualLoss_Opt(
+    #         regression_net=regression_net,
+    #         hr_mean_conditioning=cfg.model.hr_mean_conditioning,
+    #     )
+    if cfg.model.name in (
         "diffusion",
         "patched_diffusion",
         "lt_aware_patched_diffusion",
@@ -409,11 +415,11 @@ def main(cfg: DictConfig) -> None:
                 tick_start_nimg = cur_nimg
                 tick_start_time = time.time()
 
-                if cur_nimg - start_nimg == 14 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Starting Profiler at {cur_nimg}")
                     torch.cuda.profiler.start()
 
-                if cur_nimg - start_nimg == 16 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 25 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Stoping Profiler at {cur_nimg}")
                     torch.cuda.profiler.stop()
 
@@ -456,6 +462,7 @@ def main(cfg: DictConfig) -> None:
                                 "img_clean": img_clean,
                                 "img_lr": img_lr,
                                 "augment_pipe": None,
+                                "use_patch_grad_acc": use_patch_grad_acc
                             }
 
                             if lead_time_label:
@@ -467,7 +474,7 @@ def main(cfg: DictConfig) -> None:
                                 )
                             else:
                                 lead_time_label = None
-                            if isinstance(loss_fn, ResidualLoss_Opt):   
+                            if use_patch_grad_acc:   
                                 loss_fn.y_mean = None
 
                             
@@ -594,6 +601,7 @@ def main(cfg: DictConfig) -> None:
                                         "img_clean": img_clean_valid,
                                         "img_lr": img_lr_valid,
                                         "augment_pipe": None,
+                                        "use_patch_grad_acc": use_patch_grad_acc
                                     }
                                     if lead_time_label_valid:
                                         lead_time_label_valid = (
@@ -602,7 +610,7 @@ def main(cfg: DictConfig) -> None:
                                         loss_valid_kwargs.update(
                                             {"lead_time_label": lead_time_label_valid}
                                         )
-                                    if isinstance(loss_fn, ResidualLoss_Opt):   
+                                    if use_patch_grad_acc:   
                                         loss_fn.y_mean = None
 
                                     
