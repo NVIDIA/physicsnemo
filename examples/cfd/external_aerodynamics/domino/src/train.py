@@ -72,8 +72,9 @@ nvmlInit()
 
 from physicsnemo.utils.profiling import profile, Profiler
 
-# Profiler().enable("line_profiler")
-# Profiler().initialize()
+Profiler().enable("line_profiler")
+Profiler().enable("torch")
+Profiler().initialize()
 
 
 def loss_fn(
@@ -218,8 +219,13 @@ def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
     output_true = target * mask * area * (vel_inlet) ** 2.0
     output_pred = output * mask * area * (vel_inlet) ** 2.0
 
-    pres_true = output_true[:, :, 0] * normals[:, :, 2]
-    pres_pred = output_pred[:, :, 0] * normals[:, :, 2]
+    normals = torch.select(normals, 2, 2)
+    # output_true_0 = output_true[:, :, 0]
+    output_true_0 = output_true.select(2, 0)
+    output_pred_0 = output_pred.select(2, 0)
+
+    pres_true = output_true_0 * normals
+    pres_pred = output_pred_0 * normals
 
     wz_true = output_true[:, :, -1]
     wz_pred = output_pred[:, :, -1]
@@ -358,6 +364,7 @@ def train_epoch(
     loss_interval = 1
 
     gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+    start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
 
         sampled_batched = dict_to_device(sample_batched, device)
@@ -431,7 +438,8 @@ def train_epoch(
             optimizer.zero_grad()
         # Gather data and report
         running_loss += loss.item()
-
+        elapsed_time = time.perf_counter() - start_time
+        start_time = time.perf_counter()
         gpu_end_info = nvmlDeviceGetMemoryInfo(gpu_handle)
         gpu_memory_used = gpu_end_info.used / (1024**3)
         gpu_memory_delta = (gpu_end_info.used - gpu_start_info.used) / (1024**3)
@@ -446,8 +454,9 @@ def train_epoch(
                 f"    loss surface area: {alternate_loss_surf_area.item():.5f}\n"
             )
             logging_string += f"    loss integral: {loss_integral.item():.5f}\n"
-        logging_string += f"  GPU memory used: {gpu_memory_used} Gb\n"
-        logging_string += f"  GPU memory delta: {gpu_memory_delta} Gb\n"
+        logging_string += f"  GPU memory used: {gpu_memory_used:.3f} Gb\n"
+        logging_string += f"  GPU memory delta: {gpu_memory_delta:.3f} Gb\n"
+        logging_string += f"  Time taken: {elapsed_time:.2f} seconds\n"
         logger.info(logging_string)
         gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
 
@@ -635,98 +644,115 @@ def main(cfg: DictConfig) -> None:
 
     initial_integral_factor_orig = cfg.model.integral_loss_scaling_factor
 
-    for epoch in range(init_epoch, cfg.train.epochs):
-        start_time = time.perf_counter()
-        logger.info(f"Device {dist.device}, epoch {epoch_number}:")
+    with Profiler():
+        for epoch in range(init_epoch, cfg.train.epochs):
+            start_time = time.perf_counter()
+            logger.info(f"Device {dist.device}, epoch {epoch_number}:")
 
-        train_sampler.set_epoch(epoch)
-        val_sampler.set_epoch(epoch)
+            train_sampler.set_epoch(epoch)
+            val_sampler.set_epoch(epoch)
 
-        initial_integral_factor = initial_integral_factor_orig
+            initial_integral_factor = initial_integral_factor_orig
 
-        if epoch > 250:
-            surface_scaling_loss = 1.0 * cfg.model.surf_loss_scaling
-        else:
-            surface_scaling_loss = cfg.model.surf_loss_scaling
+            if epoch > 250:
+                surface_scaling_loss = 1.0 * cfg.model.surf_loss_scaling
+            else:
+                surface_scaling_loss = cfg.model.surf_loss_scaling
 
-        model.train(True)
-        epoch_start_time = time.perf_counter()
-        avg_loss = train_epoch(
-            dataloader=train_dataloader,
-            model=model,
-            optimizer=optimizer,
-            scaler=scaler,
-            tb_writer=writer,
-            logger=logger,
-            gpu_handle=gpu_handle,
-            epoch_index=epoch,
-            device=dist.device,
-            integral_scaling_factor=initial_integral_factor,
-            loss_fn_type=cfg.model.loss_function,
-            vol_loss_scaling=cfg.model.vol_loss_scaling,
-            surf_loss_scaling=surface_scaling_loss,
-        )
-        epoch_end_time = time.perf_counter()
-        logger.info(
-            f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time} seconds"
-        )
-        epoch_end_time = time.perf_counter()
-
-        model.eval()
-        avg_vloss = validation_step(
-            dataloader=val_dataloader,
-            model=model,
-            device=dist.device,
-            logger=logger,
-            use_sdf_basis=cfg.model.use_sdf_in_basis_func,
-            use_surface_normals=cfg.model.use_surface_normals,
-            integral_scaling_factor=initial_integral_factor,
-            loss_fn_type=cfg.model.loss_function,
-            vol_loss_scaling=cfg.model.vol_loss_scaling,
-            surf_loss_scaling=surface_scaling_loss,
-        )
-
-        scheduler.step()
-        logger.info(
-            f"Device {dist.device} "
-            f"LOSS train {avg_loss:.5f} "
-            f"valid {avg_vloss:.5f} "
-            f"Current lr {scheduler.get_last_lr()[0]}"
-            f"Integral factor {initial_integral_factor}"
-        )
-
-        if dist.rank == 0:
-            writer.add_scalars(
-                "Training vs. Validation Loss",
-                {"Training": avg_loss, "Validation": avg_vloss},
-                epoch_number,
-            )
-            writer.flush()
-
-        # Track best performance, and save the model's state
-        if dist.world_size > 1:
-            torch.distributed.barrier()
-
-        if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
-            best_vloss = avg_vloss
-
-        print(f"Device { dist.device}, Best val loss {best_vloss}")
-
-        if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
-            save_checkpoint(
-                to_absolute_path(model_save_path),
-                models=model,
+            model.train(True)
+            epoch_start_time = time.perf_counter()
+            avg_loss = train_epoch(
+                dataloader=train_dataloader,
+                model=model,
                 optimizer=optimizer,
-                scheduler=scheduler,
                 scaler=scaler,
-                epoch=epoch,
+                tb_writer=writer,
+                logger=logger,
+                gpu_handle=gpu_handle,
+                epoch_index=epoch,
+                device=dist.device,
+                integral_scaling_factor=initial_integral_factor,
+                loss_fn_type=cfg.model.loss_function,
+                vol_loss_scaling=cfg.model.vol_loss_scaling,
+                surf_loss_scaling=surface_scaling_loss,
+            )
+            epoch_end_time = time.perf_counter()
+            logger.info(
+                f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time} seconds"
+            )
+            epoch_end_time = time.perf_counter()
+
+            model.eval()
+            avg_vloss = validation_step(
+                dataloader=val_dataloader,
+                model=model,
+                device=dist.device,
+                logger=logger,
+                use_sdf_basis=cfg.model.use_sdf_in_basis_func,
+                use_surface_normals=cfg.model.use_surface_normals,
+                integral_scaling_factor=initial_integral_factor,
+                loss_fn_type=cfg.model.loss_function,
+                vol_loss_scaling=cfg.model.vol_loss_scaling,
+                surf_loss_scaling=surface_scaling_loss,
             )
 
-        epoch_number += 1
+            scheduler.step()
+            logger.info(
+                f"Device {dist.device} "
+                f"LOSS train {avg_loss:.5f} "
+                f"valid {avg_vloss:.5f} "
+                f"Current lr {scheduler.get_last_lr()[0]}"
+                f"Integral factor {initial_integral_factor}"
+            )
 
-        if scheduler.get_last_lr()[0] == 1e-6:
-            print("Training ended")
-            exit()
+            if dist.rank == 0:
+                writer.add_scalars(
+                    "Training vs. Validation Loss",
+                    {
+                        "Training": avg_loss,
+                        # "Validation": avg_vloss
+                    },
+                    epoch_number,
+                )
+                writer.flush()
+
+            # Track best performance, and save the model's state
+            if dist.world_size > 1:
+                torch.distributed.barrier()
+
+            if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
+                best_vloss = avg_vloss
+            #     # if dist.rank == 0:
+            #     save_checkpoint(
+            #         to_absolute_path(best_model_path),
+            #         models=model,
+            #         optimizer=optimizer,
+            #         scheduler=scheduler,
+            #         scaler=scaler,
+            #         epoch=str(
+            #             best_vloss.item()
+            #         ),  # hacky way of using epoch to store metadata
+            #     )
+            if dist.rank == 0:
+                print(
+                    f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.perf_counter() - start_time}"
+                )
+
+            if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
+                save_checkpoint(
+                    to_absolute_path(model_save_path),
+                    models=model,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    epoch=epoch,
+                )
+
+            epoch_number += 1
+
+            if scheduler.get_last_lr()[0] == 1e-6:
+                print("Training ended")
+                break
 
 
 if __name__ == "__main__":

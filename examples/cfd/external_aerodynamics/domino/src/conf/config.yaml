@@ -32,15 +32,19 @@ resume_dir: ${output}/models
 
 data_processor: # Data processor configurable parameters
   kind: drivaer_aws # must be either drivesim or drivaer_aws
-  output_dir: /lustre/rranade/modulus_dev/data/aws_data_all/
+  output_dir: /user_data/datasets/domino_volume_data_zarr/
   input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
   cached_dir: /lustre/cached/drivaer_aws/drivaer_data_full/
   use_cache: false
   num_processors: 12
 
 data: # Input directory for training and validation data
-  input_dir: /lustre/rranade/modulus_dev/data/aws_data_all/
-  input_dir_val: /lustre/rranade/modulus_dev/data/aws_data_all_val/
+  input_dir: /user_data/datasets/benchmark_datasets/domino_volume_data/
+  input_dir_val: /user_data/datasets/domino_volume_data_val/
+  # input_dir: /user_data/datasets/benchmark_datasets/domino_volume_data/
+  # input_dir_val: //user_data/datasets/domino_volume_data_cleaned_val/
+  # input_dir: /user_data/datasets/domino_volume_data_cleaned/
+  # input_dir_val: //user_data/datasets/domino_volume_data_cleaned_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25 , -0.32]
     max: [8.5 , 2.25  , 3.00]
@@ -64,13 +68,13 @@ variables:
 model:
   model_type: combined # train which model? surface, volume, combined
   loss_function: 
-    loss_type: "mse" # mse or rmse
+    loss_type: "rmse" # mse or rmse
     area_weighing_factor: 10000 # Generally inverse of maximum area
   interp_res: [128, 128, 128] # resolution of latent space 128, 64, 48
   use_sdf_in_basis_func: true # SDF in basis function network
   positional_encoding: false # calculate positional encoding?
-  volume_points_sample: 8192 # Number of points to sample in volume per epoch
-  surface_points_sample: 8192 # Number of points to sample on surface per epoch
+  volume_points_sample: 200000 # Number of points to sample in volume per epoch
+  surface_points_sample: 200000 # Number of points to sample on surface per epoch
   surface_sampling_algorithm: area_weighted # random or area_weighted
   geom_points_sample: 300_000 # Number of points to sample on STL per epoch
   surface_neighbors: true # Pre-compute surface neighborhood from input data
@@ -118,8 +122,8 @@ model:
     num_modes: 5
 
 train: # Training configurable parameters
-  epochs: 1000
-  checkpoint_interval: 1
+  epochs: 1
+  checkpoint_interval: 100
   dataloader:
     batch_size: 1
     pin_memory: false # if the preprocessing is outputing GPU data, set this to false

@@ -15,7 +15,7 @@
 # limitations under the License.
 
 from collections.abc import Iterable
-from typing import Dict, List, Optional, Sequence, Tuple, Union, cast
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
 from warnings import warn
 
 import torch
@@ -104,7 +104,7 @@ class _ToTorchTensor(torch.autograd.Function):
 
         if ctx.grad_placements is not None:
             grad_placements = ctx.grad_placements
-            grad_sharding_shapes = shard_tensor_spec.sharding_shapes
+            grad_sharding_shapes = "infer"
         else:
             grad_placements = shard_tensor_spec.placements
             grad_sharding_shapes = "infer"
@@ -196,9 +196,11 @@ class _FromTorchTensor(torch.autograd.Function):
             RuntimeError: If gradient tensor has different placement than original
         """
         previous_placement = ctx.previous_placement
-
         if grad_output.placements != previous_placement:
             raise RuntimeError("Resharding gradients not yet implemented")
+        # Automatically redistribute to the previous placement as long as it's not a partial.
+        # if not any( p.is_partial() for p in previous_placement):
+        #     grad_output = grad_output.redistribute(grad_output._spec.mesh, previous_placement)
 
         return grad_output.to_local(), None, None, None
 
@@ -236,7 +238,11 @@ class ShardTensor(DTensor):
     _spec: ShardTensorSpec
     __slots__ = ["_local_tensor", "_spec"]
 
-    _function_registry: Dict[torch._ops.OpOverload, callable] = {}
+    # For torch.ops.aten operators (low-level dispatch)
+    _dispatch_registry: Dict[torch._ops.OpOverload, Callable] = {}
+
+    # For Python-level functions (torch.mean, tensor.mean, etc.)
+    _function_registry: Dict[Callable, Callable] = {}
 
     # Upon construction of any ShardTensor objects, this will be set to true.
     # Wrappers are triggered dynamically, so the wrapping will be pass-through
@@ -253,14 +259,15 @@ class ShardTensor(DTensor):
         return cls._enable_shard_patches
 
     @classmethod
-    def register_function_handler(cls, func: torch._ops.OpOverload, handler: callable):
-        """
-        Register a custom handler for a specific function.
+    def register_dispatch_handler(
+        cls, op: torch._ops.OpOverload, handler: Callable
+    ) -> None:
+        """Register a handler for a specific PyTorch operator in the dispatch system."""
+        cls._dispatch_registry[op] = handler
 
-        Args:
-            func: The function to intercept.
-            handler: The custom handler to call instead of the default dispatch.
-        """
+    @classmethod
+    def register_function_handler(cls, func: Callable, handler: Callable) -> None:
+        """Register a handler for a Python-level function or method."""
         cls._function_registry[func] = handler
 
     @staticmethod
@@ -353,6 +360,15 @@ class ShardTensor(DTensor):
         )
 
     @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs={}):
+        # Check for overrides:
+        if func in cls._function_registry:
+            res = cls._function_registry[func](*args, **kwargs)
+            return res
+        # Fall back to the default behavior:
+        return super().__torch_function__(func, types, args, kwargs)
+
+    @classmethod
     @torch._disable_dynamo
     def __torch_dispatch__(
         cls,
@@ -363,8 +379,9 @@ class ShardTensor(DTensor):
     ) -> Union["ShardTensor", Iterable["ShardTensor"], object]:
         # Leverage DTensor Dispatch as much as possible, but, enable
         # the ability to operate on this output in the future:
-        if func in cls._function_registry:
-            return cls._function_registry[func](*args, **kwargs)
+        if func in cls._dispatch_registry:
+            res = cls._dispatch_registry[func](*args, **kwargs)
+            return res
 
         # We assume that if we reach this point, the operator has not been
         # intercepted by a wrapper or in the registry.  So the DTensor
@@ -380,13 +397,39 @@ class ShardTensor(DTensor):
         dispatch_res = DTensor._op_dispatcher.dispatch(func, args, kwargs or {})
 
         # Return a shard tensor instead of a dtensor.
-        # ShardTensor inherits from DTensor and can lazy-init from for efficiency
+        def _convert_dtensor_with_input_check(dtensor, input_args):
+            """
+            This function searches the input for ShardTensors that match output shapes.
+            It prevents collectives, since we can copy the sharding shapes for irregular shards.
+
+            If no matches are found, it falls back to inference based on DTensor.
+            """
+            # Check if this matches any input ShardTensor
+            for arg in input_args:
+                if (
+                    isinstance(arg, ShardTensor)
+                    and dtensor.shape == arg.shape
+                    and dtensor._spec.placements == arg._spec.placements
+                ):
+                    # Create spec with the input's sharding sizes
+                    spec = arg._spec
+                    return ShardTensor.__new__(
+                        ShardTensor,
+                        local_tensor=dtensor._local_tensor,
+                        spec=spec,
+                        requires_grad=dtensor.requires_grad,
+                    )
+            # Fall back to default conversion
+            return ShardTensor.from_dtensor(dtensor)
+
         if isinstance(dispatch_res, DTensor):
-            return ShardTensor.from_dtensor(dispatch_res)
+            return _convert_dtensor_with_input_check(dispatch_res, args)
 
         if isinstance(dispatch_res, Iterable):
             return type(dispatch_res)(
-                ShardTensor.from_dtensor(d) if isinstance(d, DTensor) else d
+                _convert_dtensor_with_input_check(d, args)
+                if isinstance(d, DTensor)
+                else d
                 for d in dispatch_res
             )
 
@@ -543,13 +586,16 @@ class ShardTensor(DTensor):
 
         # Before calling backward, we need to resolve any partial placements.
         new_placements = []
+        # grad_placements = []
         needs_redistribute = False
-        for placement in self._spec.placements:
+        for i, placement in enumerate(self._spec.placements):
             if placement.is_partial():
                 new_placements.append(Replicate())
+                # grad_placements.append(Shard(i))
                 needs_redistribute = True
             else:
                 new_placements.append(placement)
+                # grad_placements.append(placement)
 
         if needs_redistribute:
             self = self.redistribute(placements=new_placements)

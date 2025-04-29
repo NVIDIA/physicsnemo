@@ -206,7 +206,7 @@ def _ball_query_backward_primative_(
             wp.from_torch(num_neighbors, dtype=wp.int32, requires_grad=False),
         ],
         outputs=[
-            wp.from_torch(outputs, dtype=wp.float32, requires_grad=True),
+            wp.from_torch(outputs, dtype=wp.float32, requires_grad=False),
         ],
         adj_inputs=[
             wp.from_torch(p2_grad, dtype=wp.vec3, requires_grad=points2.requires_grad),
@@ -271,7 +271,6 @@ class BallQuery(torch.autograd.Function):
     def backward(ctx, grad_mapping, grad_num_neighbors, grad_outputs):
 
         points1, points2, mapping, num_neighbors, outputs = ctx.saved_tensors
-
         # Apply the primitive
         p2_grad = _ball_query_backward_primative_(
             points1[0],
@@ -283,7 +282,6 @@ class BallQuery(torch.autograd.Function):
             grad_num_neighbors,
             grad_outputs,
         )
-
         p2_grad = p2_grad.unsqueeze(0)
 
         # Return the gradients
