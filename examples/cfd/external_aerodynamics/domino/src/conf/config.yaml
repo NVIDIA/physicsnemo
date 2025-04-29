@@ -60,7 +60,13 @@ variables:
       UMeanTrim: vector
       pMeanTrim: scalar
       nutMeanTrim: scalar
-
+  global_parameters:
+    inlet_velocity: 
+      type: vector
+      reference: [30.0]
+    air_density: 
+      type: scalar
+      reference: 1.226
 model:
   model_type: combined # train which model? surface, volume, combined
   loss_function: 
@@ -113,7 +119,6 @@ model:
     base_layer: 512
   parameter_model:
     base_layer: 512
-    scaling_params: [30.0, 1.226] # [inlet_velocity, air_density]
     fourier_features: true
     num_modes: 5
 
