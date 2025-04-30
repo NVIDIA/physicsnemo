@@ -32,15 +32,15 @@ resume_dir: ${output}/models
 
 data_processor: # Data processor configurable parameters
   kind: drivaer_aws # must be either drivesim or drivaer_aws
-  output_dir: /lustre/snidhan/physicsnemo-work/data/aws_data_all/
-  input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
+  output_dir: /lustre/snidhan/physicsnemo-work/data/aws_data_sample/
+  input_dir: /lustre/snidhan/physicsnemo-work/data/drivaer_aws_sample/
   cached_dir: /lustre/cached/drivaer_aws/drivaer_data_full/
   use_cache: false
-  num_processors: 12
+  num_processors: 4
 
 data: # Input directory for training and validation data
-  input_dir: /lustre/snidhan/physicsnemo-work/data/aws_data_all/
-  input_dir_val: /lustre/snidhan/physicsnemo-work/data/aws_data_all_val/
+  input_dir: /lustre/snidhan/physicsnemo-work/data/aws_data_sample/
+  input_dir_val: /lustre/snidhan/physicsnemo-work/data/aws_data_sample_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25 , -0.32]
     max: [8.5 , 2.25  , 3.00]
@@ -142,9 +142,9 @@ val: # Validation configurable parameters
     drop_last: false
 
 eval: # Testing configurable parameters
-  test_path: /lustre/rranade/benchmarking/drivaer_aws_surface_test_new/
-  save_path: /lustre/rranade/domino/mesh_predictions_surf_final_pc1/
+  test_path: /lustre/snidhan/benchmarking/drivaer_aws_surface_test_new/
+  save_path: /lustre/snidhan/domino/mesh_predictions_surf_final_pc1/
   checkpoint_name: DoMINO.0.50.pt
-  scaling_param_path: /lustre/rranade/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset_1/
+  scaling_param_path: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset_1/
   refine_stl: False # Automatically refine STL during inference
   stencil_size: 1 # Stencil size for evaluating surface and volume model
