@@ -74,6 +74,9 @@ def main(cfg: DictConfig):
     # Extract global parameters names and reference values
     global_params_names = list(cfg.variables.global_parameters.keys())
     global_params_reference = {name: cfg.variables.global_parameters[name]['reference'] for name in global_params_names}
+    
+    print('global_params_names being saved', global_params_names)
+    print('global_params_reference being saved', global_params_reference)
 
     fm_data = OpenFoamDataset(
         cfg.data_processor.input_dir,

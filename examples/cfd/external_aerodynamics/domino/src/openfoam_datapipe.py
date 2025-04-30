@@ -117,6 +117,11 @@ class OpenFoamDataset(Dataset):
         self.device = device
         self.model_type = model_type
 
+        print('self.global_params_names ', self.global_params_names)
+        print('self.global_params_reference ', self.global_params_reference)
+        print('self.stream_velocity ', self.stream_velocity)
+        print('self.air_density ', self.air_density)
+
     def __len__(self):
         return len(self.filenames)
 
@@ -207,6 +212,8 @@ class OpenFoamDataset(Dataset):
                 self.global_params_values[key] = self.air_density
             else:
                 raise ValueError(f"Global parameter {key} not supported for  this dataset")
+
+        print("self.global_params_values ", self.global_params_values)
 
         # Add the parameters to the dictionary
         return {
