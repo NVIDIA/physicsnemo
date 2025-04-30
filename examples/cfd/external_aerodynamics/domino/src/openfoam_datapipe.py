@@ -198,11 +198,11 @@ class OpenFoamDataset(Dataset):
             surface_normals = None
             surface_sizes = None
 
-        # Might change depending on the use-case
+        # This will change depending on the use-case
         self.global_params_values = {}
         for key in self.global_params_names:
             if key == "inlet_velocity":
-                self.global_params_values[key][0] = self.stream_velocity
+                self.global_params_values[key] = [self.stream_velocity]
             elif key == "air_density":
                 self.global_params_values[key] = self.air_density
             else:
