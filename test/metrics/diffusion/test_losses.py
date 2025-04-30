@@ -22,7 +22,6 @@ from physicsnemo.metrics.diffusion import (
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,
-    ResidualLoss_Opt,
     VELoss,
     VELoss_dfsr,
     VPLoss,
@@ -366,6 +365,23 @@ def test_residualloss_call_method():
     # Shape should be (batch_size * patch_num, channels, patch_shape_y, patch_shape_x)
     expected_shape = (batch_size * patch_num, channels, patch_shape[0], patch_shape[1])
     assert loss_value_with_patching.shape == expected_shape
+    
+    #Tests with patching accumulation
+    loss_func.y_mean = None
+    patch_nums_iter = [4,4,4,2]
+    patch_shape = (16, 16)
+    for patch_num in patch_nums_iter: 
+        patching = RandomPatching2D(
+            img_shape=(32, 32), patch_shape=patch_shape, patch_num=patch_num
+        )
+        loss_value_with_patching = loss_func(
+            fake_residual_net, img_clean, img_lr, patching=patching, use_patch_grad_acc = True
+        )
+        assert isinstance(loss_value_with_patching, torch.Tensor)
+        # Shape should be (batch_size * patch_num, channels, patch_shape_y, patch_shape_x)
+        expected_shape = (batch_size * patch_num, channels, patch_shape[0], patch_shape[1])
+        assert loss_value_with_patching.shape == expected_shape
+    
 
     # Test error on invalid patching object
     with pytest.raises(ValueError):
@@ -479,97 +495,6 @@ def test_call_method_residualloss_with_lt_unet_hr_mean_conditioning(device):
     )
     assert isinstance(loss_value, torch.Tensor)
     assert loss_value.shape == img_clean.shape
-
-# ResLoss Opt tests
-
-
-def res_loss_opt_fake_net(
-        x,
-        img_lr,
-        sigma=None,
-        labels=None,
-        global_index=None,
-        embedding_selector=None,
-        augment_labels=None,
-    ):
-        return torch.zeros_like(x)
-
-
-def test_resloss_opt_initialization():
-    
-    # Mock the model loading
-    loss_func = ResidualLoss_Opt(
-        regression_net=res_loss_opt_fake_net,
-    )
-    assert loss_func.P_mean == 0.0
-    assert loss_func.P_std == 1.2
-    assert loss_func.sigma_data == 0.5
-
-    loss_func = ResidualLoss_Opt(
-        regression_net=res_loss_opt_fake_net,
-        P_mean=-2.0,
-        P_std=2.0,
-        sigma_data=0.3,
-    )
-    assert loss_func.P_mean == -2.0
-    assert loss_func.P_std == 2.0
-    assert loss_func.sigma_data == 0.3
-
-def test_residualloss_opt_call_method():
-
-    # Mock regression network that returns scaled input
-    class DummyRegNet(torch.nn.Module):
-        def forward(self, x, *args, **kwargs):
-            return 0.9 * x
-
-    regression_net = DummyRegNet()
-    loss_func = ResidualLoss_Opt(
-        regression_net=res_loss_opt_fake_net,
-        P_mean=-2.0,
-        P_std=2.0,
-        sigma_data=0.3,
-    )
-
-    # Create test inputs
-    batch_size = 2
-    channels = 3
-    img_clean = torch.randn(batch_size, channels, 32, 32)
-    img_lr = torch.randn(batch_size, channels, 32, 32)
-
-    # Test without patching or augmentation
-    loss_value = loss_func(res_loss_opt_fake_net, img_clean, img_lr)
-    assert isinstance(loss_value, torch.Tensor)
-    assert loss_value.shape == (batch_size, channels, 32, 32)
-
-    # Test with augmentation
-    def mock_augment_pipe(imgs):
-        return imgs, None
-
-    loss_value_with_augmentation = loss_func(
-        res_loss_opt_fake_net, img_clean, img_lr, augment_pipe=mock_augment_pipe
-    )
-    assert isinstance(loss_value_with_augmentation, torch.Tensor)
-    assert loss_value_with_augmentation.shape == (batch_size, channels, 32, 32)
-
-    # Test with patching
-    patch_num = 4
-    patch_shape = (16, 16)
-    patching = RandomPatching2D(
-        img_shape=(32, 32), patch_shape=patch_shape, patch_num=patch_num
-    )
-    loss_value_with_patching = loss_func(
-        res_loss_opt_fake_net, img_clean, img_lr, patching=patching
-    )
-    assert isinstance(loss_value_with_patching, torch.Tensor)
-    # Shape should be (batch_size * patch_num, channels, patch_shape_y, patch_shape_x)
-    expected_shape = (batch_size * patch_num, channels, patch_shape[0], patch_shape[1])
-    assert loss_value_with_patching.shape == expected_shape
-
-    # Test error on invalid patching object
-    with pytest.raises(ValueError):
-        loss_func(
-            res_loss_opt_fake_net, img_clean, img_lr, patching="invalid patching object"
-        )
 
 
 

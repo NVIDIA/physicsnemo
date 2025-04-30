@@ -741,7 +741,7 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long),
+                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long) if patching is not None else None,
                 lead_time_label=lead_time_label,
                 augment_labels=augment_labels,
             )
@@ -751,7 +751,7 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long),
+                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long) if patching is not None else None,
                 augment_labels=augment_labels,
             )
         loss = weight * ((D_yn - y) ** 2)
