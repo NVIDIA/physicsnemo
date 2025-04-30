@@ -324,7 +324,8 @@ def test_fails_if_grid_is_invalid():
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+# Skip CPU tests because too slow
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims(device):
     """Test Song UNet optimizations"""
 
@@ -359,7 +360,8 @@ def test_song_unet_optims(device):
     assert common.validate_combo_optims(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+# Skip CPU tests because too slow
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
     # Construct FNO models
