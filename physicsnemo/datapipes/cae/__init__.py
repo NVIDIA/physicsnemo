@@ -14,5 +14,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .domino_datapipe import DoMINODataPipe
-from .mesh_datapipe import MeshDatapipe
+from physicsnemo.utils.version_check import check_package_installed
+
+# This could and should be reoragnized into meta-data level requirements on pipelines.
+domino_datapipe_requirements = ["warp", "scipy"]
+mesh_datapipe_requirements = ["vtk"]
+
+
+def __getattr__(name):
+    """
+    This file is meant to provide information
+    """
+    if name == "DoMINODataPipe":
+        missing = [
+            p for p in domino_datapipe_requirements if not check_package_installed(p)
+        ]
+
+        if missing:
+            raise ImportError(
+                f"Cannot import DoMINODataPipe: Missing required packages: {', '.join(missing)}"
+            )
+        else:
+            from .domino_datapipe import DoMINODataPipe
+
+            return DoMINODataPipe
+
+    if name == "MeshDatapipe":
+        missing = [
+            p for p in mesh_datapipe_requirements if not check_package_installed(p)
+        ]
+        if missing:
+            raise ImportError(
+                f"Cannot import MeshDatapipe: Missing required packages: {', '.join(missing)}"
+            )
+        else:
+            from .mesh_datapipe import MeshDatapipe
+
+            return MeshDatapipe
+
+    raise AttributeError(
+        f"module 'physicsnemo.datapipes.cae' has no attribute '{name}'"
+    )

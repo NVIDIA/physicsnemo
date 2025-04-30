@@ -36,6 +36,32 @@ VERSION_REQUIREMENTS = {
 }
 
 
+def check_package_installed(package_name: str, error_msg: Optional[str] = None) -> bool:
+    """
+    Check if a package is installed.
+
+    Args:
+        package_name: Name of the package to check
+        error_msg: Optional custom error message
+
+    Returns:
+        True if package is installed
+
+    Raises:
+        ImportError: If package is not installed
+    """
+    try:
+        importlib.import_module(package_name)
+        return True
+    except ImportError:
+        msg = (
+            error_msg
+            or f"Package {package_name} is required but not installed, or broken."
+        )
+        print(msg)
+        return False
+
+
 def check_min_version(
     package_name: str, min_version: str, error_msg: Optional[str] = None
 ) -> bool:
@@ -86,7 +112,44 @@ def check_module_requirements(module_path: str) -> None:
         check_min_version(package, min_version)
 
 
-def require_version(package_name: str, min_version: str):
+def require_installed_package(package_name: str, error_msg: Optional[str] = None):
+    """
+    Decorator that prevents a function from being called unless the
+    specified package is installed.
+
+    Args:
+        package_name: Name of the package to check
+        error_msg: Optional custom error message
+
+    Returns:
+        Decorator function that checks package installation before execution
+
+    Example:
+        @require_installed_package("torch")
+        def my_function():
+            # This function will only execute if torch is installed
+            pass
+    """
+
+    def decorator(func):
+        import functools
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # Verify the package is installed before executing
+            check_package_installed(package_name, error_msg)
+
+            # If we get here, package is installed
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def require_version(
+    package_name: str, min_version: str, error_msg: Optional[str] = None
+):
     """
     Decorator that prevents a function from being called unless the
     specified package meets the minimum version requirement.
@@ -94,6 +157,7 @@ def require_version(package_name: str, min_version: str):
     Args:
         package_name: Name of the package to check
         min_version: Minimum required version string (e.g. '2.3')
+        error_msg: Optional custom error message
 
     Returns:
         Decorator function that checks version requirement before execution
@@ -110,8 +174,11 @@ def require_version(package_name: str, min_version: str):
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            # Verify the package is installed
+            check_package_installed(package_name)
+
             # Verify the package meets minimum version before executing
-            check_min_version(package_name, min_version)
+            check_min_version(package_name, min_version, error_msg)
 
             # If we get here, version check passed
             return func(*args, **kwargs)
