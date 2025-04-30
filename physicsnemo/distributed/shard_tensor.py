@@ -23,6 +23,7 @@ import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, _mesh_resources
 
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils.profiling import profile
 from physicsnemo.utils.version_check import check_module_requirements
 
 # Prevent importing this module if the minimum version of pytorch is not met.
@@ -197,10 +198,15 @@ class _FromTorchTensor(torch.autograd.Function):
         """
         previous_placement = ctx.previous_placement
         if grad_output.placements != previous_placement:
-            raise RuntimeError("Resharding gradients not yet implemented")
-        # Automatically redistribute to the previous placement as long as it's not a partial.
-        # if not any( p.is_partial() for p in previous_placement):
-        #     grad_output = grad_output.redistribute(grad_output._spec.mesh, previous_placement)
+            # Automatically redistribute to the previous placement as long as it's not a partial.
+            if not any(p.is_partial() for p in previous_placement):
+                grad_output = grad_output.redistribute(
+                    grad_output._spec.mesh, previous_placement
+                )
+            else:
+                raise RuntimeError(
+                    "Resharding gradients with partial placements not implemented"
+                )
 
         return grad_output.to_local(), None, None, None
 
@@ -370,6 +376,7 @@ class ShardTensor(DTensor):
 
     @classmethod
     @torch._disable_dynamo
+    @profile
     def __torch_dispatch__(
         cls,
         func: torch._ops.OpOverload,
@@ -404,21 +411,33 @@ class ShardTensor(DTensor):
 
             If no matches are found, it falls back to inference based on DTensor.
             """
-            # Check if this matches any input ShardTensor
-            for arg in input_args:
-                if (
-                    isinstance(arg, ShardTensor)
-                    and dtensor.shape == arg.shape
-                    and dtensor._spec.placements == arg._spec.placements
-                ):
-                    # Create spec with the input's sharding sizes
-                    spec = arg._spec
-                    return ShardTensor.__new__(
-                        ShardTensor,
-                        local_tensor=dtensor._local_tensor,
-                        spec=spec,
-                        requires_grad=dtensor.requires_grad,
-                    )
+            # # Check if this matches any input ShardTensor
+            # for arg in input_args:
+            #     if (
+            #         isinstance(arg, ShardTensor)
+            #         and dtensor.shape == arg.shape
+            #         and dtensor._spec.placements == arg._spec.placements
+            #     ):
+            #         print(arg._spec)
+            #         print(arg._spec._sharding_sizes)
+
+            #         # Create a new spec with the same sharding information
+            #         new_spec = ShardTensorSpec(
+            #             mesh=arg._spec.mesh,
+            #             placements=arg._spec.placements,
+            #             tensor_meta=TensorMeta(
+            #                 dtensor.shape,
+            #                 dtensor._spec.tensor_meta.stride,
+            #                 dtensor._spec.tensor_meta.dtype
+            #             ),
+            #             _sharding_sizes=arg._spec._sharding_sizes.copy()
+            #         )
+            #         return ShardTensor.__new__(
+            #             ShardTensor,
+            #             local_tensor=dtensor._local_tensor,
+            #             spec=new_spec,
+            #             requires_grad=dtensor.requires_grad,
+            #         )
             # Fall back to default conversion
             return ShardTensor.from_dtensor(dtensor)
 

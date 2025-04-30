@@ -425,7 +425,11 @@ def sharded_select_backward_helper(
 
     # Finally, make sure we use the correct local size:
     mesh_rank = grad_output._spec.mesh.get_local_rank()
-    local_output_size = output_shard_sizes[0][mesh_rank]
+    if len(output_shard_sizes.keys()) > 0:
+        local_output_size = output_shard_sizes[0][mesh_rank]
+    else:
+        # Fall back to the global shape if nothing is sharded:
+        local_output_size = output_spec.tensor_meta.shape
 
     # Now, compute the local result:
     local_result = aten.select_backward(

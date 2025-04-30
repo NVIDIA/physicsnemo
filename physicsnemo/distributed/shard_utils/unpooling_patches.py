@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
 import wrapt
+from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.distributed import ShardTensor
@@ -117,12 +118,13 @@ def compute_interpolate_output_shape(
         # If scale_factor is provided, compute output sizes
         if isinstance(scale_factor, (int, float)):
             # Single scale factor for all spatial dimensions
-            output_shape = [int(dim * scale_factor) for dim in input_shape[2:]]
+            spatial_dims = [int(dim * scale_factor) for dim in input_shape[2:]]
         else:
             # Separate scale factor for each spatial dimension
-            output_shape = [
+            spatial_dims = [
                 int(dim * scale_factor[i]) for i, dim in enumerate(input_shape[2:])
             ]
+        output_shape.extend(spatial_dims)
     else:
         # If neither is provided, output shape is the same as input
         output_shape.extend(list(input_shape[2:]))
@@ -271,10 +273,22 @@ def partial_interpolate_nd(
     for halo_config in unhalo_configs:
         output = unhalo_padding(output, input._spec.mesh, halo_config)
 
-    # Convert back to ShardTensor
-    output = ShardTensor.from_local(
-        output, input._spec.mesh, input._spec.placements, "infer"
-    )
+    result_shapes = {}
+    for mesh_dim, sharding_shape in input._spec.sharding_sizes().items():
+        updated_shapes = tuple(
+            torch.Size(compute_interpolate_output_shape(s, interp_kwargs))
+            for s in sharding_shape
+        )
+        result_shapes[mesh_dim] = updated_shapes
+
+    with record_function("upsampling.from_local"):
+        # Convert back to ShardTensor
+        output = ShardTensor.from_local(
+            output,
+            input._spec.mesh,
+            input._spec.placements,
+            sharding_shapes=result_shapes,
+        )
 
     return output
 

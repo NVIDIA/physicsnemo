@@ -398,6 +398,8 @@ class RingBallQuery(torch.autograd.Function):
             Gradients for inputs (currently not implemented)
         """
 
+        raise NotImplementedError("Backward pass for ring ball query not implemented.")
+
         (
             points1,
             points2,
