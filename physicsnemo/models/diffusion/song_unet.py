@@ -665,7 +665,7 @@ class SongUNetPosEmbd(SongUNet):
         if self.gridtype == "learnable":
             self.pos_embd = self._get_positional_embedding()
         else:
-            self.register_buffer("pos_embd", self._get_positional_embedding())
+            self.register_buffer("pos_embd", self._get_positional_embedding().float())
 
     def forward(
         self,

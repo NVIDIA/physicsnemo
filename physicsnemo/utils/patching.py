@@ -202,7 +202,7 @@ class RandomPatching2D(BasePatching2D):
         self._patch_num = patch_num
         # Generate the indices of the patches to extract
         self.reset_patch_indices()
-
+        
     @property
     def patch_num(self) -> int:
         """
@@ -244,7 +244,8 @@ class RandomPatching2D(BasePatching2D):
             )
             for _ in range(self.patch_num)
         ]
-        return
+        return 
+
 
     def apply(
         self,
@@ -294,6 +295,7 @@ class RandomPatching2D(BasePatching2D):
             add_input_interp = torch.nn.functional.interpolate(
                 input=additional_input, size=self.patch_shape, mode="bilinear"
             )
+            
         for i, (py, px) in enumerate(self.patch_indices):
             if additional_input is not None:
                 out[B * i : B * (i + 1),] = torch.cat(

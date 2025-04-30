@@ -740,7 +740,8 @@ class ResidualLoss:
                 latent,
                 y_lr,
                 sigma,
-                embedding_selector=patch_embedding_selector,
+                embedding_selector=None,
+                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long),
                 lead_time_label=lead_time_label,
                 augment_labels=augment_labels,
             )
@@ -749,7 +750,8 @@ class ResidualLoss:
                 latent,
                 y_lr,
                 sigma,
-                embedding_selector=patch_embedding_selector,
+                embedding_selector=None,
+                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long),
                 augment_labels=augment_labels,
             )
         loss = weight * ((D_yn - y) ** 2)
