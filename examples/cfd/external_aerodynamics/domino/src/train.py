@@ -288,7 +288,7 @@ def validation_step(
                     target_surf = sampled_batched["surface_fields"]
                     surface_normals = sampled_batched["surface_normals"]
                     surface_areas = sampled_batched["surface_areas"]
-                    stream_velocity = sampled_batched["global_params_reference"][0, 0]
+                    stream_velocity = sampled_batched["global_params_reference"][0]
                     surface_areas = torch.unsqueeze(surface_areas, -1)
 
                     loss_integral = (

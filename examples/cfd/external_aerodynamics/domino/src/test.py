@@ -190,8 +190,8 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         volume_mesh_centers_batch,
                         geo_encoding_local,
                         pos_encoding,
-                        stream_velocity,
-                        air_density,
+                        global_params_values,
+                        global_params_reference,
                         num_sample_points=cfg.eval.stencil_size,
                         eval_mode="volume",
                     )
@@ -203,16 +203,16 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
 
             prediction_vol[:, :, :3] = (
-                prediction_vol[:, :, :3] * stream_velocity[0, 0].cpu().numpy()
+                prediction_vol[:, :, :3] * stream_velocity.cpu().numpy()
             )
             prediction_vol[:, :, 3] = (
                 prediction_vol[:, :, 3]
-                * stream_velocity[0, 0].cpu().numpy() ** 2.0
-                * air_density[0, 0].cpu().numpy()
+                * stream_velocity.cpu().numpy() ** 2.0
+                * air_density.cpu().numpy()
             )
             prediction_vol[:, :, 4] = (
                 prediction_vol[:, :, 4]
-                * stream_velocity[0, 0].cpu().numpy()
+                * stream_velocity.cpu().numpy()
                 * length_scale[0].cpu().numpy()
             )
         else:
@@ -303,8 +303,8 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
-                * stream_velocity[0, 0].cpu().numpy() ** 2.0
-                * air_density[0, 0].cpu().numpy()
+                * stream_velocity.cpu().numpy() ** 2.0
+                * air_density.cpu().numpy()
             )
 
         else:
