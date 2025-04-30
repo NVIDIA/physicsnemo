@@ -614,7 +614,7 @@ class ResidualLoss:
                     - Augmented images of shape (B, C_hr+C_lr, H, W)
                     - Optional augmentation labels
         use_patch_grad_acc: bool, optional
-            A boolean flag indicating whether to enable multi-iterations of patching accumulations 
+            A boolean flag indicating whether to enable multi-iterations of patching accumulations
             for amortizing regression cost. Default False.
 
         Returns
@@ -679,9 +679,9 @@ class ResidualLoss:
                         augment_labels=augment_labels,
                     )
                 self.y_mean = y_mean
-            
-        # if on full domain:   
-        else:   
+
+        # if on full domain:
+        else:
             # form residual
             if lead_time_label is not None:
                 y_mean = self.regression_net(
@@ -696,9 +696,8 @@ class ResidualLoss:
                     y_lr_res,
                     augment_labels=augment_labels,
                 )
-        
-            self.y_mean = y_mean
 
+            self.y_mean = y_mean
 
         y = y - self.y_mean
 
@@ -707,6 +706,7 @@ class ResidualLoss:
 
         # patchified training
         # conditioning: cat(y_mean, y_lr, input_interp, pos_embd), 4+12+100+4
+        # removed patch_embedding_selector due to compilation issue with dynamo.
         if patching:
             # Patched residual
             # (batch_size * patch_num, c_out, patch_shape_y, patch_shape_x)
@@ -715,17 +715,8 @@ class ResidualLoss:
             # (batch_size * patch_num, 2*c_in, patch_shape_y, patch_shape_x)
             y_lr_patched = patching.apply(input=y_lr, additional_input=img_lr)
 
-            # Function to select the correct positional embedding for each
-            # patch
-            def patch_embedding_selector(emb):
-                # emb: (N_pe, image_shape_y, image_shape_x)
-                # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
-                return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
-
             y = y_patched
             y_lr = y_lr_patched
-        else:
-            patch_embedding_selector = None
 
         # Noise
         rnd_normal = torch.randn([y.shape[0], 1, 1, 1], device=img_clean.device)
@@ -741,7 +732,11 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long) if patching is not None else None,
+                global_index=patching.global_index(batch_size).to(
+                    device=img_clean.device, dtype=torch.long
+                )
+                if patching is not None
+                else None,
                 lead_time_label=lead_time_label,
                 augment_labels=augment_labels,
             )
@@ -751,15 +746,16 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index = patching.global_index(batch_size).to(device=img_clean.device, dtype=torch.long) if patching is not None else None,
+                global_index=patching.global_index(batch_size).to(
+                    device=img_clean.device, dtype=torch.long
+                )
+                if patching is not None
+                else None,
                 augment_labels=augment_labels,
             )
         loss = weight * ((D_yn - y) ** 2)
 
         return loss
-
-
-
 
 
 class VELoss_dfsr:
