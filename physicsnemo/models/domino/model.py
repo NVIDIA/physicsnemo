@@ -27,8 +27,10 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd.profiler import record_function
 
 from physicsnemo.models.layers.ball_query import BallQueryLayer
+from physicsnemo.utils.profiling import profile
 
 
 def fourier_encode(coords, num_freqs):
@@ -96,6 +98,7 @@ class BQWarp(nn.Module):
         self.ball_query_layer = BallQueryLayer(neighbors_in_radius, radius)
         self.grid_resolution = grid_resolution
 
+    @profile
     def forward(
         self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -172,31 +175,33 @@ class GeoConvOut(nn.Module):
 
         self.activation = F.relu
 
+    @profile
     def forward(
         self, x: torch.Tensor, radius: float = 0.025, neighbors_in_radius: int = 10
     ) -> torch.Tensor:
         """
         Process and project geometric features onto a 3D grid.
         """
-        batch_size = x.shape[0]
-        nx, ny, nz = (
-            self.grid_resolution[0],
-            self.grid_resolution[1],
-            self.grid_resolution[2],
-        )
+        with record_function("GeoConvOut.forward"):
+            batch_size = x.shape[0]
+            nx, ny, nz = (
+                self.grid_resolution[0],
+                self.grid_resolution[1],
+                self.grid_resolution[2],
+            )
 
-        mask = abs(x - 0) > 1e-6
-        x = self.activation(self.fc1(x))
-        x = self.activation(self.fc2(x))
-        x = F.tanh(self.fc3(x))
-        mask = mask[:, :, :, 0:1].expand(
-            mask.shape[0], mask.shape[1], mask.shape[2], x.shape[-1]
-        )
+            mask = abs(x - 0) > 1e-6
+            x = self.activation(self.fc1(x))
+            x = self.activation(self.fc2(x))
+            x = F.tanh(self.fc3(x))
+            mask = mask[:, :, :, 0:1].expand(
+                mask.shape[0], mask.shape[1], mask.shape[2], x.shape[-1]
+            )
 
-        x = torch.sum(x * mask, 2)
+            x = torch.sum(x * mask, 2)
 
-        x = torch.reshape(x, (batch_size, x.shape[-1], nx, ny, nz))
-        return x
+            x = torch.reshape(x, (batch_size, x.shape[-1], nx, ny, nz))
+            return x
 
 
 class GeoProcessor(nn.Module):
@@ -242,6 +247,7 @@ class GeoProcessor(nn.Module):
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
         self.activation = F.relu
 
+    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Process geometry information through the 3D CNN network.
@@ -357,6 +363,7 @@ class GeometryRep(nn.Module):
         self.radii = radii
         self.hops = geometry_rep.geo_conv.hops
 
+    @profile
     def forward(
         self, x: torch.Tensor, p_grid: torch.Tensor, sdf: torch.Tensor
     ) -> torch.Tensor:
@@ -438,6 +445,7 @@ class NNBasisFunctions(nn.Module):
 
         self.activation = F.relu
 
+    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Transform point features into a basis function representation.
@@ -448,15 +456,16 @@ class NNBasisFunctions(nn.Module):
         Returns:
             Tensor containing basis function coefficients
         """
-        if self.fourier_features:
-            facets = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
-        else:
-            facets = x
-        facets = self.activation(self.fc1(facets))
-        facets = self.activation(self.fc2(facets))
-        facets = self.fc3(facets)
+        with record_function("NNBasisFunctions.forward"):
+            if self.fourier_features:
+                facets = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
+            else:
+                facets = x
+            facets = self.activation(self.fc1(facets))
+            facets = self.activation(self.fc2(facets))
+            facets = self.fc3(facets)
 
-        return facets
+            return facets
 
 
 class ParameterModel(nn.Module):
@@ -497,6 +506,7 @@ class ParameterModel(nn.Module):
 
         self.activation = F.relu
 
+    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Encode physical parameters into a latent representation.
@@ -507,15 +517,16 @@ class ParameterModel(nn.Module):
         Returns:
             Tensor containing encoded parameter representation
         """
-        if self.fourier_features:
-            params = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
-        else:
-            params = x
-        params = self.activation(self.fc1(params))
-        params = self.activation(self.fc2(params))
-        params = self.fc3(params)
+        with record_function("ParameterModel.forward"):
+            if self.fourier_features:
+                params = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
+            else:
+                params = x
+            params = self.activation(self.fc1(params))
+            params = self.activation(self.fc2(params))
+            params = self.fc3(params)
 
-        return params
+            return params
 
 
 class AggregationModel(nn.Module):
@@ -553,12 +564,13 @@ class AggregationModel(nn.Module):
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
         self.fc4 = nn.Linear(int(base_layer), int(base_layer))
         self.fc5 = nn.Linear(int(base_layer), self.output_features)
-        self.bn1 = nn.BatchNorm1d(base_layer)
-        self.bn2 = nn.BatchNorm1d(int(base_layer))
-        self.bn3 = nn.BatchNorm1d(int(base_layer))
-        self.bn4 = nn.BatchNorm1d(int(base_layer))
+        # self.bn1 = nn.BatchNorm1d(base_layer)
+        # self.bn2 = nn.BatchNorm1d(int(base_layer))
+        # self.bn3 = nn.BatchNorm1d(int(base_layer))
+        # self.bn4 = nn.BatchNorm1d(int(base_layer))
         self.activation = F.relu
 
+    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Process the combined input features to predict output quantities.
@@ -573,14 +585,15 @@ class AggregationModel(nn.Module):
         Returns:
             Tensor containing predicted output quantities
         """
-        out = self.activation(self.fc1(x))
-        out = self.activation(self.fc2(out))
-        out = self.activation(self.fc3(out))
-        out = self.activation(self.fc4(out))
+        with record_function("AggregationModel.forward"):
+            out = self.activation(self.fc1(x))
+            out = self.activation(self.fc2(out))
+            out = self.activation(self.fc3(out))
+            out = self.activation(self.fc4(out))
 
-        out = self.fc5(out)
+            out = self.fc5(out)
 
-        return out
+            return out
 
 
 class LocalPointConv(nn.Module):
@@ -601,11 +614,13 @@ class LocalPointConv(nn.Module):
         self.fc2 = nn.Linear(base_layer, self.output_features)
         self.activation = F.relu
 
+    @profile
     def forward(self, x):
-        out = self.activation(self.fc1(x))
-        out = self.fc2(out)
+        with record_function("LocalPointConv.forward"):
+            out = self.activation(self.fc1(x))
+            out = self.fc2(out)
 
-        return out
+            return out
 
 
 # @dataclass
@@ -973,6 +988,7 @@ class DoMINO(nn.Module):
                     )
                 )
 
+    @profile
     def position_encoder(
         self,
         encoding_node: torch.Tensor,
@@ -1000,6 +1016,7 @@ class DoMINO(nn.Module):
         x = self.fc_p2(x)
         return x
 
+    @profile
     def geo_encoding_local(
         self, encoding_g, volume_mesh_centers, p_grid, mode="volume"
     ):
@@ -1050,6 +1067,7 @@ class DoMINO(nn.Module):
 
         return encoding_g
 
+    @profile
     def calculate_solution_with_neighbors(
         self,
         surface_mesh_centers,
@@ -1157,6 +1175,7 @@ class DoMINO(nn.Module):
 
         return output_all
 
+    @profile
     def calculate_solution(
         self,
         volume_mesh_centers,
@@ -1234,6 +1253,7 @@ class DoMINO(nn.Module):
 
         return output_all
 
+    @profile
     def forward(
         self,
         data_dict,
