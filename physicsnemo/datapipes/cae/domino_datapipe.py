@@ -251,6 +251,9 @@ class DoMINODataPipe(Dataset):
         # Perform config packaging and validation
         self.config = DoMINODataConfig(data_path=input_path, **data_config_overrides)
 
+        if not DistributedManager.is_initialized():
+            DistributedManager.initialize()
+
         dist = DistributedManager()
         if self.config.gpu_preprocessing or self.config.gpu_output:
             # Make sure we move data to the right device:
@@ -445,8 +448,8 @@ class DoMINODataPipe(Dataset):
         # Maybe move to GPU:
         with self.device_context:
             for key in data.keys():
-                data[key] = self.array_provider.asarray(data[key])
-
+                if data[key] is not None:
+                    data[key] = self.array_provider.asarray(data[key])
         return data
 
     @profile
