@@ -521,7 +521,9 @@ class DoMINODataPipe(Dataset):
             
             global_params_values = xp.array(global_params_values_list, dtype=xp.float32)
             global_params_reference = xp.array(global_params_reference_list, dtype=xp.float32)
-        
+            
+            print("global_params_values in domino_datapipe.py ", global_params_values)
+            print("global_params_reference in domino_datapipe.py ", global_params_reference)
 
         # Pull these pieces out of the data_dict for manipulation
         stl_vertices = data_dict["stl_coordinates"]
@@ -1448,4 +1450,4 @@ if __name__ == "__main__":
         phase="train",
         sampling=False,
         sample_in_bbox=False,
-    )
+    

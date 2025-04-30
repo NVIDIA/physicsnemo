@@ -506,13 +506,16 @@ def main(cfg: DictConfig) -> None:
     else:
         num_surf_vars = None
 
-    global_features = 0
+    num_global_features = 0
     global_params_names = list(cfg.variables.global_parameters.keys())
     for param in global_params_names:
         if cfg.variables.global_parameters[param].type == "vector":
-            global_features += len(cfg.variables.global_parameters[param].reference)
+            num_global_features += len(cfg.variables.global_parameters[param].reference)
+        elif cfg.variables.global_parameters[param].type == "scalar":
+            num_global_features += 1
         else:
-            global_features += 1
+            raise ValueError(f"Unknown global parameter type")
+    print('num_global_features ', num_global_features)
 
     vol_save_path = os.path.join(
         "outputs", cfg.project.name, "volume_scaling_factors.npy"
@@ -578,7 +581,7 @@ def main(cfg: DictConfig) -> None:
         input_features=3,
         output_features_vol=num_vol_vars,
         output_features_surf=num_surf_vars,
-        global_features=global_features,
+        global_features=num_global_features,
         model_parameters=cfg.model,
     ).to(dist.device)
     model = torch.compile(model, disable=True)  # TODO make this configurable
