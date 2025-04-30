@@ -21,21 +21,29 @@ Diffusion-Based Generative Models".
 
 import contextlib
 from typing import Any, Dict, List
+import importlib
 
 import numpy as np
 import nvtx
 import torch
 import torch.cuda.amp as amp
-from apex.contrib.group_norm import GroupNorm as ApexGroupNorm
 from einops import rearrange
 from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
 from physicsnemo.models.diffusion import weight_init
-from apex.contrib.group_norm import GroupNorm as ApexGroupNorm
 import nvtx
 import contextlib 
 import torch.cuda.amp as amp
 import pdb
+
+# Import apex GroupNorm if installed only
+_is_apex_available = False
+if torch.cuda.is_available():
+    try:
+        apex_gn_module = importlib.import_module("apex.contrib.group_norm")
+        ApexGroupNorm = getattr(apex_gn_module, "GroupNorm")
+    except ImportError:
+        pass
 
 class Linear(torch.nn.Module):
     """
@@ -340,6 +348,8 @@ class GroupNorm(torch.nn.Module):
         self.eps = eps
         self.weight = torch.nn.Parameter(torch.ones(num_channels))
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
+        if use_apex_gn and not _is_apex_available:
+            raise ValueError("'apex' is not installed, set `use_apex_gn=False`")
         self.use_apex_gn = use_apex_gn
         self.fused_act = fused_act
         self.act = act.lower() if act else act
