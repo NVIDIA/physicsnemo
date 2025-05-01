@@ -732,9 +732,7 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index=patching.global_index(batch_size).to(
-                    device=img_clean.device, dtype=torch.long
-                )
+                global_index=patching.global_index(batch_size, img_clean.device)
                 if patching is not None
                 else None,
                 lead_time_label=lead_time_label,
@@ -746,9 +744,7 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index=patching.global_index(batch_size).to(
-                    device=img_clean.device, dtype=torch.long
-                )
+                global_index=patching.global_index(batch_size, img_clean.device)
                 if patching is not None
                 else None,
                 augment_labels=augment_labels,

@@ -20,8 +20,8 @@ Diffusion-Based Generative Models".
 """
 
 import contextlib
-from typing import Any, Dict, List
 import importlib
+from typing import Any, Dict, List
 
 import numpy as np
 import nvtx
@@ -31,10 +31,6 @@ from einops import rearrange
 from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
 from physicsnemo.models.diffusion import weight_init
-import nvtx
-import contextlib 
-import torch.cuda.amp as amp
-import pdb
 
 # Import apex GroupNorm if installed only
 _is_apex_available = False
@@ -42,8 +38,10 @@ if torch.cuda.is_available():
     try:
         apex_gn_module = importlib.import_module("apex.contrib.group_norm")
         ApexGroupNorm = getattr(apex_gn_module, "GroupNorm")
+        _is_apex_available = True
     except ImportError:
         pass
+
 
 class Linear(torch.nn.Module):
     """
@@ -315,11 +313,11 @@ class GroupNorm(torch.nn.Module):
         A small number added to the variance to prevent division by zero, by default
         1e-5.
     use_apex_gn : bool, optional
-        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
         Need to set this as False on cpu. Defaults to False.
-    fused_act : bool, optional  
+    fused_act : bool, optional
         Whether to fuse the activation function with GroupNorm. Defaults to False.
-    act : str, optional  
+    act : str, optional
         The activation function to use when fusing activation with GroupNorm. Defaults to None.
     amp_mode : bool, optional
         A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
@@ -342,7 +340,7 @@ class GroupNorm(torch.nn.Module):
     ):
         if fused_act and act is None:
             raise ValueError("'act' must be specified when 'fused_act' is set to True.")
-        
+
         super().__init__()
         self.num_groups = min(num_groups, num_channels // min_channels_per_group)
         self.eps = eps
@@ -522,9 +520,9 @@ class UNetBlock(torch.nn.Module):
         Initialization parameters specific to attention mechanism layers.
         Defaults to 'init' if not provided.
     use_apex_gn : bool, optional
-        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
         Need to set this as False on cpu. Defaults to False.
-    act : str, optional  
+    act : str, optional
         The activation function to use when fusing activation with GroupNorm. Defaults to None.
     fused_conv_bias: bool, optional
         A boolean flag indicating whether bias will be passed as a parameter of conv2d. By default False.
