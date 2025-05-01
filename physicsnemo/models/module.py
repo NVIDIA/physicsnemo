@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import importlib
 import inspect
 import json
@@ -24,15 +25,14 @@ import tempfile
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-import copy
 
 import torch
 
 import physicsnemo
 from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.models.util_compatibility import convert_ckp_apex
 from physicsnemo.registry import ModelRegistry
 from physicsnemo.utils.filesystem import _download_cached, _get_fs
-from physicsnemo.models.util_compatibility import convert_ckp_apex
 
 
 class Module(torch.nn.Module):
@@ -378,21 +378,21 @@ class Module(torch.nn.Module):
             # Load model arguments and instantiate the model
             with open(local_path.joinpath("args.json"), "r") as f:
                 args = json.load(f)
-                
+
             ckp_args = copy.deepcopy(args)
-            
+
             # Merge model_args (adding new keys and updating existing ones)
             if model_args is not None:
                 args["__args__"].update(model_args)
-                
+
             model = cls.instantiate(args)
-            
+
             # Load the model weights
             model_dict = torch.load(
                 local_path.joinpath("model.pt"), map_location=model.device
             )
-            
-            model_dict = convert_ckp_apex(ckp_args,model_args,model_dict)
+
+            model_dict = convert_ckp_apex(ckp_args, model_args, model_dict)
             model.load_state_dict(model_dict, strict=False)
         return model
 

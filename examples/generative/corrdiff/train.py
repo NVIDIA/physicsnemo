@@ -279,8 +279,8 @@ def main(cfg: DictConfig) -> None:
             broadcast_buffers=True,
             output_device=dist.device,
             find_unused_parameters=True,  # dist.find_unused_parameters,
-            bucket_cap_mb = 35,
-            gradient_as_bucket_view = True,
+            bucket_cap_mb=35,
+            gradient_as_bucket_view=True,
         )
     if cfg.wandb.watch_model and dist.rank == 0:
         wandb.watch(model)
@@ -327,7 +327,6 @@ def main(cfg: DictConfig) -> None:
     patch_num = getattr(cfg.training.hp, "patch_num", 1)
     max_patch_per_gpu = getattr(cfg.training.hp, "max_patch_per_gpu", 1)
 
-    
     # calculate patch per iter
     if hasattr(cfg.training.hp, "max_patch_per_gpu") and max_patch_per_gpu > 1:
         max_patch_num_per_iter = min(
@@ -345,7 +344,7 @@ def main(cfg: DictConfig) -> None:
         )
     else:
         patch_nums_iter = [patch_num]
-        
+
     use_patch_grad_acc = False
     if len(patch_nums_iter) > 1:
         use_patch_grad_acc = True
@@ -372,7 +371,11 @@ def main(cfg: DictConfig) -> None:
 
     # Instantiate the optimizer
     optimizer = torch.optim.Adam(
-        params=model.parameters(), lr=cfg.training.hp.lr, betas=[0.9, 0.999], eps=1e-8, fused=True
+        params=model.parameters(),
+        lr=cfg.training.hp.lr,
+        betas=[0.9, 0.999],
+        eps=1e-8,
+        fused=True,
     )
 
     # Record the current time to measure the duration of subsequent operations.
@@ -463,7 +466,7 @@ def main(cfg: DictConfig) -> None:
                                 "img_clean": img_clean,
                                 "img_lr": img_lr,
                                 "augment_pipe": None,
-                                "use_patch_grad_acc": use_patch_grad_acc
+                                "use_patch_grad_acc": use_patch_grad_acc,
                             }
 
                             if lead_time_label:
@@ -475,17 +478,18 @@ def main(cfg: DictConfig) -> None:
                                 )
                             else:
                                 lead_time_label = None
-                            if use_patch_grad_acc:   
+                            if use_patch_grad_acc:
                                 loss_fn.y_mean = None
 
-                            
-                            for patch_num_per_iter in patch_nums_iter:    
+                            for patch_num_per_iter in patch_nums_iter:
                                 if patching is not None:
                                     patching.set_patch_sum(patch_num_per_iter)
                                     loss_fn_kwargs.update({"patching": patching})
                                 # pdb.set_trace()
                                 with nvtx.annotate(f"loss forward", color="green"):
-                                    with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
+                                    with torch.autocast(
+                                        "cuda", dtype=amp_dtype, enabled=enable_amp
+                                    ):
                                         loss = loss_fn(**loss_fn_kwargs)
 
                                 loss = loss.sum() / batch_size_per_gpu
@@ -569,9 +573,11 @@ def main(cfg: DictConfig) -> None:
                         ):
                             with torch.no_grad():
                                 for _ in range(cfg.training.io.validation_steps):
-                                    img_clean_valid, img_lr_valid, *lead_time_label_valid = next(
-                                        validation_dataset_iterator
-                                    )
+                                    (
+                                        img_clean_valid,
+                                        img_lr_valid,
+                                        *lead_time_label_valid,
+                                    ) = next(validation_dataset_iterator)
 
                                     if use_apex_gn:
                                         img_clean_valid = img_clean_valid.to(
@@ -602,25 +608,30 @@ def main(cfg: DictConfig) -> None:
                                         "img_clean": img_clean_valid,
                                         "img_lr": img_lr_valid,
                                         "augment_pipe": None,
-                                        "use_patch_grad_acc": use_patch_grad_acc
+                                        "use_patch_grad_acc": use_patch_grad_acc,
                                     }
                                     if lead_time_label_valid:
                                         lead_time_label_valid = (
-                                            lead_time_label_valid[0].to(dist.device).contiguous()
+                                            lead_time_label_valid[0]
+                                            .to(dist.device)
+                                            .contiguous()
                                         )
                                         loss_valid_kwargs.update(
                                             {"lead_time_label": lead_time_label_valid}
                                         )
-                                    if use_patch_grad_acc:   
+                                    if use_patch_grad_acc:
                                         loss_fn.y_mean = None
 
-                                    
-                                    for patch_num_per_iter in patch_nums_iter:   
+                                    for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
                                             patching.set_patch_sum(patch_num_per_iter)
-                                            loss_fn_kwargs.update({"patching": patching}) 
+                                            loss_fn_kwargs.update(
+                                                {"patching": patching}
+                                            )
                                         # pdb.set_trace()
-                                        with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
+                                        with torch.autocast(
+                                            "cuda", dtype=amp_dtype, enabled=enable_amp
+                                        ):
                                             loss_valid = loss_fn(**loss_valid_kwargs)
 
                                         loss_valid = (

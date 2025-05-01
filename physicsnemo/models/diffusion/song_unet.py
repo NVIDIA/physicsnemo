@@ -39,7 +39,7 @@ from physicsnemo.models.diffusion import (
 )
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
-import contextlib 
+
 
 @dataclass
 class MetaData(ModelMetaData):
@@ -115,9 +115,9 @@ class SongUNet(Module):
         If True, adds a learned positional embedding after the first convolution layer.
         Used in StormCast model. By default False.
     use_apex_gn : bool, optional
-        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
         Need to set this as False on cpu. Defaults to False.
-    act : str, optional  
+    act : str, optional
         The activation function to use when fusing activation with GroupNorm. Defaults to None.
     profile_mode:
         A boolean flag indicating whether to enable all nvtx annotations during profiling.
@@ -553,15 +553,15 @@ class SongUNetPosEmbd(SongUNet):
         If True, adds a learned positional embedding after the first convolution layer.
         Used in StormCast model. By default False.
     use_apex_gn : bool, optional
-        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout. 
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
         Need to set this as False on cpu. Defaults to False.
-    act : str, optional  
+    act : str, optional
         The activation function to use when fusing activation with GroupNorm. Defaults to None.
     profile_mode:
         A boolean flag indicating whether to enable all nvtx annotations during profiling.
     amp_mode : bool, optional
         A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
-        
+
     Note
     -----
     Equivalent to the original implementation by Song et al., available at
@@ -676,7 +676,9 @@ class SongUNetPosEmbd(SongUNet):
         embedding_selector: Optional[Callable] = None,
         augment_labels=None,
     ):
-        with nvtx.annotate(message="SongUNetPosEmbd", color="blue") if self.profile_mode else contextlib.nullcontext():
+        with nvtx.annotate(
+            message="SongUNetPosEmbd", color="blue"
+        ) if self.profile_mode else contextlib.nullcontext():
             if embedding_selector is not None and global_index is not None:
                 raise ValueError(
                     "Cannot provide both embedding_selector and global_index. "
@@ -693,7 +695,9 @@ class SongUNetPosEmbd(SongUNet):
                 # Select positional embeddings using global indices (selects all
                 # embeddings if global_index is None)
                 else:
-                    selected_pos_embd = self.positional_embedding_indexing(x, global_index)
+                    selected_pos_embd = self.positional_embedding_indexing(
+                        x, global_index
+                    )
                 x = torch.cat((x, selected_pos_embd), dim=1)
 
                 return super().forward(x, noise_labels, class_labels, augment_labels)
@@ -755,9 +759,8 @@ class SongUNetPosEmbd(SongUNet):
             self.pos_embd = self.pos_embd.to(x.dtype)
 
         if global_index is None:
-            selected_pos_embd = (
-                self.pos_embd[None]
-                .expand((x.shape[0], -1, -1, -1))
+            selected_pos_embd = self.pos_embd[None].expand(
+                (x.shape[0], -1, -1, -1)
             )  # (B, N_pe, H, W)
 
         else:
@@ -826,9 +829,7 @@ class SongUNetPosEmbd(SongUNet):
         """
         if x.dtype != self.pos_embd.dtype:
             self.pos_embd = self.pos_embd.to(x.dtype)
-        return embedding_selector(
-            self.pos_embd
-        )  # (B, N_pe, H, W)
+        return embedding_selector(self.pos_embd)  # (B, N_pe, H, W)
 
     def _get_positional_embedding(self):
         if self.N_grid_channels == 0:
