@@ -203,17 +203,30 @@ class OpenFoamDataset(Dataset):
             surface_normals = None
             surface_sizes = None
 
-        # This will change depending on the use-case
-        self.global_params_values = {}
+        ## Arrange global parameters reference in a list
+        global_params_reference_list = []
+        for name in self.global_params_names:
+            reference_value = self.global_params_reference[name]
+            if isinstance(reference_value, (list, tuple, np.ndarray)):
+                global_params_reference_list.extend(reference_value)
+            else:
+                global_params_reference_list.append(reference_value)
+        global_params_reference = np.array(global_params_reference_list, dtype=np.float32)
+        print("global_params_reference in openfoam_datapipe.py ", global_params_reference)
+
+        # Global parameters values for each simulation has to be arranged here in a list
+        global_params_values_list = []
         for key in self.global_params_names:
             if key == "inlet_velocity":
-                self.global_params_values[key] = [self.stream_velocity]
+                global_params_values_list.extend(self.stream_velocity)
             elif key == "air_density":
-                self.global_params_values[key] = self.air_density
+                global_params_values_list.append(self.air_density)
             else:
                 raise ValueError(f"Global parameter {key} not supported for  this dataset")
+        global_params_values = np.array(global_params_values_list, dtype=np.float32)
+        print("global_params_values in openfoam_datapipe.py ", global_params_values)
 
-        print("self.global_params_values ", self.global_params_values)
+
 
         # Add the parameters to the dictionary
         return {
@@ -228,8 +241,8 @@ class OpenFoamDataset(Dataset):
             "volume_mesh_centers": np.float32(volume_coordinates),
             "surface_fields": np.float32(surface_fields),
             "filename": cfd_filename,
-            "global_params_values": self.global_params_values,
-            "global_params_reference": self.global_params_reference,
+            "global_params_values": global_params_values,
+            "global_params_reference": global_params_reference,
         }
 
 

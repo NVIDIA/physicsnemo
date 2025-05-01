@@ -322,8 +322,8 @@ class DoMINODataPipe(Dataset):
         self.keys_to_read = ["stl_coordinates", "stl_centers", "stl_faces", "stl_areas"]
         with self.device_context:
             self.keys_to_read_if_available = {
-                "global_params_values": {"inlet_velocity": [30.0], "air_density": 1.205},
-                "global_params_reference": {"inlet_velocity": [30.0], "air_density": 1.205},
+                "global_params_values": [30.0, 1.205],
+                "global_params_reference": [30.0, 1.205],
             }
         self.volume_keys = ["volume_mesh_centers", "volume_fields"]
         self.surface_keys = [
@@ -499,31 +499,12 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_combined(self, data_dict):
-        xp = self.array_provider
-
-        # Pull these out and force to fp32:
+        
         with self.device_context:
-            global_params_values_list = []
-            global_params_reference_list = []
-            for name in self.config.global_params_names:
-                value = data_dict["global_params_values"][name]
-                reference_value = data_dict["global_params_reference"][name]
-
-                if isinstance(value, (list, tuple, np.ndarray)):
-                    global_params_values_list.extend(value)
-                else:
-                    global_params_values_list.append(value)
-
-                if isinstance(reference_value, (list, tuple, np.ndarray)):
-                    global_params_reference_list.extend(reference_value)
-                else:
-                    global_params_reference_list.append(reference_value)
-            
-            global_params_values = xp.array(global_params_values_list, dtype=xp.float32)
-            global_params_reference = xp.array(global_params_reference_list, dtype=xp.float32)
-            
-            print("global_params_values in domino_datapipe.py ", global_params_values)
-            print("global_params_reference in domino_datapipe.py ", global_params_reference)
+            global_params_values = data_dict["global_params_values"].astype(
+                self.array_provider.float32
+            )
+            global_params_reference = data_dict["global_params_reference"].astype(self.array_provider.float32)
 
         # Pull these pieces out of the data_dict for manipulation
         stl_vertices = data_dict["stl_coordinates"]
@@ -534,7 +515,7 @@ class DoMINODataPipe(Dataset):
         stl_sizes = stl_sizes[idx]
         stl_centers = stl_centers[idx]
 
-
+        xp = self.array_provider
         # Make sure the mesh_indices_flattened is an integer array:
         if mesh_indices_flattened.dtype != xp.int32:
             mesh_indices_flattened = mesh_indices_flattened.astype(xp.int32)
