@@ -285,7 +285,7 @@ def mse_loss_fn_area(output, target, normals, area, padded_value=-10):
 
 def integral_loss_fn(output, target, area, normals, padded_value=-10, cfg=None):
     if cfg:
-        vel_inlet = cfg.global_params_values["inlet_velocity"][0]
+        vel_inlet = cfg.global_params_values["inlet_velocity"]["reference"][0]
     else:
         vel_inlet = 30.0
     mask = abs(target - padded_value) > 1e-3
@@ -312,7 +312,7 @@ def integral_loss_fn_new(output, target, area, normals, padded_value=-10, cfg=No
 
 def lift_loss_fn(output, target, area, normals, padded_value=-10, cfg=None):
     if cfg:
-        vel_inlet = cfg.global_params_values["inlet_velocity"][0]
+        vel_inlet = cfg.global_params_values["inlet_velocity"]["reference"][0]
     else:
         vel_inlet = 30.0
     mask = abs(target - padded_value) > 1e-3
@@ -340,7 +340,7 @@ def lift_loss_fn(output, target, area, normals, padded_value=-10, cfg=None):
 
 def drag_loss_fn(output, target, area, normals, padded_value=-10, cfg=None):
     if cfg:
-        vel_inlet = cfg.global_params_values["inlet_velocity"][0]
+        vel_inlet = cfg.global_params_values["inlet_velocity"]["reference"][0]
     else:
         vel_inlet = 30.0
     mask = abs(target - padded_value) > 1e-3

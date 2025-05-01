@@ -571,7 +571,7 @@ class DoMINODataPipe(Dataset):
             "sdf_surf_grid": sdf_surf_grid,
             "surface_min_max": surf_grid_max_min,
             "global_params_values": xp.expand_dims(xp.array(global_params_values, dtype=xp.float32), -1),
-            "global_params_reference": xp.array(global_params_reference, dtype=xp.float32),
+            "global_params_reference": xp.expand_dims(xp.array(global_params_reference, dtype=xp.float32), -1),
             "geometry_coordinates": geom_centers,
         }
 

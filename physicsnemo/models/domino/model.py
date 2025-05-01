@@ -771,7 +771,6 @@ class DoMINO(nn.Module):
         self.use_surface_normals = model_parameters.use_surface_normals
         self.use_surface_area = model_parameters.use_surface_area
         self.encode_parameters = model_parameters.encode_parameters
-        self.param_scaling_factors = model_parameters.parameter_model.scaling_params
         self.geo_encoding_type = model_parameters.geometry_encoding_type
 
         if self.use_surface_normals:
@@ -1082,14 +1081,15 @@ class DoMINO(nn.Module):
 
         if self.encode_parameters:
             processed_parameters = []
-            for k, param in enumerate(global_params_values):
-                param = torch.unsqueeze(param, 1)
+            for k in range(global_params_values.shape[1]):
+                param = torch.unsqueeze(global_params_values[:, k, :], 1)
+                ref = torch.unsqueeze(global_params_reference[:, k,: ], 1)
                 param = param.expand(
                     param.shape[0],
                     surface_mesh_centers.shape[1],
                     param.shape[2],
                 )
-                param = param / global_params_reference[k]
+                param = param / ref
                 processed_parameters.append(param)
             processed_parameters = torch.cat(processed_parameters, axis=-1)
             param_encoding = self.parameter_model(processed_parameters)
@@ -1185,14 +1185,15 @@ class DoMINO(nn.Module):
 
         if self.encode_parameters:
             processed_parameters = []
-            for k, param in enumerate(global_params_values):
-                param = torch.unsqueeze(param, 1)
+            for k in range(global_params_values.shape[1]):
+                param = torch.unsqueeze(global_params_values[:, k, :], 1)
+                ref = torch.unsqueeze(global_params_reference[:, k,: ], 1)
                 param = param.expand(
                     param.shape[0],
                     volume_mesh_centers.shape[1],
                     param.shape[2],
                 )
-                param = param / global_params_reference[k]
+                param = param / ref
                 processed_parameters.append(param)
             processed_parameters = torch.cat(processed_parameters, axis=-1)
             param_encoding = self.parameter_model(processed_parameters)

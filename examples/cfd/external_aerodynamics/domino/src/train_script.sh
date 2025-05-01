@@ -25,4 +25,4 @@ pip install torchinfo
 pip install timm==1.0.14
 rsync -av /lustre/snidhan/physicsnemo-work/physicsnemo/physicsnemo/* /usr/local/lib/python3.10/dist-packages/physicsnemo
 cd /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/src/
-${RUN_CMD}
+#${RUN_CMD}

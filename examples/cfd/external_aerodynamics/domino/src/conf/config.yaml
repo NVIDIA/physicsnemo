@@ -85,7 +85,7 @@ model:
   use_surface_area: true # Use only surface normals and not surface area
   integral_loss_scaling_factor: 100 # Scale integral loss by this factor
   normalization: min_max_scaling # or mean_std_scaling
-  encode_parameters: false # encode inlet velocity and air density in the model
+  encode_parameters: true # encode inlet velocity and air density in the model
   surf_loss_scaling: 5.0 # scale surface loss with this factor in combined mode
   vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
   geometry_encoding_type: both # geometry encoder type, sdf, stl, both

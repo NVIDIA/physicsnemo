@@ -200,18 +200,18 @@ def loss_fn_area(
 
 
 def integral_loss_fn(
-    output, target, area, normals, stream_velocity=30.0, padded_value=-10
+    output, target, area, normals, stream_velocity=None, padded_value=-10
 ):
     drag_loss = drag_loss_fn(
-        output, target, area, normals, stream_velocity, padded_value=-10
+        output, target, area, normals, stream_velocity=stream_velocity, padded_value=-10
     )
     lift_loss = lift_loss_fn(
-        output, target, area, normals, stream_velocity, padded_value=-10
+        output, target, area, normals, stream_velocity=stream_velocity, padded_value=-10
     )
     return lift_loss + drag_loss
 
 
-def lift_loss_fn(output, target, area, normals, stream_velocity=30.0, padded_value=-10):
+def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
     vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
 
@@ -232,7 +232,7 @@ def lift_loss_fn(output, target, area, normals, stream_velocity=30.0, padded_val
     return loss
 
 
-def drag_loss_fn(output, target, area, normals, stream_velocity=30.0, padded_value=-10):
+def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
     vel_inlet = stream_velocity  # Get this from the dataset
     mask = abs(target - padded_value) > 1e-3
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -288,7 +288,8 @@ def validation_step(
                     target_surf = sampled_batched["surface_fields"]
                     surface_normals = sampled_batched["surface_normals"]
                     surface_areas = sampled_batched["surface_areas"]
-                    stream_velocity = sampled_batched["global_params_reference"][0]
+                    # To obtain stream velocity from global parameters
+                    stream_velocity = sampled_batched["global_params_values"][:, 0, :]
                     surface_areas = torch.unsqueeze(surface_areas, -1)
 
                     loss_integral = (
@@ -381,7 +382,10 @@ def train_epoch(
                 surface_areas = sampled_batched["surface_areas"]
                 surface_areas = torch.unsqueeze(surface_areas, -1)
                 surface_normals = sampled_batched["surface_normals"]
-                stream_velocity = sampled_batched["stream_velocity"]
+
+                global_params_values = sampled_batched["global_params_values"]
+                stream_velocity = global_params_values[:, 0, :] # Needs to be taken from data
+
                 alternate_loss_surf = loss_fn_surface(
                     prediction_surf,
                     target_surf,
@@ -515,7 +519,6 @@ def main(cfg: DictConfig) -> None:
             num_global_features += 1
         else:
             raise ValueError(f"Unknown global parameter type")
-    print('num_global_features ', num_global_features)
 
     vol_save_path = os.path.join(
         "outputs", cfg.project.name, "volume_scaling_factors.npy"
@@ -538,7 +541,6 @@ def main(cfg: DictConfig) -> None:
         "train",
         volume_variable_names,
         surface_variable_names,
-        global_params_names,
         vol_factors,
         surf_factors,
     )
@@ -547,7 +549,6 @@ def main(cfg: DictConfig) -> None:
         "val",
         volume_variable_names,
         surface_variable_names,
-        global_params_names,
         vol_factors,
         surf_factors,
     )
