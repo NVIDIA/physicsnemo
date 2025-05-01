@@ -83,7 +83,7 @@ class OpenFoamDataset(Dataset):
             "wallShearStress",
         ],
         volume_variables: Optional[list] = ["UMean", "pMean"],
-        global_params_names: Optional[list] = ["inlet_velocity", "air_density"],
+        global_params_types: Optional[dict] = {"inlet_velocity": "vector", "air_density": "scalar"},
         global_params_reference: Optional[dict] = {"inlet_velocity": [30.0], "air_density": 1.226},
         device: int = 0,
         model_type=None,
@@ -110,17 +110,12 @@ class OpenFoamDataset(Dataset):
 
         self.surface_variables = surface_variables
         self.volume_variables = volume_variables
-        self.global_params_names = global_params_names
+        self.global_params_types = global_params_types
         self.global_params_reference = global_params_reference
         self.stream_velocity = self.global_params_reference["inlet_velocity"][0]
         self.air_density = self.global_params_reference["air_density"]
         self.device = device
         self.model_type = model_type
-
-        print('self.global_params_names ', self.global_params_names)
-        print('self.global_params_reference ', self.global_params_reference)
-        print('self.stream_velocity ', self.stream_velocity)
-        print('self.air_density ', self.air_density)
 
     def __len__(self):
         return len(self.filenames)
@@ -203,30 +198,27 @@ class OpenFoamDataset(Dataset):
             surface_normals = None
             surface_sizes = None
 
-        ## Arrange global parameters reference in a list
+        # Arrange global parameters reference in a list, ensuring it's flat
         global_params_reference_list = []
-        for name in self.global_params_names:
-            reference_value = self.global_params_reference[name]
-            if isinstance(reference_value, (list, tuple, np.ndarray)):
-                global_params_reference_list.extend(reference_value)
+        for name, type in self.global_params_types.items():
+            if type == "vector":
+                global_params_reference_list.extend(self.global_params_reference[name])
+            elif type == "scalar":
+                global_params_reference_list.append(self.global_params_reference[name])
             else:
-                global_params_reference_list.append(reference_value)
+                raise ValueError(f"Global parameter {name} not supported for  this dataset")
         global_params_reference = np.array(global_params_reference_list, dtype=np.float32)
-        print("global_params_reference in openfoam_datapipe.py ", global_params_reference)
 
-        # Global parameters values for each simulation has to be arranged here in a list
+        # Global parameters values for each simulation has to be arranged here in a list by the user
         global_params_values_list = []
-        for key in self.global_params_names:
+        for key in self.global_params_types.keys():
             if key == "inlet_velocity":
-                global_params_values_list.extend(self.stream_velocity)
+                global_params_values_list.append(self.stream_velocity)
             elif key == "air_density":
                 global_params_values_list.append(self.air_density)
             else:
                 raise ValueError(f"Global parameter {key} not supported for  this dataset")
         global_params_values = np.array(global_params_values_list, dtype=np.float32)
-        print("global_params_values in openfoam_datapipe.py ", global_params_values)
-
-
 
         # Add the parameters to the dictionary
         return {
@@ -252,7 +244,7 @@ if __name__ == "__main__":
         phase="train",
         volume_variables=["UMean", "pMean", "nutMean"],
         surface_variables=["pMean", "wallShearStress", "nutMean"],
-        global_params_names=["inlet_velocity", "air_density"],
+        global_params_types={"inlet_velocity": "vector", "air_density": "scalar"},
         global_params_reference={"inlet_velocity": [30.0], "air_density": 1.226},
         sampling=False,
         sample_in_bbox=False,

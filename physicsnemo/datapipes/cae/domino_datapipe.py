@@ -179,9 +179,6 @@ class DoMINODataConfig:
     volume_factors: Optional[Sequence] = None
     bounding_box_dims: Optional[Union[BoundingBox, Sequence]] = None
 
-    # Global parameters:
-    global_params_names: Optional[Sequence] = ("inlet_velocity", "air_density")
-
     grid_resolution: Union[Sequence, ArrayType] = (256, 96, 64)
     normalize_coordinates: bool = False
     sample_in_bbox: bool = False
@@ -322,8 +319,8 @@ class DoMINODataPipe(Dataset):
         self.keys_to_read = ["stl_coordinates", "stl_centers", "stl_faces", "stl_areas"]
         with self.device_context:
             self.keys_to_read_if_available = {
-                "global_params_values": [30.0, 1.205],
-                "global_params_reference": [30.0, 1.205],
+                "global_params_values": [30.0, 1.226],
+                "global_params_reference": [30.0, 1.226],
             }
         self.volume_keys = ["volume_mesh_centers", "volume_fields"]
         self.surface_keys = [
@@ -573,8 +570,8 @@ class DoMINODataPipe(Dataset):
             "surf_grid": surf_grid,
             "sdf_surf_grid": sdf_surf_grid,
             "surface_min_max": surf_grid_max_min,
-            "global_params_values": xp.expand_dims(global_params_values, -1),
-            "global_params_reference": global_params_reference,
+            "global_params_values": xp.expand_dims(xp.array(global_params_values, dtype=xp.float32), -1),
+            "global_params_reference": xp.array(global_params_reference, dtype=xp.float32),
             "geometry_coordinates": geom_centers,
         }
 
@@ -1377,7 +1374,7 @@ class CachedDoMINODataset(Dataset):
 
 
 def create_domino_dataset(
-    cfg, phase, volume_variable_names, surface_variable_names, global_params_names, vol_factors, surf_factors
+    cfg, phase, volume_variable_names, surface_variable_names, vol_factors, surf_factors
 ):
     if phase == "train":
         input_path = cfg.data.input_dir
@@ -1404,7 +1401,6 @@ def create_domino_dataset(
             grid_resolution=cfg.model.interp_res,
             volume_variables=volume_variable_names,
             surface_variables=surface_variable_names,
-            global_params_names=global_params_names,
             normalize_coordinates=True,
             sampling=True,
             sample_in_bbox=True,

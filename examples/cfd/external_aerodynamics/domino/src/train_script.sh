@@ -8,7 +8,7 @@ export TOTAL_GPU=$(($SLURM_JOB_NUM_NODES * $NPROC_PER_NODE))
 
 # train the model
 RUN_CMD="python -u train.py exp_tag=10"
-# RUN_CMD="python src/process_data.py"
+#RUN_CMD="python process_data.py"
 
 echo "Running on hosts: $(echo $(scontrol show hostname))"
 ldconfig
@@ -23,6 +23,6 @@ cd /lustre/snidhan/physicsnemo-work/physicsnemo/
 pip install warp-lang
 pip install torchinfo
 pip install timm==1.0.14
-rsync -av physicsnemo/* /usr/local/lib/python3.10/dist-packages/physicsnemo
+rsync -av /lustre/snidhan/physicsnemo-work/physicsnemo/physicsnemo/* /usr/local/lib/python3.10/dist-packages/physicsnemo
 cd /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/src/
 ${RUN_CMD}
