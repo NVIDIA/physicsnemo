@@ -198,7 +198,7 @@ class OpenFoamDataset(Dataset):
             surface_normals = None
             surface_sizes = None
 
-        # Arrange global parameters reference in a list, ensuring it's flat
+        # Arrange global parameters reference in a list based on the type of the parameter
         global_params_reference_list = []
         for name, type in self.global_params_types.items():
             if type == "vector":
@@ -209,7 +209,7 @@ class OpenFoamDataset(Dataset):
                 raise ValueError(f"Global parameter {name} not supported for  this dataset")
         global_params_reference = np.array(global_params_reference_list, dtype=np.float32)
 
-        # Global parameters values for each simulation has to be arranged here in a list by the user
+        # Global parameters values for each simulation has to be arranged here in a list by the user here
         global_params_values_list = []
         for key in self.global_params_types.keys():
             if key == "inlet_velocity":

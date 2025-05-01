@@ -458,16 +458,12 @@ def main(cfg: DictConfig):
         surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
 
         # SDF calculation on the grid using WARP
-        sdf_surf_grid = (
-            signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                surf_grid_reshaped,
-                use_sign_winding_number=True,
-            )
-            .numpy()
-            .reshape(nx, ny, nz)
-        )
+        sdf_surf_grid = signed_distance_field(
+            stl_vertices,
+            mesh_indices_flattened,
+            surf_grid_reshaped,
+            use_sign_winding_number=True,
+        ).reshape(nx, ny, nz)
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
@@ -475,33 +471,31 @@ def main(cfg: DictConfig):
         # Get global parameters and global parameters scaling
         global_params_names = list(cfg.variables.global_parameters.keys())
         global_params_reference = {name: cfg.variables.global_parameters[name]['reference'] for name in global_params_names}
+        global_params_types = {name: cfg.variables.global_parameters[name]['type'] for name in global_params_names}
+        stream_velocity = global_params_reference["inlet_velocity"][0]
+        air_density = global_params_reference["air_density"]
 
-        global_params_values = {}
-        for key in global_params_names:
-            if key == "inlet_velocity":
-                global_params_values[key] = [30.0]
-            elif key == "air_density":
-                global_params_values[key] = 1.205
-            else:
-                raise ValueError(f"Global parameter {key} not supported currently")
-
-        global_params_values_list = []
+        # Arrange global parameters reference in a list, ensuring it's flat
         global_params_reference_list = []
-        for name in global_params_names:
-            value = global_params_values[name]
-            scaling_value = global_params_reference[name]
-
-            if isinstance(value, (list, tuple, np.ndarray)):
-                global_params_values_list.extend(value)
+        for name, type in global_params_types.items():
+            if type == "vector":
+                global_params_reference_list.extend(global_params_reference[name])
+            elif type == "scalar":
+                global_params_reference_list.append(global_params_reference[name])
             else:
-                global_params_values_list.append(value)
-
-            if isinstance(scaling_value, (list, tuple, np.ndarray)):
-                global_params_reference_list.extend(scaling_value)
-            else:
-                global_params_reference_list.append(scaling_value)
-        global_params_values = np.array(global_params_values_list, dtype=np.float32)
+                raise ValueError(f"Global parameter {name} not supported for  this dataset")
         global_params_reference = np.array(global_params_reference_list, dtype=np.float32)
+
+        # Global parameters values for each simulation has to be arranged here in a list by the user
+        global_params_values_list = []
+        for key in global_params_types.keys():
+            if key == "inlet_velocity":
+                global_params_values_list.append(stream_velocity)
+            elif key == "air_density":
+                global_params_values_list.append(air_density)
+            else:
+                raise ValueError(f"Global parameter {key} not supported for  this dataset")
+        global_params_values = np.array(global_params_values_list, dtype=np.float32)
 
         # Read VTP
         if model_type == "surface" or model_type == "combined":
@@ -604,16 +598,12 @@ def main(cfg: DictConfig):
             grid_reshaped = grid.reshape(nx * ny * nz, 3)
 
             # SDF calculation on the grid using WARP
-            sdf_grid = (
-                signed_distance_field(
-                    stl_vertices,
-                    mesh_indices_flattened,
-                    grid_reshaped,
-                    use_sign_winding_number=True,
-                )
-                .numpy()
-                .reshape(nx, ny, nz)
-            )
+            sdf_grid = signed_distance_field(
+                stl_vertices,
+                mesh_indices_flattened,
+                grid_reshaped,
+                use_sign_winding_number=True,
+            ).reshape(nx, ny, nz)
 
             # SDF calculation
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
@@ -675,8 +665,8 @@ def main(cfg: DictConfig):
                 "volume_min_max": vol_grid_max_min,
                 "surface_min_max": surf_grid_max_min,
                 "length_scale": np.array(length_scale, dtype=np.float32),
-                "global_params_values": np.expand_dims(global_params_values, -1),
-                "global_params_reference": global_params_reference,
+                "global_params_values": np.expand_dims(np.array(global_params_values, dtype=np.float32), -1),
+                "global_params_reference": np.expand_dims(np.array(global_params_reference, dtype=np.float32), -1),
             }
         elif model_type == "surface":
             data_dict = {
@@ -693,8 +683,8 @@ def main(cfg: DictConfig):
                 "surface_fields": np.float32(surface_fields),
                 "surface_min_max": np.float32(surf_grid_max_min),
                 "length_scale": np.array(length_scale, dtype=np.float32),
-                "global_params_values": np.expand_dims(global_params_values, -1),
-                "global_params_reference": global_params_reference,
+                "global_params_values": np.expand_dims(np.array(global_params_values, dtype=np.float32), -1),
+                "global_params_reference": np.expand_dims(np.array(global_params_reference, dtype=np.float32), -1),
             }
         elif model_type == "volume":
             data_dict = {
@@ -711,8 +701,8 @@ def main(cfg: DictConfig):
                 "volume_min_max": vol_grid_max_min,
                 "surface_min_max": surf_grid_max_min,
                 "length_scale": np.array(length_scale, dtype=np.float32),
-                "global_params_values": np.expand_dims(global_params_values, -1),
-                "global_params_reference": global_params_reference,
+                "global_params_values": np.expand_dims(np.array(global_params_values, dtype=np.float32), -1),
+                "global_params_reference": np.expand_dims(np.array(global_params_reference, dtype=np.float32), -1),
             }
 
         data_dict = {

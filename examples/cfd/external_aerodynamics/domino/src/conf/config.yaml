@@ -17,7 +17,7 @@
 project: # Project name
   name: AWS_Dataset_Global_Params
   
-exp_tag: 1 # Experiment tag
+exp_tag: 10 # Experiment tag
 # Main output directory.
 project_dir: outputs/${project.name}/
 output: outputs/${project.name}/${exp_tag}
@@ -131,7 +131,7 @@ train: # Training configurable parameters
   sampler:
     shuffle: true
     drop_last: false
-  checkpoint_dir: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/3/models/
+  checkpoint_dir: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/10/models/
   
 val: # Validation configurable parameters
   dataloader:
@@ -142,9 +142,9 @@ val: # Validation configurable parameters
     drop_last: false
 
 eval: # Testing configurable parameters
-  test_path: /lustre/snidhan/benchmarking/drivaer_aws_surface_test_new/
-  save_path: /lustre/snidhan/domino/mesh_predictions_surf_final_pc1/
-  checkpoint_name: DoMINO.0.50.pt
-  scaling_param_path: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset_1/
+  test_path: /lustre/snidhan/physicsnemo-work/data/drivaer_aws_sample/
+  save_path: /lustre/snidhan/physicsnemo-work/domino-global-param/mesh_predictions_surf_final_pc1/
+  checkpoint_name: DoMINO.0.10.pt
+  scaling_param_path: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/src/outputs/AWS_Dataset_Global_Params/
   refine_stl: False # Automatically refine STL during inference
   stencil_size: 1 # Stencil size for evaluating surface and volume model

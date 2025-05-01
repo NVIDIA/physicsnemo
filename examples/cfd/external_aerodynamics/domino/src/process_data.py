@@ -75,6 +75,7 @@ def main(cfg: DictConfig):
     global_params_names = list(cfg.variables.global_parameters.keys())
     global_params_reference = {name: cfg.variables.global_parameters[name]['reference'] for name in global_params_names}
     global_params_types = {name: cfg.variables.global_parameters[name]['type'] for name in global_params_names}
+    
     fm_data = OpenFoamDataset(
         cfg.data_processor.input_dir,
         kind=cfg.data_processor.kind,
@@ -84,6 +85,7 @@ def main(cfg: DictConfig):
         global_params_reference=global_params_reference,
         model_type=cfg.model.model_type,
     )
+    
     output_dir = cfg.data_processor.output_dir
     create_directory(output_dir)
     n_processors = cfg.data_processor.num_processors
