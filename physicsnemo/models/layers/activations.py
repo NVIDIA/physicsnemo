@@ -176,6 +176,7 @@ ACT2FN = {
     "prelu": nn.PReLU,
     "relu6": nn.ReLU6,
     "elu": nn.ELU,
+    "celu": (nn.CELU, {"alpha": 1.0}),
     "selu": nn.SELU,
     "silu": nn.SiLU,
     "gelu": nn.GELU,
