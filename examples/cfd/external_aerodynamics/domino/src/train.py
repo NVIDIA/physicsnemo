@@ -288,8 +288,8 @@ def validation_step(
                     target_surf = sampled_batched["surface_fields"]
                     surface_normals = sampled_batched["surface_normals"]
                     surface_areas = sampled_batched["surface_areas"]
-                    # To obtain stream velocity from global parameters
-                    stream_velocity = sampled_batched["global_params_values"][:, 0, :]
+                    # Needs to be taken from dataset
+                    stream_velocity = sampled_batched["global_params_values"][:, 0, :] 
                     surface_areas = torch.unsqueeze(surface_areas, -1)
 
                     loss_integral = (
@@ -382,9 +382,8 @@ def train_epoch(
                 surface_areas = sampled_batched["surface_areas"]
                 surface_areas = torch.unsqueeze(surface_areas, -1)
                 surface_normals = sampled_batched["surface_normals"]
-
-                global_params_values = sampled_batched["global_params_values"]
-                stream_velocity = global_params_values[:, 0, :] # Needs to be taken from data
+                # Needs to be taken from dataset
+                stream_velocity = sampled_batched["global_params_values"][:, 0, :] 
 
                 alternate_loss_surf = loss_fn_surface(
                     prediction_surf,
