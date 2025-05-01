@@ -29,12 +29,14 @@ from physicsnemo.utils.generative import InfiniteSampler
 from physicsnemo.launch.utils import save_checkpoint, load_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from utils.nn import (
-    regression_model_forward,
     diffusion_model_forward,
     regression_loss_fn,
     get_preconditioned_architecture,
+    build_network_condition_and_target,
 )
-from utils.data_loader_hrrr_era5 import HrrrEra5Dataset, worker_init
+from utils.plots import validation_plot
+from datasets import dataset_classes
+from datasets.dataset import worker_init
 import matplotlib.pyplot as plt
 import wandb
 from utils.spectrum import ps1d_plots
@@ -54,7 +56,14 @@ def training_loop(cfg):
 
     # Shorthand for config items
     batch_size = cfg.training.batch_size
-    local_batch_size = batch_size // dist.world_size
+    if cfg.training.batch_size_per_gpu == "auto":
+        local_batch_size = batch_size // dist.world_size
+    else:
+        local_batch_size = cfg.training.batch_size_per_gpu
+    assert batch_size % (local_batch_size * dist.world_size) == 0
+    # gradient accumulation rounds per step
+    num_accumulation_rounds = batch_size // (local_batch_size * dist.world_size)
+
     use_regression_net = cfg.model.use_regression_net
     previous_step_conditioning = cfg.model.previous_step_conditioning
     resume_checkpoint = cfg.training.resume_checkpoint
@@ -75,29 +84,23 @@ def training_loop(cfg):
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+    fp_optimizations = cfg.training.fp_optimizations
+    enable_amp = fp_optimizations.startswith("amp")
+    amp_dtype = torch.float16 if fp_optimizations == "amp-fp16" else torch.bfloat16
+
     total_train_steps = cfg.training.total_train_steps
 
     # Load dataset.
     logger0.info("Loading dataset...")
 
-    dataset_train = HrrrEra5Dataset(cfg.dataset, train=True)
-    dataset_valid = HrrrEra5Dataset(cfg.dataset, train=False)
+    dataset_cls = dataset_classes[cfg.dataset.name]
+    del cfg.dataset.name
 
-    _, hrrr_channels = dataset_train._get_hrrr_channel_names()
-    diffusion_channels = (
-        hrrr_channels
-        if cfg.dataset.diffusion_channels == "all"
-        else cfg.dataset.diffusion_channels
-    )
-    input_channels = (
-        hrrr_channels
-        if cfg.dataset.input_channels == "all"
-        else cfg.dataset.input_channels
-    )
-    input_channel_indices = [hrrr_channels.index(channel) for channel in input_channels]
-    diffusion_channel_indices = [
-        hrrr_channels.index(channel) for channel in diffusion_channels
-    ]
+    dataset_train = dataset_cls(cfg.dataset, train=True)
+    dataset_valid = dataset_cls(cfg.dataset, train=False)
+
+    background_channels = dataset_train.background_channels()
+    state_channels = dataset_train.state_channels()
 
     sampler = InfiniteSampler(
         dataset=dataset_train,
@@ -120,7 +123,6 @@ def training_loop(cfg):
         drop_last=True,
         pin_memory=torch.cuda.is_available(),
     )
-
     valid_data_loader = torch.utils.data.DataLoader(
         dataset=dataset_valid,
         batch_size=local_batch_size,
@@ -136,37 +138,41 @@ def training_loop(cfg):
     # load pretrained regression net if training diffusion
     if use_regression_net:
         regression_net = Module.from_checkpoint(cfg.model.regression_weights)
+        if cfg.training.compile_model:
+            regression_net = torch.compile(regression_net)
         regression_net = regression_net.to(device)
+    else:
+        regression_net = None
 
     # Construct network
     logger0.info("Constructing network...")
-    target_channels = len(diffusion_channels)
     if train_regression_unet:
-        conditional_channels = (
-            len(input_channels) + 26
-        )  # 26 is the number of era5 channels
+        num_condition_channels = len(background_channels) + len(state_channels)
     else:
-        conditional_channels = (
-            len(input_channels)
+        num_condition_channels = (
+            len(state_channels)
             if not previous_step_conditioning
-            else 2 * len(input_channels)
+            else 2 * len(state_channels)
         )
 
-    conditional_channels += len(cfg.dataset.invariants)
-    invariant_array = dataset_train._get_invariants()
-    invariant_tensor = torch.from_numpy(invariant_array).to(device)
-    invariant_tensor = invariant_tensor.unsqueeze(0)
-    invariant_tensor = invariant_tensor.repeat(local_batch_size, 1, 1, 1)
+    invariant_array = dataset_train.get_invariants()
+    if invariant_array is not None:
+        num_condition_channels += invariant_array.shape[0]
+        invariant_tensor = torch.from_numpy(invariant_array).to(device)
+        invariant_tensor = invariant_tensor.unsqueeze(0)
+        invariant_tensor = invariant_tensor.repeat(local_batch_size, 1, 1, 1)
+    else:
+        invariant_tensor = None
 
-    logger0.info(f"hrrr_channels {hrrr_channels}")
-    logger0.info(f"target_channels for diffusion {target_channels}")
-    logger0.info(f"conditional_channels for diffusion {conditional_channels}")
+    logger0.info(f"background_channels {background_channels}")
+    logger0.info(f"state_channels {state_channels}")
+    logger0.info(f"num_condition_channels {num_condition_channels}")
 
     net = get_preconditioned_architecture(
         name=net_name,
-        hrrr_resolution=tuple(cfg.dataset.hrrr_img_size),
-        target_channels=target_channels,
-        conditional_channels=conditional_channels,
+        img_resolution=dataset_train.image_shape(),
+        target_channels=len(state_channels),
+        conditional_channels=num_condition_channels,
         spatial_embedding=cfg.model.spatial_pos_embed,
         attn_resolutions=list(cfg.model.attn_resolutions),
     )
@@ -179,6 +185,8 @@ def training_loop(cfg):
         loss_fn = regression_loss_fn
     elif cfg.training.loss == "edm":
         loss_fn = EDMLoss(P_mean=cfg.model.P_mean)
+    if cfg.training.compile_model:
+        loss_fn = torch.compile(loss_fn)
     optimizer = torch.optim.Adam(net.parameters(), lr=cfg.training.lr)
     augment_pipe = None
     ddp = torch.nn.parallel.DistributedDataParallel(
@@ -186,77 +194,76 @@ def training_loop(cfg):
     )
 
     # Resume training from previous snapshot.
-    total_steps = 0
-    if resume_checkpoint is not None:
-        logger0.info(f'Resuming training state from "{resume_checkpoint}"...')
+    ckpt_path = os.path.join(cfg.training.rundir, f"checkpoints_{net_name}")
+    logger0.info(f'Trying to resume training state from "{ckpt_path}"...')
+    total_steps = load_checkpoint(
+        path=ckpt_path,
+        models=net,
+        optimizer=optimizer,
+        epoch=None
+        if cfg.training.resume_checkpoint == "latest"
+        else cfg.training.resume_checkpoint,
+    )
 
-        total_steps = load_checkpoint(
-            path=os.path.join(cfg.training.rundir, "checkpoints"),
-            models=net,
-            optimizer=optimizer,
-        )
+    if total_steps == 0:
+        logger0.info(f"No resumable training state found.")
+        init_weights = cfg.training.initial_weights
+        if init_weights is None:
+            logger0.info(f"Starting training from scratch...")
+        else:
+            logger0.info(f"Starting training from weights saved in {init_weights}...")
+            if init_weights.endswith(".mdlus"):
+                net.load(init_weights)
+            elif init_weights.endswith(".pt"):
+                model_dict = torch.load(init_weights, map_location=net.device)
+                net.load_state(model_dict, strict=True)
 
     # Train.
     logger0.info(
         f"Training up to {total_train_steps} steps starting from step {total_steps}..."
     )
-    stats_jsonl = None
     wandb_logs = {}
     done = total_steps >= total_train_steps
 
     train_start = time.time()
     avg_train_loss = 0
     train_steps = 0
+    valid_time = -1  # set as placeholders until validation is actually done
+    val_loss = -1
     while not done:
-        # Accumulate gradients.
+        # Compute & accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
-        batch = next(dataset_iterator)
-        hrrr_0 = batch["hrrr"][0].to(device).to(torch.float32)
-        hrrr_1 = batch["hrrr"][1].to(device).to(torch.float32)
 
-        if use_regression_net:
-            era5 = batch["era5"][0].to(device).to(torch.float32)
+        for _ in range(num_accumulation_rounds):
+            # Format input batch
+            batch = next(dataset_iterator)
+            background = batch["background"].to(device=device, dtype=torch.float32)
+            state = [s.to(device=device, dtype=torch.float32) for s in batch["state"]]
+            (condition, target, reg_out) = build_network_condition_and_target(
+                background,
+                state,
+                invariant_tensor,
+                regression_net=regression_net,
+                train_regression_unet=train_regression_unet,
+            )
 
-            with torch.no_grad():
-                reg_out = regression_model_forward(
-                    regression_net, hrrr_0, era5, invariant_tensor
+            with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
+                loss = loss_fn(
+                    net=ddp,
+                    images=target,
+                    condition=condition,
+                    augment_pipe=augment_pipe,
                 )
-                hrrr_0 = torch.cat(
-                    (
-                        hrrr_0[:, input_channel_indices, :, :],
-                        reg_out[:, input_channel_indices, :, :],
-                    ),
-                    dim=1,
-                )
-                hrrr_1 = hrrr_1 - reg_out
-                del reg_out
+            if log_to_wandb:
+                channelwise_loss = loss.mean(dim=(0, 2, 3))
+                channelwise_loss_dict = {
+                    f"ChLoss/{ch}": channelwise_loss[i].item()
+                    for (i, ch) in enumerate(state_channels)
+                }
+                wandb_logs["channelwise_loss"] = channelwise_loss_dict
 
-        elif train_regression_unet:
-            assert diffusion_channel_indices == input_channel_indices
-
-            era5 = batch["era5"][0].to(device).to(torch.float32)
-
-            hrrr_0 = torch.cat((hrrr_0[:, input_channel_indices, :, :], era5), dim=1)
-
-        hrrr_1 = hrrr_1[
-            :, diffusion_channel_indices, :, :
-        ]  # targets of the diffusion model
-
-        hrrr_0 = torch.cat((hrrr_0, invariant_tensor), dim=1)
-
-        loss = loss_fn(
-            net=ddp, images=hrrr_1, condition=hrrr_0, augment_pipe=augment_pipe
-        )
-        channelwise_loss = loss.mean(dim=(0, 2, 3))
-        channelwise_loss_dict = {
-            f"ChLoss/{diffusion_channels[i]}": channelwise_loss[i].item()
-            for i in range(target_channels)
-        }
-        if log_to_wandb:
-            wandb_logs["channelwise_loss"] = channelwise_loss_dict
-
-        loss_value = loss.sum() / target_channels
-        loss_value.backward()
+            loss_value = loss.sum() / len(state_channels)
+            loss_value.backward()
 
         if cfg.training.clip_grad_norm > 0:
             clip_grad_norm_(net.parameters(), cfg.training.clip_grad_norm)
@@ -295,61 +302,40 @@ def training_loop(cfg):
             batch = next(valid_dataset_iterator)
 
             with torch.no_grad():
-
-                hrrr_0, hrrr_1 = batch["hrrr"]
-                hrrr_0 = hrrr_0.to(torch.float32).to(device)
-                hrrr_1 = hrrr_1.to(torch.float32).to(device)
+                background = batch["background"].to(device=device, dtype=torch.float32)
+                state = [
+                    s.to(device=device, dtype=torch.float32) for s in batch["state"]
+                ]
+                (condition, target, reg_out) = build_network_condition_and_target(
+                    background,
+                    state,
+                    invariant_tensor,
+                    regression_net=regression_net,
+                    train_regression_unet=train_regression_unet,
+                )
 
                 if use_regression_net:
-                    with torch.no_grad():
-                        era5 = batch["era5"][0].to(device).to(torch.float32)
-                        reg_out = regression_model_forward(
-                            regression_net, hrrr_0, era5, invariant_tensor
-                        )
-                        hrrr_0 = torch.cat(
-                            (
-                                hrrr_0[:, input_channel_indices, :, :],
-                                reg_out[:, input_channel_indices, :, :],
-                            ),
-                            dim=1,
-                        )
-
-                        loss_target = hrrr_1 - reg_out
-                        output_images = diffusion_model_forward(
+                    output_images = (
+                        diffusion_model_forward(
                             net,
-                            hrrr_0,
-                            diffusion_channel_indices,
-                            invariant_tensor,
+                            condition,
+                            state[1].shape,
                             sampler_args=dict(cfg.sampler.args),
                         )
-
-                        valid_loss = loss_fn(
-                            net=ddp,
-                            images=loss_target[:, diffusion_channel_indices],
-                            condition=torch.cat((hrrr_0, invariant_tensor), dim=1),
-                            augment_pipe=augment_pipe,
-                        )
-                        output_images += reg_out[:, diffusion_channel_indices, :, :]
-                        del reg_out
-
-                elif train_regression_unet:
-                    assert (
-                        use_regression_net == False
-                    ), "use_regression_net must be False when training regression unet"
-                    assert (
-                        input_channel_indices == diffusion_channel_indices
-                    ), "input_channel_indices must be equal to diffusion_channel_indices when training regression unet"
-                    condition = torch.cat(
-                        (
-                            hrrr_0[:, input_channel_indices, :, :],
-                            era5[:],
-                            invariant_tensor,
-                        ),
-                        dim=1,
+                        + reg_out
                     )
+                    del reg_out
+
+                    valid_loss = loss_fn(
+                        net=net,
+                        images=target,
+                        condition=condition,
+                        augment_pipe=augment_pipe,
+                    )
+                elif train_regression_unet:
                     valid_loss, output_images = loss_fn(
-                        net=ddp,
-                        images=hrrr_1[:, diffusion_channel_indices, :, :],
+                        net=net,
+                        images=target,
                         condition=condition,
                         augment_pipe=augment_pipe,
                         return_model_outputs=True,
@@ -358,16 +344,14 @@ def training_loop(cfg):
                     if log_to_wandb:
                         channelwise_valid_loss = valid_loss.mean(dim=[0, 2, 3])
                         channelwise_valid_loss_dict = {
-                            f"ChLoss_valid/{diffusion_channels[i]}": channelwise_valid_loss[
+                            f"ChLoss_valid/{state_channels[i]}": channelwise_valid_loss[
                                 i
                             ].item()
-                            for i in range(target_channels)
+                            for i in range(state_channels)
                         }
                         wandb_logs[
                             "channelwise_valid_loss"
                         ] = channelwise_valid_loss_dict
-
-                hrrr_1 = hrrr_1[:, diffusion_channel_indices, :, :]
 
                 if dist.world_size > 1:
                     torch.distributed.barrier()
@@ -383,42 +367,37 @@ def training_loop(cfg):
 
                 for i in range(output_images.shape[0]):
                     image = output_images[i].cpu().numpy()
-                    fields = ["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]
+                    fields = cfg.training.validation_plot_variables
 
                     # Compute spectral metrics
                     figs, spec_ratios = ps1d_plots(
-                        output_images[i], hrrr_1[i], fields, diffusion_channels
+                        output_images[i], state[1][i], fields, state_channels
                     )
 
                     for f_ in fields:
-                        f_index = diffusion_channels.index(f_)
+                        f_index = state_channels.index(f_)
                         image_dir = os.path.join(cfg.training.rundir, "images", f_)
-                        generated = image[f_index]
-                        truth = hrrr_1[i, f_index].cpu().numpy()
-
-                        fig, (a, b) = plt.subplots(1, 2)
-                        im = a.imshow(generated)
-                        a.set_title("generated, {}.png".format(f_))
-                        plt.colorbar(im, fraction=0.046, pad=0.04)
-                        im = b.imshow(truth)
-                        b.set_title("truth")
-                        plt.colorbar(im, fraction=0.046, pad=0.04)
                         os.makedirs(image_dir, exist_ok=True)
-                        plt.savefig(
+
+                        generated = image[f_index]
+                        truth = state[1][i, f_index].cpu().numpy()
+
+                        fig = validation_plot(generated, truth, f_)
+                        fig.savefig(
                             os.path.join(image_dir, f"{total_steps}_{i}_{f_}.png")
                         )
-                        plt.close("all")
 
                         specfig = "PS1D_" + f_
                         figs[specfig].savefig(
-                            os.path.join(image_dir, f"{total_steps}{i}{f_}_spec.png")
+                            os.path.join(image_dir, f"{total_steps}_{i}_{f_}_spec.png")
                         )
-                        plt.close(figs[specfig])
                         if log_to_wandb:
                             # Save plots as wandb Images
                             for figname, plot in figs.items():
                                 wandb_logs[figname] = wandb.Image(plot)
                             wandb_logs.update({f"generated_{f_}": wandb.Image(fig)})
+
+                    plt.close("all")
 
                 if log_to_wandb:
                     wandb_logs.update(spec_ratios)
@@ -461,7 +440,7 @@ def training_loop(cfg):
         ):
 
             save_checkpoint(
-                path=os.path.join(cfg.training.rundir, "checkpoints"),
+                path=os.path.join(cfg.training.rundir, f"checkpoints_{net_name}"),
                 models=net,
                 optimizer=optimizer,
                 epoch=total_steps,
