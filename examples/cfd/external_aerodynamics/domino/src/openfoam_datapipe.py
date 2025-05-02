@@ -83,8 +83,14 @@ class OpenFoamDataset(Dataset):
             "wallShearStress",
         ],
         volume_variables: Optional[list] = ["UMean", "pMean"],
-        global_params_types: Optional[dict] = {"inlet_velocity": "vector", "air_density": "scalar"},
-        global_params_reference: Optional[dict] = {"inlet_velocity": [30.0], "air_density": 1.226},
+        global_params_types: Optional[dict] = {
+            "inlet_velocity": "vector",
+            "air_density": "scalar",
+        },
+        global_params_reference: Optional[dict] = {
+            "inlet_velocity": [30.0],
+            "air_density": 1.226,
+        },
         device: int = 0,
         model_type=None,
     ):
@@ -191,7 +197,9 @@ class OpenFoamDataset(Dataset):
             )
 
             # Non-dimensionalize surface fields
-            surface_fields = surface_fields / (self.air_density * self.stream_velocity**2.0)
+            surface_fields = surface_fields / (
+                self.air_density * self.stream_velocity**2.0
+            )
         else:
             surface_fields = None
             surface_coordinates = None
@@ -206,10 +214,17 @@ class OpenFoamDataset(Dataset):
             elif type == "scalar":
                 global_params_reference_list.append(self.global_params_reference[name])
             else:
-                raise ValueError(f"Global parameter {name} not supported for  this dataset")
-        global_params_reference = np.array(global_params_reference_list, dtype=np.float32)
+                raise ValueError(
+                    f"Global parameter {name} not supported for  this dataset"
+                )
+        global_params_reference = np.array(
+            global_params_reference_list, dtype=np.float32
+        )
 
-        # Global parameters values for each simulation has to be arranged here in a list by the user here
+        # Define the list of global parameter values for each simulation.
+        # Note: The user must ensure that the values provided here correspond to the
+        # `global_parameters` specified in `config.yaml` and that these parameters
+        # exist within each simulation file.
         global_params_values_list = []
         for key in self.global_params_types.keys():
             if key == "inlet_velocity":
@@ -217,7 +232,9 @@ class OpenFoamDataset(Dataset):
             elif key == "air_density":
                 global_params_values_list.append(self.air_density)
             else:
-                raise ValueError(f"Global parameter {key} not supported for  this dataset")
+                raise ValueError(
+                    f"Global parameter {key} not supported for  this dataset"
+                )
         global_params_values = np.array(global_params_values_list, dtype=np.float32)
 
         # Add the parameters to the dictionary
