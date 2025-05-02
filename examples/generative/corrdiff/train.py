@@ -48,8 +48,6 @@ from helpers.train_helpers import (
     is_time_for_periodic_task,
 )
 import nvtx
-import contextlib
-import pdb
 
 
 torch._dynamo.reset()
@@ -202,11 +200,6 @@ def main(cfg: DictConfig) -> None:
     if hasattr(cfg.model, "model_args"):  # override defaults from config file
         model_args.update(OmegaConf.to_container(cfg.model.model_args))
 
-    optimization_mode = False
-    # optimization mode:
-    # if hasattr(cfg.training.perf, "torch_compile") and cfg.training.perf.torch_compile:
-    #      model_args.update({"use_apex_gn":True,"fused_conv_bias":True,"model_type":"SongUNetPosOptEmbd" })
-    #      optimization_mode = True
     use_torch_compile = False
     use_apex_gn = False
     profile_mode = False
@@ -349,12 +342,6 @@ def main(cfg: DictConfig) -> None:
     if len(patch_nums_iter) > 1:
         use_patch_grad_acc = True
 
-    # Instantiate the loss function
-    # if cfg.model.name == "patched_diffusion" and len(patch_nums_iter)>1:
-    #     loss_fn = ResidualLoss_Opt(
-    #         regression_net=regression_net,
-    #         hr_mean_conditioning=cfg.model.hr_mean_conditioning,
-    #     )
     if cfg.model.name in (
         "diffusion",
         "patched_diffusion",
@@ -466,7 +453,6 @@ def main(cfg: DictConfig) -> None:
                                 "img_clean": img_clean,
                                 "img_lr": img_lr,
                                 "augment_pipe": None,
-                                "use_patch_grad_acc": use_patch_grad_acc,
                             }
 
                             if lead_time_label:
@@ -478,14 +464,18 @@ def main(cfg: DictConfig) -> None:
                                 )
                             else:
                                 lead_time_label = None
+
                             if use_patch_grad_acc:
                                 loss_fn.y_mean = None
+                                loss_fn_kwargs.update(
+                                    {"use_patch_grad_acc": use_patch_grad_acc}
+                                )
 
                             for patch_num_per_iter in patch_nums_iter:
                                 if patching is not None:
                                     patching.set_patch_sum(patch_num_per_iter)
                                     loss_fn_kwargs.update({"patching": patching})
-                                # pdb.set_trace()
+
                                 with nvtx.annotate(f"loss forward", color="green"):
                                     with torch.autocast(
                                         "cuda", dtype=amp_dtype, enabled=enable_amp
@@ -608,7 +598,6 @@ def main(cfg: DictConfig) -> None:
                                         "img_clean": img_clean_valid,
                                         "img_lr": img_lr_valid,
                                         "augment_pipe": None,
-                                        "use_patch_grad_acc": use_patch_grad_acc,
                                     }
                                     if lead_time_label_valid:
                                         lead_time_label_valid = (
@@ -621,6 +610,9 @@ def main(cfg: DictConfig) -> None:
                                         )
                                     if use_patch_grad_acc:
                                         loss_fn.y_mean = None
+                                        loss_fn_kwargs.update(
+                                            {"use_patch_grad_acc": use_patch_grad_acc}
+                                        )
 
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
@@ -628,7 +620,7 @@ def main(cfg: DictConfig) -> None:
                                             loss_fn_kwargs.update(
                                                 {"patching": patching}
                                             )
-                                        # pdb.set_trace()
+
                                         with torch.autocast(
                                             "cuda", dtype=amp_dtype, enabled=enable_amp
                                         ):
