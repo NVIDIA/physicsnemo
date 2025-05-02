@@ -146,6 +146,11 @@ def signed_distance_field(
         shape=sdf_points.shape, dtype=wp.int32, device=device
     )
 
+    print("wp.get_device():", wp.get_device())
+    print("type(input_points):", type(input_points))
+    if hasattr(input_points, 'device'):
+        print("input_points.device:", input_points.device)
+
     wp.launch(
         kernel=_bvh_query_distance,
         dim=len(sdf_points),
