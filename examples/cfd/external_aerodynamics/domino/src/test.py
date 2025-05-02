@@ -91,8 +91,8 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
         # Global parameters
         global_params_values = data_dict["global_params_values"]
         global_params_reference = data_dict["global_params_reference"]
-        stream_velocity = global_params_reference[0]
-        air_density = global_params_reference[1]
+        stream_velocity = global_params_reference[:, 0, :]
+        air_density = global_params_reference[:, 1, :]
 
         # STL nodes
         geo_centers = data_dict["geometry_coordinates"]
@@ -203,16 +203,16 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
 
             prediction_vol[:, :, :3] = (
-                prediction_vol[:, :, :3] * stream_velocity.cpu().numpy()
+                prediction_vol[:, :, :3] * stream_velocity[0, 0].cpu().numpy()
             )
             prediction_vol[:, :, 3] = (
                 prediction_vol[:, :, 3]
-                * stream_velocity.cpu().numpy() ** 2.0
-                * air_density.cpu().numpy()
+                * stream_velocity[0, 0].cpu().numpy() ** 2.0
+                * air_density[0, 0].cpu().numpy()
             )
             prediction_vol[:, :, 4] = (
                 prediction_vol[:, :, 4]
-                * stream_velocity.cpu().numpy()
+                * stream_velocity[0, 0].cpu().numpy()
                 * length_scale[0].cpu().numpy()
             )
         else:
@@ -303,8 +303,8 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
-                * stream_velocity.cpu().numpy() ** 2.0
-                * air_density.cpu().numpy()
+                * stream_velocity[0, 0].cpu().numpy() ** 2.0
+                * air_density[0, 0].cpu().numpy()
             )
 
         else:
@@ -429,7 +429,7 @@ def main(cfg: DictConfig):
         # Read STL
         reader = pv.get_reader(stl_path)
         mesh_stl = reader.read()
-        stl_vertices = mesh_stl.points
+        stl_vertices = np.array(mesh_stl.points)
         stl_faces = np.array(mesh_stl.faces).reshape((-1, 4))[
             :, 1:
         ]  # Assuming triangular elements
@@ -613,8 +613,8 @@ def main(cfg: DictConfig):
                 include_hit_points=True,
                 use_sign_winding_number=True,
             )
-            sdf_nodes = sdf_nodes.numpy().reshape(-1, 1)
-            sdf_node_closest_point = sdf_node_closest_point.numpy()
+            sdf_nodes = sdf_nodes.reshape(-1, 1)
+            sdf_node_closest_point = sdf_node_closest_point
 
             if cfg.model.positional_encoding:
                 pos_volume_closest = calculate_normal_positional_encoding(
