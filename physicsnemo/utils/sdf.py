@@ -115,6 +115,12 @@ def signed_distance_field(
     """
     wp.init()
 
+    # Get the current warp device string (e.g., "cuda:2")
+    try:
+        device = str(wp.get_device())
+    except Exception:
+        device = "cuda"
+
     # If cupy arrays come in, we have to convert them to numpy arrays:
     return_cupy = False
     if isinstance(mesh_vertices, cp.ndarray):
@@ -125,10 +131,10 @@ def signed_distance_field(
         return_cupy = True
 
     # Convert numpy to warp arrays:
-    mesh_vertices = wp.array(mesh_vertices, dtype=wp.vec3, device="cuda")
-    mesh_indices = wp.array(mesh_indices, dtype=wp.int32, device="cuda")
+    mesh_vertices = wp.array(mesh_vertices, dtype=wp.vec3, device=device)
+    mesh_indices = wp.array(mesh_indices, dtype=wp.int32, device=device)
 
-    sdf_points = wp.array(input_points, dtype=wp.vec3, device="cuda")
+    sdf_points = wp.array(input_points, dtype=wp.vec3, device=device)
 
     mesh = wp.Mesh(mesh_vertices, mesh_indices)
 
@@ -152,7 +158,7 @@ def signed_distance_field(
             sdf_hit_point_id,
             use_sign_winding_number,
         ],
-        device="cuda",
+        device=device,
     )
 
     if return_cupy:
