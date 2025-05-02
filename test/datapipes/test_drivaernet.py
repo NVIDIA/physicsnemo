@@ -16,7 +16,7 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 
 from . import common
 
@@ -24,11 +24,10 @@ Tensor = torch.Tensor
 
 
 @pytest.fixture
-def data_dir():
-    return "/data/nfs/modulus-data/datasets/drivaernet/"
+def data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/drivaernet/")
 
 
-@nfsdata_or_fail
 @import_or_fail(["vtk", "pyvista", "dgl"])
 @pytest.mark.parametrize("cache_graph", [True, False])
 def test_drivaernet_init(data_dir, cache_graph, tmp_path, pytestconfig):
