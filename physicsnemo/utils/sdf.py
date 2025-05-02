@@ -138,12 +138,12 @@ def signed_distance_field(
 
     mesh = wp.Mesh(mesh_vertices, mesh_indices)
 
-    sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=sdf_points.device)
+    sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=device)
     sdf_hit_point = wp.zeros(
-        shape=sdf_points.shape, dtype=wp.vec3f, device=sdf_points.device
+        shape=sdf_points.shape, dtype=wp.vec3f, device=device
     )
     sdf_hit_point_id = wp.zeros(
-        shape=sdf_points.shape, dtype=wp.int32, device=sdf_points.device
+        shape=sdf_points.shape, dtype=wp.int32, device=device
     )
 
     wp.launch(
