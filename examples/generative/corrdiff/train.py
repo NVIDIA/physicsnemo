@@ -304,8 +304,10 @@ def main(cfg: DictConfig) -> None:
         logger0.success("Loaded the pre-trained regression model")
 
     if use_torch_compile:
-        model = torch.compile(model)
-        regression_net = torch.compile(regression_net)
+        if model:
+            model = torch.compile(model)
+        if regression_net:
+            regression_net = torch.compile(regression_net)
 
     # Compute the number of required gradient accumulation rounds
     # It is automatically used if batch_size_per_gpu * dist.world_size < total_batch_size
@@ -338,10 +340,29 @@ def main(cfg: DictConfig) -> None:
     else:
         patch_nums_iter = [patch_num]
 
-    use_patch_grad_acc = False
-    if len(patch_nums_iter) > 1:
-        use_patch_grad_acc = True
+    # Set patch gradient accumulation only for patched diffusion models
+    if cfg.model.name in {
+        "patched_diffusion",
+        "lt_aware_patched_diffusion",
+    }:
+        if len(patch_nums_iter) > 1:
+            if not patching:
+                logger0.info(
+                    "Patching is not enabled: patch gradient accumulation automatically disabled."
+                )
+                use_patch_grad_acc = False
+            else:
+                use_patch_grad_acc = True
+        else:
+            use_patch_grad_acc = False
+    # Automatically disable patch gradient accumulation for non-patched models
+    else:
+        logger0.info(
+            "Training a non-patched model: patch gradient accumulation automatically disabled."
+        )
+        use_patch_grad_acc = None
 
+    # Instantiate the loss function
     if cfg.model.name in (
         "diffusion",
         "patched_diffusion",
@@ -454,6 +475,10 @@ def main(cfg: DictConfig) -> None:
                                 "img_lr": img_lr,
                                 "augment_pipe": None,
                             }
+                            if use_patch_grad_acc is not None:
+                                loss_fn_kwargs[
+                                    "use_patch_grad_acc"
+                                ] = use_patch_grad_acc
 
                             if lead_time_label:
                                 lead_time_label = (
@@ -464,18 +489,14 @@ def main(cfg: DictConfig) -> None:
                                 )
                             else:
                                 lead_time_label = None
-
                             if use_patch_grad_acc:
                                 loss_fn.y_mean = None
-                                loss_fn_kwargs.update(
-                                    {"use_patch_grad_acc": use_patch_grad_acc}
-                                )
 
                             for patch_num_per_iter in patch_nums_iter:
                                 if patching is not None:
                                     patching.set_patch_sum(patch_num_per_iter)
                                     loss_fn_kwargs.update({"patching": patching})
-
+                                # pdb.set_trace()
                                 with nvtx.annotate(f"loss forward", color="green"):
                                     with torch.autocast(
                                         "cuda", dtype=amp_dtype, enabled=enable_amp
@@ -598,7 +619,12 @@ def main(cfg: DictConfig) -> None:
                                         "img_clean": img_clean_valid,
                                         "img_lr": img_lr_valid,
                                         "augment_pipe": None,
+                                        "use_patch_grad_acc": use_patch_grad_acc,
                                     }
+                                    if use_patch_grad_acc is not None:
+                                        loss_valid_kwargs[
+                                            "use_patch_grad_acc"
+                                        ] = use_patch_grad_acc
                                     if lead_time_label_valid:
                                         lead_time_label_valid = (
                                             lead_time_label_valid[0]
@@ -610,9 +636,6 @@ def main(cfg: DictConfig) -> None:
                                         )
                                     if use_patch_grad_acc:
                                         loss_fn.y_mean = None
-                                        loss_fn_kwargs.update(
-                                            {"use_patch_grad_acc": use_patch_grad_acc}
-                                        )
 
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
@@ -620,7 +643,7 @@ def main(cfg: DictConfig) -> None:
                                             loss_fn_kwargs.update(
                                                 {"patching": patching}
                                             )
-
+                                        # pdb.set_trace()
                                         with torch.autocast(
                                             "cuda", dtype=amp_dtype, enabled=enable_amp
                                         ):
