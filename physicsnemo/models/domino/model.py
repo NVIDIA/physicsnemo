@@ -759,9 +759,6 @@ class DoMINO(nn.Module):
         output_features_vol: int | None = None,
         output_features_surf: int | None = None,
         model_parameters=None,
-        solution_calculation_mode: Literal[
-            "one-loop", "two-loop", "compare"
-        ] = "two-loop",
     ):
         """
         Initialize the DoMINO model.
@@ -784,7 +781,7 @@ class DoMINO(nn.Module):
             raise ValueError(
                 "At least one of `output_features_vol` or `output_features_surf` must be specified"
             )
-        self.solution_calculation_mode = solution_calculation_mode
+        self.solution_calculation_mode = model_parameters.solution_calculation_mode
         self.num_variables_vol = output_features_vol
         self.num_variables_surf = output_features_surf
         self.grid_resolution = model_parameters.interp_res
