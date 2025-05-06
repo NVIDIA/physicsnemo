@@ -20,7 +20,7 @@ import torch
 import torch.distributed as dist
 import wrapt
 
-from physicsnemo.utils.profiling import profile
+from physicsnemo.utils.profiling import annotate, profile
 from physicsnemo.utils.version_check import check_module_requirements
 
 check_module_requirements("physicsnemo.distributed.shard_tensor")
@@ -308,73 +308,73 @@ def partial_conv_nd(
     Returns:
         Resulting ShardTensor after convolution operation
     """
-    kernel_size = weight.shape[2:]
+    with annotate("partial_conv_nd"):
+        kernel_size = weight.shape[2:]
 
-    # This will produce one config per sharded dim
-    # It also *updates* conv_kwargs in place to set padding to 0 on the sharded dims
-    halo_configs = compute_halo_configs_from_conv_args(input, kernel_size, conv_kwargs)
-
-    # We get one halo_config per sharded dim.
-
-    sharding_shapes = input._spec.sharding_sizes()
-    # # First, update the shapes to take into account the halo and edge paddings:
-
-    real_input_shapes = {}
-    for mesh_dim, sharing_tuple in sharding_shapes.items():
-        tensor_dim = halo_configs[mesh_dim].tensor_dim
-        real_input_shapes[mesh_dim] = []
-        for i, s in enumerate(sharing_tuple):
-            padding = halo_configs[mesh_dim].halo_size
-
-            if i == 0 or i == len(sharing_tuple) - 1:
-                # On the edge of the split, the additional size is halo + edge padding
-                padding += halo_configs[mesh_dim].edge_padding_size
-            else:
-                # Otherwise, its 2xhalo size added on.
-                padding += halo_configs[mesh_dim].halo_size
-
-            updated_shape = list(s)
-            updated_shape[tensor_dim] += padding
-
-            real_input_shapes[mesh_dim].append(updated_shape)
-
-    # # Now, from the real input shapes, we can compute the real output shape on every rank:
-    # real_output_shapes = {
-    #     dim : tuple( compute_output_shape(s, conv_kwargs, kernel_size) for s in real_input_shapes[dim] )
-    #     for dim in real_input_shapes
-    # }
-
-    input_spec = input._spec
-    local_input = input.to_local()
-
-    # Apply the halo padding to the input tensor
-    for halo_config in halo_configs:
-        local_input = halo_padding(local_input, input._spec.mesh, halo_config)
-
-    # Perform the convolution on the padded tensor
-    local_output = perform_convolution(
-        local_input, weight, bias, input_spec, conv_kwargs
-    )
-
-    batch_channel_shape = tuple(local_output.shape[:2])
-    # Update the output shapes to take into account the batch anc channel dims:
-    real_output_shapes = {
-        dim: tuple(
-            batch_channel_shape + compute_output_shape(s, conv_kwargs, kernel_size)
-            for s in real_input_shapes[dim]
+        # This will produce one config per sharded dim
+        # It also *updates* conv_kwargs in place to set padding to 0 on the sharded dims
+        halo_configs = compute_halo_configs_from_conv_args(
+            input, kernel_size, conv_kwargs
         )
-        for dim in real_input_shapes
-    }
 
-    # Convert the local output to a ShardTensor
-    output = ShardTensor.from_local(
-        local_output,
-        input_spec.mesh,
-        input_spec.placements,
-        sharding_shapes=real_output_shapes,
-    )
+        # We get one halo_config per sharded dim.
 
-    return output
+        sharding_shapes = input._spec.sharding_sizes()
+        # # First, update the shapes to take into account the halo and edge paddings:
+
+        real_input_shapes = {}
+        for mesh_dim, sharing_tuple in sharding_shapes.items():
+            tensor_dim = halo_configs[mesh_dim].tensor_dim
+            real_input_shapes[mesh_dim] = []
+            for i, s in enumerate(sharing_tuple):
+                padding = halo_configs[mesh_dim].halo_size
+
+                if i == 0 or i == len(sharing_tuple) - 1:
+                    # On the edge of the split, the additional size is halo + edge padding
+                    padding += halo_configs[mesh_dim].edge_padding_size
+                else:
+                    # Otherwise, its 2xhalo size added on.
+                    padding += halo_configs[mesh_dim].halo_size
+
+                updated_shape = list(s)
+                updated_shape[tensor_dim] += padding
+
+                real_input_shapes[mesh_dim].append(updated_shape)
+
+        input_spec = input._spec
+        local_input = input.to_local()
+
+        with annotate("halo_padding"):
+            # Apply the halo padding to the input tensor
+            for halo_config in halo_configs:
+                local_input = halo_padding(local_input, input._spec.mesh, halo_config)
+
+        with annotate("perform_convolution"):
+            # Perform the convolution on the padded tensor
+            local_output = perform_convolution(
+                local_input, weight, bias, input_spec, conv_kwargs
+            )
+
+        batch_channel_shape = tuple(local_output.shape[:2])
+        # Update the output shapes to take into account the batch anc channel dims:
+        real_output_shapes = {
+            dim: tuple(
+                batch_channel_shape + compute_output_shape(s, conv_kwargs, kernel_size)
+                for s in real_input_shapes[dim]
+            )
+            for dim in real_input_shapes
+        }
+
+        # Convert the local output to a ShardTensor
+        with annotate("partial_conv_nd.from_local"):
+            output = ShardTensor.from_local(
+                local_output,
+                input_spec.mesh,
+                input_spec.placements,
+                sharding_shapes=real_output_shapes,
+            )
+
+        return output
 
 
 @profile

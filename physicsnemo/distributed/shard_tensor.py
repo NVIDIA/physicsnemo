@@ -23,7 +23,7 @@ import torch.distributed as dist
 from torch.distributed.device_mesh import DeviceMesh, _mesh_resources
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils.profiling import profile
+from physicsnemo.utils.profiling import annotate, profile
 from physicsnemo.utils.version_check import check_module_requirements
 
 # Prevent importing this module if the minimum version of pytorch is not met.
@@ -102,14 +102,20 @@ class _ToTorchTensor(torch.autograd.Function):
         """
         shard_tensor_spec = ctx.shard_tensor_spec
         mesh = shard_tensor_spec.mesh
-
         if ctx.grad_placements is not None:
-            grad_placements = ctx.grad_placements
-            grad_sharding_shapes = "infer"
+            if ctx.grad_placements != shard_tensor_spec.placements:
+                grad_placements = ctx.grad_placements
+                grad_sharding_shapes = "infer"
+            else:
+                # If the placements are the same as the input placements,
+                # we reuse the sharding sizes from the input placements.
+                grad_placements = ctx.grad_placements
+                grad_sharding_shapes = shard_tensor_spec._sharding_sizes
         else:
             grad_placements = shard_tensor_spec.placements
+            grad_sharding_shapes = shard_tensor_spec._sharding_sizes
+        if grad_sharding_shapes is None:
             grad_sharding_shapes = "infer"
-
         # Generate a spec based on grad outputs and the expected placements:
         grad_tensor_spec = _infer_shard_tensor_spec_from_local_chunks(
             grad_output, mesh, grad_placements, grad_sharding_shapes
@@ -367,12 +373,13 @@ class ShardTensor(DTensor):
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs={}):
-        # Check for overrides:
-        if func in cls._function_registry:
-            res = cls._function_registry[func](*args, **kwargs)
-            return res
-        # Fall back to the default behavior:
-        return super().__torch_function__(func, types, args, kwargs)
+        with annotate(f"__torch_function___{func.__name__}"):
+            # Check for overrides:
+            if func in cls._function_registry:
+                res = cls._function_registry[func](*args, **kwargs)
+                return res
+            # Fall back to the default behavior:
+            return super().__torch_function__(func, types, args, kwargs)
 
     @classmethod
     @torch._disable_dynamo
@@ -384,75 +391,64 @@ class ShardTensor(DTensor):
         args: Tuple[object, ...] = (),
         kwargs: Optional[Dict[str, object]] = None,
     ) -> Union["ShardTensor", Iterable["ShardTensor"], object]:
-        # Leverage DTensor Dispatch as much as possible, but, enable
-        # the ability to operate on this output in the future:
-        if func in cls._dispatch_registry:
-            res = cls._dispatch_registry[func](*args, **kwargs)
-            return res
+        with annotate(f"__torch_dispatch___{func.__name__}"):
+            # Leverage DTensor Dispatch as much as possible, but, enable
+            # the ability to operate on this output in the future:
+            if func in cls._dispatch_registry:
+                res = cls._dispatch_registry[func](*args, **kwargs)
+                return res
 
-        # We assume that if we reach this point, the operator has not been
-        # intercepted by a wrapper or in the registry.  So the DTensor
-        # default behavior is likely to be correct.
+            # We assume that if we reach this point, the operator has not been
+            # intercepted by a wrapper or in the registry.  So the DTensor
+            # default behavior is likely to be correct.
 
-        if func == aten.view.default:
-            # For view, we need input tensors to be contiguous:
-            for arg in args:
-                if isinstance(arg, ShardTensor) or isinstance(arg, DTensor):
-                    if not arg._local_tensor.is_contiguous():
-                        arg._local_tensor = arg._local_tensor.contiguous()
+            if func == aten.view.default:
+                # For view, we need input tensors to be contiguous:
+                for arg in args:
+                    if isinstance(arg, ShardTensor) or isinstance(arg, DTensor):
+                        if not arg._local_tensor.is_contiguous():
+                            arg._local_tensor = arg._local_tensor.contiguous()
 
-        dispatch_res = DTensor._op_dispatcher.dispatch(func, args, kwargs or {})
+            dispatch_res = DTensor._op_dispatcher.dispatch(func, args, kwargs or {})
 
-        # Return a shard tensor instead of a dtensor.
-        def _convert_dtensor_with_input_check(dtensor, input_args):
-            """
-            This function searches the input for ShardTensors that match output shapes.
-            It prevents collectives, since we can copy the sharding shapes for irregular shards.
+            # Return a shard tensor instead of a dtensor.
+            def _convert_dtensor_with_input_check(dtensor, input_args):
+                """
+                This function searches the input for ShardTensors that match output shapes.
+                It prevents collectives, since we can copy the sharding shapes for irregular shards.
 
-            If no matches are found, it falls back to inference based on DTensor.
-            """
-            # # Check if this matches any input ShardTensor
-            # for arg in input_args:
-            #     if (
-            #         isinstance(arg, ShardTensor)
-            #         and dtensor.shape == arg.shape
-            #         and dtensor._spec.placements == arg._spec.placements
-            #     ):
-            #         print(arg._spec)
-            #         print(arg._spec._sharding_sizes)
+                If no matches are found, it falls back to inference based on DTensor.
 
-            #         # Create a new spec with the same sharding information
-            #         new_spec = ShardTensorSpec(
-            #             mesh=arg._spec.mesh,
-            #             placements=arg._spec.placements,
-            #             tensor_meta=TensorMeta(
-            #                 dtensor.shape,
-            #                 dtensor._spec.tensor_meta.stride,
-            #                 dtensor._spec.tensor_meta.dtype
-            #             ),
-            #             _sharding_sizes=arg._spec._sharding_sizes.copy()
-            #         )
-            #         return ShardTensor.__new__(
-            #             ShardTensor,
-            #             local_tensor=dtensor._local_tensor,
-            #             spec=new_spec,
-            #             requires_grad=dtensor.requires_grad,
-            #         )
-            # Fall back to default conversion
-            return ShardTensor.from_dtensor(dtensor)
+                This is only used when we already went back through the DTensor dispatch.
+                """
+                # Check if this matches any input ShardTensor
+                for arg in input_args:
+                    if (
+                        isinstance(arg, ShardTensor)
+                        and dtensor._spec.tensor_meta == arg._spec.tensor_meta.shape
+                        and dtensor._spec.placements == arg._spec.placements
+                    ):
+                        return ShardTensor.__new__(
+                            ShardTensor,
+                            local_tensor=dtensor._local_tensor,
+                            spec=arg._spec,
+                            requires_grad=dtensor.requires_grad,
+                        )
+                # Fall back to default conversion
+                return ShardTensor.from_dtensor(dtensor)
 
-        if isinstance(dispatch_res, DTensor):
-            return _convert_dtensor_with_input_check(dispatch_res, args)
+            if isinstance(dispatch_res, DTensor):
+                return _convert_dtensor_with_input_check(dispatch_res, args)
 
-        if isinstance(dispatch_res, Iterable):
-            return type(dispatch_res)(
-                _convert_dtensor_with_input_check(d, args)
-                if isinstance(d, DTensor)
-                else d
-                for d in dispatch_res
-            )
+            if isinstance(dispatch_res, Iterable):
+                return type(dispatch_res)(
+                    _convert_dtensor_with_input_check(d, args)
+                    if isinstance(d, DTensor)
+                    else d
+                    for d in dispatch_res
+                )
 
-        return dispatch_res
+            return dispatch_res
 
     @staticmethod
     def from_local(

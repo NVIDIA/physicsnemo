@@ -481,9 +481,6 @@ def _infer_shard_tensor_spec_from_local_chunks(
                     )
 
         if sharding_shapes == "infer":
-            # To avoid H2D transfers, this method will use CPU-based RPC functions
-            # to infer the shapes and sizes.  It is still overall blocking, but
-            # multiple mesh dimensions can be communicated in parallel.
             # When unsure, this is a good option.
             shard_shapes_by_dim, global_shape = _all_gather_shard_shapes(
                 local_chunk.shape,

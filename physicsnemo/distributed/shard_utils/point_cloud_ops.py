@@ -509,6 +509,7 @@ def ball_query_layer_wrapper(
 
             local_p1 = points1.to_local()
             local_p2 = points2.to_local()
+            k = bq_kwargs["k"]
 
             mapping, num_neighbors, outputs = ball_query_layer(
                 local_p1,
@@ -516,14 +517,39 @@ def ball_query_layer_wrapper(
                 **bq_kwargs,
             )
 
+            b = points1.shape[0]
+
+            mapping_placement = {}
+            num_neighbors_placement = {}
+            outputs_placement = {}
+
+            for k, s in points1._spec.sharding_sizes().items():
+                n_points = [int(_s[1]) for _s in s]
+                mapping_placement[k] = tuple(torch.Size([b, np, k]) for np in n_points)
+                num_neighbors_placement[k] = tuple(
+                    torch.Size([b, np]) for np in n_points
+                )
+                outputs_placement[k] = tuple(
+                    torch.Size([b, np, k, 3]) for np in n_points
+                )
+
             mapping = ShardTensor.from_local(
-                mapping, points1._spec.mesh, points1._spec.placements, "infer"
+                mapping,
+                points1._spec.mesh,
+                points1._spec.placements,
+                sharding_shapes=mapping_placement,
             )
             num_neighbors = ShardTensor.from_local(
-                num_neighbors, points1._spec.mesh, points1._spec.placements, "infer"
+                num_neighbors,
+                points1._spec.mesh,
+                points1._spec.placements,
+                sharding_shapes=num_neighbors_placement,
             )
             outputs = ShardTensor.from_local(
-                outputs, points1._spec.mesh, points1._spec.placements, "infer"
+                outputs,
+                points1._spec.mesh,
+                points1._spec.placements,
+                sharding_shapes=outputs_placement,
             )
 
         return mapping, num_neighbors, outputs

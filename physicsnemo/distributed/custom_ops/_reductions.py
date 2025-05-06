@@ -197,7 +197,6 @@ def compute_result_sharding_sizes(
 
         # Get the original sharding sizes
         original_sharding_sizes = tensor._spec.sharding_sizes()
-
         # Use normalize_dim directly
         normalized_dim = normalize_dim(dim, tensor.ndim)
 

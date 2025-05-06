@@ -52,6 +52,11 @@ data: # Input directory for training and validation data
     min: [-1.1, -1.2 , -0.32]
     max: [4.5 , 1.2  , 1.2]
 
+domain_parallelism:
+  domain_size: 2
+  shard_grid: True
+  shard_points: True
+
 variables:
   surface:
     solution:
@@ -70,11 +75,11 @@ model:
   loss_function: 
     loss_type: "rmse" # mse or rmse
     area_weighing_factor: 10000 # Generally inverse of maximum area
-  interp_res: [128, 128, 128] # resolution of latent space 128, 64, 48
+  interp_res: [192, 192, 192] # resolution of latent space 128, 64, 48
   use_sdf_in_basis_func: true # SDF in basis function network
   positional_encoding: false # calculate positional encoding?
-  volume_points_sample: 200000 # Number of points to sample in volume per epoch
-  surface_points_sample: 200000 # Number of points to sample on surface per epoch
+  volume_points_sample: 8192 # Number of points to sample in volume per epoch
+  surface_points_sample: 8192 # Number of points to sample on surface per epoch
   surface_sampling_algorithm: area_weighted # random or area_weighted
   geom_points_sample: 300_000 # Number of points to sample on STL per epoch
   surface_neighbors: true # Pre-compute surface neighborhood from input data
@@ -122,7 +127,7 @@ model:
     num_modes: 5
 
 train: # Training configurable parameters
-  epochs: 1
+  epochs: 2
   checkpoint_interval: 100
   dataloader:
     batch_size: 1
