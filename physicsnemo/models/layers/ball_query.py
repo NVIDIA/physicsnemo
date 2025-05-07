@@ -129,7 +129,6 @@ class BallQuery(torch.autograd.Function):
         try:
             device = str(wp.get_device())
         except Exception as e:
-            # Fallback to cuda:0 if warp is not initialized or device is not set
             device = "cuda"
 
         # Convert from torch to warp
