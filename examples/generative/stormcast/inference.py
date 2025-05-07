@@ -92,7 +92,6 @@ def main(cfg: DictConfig):
 
         for i in range(n_steps):
             data = dataset[i + hours_since_jan_01]
-            print(i)
 
             background = data["background"].to(device=device, dtype=torch.float32)
             background = background.unsqueeze(0)
@@ -123,13 +122,14 @@ def main(cfg: DictConfig):
                 i,
             )
 
-            # inference regression model, placing output into state_pred
+            # build diffusion condition and inference regression model, placing output into state_pred
             (condition, _, state_pred) = build_network_condition_and_target(
                 background,
                 [state_pred, state_pred],
                 invariant_tensor,
                 regression_net=regression_model,
-                train_regression_unet=False,
+                condition_list=cfg.model.diffusion_conditions,
+                regression_condition_list=cfg.model.regression_conditions,
             )
 
             state_pred_noedm = state_pred.clone()

@@ -65,27 +65,41 @@ def get_preconditioned_architecture(
 
 
 def build_network_condition_and_target(
-    background, state, invariant_tensor, regression_net=None, train_regression_unet=True
+    background,
+    state,
+    invariant_tensor,
+    regression_net=None,
+    condition_list=("state", "background"),
+    regression_condition_list=("state", "background"),
 ):
-    assert not (train_regression_unet and (regression_net is not None))
+    assert not (("regression" in condition_list) and (regression_net is None))
     target = state[1]
-    if regression_net is not None:
-        # Inference regression model
-        with torch.no_grad():
-            reg_out = regression_model_forward(
-                regression_net, state[0], background, invariant_tensor
+
+    condition_tensors = {
+        "state": state[0],
+        "background": background,
+        "invariant": invariant_tensor,
+        "regression": None,
+    }
+
+    with torch.no_grad():
+        if "regression" in condition_list:
+            # Inference regression model
+            condition_tensors["regression"] = regression_model_forward(
+                regression_net,
+                state[0],
+                background,
+                invariant_tensor,
+                condition_list=regression_condition_list,
             )
-            condition = torch.cat((state[0], reg_out), dim=1)
-            target = target - reg_out
+            target = target - condition_tensors["regression"]
 
-    elif train_regression_unet:
-        condition = torch.cat((state[0], background), dim=1)
-        reg_out = None
+        condition = [
+            y for c in condition_list if (y := condition_tensors[c]) is not None
+        ]
+        condition = torch.cat(condition, dim=1)
 
-    if invariant_tensor is not None:
-        condition = torch.cat((condition, invariant_tensor), dim=1)
-
-    return (condition, target, reg_out)
+    return (condition, target, condition_tensors["regression"])
 
 
 def diffusion_model_forward(model, condition, shape, sampler_args={}):
@@ -98,16 +112,14 @@ def diffusion_model_forward(model, condition, shape, sampler_args={}):
     )
 
 
-def regression_model_forward(model, output, input, invariant_tensor):
+def regression_model_forward(
+    model, state, background, invariant_tensor, condition_list=("state", "background")
+):
     """Helper function to run regression model forward pass in inference"""
 
-    x = (
-        [output, input]
-        if invariant_tensor is None
-        else [output, input, invariant_tensor]
+    (x, _, _) = build_network_condition_and_target(
+        background, (state, None), invariant_tensor, condition_list=condition_list
     )
-    x = torch.cat(x, dim=1)
-
     return model(x)
 
 

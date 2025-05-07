@@ -15,7 +15,6 @@
 # limitations under the License.
 
 # General inference config items
-outdir: 'rundir' # Root path under which to save inference outputs
 experiment_name: 'stormcast-inference' # Name for the inference experiment being run
 run_id: 0 # Unique identifier for the inference run
 rundir: ./${inference.outdir}/${inference.experiment_name}/${inference.run_id} # Path where experiement outputs will be saved
