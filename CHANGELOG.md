@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ERA5 download example updated to use current file format convention and
   restricts global statistics computation to the training set
 - Support for training custom StormCast models and various other improvements for StormCast
+- Explicit handling of Warp device for ball query and sdf
 
 ### Deprecated
 
