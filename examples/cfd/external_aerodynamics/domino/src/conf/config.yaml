@@ -67,6 +67,7 @@ variables:
     air_density: 
       type: scalar
       reference: 1.226
+      
 model:
   model_type: combined # train which model? surface, volume, combined
   loss_function: 
