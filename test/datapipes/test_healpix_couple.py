@@ -120,6 +120,7 @@ def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
     output_time_dim = 1
     presteps = 0
     batch_size = 2
+    batch = {"time": slice(0, 2)}
 
     # open our test dataset
     ds_path = Path(data_dir, dataset_name + ".zarr")
@@ -234,6 +235,18 @@ def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
     # test coupler reset
     coupler.reset_coupler()
     assert coupler.coupled_mode is False
+
+    # test loading from the dataset
+    coupled_scaling = {
+        "mean": np.expand_dims(coupled_scaling["mean"].to_numpy(), (0, 2, 3, 4)),
+        "std": np.expand_dims(coupled_scaling["std"].to_numpy(), (0, 2, 3, 4)),
+    }
+    expected = zarr_ds.sel(channel_in=variables).inputs[:2].values
+    expected = (expected - coupled_scaling["mean"]) / coupled_scaling["std"]
+    coupled_field = coupler.construct_integrated_couplings(
+        batch=batch, bsize=batch_size
+    )
+    assert np.array_equal(expected, coupled_field[0])
 
     zarr_ds.close()
     DistributedManager.cleanup()
