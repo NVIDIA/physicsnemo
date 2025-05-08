@@ -73,8 +73,11 @@ def main(cfg: DictConfig):
     )
 
     # Load pretrained models
-    net = Module.from_checkpoint(cfg.inference.regression_checkpoint)
-    regression_model = net.to(device)
+    if "regression" in cfg.model.diffusion_conditions:
+        net = Module.from_checkpoint(cfg.inference.regression_checkpoint)
+        regression_model = net.to(device)
+    else:
+        regression_model = None
     net = Module.from_checkpoint(cfg.inference.diffusion_checkpoint)
     diffusion_model = net.to(device)
 
@@ -132,6 +135,9 @@ def main(cfg: DictConfig):
                 regression_condition_list=cfg.model.regression_conditions,
             )
 
+            if state_pred is None:  # in case of no regression model
+                state_pred = torch.zeros_like(state_pred_edm)
+
             state_pred_noedm = state_pred.clone()
             # inference diffusion model
             edm_corrected_outputs = diffusion_model_forward(
@@ -140,6 +146,7 @@ def main(cfg: DictConfig):
                 state_pred.shape,
                 sampler_args=dict(cfg.sampler.args),
             )
+
             state_pred[0, :] += edm_corrected_outputs[0].float()
             state_pred_edm = state_pred.clone()
 

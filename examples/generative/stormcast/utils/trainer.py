@@ -67,18 +67,15 @@ def training_loop(cfg):
 
     loss_type = cfg.training.loss
     if loss_type == "regression":
-        train_regression_unet = True
         net_name = "regression"
     elif loss_type == "edm":
-        train_regression_unet = False
         net_name = "diffusion"
 
     condition_list = (
         cfg.model.regression_conditions
-        if train_regression_unet
+        if net_name == "regression"
         else cfg.model.diffusion_conditions
     )
-    use_regression_net = "regression" in condition_list
 
     # Seed and Performance settings
     np.random.seed((cfg.training.seed * dist.world_size + dist.rank) % (1 << 31))
@@ -139,7 +136,7 @@ def training_loop(cfg):
     valid_dataset_iterator = iter(valid_data_loader)
 
     # load pretrained regression net if training diffusion
-    if use_regression_net:
+    if "regression" in condition_list:
         regression_net = Module.from_checkpoint(cfg.model.regression_weights)
         if cfg.training.compile_model:
             regression_net = torch.compile(regression_net)
@@ -163,8 +160,9 @@ def training_loop(cfg):
         "regression": len(state_channels),
         "invariant": 0 if invariant_tensor is None else invariant_tensor.shape[1],
     }
-    num_condition_channels = sum([num_condition_channels[c] for c in condition_list])
+    num_condition_channels = sum(num_condition_channels[c] for c in condition_list)
 
+    logger0.info(f"model conditions {condition_list}")
     logger0.info(f"background_channels {background_channels}")
     logger0.info(f"state_channels {state_channels}")
     logger0.info(f"num_condition_channels {num_condition_channels}")
@@ -320,33 +318,35 @@ def training_loop(cfg):
                         regression_condition_list=cfg.model.regression_conditions,
                     )
 
-                    if use_regression_net:
-                        output_images = (
-                            diffusion_model_forward(
-                                net,
-                                condition,
-                                state[1].shape,
-                                sampler_args=dict(cfg.sampler.args),
-                            )
-                            + reg_out
+                    # evaluate validation loss
+                    loss_kwargs = (
+                        {"return_model_outputs": True}
+                        if net_name == "regression"
+                        else {}
+                    )
+                    valid_loss = loss_fn(
+                        net=net,
+                        images=target,
+                        condition=condition,
+                        augment_pipe=augment_pipe,
+                        **loss_kwargs,
+                    )
+
+                    if net_name == "diffusion":
+                        output_images = diffusion_model_forward(
+                            net,
+                            condition,
+                            state[1].shape,
+                            sampler_args=dict(cfg.sampler.args),
                         )
+                        if "regression" in condition_list:
+                            output_images += reg_out
                         del reg_out
-
-                        valid_loss = loss_fn(
-                            net=net,
-                            images=target,
-                            condition=condition,
-                            augment_pipe=augment_pipe,
-                        )
-                    elif train_regression_unet:
-                        valid_loss, output_images = loss_fn(
-                            net=net,
-                            images=target,
-                            condition=condition,
-                            augment_pipe=augment_pipe,
-                            return_model_outputs=True,
-                        )
-
+                    else:
+                        (
+                            valid_loss,
+                            output_images,
+                        ) = valid_loss  # in this case, loss_fn returns a tuple
                         if log_to_wandb:
                             channelwise_valid_loss = valid_loss.mean(dim=[0, 2, 3])
                             channelwise_valid_loss_dict = {
