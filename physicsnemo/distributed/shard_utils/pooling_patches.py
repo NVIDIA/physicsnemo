@@ -201,7 +201,7 @@ def generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs):
                 if shard_dim >= 2:
                     spatial_dim = shard_dim - 2  # Convert to spatial dimension index
                     # Get the sizes for this mesh dimension
-                    shard_shapes = input._spec.sharding_sizes()[mesh_dim]
+                    shard_shapes = input._spec.sharding_shapes()[mesh_dim]
                     for shard_shape in shard_shapes:
                         if (
                             spatial_dim < len(shard_shape) - 2
@@ -216,7 +216,7 @@ def generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs):
 
         # Compute the sharding shapes:
         updated_placements = {}
-        for mesh_dim, shard_shapes in input._spec.sharding_sizes().items():
+        for mesh_dim, shard_shapes in input._spec.sharding_shapes().items():
             updated_shard_shapes = [
                 compute_output_shape(shard_shape, pool_kwargs)
                 for shard_shape in shard_shapes
@@ -374,7 +374,7 @@ def generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs):
                 if shard_dim >= 2:
                     spatial_dim = shard_dim - 2  # Convert to spatial dimension index
                     # Get the sizes for this mesh dimension
-                    shard_shapes = input._spec.sharding_sizes()[mesh_dim]
+                    shard_shapes = input._spec.sharding_shapes()[mesh_dim]
                     for shard_shape in shard_shapes:
                         if (
                             spatial_dim < len(shard_shape) - 2
@@ -389,7 +389,7 @@ def generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs):
 
         # Compute the sharding shapes:
         updated_placements = {}
-        for mesh_dim, shard_shapes in input._spec.sharding_sizes().items():
+        for mesh_dim, shard_shapes in input._spec.sharding_shapes().items():
             updated_shard_shapes = [
                 compute_output_shape(shard_shape, pool_kwargs)
                 for shard_shape in shard_shapes

@@ -175,7 +175,7 @@ def reduction_shape(
     return torch.Size(shape)
 
 
-def compute_result_sharding_sizes(
+def compute_result_sharding_shapes(
     tensor: ShardTensor, dim: DimT, keepdim: bool
 ) -> Dict[int, List[torch.Size]]:
     """
@@ -193,20 +193,20 @@ def compute_result_sharding_sizes(
         return {}
     else:
         # Create a dictionary to store sharding sizes for dimensions that remain in the output
-        result_sharding_sizes = {}
+        result_sharding_shapes = {}
 
         # Get the original sharding sizes
-        original_sharding_sizes = tensor._spec.sharding_sizes()
+        original_sharding_shapes = tensor._spec.sharding_shapes()
         # Use normalize_dim directly
         normalized_dim = normalize_dim(dim, tensor.ndim)
 
-        for mesh_dim, sharding_sizes in original_sharding_sizes.items():
-            result_sharding_sizes[mesh_dim] = [
+        for mesh_dim, sharding_shapes in original_sharding_shapes.items():
+            result_sharding_shapes[mesh_dim] = [
                 reduction_shape(shape, normalized_dim, keepdim)
-                for shape in sharding_sizes
+                for shape in sharding_shapes
             ]
 
-        return result_sharding_sizes
+        return result_sharding_shapes
 
 
 def create_sharded_grad_input(
@@ -226,7 +226,7 @@ def create_sharded_grad_input(
         local_grad_input,
         device_mesh=original_spec.mesh,
         placements=original_spec.placements,
-        sharding_shapes=original_spec.sharding_sizes(),
+        sharding_shapes=original_spec.sharding_shapes(),
     )
 
 
@@ -306,14 +306,14 @@ class ShardedSum(ShardedReductionBase):
 
         # Compute placements for the result
         placements = compute_result_placements(tensor, dim, "sum")
-        output_sharding_sizes = compute_result_sharding_sizes(tensor, dim, keepdim)
+        output_sharding_shapes = compute_result_sharding_shapes(tensor, dim, keepdim)
 
         # Create result ShardTensor
         result = ShardTensor.from_local(
             local_result,
             tensor.device_mesh,
             placements,
-            sharding_shapes=output_sharding_sizes,
+            sharding_shapes=output_sharding_shapes,
         )
 
         return result
@@ -424,14 +424,14 @@ class ShardedMean(ShardedReductionBase):
         local_result = local_result * weight
 
         placements = compute_result_placements(tensor, dim, "sum")
-        output_sharding_sizes = compute_result_sharding_sizes(tensor, dim, keepdim)
+        output_sharding_shapes = compute_result_sharding_shapes(tensor, dim, keepdim)
 
         # Create result ShardTensor
         result = ShardTensor.from_local(
             local_result,
             tensor.device_mesh,
             placements,
-            sharding_shapes=output_sharding_sizes,
+            sharding_shapes=output_sharding_shapes,
         )
 
         return result
@@ -521,6 +521,7 @@ def sum_wrapper(
     return ShardedSum.apply(tensor, dim, keepdim, *args, **kwargs)
 
 
+# TODO - accept func, types, args, kwargs instead
 def mean_wrapper(
     tensor: ShardTensor,
     dim: DimT = None,

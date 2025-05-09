@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
-import wrapt
 
 from physicsnemo.utils.profiling import annotate, profile
 from physicsnemo.utils.version_check import check_module_requirements
@@ -41,15 +40,6 @@ from .halo import HaloConfig, halo_padding  # noqa: E402
 from .patch_core import promote_to_iterable  # noqa: E402
 
 aten = torch.ops.aten
-
-__all__ = [
-    "conv1d_wrapper",
-    "conv2d_wrapper",
-    "conv3d_wrapper",
-    "conv_transpose1d_wrapper",
-    "conv_transpose2d_wrapper",
-    "conv_transpose3d_wrapper",
-]
 
 
 @profile
@@ -262,23 +252,31 @@ def compute_output_shape(
 ) -> Tuple[int, ...]:
     """
     For a specified input shape, determine the output shape after a convolution.
-
+    Handles both regular and transposed convolutions.
     """
-
     output_shape = []
     tensor_rank = len(sharding_shape[2:])
     for tensor_dim in range(tensor_rank):
-        num = (
-            sharding_shape[tensor_dim + 2]
-            + 2 * conv_kwargs["padding"][tensor_dim]
-            - (kernel_size[tensor_dim] - 1) * conv_kwargs["dilation"][tensor_dim]
-            - 1
-        )
-        o = num / conv_kwargs["stride"][tensor_dim] + 1
-        output_shape.append(int(o))
+        if not conv_kwargs["transposed"]:
+            # Regular convolution
+            num = (
+                sharding_shape[tensor_dim + 2]
+                + 2 * conv_kwargs["padding"][tensor_dim]
+                - (kernel_size[tensor_dim] - 1) * conv_kwargs["dilation"][tensor_dim]
+                - 1
+            )
+            o = num / conv_kwargs["stride"][tensor_dim] + 1
+        else:
+            # Transposed convolution
+            output_padding = conv_kwargs.get("output_padding", (0,) * tensor_rank)[
+                tensor_dim
+            ]
+            o = (sharding_shape[tensor_dim + 2] - 1) * conv_kwargs["stride"][tensor_dim]
+            o = o - 2 * conv_kwargs["padding"][tensor_dim]
+            o = o + conv_kwargs["dilation"][tensor_dim] * (kernel_size[tensor_dim] - 1)
+            o = o + output_padding + 1
 
-    # To compute the output shape, we first need to know the real input shape.
-    # For this function, there are two changes
+        output_shape.append(int(o))
 
     return tuple(output_shape)
 
@@ -318,28 +316,35 @@ def partial_conv_nd(
         )
 
         # We get one halo_config per sharded dim.
-
-        sharding_shapes = input._spec.sharding_sizes()
+        sharding_shapes = input._spec.sharding_shapes()
         # # First, update the shapes to take into account the halo and edge paddings:
+
+        # Create a mapping from mesh_dim to halo_config for easy lookup
+        halo_config_map = {config.mesh_dim: config for config in halo_configs}
 
         real_input_shapes = {}
         for mesh_dim, sharing_tuple in sharding_shapes.items():
-            tensor_dim = halo_configs[mesh_dim].tensor_dim
+            # If this mesh_dim doesn't need halos, just copy the original shapes
+            if mesh_dim not in halo_config_map:
+                real_input_shapes[mesh_dim] = sharing_tuple
+                continue
+
+            tensor_dim = halo_config_map[mesh_dim].tensor_dim
             real_input_shapes[mesh_dim] = []
             for i, s in enumerate(sharing_tuple):
-                padding = halo_configs[mesh_dim].halo_size
+                padding = halo_config_map[mesh_dim].halo_size
 
                 if i == 0 or i == len(sharing_tuple) - 1:
                     # On the edge of the split, the additional size is halo + edge padding
-                    padding += halo_configs[mesh_dim].edge_padding_size
+                    padding += halo_config_map[mesh_dim].edge_padding_size
                 else:
                     # Otherwise, its 2xhalo size added on.
-                    padding += halo_configs[mesh_dim].halo_size
+                    padding += halo_config_map[mesh_dim].halo_size
 
                 updated_shape = list(s)
                 updated_shape[tensor_dim] += padding
 
-                real_input_shapes[mesh_dim].append(updated_shape)
+                real_input_shapes[mesh_dim].append(tuple(updated_shape))
 
         input_spec = input._spec
         local_input = input.to_local()
@@ -442,13 +447,6 @@ class PartialConvND(torch.autograd.Function):
         ctx.conv_kwargs = conv_kwargs
         # Perform local convolution on this shard
         local_chunk = aten.convolution.default(inputs, weights, bias, **conv_kwargs)
-        # Wrap result in ShardTensor with specified distribution
-        # output = ShardTensor.from_local(
-        #     local_chunk,
-        #     input_spec.mesh,
-        #     input_spec.placements,
-        #     sharding_shapes="infer",
-        # )
 
         ctx.requires_input_grad = inputs.requires_grad
         # return output
@@ -503,78 +501,26 @@ class PartialConvND(torch.autograd.Function):
         return grad_input, grad_weight, grad_bias, None, None
 
 
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "conv1d", enabled=ShardTensor.patches_enabled
-)
-def conv1d_wrapper(wrapped, instance, args, kwargs):
+def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: dict):
+    """Wrapper function for N-dimensional convolution operations supporting shardtensors.
 
-    return generic_conv_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "conv2d", enabled=ShardTensor.patches_enabled
-)
-def conv2d_wrapper(wrapped, instance, args, kwargs):
-
-    return generic_conv_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "conv3d", enabled=ShardTensor.patches_enabled
-)
-def conv3d_wrapper(wrapped, instance, args, kwargs):
-
-    return generic_conv_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "conv_transpose1d", enabled=ShardTensor.patches_enabled
-)
-def conv_transpose1d_wrapper(wrapped, instance, args, kwargs):
-
-    return generic_conv_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "conv_transpose2d", enabled=ShardTensor.patches_enabled
-)
-def conv_transpose2d_wrapper(wrapped, instance, args, kwargs):
-
-    return generic_conv_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "conv_transpose3d", enabled=ShardTensor.patches_enabled
-)
-def conv_transpose3d_wrapper(wrapped, instance, args, kwargs):
-
-    return generic_conv_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-def generic_conv_nd_wrapper(
-    wrapped, instance, args, kwargs
-) -> Union[torch.Tensor, ShardTensor]:
-    """Generic wrapper for torch N-dimensional convolution operations.
-
-    Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
-    For regular tensors, passes through to the wrapped convolution.
-    For ShardTensor inputs, handles gathering weights/bias and applying distributed
-    convolution with halo regions.
+    This function dispatches convolution operations to appropriate implementations based on input types.
+    It handles both regular and transposed convolutions, and supports both torch.Tensor and ShardTensor inputs.
 
     Args:
-        wrapped: Original convolution function being wrapped
-        instance: Instance the wrapped function is bound to
-        args: Positional arguments for convolution
-        kwargs: Keyword arguments for convolution
+        func: The convolution function to be wrapped (conv1d, conv2d, etc.)
+        types: Tuple of input types (unused)
+        args: Positional arguments to the convolution function
+        kwargs: Keyword arguments to the convolution function
 
     Returns:
-        Convolution result as either torch.Tensor or ShardTensor
+        The result of the convolution operation
 
     Raises:
-        UndeterminedShardingError: If input tensor types are invalid or incompatible
+        UndeterminedShardingError: If input, weight, or bias have invalid types
     """
 
-    if "transpose" in wrapped.__name__:
+    if "transpose" in func.__name__:
         input, weight, bias, conv_kwargs = repackage_conv_transposed_args(
             *args, **kwargs
         )
@@ -587,7 +533,7 @@ def generic_conv_nd_wrapper(
         and type(weight) == torch.nn.parameter.Parameter
         and (bias is None or type(bias) == torch.nn.parameter.Parameter)
     ):
-        return wrapped(*args, **kwargs)
+        return func(*args, **kwargs)
 
     # Handle distributed ShardTensor inputs
     elif type(input) == ShardTensor:
@@ -735,8 +681,21 @@ def repackage_conv_transposed_args(
     return input, weight, bias, return_kwargs
 
 
-# This will become the future implementation, or similar.
-# Why not today?  Because the backwards pass in DTensor has an explicit (and insufficient)
-# hard coded implementation for the backwards pass.
-# When that switch happens, the order in the arg repackaging will need to be updated.
-# ShardTensor.register_function_handler(aten.convolution.default, generic_conv_nd_wrapper)
+ShardTensor.register_function_handler(
+    torch.nn.functional.conv1d, generic_conv_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.conv2d, generic_conv_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.conv3d, generic_conv_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.conv_transpose1d, generic_conv_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.conv_transpose2d, generic_conv_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.conv_transpose3d, generic_conv_nd_wrapper
+)

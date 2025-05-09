@@ -91,7 +91,7 @@ def ring_ball_query(
 
     # Get the shard sizes for the point cloud going around the ring.
     # We've already checked that the mesh is 1D so call the '0' index.
-    p2_shard_sizes = points2._spec.sharding_sizes()[0]
+    p2_shard_sizes = points2._spec.sharding_shapes()[0]
 
     # Call the differentiable version of the ring-ball-query:
     mapping_shard, num_neighbors_shard, outputs_shard = RingBallQuery.apply(
@@ -116,7 +116,7 @@ def ring_ball_query(
         outputs_shard_shapes = "infer"
     elif type(points1._spec.placements[0]) == Shard:
 
-        p1_shard_sizes = points1._spec.sharding_sizes()[0]
+        p1_shard_sizes = points1._spec.sharding_shapes()[0]
 
         # This conversion to shard tensor can be done explicitly computing the output shapes.
 
@@ -523,7 +523,7 @@ def ball_query_layer_wrapper(
             num_neighbors_placement = {}
             outputs_placement = {}
 
-            for k, s in points1._spec.sharding_sizes().items():
+            for k, s in points1._spec.sharding_shapes().items():
                 n_points = [int(_s[1]) for _s in s]
                 mapping_placement[k] = tuple(torch.Size([b, np, k]) for np in n_points)
                 num_neighbors_placement[k] = tuple(

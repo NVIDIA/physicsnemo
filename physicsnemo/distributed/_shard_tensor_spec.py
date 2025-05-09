@@ -48,15 +48,15 @@ class ShardTensorSpec(DTensorSpec):
     ----------
     _local_shape : Optional[torch.Size]
         The shape of the local shard of the tensor
-    _sharding_sizes : Optional[dict[int, Tuple[torch.Size, ...]]]
-        Mapping from mesh dimension to shard sizes. Keys are mesh dimensions,
+    _sharding_shapes : Optional[dict[int, Tuple[torch.Size, ...]]]
+        Mapping from mesh dimension to shard shapes. Keys are mesh dimensions,
         values are tuples of torch.Size representing shard shapes along that dimension.
-        Shard sizes are only tracked along the sharded dimensions, not replicated dimensions.
+        Shard shapes are only tracked along the sharded dimensions, not replicated dimensions.
     """
 
     _local_shape: Optional[torch.Size] = field(default_factory=lambda: None)
-    # This dict is a mapping from the mesh dimension to the shard sizes, _not_ the tensor index
-    _sharding_sizes: Optional[dict[int, Tuple[torch.Size, ...]]] = field(
+    # This dict is a mapping from the mesh dimension to the shard shapes, _not_ the tensor index
+    _sharding_shapes: Optional[dict[int, Tuple[torch.Size, ...]]] = field(
         default_factory=lambda: None
     )
 
@@ -68,7 +68,7 @@ class ShardTensorSpec(DTensorSpec):
         Returns
         -------
         int
-            Hash value incorporating mesh, placements, tensor metadata and sharding sizes
+            Hash value incorporating mesh, placements, tensor metadata and sharding shapes
         """
 
         hash_items = []
@@ -79,8 +79,8 @@ class ShardTensorSpec(DTensorSpec):
             hash_items.append(self.tensor_meta.shape)
             hash_items.append(self.tensor_meta.stride)
             hash_items.append(self.tensor_meta.dtype)
-        if self._sharding_sizes is not None:
-            hash_items.append(tuple(sorted(self._sharding_sizes.items())))
+        if self._sharding_shapes is not None:
+            hash_items.append(tuple(sorted(self._sharding_shapes.items())))
         hash_tuple = tuple(hash_items)
         return hash(hash_tuple)
 
@@ -93,27 +93,27 @@ class ShardTensorSpec(DTensorSpec):
             self._hash = self._hash_impl()
         return self._hash
 
-    def sharding_sizes(
+    def sharding_shapes(
         self, mesh_dim: Optional[int] = None
     ) -> dict[int, Tuple[torch.Size, ...]] | Tuple[torch.Size, ...]:
-        """Get the sizes of shards along specified mesh dimensions.
+        """Get the shapes of shards along specified mesh dimensions.
 
         Parameters
         ----------
         mesh_dim : Optional[int]
-            If provided, return sizes only for this mesh dimension
+            If provided, return shapes only for this mesh dimension
 
         Returns
         -------
         dict[int, Tuple[torch.Size, ...]] | Tuple[torch.Size, ...]
-            Dictionary of shard sizes by mesh dim, or tuple of sizes for specific dim
+            Dictionary of shard shapes by mesh dim, or tuple of shapes for specific dim
         """
-        if self._sharding_sizes is None:
+        if self._sharding_shapes is None:
             if mesh_dim is None:
                 shard_shapes_by_dim, global_shape = _all_gather_shard_shapes(
                     self._local_shape, self.placements, self.mesh
                 )
-                self._sharding_sizes = shard_shapes_by_dim
+                self._sharding_shapes = shard_shapes_by_dim
                 self.tensor_meta = self.tensor_meta._replace(shape=global_shape)
             else:
                 return _gather_shard_shapes_for_dim(
@@ -123,9 +123,9 @@ class ShardTensorSpec(DTensorSpec):
                     do_checks=False,
                 )
         if mesh_dim is not None:
-            if mesh_dim in self._sharding_sizes:
-                return self._sharding_sizes[mesh_dim]
-        return self._sharding_sizes
+            if mesh_dim in self._sharding_shapes:
+                return self._sharding_shapes[mesh_dim]
+        return self._sharding_shapes
 
     def __eq__(self, other: object) -> bool:
         """Check if two ShardTensorSpecs are equal.
@@ -139,7 +139,7 @@ class ShardTensorSpec(DTensorSpec):
             return False
         if not super().__eq__(other):
             return False
-        if self._sharding_sizes != other._sharding_sizes:
+        if self._sharding_shapes != other._sharding_shapes:
             return False
         return True
 
@@ -202,7 +202,7 @@ class ShardTensorSpec(DTensorSpec):
             placement = self.placements[loop_mesh_dim]
             # If the placement is not shard, offset is 0:
             if isinstance(placement, Shard):
-                shards = self._sharding_sizes[loop_mesh_dim]
+                shards = self._sharding_shapes[loop_mesh_dim]
                 tensor_dim = placement.dim
                 o = sum([s[tensor_dim] for s in shards[:coord]])
                 offsets.append(o)
@@ -349,7 +349,7 @@ def _all_gather_shard_shapes(
     return shard_shapes_by_dim, tuple(global_shape)
 
 
-def compute_sharding_sizes_from_chunking_global_shape(
+def compute_sharding_shapes_from_chunking_global_shape(
     mesh: DeviceMesh,
     placements: Tuple[Placement, ...],
     global_shape: Tuple[int, ...],
@@ -376,7 +376,7 @@ def compute_sharding_sizes_from_chunking_global_shape(
         raise ValueError("Number of placements must match mesh dimensions")
 
     # First compute raw chunk sizes for each sharded dimension
-    temp_sharding_sizes: Dict[int, List[int]] = {}
+    temp_sharding_shapes: Dict[int, List[int]] = {}
     for i in range(mesh.ndim):
         if isinstance(placements[i], Shard):
             # Compute the chunk size for this dimension:
@@ -384,26 +384,26 @@ def compute_sharding_sizes_from_chunking_global_shape(
             chunked_shapes = compute_split_shapes(input_dim, mesh.size(i))
             # This needs to be a tuple of torch.Size
 
-            temp_sharding_sizes[i] = chunked_shapes
+            temp_sharding_shapes[i] = chunked_shapes
 
     # Initialize shapes for all sharded dimensions, but using the global shape.
     # We will update next.
-    sharding_sizes = {
+    sharding_shapes = {
         mesh_dim: [list(global_shape) for _ in chunks]
-        for mesh_dim, chunks in temp_sharding_sizes.items()
+        for mesh_dim, chunks in temp_sharding_shapes.items()
     }
 
     # For every sharded dimension, update the tensor size along it's axis for all mesh dims
-    for mesh_dim in temp_sharding_sizes.keys():
+    for mesh_dim in temp_sharding_shapes.keys():
         placement = placements[mesh_dim]
         tensor_dim = placement.dim
-        for i, shard_size in enumerate(temp_sharding_sizes[mesh_dim]):
-            sharding_sizes[mesh_dim][i][tensor_dim] = shard_size
+        for i, shard_size in enumerate(temp_sharding_shapes[mesh_dim]):
+            sharding_shapes[mesh_dim][i][tensor_dim] = shard_size
 
     # Convert to immutable torch.Size
     return {
         mesh_dim: [torch.Size(tuple(size)) for size in sizes]
-        for mesh_dim, sizes in sharding_sizes.items()
+        for mesh_dim, sizes in sharding_shapes.items()
     }
 
 
@@ -460,7 +460,7 @@ def _infer_shard_tensor_spec_from_local_chunks(
     if isinstance(sharding_shapes, str):
         if sharding_shapes == "chunk":
             # This is communication-free.  It's the path from a properly-formated DTensorSpec.
-            shard_shapes_by_dim = compute_sharding_sizes_from_chunking_global_shape(
+            shard_shapes_by_dim = compute_sharding_shapes_from_chunking_global_shape(
                 target_mesh,
                 placements,
                 list(global_shape),
@@ -508,11 +508,11 @@ def _infer_shard_tensor_spec_from_local_chunks(
         shape=tuple(global_shape), stride=stride, dtype=local_chunk.dtype
     )
 
-    sharding_sizes = {dim: tuple(s) for dim, s in shard_shapes_by_dim.items()}
+    sharding_shapes = {dim: tuple(s) for dim, s in shard_shapes_by_dim.items()}
     return ShardTensorSpec(
         mesh=target_mesh,
         placements=placements,
         tensor_meta=global_meta,
         _local_shape=local_chunk.shape,
-        _sharding_sizes=sharding_sizes,
+        _sharding_shapes=sharding_shapes,
     )

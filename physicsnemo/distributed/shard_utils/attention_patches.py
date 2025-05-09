@@ -617,7 +617,7 @@ def ring_sdpa(
 
     # Convert back to ShardTensor
     x = ShardTensor.from_local(
-        x, q._spec.mesh, q._spec.placements, q._spec.sharding_sizes()
+        x, q._spec.mesh, q._spec.placements, q._spec.sharding_shapes()
     )
     return x
 

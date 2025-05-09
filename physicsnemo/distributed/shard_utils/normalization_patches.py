@@ -163,7 +163,7 @@ class PartialGroupNorm(torch.autograd.Function):
             local_output,
             spec.mesh,
             spec.placements,
-            sharding_shapes=spec.sharding_sizes(),
+            sharding_shapes=spec.sharding_shapes(),
         )
 
     @staticmethod

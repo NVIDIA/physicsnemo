@@ -110,10 +110,10 @@ class _ToTorchTensor(torch.autograd.Function):
                 # If the placements are the same as the input placements,
                 # we reuse the sharding sizes from the input placements.
                 grad_placements = ctx.grad_placements
-                grad_sharding_shapes = shard_tensor_spec._sharding_sizes
+                grad_sharding_shapes = shard_tensor_spec._sharding_shapes
         else:
             grad_placements = shard_tensor_spec.placements
-            grad_sharding_shapes = shard_tensor_spec._sharding_sizes
+            grad_sharding_shapes = shard_tensor_spec._sharding_shapes
         if grad_sharding_shapes is None:
             grad_sharding_shapes = "infer"
         # Generate a spec based on grad outputs and the expected placements:
@@ -375,8 +375,8 @@ class ShardTensor(DTensor):
     def __torch_function__(cls, func, types, args=(), kwargs={}):
         with annotate(f"__torch_function___{func.__name__}"):
             # Check for overrides:
-            if func in cls._function_registry:
-                res = cls._function_registry[func](*args, **kwargs)
+            if func in cls._function_registry and cls._enable_shard_patches:
+                res = cls._function_registry[func](func, types, args, kwargs)
                 return res
             # Fall back to the default behavior:
             return super().__torch_function__(func, types, args, kwargs)
@@ -693,7 +693,7 @@ def scatter_tensor(
         mesh=mesh,
         placements=[Replicate() for _ in range(mesh.ndim)],
         tensor_meta=local_meta,
-        _sharding_sizes={},
+        _sharding_shapes={},
     )
 
     # Make a "fully-replicated" tensor on all ranks:

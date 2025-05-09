@@ -118,7 +118,7 @@ class ShardedIndexSelect(torch.autograd.Function):
             # Size per rank is easy to compute, no communication needed.
             output_size = list(tensor.shape)
             output_shard_sizes = {}
-            for mesh_dim, index_shard_sizes in index._spec.sharding_sizes().items():
+            for mesh_dim, index_shard_sizes in index._spec.sharding_shapes().items():
                 output_shard_sizes[mesh_dim] = []
                 for local_chunk_size in index_shard_sizes:
                     this_shard_size = output_size
@@ -339,7 +339,7 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
         # Since the constraint above prevents selecting along a sharded dimension,
         # we can be sure that none of these adjusted shapes will be sharded.
         output_shard_sizes = {}
-        for mesh_dim, index_shard_sizes in input_spec.sharding_sizes().items():
+        for mesh_dim, index_shard_sizes in input_spec.sharding_shapes().items():
             output_shard_sizes[mesh_dim] = []
             for local_chunk_size in index_shard_sizes:
                 local_chunk_size_list = list(local_chunk_size)
@@ -353,7 +353,7 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
             mesh=input_spec.mesh,
             placements=tuple(new_placements),
             tensor_meta=new_meta,
-            _sharding_sizes=output_shard_sizes,
+            _sharding_shapes=output_shard_sizes,
         )
         # Finally, actually perform the select:
         local_result = aten.select.int(tensor._local_tensor, dim, index)
@@ -405,7 +405,7 @@ def sharded_select_backward_helper(
 
     # Next, calculate the sharding sizes for the output tensor:
     output_shard_sizes = {}
-    for mesh_dim, index_shard_sizes in grad_output._spec.sharding_sizes().items():
+    for mesh_dim, index_shard_sizes in grad_output._spec.sharding_shapes().items():
         output_shard_sizes[mesh_dim] = []
         for local_chunk_size in index_shard_sizes:
             # We need to insert input_sizes[dim] at index:
@@ -420,7 +420,7 @@ def sharded_select_backward_helper(
         mesh=grad_output._spec.mesh,
         placements=tuple(new_placements),
         tensor_meta=new_meta,
-        _sharding_sizes=output_shard_sizes,
+        _sharding_shapes=output_shard_sizes,
     )
 
     # Finally, make sure we use the correct local size:

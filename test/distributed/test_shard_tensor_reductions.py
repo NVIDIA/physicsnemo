@@ -154,8 +154,8 @@ def run_shard_tensor_reduction(
             # Make sure that the sharded gradients have the same placement and sharding sizes as the original tensor
             assert shard_tensor.grad._spec.placements == shard_tensor._spec.placements
             assert (
-                shard_tensor.grad._spec.sharding_sizes()
-                == shard_tensor._spec.sharding_sizes()
+                shard_tensor.grad._spec.sharding_shapes()
+                == shard_tensor._spec.sharding_shapes()
             )
 
         print("Success!")
