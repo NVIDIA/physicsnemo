@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterable
+
 import torch
 from physicsnemo.models import Module
 from physicsnemo.models.diffusion import EDMPrecond, StormCastUNet
@@ -27,7 +29,7 @@ def get_preconditioned_architecture(
     spatial_embedding: bool = True,
     img_resolution: tuple = (512, 640),
     attn_resolutions: list = [],
-):
+) -> EDMPrecond | StormCastUNet:
     """
 
     Args:
@@ -65,14 +67,34 @@ def get_preconditioned_architecture(
 
 
 def build_network_condition_and_target(
-    background,
-    state,
-    invariant_tensor,
-    regression_net=None,
-    condition_list=("state", "background"),
-    regression_condition_list=("state", "background"),
-):
-    assert not (("regression" in condition_list) and (regression_net is None))
+    background: torch.Tensor,
+    state: tuple[torch.Tensor, torch.Tensor],
+    invariant_tensor: torch.Tensor | None,
+    regression_net: Module | None = None,
+    condition_list: Iterable[str] = ("state", "background"),
+    regression_condition_list: Iterable[str] = ("state", "background"),
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Build the condition and target tensors for the network.
+
+    Args:
+        background: background tensor
+        state: tuple of previous state and target state
+        invariant_tensor: invariant tensor or None if no invariant is used
+        regression_net: regression model, can be None if 'regression' is not in condition_list
+        condition_list: list of conditions to include, may include 'state', 'background', 'regression' and 'invariant'
+        regression_condition_list: list of conditions for the regression network, may include 'state', 'background', and 'invariant'
+            This is only used if regression_net is set.
+    Returns:
+        A tuple of tensors: (
+            condition: model condition concatenated from conditions specified in condition_list,
+            target: training target,
+            regression: regression model output
+        ). The regression model output will be None if 'regression' is not in condition_list.
+    """
+    if ("regression" in condition_list) and (regression_net is None):
+        raise ValueError(
+            "regression_net must be provided if 'regression' is in condition_list"
+        )
     target = state[1]
 
     condition_tensors = {
