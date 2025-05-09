@@ -647,10 +647,6 @@ class ResidualLoss:
                 f"Batch size, height and width must match."
             )
 
-        rnd_normal = torch.randn([img_clean.shape[0], 1, 1, 1], device=img_clean.device)
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
-
         # augment for conditional generation
         img_tot = torch.cat((img_clean, img_lr), dim=1)
         y_tot, augment_labels = (
@@ -680,7 +676,7 @@ class ResidualLoss:
                     )
                 self.y_mean = y_mean
 
-        # if on full domain:
+        # if on full domain, or if using patching without multi-iterations
         else:
             # form residual
             if lead_time_label is not None:
@@ -731,10 +727,11 @@ class ResidualLoss:
                 latent,
                 y_lr,
                 sigma,
-                embedding_selector=None,
-                global_index=patching.global_index(batch_size, img_clean.device)
-                if patching is not None
-                else None,
+                global_index=(
+                    patching.global_index(batch_size, img_clean.device)
+                    if patching is not None
+                    else None
+                ),
                 lead_time_label=lead_time_label,
                 augment_labels=augment_labels,
             )
@@ -743,10 +740,11 @@ class ResidualLoss:
                 latent,
                 y_lr,
                 sigma,
-                embedding_selector=None,
-                global_index=patching.global_index(batch_size, img_clean.device)
-                if patching is not None
-                else None,
+                global_index=(
+                    patching.global_index(batch_size, img_clean.device)
+                    if patching is not None
+                    else None
+                ),
                 augment_labels=augment_labels,
             )
         loss = weight * ((D_yn - y) ** 2)

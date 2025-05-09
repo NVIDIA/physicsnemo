@@ -21,6 +21,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 from hydra.core.hydra_config import HydraConfig
+from contextlib import nullcontext
 
 from physicsnemo import Module
 from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
@@ -74,6 +75,31 @@ def checkpoint_list(path, suffix=".mdlus"):
     return [file for _, file in checkpoints]
 
 
+# Define safe CUDA profiler tools that fallback to no-ops when CUDA is not available
+def cuda_profiler():
+    if torch.cuda.is_available():
+        return torch.cuda.profiler.profile()
+    else:
+        return nullcontext()
+
+
+def cuda_profiler_start():
+    if torch.cuda.is_available():
+        torch.cuda.profiler.start()
+
+
+def cuda_profiler_stop():
+    if torch.cuda.is_available():
+        torch.cuda.profiler.stop()
+
+
+def profiler_emit_nvtx():
+    if torch.cuda.is_available():
+        return torch.autograd.profiler.emit_nvtx()
+    else:
+        return nullcontext()
+
+
 # Train the CorrDiff model using the configurations in "conf/config_training.yaml"
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_training")
 def main(cfg: DictConfig) -> None:
@@ -106,10 +132,10 @@ def main(cfg: DictConfig) -> None:
     logger0.info(f"Using dataset: {cfg.dataset.type}")
 
     if hasattr(cfg, "validation"):
-        train_test_split = True
+        validation = True
         validation_dataset_cfg = OmegaConf.to_container(cfg.validation)
     else:
-        train_test_split = False
+        validation = False
         validation_dataset_cfg = None
     fp_optimizations = cfg.training.perf.fp_optimizations
     songunet_checkpoint_level = cfg.training.perf.songunet_checkpoint_level
@@ -146,7 +172,7 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.training.hp.batch_size_per_gpu,
         seed=0,
         validation_dataset_cfg=validation_dataset_cfg,
-        train_test_split=train_test_split,
+        validation=validation,
     )
 
     # Parse image configuration & update model args
@@ -200,7 +226,6 @@ def main(cfg: DictConfig) -> None:
     if hasattr(cfg.model, "model_args"):  # override defaults from config file
         model_args.update(OmegaConf.to_container(cfg.model.model_args))
 
-    optimization_mode = False
     use_torch_compile = False
     use_apex_gn = False
     profile_mode = False
@@ -421,8 +446,8 @@ def main(cfg: DictConfig) -> None:
         input_dtype = torch.float16
 
     # enable profiler:
-    with torch.cuda.profiler.profile():
-        with torch.autograd.profiler.emit_nvtx():
+    with cuda_profiler():
+        with profiler_emit_nvtx():
 
             while not done:
                 tick_start_nimg = cur_nimg
@@ -430,11 +455,11 @@ def main(cfg: DictConfig) -> None:
 
                 if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Starting Profiler at {cur_nimg}")
-                    torch.cuda.profiler.start()
+                    cuda_profiler_start()
 
                 if cur_nimg - start_nimg == 25 * cfg.training.hp.total_batch_size:
-                    logger0.info(f"Stoping Profiler at {cur_nimg}")
-                    torch.cuda.profiler.stop()
+                    logger0.info(f"Stopping Profiler at {cur_nimg}")
+                    cuda_profiler_stop()
 
                 with nvtx.annotate("Training iteration", color="green"):
                     # Compute & accumulate gradients
@@ -444,7 +469,7 @@ def main(cfg: DictConfig) -> None:
                         with nvtx.annotate(
                             f"accumulation round {n_i}", color="Magenta"
                         ):
-                            with nvtx.annotate(f"loading data", color="green"):
+                            with nvtx.annotate("loading data", color="green"):
                                 img_clean, img_lr, *lead_time_label = next(
                                     dataset_iterator
                                 )
@@ -495,9 +520,8 @@ def main(cfg: DictConfig) -> None:
 
                             for patch_num_per_iter in patch_nums_iter:
                                 if patching is not None:
-                                    patching.set_patch_sum(patch_num_per_iter)
+                                    patching.set_patch_num(patch_num_per_iter)
                                     loss_fn_kwargs.update({"patching": patching})
-                                # pdb.set_trace()
                                 with nvtx.annotate(f"loss forward", color="green"):
                                     with torch.autocast(
                                         "cuda", dtype=amp_dtype, enabled=enable_amp
@@ -546,7 +570,7 @@ def main(cfg: DictConfig) -> None:
                         n_average_loss_running_mean = 1
 
                     # Update weights.
-                    with nvtx.annotate(f"update weights", color="blue"):
+                    with nvtx.annotate("update weights", color="blue"):
                         lr_rampup = (
                             cfg.training.hp.lr_rampup
                         )  # ramp up the learning rate
@@ -640,11 +664,10 @@ def main(cfg: DictConfig) -> None:
 
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
-                                            patching.set_patch_sum(patch_num_per_iter)
+                                            patching.set_patch_num(patch_num_per_iter)
                                             loss_fn_kwargs.update(
                                                 {"patching": patching}
                                             )
-                                        # pdb.set_trace()
                                         with torch.autocast(
                                             "cuda", dtype=amp_dtype, enabled=enable_amp
                                         ):
@@ -701,14 +724,15 @@ def main(cfg: DictConfig) -> None:
                     fields += [
                         f"cpu_mem_gb {(psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"
                     ]
-                    fields += [
-                        f"peak_gpu_mem_gb {(torch.cuda.max_memory_allocated(dist.device) / 2**30):<6.2f}"
-                    ]
-                    fields += [
-                        f"peak_gpu_mem_reserved_gb {(torch.cuda.max_memory_reserved(dist.device) / 2**30):<6.2f}"
-                    ]
+                    if torch.cuda.is_available():
+                        fields += [
+                            f"peak_gpu_mem_gb {(torch.cuda.max_memory_allocated(dist.device) / 2**30):<6.2f}"
+                        ]
+                        fields += [
+                            f"peak_gpu_mem_reserved_gb {(torch.cuda.max_memory_reserved(dist.device) / 2**30):<6.2f}"
+                        ]
+                        torch.cuda.reset_peak_memory_stats()
                     logger0.info(" ".join(fields))
-                    torch.cuda.reset_peak_memory_stats()
 
                 # Save checkpoints
                 if dist.world_size > 1:
