@@ -219,7 +219,7 @@ class RandomPatching2D(BasePatching2D):
         """
         return self._patch_num
 
-    def set_patch_sum(self, value: int) -> None:
+    def set_patch_num(self, value: int) -> None:
         """
         Set the number of patches to extract and reset patch indices.
         This is the only way to modify the patch_num value.
