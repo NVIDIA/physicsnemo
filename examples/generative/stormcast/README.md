@@ -94,7 +94,7 @@ torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py --config-name <your
 
 ### Memory management
 
-The default configuration uses a batch size of 64 (controlled by `training.batch_size`), as used in the StormCast paper. If you have few GPUs and/or GPUs with limited memory, the default setting of `training.batch_size_per_gpu: 'auto'` may cause you to run out of memory. In that case, you can reduce the per-GPU memory utilization by manually setting `training.batch_size_per_gpu` to an integer value smaller than `training.batch_size` divided by the number of GPUs. The StormCast training code will automatically employ gradient accumulation to maintain the desired effective batch size specified by while using less memory, at the cost of longer training time.
+The default configuration uses a batch size of 64 (controlled by `training.batch_size`), as used in the StormCast paper. If you have few GPUs and/or GPUs with limited memory, the default setting of `training.batch_size_per_gpu: 'auto'` may cause you to run out of memory. In that case, you can reduce the per-GPU memory utilization by manually setting `training.batch_size_per_gpu` to an integer value smaller than `training.batch_size` divided by the number of GPUs. The StormCast training code will automatically employ gradient accumulation to maintain the desired effective batch size specified by `training.batch_size` while using less memory, at the cost of longer training time.
 
 Another way to reduce memory usage is to enable 16-bit training by setting `training.fp_optimizations` to `amp-bf16`. This is not enabled by default as it was not used in the StormCast paper, but our experience indicates that BF16 training works as well as 32-bit training.
 
