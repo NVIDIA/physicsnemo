@@ -94,11 +94,13 @@ torchrun --standalone --nnodes=1 --nproc_per_node=8 train.py --config-name <your
 
 ### Memory management
 
-The default configuration uses a batch size of 64 (controlled by `training.batch_size`), as used in the StormCast paper. If you have few GPUs and/or GPUs with limited memory, the default setting of `training.batch_size_per_gpu: 'auto'` may cause you to run our of memory. In that case, you can reduce the per-GPU memory utilization by manually setting `training.batch_size_per_gpu` to an integer value smaller than `training.batch_size` divided by the number of GPUs. The StormCast training code will automatically employ gradient accumulation to maintain the desired effective batch size specified by while using less memory, at the cost of longer training time.
+The default configuration uses a batch size of 64 (controlled by `training.batch_size`), as used in the StormCast paper. If you have few GPUs and/or GPUs with limited memory, the default setting of `training.batch_size_per_gpu: 'auto'` may cause you to run out of memory. In that case, you can reduce the per-GPU memory utilization by manually setting `training.batch_size_per_gpu` to an integer value smaller than `training.batch_size` divided by the number of GPUs. The StormCast training code will automatically employ gradient accumulation to maintain the desired effective batch size specified by while using less memory, at the cost of longer training time.
 
 Another way to reduce memory usage is to enable 16-bit training by setting `training.fp_optimizations` to `amp-bf16`. This is not enabled by default as it was not used in the StormCast paper, but our experience indicates that BF16 training works as well as 32-bit training.
 
-### Inference
+## Inference
+
+When the training-time validation is run, simple examples of model inference are saved in the `images` subdirectory in your `run` directory.
 
 A simple demonstrative inference script is given in `inference.py`, which is also configured using hydra in a manner similar to training. The reference `stormcast_inference` config shows an example inference config, which looks largely the same as a training config except the output directory is now controlled by the settings from `inference` rather than `training` config:
 ```yaml
@@ -113,22 +115,22 @@ To run inference, simply do:
 python inference.py --config-name <your_inference_config>
 ```
 
-This will load regression and diffusion models from directories specified by `inference.regression_checkpoint` and `inference.diffusion_checkpoint` respectively; each of these should be a path to a PhysicsNeMo checkpoint (`.mdlus` file) from your training runs. The `inference.py` script will use these models to run a forecast and save outputs as a `zarr` file along with a few plots saved as `png` files. We also recommend bringing your checkpoints to [earth2studio](https://github.com/NVIDIA/earth2studio)
-for further analysis and visualizations.
+This will load regression and diffusion models from directories specified by `inference.regression_checkpoint` and `inference.diffusion_checkpoint` respectively; each of these should be a path to a PhysicsNeMo checkpoint (`.mdlus` file) from your training runs. The `inference.py` script will use these models to run a forecast and save outputs as a `zarr` file along with a few plots saved as `png` files.
+
+The `inference.py` script currently fully supports only the default ERA5-HRRR StormCast implementation. For custom datasets and more complex inference workflows, we recommend bringing your checkpoints to [Earth2Studio](https://github.com/NVIDIA/earth2studio) for further analysis and visualizations. The [Earth2Studio wrapper for StormCast](https://github.com/NVIDIA/earth2studio/blob/main/earth2studio/models/px/stormcast.py) can be used as a starting point for custom implementations.
 
 
 ## Datasets
 
 ### ERA5-HRRR dataset
 
-In this example, StormCast is trained on the [HRRR dataset](https://rapidrefresh.noaa.gov/hrrr/),
+With the default configuration, StormCast is trained on the [HRRR dataset](https://rapidrefresh.noaa.gov/hrrr/),
 conditioned on the [ERA5 dataset](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5).
 The datapipe in this example is tailored specifically for the domain and problem setting posed in the 
 [original StormCast preprint](https://arxiv.org/abs/2408.10958), namely a subset of HRRR and ERA5 variables
 in a region over the Central US with spatial extent 1536km x 1920km.
 
-
-A custom dataset object is defined in `datasets/data_loader_hrrr_era5.py`, which loads temporally-aligned samples from HRRR and ERA5, interpolated to the same grid and normalized appropriately. This data pipeline requires the HRRR and ERA5 data to abide by a specific `zarr` format and for other datasets, you will need to create a custom datapipe. The table below lists the variables used to train StormCast -- in total there are 26 ERA5 variables used and 99 HRRR variables (along with 2 static HRRR invariants, the land/water mask and orography).
+A custom dataset object is defined in `datasets/data_loader_hrrr_era5.py`, which loads temporally-aligned samples from HRRR and ERA5, interpolated to the same grid and normalized appropriately. This data pipeline requires the HRRR and ERA5 data to abide by a specific `zarr` format and for other datasets, you will need to [create a custom datapipe](#adding-custom-datasets). The table below lists the variables used to train StormCast -- in total there are 26 ERA5 variables used and 99 HRRR variables (along with 2 static HRRR invariants, the land/water mask and orography).
 
 #### ERA5 Variables
 
@@ -163,7 +165,7 @@ A custom dataset object is defined in `datasets/data_loader_hrrr_era5.py`, which
 
 While it is possible to train StormCast on custom datasets by formatting them indentically to the Zarr datasets used in the ERA5-HRRR example, a more flexible option is to define a custom dataset object. These datasets must follow the `StormCastDataset` interface defined in `datasets/base.py`; see the docstrings in that file for a specification of what the functions must accept and return. You can use the `datasets/data_loader_hrrr_era5.py` implementation as an example. 
 
-Once you have implemented the custom dataset, create a configuration file in `config/dataset`. This configuration file must have one special attribute, `name`. This indicates a module in the `datasets` directory and a class to be used for the dataset. For instance, `data_loader_hrrr_era5.HrrrEra5Dataset` will use the default ERA5-HRRR dataset, found in `datasets/data_loader_hrrr_era5.py`. The other parameters in the dataset configuration file will be passed to the `params` object used to initialize the dataset and can be used to specify e.g. the file system path from which the dataset is loaded.
+Once you have implemented the custom dataset, create a configuration file in `config/dataset`. This configuration file must have one special attribute, `name`. This indicates a module in the `datasets` directory and a class to be used for the dataset. For instance, specifying `name: data_loader_hrrr_era5.HrrrEra5Dataset` will use the default ERA5-HRRR dataset, found in `datasets/data_loader_hrrr_era5.py`. The other parameters in the dataset configuration file will be passed to the `params` object used to initialize the dataset and can be used to specify e.g. the file system path from which the dataset is loaded.
 
 ## Logging
 
