@@ -18,9 +18,11 @@
 # Model name
 model_name: 'regression' # 'regression', 'diffusion', or custom model added by user
 
-# Model hyperparameters
+# Model conditions
 regression_conditions: ["state", "background", "invariant"] # list consisting of "state", "background", "invariant" (default from StormCast paper)
 diffusion_conditions: ["state", "regression", "invariant"] # list consisting of "state", "regression", "background", "invariant" (default from StormCast paper)
+
+# Model hyperparameters
 spatial_pos_embed: False # Whether or not to add an additive position embed after the first conv in the U-Net
 P_mean: -1.2 # Center of the EDM lognormal noise sampling distribution
 attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention (empty list == no self-attention)

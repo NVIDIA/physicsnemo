@@ -21,7 +21,27 @@ import torch
 
 
 class StormCastDataset(torch.utils.data.Dataset, ABC):
-    """An abstract class that defines the interface for StormCast datasets."""
+    """An abstract class that defines the interface for StormCast datasets.
+
+    All datasets must inherit from this class and implement the methods marked as @abstractmethod.
+    The other methods have default implementations and can be overridden by the dataset if needed,
+    for example to provide a normalization scheme.
+
+    In addition to the methods defined below, all datasets must also implement the following:
+    - `__init__`, which should accept a `params` argument containing the dataset parameters
+        and a `train` argument indicating whether the dataset is for training or validation
+    - `__len__`, which should return the number of samples in the dataset
+    - `__getitem__`, which should return a dictionary containing the following keys:
+        - `background`: a numpy.ndarray or torch.Tensor of shape
+            `(num_channels_background, height, width)` containing the background data
+        - `state`: a 2-tuple of numpy.ndarray or torch.Tensor of shape
+            `(num_channels_state, height, width)` with index 0 containing the input state data
+            and index 1 containing the target state data
+        The outputs of __getitem__ should be already normalized (this is not done in the training
+        loop for performance reasons).
+
+    An example implementation of a dataset is given in `data_loader_hrrr_era5.py`.
+    """
 
     @abstractmethod
     def background_channels(self) -> list[str]:
@@ -44,19 +64,27 @@ class StormCastDataset(torch.utils.data.Dataset, ABC):
     def longitude(self) -> np.ndarray:
         return np.full(self.image_shape(), np.nan)
 
-    def normalize_background(self, x: np.ndarray) -> np.ndarray:
+    def normalize_background(
+        self, x: np.ndarray | torch.Tensor
+    ) -> np.ndarray | torch.Tensor:
         """Convert background from physical units to normalized data."""
         return x
 
-    def denormalize_background(self, x: np.ndarray) -> np.ndarray:
+    def denormalize_background(
+        self, x: np.ndarray | torch.Tensor
+    ) -> np.ndarray | torch.Tensor:
         """Convert background from normalized data to physical units."""
         return x
 
-    def normalize_state(self, x: np.ndarray) -> np.ndarray:
+    def normalize_state(
+        self, x: np.ndarray | torch.Tensor
+    ) -> np.ndarray | torch.Tensor:
         """Convert state from physical units to normalized data."""
         return x
 
-    def denormalize_state(self, x: np.ndarray) -> np.ndarray:
+    def denormalize_state(
+        self, x: np.ndarray | torch.Tensor
+    ) -> np.ndarray | torch.Tensor:
         """Convert state from normalized data to physical units."""
         return x
 
