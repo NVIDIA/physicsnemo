@@ -283,7 +283,7 @@ def mse_loss_fn_area(output, target, normals, area, padded_value=-10):
     return loss
 
 
-def integral_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
+def integral_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=None):
 
     mask = abs(target - padded_value) > 1e-3
     area = torch.unsqueeze(area, -1)
@@ -302,7 +302,7 @@ def integral_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=
 
 
 def integral_loss_fn_new(
-    output, target, area, normals, padded_value=-10, vel_inlet=30.0
+    output, target, area, normals, padded_value=-10, vel_inlet=None
 ):
     drag_loss = drag_loss_fn(
         output, target, area, normals, padded_value=-10, vel_inlet=vel_inlet
@@ -313,7 +313,7 @@ def integral_loss_fn_new(
     return lift_loss + drag_loss
 
 
-def lift_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
+def lift_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=None):
 
     mask = abs(target - padded_value) > 1e-3
     area = torch.unsqueeze(area, -1)
@@ -338,7 +338,7 @@ def lift_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0
     return loss
 
 
-def drag_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
+def drag_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=None):
 
     mask = abs(target - padded_value) > 1e-3
     area = torch.unsqueeze(area, -1)
@@ -371,7 +371,6 @@ def validation_step(
     use_surface_normals=False,
     integral_scaling_factor=1.0,
     loss_fn_type="mse",
-    vel_inlet=30.0,
 ):
     running_vloss = 0.0
     with torch.no_grad():
@@ -395,6 +394,9 @@ def validation_step(
                 target_surf = sampled_batched["surface_fields"]
                 surface_normals = sampled_batched["surface_normals"]
                 surface_areas = sampled_batched["surface_areas"]
+                # Needs to be taken from dataset
+                stream_velocity = sampled_batched["global_params_values"][:, 0, :]
+
                 if loss_fn_type == "rmse":
                     loss_norm_surf = relative_loss_fn_surface(
                         prediction_surf, target_surf, surface_normals, padded_value=-10
@@ -424,7 +426,7 @@ def validation_step(
                         surface_areas,
                         surface_normals,
                         padded_value=-10,
-                        vel_inlet=vel_inlet,
+                        vel_inlet=stream_velocity,
                     )
                 ) * integral_scaling_factor
 
@@ -457,7 +459,6 @@ def train_epoch(
     device,
     integral_scaling_factor,
     loss_fn_type,
-    vel_inlet=30.0,
 ):
 
     running_loss = 0.0
@@ -487,6 +488,9 @@ def train_epoch(
                 target_surf = sampled_batched["surface_fields"]
                 surface_areas = sampled_batched["surface_areas"]
                 surface_normals = sampled_batched["surface_normals"]
+                # Needs to be taken from dataset
+                stream_velocity = sampled_batched["global_params_values"][:, 0, :]
+
                 if loss_fn_type == "rmse":
                     loss_norm_surf = relative_loss_fn_surface(
                         prediction_surf, target_surf, surface_normals, padded_value=-10
@@ -516,7 +520,7 @@ def train_epoch(
                         surface_areas,
                         surface_normals,
                         padded_value=-10,
-                        vel_inlet=vel_inlet,
+                        vel_inlet=stream_velocity,
                     )
                 ) * integral_scaling_factor
 
@@ -611,14 +615,6 @@ def main(cfg: DictConfig) -> None:
     else:
         vol_factors = None
         surf_factors = None
-
-    if cfg:
-        vel_inlet = 0.0
-        for vel_component in cfg.variables.global_parameters.inlet_velocity.reference:
-            vel_inlet += vel_component**2
-        vel_inlet = np.sqrt(vel_inlet)
-    else:
-        vel_inlet = 30.0
 
     train_dataset = create_domino_dataset(
         cfg,
@@ -762,7 +758,6 @@ def main(cfg: DictConfig) -> None:
             device=dist.device,
             integral_scaling_factor=initial_integral_factor,
             loss_fn_type=cfg.model.loss_function,
-            vel_inlet=vel_inlet,
         )
 
         model.eval()
@@ -774,7 +769,6 @@ def main(cfg: DictConfig) -> None:
             use_surface_normals=cfg.model.use_surface_normals,
             integral_scaling_factor=initial_integral_factor,
             loss_fn_type=cfg.model.loss_function,
-            vel_inlet=vel_inlet,
         )
 
         scheduler.step()
