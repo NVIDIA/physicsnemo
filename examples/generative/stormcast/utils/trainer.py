@@ -64,18 +64,19 @@ def training_loop(cfg):
     # gradient accumulation rounds per step
     num_accumulation_rounds = batch_size // (local_batch_size * dist.world_size)
 
-    use_regression_net = cfg.model.use_regression_net
-    previous_step_conditioning = cfg.model.previous_step_conditioning
-    resume_checkpoint = cfg.training.resume_checkpoint
     log_to_wandb = cfg.training.log_to_wandb
 
     loss_type = cfg.training.loss
     if loss_type == "regression":
-        train_regression_unet = True
         net_name = "regression"
     elif loss_type == "edm":
-        train_regression_unet = False
         net_name = "diffusion"
+
+    condition_list = (
+        cfg.model.regression_conditions
+        if net_name == "regression"
+        else cfg.model.diffusion_conditions
+    )
 
     # Seed and Performance settings
     np.random.seed((cfg.training.seed * dist.world_size + dist.rank) % (1 << 31))
@@ -136,7 +137,7 @@ def training_loop(cfg):
     valid_dataset_iterator = iter(valid_data_loader)
 
     # load pretrained regression net if training diffusion
-    if use_regression_net:
+    if "regression" in condition_list:
         regression_net = Module.from_checkpoint(cfg.model.regression_weights)
         if cfg.training.compile_model:
             regression_net = torch.compile(regression_net)
@@ -144,25 +145,25 @@ def training_loop(cfg):
     else:
         regression_net = None
 
-    # Construct network
-    logger0.info("Constructing network...")
-    if train_regression_unet:
-        num_condition_channels = len(background_channels) + len(state_channels)
-    else:
-        num_condition_channels = (
-            len(state_channels)
-            if not previous_step_conditioning
-            else 2 * len(state_channels)
-        )
-
     invariant_array = dataset_train.get_invariants()
     if invariant_array is not None:
-        num_condition_channels += invariant_array.shape[0]
         invariant_tensor = torch.from_numpy(invariant_array).to(device)
         invariant_tensor = invariant_tensor.unsqueeze(0)
         invariant_tensor = invariant_tensor.repeat(local_batch_size, 1, 1, 1)
     else:
         invariant_tensor = None
+
+    # Construct network
+    logger0.info("Constructing network...")
+    num_condition_channels = {
+        "state": len(state_channels),
+        "background": len(background_channels),
+        "regression": len(state_channels),
+        "invariant": 0 if invariant_tensor is None else invariant_tensor.shape[1],
+    }
+    num_condition_channels = sum(num_condition_channels[c] for c in condition_list)
+
+    logger0.info(f"model conditions {condition_list}")
 
     logger0.info(f"background_channels {background_channels}")
     logger0.info(f"state_channels {state_channels}")
@@ -239,21 +240,24 @@ def training_loop(cfg):
             batch = next(dataset_iterator)
             background = batch["background"].to(device=device, dtype=torch.float32)
             state = [s.to(device=device, dtype=torch.float32) for s in batch["state"]]
-            (condition, target, reg_out) = build_network_condition_and_target(
-                background,
-                state,
-                invariant_tensor,
-                regression_net=regression_net,
-                train_regression_unet=train_regression_unet,
-            )
 
             with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
+                (condition, target, reg_out) = build_network_condition_and_target(
+                    background,
+                    state,
+                    invariant_tensor,
+                    regression_net=regression_net,
+                    condition_list=condition_list,
+                    regression_condition_list=cfg.model.regression_conditions,
+                )
                 loss = loss_fn(
                     net=ddp,
                     images=target,
                     condition=condition,
                     augment_pipe=augment_pipe,
                 )
+
+
             if log_to_wandb:
                 channelwise_loss = loss.mean(dim=(0, 2, 3))
                 channelwise_loss_dict = {
@@ -306,52 +310,58 @@ def training_loop(cfg):
                 state = [
                     s.to(device=device, dtype=torch.float32) for s in batch["state"]
                 ]
-                (condition, target, reg_out) = build_network_condition_and_target(
-                    background,
-                    state,
-                    invariant_tensor,
-                    regression_net=regression_net,
-                    train_regression_unet=train_regression_unet,
-                )
-
-                if use_regression_net:
-                    output_images = (
-                        diffusion_model_forward(
-                            net,
-                            condition,
-                            state[1].shape,
-                            sampler_args=dict(cfg.sampler.args),
-                        )
-                        + reg_out
+                with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
+                    (condition, target, reg_out) = build_network_condition_and_target(
+                        background,
+                        state,
+                        invariant_tensor,
+                        regression_net=regression_net,
+                        condition_list=condition_list,
+                        regression_condition_list=cfg.model.regression_conditions,
                     )
-                    del reg_out
 
+                    # evaluate validation loss
+                    loss_kwargs = (
+                        {"return_model_outputs": True}
+                        if net_name == "regression"
+                        else {}
+                    )
                     valid_loss = loss_fn(
                         net=net,
                         images=target,
                         condition=condition,
                         augment_pipe=augment_pipe,
-                    )
-                elif train_regression_unet:
-                    valid_loss, output_images = loss_fn(
-                        net=net,
-                        images=target,
-                        condition=condition,
-                        augment_pipe=augment_pipe,
-                        return_model_outputs=True,
+                        **loss_kwargs,
                     )
 
-                    if log_to_wandb:
-                        channelwise_valid_loss = valid_loss.mean(dim=[0, 2, 3])
-                        channelwise_valid_loss_dict = {
-                            f"ChLoss_valid/{state_channels[i]}": channelwise_valid_loss[
-                                i
-                            ].item()
-                            for i in range(state_channels)
-                        }
-                        wandb_logs[
-                            "channelwise_valid_loss"
-                        ] = channelwise_valid_loss_dict
+                    if net_name == "diffusion":
+                        output_images = diffusion_model_forward(
+
+                            net,
+                            condition,
+                            state[1].shape,
+                            sampler_args=dict(cfg.sampler.args),
+                        )
+                        if "regression" in condition_list:
+                            output_images += reg_out
+                        del reg_out
+                    else:
+                        (
+                            valid_loss,
+                            output_images,
+                        ) = valid_loss  # in this case, loss_fn returns a tuple
+                        if log_to_wandb:
+                            channelwise_valid_loss = valid_loss.mean(dim=[0, 2, 3])
+                            channelwise_valid_loss_dict = {
+                                f"ChLoss_valid/{state_channels[i]}": channelwise_valid_loss[
+                                    i
+                                ].item()
+                                for i in range(state_channels)
+                            }
+                            wandb_logs[
+                                "channelwise_valid_loss"
+                            ] = channelwise_valid_loss_dict
+
 
                 if dist.world_size > 1:
                     torch.distributed.barrier()

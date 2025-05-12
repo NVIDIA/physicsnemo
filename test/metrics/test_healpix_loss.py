@@ -21,7 +21,7 @@ from typing import Sequence
 import numpy as np
 import pytest
 import torch
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 
 from physicsnemo.metrics.climate.healpix_loss import (
     BaseMSE,
@@ -228,9 +228,8 @@ def test_WeightedMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
 
 
 @pytest.fixture
-def data_dir():
-    path = "/data/nfs/modulus-data/datasets/healpix/"
-    return path
+def data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/healpix/")
 
 
 @pytest.fixture
@@ -239,7 +238,6 @@ def dataset_name():
     return name
 
 
-@nfsdata_or_fail
 @import_or_fail("xarray")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_OceanMSE(
@@ -319,7 +317,6 @@ def test_OceanMSE(
     )
 
 
-@nfsdata_or_fail
 @import_or_fail("xarray")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_WeightedOceanMSE(

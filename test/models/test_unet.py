@@ -18,15 +18,17 @@ import random
 
 import pytest
 import torch
-
-from physicsnemo.models.unet import UNet
+from pytest_utils import import_or_fail
 
 from . import common
 
 
+@import_or_fail(["transformer_engine"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_unet_forward(device):
+def test_unet_forward(device, pytestconfig):
     """Test unet forward pass"""
+    from physicsnemo.models.unet import UNet
+
     torch.manual_seed(0)
     # Construct unet3d model
     model = UNet(
@@ -42,9 +44,12 @@ def test_unet_forward(device):
     assert common.validate_forward_accuracy(model, (invar,))
 
 
+@import_or_fail(["transformer_engine"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_unet_constructor(device):
+def test_unet_constructor(device, pytestconfig):
     """Test unet constructor options"""
+    from physicsnemo.models.unet import UNet
+
     # Define dictionary of constructor args
     for depth in [2, 3]:
         if depth == 2:

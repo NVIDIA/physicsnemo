@@ -23,7 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ERA5 download example updated to use current file format convention and
   restricts global statistics computation to the training set
 - Support for training custom StormCast models and various other improvements for StormCast
+- Updated CorrDiff training code to support multiple patch iterations to amortize
+  regression cost and usage of `torch.compile`
+- Refactored `physicsnemo/models/diffusion/layers.py` to optimize data type
+  casting workflow, avoiding unnecessary casting under autocast mode
+- Refactored Conv2d to enable fusion of conv2d with bias addition
+- Refactored GroupNorm, UNetBlock, SongUNet, SongUNetPosEmbd to support usage of
+  Apex GroupNorm, fusion of activation with GroupNorm, and AMP workflow.
+- Updated SongUNetPosEmbd to avoid unnecessary HtoD Memcpy of `pos_embd`
+- Updated `from_checkpoint` to accommodate conversion between Apex optimized ckp
+  and non-optimized ckp
+- Refactored CorrDiff NVTX annotation workflow to be configurable
+- Refactored `ResidualLoss` to support patch-accumlating training for
+  amortizing regression costs
 - Explicit handling of Warp device for ball query and sdf
+
 
 ### Deprecated
 

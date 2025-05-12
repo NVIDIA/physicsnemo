@@ -19,7 +19,7 @@ import math
 import random
 import warnings
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 from einops import rearrange
@@ -112,7 +112,9 @@ class BasePatching2D(ABC):
         """
         raise NotImplementedError("'fuse' method must be implemented in subclasses.")
 
-    def global_index(self, batch_size: int) -> Tensor:
+    def global_index(
+        self, batch_size: int, device: Union[torch.device, str] = "cpu"
+    ) -> Tensor:
         """
         Returns a tensor containing the global indices for each patch.
 
@@ -125,6 +127,8 @@ class BasePatching2D(ABC):
         ----------
         batch_size : int
             The size of the batch of images to patch.
+        device : Union[torch.device, str]
+            Proper device to initialize global_index on. Default to `cpu`
 
         Returns
         -------
@@ -134,12 +138,12 @@ class BasePatching2D(ABC):
             y-coordinate (height), and `global_index[:, 1, :, :]` contains the
             x-coordinate (width).
         """
-        Ny = torch.arange(self.img_shape[0]).int()
-        Nx = torch.arange(self.img_shape[1]).int()
+        Ny = torch.arange(self.img_shape[0], device=device).int()
+        Nx = torch.arange(self.img_shape[1], device=device).int()
         grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0)[
             None,
         ].expand(batch_size, -1, -1, -1)
-        global_index = self.apply(grid)
+        global_index = self.apply(grid).long()
         return global_index
 
 
@@ -215,7 +219,7 @@ class RandomPatching2D(BasePatching2D):
         """
         return self._patch_num
 
-    def set_patch_sum(self, value: int) -> None:
+    def set_patch_num(self, value: int) -> None:
         """
         Set the number of patches to extract and reset patch indices.
         This is the only way to modify the patch_num value.
@@ -289,10 +293,16 @@ class RandomPatching2D(BasePatching2D):
             self.patch_shape[1],
             device=input.device,
         )
+        out = out.to(
+            memory_format=torch.channels_last
+            if input.is_contiguous(memory_format=torch.channels_last)
+            else torch.contiguous_format
+        )
         if additional_input is not None:
             add_input_interp = torch.nn.functional.interpolate(
                 input=additional_input, size=self.patch_shape, mode="bilinear"
             )
+
         for i, (py, px) in enumerate(self.patch_indices):
             if additional_input is not None:
                 out[B * i : B * (i + 1),] = torch.cat(

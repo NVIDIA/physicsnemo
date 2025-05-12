@@ -505,7 +505,7 @@ The generated samples are saved in a NetCDF file with three main components:
 <img src="../../../docs/img/corrdiff_training_loss.png"/>
 </p>
 
-1. **Which hyperparameters are most important?**  
+6. **Which hyperparameters are most important?**  
    One of the most crucial hyperparameters is the patch size for a patch-based
    diffusion model (`patch_shape_x` and `patch_shape_y` in the configuration file). A larger
    patch size increases computational cost and GPU memory requirements, while a
@@ -527,6 +527,36 @@ The generated samples are saved in a NetCDF file with three main components:
    - Batch size per GPU (`training.hp.batch_size_per_gpu`): Number of samples
      processed in parallel on each GPU. It needs to be reduced if you encounter
      an out-of-memory error.
+
+7. **How do I set up validation during training?**  
+   CorrDiff supports validation during training through its configuration system. The validation approach is based on a separate validation configuration that inherits from and selectively overrides the training dataset settings.
+
+   **Configuration Example**:
+   ```yaml
+   # Training dataset configuration
+   dataset:
+     data_path: </path/to/training/data>
+     stats_path: </path/to/statistics.json>
+     output_variables: ["temperature", "humidity", "wind_speed"]
+     # Other dataset parameters...
+   
+   # Validation dataset configuration (optional)
+   validation:
+     data_path: </path/to/validation/data>  # Override training data path 
+     # All other parameters not specified here are inherited from the dataset section
+   ```
+
+   You only need to specify the parameters you want to override in the `validation` section. All other parameters will be inherited from the main `dataset` configuration. Common overrides include:
+   - Different data path for a separate validation set
+   - Smaller subset of variables to validate on
+   - Different time periods or spatial regions
+
+   **Implementation Note**: When a `validation` section is present in the
+   configuration, the training script automatically sets up a validation
+   dataset and periodically evaluates model performance against it. The
+   validation loss is logged by our built-in loggers and to Weights & Biases (if enabled).
+
+   **Early Stopping**: CorrDiff does not currently include built-in configurable early stopping. However, the training script saves multiple checkpoints throughout training and logs the associated validation losses. You can analyze these metrics after training to identify the optimal checkpoint with the lowest validation loss, effectively implementing a form of post-training early stopping.
 
 
 ## References
