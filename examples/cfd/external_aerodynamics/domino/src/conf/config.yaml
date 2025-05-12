@@ -15,9 +15,9 @@
 # limitations under the License.
 
 project: # Project name
-  name: AWS_Dataset_Global_Params
+  name: AWS_Dataset_1
   
-exp_tag: 10 # Experiment tag
+exp_tag: 1 # Experiment tag
 # Main output directory.
 project_dir: outputs/${project.name}/
 output: outputs/${project.name}/${exp_tag}
@@ -32,15 +32,15 @@ resume_dir: ${output}/models
 
 data_processor: # Data processor configurable parameters
   kind: drivaer_aws # must be either drivesim or drivaer_aws
-  output_dir: /lustre/snidhan/physicsnemo-work/data/aws_data_sample/
-  input_dir: /lustre/snidhan/physicsnemo-work/data/drivaer_aws_sample/
+  output_dir: /lustre/rranade/modulus_dev/data/aws_data_all/
+  input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
   cached_dir: /lustre/cached/drivaer_aws/drivaer_data_full/
   use_cache: false
-  num_processors: 4
+  num_processors: 12
 
 data: # Input directory for training and validation data
-  input_dir: /lustre/snidhan/physicsnemo-work/data/aws_data_sample/
-  input_dir_val: /lustre/snidhan/physicsnemo-work/data/aws_data_sample_val/
+  input_dir: /lustre/rranade/modulus_dev/data/aws_data_all/
+  input_dir_val: /lustre/rranade/modulus_dev/data/aws_data_all_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25 , -0.32]
     max: [8.5 , 2.25  , 3.00]
@@ -67,6 +67,7 @@ variables:
     air_density: 
       type: scalar
       reference: 1.226
+      
 model:
   model_type: combined # train which model? surface, volume, combined
   loss_function: 
@@ -131,7 +132,7 @@ train: # Training configurable parameters
   sampler:
     shuffle: true
     drop_last: false
-  checkpoint_dir: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/10/models/
+  checkpoint_dir: /lustre/rranade/physicsnemo_dev/physicsnemo_forked/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/3/models/
   
 val: # Validation configurable parameters
   dataloader:
@@ -142,9 +143,9 @@ val: # Validation configurable parameters
     drop_last: false
 
 eval: # Testing configurable parameters
-  test_path: /lustre/snidhan/physicsnemo-work/data/drivaer_aws_sample/
-  save_path: /lustre/snidhan/physicsnemo-work/domino-global-param/mesh_predictions_surf_final_pc1/
-  checkpoint_name: DoMINO.0.10.pt
-  scaling_param_path: /lustre/snidhan/physicsnemo-work/physicsnemo/examples/cfd/external_aerodynamics/domino/src/outputs/AWS_Dataset_Global_Params/
+  test_path: /lustre/rranade/benchmarking/drivaer_aws_surface_test_new/
+  save_path: /lustre/rranade/domino/mesh_predictions_surf_final_pc1/
+  checkpoint_name: DoMINO.0.50.pt
+  scaling_param_path: /lustre/rranade/modulus_dev/modulus_forked/modulus/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset_1/
   refine_stl: False # Automatically refine STL during inference
   stencil_size: 1 # Stencil size for evaluating surface and volume model

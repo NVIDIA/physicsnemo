@@ -16,14 +16,14 @@
 
 """
 This code provides the datapipe for reading the processed npy files,
-generating multi-res grids, calculating signed distance fields, 
-positional encodings, sampling random points in the volume and on surface, 
+generating multi-res grids, calculating signed distance fields,
+positional encodings, sampling random points in the volume and on surface,
 normalizing fields and returning the output tensors as a dictionary.
 
-This datapipe also non-dimensionalizes the fields, so the order in which the variables should 
-be fixed: velocity, pressure, turbulent viscosity for volume variables and 
-pressure, wall-shear-stress for surface variables. The different parameters such as 
-variable names, domain resolution, sampling size etc. are configurable in config.yaml. 
+This datapipe also non-dimensionalizes the fields, so the order in which the variables should
+be fixed: velocity, pressure, turbulent viscosity for volume variables and
+pressure, wall-shear-stress for surface variables. The different parameters such as
+variable names, domain resolution, sampling size etc. are configurable in config.yaml.
 """
 
 import os
@@ -496,12 +496,14 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_combined(self, data_dict):
-        
+
         with self.device_context:
             global_params_values = data_dict["global_params_values"].astype(
                 self.array_provider.float32
             )
-            global_params_reference = data_dict["global_params_reference"].astype(self.array_provider.float32)
+            global_params_reference = data_dict["global_params_reference"].astype(
+                self.array_provider.float32
+            )
 
         # Pull these pieces out of the data_dict for manipulation
         stl_vertices = data_dict["stl_coordinates"]
@@ -570,8 +572,12 @@ class DoMINODataPipe(Dataset):
             "surf_grid": surf_grid,
             "sdf_surf_grid": sdf_surf_grid,
             "surface_min_max": surf_grid_max_min,
-            "global_params_values": xp.expand_dims(xp.array(global_params_values, dtype=xp.float32), -1),
-            "global_params_reference": xp.expand_dims(xp.array(global_params_reference, dtype=xp.float32), -1),
+            "global_params_values": xp.expand_dims(
+                xp.array(global_params_values, dtype=xp.float32), -1
+            ),
+            "global_params_reference": xp.expand_dims(
+                xp.array(global_params_reference, dtype=xp.float32), -1
+            ),
             "geometry_coordinates": geom_centers,
         }
 
@@ -1082,7 +1088,7 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 for j in range(len(fm_dict)):
                     print(f"Min max scaling on iteration {j}")
                     d_dict = fm_dict[j]
-                    vol_fields = d_dict["volume_fields"]
+                    vol_fields = d_dict["volume_fields"].cpu().numpy()
 
                     if vol_fields is not None:
                         vol_mean = np.mean(vol_fields, 0)
@@ -1186,7 +1192,7 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 for j in range(len(fm_dict)):
                     print(f"Min max scaling on iteration {j}")
                     d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"]
+                    surf_fields = d_dict["surface_fields"].cpu().numpy()
 
                     if surf_fields is not None:
                         surf_mean = np.mean(surf_fields, 0)
@@ -1427,4 +1433,4 @@ if __name__ == "__main__":
         phase="train",
         sampling=False,
         sample_in_bbox=False,
-        )
+    )
