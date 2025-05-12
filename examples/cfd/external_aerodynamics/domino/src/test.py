@@ -629,7 +629,6 @@ def main(cfg: DictConfig):
                 use_sign_winding_number=True,
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
-            sdf_node_closest_point = sdf_node_closest_point
 
             if cfg.model.positional_encoding:
                 pos_volume_closest = calculate_normal_positional_encoding(
