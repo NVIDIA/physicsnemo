@@ -122,7 +122,6 @@ class OpenFoamDataset(Dataset):
         for vel_component in self.global_params_reference["inlet_velocity"]:
             self.stream_velocity += vel_component**2
         self.stream_velocity = np.sqrt(self.stream_velocity)
-
         self.air_density = self.global_params_reference["air_density"]
         self.device = device
         self.model_type = model_type

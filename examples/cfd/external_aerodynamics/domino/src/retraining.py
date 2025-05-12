@@ -284,7 +284,7 @@ def mse_loss_fn_area(output, target, normals, area, padded_value=-10):
 
 
 def integral_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
-    
+
     mask = abs(target - padded_value) > 1e-3
     area = torch.unsqueeze(area, -1)
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -301,14 +301,20 @@ def integral_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=
     return loss
 
 
-def integral_loss_fn_new(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
-    drag_loss = drag_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=vel_inlet)
-    lift_loss = lift_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=vel_inlet)
+def integral_loss_fn_new(
+    output, target, area, normals, padded_value=-10, vel_inlet=30.0
+):
+    drag_loss = drag_loss_fn(
+        output, target, area, normals, padded_value=-10, vel_inlet=vel_inlet
+    )
+    lift_loss = lift_loss_fn(
+        output, target, area, normals, padded_value=-10, vel_inlet=vel_inlet
+    )
     return lift_loss + drag_loss
 
 
 def lift_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
-    
+
     mask = abs(target - padded_value) > 1e-3
     area = torch.unsqueeze(area, -1)
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -333,7 +339,7 @@ def lift_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0
 
 
 def drag_loss_fn(output, target, area, normals, padded_value=-10, vel_inlet=30.0):
-    
+
     mask = abs(target - padded_value) > 1e-3
     area = torch.unsqueeze(area, -1)
     output_true = target * mask * area * (vel_inlet) ** 2.0
@@ -607,7 +613,10 @@ def main(cfg: DictConfig) -> None:
         surf_factors = None
 
     if cfg:
-        vel_inlet = cfg.variables.global_parameters.inlet_velocity.reference[0]
+        vel_inlet = 0.0
+        for vel_component in cfg.variables.global_parameters.inlet_velocity.reference:
+            vel_inlet += vel_component**2
+        vel_inlet = np.sqrt(vel_inlet)
     else:
         vel_inlet = 30.0
 
