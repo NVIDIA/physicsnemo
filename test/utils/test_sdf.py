@@ -78,7 +78,7 @@ def test_sdf(pytestconfig):
         np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
         np.array([1, 1, 1, 0.1, 0.1, 0.1], dtype=np.float64),
     )
-    np.testing.assert_allclose(sdf_tet.numpy(), [1.15470052, -0.1], atol=1e-7)
+    np.testing.assert_allclose(sdf_tet, [1.15470052, -0.1], atol=1e-7)
 
     sdf_tet, sdf_hit_point, sdf_hit_point_id = signed_distance_field(
         tet,
@@ -88,8 +88,8 @@ def test_sdf(pytestconfig):
         include_hit_points_id=True,
     )
     np.testing.assert_allclose(
-        sdf_hit_point.numpy(),
+        sdf_hit_point,
         [[0.33333322, 0.33333334, 0.3333334], [0.12000002, 0.11, 0.0]],
         atol=1e-7,
     )
-    np.testing.assert_allclose(sdf_hit_point_id.numpy(), [3, 0], atol=1e-7)
+    np.testing.assert_allclose(sdf_hit_point_id, [3, 0], atol=1e-7)
