@@ -13,16 +13,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-name: patched_diffusion
-# Model type.
-hr_mean_conditioning: True
-# Recommended to use high-res conditioning for diffusion.
-
-# Standard model parameters.
-model_args:
-  gridtype: "learnable"
-  # Type of positional grid to use: 'sinusoidal', 'learnable', 'linear'.
-  # Controls how positional information is encoded.
-  N_grid_channels: 100
-  # Number of channels for positional grid embeddings

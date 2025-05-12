@@ -21,6 +21,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
 import wandb
 from hydra.core.hydra_config import HydraConfig
+from contextlib import nullcontext
 
 from physicsnemo import Module
 from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
@@ -47,6 +48,14 @@ from helpers.train_helpers import (
     handle_and_clip_gradients,
     is_time_for_periodic_task,
 )
+import nvtx
+
+
+torch._dynamo.reset()
+# Increase the cache size limit
+torch._dynamo.config.cache_size_limit = 264  # Set to a higher value
+torch._dynamo.config.verbose = True  # Enable verbose logging
+torch._dynamo.config.suppress_errors = False  # Forces the error to show all details
 
 
 def checkpoint_list(path, suffix=".mdlus"):
@@ -64,6 +73,31 @@ def checkpoint_list(path, suffix=".mdlus"):
     # Sort by index and return filenames
     checkpoints.sort(key=lambda x: x[0])
     return [file for _, file in checkpoints]
+
+
+# Define safe CUDA profiler tools that fallback to no-ops when CUDA is not available
+def cuda_profiler():
+    if torch.cuda.is_available():
+        return torch.cuda.profiler.profile()
+    else:
+        return nullcontext()
+
+
+def cuda_profiler_start():
+    if torch.cuda.is_available():
+        torch.cuda.profiler.start()
+
+
+def cuda_profiler_stop():
+    if torch.cuda.is_available():
+        torch.cuda.profiler.stop()
+
+
+def profiler_emit_nvtx():
+    if torch.cuda.is_available():
+        return torch.autograd.profiler.emit_nvtx()
+    else:
+        return nullcontext()
 
 
 # Train the CorrDiff model using the configurations in "conf/config_training.yaml"
@@ -98,10 +132,10 @@ def main(cfg: DictConfig) -> None:
     logger0.info(f"Using dataset: {cfg.dataset.type}")
 
     if hasattr(cfg, "validation"):
-        train_test_split = True
+        validation = True
         validation_dataset_cfg = OmegaConf.to_container(cfg.validation)
     else:
-        train_test_split = False
+        validation = False
         validation_dataset_cfg = None
     fp_optimizations = cfg.training.perf.fp_optimizations
     songunet_checkpoint_level = cfg.training.perf.songunet_checkpoint_level
@@ -138,7 +172,7 @@ def main(cfg: DictConfig) -> None:
         batch_size=cfg.training.hp.batch_size_per_gpu,
         seed=0,
         validation_dataset_cfg=validation_dataset_cfg,
-        train_test_split=train_test_split,
+        validation=validation,
     )
 
     # Parse image configuration & update model args
@@ -153,7 +187,6 @@ def main(cfg: DictConfig) -> None:
         prob_channels = dataset.get_prob_channel_index()
     else:
         prob_channels = None
-
     # Parse the patch shape
     if (
         cfg.model.name == "patched_diffusion"
@@ -192,6 +225,26 @@ def main(cfg: DictConfig) -> None:
         model_args["prob_channels"] = prob_channels
     if hasattr(cfg.model, "model_args"):  # override defaults from config file
         model_args.update(OmegaConf.to_container(cfg.model.model_args))
+
+    use_torch_compile = False
+    use_apex_gn = False
+    profile_mode = False
+
+    if hasattr(cfg.training.perf, "torch_compile"):
+        use_torch_compile = cfg.training.perf.torch_compile
+    if hasattr(cfg.training.perf, "use_apex_gn"):
+        use_apex_gn = cfg.training.perf.use_apex_gn
+    if hasattr(cfg.training.perf, "profile_mode"):
+        profile_mode = cfg.training.perf.profile_mode
+
+    model_args.update(
+        {
+            "use_apex_gn": use_apex_gn,
+            "profile_mode": profile_mode,
+            "amp_mode": enable_amp,
+        }
+    )
+
     if cfg.model.name == "regression":
         model = UNet(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
@@ -225,6 +278,8 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"Invalid model: {cfg.model.name}")
 
     model.train().requires_grad_(True).to(dist.device)
+    if use_apex_gn:
+        model.to(memory_format=torch.channels_last)
 
     # Check if regression model is used with patching
     if (
@@ -242,7 +297,9 @@ def main(cfg: DictConfig) -> None:
             device_ids=[dist.local_rank],
             broadcast_buffers=True,
             output_device=dist.device,
-            find_unused_parameters=dist.find_unused_parameters,
+            find_unused_parameters=True,  # dist.find_unused_parameters,
+            bucket_cap_mb=35,
+            gradient_as_bucket_view=True,
         )
     if cfg.wandb.watch_model and dist.rank == 0:
         wandb.watch(model)
@@ -259,9 +316,77 @@ def main(cfg: DictConfig) -> None:
             raise FileNotFoundError(
                 f"Expected this regression checkpoint but not found: {regression_checkpoint_path}"
             )
-        regression_net = Module.from_checkpoint(regression_checkpoint_path)
+        reg_model_args = {
+            "use_apex_gn": use_apex_gn,
+            "profile_mode": profile_mode,
+            "amp_mode": enable_amp,
+        }
+        regression_net = Module.from_checkpoint(
+            regression_checkpoint_path, reg_model_args
+        )
         regression_net.eval().requires_grad_(False).to(dist.device)
+        if use_apex_gn:
+            regression_net.to(memory_format=torch.channels_last)
         logger0.success("Loaded the pre-trained regression model")
+
+    if use_torch_compile:
+        if model:
+            model = torch.compile(model)
+        if regression_net:
+            regression_net = torch.compile(regression_net)
+
+    # Compute the number of required gradient accumulation rounds
+    # It is automatically used if batch_size_per_gpu * dist.world_size < total_batch_size
+    batch_gpu_total, num_accumulation_rounds = compute_num_accumulation_rounds(
+        cfg.training.hp.total_batch_size,
+        cfg.training.hp.batch_size_per_gpu,
+        dist.world_size,
+    )
+    batch_size_per_gpu = cfg.training.hp.batch_size_per_gpu
+    logger0.info(f"Using {num_accumulation_rounds} gradient accumulation rounds")
+
+    patch_num = getattr(cfg.training.hp, "patch_num", 1)
+    max_patch_per_gpu = getattr(cfg.training.hp, "max_patch_per_gpu", 1)
+
+    # calculate patch per iter
+    if hasattr(cfg.training.hp, "max_patch_per_gpu") and max_patch_per_gpu > 1:
+        max_patch_num_per_iter = min(
+            patch_num, (max_patch_per_gpu // batch_size_per_gpu)
+        )  # Ensure at least 1 patch per iter
+        patch_iterations = (
+            patch_num + max_patch_num_per_iter - 1
+        ) // max_patch_num_per_iter
+        patch_nums_iter = [
+            min(max_patch_num_per_iter, patch_num - i * max_patch_num_per_iter)
+            for i in range(patch_iterations)
+        ]
+        print(
+            f"max_patch_num_per_iter is {max_patch_num_per_iter}, patch_iterations is {patch_iterations}, patch_nums_iter is {patch_nums_iter}"
+        )
+    else:
+        patch_nums_iter = [patch_num]
+
+    # Set patch gradient accumulation only for patched diffusion models
+    if cfg.model.name in {
+        "patched_diffusion",
+        "lt_aware_patched_diffusion",
+    }:
+        if len(patch_nums_iter) > 1:
+            if not patching:
+                logger0.info(
+                    "Patching is not enabled: patch gradient accumulation automatically disabled."
+                )
+                use_patch_grad_acc = False
+            else:
+                use_patch_grad_acc = True
+        else:
+            use_patch_grad_acc = False
+    # Automatically disable patch gradient accumulation for non-patched models
+    else:
+        logger0.info(
+            "Training a non-patched model: patch gradient accumulation automatically disabled."
+        )
+        use_patch_grad_acc = None
 
     # Instantiate the loss function
     if cfg.model.name in (
@@ -280,21 +405,15 @@ def main(cfg: DictConfig) -> None:
 
     # Instantiate the optimizer
     optimizer = torch.optim.Adam(
-        params=model.parameters(), lr=cfg.training.hp.lr, betas=[0.9, 0.999], eps=1e-8
+        params=model.parameters(),
+        lr=cfg.training.hp.lr,
+        betas=[0.9, 0.999],
+        eps=1e-8,
+        fused=True,
     )
 
     # Record the current time to measure the duration of subsequent operations.
     start_time = time.time()
-
-    # Compute the number of required gradient accumulation rounds
-    # It is automatically used if batch_size_per_gpu * dist.world_size < total_batch_size
-    batch_gpu_total, num_accumulation_rounds = compute_num_accumulation_rounds(
-        cfg.training.hp.total_batch_size,
-        cfg.training.hp.batch_size_per_gpu,
-        dist.world_size,
-    )
-    batch_size_per_gpu = cfg.training.hp.batch_size_per_gpu
-    logger0.info(f"Using {num_accumulation_rounds} gradient accumulation rounds")
 
     ## Resume training from previous checkpoints if exists
     if dist.world_size > 1:
@@ -319,207 +438,319 @@ def main(cfg: DictConfig) -> None:
     # init variables to monitor running mean of average loss since last periodic
     average_loss_running_mean = 0
     n_average_loss_running_mean = 1
+    start_nimg = cur_nimg
+    input_dtype = torch.float32
+    if enable_amp:
+        input_dtype = torch.float32
+    elif fp16:
+        input_dtype = torch.float16
 
-    while not done:
-        tick_start_nimg = cur_nimg
-        tick_start_time = time.time()
-        # Compute & accumulate gradients
-        optimizer.zero_grad(set_to_none=True)
-        loss_accum = 0
-        for _ in range(num_accumulation_rounds):
-            img_clean, img_lr, *lead_time_label = next(dataset_iterator)
-            img_clean = img_clean.to(dist.device).to(torch.float32).contiguous()
-            img_lr = img_lr.to(dist.device).to(torch.float32).contiguous()
-            loss_fn_kwargs = {
-                "net": model,
-                "img_clean": img_clean,
-                "img_lr": img_lr,
-                "augment_pipe": None,
-            }
-            # Sample new random patches for this iteration and add patching to
-            # loss arguments
-            if patching is not None:
-                patching.reset_patch_indices()
-                loss_fn_kwargs.update({"patching": patching})
-            if lead_time_label:
-                lead_time_label = lead_time_label[0].to(dist.device).contiguous()
-                loss_fn_kwargs.update({"lead_time_label": lead_time_label})
-            else:
-                lead_time_label = None
-            with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
-                loss = loss_fn(**loss_fn_kwargs)
-            loss = loss.sum() / batch_size_per_gpu
-            loss_accum += loss / num_accumulation_rounds
-            loss.backward()
+    # enable profiler:
+    with cuda_profiler():
+        with profiler_emit_nvtx():
 
-        loss_sum = torch.tensor([loss_accum], device=dist.device)
-        if dist.world_size > 1:
-            torch.distributed.barrier()
-            torch.distributed.all_reduce(loss_sum, op=torch.distributed.ReduceOp.SUM)
-        average_loss = (loss_sum / dist.world_size).cpu().item()
+            while not done:
+                tick_start_nimg = cur_nimg
+                tick_start_time = time.time()
 
-        # update running mean of average loss since last periodic task
-        average_loss_running_mean += (
-            average_loss - average_loss_running_mean
-        ) / n_average_loss_running_mean
-        n_average_loss_running_mean += 1
+                if cur_nimg - start_nimg == 24 * cfg.training.hp.total_batch_size:
+                    logger0.info(f"Starting Profiler at {cur_nimg}")
+                    cuda_profiler_start()
 
-        if dist.rank == 0:
-            writer.add_scalar("training_loss", average_loss, cur_nimg)
-            writer.add_scalar(
-                "training_loss_running_mean", average_loss_running_mean, cur_nimg
-            )
-            wandb.log(
-                {
-                    "training_loss": average_loss,
-                    "training_loss_running_mean": average_loss_running_mean,
-                }
-            )
+                if cur_nimg - start_nimg == 25 * cfg.training.hp.total_batch_size:
+                    logger0.info(f"Stopping Profiler at {cur_nimg}")
+                    cuda_profiler_stop()
 
-        ptt = is_time_for_periodic_task(
-            cur_nimg,
-            cfg.training.io.print_progress_freq,
-            done,
-            cfg.training.hp.total_batch_size,
-            dist.rank,
-            rank_0_only=True,
-        )
-        if ptt:
-            # reset running mean of average loss
-            average_loss_running_mean = 0
-            n_average_loss_running_mean = 1
-
-        # Update weights.
-        lr_rampup = cfg.training.hp.lr_rampup  # ramp up the learning rate
-        for g in optimizer.param_groups:
-            if lr_rampup > 0:
-                g["lr"] = cfg.training.hp.lr * min(cur_nimg / lr_rampup, 1)
-            if cur_nimg >= lr_rampup:
-                g["lr"] *= cfg.training.hp.lr_decay ** ((cur_nimg - lr_rampup) // 5e6)
-            current_lr = g["lr"]
-            if dist.rank == 0:
-                writer.add_scalar("learning_rate", current_lr, cur_nimg)
-        handle_and_clip_gradients(
-            model, grad_clip_threshold=cfg.training.hp.grad_clip_threshold
-        )
-        optimizer.step()
-
-        cur_nimg += cfg.training.hp.total_batch_size
-        done = cur_nimg >= cfg.training.hp.training_duration
-
-        # Validation
-        if validation_dataset_iterator is not None:
-            valid_loss_accum = 0
-            if is_time_for_periodic_task(
-                cur_nimg,
-                cfg.training.io.validation_freq,
-                done,
-                cfg.training.hp.total_batch_size,
-                dist.rank,
-            ):
-                with torch.no_grad():
-                    for _ in range(cfg.training.io.validation_steps):
-                        img_clean_valid, img_lr_valid, *lead_time_label_valid = next(
-                            validation_dataset_iterator
-                        )
-
-                        img_clean_valid = (
-                            img_clean_valid.to(dist.device)
-                            .to(torch.float32)
-                            .contiguous()
-                        )
-                        img_lr_valid = (
-                            img_lr_valid.to(dist.device).to(torch.float32).contiguous()
-                        )
-                        loss_valid_kwargs = {
-                            "net": model,
-                            "img_clean": img_clean_valid,
-                            "img_lr": img_lr_valid,
-                            "augment_pipe": None,
-                        }
-                        if lead_time_label_valid:
-                            lead_time_label_valid = (
-                                lead_time_label_valid[0].to(dist.device).contiguous()
-                            )
-                            loss_valid_kwargs.update(
-                                {"lead_time_label": lead_time_label_valid}
-                            )
-                        loss_valid = loss_fn(**loss_valid_kwargs)
-                        loss_valid = (
-                            (loss_valid.sum() / batch_size_per_gpu).cpu().item()
-                        )
-                        valid_loss_accum += (
-                            loss_valid / cfg.training.io.validation_steps
-                        )
-                    valid_loss_sum = torch.tensor(
-                        [valid_loss_accum], device=dist.device
-                    )
-                    if dist.world_size > 1:
-                        torch.distributed.barrier()
-                        torch.distributed.all_reduce(
-                            valid_loss_sum, op=torch.distributed.ReduceOp.SUM
-                        )
-                    average_valid_loss = valid_loss_sum / dist.world_size
-                    if dist.rank == 0:
-                        writer.add_scalar(
-                            "validation_loss", average_valid_loss, cur_nimg
-                        )
-                        wandb.log(
-                            {
-                                "validation_loss": average_valid_loss,
+                with nvtx.annotate("Training iteration", color="green"):
+                    # Compute & accumulate gradients
+                    optimizer.zero_grad(set_to_none=True)
+                    loss_accum = 0
+                    for n_i in range(num_accumulation_rounds):
+                        with nvtx.annotate(
+                            f"accumulation round {n_i}", color="Magenta"
+                        ):
+                            with nvtx.annotate("loading data", color="green"):
+                                img_clean, img_lr, *lead_time_label = next(
+                                    dataset_iterator
+                                )
+                                if use_apex_gn:
+                                    img_clean = img_clean.to(
+                                        dist.device,
+                                        dtype=input_dtype,
+                                        non_blocking=True,
+                                    ).to(memory_format=torch.channels_last)
+                                    img_lr = img_lr.to(
+                                        dist.device,
+                                        dtype=input_dtype,
+                                        non_blocking=True,
+                                    ).to(memory_format=torch.channels_last)
+                                else:
+                                    img_clean = (
+                                        img_clean.to(dist.device)
+                                        .to(input_dtype)
+                                        .contiguous()
+                                    )
+                                    img_lr = (
+                                        img_lr.to(dist.device)
+                                        .to(input_dtype)
+                                        .contiguous()
+                                    )
+                            loss_fn_kwargs = {
+                                "net": model,
+                                "img_clean": img_clean,
+                                "img_lr": img_lr,
+                                "augment_pipe": None,
                             }
+                            if use_patch_grad_acc is not None:
+                                loss_fn_kwargs[
+                                    "use_patch_grad_acc"
+                                ] = use_patch_grad_acc
+
+                            if lead_time_label:
+                                lead_time_label = (
+                                    lead_time_label[0].to(dist.device).contiguous()
+                                )
+                                loss_fn_kwargs.update(
+                                    {"lead_time_label": lead_time_label}
+                                )
+                            else:
+                                lead_time_label = None
+                            if use_patch_grad_acc:
+                                loss_fn.y_mean = None
+
+                            for patch_num_per_iter in patch_nums_iter:
+                                if patching is not None:
+                                    patching.set_patch_num(patch_num_per_iter)
+                                    loss_fn_kwargs.update({"patching": patching})
+                                with nvtx.annotate(f"loss forward", color="green"):
+                                    with torch.autocast(
+                                        "cuda", dtype=amp_dtype, enabled=enable_amp
+                                    ):
+                                        loss = loss_fn(**loss_fn_kwargs)
+
+                                loss = loss.sum() / batch_size_per_gpu
+                                loss_accum += loss / num_accumulation_rounds
+                                with nvtx.annotate(f"loss backward", color="yellow"):
+                                    loss.backward()
+
+                    with nvtx.annotate(f"loss aggregate", color="green"):
+                        loss_sum = torch.tensor([loss_accum], device=dist.device)
+                        if dist.world_size > 1:
+                            torch.distributed.barrier()
+                            torch.distributed.all_reduce(
+                                loss_sum, op=torch.distributed.ReduceOp.SUM
+                            )
+                        average_loss = (loss_sum / dist.world_size).cpu().item()
+
+                    # update running mean of average loss since last periodic task
+                    average_loss_running_mean += (
+                        average_loss - average_loss_running_mean
+                    ) / n_average_loss_running_mean
+                    n_average_loss_running_mean += 1
+
+                    if dist.rank == 0:
+                        writer.add_scalar("training_loss", average_loss, cur_nimg)
+                        writer.add_scalar(
+                            "training_loss_running_mean",
+                            average_loss_running_mean,
+                            cur_nimg,
                         )
 
-        if is_time_for_periodic_task(
-            cur_nimg,
-            cfg.training.io.print_progress_freq,
-            done,
-            cfg.training.hp.total_batch_size,
-            dist.rank,
-            rank_0_only=True,
-        ):
-            # Print stats if we crossed the printing threshold with this batch
-            tick_end_time = time.time()
-            fields = []
-            fields += [f"samples {cur_nimg:<9.1f}"]
-            fields += [f"training_loss {average_loss:<7.2f}"]
-            fields += [f"training_loss_running_mean {average_loss_running_mean:<7.2f}"]
-            fields += [f"learning_rate {current_lr:<7.8f}"]
-            fields += [f"total_sec {(tick_end_time - start_time):<7.1f}"]
-            fields += [f"sec_per_tick {(tick_end_time - tick_start_time):<7.1f}"]
-            fields += [
-                f"sec_per_sample {((tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg)):<7.2f}"
-            ]
-            fields += [
-                f"cpu_mem_gb {(psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"
-            ]
-            fields += [
-                f"peak_gpu_mem_gb {(torch.cuda.max_memory_allocated(dist.device) / 2**30):<6.2f}"
-            ]
-            fields += [
-                f"peak_gpu_mem_reserved_gb {(torch.cuda.max_memory_reserved(dist.device) / 2**30):<6.2f}"
-            ]
-            logger0.info(" ".join(fields))
-            if torch.cuda.is_available():
-                torch.cuda.reset_peak_memory_stats()
+                    ptt = is_time_for_periodic_task(
+                        cur_nimg,
+                        cfg.training.io.print_progress_freq,
+                        done,
+                        cfg.training.hp.total_batch_size,
+                        dist.rank,
+                        rank_0_only=True,
+                    )
+                    if ptt:
+                        # reset running mean of average loss
+                        average_loss_running_mean = 0
+                        n_average_loss_running_mean = 1
 
-        # Save checkpoints
-        if dist.world_size > 1:
-            torch.distributed.barrier()
-        if is_time_for_periodic_task(
-            cur_nimg,
-            cfg.training.io.save_checkpoint_freq,
-            done,
-            cfg.training.hp.total_batch_size,
-            dist.rank,
-            rank_0_only=True,
-        ):
-            save_checkpoint(
-                path=checkpoint_dir,
-                models=model,
-                optimizer=optimizer,
-                epoch=cur_nimg,
-            )
+                    # Update weights.
+                    with nvtx.annotate("update weights", color="blue"):
+                        lr_rampup = (
+                            cfg.training.hp.lr_rampup
+                        )  # ramp up the learning rate
+                        for g in optimizer.param_groups:
+                            if lr_rampup > 0:
+                                g["lr"] = cfg.training.hp.lr * min(
+                                    cur_nimg / lr_rampup, 1
+                                )
+                            if cur_nimg >= lr_rampup:
+                                g["lr"] *= cfg.training.hp.lr_decay ** (
+                                    (cur_nimg - lr_rampup) // 5e6
+                                )
+                            current_lr = g["lr"]
+                            if dist.rank == 0:
+                                writer.add_scalar("learning_rate", current_lr, cur_nimg)
+                        handle_and_clip_gradients(
+                            model,
+                            grad_clip_threshold=cfg.training.hp.grad_clip_threshold,
+                        )
+                    with nvtx.annotate("optimizer step", color="blue"):
+                        optimizer.step()
+
+                    cur_nimg += cfg.training.hp.total_batch_size
+                    done = cur_nimg >= cfg.training.hp.training_duration
+
+                with nvtx.annotate("validation", color="red"):
+                    # Validation
+                    if validation_dataset_iterator is not None:
+                        valid_loss_accum = 0
+                        if is_time_for_periodic_task(
+                            cur_nimg,
+                            cfg.training.io.validation_freq,
+                            done,
+                            cfg.training.hp.total_batch_size,
+                            dist.rank,
+                        ):
+                            with torch.no_grad():
+                                for _ in range(cfg.training.io.validation_steps):
+                                    (
+                                        img_clean_valid,
+                                        img_lr_valid,
+                                        *lead_time_label_valid,
+                                    ) = next(validation_dataset_iterator)
+
+                                    if use_apex_gn:
+                                        img_clean_valid = img_clean_valid.to(
+                                            dist.device,
+                                            dtype=input_dtype,
+                                            non_blocking=True,
+                                        ).to(memory_format=torch.channels_last)
+                                        img_lr_valid = img_lr_valid.to(
+                                            dist.device,
+                                            dtype=input_dtype,
+                                            non_blocking=True,
+                                        ).to(memory_format=torch.channels_last)
+
+                                    else:
+                                        img_clean_valid = (
+                                            img_clean_valid.to(dist.device)
+                                            .to(input_dtype)
+                                            .contiguous()
+                                        )
+                                        img_lr_valid = (
+                                            img_lr_valid.to(dist.device)
+                                            .to(input_dtype)
+                                            .contiguous()
+                                        )
+
+                                    loss_valid_kwargs = {
+                                        "net": model,
+                                        "img_clean": img_clean_valid,
+                                        "img_lr": img_lr_valid,
+                                        "augment_pipe": None,
+                                        "use_patch_grad_acc": use_patch_grad_acc,
+                                    }
+                                    if use_patch_grad_acc is not None:
+                                        loss_valid_kwargs[
+                                            "use_patch_grad_acc"
+                                        ] = use_patch_grad_acc
+                                    if lead_time_label_valid:
+                                        lead_time_label_valid = (
+                                            lead_time_label_valid[0]
+                                            .to(dist.device)
+                                            .contiguous()
+                                        )
+                                        loss_valid_kwargs.update(
+                                            {"lead_time_label": lead_time_label_valid}
+                                        )
+                                    if use_patch_grad_acc:
+                                        loss_fn.y_mean = None
+
+                                    for patch_num_per_iter in patch_nums_iter:
+                                        if patching is not None:
+                                            patching.set_patch_num(patch_num_per_iter)
+                                            loss_fn_kwargs.update(
+                                                {"patching": patching}
+                                            )
+                                        with torch.autocast(
+                                            "cuda", dtype=amp_dtype, enabled=enable_amp
+                                        ):
+                                            loss_valid = loss_fn(**loss_valid_kwargs)
+
+                                        loss_valid = (
+                                            (loss_valid.sum() / batch_size_per_gpu)
+                                            .cpu()
+                                            .item()
+                                        )
+                                        valid_loss_accum += (
+                                            loss_valid
+                                            / cfg.training.io.validation_steps
+                                        )
+                                valid_loss_sum = torch.tensor(
+                                    [valid_loss_accum], device=dist.device
+                                )
+                                if dist.world_size > 1:
+                                    torch.distributed.barrier()
+                                    torch.distributed.all_reduce(
+                                        valid_loss_sum,
+                                        op=torch.distributed.ReduceOp.SUM,
+                                    )
+                                average_valid_loss = valid_loss_sum / dist.world_size
+                                if dist.rank == 0:
+                                    writer.add_scalar(
+                                        "validation_loss", average_valid_loss, cur_nimg
+                                    )
+
+                if is_time_for_periodic_task(
+                    cur_nimg,
+                    cfg.training.io.print_progress_freq,
+                    done,
+                    cfg.training.hp.total_batch_size,
+                    dist.rank,
+                    rank_0_only=True,
+                ):
+                    # Print stats if we crossed the printing threshold with this batch
+                    tick_end_time = time.time()
+                    fields = []
+                    fields += [f"samples {cur_nimg:<9.1f}"]
+                    fields += [f"training_loss {average_loss:<7.2f}"]
+                    fields += [
+                        f"training_loss_running_mean {average_loss_running_mean:<7.2f}"
+                    ]
+                    fields += [f"learning_rate {current_lr:<7.8f}"]
+                    fields += [f"total_sec {(tick_end_time - start_time):<7.1f}"]
+                    fields += [
+                        f"sec_per_tick {(tick_end_time - tick_start_time):<7.1f}"
+                    ]
+                    fields += [
+                        f"sec_per_sample {((tick_end_time - tick_start_time) / (cur_nimg - tick_start_nimg)):<7.2f}"
+                    ]
+                    fields += [
+                        f"cpu_mem_gb {(psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"
+                    ]
+                    if torch.cuda.is_available():
+                        fields += [
+                            f"peak_gpu_mem_gb {(torch.cuda.max_memory_allocated(dist.device) / 2**30):<6.2f}"
+                        ]
+                        fields += [
+                            f"peak_gpu_mem_reserved_gb {(torch.cuda.max_memory_reserved(dist.device) / 2**30):<6.2f}"
+                        ]
+                        torch.cuda.reset_peak_memory_stats()
+                    logger0.info(" ".join(fields))
+
+                # Save checkpoints
+                if dist.world_size > 1:
+                    torch.distributed.barrier()
+                if is_time_for_periodic_task(
+                    cur_nimg,
+                    cfg.training.io.save_checkpoint_freq,
+                    done,
+                    cfg.training.hp.total_batch_size,
+                    dist.rank,
+                    rank_0_only=True,
+                ):
+                    save_checkpoint(
+                        path=checkpoint_dir,
+                        models=model,
+                        optimizer=optimizer,
+                        epoch=cur_nimg,
+                    )
 
             # Retain only the recent n checkpoints, if desired
             if cfg.training.io.save_n_recent_checkpoints > 0:

@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import List, Literal, Tuple, Union
 
 import numpy as np
-import nvtx
 import torch
 
 from physicsnemo.models.meta import ModelMetaData
@@ -821,7 +820,6 @@ class EDMPrecondSuperResolution(Module):
         """
         return torch.cat([c_in * x, img_lr.to(x.dtype)], dim=1)
 
-    @nvtx.annotate(message="EDMPrecondSuperResolution", color="orange")
     def forward(
         self,
         x: torch.Tensor,

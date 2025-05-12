@@ -103,5 +103,7 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Returns:
             The profiled function wrapped with LineProfiler
         """
+        if not lp_avail:
+            return fn
         f = self._profiler(fn)
         return f
