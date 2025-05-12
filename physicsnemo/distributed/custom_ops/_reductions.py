@@ -497,18 +497,13 @@ class ShardedMean(ShardedReductionBase):
         return grad_input, None, None, None
 
 
-# Create wrapper functions
 def sum_wrapper(
-    tensor: ShardTensor,
-    dim: DimT = None,
-    keepdim: bool = False,
-    *args: Any,
-    **kwargs: Any
+    func: Callable, types: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]
 ) -> ShardTensor:
     """
     Wrapper function for ShardTensor sum reduction.
 
-    Args:
+    In Args and kwargs:
         tensor: Input ShardTensor to reduce.
         dim: The dimension(s) to reduce.
         keepdim: Whether to preserve reduced dimensions with size 1.
@@ -518,16 +513,14 @@ def sum_wrapper(
     Returns:
         ShardTensor: Result of sum reduction.
     """
-    return ShardedSum.apply(tensor, dim, keepdim, *args, **kwargs)
+    tensor, dim, keepdim, extra_args, extra_kwargs = unpack_args(*args, **kwargs)
+
+    return ShardedSum.apply(tensor, dim, keepdim, *extra_args, **extra_kwargs)
 
 
 # TODO - accept func, types, args, kwargs instead
 def mean_wrapper(
-    tensor: ShardTensor,
-    dim: DimT = None,
-    keepdim: bool = False,
-    *args: Any,
-    **kwargs: Any
+    func: Callable, types: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]
 ) -> ShardTensor:
     """
     Wrapper function for ShardTensor mean reduction.
@@ -542,15 +535,32 @@ def mean_wrapper(
     Returns:
         ShardTensor: Result of mean reduction.
     """
-    return ShardedMean.apply(tensor, dim, keepdim, *args, **kwargs)
+    tensor, dim, keepdim, extra_args, extra_kwargs = unpack_args(*args, **kwargs)
+
+    return ShardedMean.apply(tensor, dim, keepdim, *extra_args, **extra_kwargs)
+
+
+def unpack_args(
+    tensor: ShardTensor,
+    dim: DimT = None,
+    keepdim: bool = False,
+    *args: Any,
+    **kwargs: Any
+) -> Tuple[ShardTensor, DimT, bool, Tuple[Any, ...], Dict[str, Any]]:
+    """
+    Unpack arguments for reduction functions.  Maps default args from torch.
+
+    Returns:
+        tensor: Input ShardTensor to reduce.
+        dim: The dimension(s) to reduce.
+    """
+    return tensor, dim, keepdim, args, kwargs
 
 
 # Map the reduction ops to their handlers
 reduction_mapping: Dict[str, Callable] = {
     "sum": sum_wrapper,
     "avg": mean_wrapper,
-    # "max": max_wrapper,
-    # "min": min_wrapper
 }
 
 
@@ -566,7 +576,3 @@ def register_reduction_functions() -> None:
     ShardTensor.register_function_handler(torch.Tensor.mean, mean_wrapper)
     ShardTensor.register_function_handler(torch.sum, sum_wrapper)
     ShardTensor.register_function_handler(torch.Tensor.sum, sum_wrapper)
-    # ShardTensor.register_function_handler(torch.max, max_wrapper)
-    # ShardTensor.register_function_handler(torch.Tensor.max, max_wrapper)
-    # ShardTensor.register_function_handler(torch.min, min_wrapper)
-    # ShardTensor.register_function_handler(torch.Tensor.min, min_wrapper)
