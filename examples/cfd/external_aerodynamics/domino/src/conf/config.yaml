@@ -63,7 +63,7 @@ variables:
   global_parameters:
     inlet_velocity: 
       type: vector
-      reference: [30.0] # Provide the vector, omitting any trailing zero components. For instance, a vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
+      reference: [30.0] # vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
     air_density: 
       type: scalar
       reference: 1.226
