@@ -305,10 +305,12 @@ class VortexSheddingDataset(DGLDataset):
 
     @staticmethod
     def cell_to_adj(cells):
-        """creates adjancy matrix in COO format from mesh cells"""
+        """creates adjacency matrix in COO format from mesh cells (tetrahedra)"""
         num_cells = np.shape(cells)[0]
-        src = [cells[i][indx] for i in range(num_cells) for indx in [0, 1, 2]]
-        dst = [cells[i][indx] for i in range(num_cells) for indx in [1, 2, 0]]
+        # For each tetrahedron, generate all 6 edges
+        edge_indices = [(0,1), (0,2), (0,3), (1,2), (1,3), (2,3)]
+        src = [cells[i][a] for i in range(num_cells) for a,b in edge_indices]
+        dst = [cells[i][b] for i in range(num_cells) for a,b in edge_indices]
         return src, dst
 
     @staticmethod
@@ -386,7 +388,7 @@ class VortexSheddingDataset(DGLDataset):
             torch.eq(node_type, torch.zeros_like(node_type)),
             torch.eq(
                 node_type,
-                torch.zeros_like(node_type) + 5,
+                torch.zeros_like(node_type) + 1,
             ),
         )
         return mask

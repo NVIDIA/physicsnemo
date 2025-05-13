@@ -28,7 +28,7 @@ from omegaconf import DictConfig
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 
-from physicsnemo.datapipes.gnn.vortex_shedding_dataset import VortexSheddingDataset
+from physicsnemo.datapipes.gnn.deforming_plate_dataset import VortexSheddingDataset
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.logging import (
     PythonLogger,
@@ -174,8 +174,8 @@ def main(cfg: DictConfig) -> None:
 
     # Initialize loggers.
     initialize_wandb(
-        project="PhysicsNeMo-Launch",
-        entity="PhysicsNeMo",
+        project="Modulus-Launch",
+        entity="Modulus",
         name="Vortex_Shedding-Training",
         group="Vortex_Shedding-DDP-Group",
         mode=cfg.wandb_mode,
