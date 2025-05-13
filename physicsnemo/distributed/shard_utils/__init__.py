@@ -32,11 +32,15 @@ try:
             select_backward_wrapper,
             select_wrapper,
         )
-        from .natten_patches import na2d_wrapper
+
+        # Currently disabled until wrapt is removed
+        # from .natten_patches import na2d_wrapper
         from .normalization_patches import group_norm_wrapper
         from .point_cloud_ops import ball_query_layer_wrapper
         from .pooling_patches import generic_avg_pool_nd_wrapper
         from .unpooling_patches import generic_interpolate_wrapper
+
+    register_shard_wrappers()
 
 except ImportError:
     pass
