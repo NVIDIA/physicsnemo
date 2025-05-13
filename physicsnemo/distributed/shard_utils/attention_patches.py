@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
-import wrapt
 from torch.autograd.profiler import record_function
 
 from physicsnemo.utils.version_check import check_module_requirements
@@ -31,7 +30,6 @@ from torch.distributed import DeviceMesh  # noqa: E402
 from physicsnemo.distributed import ShardTensor  # noqa: E402
 from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
     MissingShardPatch,
-    UndeterminedShardingError,
 )
 from physicsnemo.distributed.shard_utils.ring import (  # noqa: E402
     RingPassingConfig,
@@ -613,7 +611,7 @@ def ring_sdpa(
     else:
         latn_mask = None
 
-    x = RingSDPA.apply(lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs)
+    x = RingSDPABlocking.apply(lq, lk, lv, latn_mask, q._spec.mesh, ring_config, kwargs)
 
     # Convert back to ShardTensor
     x = ShardTensor.from_local(
@@ -622,17 +620,7 @@ def ring_sdpa(
     return x
 
 
-# Make sure the module exists before importing it:
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional",
-    "scaled_dot_product_attention",
-    enabled=ShardTensor.patches_enabled,
-)
-def sdpa_wrapper(
-    wrapped: Any, instance: Any, args: tuple, kwargs: dict
-) -> Union[torch.Tensor, ShardTensor]:
+def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> ShardTensor:
     """Wrapper for natten.functional.na2d to support sharded tensors.
 
     Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
@@ -654,24 +642,15 @@ def sdpa_wrapper(
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
 
-    if all([type(_t) == torch.Tensor for _t in (q, k, v)]):
-        return wrapped(*args, **kwargs)
-    elif all([type(_t) == ShardTensor for _t in (q, k, v)]):
+    # Make sure all tensors are on the same mesh
+    if not (q._spec.mesh == k._spec.mesh == v._spec.mesh):
+        raise MissingShardPatch("q, k, and v must all be on the same mesh")
 
-        # Make sure all tensors are on the same mesh
-        if not (q._spec.mesh == k._spec.mesh == v._spec.mesh):
-            raise MissingShardPatch("q, k, and v must all be on the same mesh")
+    # Make sure the mesh is 1D
+    if q._spec.mesh.ndim != 1:
+        raise MissingShardPatch("q must be on a 1D mesh")
 
-        # Make sure the mesh is 1D
-        if q._spec.mesh.ndim != 1:
-            raise MissingShardPatch("q must be on a 1D mesh")
-
-        return ring_sdpa(q, k, v, attn_mask, **kwargs)
-
-    else:
-        raise UndeterminedShardingError(
-            "q, k, and v must all be the same types (torch.Tensor or ShardTensor)"
-        )
+    return ring_sdpa(q, k, v, attn_mask, **kwargs)
 
 
 def repackage_sdpa_args(
@@ -709,3 +688,8 @@ def repackage_sdpa_args(
     }
 
     return query, key, value, attn_mask, return_kwargs
+
+
+ShardTensor.register_function_handler(
+    torch.nn.functional.scaled_dot_product_attention, sdpa_wrapper
+)

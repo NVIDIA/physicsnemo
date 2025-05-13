@@ -14,10 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import torch
-import wrapt
 from torch.distributed.tensor.placement_types import Shard
 
 from physicsnemo.distributed import ShardTensor
@@ -27,11 +26,6 @@ from physicsnemo.distributed.shard_utils.patch_core import (
 )
 
 aten = torch.ops.aten
-
-__all__ = [
-    "avg_pool3d_wrapper",
-    "max_pool3d_wrapper",
-]
 
 
 def compute_output_shape(input_shape, pool_kwargs):
@@ -68,27 +62,6 @@ def compute_output_shape(input_shape, pool_kwargs):
         output_shape.append(output_size)
 
     return tuple(output_shape)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "avg_pool3d", enabled=ShardTensor.patches_enabled
-)
-def avg_pool3d_wrapper(wrapped, instance, args, kwargs):
-    return generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "avg_pool2d", enabled=ShardTensor.patches_enabled
-)
-def avg_pool2d_wrapper(wrapped, instance, args, kwargs):
-    return generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "avg_pool1d", enabled=ShardTensor.patches_enabled
-)
-def avg_pool1d_wrapper(wrapped, instance, args, kwargs):
-    return generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs)
 
 
 def repackage_pool_args(
@@ -144,16 +117,19 @@ def repackage_pool_args(
     return input, return_kwargs
 
 
-def generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs):
+def generic_avg_pool_nd_wrapper(
+    func: Callable,
+    types: Tuple[Any, ...],
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> ShardTensor:
     """Generic wrapper for torch N-dimensional pooling operations.
 
-    Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
-    For regular tensors, passes through to the wrapped pooling function.
     For ShardTensor inputs, handles applying distributed pooling.
 
     Args:
-        wrapped: Original pooling function being wrapped
-        instance: Instance the wrapped function is bound to
+        func: Original torch pooling function being wrapped
+        types: Types of the arguments
         args: Positional arguments for pooling
         kwargs: Keyword arguments for pooling
 
@@ -167,52 +143,43 @@ def generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs):
     # Extract the input tensor and package the remaining arguments
     input, pool_kwargs = repackage_pool_args(*args, **kwargs)
 
-    # Handle regular torch tensor inputs
-    if type(input) == torch.Tensor:
-        return wrapped(*args, **kwargs)
+    # For pooling, the main challenge is to predict the output shape
 
-    # Handle distributed ShardTensor inputs
-    elif type(input) == ShardTensor:
+    # Get the local tensor:
+    local_input = input.to_local()
 
-        # For pooling, the main challenge is to predict the output shape
+    local_pooled_output = func(local_input, **pool_kwargs)
 
-        # Get the local tensor:
-        local_input = input.to_local()
+    # Reject cases where stride != kernel_size
+    if pool_kwargs.get("stride") != pool_kwargs.get("kernel_size"):
+        raise MissingShardPatch("Stride must equal kernel_size for pooling operations")
 
-        local_pooled_output = wrapped(local_input, **pool_kwargs)
+    # Check divisibility by stride only for sharded dimensions
+    stride = pool_kwargs.get("stride")
+    if isinstance(stride, int):
+        # Assuming channels first ...
+        stride = (stride,) * (len(local_input.shape) - 2)
 
-        # Reject cases where stride != kernel_size
-        if pool_kwargs.get("stride") != pool_kwargs.get("kernel_size"):
-            raise MissingShardPatch(
-                "Stride must equal kernel_size for pooling operations"
-            )
-
-        # Check divisibility by stride only for sharded dimensions
-        stride = pool_kwargs.get("stride")
-        if isinstance(stride, int):
-            # Assuming channels first ...
-            stride = (stride,) * (len(local_input.shape) - 2)
-
-        for mesh_dim, placement in enumerate(input._spec.placements):
-            if isinstance(placement, Shard):
-                # This dimension is sharded on this mesh dimension
-                shard_dim = placement.dim
-                # Skip batch and channel dimensions (first two dims)
-                if shard_dim >= 2:
-                    spatial_dim = shard_dim - 2  # Convert to spatial dimension index
-                    # Get the sizes for this mesh dimension
-                    shard_shapes = input._spec.sharding_shapes()[mesh_dim]
-                    for shard_shape in shard_shapes:
-                        if (
-                            spatial_dim < len(shard_shape) - 2
-                        ):  # Check if dimension is valid
-                            spatial_size = shard_shape[shard_dim]
-                            stride_for_dim = stride[spatial_dim]
-                            if spatial_size % stride_for_dim != 0:
-                                raise UndeterminedShardingError(
-                                    f"Sharded dimension {shard_dim} with local size {spatial_size} "
-                                    f"must be divisible by stride {stride_for_dim}"
-                                )
+    for mesh_dim, placement in enumerate(input._spec.placements):
+        if isinstance(placement, Shard):
+            # This dimension is sharded on this mesh dimension
+            shard_dim = placement.dim
+            # Skip batch and channel dimensions (first two dims)
+            if shard_dim >= 2:
+                spatial_dim = shard_dim - 2  # Convert to spatial dimension index
+                # Get the sizes for this mesh dimension
+                shard_shapes = input._spec.sharding_shapes()[mesh_dim]
+                for shard_shape in shard_shapes:
+                    if (
+                        spatial_dim < len(shard_shape) - 2
+                    ):  # Check if dimension is valid
+                        spatial_size = shard_shape[shard_dim]
+                        stride_for_dim = stride[spatial_dim]
+                        if spatial_size % stride_for_dim != 0:
+                            raise UndeterminedShardingError(
+                                f"Sharded dimension {shard_dim} with local size {spatial_size} "
+                                f"must be divisible by stride {stride_for_dim}"
+                            )
 
         # Compute the sharding shapes:
         updated_placements = {}
@@ -241,25 +208,15 @@ def generic_avg_pool_nd_wrapper(wrapped, instance, args, kwargs):
         raise UndeterminedShardingError(msg)
 
 
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "max_pool3d", enabled=ShardTensor.patches_enabled
+ShardTensor.register_function_handler(
+    torch.nn.functional.avg_pool1d, generic_avg_pool_nd_wrapper
 )
-def max_pool3d_wrapper(wrapped, instance, args, kwargs):
-    return generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "max_pool2d", enabled=ShardTensor.patches_enabled
+ShardTensor.register_function_handler(
+    torch.nn.functional.avg_pool2d, generic_avg_pool_nd_wrapper
 )
-def max_pool2d_wrapper(wrapped, instance, args, kwargs):
-    return generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs)
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "max_pool1d", enabled=ShardTensor.patches_enabled
+ShardTensor.register_function_handler(
+    torch.nn.functional.avg_pool3d, generic_avg_pool_nd_wrapper
 )
-def max_pool1d_wrapper(wrapped, instance, args, kwargs):
-    return generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs)
 
 
 def repackage_max_pool_args(
@@ -312,16 +269,19 @@ def repackage_max_pool_args(
     return input, return_kwargs
 
 
-def generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs):
+def generic_max_pool_nd_wrapper(
+    func: Callable,
+    types: Tuple[Any, ...],
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> ShardTensor:
     """Generic wrapper for torch N-dimensional max pooling operations.
 
-    Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
-    For regular tensors, passes through to the wrapped pooling function.
-    For ShardTensor inputs, handles applying distributed pooling.
+    Handles distributed ShardTensor inputs.
 
     Args:
-        wrapped: Original pooling function being wrapped
-        instance: Instance the wrapped function is bound to
+        func: Original torch pooling function being wrapped
+        types: Types of the arguments
         args: Positional arguments for pooling
         kwargs: Keyword arguments for pooling
 
@@ -335,57 +295,49 @@ def generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs):
     # Extract the input tensor and package the remaining arguments
     input, pool_kwargs = repackage_max_pool_args(*args, **kwargs)
 
-    # Handle regular torch tensor inputs
-    if type(input) == torch.Tensor:
-        return wrapped(*args, **kwargs)
+    # Get the local tensor:
+    local_input = input.to_local()
 
-    # Handle distributed ShardTensor inputs
-    elif type(input) == ShardTensor:
-        # Get the local tensor:
-        local_input = input.to_local()
+    # Call the local pooling operation
+    local_pooled_output = func(local_input, **pool_kwargs)
 
-        # Call the local pooling operation
-        local_pooled_output = wrapped(local_input, **pool_kwargs)
+    # Handle return_indices case
+    return_indices = pool_kwargs.get("return_indices", False)
+    if return_indices:
+        local_pooled_output, indices = local_pooled_output
 
-        # Handle return_indices case
-        return_indices = pool_kwargs.get("return_indices", False)
-        if return_indices:
-            local_pooled_output, indices = local_pooled_output
+    # Everything below here is computing output meta data
 
-        # Everything below here is computing output meta data
+    # Reject cases where stride != kernel_size
+    if pool_kwargs.get("stride") != pool_kwargs.get("kernel_size"):
+        raise MissingShardPatch("Stride must equal kernel_size for pooling operations")
 
-        # Reject cases where stride != kernel_size
-        if pool_kwargs.get("stride") != pool_kwargs.get("kernel_size"):
-            raise MissingShardPatch(
-                "Stride must equal kernel_size for pooling operations"
-            )
+    # Check divisibility by stride only for sharded dimensions
+    stride = pool_kwargs.get("stride")
+    if isinstance(stride, int):
+        # Assuming channels first ...
+        stride = (stride,) * (len(local_input.shape) - 2)
 
-        # Check divisibility by stride only for sharded dimensions
-        stride = pool_kwargs.get("stride")
-        if isinstance(stride, int):
-            # Assuming channels first ...
-            stride = (stride,) * (len(local_input.shape) - 2)
-
-        for mesh_dim, placement in enumerate(input._spec.placements):
-            if isinstance(placement, Shard):
-                # This dimension is sharded on this mesh dimension
-                shard_dim = placement.dim
-                # Skip batch and channel dimensions (first two dims)
-                if shard_dim >= 2:
-                    spatial_dim = shard_dim - 2  # Convert to spatial dimension index
-                    # Get the sizes for this mesh dimension
-                    shard_shapes = input._spec.sharding_shapes()[mesh_dim]
-                    for shard_shape in shard_shapes:
-                        if (
-                            spatial_dim < len(shard_shape) - 2
-                        ):  # Check if dimension is valid
-                            spatial_size = shard_shape[shard_dim]
-                            stride_for_dim = stride[spatial_dim]
-                            if spatial_size % stride_for_dim != 0:
-                                raise UndeterminedShardingError(
-                                    f"Sharded dimension {shard_dim} with local size {spatial_size} "
-                                    f"must be divisible by stride {stride_for_dim}"
-                                )
+    for mesh_dim, placement in enumerate(input._spec.placements):
+        if isinstance(placement, Shard):
+            # This dimension is sharded on this mesh dimension
+            shard_dim = placement.dim
+            # Skip batch and channel dimensions (first two dims)
+            if shard_dim >= 2:
+                spatial_dim = shard_dim - 2  # Convert to spatial dimension index
+                # Get the sizes for this mesh dimension
+                shard_shapes = input._spec.sharding_shapes()[mesh_dim]
+                for shard_shape in shard_shapes:
+                    if (
+                        spatial_dim < len(shard_shape) - 2
+                    ):  # Check if dimension is valid
+                        spatial_size = shard_shape[shard_dim]
+                        stride_for_dim = stride[spatial_dim]
+                        if spatial_size % stride_for_dim != 0:
+                            raise UndeterminedShardingError(
+                                f"Sharded dimension {shard_dim} with local size {spatial_size} "
+                                f"must be divisible by stride {stride_for_dim}"
+                            )
 
         # Compute the sharding shapes:
         updated_placements = {}
@@ -422,6 +374,17 @@ def generic_max_pool_nd_wrapper(wrapped, instance, args, kwargs):
             f"{type(input)}"
         )
         raise UndeterminedShardingError(msg)
+
+
+ShardTensor.register_function_handler(
+    torch.nn.functional.max_pool3d, generic_max_pool_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.max_pool2d, generic_max_pool_nd_wrapper
+)
+ShardTensor.register_function_handler(
+    torch.nn.functional.max_pool1d, generic_max_pool_nd_wrapper
+)
 
 
 # Write a function to extract the default args for avg_pool_nd

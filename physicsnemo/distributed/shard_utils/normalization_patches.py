@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import torch
 import torch.distributed as dist
-import wrapt
 from torch.distributed.tensor import DTensor
 
 from physicsnemo.distributed import ShardTensor, ShardTensorSpec
@@ -28,10 +27,6 @@ __all__ = [
     "group_norm_wrapper",
 ]
 
-
-from physicsnemo.distributed.shard_utils.patch_core import (
-    UndeterminedShardingError,
-)
 
 aten = torch.ops.aten
 
@@ -214,67 +209,35 @@ class PartialGroupNorm(torch.autograd.Function):
         return grad_input, None, None, grad_weight, grad_bias, None
 
 
-@wrapt.patch_function_wrapper("torch.nn.functional", "group_norm")
-def group_norm_wrapper(
-    wrapped, instance, args, kwargs
-) -> Union[torch.Tensor, ShardTensor]:
+def group_norm_wrapper(func, types, args, kwargs) -> ShardTensor:
     """Wrapper for torch.nn.functional.group_norm that handles ShardTensor inputs.
 
-    This function intercepts calls to group_norm and either:
-    1. Passes regular torch.Tensor inputs to the original function
-    2. Handles ShardTensor inputs with the PartialGroupNorm custom implementation
+    This function intercepts calls to group_norm and handles ShardTensor inputs
+    with the PartialGroupNorm custom implementation
 
     Args:
-        wrapped: Original group_norm function
-        instance: Instance reference (unused)
+        func: Original group_norm function
+        types:  (unused)
         args: Positional arguments to group_norm
         kwargs: Keyword arguments to group_norm
 
     Returns:
-        Normalized tensor (either torch.Tensor or ShardTensor)
+        Normalized tensor ( ShardTensor)
     """
     input, num_groups, weight, bias, eps = repackage_group_norm_args(*args, **kwargs)
 
-    # Handle regular torch tensor inputs
-    if (
-        isinstance(input, torch.Tensor)
-        and not isinstance(input, ShardTensor)
-        and (
-            isinstance(weight, (torch.nn.parameter.Parameter, torch.Tensor))
-            or weight is None
-        )
-        and (
-            bias is None
-            or isinstance(bias, (torch.nn.parameter.Parameter, torch.Tensor))
-        )
-    ):
-        output = wrapped(*args, **kwargs)
-        return output
+    # Gather any distributed weights/bias
+    if isinstance(weight, (ShardTensor, DTensor)):
+        weight = weight.full_tensor()
+    if isinstance(bias, (ShardTensor, DTensor)):
+        bias = bias.full_tensor()
 
-    # Handle distributed ShardTensor inputs
-    elif isinstance(input, ShardTensor):
-        # Gather any distributed weights/bias
-        if isinstance(weight, (ShardTensor, DTensor)):
-            weight = weight.full_tensor()
-        if isinstance(bias, (ShardTensor, DTensor)):
-            bias = bias.full_tensor()
+    output_spec = input._spec
+    x = PartialGroupNorm.apply(
+        input.to_local(), output_spec, num_groups, weight, bias, eps
+    )
 
-        output_spec = input._spec
-        x = PartialGroupNorm.apply(
-            input.to_local(), output_spec, num_groups, weight, bias, eps
-        )
-
-        return x
-
-    else:
-        msg = (
-            "input, weight, bias (if not None) must all be the valid types "
-            "(torch.Tensor or ShardTensor), but got "
-            f"{type(input)}, "
-            f"{type(weight)}, "
-            f"{type(bias)}, "
-        )
-        raise UndeterminedShardingError(msg)
+    return x
 
 
 def repackage_group_norm_args(
@@ -301,3 +264,8 @@ def repackage_group_norm_args(
         Tuple of (input, num_groups, weight, bias, eps)
     """
     return input, num_groups, weight, bias, eps
+
+
+ShardTensor.register_function_handler(
+    torch.nn.functional.group_norm, group_norm_wrapper
+)

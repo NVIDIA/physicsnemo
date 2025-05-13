@@ -18,6 +18,7 @@ from typing import Tuple
 
 import torch
 import warp as wp
+from torch.overrides import handle_torch_function, has_torch_function
 
 
 @wp.kernel
@@ -294,10 +295,20 @@ class BallQuery(torch.autograd.Function):
         )
 
 
-def ball_query_layer(points1, points2, k, radius, hash_grid):
+def ball_query_layer(
+    points1: torch.Tensor,
+    points2: torch.Tensor,
+    k: int,
+    radius: float,
+    hash_grid: wp.HashGrid,
+):
     """
     Wrapper for BallQuery.apply to support a functional interface.
     """
+    if has_torch_function((points1, points2)):
+        return handle_torch_function(
+            ball_query_layer, (points1, points2), points1, points2, k, radius, hash_grid
+        )
     return BallQuery.apply(points1, points2, k, radius, hash_grid)
 
 

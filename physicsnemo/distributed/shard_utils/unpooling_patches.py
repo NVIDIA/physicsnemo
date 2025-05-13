@@ -17,7 +17,6 @@
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
-import wrapt
 from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Shard
 
@@ -27,22 +26,6 @@ from physicsnemo.distributed.shard_utils.halo import (
     halo_padding,
     unhalo_padding,
 )
-from physicsnemo.distributed.shard_utils.patch_core import (
-    UndeterminedShardingError,
-)
-
-__all__ = [
-    "interpolate_wrapper",
-]
-
-
-@wrapt.patch_function_wrapper(
-    "torch.nn.functional", "interpolate", enabled=ShardTensor.patches_enabled
-)
-def interpolate_wrapper(
-    wrapped: Callable, instance: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]
-) -> Union[torch.Tensor, ShardTensor]:
-    return generic_interpolate_wrapper(wrapped, instance, args, kwargs)
 
 
 def repackage_interpolate_args(
@@ -294,12 +277,14 @@ def partial_interpolate_nd(
 
 
 def generic_interpolate_wrapper(
-    wrapped: Callable, instance: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]
-) -> Union[torch.Tensor, ShardTensor]:
+    func: Callable,
+    types: Tuple[Any, ...],
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
+) -> ShardTensor:
     """Wrapper for torch.nn.functional.interpolate.
 
-    Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
-    For regular tensors, passes through to the wrapped interpolation function.
+    Handles both distributed ShardTensor inputs.
     For ShardTensor inputs, handles distributed interpolation with halo exchanges.
 
     Args:
@@ -309,7 +294,7 @@ def generic_interpolate_wrapper(
         kwargs: Keyword arguments for interpolation
 
     Returns:
-        Interpolation result as either torch.Tensor or ShardTensor
+        Interpolation result as or ShardTensor
 
     Raises:
         UndeterminedShardingError: If input tensor types are invalid
@@ -317,18 +302,10 @@ def generic_interpolate_wrapper(
     # Extract the input tensor and package the remaining arguments
     input, interp_kwargs = repackage_interpolate_args(*args, **kwargs)
 
-    # Handle regular torch tensor inputs
-    if type(input) == torch.Tensor:
-        return wrapped(*args, **kwargs)
-
     # Handle distributed ShardTensor inputs
-    elif type(input) == ShardTensor:
-        # Use the convolution args to compute the sharded halo
-        return partial_interpolate_nd(input, interp_kwargs)
-    else:
-        msg = (
-            "input must be a valid type "
-            "(torch.Tensor or ShardTensor), but got "
-            f"{type(input)}"
-        )
-        raise UndeterminedShardingError(msg)
+    return partial_interpolate_nd(input, interp_kwargs)
+
+
+ShardTensor.register_function_handler(
+    torch.nn.functional.interpolate, generic_interpolate_wrapper
+)

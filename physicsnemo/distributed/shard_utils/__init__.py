@@ -36,12 +36,7 @@ try:
         from .normalization_patches import group_norm_wrapper
         from .point_cloud_ops import ball_query_layer_wrapper
         from .pooling_patches import generic_avg_pool_nd_wrapper
-        from .unpooling_patches import interpolate_wrapper
-
-        ShardTensor.register_dispatch_handler(torch.ops.aten.select.int, select_wrapper)
-        ShardTensor.register_dispatch_handler(
-            torch.ops.aten.select_backward.default, select_backward_wrapper
-        )
+        from .unpooling_patches import generic_interpolate_wrapper
 
 except ImportError:
     pass

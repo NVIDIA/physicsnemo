@@ -14,10 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Tuple, Union
+from typing import Any, Tuple
 
 import torch
-import wrapt
 
 from physicsnemo.utils.version_check import check_module_requirements
 
@@ -247,43 +246,26 @@ def sharded_index_select(
     return ShardedIndexSelect.apply(tensor, dim, index)
 
 
-@wrapt.patch_function_wrapper(
-    "torch",
-    "index_select",
-    enabled=ShardTensor.patches_enabled,
-)
 def index_select_wrapper(
-    wrapped: Any, instance: Any, args: tuple, kwargs: dict
-) -> Union[ShardTensor, torch.Tensor]:
+    func: Any, instance: Any, args: tuple, kwargs: dict
+) -> ShardTensor:
     """
-    Wrapper for index_select operation that handles both ShardTensors and regular Tensors.
-
-    This function dispatches to the appropriate implementation based on the input types.
-    For ShardTensors, it uses sharded_index_select, otherwise falls back to torch's index_select.
-
+    Wrapper for index_select operation that handles ShardTensors
 
     Returns
     -------
-    Union[ShardTensor, torch.Tensor]
+    ShardTensor
         Output tensor containing the selected elements
 
-    Raises
-    ------
-    TypeError
-        If the input combination is not supported
     """
 
     # Extract the tensor and index from the arguments
     tensor, dim, index = args
 
-    if isinstance(tensor, ShardTensor) and isinstance(index, ShardTensor):
-        return sharded_index_select(tensor, dim, index)
-    elif isinstance(tensor, torch.Tensor) and isinstance(index, torch.Tensor):
-        return torch.index_select(tensor, dim, index)
-    else:
-        raise TypeError(
-            f"Unsupported input types: tensor {type(tensor)}, index {type(index)}"
-        )
+    return sharded_index_select(tensor, dim, index)
+
+
+ShardTensor.register_function_handler(torch.index_select, index_select_wrapper)
 
 
 def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTensor:
@@ -489,3 +471,9 @@ def select_backward_wrapper(grad_output, input_sizes, dim, index):
         raise MissingShardPatch(
             f"Unsupported tensor types: grad_output {type(grad_output)}"
         )
+
+
+ShardTensor.register_dispatch_handler(torch.ops.aten.select.int, select_wrapper)
+ShardTensor.register_dispatch_handler(
+    torch.ops.aten.select_backward.default, select_backward_wrapper
+)
