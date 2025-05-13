@@ -20,7 +20,7 @@ FROM ${BASE_CONTAINER} as builder
 ARG TARGETPLATFORM
 
 # Update pip and setuptools
-RUN pip install "pip==23.2.1" "setuptools==68.2.2"
+RUN pip install "pip>=23.2.1" "setuptools>=68.2.2"
 
 # Setup git lfs, graphviz gl1(vtk dep)
 RUN apt-get update && \
