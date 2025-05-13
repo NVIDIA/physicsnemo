@@ -12,11 +12,11 @@ To understand why scientific AI hits unique challenges in training and inference
 For all AI models, the memory cost of inference is dominated by just two categories of use:
 
 1. **Model parameters** (weights, biases, encodings, etc.) all are required to be loaded into GPU memory for fast access during inference.  For a model with N total parameters, each parameter requires 4 bytes in float32 precision, or 2 in float16/bfloat16.  A rough approximation is that a 100M parameter model requires 400MB of memory  in float32 precision.  For Large Language Models with billions of parameters, even at inference time this is a large amount of memory. 
-2. **Data and Activations** represent the memory required to actually compute the layers and outputs of the model.  For inference, the available memory has to be enough to hold the input data, output data, and model parameters as well as temporariliy accomodate memory of intermediate activations.  As one layer's output is consumed by the next layer, the total memory needed to store activations typically never exceeds the requirements of the most memory-intensive layer.
+2. **Data and Activations** represent the memory required to actually compute the layers and outputs of the model.  For inference, the available memory has to be enough to hold the input data, output data, and model parameters as well as temporariliy accommodate memory of intermediate activations.  As one layer's output is consumed by the next layer, the total memory needed to store activations typically never exceeds the requirements of the most memory-intensive layer.
 
 For scientific AI with high resolution data, the memory cost at inference quickly becomes dominated not by the model parameters but by the data.
 
-During training, the high resolution of the data is even ore challenging.  For each layer during training, pytorch will typically save the some version of the layer's input or output as the "intermediate activation" for that layer.  In practice, this is a computational optimization to enable the backwards pass to compute and propagate gradients more efficiently.  Each layer, however, requires extra memory storage during training that is proportional to the resolution of the input data.
+During training, the high resolution of the data is even more challenging.  For each layer during training, pytorch will typically save the some version of the layer's input or output as the "intermediate activation" for that layer.  In practice, this is a computational optimization to enable the backwards pass to compute and propagate gradients more efficiently.  Each layer, however, requires extra memory storage during training that is proportional to the resolution of the input data.
 
 As a cumulative effect, as models continue to stack up layers and save intermediate activations, the activation-related memory required training a model grows with both the depth of the model and the resolution of the input data.  In contrast to Large Language Models, where the memory usage during training is dominated by the parameters, gradients, and optimizer states, for high resolution scientific AI models with modest parameter counts the memory usage is dominated by data size.
 
@@ -106,7 +106,7 @@ In the example above, for a simple convolution, we saw that just splitting the d
 How does ``ShardTensor`` help?
 -----------------------------
 
-PyTorch's ``DTensor`` interface already has an interface for a distributed tensor mechanism, and it's great - great enough, in fact, that ``ShardTensor`` is built upon it.  However, ``DTensor`` is built with a different paradigm of parallelism in mind, including model parallelisms from DeepSpeed and MegaTron [CITATION NEEDED] TODO.  It has several shortcomings: notably, it can not accomodate data that isn't distributed uniformly or according to ``torch.chunk`` syntax.  For scientific data, such as mesh data, point clouds, or anything else irregular, this is a nearly-immediate dead end for deploying domain parallelism.  Further, ``DTensor``'s mechanism for implementing parallelism is largely restricted to lower level ``torch`` operations - great for broad support in PyTorch, but not as accesible for most developers.
+PyTorch's ``DTensor`` interface already has an interface for a distributed tensor mechanism, and it's great - great enough, in fact, that ``ShardTensor`` is built upon it.  However, ``DTensor`` is built with a different paradigm of parallelism in mind, including model parallelisms from DeepSpeed and MegaTron [CITATION NEEDED] TODO.  It has several shortcomings: notably, it can not accommodate data that isn't distributed uniformly or according to ``torch.chunk`` syntax.  For scientific data, such as mesh data, point clouds, or anything else irregular, this is a nearly-immediate dead end for deploying domain parallelism.  Further, ``DTensor``'s mechanism for implementing parallelism is largely restricted to lower level ``torch`` operations - great for broad support in PyTorch, but not as accesible for most developers.
 
 With ``ShardTensor``, we extend the functionality of ``DTensor`` in the ways needed to make domain parallelism simpler and easier to apply.  In practice, this looks like the following, if we reuse the convolution example from before:
 
@@ -124,7 +124,6 @@ With ``ShardTensor``, we extend the functionality of ``DTensor`` in the ways nee
         DistributedManager,
         ShardTensor,
         scatter_tensor,
-        register_custom_ops
     )
 
     DistributedManager.initialize()
@@ -172,7 +171,7 @@ With ``ShardTensor``, we extend the functionality of ``DTensor`` in the ways nee
     full_output.mean().backward()
 
     distributed_grad = sharded_tensor.grad
-    # distributed grad itsself is a sharded tensor:
+    # distributed grad itself is a sharded tensor:
     full_grad = distributed_grad.full_tensor()
     if dm.rank == 0:
         # Check that the gradient is correct:
@@ -203,7 +202,7 @@ There is a substantial amount of care needed to implement layers in ``ShardTenso
 When Should You Use ``ShardTensor``?
 ==================================
 
-``ShardTensor`` and domain parallelism solve a very specific problem in Scientific AI: input data is such high resolution that models can't train, even at Batch Size of 1, due to memory limitations.  And while that challenge can be partially surmounted with reduced precision and input spatial downsampling, not all models can tolerate those techniques without sacrificing accuracy.  In this case, you should view ``ShardTensor`` as a solution to that problem: it will enable you to run training and inference on higher resolution data than a single GPU can accomodate.  It is not the only technique for this, and in some cases it isn't the best choice.  In this section we'll compare and contrast ``ShardTensor`` to some other techinques for high resolution data, which can highlight some strengths and weaknesses of ``ShardTensor.``
+``ShardTensor`` and domain parallelism solve a very specific problem in Scientific AI: input data is such high resolution that models can't train, even at Batch Size of 1, due to memory limitations.  And while that challenge can be partially surmounted with reduced precision and input spatial downsampling, not all models can tolerate those techniques without sacrificing accuracy.  In this case, you should view ``ShardTensor`` as a solution to that problem: it will enable you to run training and inference on higher resolution data than a single GPU can accommodate.  It is not the only technique for this, and in some cases it isn't the best choice.  In this section we'll compare and contrast ``ShardTensor`` to some other techniques for high resolution data, which can highlight some strengths and weaknesses of ``ShardTensor.``
 
 One other technique for high resolution data is **Pipeline Parallelism**.  In pipeline parallelism, the model is divided across 2 or more devices, and each device contains full layers and activations, but to run the entire model the data is "pipelined": input data on GPU 0 is propagated through the local layers, and the outputs of the last layer on GPU 0 become the inputs to the first layer on GPU 1, and so on.  Gradients can be computed by running the pipeline in reverse, as well.
 
@@ -211,7 +210,7 @@ For some use cases, pipeline parallelism can be very powerful.  But it also has 
 
 With just one or several points in the model where pipeline parallelism divides your model, it is conceptually simple and each GPU has minimal communication overhead.  However, not all models are well supported with pipeline parallelism (consider a UNet architecture).  On the other hand, ``ShardTensor`` enables you to slice your model by dividing each and every layer over sharded inputs.  In terms of model support, this makes more complicated architectures like UNet simple: the concatenation of features across the down/up sampling paths is unmodified in user space (and in fact it's pretty simple in low-level implementations too: it becomes a concat of the local tensor objects).  On the other hand, because each layer introduces additional overhead of communication or coordination, a sharded layer can be less efficient than a purely-local layer.
 
-As a general rule, ``ShardTensor`` performs efficiently when the input data is large, and when the ratio of communication time to computation time is small.  For some operations, like sequence-parallel attention via a Ring Mechanism [Ring Attention] TODO the benefits become clear, as shown below: the sharded model is faster after a certain input data size.  More importantly, the sharded model is still **functional** after a massive input size:  something pipeline parallelism could not acheive for a simple one-layer model.
+As a general rule, ``ShardTensor`` performs efficiently when the input data is large, and when the ratio of communication time to computation time is small.  For some operations, like sequence-parallel attention via a Ring Mechanism [Ring Attention] TODO the benefits become clear, as shown below: the sharded model is faster after a certain input data size.  More importantly, the sharded model is still **functional** after a massive input size:  something pipeline parallelism could not achieve for a simple one-layer model.
 
 TODO - add plot of attention efficiency.
 
@@ -238,3 +237,16 @@ Summary
 =======
 
 In this tutorial, we saw details about PhysicsNeMo's ``ShardTensor`` object, and how it can be used to enable domain parallelism.  For more behind-the-scenes details of how layers are enabled, see `implementing-new-layers <implementing-new-layers>`_ TODO.  For an example of combining domain parallelism with other parallelisms through FSDP, see `fsdp_and_shard_tensor <fsdp_and_shard_tensor.rst>`_ TODO-fixlink.
+
+
+TODO list:
+- links to implementing new layers
+- citations to Deep speed, MegaTron
+- links to DTensor, DeviceMesh
+- plot of attention efficiency
+- link to fsdp_and_shard_tensor.rst
+- ease in to "How does ShardTensor work?" more slowly, less technically.
+- link to DistributedDataParallel
+- Add a glossary of terms (DTensor, NCCL, FSDP, others)
+- Add a section about prerequisites
+- possibly expand the summary
