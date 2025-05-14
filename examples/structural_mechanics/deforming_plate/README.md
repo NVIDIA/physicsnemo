@@ -37,6 +37,10 @@ has a unique mesh due to geometry variations across samples, and the meshes have
 nodes on average. Note that the model can handle different meshes with different number
 of nodes and edges as the input.
 
+The datapipe from the vortex shedding example has been adapted to load this dataset.
+Currently, we assume that the deformations are small. This limitation will
+be addressed in future updates.
+
 ## Model overview and architecture
 
 The model is free-running and auto-regressive. It takes the prediction at
