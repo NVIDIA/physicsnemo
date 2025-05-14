@@ -128,7 +128,7 @@ class BallQuery(torch.autograd.Function):
 
         try:
             device = str(wp.get_device())
-        except Exception as e:
+        except Exception:
             device = "cuda"
 
         # Convert from torch to warp
