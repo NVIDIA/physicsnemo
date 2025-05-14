@@ -63,7 +63,7 @@ def training_loop(cfg):
     assert batch_size % (local_batch_size * dist.world_size) == 0
     # gradient accumulation rounds per step
     num_accumulation_rounds = batch_size // (local_batch_size * dist.world_size)
-    
+
     log_to_wandb = cfg.training.log_to_wandb
 
     loss_type = cfg.training.loss
@@ -334,7 +334,6 @@ def training_loop(cfg):
 
                     if net_name == "diffusion":
                         output_images = diffusion_model_forward(
-
                             net,
                             condition,
                             state[1].shape,
