@@ -55,7 +55,7 @@ from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.sdf import signed_distance_field
 
-AIR_DENSITY = 1.205
+AIR_DENSITY = 1.226
 STREAM_VELOCITY = 30.00
 
 
@@ -452,7 +452,6 @@ def main(cfg: DictConfig):
                 surf_grid_reshaped,
                 use_sign_winding_number=True,
             )
-            .numpy()
             .reshape(nx, ny, nz)
         )
         surf_grid = np.float32(surf_grid)
@@ -567,7 +566,6 @@ def main(cfg: DictConfig):
                     grid_reshaped,
                     use_sign_winding_number=True,
                 )
-                .numpy()
                 .reshape(nx, ny, nz)
             )
 
@@ -579,8 +577,7 @@ def main(cfg: DictConfig):
                 include_hit_points=True,
                 use_sign_winding_number=True,
             )
-            sdf_nodes = sdf_nodes.numpy().reshape(-1, 1)
-            sdf_node_closest_point = sdf_node_closest_point.numpy()
+            sdf_nodes = sdf_nodes.reshape(-1, 1)
 
             if cfg.model.positional_encoding:
                 pos_volume_closest = calculate_normal_positional_encoding(
@@ -794,7 +791,6 @@ def main(cfg: DictConfig):
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
             write_to_vtu(polydata_vol, vtu_pred_save_path)
-
 
 if __name__ == "__main__":
     main()

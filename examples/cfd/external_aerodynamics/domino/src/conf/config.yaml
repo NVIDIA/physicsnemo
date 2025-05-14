@@ -66,7 +66,7 @@ model:
   loss_function: 
     loss_type: "mse" # mse or rmse
     area_weighing_factor: 10000 # Generally inverse of maximum area
-  interp_res: [128, 128, 128] # resolution of latent space 128, 64, 48
+  interp_res: [128, 64, 64] # resolution of latent space 128, 64, 48
   use_sdf_in_basis_func: true # SDF in basis function network
   positional_encoding: false # calculate positional encoding?
   volume_points_sample: 8192 # Number of points to sample in volume per epoch
@@ -90,8 +90,8 @@ model:
     geo_conv:
       base_neurons: 32 # 256 or 64
       base_neurons_out: 1
-      volume_radii: [0.1, 0.5]
-      surface_radii: [0.05] # 0.05
+      volume_radii: [0.1, 0.5, 2.5, 5.0]
+      surface_radii: [0.01, 0.05, 0.1] # 0.05
       hops: 1
     geo_processor:
       base_filters: 8
@@ -106,15 +106,15 @@ model:
   position_encoder: # Hyperparameters for position encoding network
     base_neurons: 512
   geometry_local: # Hyperparameters for local geometry extraction
-    volume_neighbors_in_radius: [128, 128] # [64, 128]
-    surface_neighbors_in_radius: [128] # [64]
-    volume_radii: [0.05, 0.1] # [0.05. 0.1]
+    volume_neighbors_in_radius: [64] # [64, 128]
+    surface_neighbors_in_radius: [64] # [64]
+    volume_radii: [0.05] # [0.05. 0.1]
     surface_radii: [0.05] # [0.05]
     base_layer: 512
   parameter_model:
     base_layer: 512
     scaling_params: [30.0, 1.226] # [inlet_velocity, air_density]
-    fourier_features: true
+    fourier_features: false
     num_modes: 5
 
 train: # Training configurable parameters
@@ -138,8 +138,8 @@ val: # Validation configurable parameters
 
 eval: # Testing configurable parameters
   test_path: /lustre/rranade/benchmarking/drivaer_aws_surface_test_new/
-  save_path: /lustre/rranade/domino/mesh_predictions_surf_final_pc1/
-  checkpoint_name: DoMINO.0.50.pt
-  scaling_param_path: /lustre/rranade/modulus_dev/modulus_forked/modulus/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset_1/
+  save_path: /lustre/rranade/domino/aws_data_predicted/
+  checkpoint_name: DoMINO.0.472.pt
+  scaling_param_path: /lustre/rranade/modulus_dev/modulus_new/physicsnemo/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/
   refine_stl: False # Automatically refine STL during inference
-  stencil_size: 1 # Stencil size for evaluating surface and volume model
+  stencil_size: 7 # Stencil size for evaluating surface and volume model
