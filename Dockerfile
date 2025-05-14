@@ -48,7 +48,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$PYSPNG_ARM64_WHEEL" != "unkn
 # Remove packaging==23.2 from constraint.txt in the PyTorch container
 RUN FILE="/etc/pip/constraint.txt" && \
     if [ -f "$FILE" ]; then \
-        sed -i '/packaging==23.2/d' "$FILE"; \
+        sed -i '/packaging/d' "$FILE"; \
     else \
         echo "File not found: $FILE"; \
     fi
