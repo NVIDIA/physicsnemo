@@ -38,7 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   amortizing regression costs
 - Explicit handling of Warp device for ball query and sdf
 
-
 ### Deprecated
 
 ### Removed

@@ -57,8 +57,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Medium-range global weather forecast using GraphCast](./weather/graphcast/)|GraphCast|
 |[Medium-range global weather forecast using FCN-AFNO](./weather/fcn_afno/)|FCN-AFNO|
 |[Medium-range and S2S global weather forecast using DLWP](./weather/dlwp/)|DLWP|
-|[Medium-range and S2S global weather forecast using DLWP-HEALPix](./weather/dlwp_healpix/)|DLWP-HEALPix|
-|[Coupled Ocean-Atmosphere Medium-range and S2S global weather forecast using DLWP-HEALPix](./weather/dlwp_healpix_coupled/)|DLWP-HEALPix|
+|[Coupled Ocean-Atmosphere Medium-range and S2S global weather forecast using DLWP-HEALPix](./weather/dlwp_healpix/)|DLWP-HEALPix|
 |[Medium-range and S2S global weather forecast using Pangu](./weather/pangu_weather/)|Pangu|
 |[Diagonistic (Precipitation) model using AFNO](./weather/diagnostic/)|AFNO|
 |[Unified Recipe for training several Global Weather Forecasting models](./weather/unified_recipe/)|AFNO, FCN-SFNO, GraphCast|

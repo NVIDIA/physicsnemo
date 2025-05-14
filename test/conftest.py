@@ -17,7 +17,6 @@ import os
 import pathlib
 from collections import defaultdict
 
-from collections import defaultdict
 
 import pytest
 

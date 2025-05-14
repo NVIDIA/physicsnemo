@@ -63,7 +63,7 @@ def training_loop(cfg):
     assert batch_size % (local_batch_size * dist.world_size) == 0
     # gradient accumulation rounds per step
     num_accumulation_rounds = batch_size // (local_batch_size * dist.world_size)
-
+    
     log_to_wandb = cfg.training.log_to_wandb
 
     loss_type = cfg.training.loss
@@ -164,7 +164,6 @@ def training_loop(cfg):
     num_condition_channels = sum(num_condition_channels[c] for c in condition_list)
 
     logger0.info(f"model conditions {condition_list}")
-
     logger0.info(f"background_channels {background_channels}")
     logger0.info(f"state_channels {state_channels}")
     logger0.info(f"num_condition_channels {num_condition_channels}")
@@ -256,7 +255,6 @@ def training_loop(cfg):
                     condition=condition,
                     augment_pipe=augment_pipe,
                 )
-
 
             if log_to_wandb:
                 channelwise_loss = loss.mean(dim=(0, 2, 3))
@@ -361,7 +359,6 @@ def training_loop(cfg):
                             wandb_logs[
                                 "channelwise_valid_loss"
                             ] = channelwise_valid_loss_dict
-
 
                 if dist.world_size > 1:
                     torch.distributed.barrier()
