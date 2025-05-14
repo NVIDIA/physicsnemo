@@ -35,23 +35,30 @@ from physicsnemo.launch.utils import load_checkpoint
 
 import numpy as np
 
+
 def extract_surface_triangles(tets):
     # tets: (N_tet, 4) array of indices
     # Returns: (N_surface_tri, 3) array of triangle indices
-    faces = np.concatenate([
-        tets[:, [0, 1, 2]],
-        tets[:, [0, 1, 3]],
-        tets[:, [0, 2, 3]],
-        tets[:, [1, 2, 3]],
-    ], axis=0)
+    faces = np.concatenate(
+        [
+            tets[:, [0, 1, 2]],
+            tets[:, [0, 1, 3]],
+            tets[:, [0, 2, 3]],
+            tets[:, [1, 2, 3]],
+        ],
+        axis=0,
+    )
     # Sort each face so that duplicates can be found
     faces = np.sort(faces, axis=1)
     # Find unique faces and their counts
     faces_tuple = [tuple(face) for face in faces]
     from collections import Counter
+
     face_counts = Counter(faces_tuple)
     # Surface faces appear only once
-    surface_faces = np.array([face for face, count in face_counts.items() if count == 1])
+    surface_faces = np.array(
+        [face for face, count in face_counts.items() if count == 1]
+    )
     return surface_faces
 
 
@@ -117,7 +124,9 @@ class MGNRollout:
             graph = graph.to(self.device)
             # denormalize data
             graph.ndata["x"][:, 0:3] = self.dataset.denormalize(
-                graph.ndata["x"][:, 0:3], stats["world_pos_mean"], stats["world_pos_std"]
+                graph.ndata["x"][:, 0:3],
+                stats["world_pos_mean"],
+                stats["world_pos_std"],
             )
             graph.ndata["y"][:, 0:3] = self.dataset.denormalize(
                 graph.ndata["y"][:, 0:3],
@@ -143,7 +152,9 @@ class MGNRollout:
 
             # denormalize prediction
             pred_i[:, 0:3] = self.dataset.denormalize(
-                pred_i[:, 0:3], stats["world_pos_diff_mean"], stats["world_pos_diff_std"]
+                pred_i[:, 0:3],
+                stats["world_pos_diff_mean"],
+                stats["world_pos_diff_std"],
             )
             pred_i[:, 3] = self.dataset.denormalize(
                 pred_i[:, 3], stats["stress_mean"], stats["stress_std"]
@@ -232,20 +243,24 @@ class MGNRollout:
         from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
         self.ax[0].cla()
-        self.ax[0] = self.fig.add_subplot(1, 2, 1, projection='3d')
+        self.ax[0] = self.fig.add_subplot(1, 2, 1, projection="3d")
         tris = mesh_pos_pred[surface_tris]
         # Use a solid metallic color (e.g., 'silver')
-        col = Poly3DCollection(tris, facecolor='silver', edgecolor='k', linewidths=0.05)
+        col = Poly3DCollection(tris, facecolor="silver", edgecolor="k", linewidths=0.05)
         self.ax[0].add_collection3d(col)
-        self.ax[0].auto_scale_xyz(mesh_pos_pred[:,0], mesh_pos_pred[:,1], mesh_pos_pred[:,2])
+        self.ax[0].auto_scale_xyz(
+            mesh_pos_pred[:, 0], mesh_pos_pred[:, 1], mesh_pos_pred[:, 2]
+        )
         self.ax[0].set_title("Predicted Deformed Mesh", color="white")
 
         self.ax[1].cla()
-        self.ax[1] = self.fig.add_subplot(1, 2, 2, projection='3d')
+        self.ax[1] = self.fig.add_subplot(1, 2, 2, projection="3d")
         tris = mesh_pos_exact[surface_tris]
-        col = Poly3DCollection(tris, facecolor='silver', edgecolor='k', linewidths=0.05)
+        col = Poly3DCollection(tris, facecolor="silver", edgecolor="k", linewidths=0.05)
         self.ax[1].add_collection3d(col)
-        self.ax[1].auto_scale_xyz(mesh_pos_exact[:,0], mesh_pos_exact[:,1], mesh_pos_exact[:,2])
+        self.ax[1].auto_scale_xyz(
+            mesh_pos_exact[:, 0], mesh_pos_exact[:, 1], mesh_pos_exact[:, 2]
+        )
         self.ax[1].set_title("True Deformed Mesh", color="white")
 
         # Adjust subplots to minimize empty space
@@ -257,6 +272,7 @@ class MGNRollout:
             left=0.05, bottom=0.05, right=0.95, top=0.95, wspace=0.2, hspace=0.05
         )
         return self.fig
+
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
@@ -277,6 +293,7 @@ def main(cfg: DictConfig) -> None:
         )
         ani.save(f"animations/animation_{k}.gif")
         logger.info(f"Created animation for {k}")
+
 
 if __name__ == "__main__":
     main()

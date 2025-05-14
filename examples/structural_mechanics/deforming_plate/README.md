@@ -1,6 +1,6 @@
 # MeshGraphNet for Modeling Deforming Plate
 
-# **Note:** This example is a work in progress and will be updated soon. We expect accuracy improvements in future releases.
+**Note:** This example is a work in progress and will be updated soon.
 
 This example is a re-implementation of the DeepMind's deforming plate example
 <https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets> in PyTorch.
@@ -31,7 +31,7 @@ making them well-suited for a wide range of applications.
 
 We rely on DeepMind's deforming plate dataset for this example. The dataset includes
 1000 training, 100 validation, and 100 test samples that are simulated using COMSOL
-with irregular tetrahedral meshes, each for 400 steps. 
+with irregular tetrahedral meshes, each for 400 steps.
 These samples vary in the geometry and boundary condition. Each sample
 has a unique mesh due to geometry variations across samples, and the meshes have 1271
 nodes on average. Note that the model can handle different meshes with different number
@@ -60,7 +60,7 @@ the processor includes 15 message passing layers. Batch size per GPU is set to 1
 Summation aggregation is used in the
 processor for message aggregation. A learning rate of 0.0001 is used, decaying
 exponentially with a rate of 0.9999991. Training is performed on 8 NVIDIA H100
-GPUs, leveraging data parallelism for 25 epochs. The total training time was 
+GPUs, leveraging data parallelism for 25 epochs. The total training time was
 20 hours.
 
 ## Getting Started
