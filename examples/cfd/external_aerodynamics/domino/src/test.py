@@ -445,15 +445,12 @@ def main(cfg: DictConfig):
         surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
 
         # SDF calculation on the grid using WARP
-        sdf_surf_grid = (
-            signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                surf_grid_reshaped,
-                use_sign_winding_number=True,
-            )
-            .reshape(nx, ny, nz)
-        )
+        sdf_surf_grid = signed_distance_field(
+            stl_vertices,
+            mesh_indices_flattened,
+            surf_grid_reshaped,
+            use_sign_winding_number=True,
+        ).reshape(nx, ny, nz)
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
@@ -559,15 +556,12 @@ def main(cfg: DictConfig):
             grid_reshaped = grid.reshape(nx * ny * nz, 3)
 
             # SDF calculation on the grid using WARP
-            sdf_grid = (
-                signed_distance_field(
-                    stl_vertices,
-                    mesh_indices_flattened,
-                    grid_reshaped,
-                    use_sign_winding_number=True,
-                )
-                .reshape(nx, ny, nz)
-            )
+            sdf_grid = signed_distance_field(
+                stl_vertices,
+                mesh_indices_flattened,
+                grid_reshaped,
+                use_sign_winding_number=True,
+            ).reshape(nx, ny, nz)
 
             # SDF calculation
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
@@ -791,6 +785,7 @@ def main(cfg: DictConfig):
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
             write_to_vtu(polydata_vol, vtu_pred_save_path)
+
 
 if __name__ == "__main__":
     main()
