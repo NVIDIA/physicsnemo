@@ -46,7 +46,7 @@ from physicsnemo.datapipes.gnn.utils import load_json, save_json
 tf.config.set_visible_devices([], "GPU")
 
 
-class VortexSheddingDataset(DGLDataset):
+class DeformingPlateDataset(DGLDataset):
     """In-memory MeshGraphNet Dataset for stationary mesh
     Notes:
         - This dataset prepares and processes the data available in MeshGraphNet's repo:
@@ -429,8 +429,8 @@ if __name__ == "__main__":
     data_dir = "/code/mnabian/plate/physicsnemo/examples/solid_mechanics/deforming_plate/raw_dataset/deforming_plate/deforming_plate"  # <-- change this to your data path
 
     # Instantiate the dataset (with small numbers for a quick test)
-    dataset = VortexSheddingDataset(
-        name="deformin_plate_example",
+    dataset = DeformingPlateDataset(
+        name="deforming_plate_example",
         data_dir=data_dir,
         split="train",
         num_samples=10,

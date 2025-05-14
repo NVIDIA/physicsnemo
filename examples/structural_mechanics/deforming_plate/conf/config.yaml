@@ -44,7 +44,7 @@ num_processor_checkpoint_segments: 0
 recompute_activation: False
 
 # wandb configs
-wandb_mode: online
+wandb_mode: disabled
 watch_model: False
 
 ckpt_path: "./checkpoints"

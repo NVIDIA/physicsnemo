@@ -28,7 +28,7 @@ from omegaconf import DictConfig
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 
-from physicsnemo.datapipes.gnn.deforming_plate_dataset import VortexSheddingDataset
+from physicsnemo.datapipes.gnn.deforming_plate_dataset import DeformingPlateDataset
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.logging import (
     PythonLogger,
@@ -54,7 +54,7 @@ class MGNTrainer:
             mlp_act = "silu"
 
         # instantiate dataset
-        dataset = VortexSheddingDataset(
+        dataset = DeformingPlateDataset(
             name="deforming_plate_train",
             data_dir=to_absolute_path(cfg.data_dir),
             split="train",
@@ -176,8 +176,8 @@ def main(cfg: DictConfig) -> None:
     initialize_wandb(
         project="Modulus-Launch",
         entity="Modulus",
-        name="Vortex_Shedding-Training",
-        group="Vortex_Shedding-DDP-Group",
+        name="Deforming_Plate-Training",
+        group="Deforming_Plate-DDP-Group",
         mode=cfg.wandb_mode,
     )  # Wandb logger
     logger = PythonLogger("main")  # General python logger

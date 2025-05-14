@@ -1,9 +1,11 @@
-# MeshGraphNet for transient vortex shedding
+# MeshGraphNet for Modeling Deforming Plate
 
-This example is a re-implementation of the DeepMind's vortex shedding example
+# **Note:** This example is a work in progress and will be updated soon. We expect accuracy improvements in future releases.
+
+This example is a re-implementation of the DeepMind's deforming plate example
 <https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets> in PyTorch.
-It demonstrates how to train a Graph Neural Network (GNN) for evaluation of the
-transient vortex shedding on parameterized geometries.
+It demonstrates how to train a Graph Neural Network (GNN) for structural
+mechanics applications.
 
 ## Problem overview
 
@@ -27,50 +29,35 @@ making them well-suited for a wide range of applications.
 
 ## Dataset
 
-We rely on DeepMind's vortex shedding dataset for this example. The dataset includes
+We rely on DeepMind's deforming plate dataset for this example. The dataset includes
 1000 training, 100 validation, and 100 test samples that are simulated using COMSOL
-with irregular triangle 2D meshes, each for 600 time steps with a time step size of
-0.01s. These samples vary in the size and the position of the cylinder. Each sample
-has a unique mesh due to geometry variations across samples, and the meshes have 1885
+with irregular tetrahedral meshes, each for 400 steps. 
+These samples vary in the geometry and boundary condition. Each sample
+has a unique mesh due to geometry variations across samples, and the meshes have 1271
 nodes on average. Note that the model can handle different meshes with different number
 of nodes and edges as the input.
 
 ## Model overview and architecture
 
-The model is free-running and auto-regressive. It takes the initial condition as the
-input and predicts the solution at the first time step. It then takes the prediction at
-the first time step to predict the solution at the next time step. The model continues
-to use the prediction at time step $t$ to predict the solution at time step $t+1$, until
-the rollout is complete. Note that the model is also able to predict beyond the
-simulation time span and extrapolate in time. However, the accuracy of the prediction
-might degrade over time and if possible, extrapolation should be avoided unless
-the underlying data patterns remain stationary and consistent.
+The model is free-running and auto-regressive. It takes the prediction at
+the previous time step to predict the solution at the next step.
 
 The model uses the input mesh to construct a bi-directional DGL graph for each sample.
-The node features include (6 in total):
 
-- Velocity components at time step $t$, i.e., $u_t$, $v_t$
-- One-hot encoded node type (interior node, no-slip node, inlet node, outlet node)
-
-The edge features for each sample are time-independent and include (3 in total):
-
-- Relative $x$ and $y$ distance between the two end nodes of an edge
-- L2 norm of the relative distance vector
-
-The output of the model is the velocity components at time step t+1, i.e.,
-$u_{t+1}$, $v_{t+1}$, as well as the pressure $p_{t+1}$.
+The output of the model is the mesh deformation between two consecutive steps.
 
 ![Comparison between the MeshGraphNet prediction and the
-ground truth for the horizontal velocity for different test samples.
-](../../../docs/img/vortex_shedding.gif)
+ground truth for the deforming plate for different test samples.
+](../../../docs/img/deforming_plate.gif)
 
 A hidden dimensionality of 128 is used in the encoder,
 processor, and decoder. The encoder and decoder consist of two hidden layers, and
 the processor includes 15 message passing layers. Batch size per GPU is set to 1.
 Summation aggregation is used in the
 processor for message aggregation. A learning rate of 0.0001 is used, decaying
-exponentially with a rate of 0.9999991. Training is performed on 8 NVIDIA A100
-GPUs, leveraging data parallelism for 25 epochs.
+exponentially with a rate of 0.9999991. Training is performed on 8 NVIDIA H100
+GPUs, leveraging data parallelism for 25 epochs. The total training time was 
+20 hours.
 
 ## Getting Started
 
@@ -88,7 +75,7 @@ To download the data from DeepMind's repo, run
 
 ```bash
 cd raw_dataset
-sh download_dataset.sh cylinder_flow
+sh download_dataset.sh deforming_plate
 ```
 
 To train the model, run

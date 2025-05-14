@@ -29,7 +29,7 @@ from omegaconf import DictConfig
 import torch
 
 from physicsnemo.models.meshgraphnet import MeshGraphNet
-from physicsnemo.datapipes.gnn.deforming_plate_dataset import VortexSheddingDataset
+from physicsnemo.datapipes.gnn.deforming_plate_dataset import DeformingPlateDataset
 from physicsnemo.launch.logging import PythonLogger
 from physicsnemo.launch.utils import load_checkpoint
 
@@ -65,8 +65,8 @@ class MGNRollout:
         logger.info(f"Using {self.device} device")
 
         # instantiate dataset
-        self.dataset = VortexSheddingDataset(
-            name="vortex_shedding_test",
+        self.dataset = DeformingPlateDataset(
+            name="deforming_plate_test",
             data_dir=to_absolute_path(cfg.data_dir),
             split="test",
             num_samples=cfg.num_test_samples,
