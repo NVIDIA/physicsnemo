@@ -166,9 +166,11 @@ If we make the same changes to the distributed version, we get an error when we 
 
 This is a good time to talk about how pytorch decides what to do each time it's called for an operation on ``torch.Tensor(s)``, which will lead into how we fix this error.
 
-TODO -- THIS SECTION
-.. Pytorch, as you likely already know, implements operations on multiple backends and with multiple
-TODO -- THIS SECTION
+Pytorch, as you likely already know, implements operations on multiple backends and with multiple paths for execution.  How does it decide which path to use, when you call an operation on a tensor?  The answer lies in the pytorch ``__torch_function__`` and ``__torch_dispatch__`` interface.
+
+There are many resources, more detailed and more correct than this (for example, see `this blog post <https://dev-discuss.pytorch.org/t/what-and-why-is-torch-dispatch/557>`_ or `this one <https://blog.ezyang.com/2020/09/lets-talk-about-the-pytorch-dispatcher/>_` and especially the `official walkthrough <https://github.com/pytorch/pytorch/wiki/PyTorch-dispatcher-walkthrough>_`), but here is a high level overview: function routing is built on input types, rather than functions themselves. So when you call a function with an object (like ShardTensor) that extends the PyTorch ``torch.Tensor`` interface, you can use ``__torch_function__`` and ``__torch_dispatch__`` to capture and reroute operations to custom implementations.
+
+For built in functions to pytorch, this is simply a matter of registering a pair of functions with ``ShardTensor``: the function you want to intercept, and the function you want to route data to instead (as long as at least one argument is a ``ShardTensor``).  We'll see this in action below, but in the case of functions that ``torch`` does not know about (external functions, user functions, etc.), we can tap into this system manually. 
 
 
 With all that in mind, let's add a handler for ``torch.dot`` that works on physicsnemo's ``ShardTensor``:
