@@ -659,7 +659,7 @@ class ResidualLoss:
         y = y_tot[:, : img_clean.shape[1], :, :]
         y_lr = y_tot[:, img_clean.shape[1] :, :, :]
         y_lr_res = y_lr
-        batch_size = y.shape[0]
+        # batch_size = y.shape[0]
 
         # if using multi-iterations of patching, switch to optimized version
         if use_patch_grad_acc:
@@ -732,9 +732,12 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index=patching.global_index(batch_size, img_clean.device)
+                global_index=patching.get_patch_indices()
                 if patching is not None
                 else None,
+                # global_index=patching.global_index(batch_size, img_clean.device)
+                # if patching is not None
+                # else None,
                 lead_time_label=lead_time_label,
                 augment_labels=augment_labels,
             )
@@ -744,9 +747,12 @@ class ResidualLoss:
                 y_lr,
                 sigma,
                 embedding_selector=None,
-                global_index=patching.global_index(batch_size, img_clean.device)
+                global_index=patching.get_patch_indices()
                 if patching is not None
                 else None,
+                # global_index=patching.global_index(batch_size, img_clean.device)
+                # if patching is not None
+                # else None,
                 augment_labels=augment_labels,
             )
         loss = weight * ((D_yn - y) ** 2)

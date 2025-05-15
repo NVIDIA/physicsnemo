@@ -31,7 +31,7 @@ model_args:
   # Number of channels for lead-time embeddings
   lead_time_steps: 9
   # Number of lead-time steps
-  model_type: "SongUNetPosLtEmbd"
+  model_type: "SongUNetPosEmbd"
   # Type of model architecture: 'SongUNetPosLtEmbd' for lead-time aware UNet with
   # positional embeddings, 'SongUNetPosEmbd' for UNet with positional
   # embeddings, 'SongUNet' for UNet without positional embeddings,

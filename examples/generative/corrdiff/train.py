@@ -55,6 +55,7 @@ torch._dynamo.reset()
 torch._dynamo.config.cache_size_limit = 264  # Set to a higher value
 torch._dynamo.config.verbose = True  # Enable verbose logging
 torch._dynamo.config.suppress_errors = False  # Forces the error to show all details
+torch._logging.set_logs(recompiles=True, graph_breaks=True)
 
 
 def checkpoint_list(path, suffix=".mdlus"):
@@ -219,6 +220,12 @@ def main(cfg: DictConfig) -> None:
         }
     )
 
+    if (
+        cfg.model.name == "lt_aware_ce_regression"
+        or cfg.model.name == "lt_aware_patched_diffusion"
+    ):
+        model_args.update({"lead_time_mode": True})
+
     if cfg.model.name == "regression":
         model = UNet(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
@@ -252,6 +259,7 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"Invalid model: {cfg.model.name}")
 
     model.train().requires_grad_(True).to(dist.device)
+
     if use_apex_gn:
         model.to(memory_format=torch.channels_last)
 
@@ -278,6 +286,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.wandb.watch_model and dist.rank == 0:
         wandb.watch(model)
 
+    regression_net = None
     # Load the regression checkpoint if applicable
     if (
         hasattr(cfg.training.io, "regression_checkpoint_path")
@@ -431,7 +440,7 @@ def main(cfg: DictConfig) -> None:
                     logger0.info(f"Starting Profiler at {cur_nimg}")
                     torch.cuda.profiler.start()
 
-                if cur_nimg - start_nimg == 25 * cfg.training.hp.total_batch_size:
+                if cur_nimg - start_nimg == 26 * cfg.training.hp.total_batch_size:
                     logger0.info(f"Stoping Profiler at {cur_nimg}")
                     torch.cuda.profiler.stop()
 
@@ -496,7 +505,6 @@ def main(cfg: DictConfig) -> None:
                                 if patching is not None:
                                     patching.set_patch_sum(patch_num_per_iter)
                                     loss_fn_kwargs.update({"patching": patching})
-                                # pdb.set_trace()
                                 with nvtx.annotate(f"loss forward", color="green"):
                                     with torch.autocast(
                                         "cuda", dtype=amp_dtype, enabled=enable_amp
@@ -643,7 +651,6 @@ def main(cfg: DictConfig) -> None:
                                             loss_fn_kwargs.update(
                                                 {"patching": patching}
                                             )
-                                        # pdb.set_trace()
                                         with torch.autocast(
                                             "cuda", dtype=amp_dtype, enabled=enable_amp
                                         ):

@@ -19,7 +19,7 @@ import math
 import random
 import warnings
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 from einops import rearrange
@@ -249,6 +249,20 @@ class RandomPatching2D(BasePatching2D):
             for _ in range(self.patch_num)
         ]
         return
+
+    def get_patch_indices(self) -> List[Tuple[int, int]]:
+        """
+        Get the current list of patch starting indices.
+
+        These are the upper-left coordinates of each extracted patch
+        from the full image.
+
+        Returns
+        -------
+        List[Tuple[int, int]]
+            A list of (row, column) tuples representing patch starting positions.
+        """
+        return self.patch_indices
 
     def apply(
         self,
