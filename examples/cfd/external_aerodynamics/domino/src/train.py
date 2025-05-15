@@ -39,7 +39,7 @@ import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
-
+import torch.distributed as dist
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -63,9 +63,6 @@ from physicsnemo.utils.domino.utils import *
 # This is included for GPU memory tracking:
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import time
-
-# Initialize NVML
-nvmlInit()
 
 
 def loss_fn(
@@ -283,6 +280,7 @@ def compute_loss_dict(
             target_surf,
             loss_fn_type.loss_type,
         )
+
         loss_surf_area = loss_fn_area(
             prediction_surf,
             target_surf,
@@ -357,7 +355,6 @@ def validation_step(
     return avg_vloss
 
 
-@profile
 def train_epoch(
     dataloader,
     model,
@@ -424,7 +421,7 @@ def train_epoch(
             + "\n"
         )
         loss_string += (
-            "  " + f"\t".join([f"{l.item():<10.2f}" for l in loss_dict.values()]) + "\n"
+            "  " + f"\t".join([f"{l.item():<10.3e}" for l in loss_dict.values()]) + "\n"
         )
 
         logging_string += loss_string
@@ -453,6 +450,9 @@ def main(cfg: DictConfig) -> None:
     # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()
+
+    # Initialize NVML
+    nvmlInit()
 
     gpu_handle = nvmlDeviceGetHandleByIndex(dist.device.index)
 

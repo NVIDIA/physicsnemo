@@ -100,9 +100,6 @@ from train import (
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import time
 
-# Initialize NVML
-nvmlInit()
-
 
 from physicsnemo.utils.profiling import profile, Profiler
 
@@ -224,7 +221,7 @@ def train_epoch(
         loss_string += (
             "  "
             + f"\t".join(
-                [f"{l.full_tensor().item():<10.2f}" for l in loss_dict.values()]
+                [f"{l.full_tensor().item():<10.2e}" for l in loss_dict.values()]
             )
             + "\n"
         )
@@ -262,9 +259,17 @@ def main(cfg: DictConfig) -> None:
     DistributedManager.initialize()
     dist = DistributedManager()
 
+    # Initialize NVML
+    nvmlInit()
+
     # Use this to monitor GPU memory usage for visible GPUs:
     gpu_count = torch.cuda.device_count()
-    gpu_handles = [nvmlDeviceGetHandleByIndex(i) for i in range(gpu_count)]
+    # This will allocate a little memory on all visible GPUS:
+    # Change to just the local GPU if you don't want that.
+    gpu_handles = [
+        nvmlDeviceGetHandleByIndex(dist.local_rank),
+    ]
+    # gpu_handles = [nvmlDeviceGetHandleByIndex(i) for i in range(gpu_count)]
 
     #################################
     # Mesh Creation
