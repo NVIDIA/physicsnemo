@@ -864,8 +864,6 @@ class SongUNetPosEmbd(SongUNet):
                 )
 
             for i, (py, px) in enumerate(global_index):
-                py = torch.tensor(py)
-                px = torch.tensor(px)
                 out[B * i : B * (i + 1),] = self.pos_embd[
                     :,
                     py : py + patch_shape[0],
