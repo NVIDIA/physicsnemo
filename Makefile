@@ -7,10 +7,11 @@ editable-install:
 		pip install -e .[dev] --config-settings editable_mode=strict
 
 get-data:
-	mkdir -p /data && \
-		mkdir -p /data/nfs/ && \
-		git -C /data/nfs/modulus-data pull || \
-		git clone https://gitlab-master.nvidia.com/modulus/modulus-data.git /data/nfs/modulus-data
+	test -n "$(TEST_DATA_DIR)" || { echo "Error: TEST_DATA_DIR should be set"; exit 1; }
+	mkdir -p $(TEST_DATA_DIR) && \
+	rm -rf $(TEST_DATA_DIR)/modulus-data && \
+	git clone https://gitlab-master.nvidia.com/modulus/modulus-data.git $(TEST_DATA_DIR)/modulus-data && \
+	echo "Test data has been saved in ${TEST_DATA_DIR}"
 
 setup-ci:
 	pip install pre-commit && \

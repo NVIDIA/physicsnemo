@@ -131,7 +131,7 @@ class TorchProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Single
 
         # Get the output directory:
         out_top = self.output_dir(output_top)
-        if self._profiler is not None:
+        if self._profiler is not None and self._profiler.profiler is not None:
 
             try:
                 averages = self._profiler.key_averages()
