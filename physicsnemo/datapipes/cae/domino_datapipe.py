@@ -1020,7 +1020,7 @@ class DoMINODataPipe(Dataset):
 def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -> None:
 
     model_type = cfg.model.model_type
-    max_scaling_factor_files = 5
+    max_scaling_factor_files = 20
 
     if model_type == "volume" or model_type == "combined":
         vol_save_path = os.path.join(cfg.project_dir, "volume_scaling_factors.npy")
@@ -1045,7 +1045,7 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 bounding_box_dims_surf=cfg.data.bounding_box_surface,
                 compute_scaling_factors=True,
                 gpu_preprocessing=True,
-                gpu_output=False,
+                gpu_output=True,
             )
 
             # Calculate mean
@@ -1092,19 +1092,27 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                     d_dict = fm_dict[j]
                     vol_fields = d_dict["volume_fields"]
 
+                    if vol_fields.device.type == "cuda":
+                        xp = cp
+                        vol_fields = vol_fields.cuda()
+                        vol_fields = cp.from_dlpack(vol_fields)
+                    else:
+                        xp = np
+                        vol_fields = vol_fields.cpu().numpy()
+
                     if vol_fields is not None:
-                        vol_mean = np.mean(vol_fields, 0)
-                        vol_std = np.std(vol_fields, 0)
+                        vol_mean = xp.mean(vol_fields, 0)
+                        vol_std = xp.std(vol_fields, 0)
                         vol_idx = mean_std_sampling(
                             vol_fields, vol_mean, vol_std, tolerance=12.0
                         )
-                        vol_fields_sampled = np.delete(vol_fields, vol_idx, axis=0)
+                        vol_fields_sampled = xp.delete(vol_fields, vol_idx, axis=0)
                         if j == 0:
-                            vol_fields_max = np.amax(vol_fields_sampled, 0)
-                            vol_fields_min = np.amin(vol_fields_sampled, 0)
+                            vol_fields_max = xp.amax(vol_fields_sampled, 0)
+                            vol_fields_min = xp.amin(vol_fields_sampled, 0)
                         else:
-                            vol_fields_max1 = np.amax(vol_fields_sampled, 0)
-                            vol_fields_min1 = np.amin(vol_fields_sampled, 0)
+                            vol_fields_max1 = xp.amax(vol_fields_sampled, 0)
+                            vol_fields_min1 = xp.amin(vol_fields_sampled, 0)
 
                             for k in range(vol_fields.shape[-1]):
                                 if vol_fields_max1[k] > vol_fields_max[k]:
@@ -1194,21 +1202,28 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 for j in range(len(fm_dict)):
                     print(f"Min max scaling on iteration {j}")
                     d_dict = fm_dict[j]
-                    surf_fields = d_dict["surface_fields"].cpu().numpy()
+                    surf_fields = d_dict["surface_fields"]
+                    if surf_fields.device.type == "cuda":
+                        xp = cp
+                        surf_fields = surf_fields.cuda()
+                        surf_fields = cp.from_dlpack(surf_fields)
+                    else:
+                        xp = np
+                        surf_fields = surf_fields.cpu().numpy()
 
                     if surf_fields is not None:
-                        surf_mean = np.mean(surf_fields, 0)
-                        surf_std = np.std(surf_fields, 0)
+                        surf_mean = xp.mean(surf_fields, 0)
+                        surf_std = xp.std(surf_fields, 0)
                         surf_idx = mean_std_sampling(
                             surf_fields, surf_mean, surf_std, tolerance=12.0
                         )
-                        surf_fields_sampled = np.delete(surf_fields, surf_idx, axis=0)
+                        surf_fields_sampled = xp.delete(surf_fields, surf_idx, axis=0)
                         if j == 0:
-                            surf_fields_max = np.amax(surf_fields_sampled, 0)
-                            surf_fields_min = np.amin(surf_fields_sampled, 0)
+                            surf_fields_max = xp.amax(surf_fields_sampled, 0)
+                            surf_fields_min = xp.amin(surf_fields_sampled, 0)
                         else:
-                            surf_fields_max1 = np.amax(surf_fields_sampled, 0)
-                            surf_fields_min1 = np.amin(surf_fields_sampled, 0)
+                            surf_fields_max1 = xp.amax(surf_fields_sampled, 0)
+                            surf_fields_min1 = xp.amin(surf_fields_sampled, 0)
 
                             for k in range(surf_fields.shape[-1]):
                                 if surf_fields_max1[k] > surf_fields_max[k]:
