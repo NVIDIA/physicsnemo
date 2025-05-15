@@ -120,8 +120,10 @@ def compute_result_placements(
     """
     if is_full_reduction(dim, tensor.ndim):
         return [
-            Partial("sum" if reduction_name != "avg" else "avg")
-            for _ in range(tensor.device_mesh.ndim)
+            p
+            if p.is_replicate()
+            else Partial("sum" if reduction_name != "avg" else "avg")
+            for p in tensor._spec.placements
         ]
 
     # Use enhanced normalize_dim to get dimensions as a set

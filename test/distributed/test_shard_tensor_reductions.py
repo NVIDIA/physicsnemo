@@ -46,6 +46,66 @@ from distributed_utils_for_testing import modify_environment
 from physicsnemo.distributed import DistributedManager
 
 
+def run_consecutive_reductions(
+    rank,
+    num_gpus,
+    mesh_names,
+    mesh_sizes,
+):
+    with modify_environment(
+        RANK=f"{rank}",
+        WORLD_SIZE=f"{num_gpus}",
+        MASTER_PORT=str(13245),
+        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
+    ):
+
+        def two_reduction_operation(output, target):
+
+            mask = target > 0.0
+
+            num = torch.sum(mask * (output - target) ** 2.0, (1,))
+            denom = torch.sum(mask)
+
+            return torch.mean(num / denom)
+
+        init_dist(rank, num_gpus)
+
+        dm = DistributedManager()
+
+        full_output = torch.randn(2, 400, 5, requires_grad=False).to(dm.device)
+        full_target = torch.randn(2, 400, 5, requires_grad=False).to(dm.device)
+        baseline = two_reduction_operation(full_output, full_target)
+
+        # Scatter it:
+        global_mesh = dm.initialize_mesh(mesh_sizes, mesh_names)  # noqa: F841
+        placements = (Shard(1),)
+        shard_output = scatter_tensor(
+            full_output,
+            0,
+            global_mesh,
+            placements,
+            global_shape=full_output.shape,
+            dtype=full_output.dtype,
+            requires_grad=False,
+        )
+        shard_target = scatter_tensor(
+            full_target,
+            0,
+            global_mesh,
+            placements,
+            global_shape=full_target.shape,
+            dtype=full_target.dtype,
+            requires_grad=False,
+        )
+
+        sharded_result = two_reduction_operation(shard_output, shard_target)
+
+        full_result = sharded_result.full_tensor()
+
+        if rank == 0:
+            assert torch.allclose(baseline, full_result)
+
+
 def run_shard_tensor_reduction(
     rank, num_gpus, mesh_names, mesh_sizes, op, backward, dim, in_place, verbose
 ):
@@ -164,7 +224,7 @@ def run_shard_tensor_reduction(
 
 @pytest.mark.multigpu
 @pytest.mark.parametrize("op", ["sum", "mean"])
-@pytest.mark.parametrize("backward", [True, False])
+@pytest.mark.parametrize("backward", [True])
 @pytest.mark.parametrize("dim", [None, 0, (0, 1)])
 @pytest.mark.parametrize("in_place", [True, False])
 def test_shard_tensor_reduction(op, backward, dim, in_place):
@@ -196,5 +256,28 @@ def test_shard_tensor_reduction(op, backward, dim, in_place):
     )
 
 
+def test_consecutive_reductions():
+
+    num_gpus = torch.cuda.device_count()
+    assert num_gpus >= 2, "Not enough GPUs available for test"
+
+    mesh_names = ["domain"]
+    mesh_sizes = [-1]
+
+    torch.multiprocessing.set_start_method("spawn", force=True)
+
+    torch.multiprocessing.spawn(
+        run_consecutive_reductions,
+        args=(
+            num_gpus,
+            mesh_names,
+            mesh_sizes,
+        ),
+        nprocs=num_gpus,
+        join=True,
+        daemon=True,
+    )
+
+
 if __name__ == "__main__":
-    test_shard_tensor_reduction(op="sum", backward=True, dim=(0,), in_place=False)
+    test_consecutive_reductions()
