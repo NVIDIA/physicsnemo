@@ -17,7 +17,6 @@ import os
 import pathlib
 from collections import defaultdict
 
-
 import pytest
 
 NFS_DATA_PATH = "/data/nfs/modulus-data"
