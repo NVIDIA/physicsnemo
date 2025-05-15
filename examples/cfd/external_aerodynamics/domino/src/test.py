@@ -55,7 +55,7 @@ from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.sdf import signed_distance_field
 
-AIR_DENSITY = 1.205
+AIR_DENSITY = 1.226
 STREAM_VELOCITY = 30.00
 
 
@@ -114,13 +114,13 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             encoding_g_vol = model.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
             # Normalize based on BBox around surface (car)
-            geo_centers_surf = (
-                2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
-            )
-            encoding_g_surf = model.geo_rep_surface1(
-                geo_centers_surf, s_grid, sdf_surf_grid
-            )
-            encoding_g_vol += encoding_g_surf
+            # geo_centers_surf = (
+            #     2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
+            # )
+            # encoding_g_surf = model.geo_rep_surface1(
+            #     geo_centers_surf, s_grid, sdf_surf_grid
+            # )
+            # encoding_g_vol += encoding_g_surf
 
         if output_features_surf is not None:
             # Represent geometry on bounding box
@@ -445,16 +445,12 @@ def main(cfg: DictConfig):
         surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
 
         # SDF calculation on the grid using WARP
-        sdf_surf_grid = (
-            signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                surf_grid_reshaped,
-                use_sign_winding_number=True,
-            )
-            .numpy()
-            .reshape(nx, ny, nz)
-        )
+        sdf_surf_grid = signed_distance_field(
+            stl_vertices,
+            mesh_indices_flattened,
+            surf_grid_reshaped,
+            use_sign_winding_number=True,
+        ).reshape(nx, ny, nz)
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
@@ -560,16 +556,12 @@ def main(cfg: DictConfig):
             grid_reshaped = grid.reshape(nx * ny * nz, 3)
 
             # SDF calculation on the grid using WARP
-            sdf_grid = (
-                signed_distance_field(
-                    stl_vertices,
-                    mesh_indices_flattened,
-                    grid_reshaped,
-                    use_sign_winding_number=True,
-                )
-                .numpy()
-                .reshape(nx, ny, nz)
-            )
+            sdf_grid = signed_distance_field(
+                stl_vertices,
+                mesh_indices_flattened,
+                grid_reshaped,
+                use_sign_winding_number=True,
+            ).reshape(nx, ny, nz)
 
             # SDF calculation
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
@@ -579,8 +571,7 @@ def main(cfg: DictConfig):
                 include_hit_points=True,
                 use_sign_winding_number=True,
             )
-            sdf_nodes = sdf_nodes.numpy().reshape(-1, 1)
-            sdf_node_closest_point = sdf_node_closest_point.numpy()
+            sdf_nodes = sdf_nodes.reshape(-1, 1)
 
             if cfg.model.positional_encoding:
                 pos_volume_closest = calculate_normal_positional_encoding(

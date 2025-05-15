@@ -366,6 +366,31 @@ def test_residualloss_call_method():
     expected_shape = (batch_size * patch_num, channels, patch_shape[0], patch_shape[1])
     assert loss_value_with_patching.shape == expected_shape
 
+    # Tests with patching accumulation
+    loss_func.y_mean = None
+    patch_nums_iter = [4, 4, 4, 2]
+    patch_shape = (16, 16)
+    for patch_num in patch_nums_iter:
+        patching = RandomPatching2D(
+            img_shape=(32, 32), patch_shape=patch_shape, patch_num=patch_num
+        )
+        loss_value_with_patching = loss_func(
+            fake_residual_net,
+            img_clean,
+            img_lr,
+            patching=patching,
+            use_patch_grad_acc=True,
+        )
+        assert isinstance(loss_value_with_patching, torch.Tensor)
+        # Shape should be (batch_size * patch_num, channels, patch_shape_y, patch_shape_x)
+        expected_shape = (
+            batch_size * patch_num,
+            channels,
+            patch_shape[0],
+            patch_shape[1],
+        )
+        assert loss_value_with_patching.shape == expected_shape
+
     # Test error on invalid patching object
     with pytest.raises(ValueError):
         loss_func(

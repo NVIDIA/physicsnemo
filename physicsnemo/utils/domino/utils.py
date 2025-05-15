@@ -314,8 +314,6 @@ def pad_inp(arr: ArrayType, npoin: int, pad_value: float = 0.0) -> ArrayType:
     return arr_padded
 
 
-# CJA NOTE: the `sample_array` function is the same optimization I put into shuffle_array.
-# Keeping the cupy compatible version (mine)
 @profile
 def shuffle_array(
     arr: ArrayType,
@@ -323,6 +321,9 @@ def shuffle_array(
 ) -> Tuple[ArrayType, ArrayType]:
     """Function for shuffling arrays"""
     xp = array_type(arr)
+    if npoin > arr.shape[0]:
+        # If asking too many points, truncate the ask but still shuffle.
+        npoin = arr.shape[0]
     idx = xp.random.choice(arr.shape[0], size=npoin, replace=False)
     return arr[idx], idx
 
@@ -439,6 +440,9 @@ def area_weighted_shuffle_array(
     factor = 1.0
     total_area = xp.sum(area**factor)
     probs = area**factor / total_area
+
+    if npoin > arr.shape[0]:
+        npoin = arr.shape[0]
 
     idx = xp.arange(arr.shape[0])
 

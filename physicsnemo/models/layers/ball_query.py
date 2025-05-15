@@ -250,6 +250,16 @@ class BallQuery(torch.autograd.Function):
         if points1.shape[0] != 1:
             raise AssertionError("Ball Query only works for batch size 1")
 
+        # CJA - 5/15/25 - This was added recently, but it looks like I also
+        # addressed it.  The primitive functions below handle device selection
+        # via compute-follows-data: they will allocate new tensors on the device
+        # where points1 currently resides (forward) and points2 resides (backward).
+        # there isn't checking that the devices match, but it will crash if they do not.
+        # try:
+        #     device = str(wp.get_device())
+        # except Exception:
+        #     device = "cuda"
+
         ctx.k = k
         ctx.radius = radius
 
