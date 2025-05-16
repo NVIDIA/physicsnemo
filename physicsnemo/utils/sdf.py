@@ -109,7 +109,7 @@ def signed_distance_field(
     >>> mesh_vertices = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
     >>> mesh_indices = np.array((0, 1, 2))
     >>> input_points = [(0.5, 0.5, 0.5)]
-    >>> signed_distance_field(mesh_vertices, mesh_indices, input_points).numpy()
+    >>> signed_distance_field(mesh_vertices, mesh_indices, input_points)
     Module ...
     array([0.5], dtype=float32)
     """
