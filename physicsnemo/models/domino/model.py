@@ -729,7 +729,6 @@ class DoMINO(nn.Module):
     ...            "air_density": air_density,
     ...        }
     >>> output = model(input_dict)
-    Module ...
     >>> print(f"{output[0].shape}, {output[1].shape}")
     torch.Size([1, 100, 5]), torch.Size([1, 100, 4])
     """
