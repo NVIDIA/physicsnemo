@@ -12,13 +12,18 @@ To understand why scientific AI hits unique challenges in training and inference
 For all AI models, the memory cost of inference is dominated by just two categories of use:
 
 1. **Model parameters** (weights, biases, encodings, etc.) all are required to be loaded into GPU memory for fast access during inference.  For a model with N total parameters, each parameter requires 4 bytes in float32 precision, or 2 in float16/bfloat16.  A rough approximation is that a 100M parameter model requires 400MB of memory  in float32 precision.  For Large Language Models with billions of parameters, even at inference time this is a large amount of memory. 
-2. **Data and Activations** represent the memory required to actually compute the layers and outputs of the model.  For inference, the available memory has to be enough to hold the input data, output data, and model parameters as well as temporariliy accommodate memory of intermediate activations.  As one layer's output is consumed by the next layer, the total memory needed to store activations typically never exceeds the requirements of the most memory-intensive layer.
 
-For scientific AI with high resolution data, the memory cost at inference quickly becomes dominated not by the model parameters but by the data.
+2. **Active Data** (the inputs and outputs!) represent the memory required to actually compute the layers and outputs of the model.  For inference, the available memory has to be enough to hold the input data, output data, and model parameters as well as temporariliy accommodate memory of intermediate activations.  As one layer's output is consumed by the next layer, the total memory needed typically never exceeds the requirements of the most memory-intensive layer.
 
-During training, the high resolution of the data is even more challenging.  For each layer during training, pytorch will typically save the some version of the layer's input or output as the "intermediate activation" for that layer.  In practice, this is a computational optimization to enable the backwards pass to compute and propagate gradients more efficiently.  Each layer, however, requires extra memory storage during training that is proportional to the resolution of the input data.
+For scientific AI with high resolution data, the memory cost at inference can be dominated not by the model parameters but by the data - though it's not always a clear cut winner.
 
-As a cumulative effect, as models continue to stack up layers and save intermediate activations, the activation-related memory required training a model grows with both the depth of the model and the resolution of the input data.  In contrast to Large Language Models, where the memory usage during training is dominated by the parameters, gradients, and optimizer states, for high resolution scientific AI models with modest parameter counts the memory usage is dominated by data size.
+During training (for a standard training loop), the high resolution of the data is even more challenging.  There are two additional memory consumers during a model training, in most cases:
+
+3. **Optimizer states** (gradients, moments) are needed to accumulate and update the model's parameters during training.  This can be as little memory usage as the model's parameters, again, for SGD.  For more complicated optimizers, like ``adam``, the optimizer must store moments and running gradient averages and the usage increases.
+
+4. **Activations** For each layer during training, pytorch will typically save the some version of the layer's input, output, or other component as the "intermediate activation" for that layer.  In practice, this is a computational optimization to enable the backwards pass to compute and propagate gradients more efficiently.  Each layer, however, requires extra memory storage during training that is proportional to the resolution of the input data.  
+
+As a cumulative effect, as models continue to stack up layers and save intermediate activations, the activation-related memory required training a model grows with both the depth of the model and the resolution of the input data.  In contrast to Large Language Models, where the memory usage during training is dominated by the parameters, gradients, and optimizer states, for high resolution scientific AI models with modest parameter counts the memory usage is dominated by actications!
 
 To address this challenge, in PhysicsNeMo we have developed a domain-parallelism framework specifically designed to parallelize the high compute and memory costs of training and inferencing models on high resolution data.  Named ``ShardTensor``, and built on top of PyTorch's ``DTensor`` framework, ``ShardTensor`` allows models to divide expensive operations across multiple GPUs - parallelizing both the compute required as well as the storage of the intermediate activations.
 
@@ -129,56 +134,109 @@ With ``ShardTensor``, we extend the functionality of ``DTensor`` in the ways nee
     DistributedManager.initialize()
     dm = DistributedManager()
 
-    mesh = dm.initialize_mesh((-1,), ("domain_parallel",))
+    ###########################
+    # Single GPU - Create input
+    ###########################
+    original_tensor = torch.randn(1, 8, 1024, 1024, device=dm.device, requires_grad=True)
 
-    if dm.rank == 0:
-        original_tensor = torch.randn(1, 8, 1024, 1024, device=dm.device, requires_grad=True)
-    else:
-        original_tensor = None
-
-    # This is now a tensor across all GPUs, spread on the "height" dimension == 2    
-    sharded_tensor = scatter_tensor(original_tensor, 0, mesh, (Shard(2),), requires_grad=True)
-
+    ###########################################
+    # Single GPU - Create a single-layer model:
+    ###########################################
     conv = torch.nn.Conv2d(8, 8, 3, stride=1, padding=1).to(dm.device)
 
-    if dm.rank == 0:
-        # Get the single-device output:
-        rank_0_output = conv(original_tensor)
-        
+    ########################################
+    # Single GPU - forward + loss + backward
+    ########################################
+    single_gpu_output = conv(original_tensor)
+
+    # This isn't really a loss, just a pretend one that's scalar!
+    single_gpu_output.mean().backward()
+    # Copy the gradients produced here - so we don't overwrite them later.
+    original_tensor_grad = original_tensor.grad.data.clone()
+
+    ####################
+    # Single GPU - DONE!
+    ####################
+
+
+    #################
+    # Sharded - Setup
+    #################
+
+
+    # DeviceMesh is a pytorch object - you can initialize it directly, or for added
+    # flexibility physicsnemo can infer up to one mesh dimension for you 
+    # (as a -1, like in a tensor.reshape() call...)
+    mesh = dm.initialize_mesh(mesh_shape=(-1,), mesh_dim_names=("domain_parallel",))
+
+    # A mesh, by the way, refers to devices and not data: it's a mesh of connected 
+    # GPUs in this case, and the python DeviceMesh can be reused as many times as needed.
+    # That said, it can be decomposed similar to a tensor - multiple mesh axes, and 
+    # you can axis sub-meshes.  Each mesh also has ways to access process groups 
+    # for targeted collectives.
+
+
+    ###########################
+    # Sharded - Distribute Data
+    ###########################
+
+    # This is now a tensor across all GPUs, spread on the "height" dimension == 2    
+    # In general, to create a ShardTensor (or DTensor) you need to specify placements.
+    # Placements must be a list or tuple of `Shard()` or `Replicate()` objects 
+    # from torch.distributed.tensor. 
+    #
+    # Each index in the tuple represents the placement over the corresponding mesh dimension
+    # (so, mesh.ndim == len(placements)! )
+    # `Shard()` takes an argument representing the **tensor** index that is sharded.
+    # So below, the tensor is sharded over the tensor dimension 2 on the mesh dimension 0.
+    sharded_tensor = scatter_tensor(original_tensor, 0, mesh, (Shard(2),), requires_grad=True)
+
+
+    ################################
+    # Sharded - distribute the model
+    ################################
+
     # We tell pytorch that the convolution will work on distributed tensors:
     # And, over the same mesh!
-    conv = distribute_module(conv, mesh)
+    distributed_conv = distribute_module(conv, mesh)
+
+
+    #####################################
+    # Sharded - forward + loss + backward
+    #####################################
 
     # Now, we can do the distributed convolution:
-    sharded_output = conv(sharded_tensor)
+    sharded_output = distributed_conv(sharded_tensor)
+    sharded_output.mean().backward()
 
-    # We can now gather the output back to the original tensor:
-    full_output = sharded_output.full_tensor() # This triggers a collective allgather.
+
+    ############################################
+    # Sharded - gather up outputs to all devices
+    ############################################
+
+    # This triggers a collective allgather.
+    full_output = sharded_output.full_tensor()
+    full_grad = sharded_tensor.grad.full_tensor()
+
+
+
+    #################
+    # Accuracy Checks
+    #################
 
     if dm.rank == 0:
-
+        # Only check on rank 0 because we used it's data and weights for the sharded tensor.
         # Check that the output is the same as the single-device output:
-        diff = full_output - rank_0_output
-        assert torch.allclose(full_output, rank_0_output)
+        assert torch.allclose(full_output, single_gpu_output)
         print(f"Global operation matches local! ")
 
-    # We can even do gradients:
-    if dm.rank == 0:
-        rank_0_output.mean().backward()
-        original_tensor_grad = original_tensor.grad.data.clone()
-
-    # Distribute gradients:
-    full_output.mean().backward()
-
-    distributed_grad = sharded_tensor.grad
-    # distributed grad itself is a sharded tensor:
-    full_grad = distributed_grad.full_tensor()
-    if dm.rank == 0:
         # Check that the gradient is correct:
         assert torch.allclose(original_tensor_grad, full_grad)
         print(f"Gradient check passed!")
+
         
-    print(f"Distributed grad sharding and local shape: {distributed_grad._spec.placements}, {distributed_grad.to_local().shape}")
+    print(f"Distributed grad sharding and local shape: {sharded_tensor.grad._spec.placements}, {sharded_tensor.grad.to_local().shape}")
+
 
 If you run this (``torchrun --nproc-per-node 4 conv_example.py``), you'll see the checks on output and gradients both pass.  Further, the last line will print:
 
@@ -195,7 +253,7 @@ At a high level, ``DTensor`` from pytorch is a concept of a local chunk of a ten
 
 At run time, when an operation in ``torch`` has ``DTensor`` as input, pytorch will use a custom dispatcher in ``DTensor`` to route perform operations correctly on the inputs.  ``ShardTensor`` extends this by intercepting a little higher than ``DTensor``: operations can be intercepted at the functional level, or at the dispatch level, and if ``ShardTensor`` has no registered implementation it will fall back to DTensor.
 
-ShardTensor also has custom implementations of common reduction operations ``sum`` and ``mean``, in order to properly intercept and distribute gradients correctly.  This is why, in the example above, you can seamlessly call ``mean().backward()`` on a ``ShardTensor`` and the gradients will arrive to their proper sharding.
+ShardTensor also has dedicated implementations of common reduction operations ``sum`` and ``mean``, in order to properly intercept and distribute gradients correctly.  This is why, in the example above, you can seamlessly call ``mean().backward()`` on a ``ShardTensor`` and the gradients will arrive to their proper sharding.  No need to do anything special - reducing a ``ShardTensor`` will handle this automatically.
 
 There is a substantial amount of care needed to implement layers in ``ShardTensor`` (or ``DTensor``!).  If you're interested in doing so for your custom model, please check out a full tutorial on this subject: `implementing-new-layers <implementing-new-layers>`_ TODO.
 
@@ -210,7 +268,7 @@ For some use cases, pipeline parallelism can be very powerful.  But it also has 
 
 With just one or several points in the model where pipeline parallelism divides your model, it is conceptually simple and each GPU has minimal communication overhead.  However, not all models are well supported with pipeline parallelism (consider a UNet architecture).  On the other hand, ``ShardTensor`` enables you to slice your model by dividing each and every layer over sharded inputs.  In terms of model support, this makes more complicated architectures like UNet simple: the concatenation of features across the down/up sampling paths is unmodified in user space (and in fact it's pretty simple in low-level implementations too: it becomes a concat of the local tensor objects).  On the other hand, because each layer introduces additional overhead of communication or coordination, a sharded layer can be less efficient than a purely-local layer.
 
-As a general rule, ``ShardTensor`` performs efficiently when the input data is large, and when the ratio of communication time to computation time is small.  For some operations, like sequence-parallel attention via a Ring Mechanism [Ring Attention] TODO the benefits become clear, as shown below: the sharded model is faster after a certain input data size.  More importantly, the sharded model is still **functional** after a massive input size:  something pipeline parallelism could not achieve for a simple one-layer model.
+As a general rule, ``ShardTensor`` performs efficiently when the input data is large, and when the ratio of communication time to computation time is small. For some operations, like sequence-parallel attention via a Ring Mechanism (`Ring Attention <https://arxiv.org/pdf/2310.01889>`_), the benefits become clear, as shown below: the sharded model is faster after a certain input data size. More importantly, the sharded model is still **functional** after a massive input size—something pipeline parallelism could not achieve for a simple one-layer model.
 
 TODO - add plot of attention efficiency.
 
@@ -221,7 +279,7 @@ Another technique for dealing with high resolution input data during training is
 In general, if your model meets all of these conditions, you should consider using ``ShardTensor`` for domain parallelism during training:
 
 - Your model has relatively large input size even at batch size of 1 - so large, in fact, that you run out of GPU memory trying to train the model with batch size 1.
-    - If your model comfortably fits batch_size=1 training, you will have a simpler and more efficient training using PyTorch's DistributedDataParallel (link, TODO)
+    - If your model comfortably fits batch_size=1 training, you will have a simpler and more efficient training using PyTorch's `DistributedDataParallel <https://pytorch.org/docs/stable/ddp.html>`_
 - Your model is composed of supported domain-parallel layers (convolutions, normalizations, upsampling/pooling/reductions, attention layers, etc.)
     - Not every layer has a domain-parallel implementation in PhysicsNeMo.  You can add it to your code yourself if it's simple (consider a P.R. if you do!) or ask for support on github.
     - How do you know if a layer is supported?  Pass a ``ShardTensor`` in like above and test it!
@@ -238,15 +296,28 @@ Summary
 
 In this tutorial, we saw details about PhysicsNeMo's ``ShardTensor`` object, and how it can be used to enable domain parallelism.  For more behind-the-scenes details of how layers are enabled, see `implementing-new-layers <implementing-new-layers>`_ TODO.  For an example of combining domain parallelism with other parallelisms through FSDP, see `fsdp_and_shard_tensor <fsdp_and_shard_tensor.rst>`_ TODO-fixlink.
 
+Glossary
+========
+
+- **DeviceMesh**: A pytorch abstraction that represents a set of connected GPUs.  See `DeviceMesh <https://docs.pytorch.org/docs/stable/distributed.html#devicemesh>`_ for more details.  ``DeviceMesh`` is particularly useful for multilevel parallelism (data parallel training + domain parallelism, for example).
+
+- **DTensor**: PyTorch's distributed tensor object.  See `DTensor <https://docs.pytorch.org/docs/stable/distributed.tensor.html>`_ for more details.
+
+- **ShardTensor**: PhysicsNeMo's distributed extension to ``DTensor``.  In particular, ``ShardTensor`` removes requirements for even data distribution (though it's still optimal for computational load balancing) and implements domain parallel paths for many operations.
+
+- **NCCL**: NVIDIA's collective communication library for high speed GPU-GPU communication.  See `NCCL <https://developer.nvidia.com/nccl>`_ for more details.
+
+- **DDP**: PyTorch's distributed data parallel training system.  See `DDP <https://pytorch.org/docs/stable/ddp.html>`_ for more details.
+
+- **FSDP**: PyTorch's fully sharded data parallel training system.  ``FSDP`` is an superset of ``DDP``, and to use ``ShardTensor`` domain parallelism you must use ``FSDP``, not ``DDP``.  See `FSDP <https://pytorch.org/docs/stable/fsdp.html>`_ for more details.
+
+- **DeepSpeed**: A distributed training and inference framework for large language models, built fully sharding weights, gradients, and optimizer states.  See `DeepSpeed <https://www.deepspeed.ai/>`_ for more details.
+
+- **MegaTron**: Another distributed training and inference framework for large language models, built on sharding weights along the channel dimension with optimized Attention collectives.  See `MegaTron <https://developer.nvidia.com/megatron-core>`_ for more details.
 
 TODO list:
 - links to implementing new layers
 - citations to Deep speed, MegaTron
-- links to DTensor, DeviceMesh
 - plot of attention efficiency
 - link to fsdp_and_shard_tensor.rst
-- ease in to "How does ShardTensor work?" more slowly, less technically.
-- link to DistributedDataParallel
-- Add a glossary of terms (DTensor, NCCL, FSDP, others)
 - Add a section about prerequisites
-- possibly expand the summary

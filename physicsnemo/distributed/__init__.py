@@ -57,5 +57,7 @@ try:
 
         register_shard_wrappers()
 
+    register_custom_ops()
+
 except ImportError:
     pass
