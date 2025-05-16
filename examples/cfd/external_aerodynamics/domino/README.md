@@ -46,15 +46,20 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 
 3. Run `process_data.py`. This will process VTP/VTU files and save them as npy for faster
  processing in DoMINO datapipe. Modify data_processor key in config file. Additionally, run
- `cache_data.py` if using caching to decrease training time. The final processed dataset
- should be divided and saved into 2 directories, for training and validation. Specify these
- directories in `conf/config.yaml`
+ `cache_data.py` to save outputs of DoMINO datapipe in the `.npy` files. The DoMINO datapipe
+ is set up to calculate Signed Distance Field and Nearest Neighbor interpolations
+ on-the-fly during training. Caching will save these as a preprocessing step and should
+ be used in cases where the STL surface meshes are upwards of 30 million cells.
+ The final processed dataset should be divided and saved into 2 directories, for training
+ and validation. Specify these directories in `conf/config.yaml`.
 
 4. Run `train.py` to start the training. Modify data, train and model keys in config file.
   If using cached data then use `conf/cached.yaml` instead of `conf/config.yaml`.
 
 5. Run `test.py` to test on `.vtp` / `.vtu`. Predictions are written to the same file.
   Modify eval key in config file to specify checkpoint, input and output directory.
+  Important to note that the data used for testing is in the raw simulation format and
+  should not be processed to `.npy`.
 
 6. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
@@ -104,12 +109,14 @@ The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
   and turb-visc for surface and velocity, pressure and turb-visc for volume.
 
 4. Bounding box is configurable and will depend on the usecase. The presets are
- suitable for the AWS DriveAer-ML dataset.
+ suitable for the DriveAer-ML dataset.
 
-5. Integral loss factor is currently set to 0.0 as it adversely impacts the training.
+The DoMINO model architecture is used to support the
+[Real Time Digital Twin Blueprint](https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation)
+and the
+[DoMINO-Automotive-Aero NIM](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/domino-automotive-aero).
 
-The DoMINO model architecture is used to support the Real Time Wind Tunnel OV Blueprint
-demo presented at Supercomputing' 24. Some of the results are shown below.
+Some of the results are shown below.
 
 ![Results from DoMINO for RTWT SC demo](../../../../docs/img/domino_result_rtwt.jpg)
 
