@@ -90,6 +90,7 @@ def main(cfg: DictConfig) -> None:
         resample_surfaces=False,
         for_caching=True,
         deterministic_seed=True,
+        surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
     )
 
     # Create output directory on rank 0
