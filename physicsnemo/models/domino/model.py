@@ -684,7 +684,7 @@ class DoMINO(nn.Module):
 
     Warp ...
     >>> bsize = 1
-    >>> nx, ny, nz = config.model.interp_res
+    >>> nx, ny, nz = cfg.model.interp_res
     >>> num_neigh = 7
     >>> pos_normals_closest_vol = torch.randn(bsize, 100, 3).to(device)
     >>> pos_normals_com_vol = torch.randn(bsize, 100, 3).to(device)
