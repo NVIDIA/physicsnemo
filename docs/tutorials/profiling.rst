@@ -247,6 +247,7 @@ Next, take a look at the first instrumented version of the model code,
 compared to the original:
 
 .. code-block:: diff
+
     *** attn_baseline.py	2025-01-27 07:41:37.749753000 -0800
     --- attn_instrumented.py	2025-01-27 11:27:09.162202000 -0800
     ***************
