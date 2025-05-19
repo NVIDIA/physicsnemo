@@ -183,6 +183,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.model.hr_mean_conditioning:
         img_in_channels += img_out_channels
 
+    # Handle patch shape
     if cfg.model.name == "lt_aware_ce_regression":
         prob_channels = dataset.get_prob_channel_index()
     else:
@@ -197,6 +198,16 @@ def main(cfg: DictConfig) -> None:
     else:
         patch_shape_x = None
         patch_shape_y = None
+    if (
+        patch_shape_x
+        and patch_shape_y
+        and patch_shape_y >= img_shape[0]
+        and patch_shape_x >= img_shape[1]
+    ):
+        logger0.warning(
+            f"Patch shape {patch_shape_y}x{patch_shape_x} is larger than \
+            the image shape {img_shape[0]}x{img_shape[1]}. Patching will not be used."
+        )
     patch_shape = (patch_shape_y, patch_shape_x)
     use_patching, img_shape, patch_shape = set_patch_shape(img_shape, patch_shape)
     if use_patching:
@@ -304,6 +315,12 @@ def main(cfg: DictConfig) -> None:
     if cfg.wandb.watch_model and dist.rank == 0:
         wandb.watch(model)
 
+    # Load the model checkpoint if applicable
+    try:
+        cur_nimg_model = load_checkpoint(path=checkpoint_dir, models=model)
+    except:
+        cur_nimg_model = None
+
     # Load the regression checkpoint if applicable
     if (
         hasattr(cfg.training.io, "regression_checkpoint_path")
@@ -328,10 +345,12 @@ def main(cfg: DictConfig) -> None:
         if use_apex_gn:
             regression_net.to(memory_format=torch.channels_last)
         logger0.success("Loaded the pre-trained regression model")
+    else:
+        regression_net = None
 
+    # Compile the model and regression net if applicable
     if use_torch_compile:
-        if model:
-            model = torch.compile(model)
+        model = torch.compile(model)
         if regression_net:
             regression_net = torch.compile(regression_net)
 
@@ -415,13 +434,12 @@ def main(cfg: DictConfig) -> None:
     # Record the current time to measure the duration of subsequent operations.
     start_time = time.time()
 
-    ## Resume training from previous checkpoints if exists
+    ## Load optimizer checkpoint if exists
     if dist.world_size > 1:
         torch.distributed.barrier()
     try:
         cur_nimg = load_checkpoint(
             path=checkpoint_dir,
-            models=model,
             optimizer=optimizer,
             device=dist.device,
         )

@@ -113,7 +113,6 @@ class BQWarp(nn.Module):
         self.ball_query_layer = BallQueryLayer(neighbors_in_radius, radius)
         self.grid_resolution = grid_resolution
 
-    @profile
     def forward(
         self, x: torch.Tensor, p_grid: torch.Tensor, reverse_mapping: bool = True
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -190,7 +189,6 @@ class GeoConvOut(nn.Module):
 
         self.activation = F.relu
 
-    @profile
     def forward(
         self, x: torch.Tensor, radius: float = 0.025, neighbors_in_radius: int = 10
     ) -> torch.Tensor:
@@ -261,7 +259,6 @@ class GeoProcessor(nn.Module):
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
         self.activation = F.relu
 
-    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Process geometry information through the 3D CNN network.
@@ -377,7 +374,6 @@ class GeometryRep(nn.Module):
         self.radii = radii
         self.hops = geometry_rep.geo_conv.hops
 
-    @profile
     def forward(
         self, x: torch.Tensor, p_grid: torch.Tensor, sdf: torch.Tensor
     ) -> torch.Tensor:
@@ -463,7 +459,6 @@ class NNBasisFunctions(nn.Module):
             "freqs", torch.exp(torch.linspace(0, math.pi, self.num_modes))
         )
 
-    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Transform point features into a basis function representation.
@@ -475,7 +470,6 @@ class NNBasisFunctions(nn.Module):
             Tensor containing basis function coefficients
         """
         if self.fourier_features:
-            # facets = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
             facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
         else:
             facets = x
@@ -524,7 +518,6 @@ class ParameterModel(nn.Module):
 
         self.activation = F.relu
 
-    @profile
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Encode physical parameters into a latent representation.
@@ -629,7 +622,6 @@ class LocalPointConv(nn.Module):
         self.fc2 = nn.Linear(base_layer, self.output_features)
         self.activation = F.relu
 
-    @profile
     def forward(self, x):
         out = self.activation(self.fc1(x))
         out = self.fc2(out)
@@ -703,7 +695,7 @@ class DoMINO(nn.Module):
 
     Warp ...
     >>> bsize = 1
-    >>> nx, ny, nz = 128, 64, 48
+    >>> nx, ny, nz = cfg.model.interp_res
     >>> num_neigh = 7
     >>> pos_normals_closest_vol = torch.randn(bsize, 100, 3).to(device)
     >>> pos_normals_com_vol = torch.randn(bsize, 100, 3).to(device)
@@ -748,7 +740,6 @@ class DoMINO(nn.Module):
     ...            "air_density": air_density,
     ...        }
     >>> output = model(input_dict)
-    Module ...
     >>> print(f"{output[0].shape}, {output[1].shape}")
     torch.Size([1, 100, 5]), torch.Size([1, 100, 4])
     """
@@ -1002,7 +993,6 @@ class DoMINO(nn.Module):
                     )
                 )
 
-    @profile
     def position_encoder(
         self,
         encoding_node: torch.Tensor,
@@ -1030,7 +1020,6 @@ class DoMINO(nn.Module):
         x = self.fc_p2(x)
         return x
 
-    @profile
     def geo_encoding_local(
         self, encoding_g, volume_mesh_centers, p_grid, mode="volume"
     ):

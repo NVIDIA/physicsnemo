@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # ruff: noqa: E402
 import os
 import sys
@@ -123,3 +124,38 @@ def test_unet_checkpoint(device):
 
     input_image = torch.ones([1, inc, res, res]).to(device)
     assert common.validate_checkpoint(model_1, model_2, (input_image,))
+
+
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_unet_amp_mode_property(device):
+    """Test UNet wrappers amp_mode property"""
+
+    res, inc, outc = 32, 1, 1
+
+    model = UNet(
+        img_resolution=res,
+        img_in_channels=inc,
+        img_out_channels=outc,
+        model_type="SongUNet",
+    ).to(device)
+
+    # Getter should reflect underlying model value (default False)
+    assert model.amp_mode is False
+
+    # Set to True and verify propagation
+    model.amp_mode = True
+    assert model.amp_mode is True
+    if hasattr(model.model, "amp_mode"):
+        assert model.model.amp_mode is True
+    for sub in model.model.modules():
+        if hasattr(sub, "amp_mode"):
+            assert sub.amp_mode is True
+
+    # Toggle back to False and verify again
+    model.amp_mode = False
+    assert model.amp_mode is False
+    if hasattr(model.model, "amp_mode"):
+        assert model.model.amp_mode is False
+    for sub in model.model.modules():
+        if hasattr(sub, "amp_mode"):
+            assert sub.amp_mode is False

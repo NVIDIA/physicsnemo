@@ -46,6 +46,10 @@ def data_dir(nfs_data_dir):
 def test_domino_datapipe(
     data_dir, gpu_preprocessing, gpu_output, model_type, tmp_path, pytestconfig
 ):
+    if gpu_preprocessing and model_type in ["surface", "combined"]:
+        pytest.xfail(
+            "Known cuda/cuml issue with GPU preprocessing for surface data (cuml nearest neighbors)"
+        )
 
     from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
 

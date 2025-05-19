@@ -917,6 +917,29 @@ class EDMPrecondSuperResolution(Module):
         """
         return EDMPrecond.round_sigma(sigma)
 
+    @property
+    def amp_mode(self):
+        """
+        Return the *amp_mode* flag of the wrapped model or *None*.
+        """
+        return getattr(self.model, "amp_mode", None)
+
+    @amp_mode.setter
+    def amp_mode(self, value: bool):
+        """
+        Propagate *amp_mode* to the model and all its sub-modules.
+        """
+
+        if not isinstance(value, bool):
+            raise TypeError("amp_mode must be a boolean value.")
+
+        if hasattr(self.model, "amp_mode"):
+            self.model.amp_mode = value
+
+        for sub_module in self.model.modules():
+            if hasattr(sub_module, "amp_mode"):
+                sub_module.amp_mode = value
+
 
 class VEPrecond_dfsr(torch.nn.Module):
     """

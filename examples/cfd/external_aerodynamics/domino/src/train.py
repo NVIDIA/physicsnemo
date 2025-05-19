@@ -33,8 +33,9 @@ import re
 import torch
 import torchinfo
 
-from typing import Literal, Dict
+from typing import Literal
 
+import apex
 import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
@@ -45,6 +46,8 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
+from nvtx import annotate as nvtx_annotate
+import torch.cuda.nvtx as nvtx
 
 import torch.cuda.nvtx as nvtx
 
@@ -63,6 +66,15 @@ from physicsnemo.utils.domino.utils import *
 # This is included for GPU memory tracking:
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import time
+
+# Initialize NVML
+nvmlInit()
+
+
+from physicsnemo.utils.profiling import profile, Profiler
+
+# Profiler().enable("line_profiler")
+# Profiler().initialize()
 
 
 def loss_fn(
@@ -355,6 +367,7 @@ def validation_step(
     return avg_vloss
 
 
+@profile
 def train_epoch(
     dataloader,
     model,

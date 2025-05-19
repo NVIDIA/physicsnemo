@@ -232,6 +232,11 @@ class Module(torch.nn.Module):
                 f"File name must end with {self._file_extension} extension"
             )
 
+        # Strip out torch dynamo wrapper
+        if isinstance(self, torch._dynamo.eval_frame.OptimizedModule):
+            self._orig_mod.save(file_name, verbose)
+            return
+
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir)
 

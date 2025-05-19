@@ -113,15 +113,6 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             geo_centers_vol = 2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
             encoding_g_vol = model.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
-            # Normalize based on BBox around surface (car)
-            # geo_centers_surf = (
-            #     2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
-            # )
-            # encoding_g_surf = model.geo_rep_surface1(
-            #     geo_centers_surf, s_grid, sdf_surf_grid
-            # )
-            # encoding_g_vol += encoding_g_surf
-
         if output_features_surf is not None:
             # Represent geometry on bounding box
             geo_centers_surf = (
