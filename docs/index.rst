@@ -9,7 +9,7 @@ NVIDIA PhysicsNeMo Core (Latest Release)
    tutorials/simple_training_example.rst
    tutorials/simple_logging_and_checkpointing.rst
    tutorials/profiling.rst
-   tutorials/fsdp_and_shard_tensor.rst
+   tutorials/domain_parallelism_entry_point.rst
 
 .. toctree::
    :maxdepth: 2

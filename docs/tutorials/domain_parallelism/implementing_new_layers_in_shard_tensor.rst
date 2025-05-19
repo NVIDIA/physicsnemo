@@ -1,12 +1,12 @@
-Implementing new layers for `ShardTensor`
+Implementing new layers for ShardTensor
 =========================================
 
-This tutorial is a walkthrough of how to extend domain parallel functionality via `ShardTensor`.  We'll first discuss at a high level some parallelism techniques, and then look at exactly how to implement a domain parallel layer with a few examples.  For some background on what `ShardTensor` is and when to use it, check out the tutorial :ref:`domain_parallelism.rst`.
+This tutorial is a walkthrough of how to extend domain parallel functionality via ``ShardTensor``.  We'll first discuss at a high level some parallelism techniques, and then look at exactly how to implement a domain parallel layer with a few examples.  For some background on what `ShardTensor` is and when to use it, check out the tutorial :ref:`domain_parallelism.rst`.
 
-When is extending `ShardTensor` needed?
+When is extending ``ShardTensor`` needed?
 ---------------------------------------
 
-`ShardTensor` is designed to support domain-parallel operations, or operations that can be performed on a tensor that resides across multiple devices. Many operations are supported already - out of the box - by the upstream ``DTensor`` class that ``ShardTensor`` inherits from.  Some operations - many convolutions, interpolations, poolings, normalizations, and attention - are supported through ``PhysicsNeMo``.  In this tutorial, we'll look at a few increasingly-complicated situations and see how ``ShardTensor`` handles them - or doesn't - and how to fix cases that aren't supported or aren't performant.
+``ShardTensor`` is designed to support domain-parallel operations, or operations that can be performed on a tensor that resides across multiple devices. Many operations are supported already - out of the box - by the upstream ``DTensor`` class that ``ShardTensor`` inherits from.  Some operations - many convolutions, interpolations, poolings, normalizations, and attention - are supported through ``PhysicsNeMo``.  In this tutorial, we'll look at a few increasingly-complicated situations and see how ``ShardTensor`` handles them - or doesn't - and how to fix cases that aren't supported or aren't performant.
 
 
 Example 0: Vector Addition
@@ -19,19 +19,19 @@ As a basic example (and note that this is a built-in operation from ``DTensor``)
     :language: python
 
 
-To perform this with ShardTensor, we first need to convert these tensors to ``ShardTensor`` objects.  The easiest way to do this is with the ``scatter_tensor`` method:
+To perform this with ``ShardTensor``, we first need to convert these tensors to ``ShardTensor`` objects.  The easiest way to do this is with the ``scatter_tensor`` method:
 
 .. literalinclude:: ../../test_scripts/domain_parallelism/new_layers/vector_add_sharded.py
     :caption: Example 0: Vector Addition, distributed computation
     :language: python
 
-This will run, out of the box (and in fact doesn't even need ``ShardTensor``, ``DTensor`` implements distributed vector addition).  If you have a multiple GPU system, execute the code with a command like ``torchrun --nproc-per-node 8 example_0_sharded.py``.  You ought to see pretty good scaling efficiency - with no communication overhead, the distributed operation can work at approximately weak scaling speeds.  For small tensors, though, where the addition operation is bound by launch latency: you will see a slightly higher overhead with distributed operations because there is slightly more organization and bookkeeping required.
+This will run, out of the box (and in fact doesn't even need ``ShardTensor``, ``DTensor`` implements distributed vector addition).  If you have a multi-GPU system, execute the code with a command like ``torchrun --nproc-per-node 8 example_0_sharded.py``.  You ought to see pretty good scaling efficiency - with no communication overhead, the distributed operation can work at approximately weak scaling speeds.  For small tensors, though, where the addition operation is bound by launch latency: you will see a slightly higher overhead with distributed operations because there is slightly more organization and bookkeeping required.
     
 
 Example 1: Vector Dot Product
 -----------------------------
 
-Let's look now at a slightly more complicated example: the dot product of two vectors.  In this case, because the output is a single scalar, we'll find that there _is_ communication required and see how to implement that seamlessly with ``ShardTensor``.
+Let's look now at a slightly more complicated example: the dot product of two vectors.  In this case, because the output is a single scalar, we'll find that there *is* communication required and see how to implement that seamlessly with ``ShardTensor``.
 
 Here's the single-device implementation.  Note that the **only** difference here is in the definition of ``f``:
 
@@ -47,22 +47,22 @@ For reference, here's the full code:
     :language: python
 
 
-If we make the same changes to the distributed version, we get an error when we run it:
+If we make the same changes to the distributed version, we get an error when we run it (as of torch 2.6!):
 
 .. code-block:: bash
 
     NotImplementedError: Operator aten.dot.default does not have a sharding strategy registered.
 
-This is a good time to talk about how pytorch decides what to do each time it's called for an operation on ``torch.Tensor(s)``, which will lead into how we fix this error.
+This is a good time to talk about how PyTorch decides what to do each time it's called for an operation on ``torch.Tensor(s)``, which will lead into how we fix this error.
 
-Pytorch, as you likely already know, implements operations on multiple backends and with multiple paths for execution.  How does it decide which path to use, when you call an operation on a tensor?  The answer lies in the pytorch ``__torch_function__`` and ``__torch_dispatch__`` interface.
+PyTorch, as you likely already know, implements operations on multiple backends and with multiple paths for execution.  How does it decide which path to use, when you call an operation on a tensor?  The answer lies in the PyTorch ``__torch_function__`` and ``__torch_dispatch__`` interface.
 
-There are many resources, more detailed and more correct than this (for example, see `this blog post <https://dev-discuss.pytorch.org/t/what-and-why-is-torch-dispatch/557>`_ or `this one <https://blog.ezyang.com/2020/09/lets-talk-about-the-pytorch-dispatcher/>_` and especially the `official walkthrough <https://github.com/pytorch/pytorch/wiki/PyTorch-dispatcher-walkthrough>_`), but here is a high level overview: function routing is built on input types, rather than functions themselves. So when you call a function with an object (like ShardTensor) that extends the PyTorch ``torch.Tensor`` interface, you can use ``__torch_function__`` and ``__torch_dispatch__`` to capture and reroute operations to custom implementations.
+There are many resources, more detailed and more correct than this (for example, see `this blog post <https://dev-discuss.pytorch.org/t/what-and-why-is-torch-dispatch/557>`_ or `this one <https://blog.ezyang.com/2020/09/lets-talk-about-the-pytorch-dispatcher/>`_ and especially the `official walkthrough <https://github.com/pytorch/pytorch/wiki/PyTorch-dispatcher-walkthrough>`_), but here is a high level overview: function routing is built on input types, rather than functions themselves. So when you call a function with an object (like ShardTensor) that extends the PyTorch ``torch.Tensor`` interface, you can use ``__torch_function__`` and ``__torch_dispatch__`` to capture and reroute operations to custom implementations.
 
-For built in functions to pytorch, this is simply a matter of registering a pair of functions with ``ShardTensor``: the function you want to intercept, and the function you want to route data to instead (as long as at least one argument is a ``ShardTensor``).  We'll see this in action below, but in the case of functions that ``torch`` does not know about (external functions, user functions, etc.), we can tap into this system manually. 
+For built in functions to PyTorch, this is simply a matter of registering a pair of functions with ``ShardTensor``: the function you want to intercept, and the function you want to route data to instead (as long as at least one argument is a ``ShardTensor``).  We'll see this in action below, but in the case of functions that ``torch`` does not know about (external functions, user functions, etc.), we can tap into this system manually. 
 
 
-With all that in mind, let's add a handler for ``torch.dot`` that works on physicsnemo's ``ShardTensor``:
+With all that in mind, let's add a handler for ``torch.dot`` that works on PhysicsNeMo's ``ShardTensor``:
 
 .. code-block:: python
 
@@ -82,7 +82,7 @@ With all that in mind, let's add a handler for ``torch.dot`` that works on physi
         x_spec = x._spec
         y_spec = y._spec
         
-        # IT'S usually good to ensure the tensor placements work:
+        # It's usually good to ensure the tensor placements work:
         if not x_spec.placements == y_spec.placements:
             raise NotImplementedError("Tensors must be sharded on the same device")
         
@@ -135,10 +135,10 @@ You should now be able to run this code with ``torchrun --nproc-per-node 8 examp
 Example 2: Nearest Neighbors 
 ----------------------------
 
-With some basics out of the way, let's look at something a little more interesting and useful.  In many scientific AI workloads, we need to do a query of the nearest neighbors of a point cloud to build a GNN.  Pytorch doesn't really have an efficient implementation of a nearest neighbor operation - let's write one here (poorly!) just to show how it can be parallelized.
+With some basics out of the way, let's look at something a little more interesting and useful.  In many scientific AI workloads, we need to do a query of the nearest neighbors of a point cloud to build a GNN.  PyTorch doesn't really have an efficient implementation of a nearest neighbor operation - let's write one here (poorly!) just to show how it can be parallelized.
 
 .. note:: 
-    There are much better ways to write a kNN to operate on pytorch tensors - don't use this in production code!  This is a brute force implementation. Most times when you need the nearest neighbors of a point cloud, some sort of KDTree or hash mapping structure is significantly more efficient. We're not using that in this tutorial for clarity, but when we need these operations in ``physicsnemo`` we use optimized implementations backed by libraries like ``cuml`` (see the `cuml documentation <https://docs.rapids.ai/api/cuml/stable/>`_) and ``warp``. (`documentation <https://developer.nvidia.com/warp-python>_`).
+    There are much better ways to write a kNN to operate on PyTorch tensors - don't use this in production code!  This is a brute force implementation. Most times when you need the nearest neighbors of a point cloud, some sort of KDTree or hash mapping structure is significantly more efficient. We're not using that in this tutorial for clarity, but when we need these operations in ``physicsnemo`` we use optimized implementations backed by libraries like ``cuml`` (see the `cuml documentation <https://docs.rapids.ai/api/cuml/stable/>`_) and ``warp``. (`documentation <https://developer.nvidia.com/warp-python>_`).
 
 
 .. literalinclude:: ../../test_scripts/domain_parallelism/new_layers/knn_brute_force_baseline.py
@@ -152,16 +152,16 @@ If you run this (``python example_2_baseline.py``), you'll see that it's not qui
 
     displacement_vec = x[None, :, :] - y[:, None, :]
 
-So, as written you can't really scale this up larger on a single device.  There are - as noted - better ways to do a kNN but let's parallelize this one since it's a good way to learn how you might parallelize custom functions.  In fact, a functional paralellization couldn't be easier - do nothing but cast the inputs to ``ShardTensor`` and let the existing operations take care of it.  The underlying implementation of ``ShardTensor`` and ``DTensor`` enables this out of the box:
+As written, you can't really scale this up larger on a single device.  There are - as noted - better ways to do a kNN but let's parallelize this one since it's a good way to learn how you might parallelize custom functions.  In fact, a functional parallelization couldn't be easier - do nothing but cast the inputs to ``ShardTensor`` and let the existing operations take care of it.  The underlying implementations of ``ShardTensor`` and ``DTensor`` enables this out of the box:
 
 .. literalinclude:: ../../test_scripts/domain_parallelism/new_layers/knn_brute_force_sharded.py
     :caption: Example 2: Nearest Neighbors, distributed computation, basic functionality
     :language: python
 
 
-Go ahead and pause, here, and run these codes either with ``torchrun --nproc-per-node 8 example_2_sharded.py``.  You should see a significant speedup - we saw about 33 ms per call on a single A100.  Compared to 150ms, that's a nice improvement, about 4.5x faster ... but we're also using 8 GPUs.  Why isn't it 8x faster?
+Go ahead and pause, and run these codes with ``torchrun --nproc-per-node 8 example_2_sharded.py``.  You should see a good speedup - we saw about 33 ms per call on a single A100.  Compared to 150ms, that's a nice improvement, about 4.5x faster ... but we're also using 8 GPUs.  Why isn't it 8x faster?
 
-The issue, here, is once again in this line:
+The issue is once again in this line:
 
 .. code-block:: python
 
@@ -193,32 +193,32 @@ It's nice, of course, that ``DTensor`` will get this numerically correct out of 
 Run this (``torchrun --nproc-per-node 8 example_2_sharded.py``), and you'll see the time per iteration is more like 20.7ms.  That's an 8x speed up over the original, single device implementation - much better!
 
 .. note:: 
-    There is an important piece of that previous example, in case you overlooked it.  The ``knn`` function has a few extra lines registering it with pytorch's overrides system (`torch.overrides <https://docs.pytorch.org/docs/stable/torch.overrides.html>`_). This step let's pytorch track the ``knn`` function, and registering it with ``ShardTensor`` sends execution to the ``knn_ring`` function instead.  When that function in turn calls the ``knn`` function on standard ``torch.Tensor`` objects, it is executed normally on the local objects.
+    There is an important piece of that previous example, in case you overlooked it.  The ``knn`` function has a few extra lines registering it with PyTorch's overrides system (`torch.overrides <https://docs.pytorch.org/docs/stable/torch.overrides.html>`_). This step lets PyTorch track the ``knn`` function, and registering it with ``ShardTensor`` sends execution to the ``knn_ring`` function instead.  When that function in turn calls the ``knn`` function on standard ``torch.Tensor`` objects, it is executed normally on the local objects.
 
 What collectives do I need for my operation?
 --------------------------------------------
 
 If you're looking to extend ``ShardTensor`` to support a new domain parallelism operation, it can fall into one of several - not exhaustive - categories.  Use this to guide your thinking about performant domain-parallel implementations.
 
-- **Fully Local** operations can be computed locally at every value of a tensor, with a one-to-one mapping between input and output tensors.  Activations are an obvious example of this, but tensor-wise math can be too: ``c = a + b``, where ``a`` and ``b`` are both tensors, can follow this patten (absent reshaping/broadcasting, as we saw above, which complicates things).  In these cases, the "domain parallel" component of an operation is really just a purely local operation + making sure the output tensor ``c`` is represented properly as a distributed object.  No communication is needed.
+- **Fully Local** operations can be computed locally at every value of a tensor, with a one-to-one mapping between input and output tensors.  Activations are an obvious example of this, but tensor-wise math can be too: ``c = a + b``, where ``a`` and ``b`` are both tensors, can follow this pattern (absent reshaping/broadcasting, as we saw above, which complicates things).  In these cases, the "domain parallel" component of an operation is really just a purely local operation + making sure the output tensor ``c`` is represented properly as a distributed object.  No communication is needed.
 
-- **Semi-Local** operations depend on neighboring values, but not on _every_ value.  Depending on the details of operation, and the pattern of distributing a tensor across devices, to correctly perform this operation some information at the edges of each local tensor may need to be exchanged.  One example of this is `convolution` operations, where information must be exchanged across the domain decomposition boundary for most cases.  A more complicated example is a distributed graph, where some graph nodes share an edge that spans a domain boundary.  In many cases, this type of information exchange across a boundary is referred to as a ``halo``.  As long as the halo is small compared to the computation, these operations scale well through domain decomposition.
+- **Semi-Local** operations depend on neighboring values, but not on _every_ value.  Depending on the details of operation, and the pattern of distributing a tensor across devices, to correctly perform this operation some information at the edges of each local tensor may need to be exchanged.  One example of this is `convolution` operations, where information must be exchanged across the domain decomposition boundary for most cases.  A more complicated example is a distributed graph, where some graph nodes share an edge that spans a domain boundary.  In many cases, this type of information exchange across a boundary is referred to as a 'halo'.  As long as the halo is small compared to the computation, these operations scale well through domain decomposition.
 
 - **Reduction** based operations that require a large scale reduction of data, such as ``sum`` but also normalization layers, can usually be implemented in two or less passes: first, compute local reductions on the local piece of a tensors, and ``allreduce`` it across the domain.  Then, update the output by applying a correction factor based on the local to global statistics calculated.  
 
-- **Global**  operations require a global view of tensors to compute correctly: each output point depends on information from all possible input locations.  Two examples that appear very different but are both global for domain decomposition are _Attention_ mechanisms, and distance-based queries on point clouds such as the _kNN_ we implemented earlier.  In both cases, one particular value of output can depend on any or all values of input tensors.  There are multiple ways to proceed for these operations, but in this case a ``ring`` collective can be quite efficient: tensors will perform the computation on local chunks, and then part of the input (KV, for attention, or part of the point cloud) will be passed to the next rank in a ring topology.  With overlapping communication and computation, these algorithms can acheive excellent scaling properties.  A challenge may be that the outputs of each iteration of the ring may need to be combined in non-intuitive ways.  RingAttention (TODO - citation), which inspired the implementation in ``PhysicsNeMo``, necessitates log- and sign-based accumulation of outputs.  The ``kNN`` layer has two ``topk`` calls per iteration - one for the real operation, and one to combine the output.
+- **Global**  operations require a global view of tensors to compute correctly: each output point depends on information from all possible input locations.  Two examples that appear very different but are both global for domain decomposition are _Attention_ mechanisms, and distance-based queries on point clouds such as the _kNN_ we implemented earlier.  In both cases, one particular value of output can depend on any or all values of input tensors.  There are multiple ways to proceed for these operations, but in this case a ``ring`` collective can be quite efficient: tensors will perform the computation on local chunks, and then part of the input (KV, for attention, or part of the point cloud) will be passed to the next rank in a ring topology.  With overlapping communication and computation, these algorithms can achieve excellent scaling properties.  A challenge may be that the outputs of each iteration of the ring may need to be combined in non-intuitive ways.  `Ring Attention <https://arxiv.org/pdf/2310.01889>`_, which inspired the implementation in ``PhysicsNeMo``, necessitates log- and sign-based accumulation of outputs.  The ``kNN`` layer has two ``topk`` calls per iteration - one for the real operation, and one to combine the output.
 
-It isn't necessarily true that all operations might fall in to these categories for domain parallelism.  However, thinking about the way input data is decomposed, how output data must be decomposed, and what communication patterns are needed will often be enough to guide you to a correct, efficient implementation of a domain parellel function.
+It isn't necessarily true that all operations fall in to these categories for domain parallelism.  However, thinking about the way input data is decomposed, how output data must be decomposed, and what communication patterns are needed will often be enough to guide you to a correct, efficient implementation of a domain parellel function.
 
 .. note::
-    ``ShardTensor``, as implemented in ``torch``, follows the execution model of ``torch``: in general, no knowledge of previous or subsequent operations is assumed at each layer.  So, while there are certainly more optimized ways to support _specific_ operations (imaging 2 convolutions back to back, for example: you could perform a halo exchange just once if you sized it properly) in general we have traded absolute peak performance for the ability to support a flexible set of layers and models with minimal to no user-space operations.  So we do the halo exchange twice in two back-to-back convolutions, but benefit is an increase in usability and flexibility.
+    ``ShardTensor``, as implemented in ``torch``, follows the execution model of ``torch``: in general, no knowledge of previous or subsequent operations is assumed at each layer.  So, while there are certainly more optimized ways to support *specific* models (imagine 2 convolutions back to back, for example: you could perform a halo exchange just once if you sized it properly) in general we have traded absolute peak performance for the ability to support a flexible set of layers and models with minimal to no user-space operations.  So we do the halo exchange twice in two back-to-back convolutions, but the benefit is an increase in usability and flexibility.  When the data size is large, the overhead is small in comparison.
 
 
 
 Supporting Your Model
 ---------------------
 
-``ShardTensor``, like ``DTensor`` upstream in pytorch, is designed to drop in and replace ``torch.Tensor`` objects.  As such, you rarely have to modify your model code directly to have multiple execution paths for distributed vs. single-device tensors.  Instead, ensure support for all the torch functions in your model and let pytorch's dispatch techniques route everything appropriately.
+``ShardTensor``, like ``DTensor`` upstream in PyTorch, is designed to drop in and replace ``torch.Tensor`` objects.  As such, you rarely have to modify your model code directly to have multiple execution paths for distributed vs. single-device tensors.  Instead, ensure support for all the torch functions in your model and let PyTorch's dispatch techniques route everything appropriately.
 
 
 Going Backwards
@@ -227,7 +227,7 @@ Going Backwards
 One thing we haven't covered in this tutorial is the backwards pass of sharded operations.  There are two components to this:
 
 1. When you call ``backward()`` on a ``ShardTensor`` object ... what happens?  We have designed ``ShardTensor`` to smoothly handle the most common cases: you compute a loss via a reduction (``outputs.mean()``) and then call backward on the output of the reduction.  ``ShardTensor`` will then ensure the loss moves backwards correctly through the reduction and the gradients are also sharded - just like their inputs.
-2. When you have implemented a custom operation and registered it with ``ShardTensor.register_function_handler``, what do the gradients do? If you use the ``to_local`` and ``from_local`` operations on ``ShardTensor`` objects, which are differentiable, and the in-between operations are also differentiable, it will work correctly.  Everything between ``to_local`` and ``from_local`` will use standard autograd operations from upstream PyTorch.  If you need something more complex (like our ring computation, above), you can implement a custom autograd layer in pytorch that performs the collectives directly.  See the excellent pytorch documentation on `defining new autograd functions <https://docs.pytorch.org/tutorials/beginner/examples_autograd/two_layer_net_custom_function.html>`_ for many more details.
+2. When you have implemented a custom operation and registered it with ``ShardTensor.register_function_handler``, what do the gradients do? If you use the ``to_local`` and ``from_local`` operations on ``ShardTensor`` objects, which are differentiable, and the in-between operations are also differentiable, it will work correctly.  Everything between ``to_local`` and ``from_local`` will use standard autograd operations from upstream PyTorch.  If you need something more complex (like our ring computation, above), you can implement a custom autograd layer in PyTorch that performs the collectives directly.  See the excellent PyTorch documentation on `Defining new autograd functions <https://docs.pytorch.org/tutorials/beginner/examples_autograd/two_layer_net_custom_function.html>`_ for many more details.
 
 
 Summary
@@ -238,8 +238,8 @@ Up to here, we've seen a couple examples of distributed computation with ``Shard
 
 - ``ShardTensor`` is built on top of ``DTensor``, enabling it to fall back to ``DTensor`` computations whenever it doesn't have a custom implementation.  In nearly all simple operations, this is functional.
 - When necessary, ``ShardTensor`` can have a dedicated execution path for sharded operations via ``ShardTensor.register_function_handler(target, handler)``.  This technique will route calls to ``target`` to ``handler`` when ``target`` is called on ``ShardTensor`` objects, as long as the function is a torch function.
-- Not every function you want to use, of course, is part of ``torch``.  In this case, you can use pytorch's overrides system to inform torch about the function and then route calls appropriately.
-- Even though many operations are functional out of the box from ``DTensor``, it does not mean they are efficient.  ``DTensor`` is optimized for Large Langauge Model applications.  In ``PhysicsNeMo``, we are providing a number of efficient distributed operations for common scientific AI needs - and if want you need isn't supported, feel free to reach out on github for support!
+- Not every function you want to use, of course, is part of ``torch``.  In this case, you can use PyTorch's overrides system to inform torch about the function and then route calls appropriately.
+- Even though many operations are functional out of the box from ``DTensor``, it does not mean they are efficient.  ``DTensor`` is optimized for Large Language Model applications.  In ``PhysicsNeMo``, we are providing a number of efficient distributed operations for common scientific AI needs - and if want you need isn't supported, feel free to reach out on `GitHub <https://github.com/NVIDIA/physicsnemo/tree/main>`_ for support!
 
 ``ShardTensor`` is still under active development, and we're working to add more model support.  To see how to use it with an end-to-end training example, see the :ref:`fsdp_and_shard_tensor` tutorial.  In particular, ``ShardTensor`` is fully compatible with ``torch.distributed.fsdp.FullyShardedDataParallel`` enabling you to even deploy multiple levels of parallelism: domain parallelism + batch parallelism (+ model parallelism, if needed!).
 
