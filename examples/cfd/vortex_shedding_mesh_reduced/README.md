@@ -61,8 +61,8 @@ per GPU is set to 10 for the sequence model training. Traing epochs is set as 20
 To download the data , run
 
 ```bash
-wget --content-disposition https://api.ngc.nvidia.com/v2/resources/nvidia/physicsnemo/modulus_datasets_cylinder-flow/versions/v1/zip -O physicsnemo_datasets_cylinder-flow_v1.zip
-unzip physicsnemo_datasets_cylinder-flow_v1.zip
+wget --content-disposition https://api.ngc.nvidia.com/v2/resources/nvidia/modulus/modulus_datasets_cylinder-flow/versions/v1/zip -O modulus_datasets_cylinder-flow_v1.zip
+unzip modulus_datasets_cylinder-flow_v1.zip
 unzip dataset.zip
 ```
 
