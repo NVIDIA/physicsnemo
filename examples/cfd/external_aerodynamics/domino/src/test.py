@@ -55,7 +55,7 @@ from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.sdf import signed_distance_field
 
-AIR_DENSITY = 1.226
+AIR_DENSITY = 1.205
 STREAM_VELOCITY = 30.00
 
 
