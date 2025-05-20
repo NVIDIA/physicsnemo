@@ -1022,3 +1022,206 @@ class SongUNetPosEmbd(SongUNet):
             )
         )  # (lead_time_steps, lead_time_channels, img_shape_y, img_shape_x)
         return grid
+
+
+class SongUNetPosLtEmbd(SongUNetPosEmbd):
+    """
+    This model is adapted from SongUNetPosEmbd, with the incorporation of lead-time aware
+    embeddings. The lead-time embedding is activated by setting the
+    `lead_time_channels` and `lead_time_steps` parameters.
+
+    Like SongUNetPosEmbd, this model provides two methods for selecting positional embeddings:
+    1. Using a selector function (preferred method). See
+       :meth:`positional_embedding_selector` for details.
+    2. Using global indices. See :meth:`positional_embedding_indexing` for
+       details.
+
+    Parameters
+    -----------
+    img_resolution : Union[List[int], int]
+        The resolution of the input/output image. Can be a single int for square images
+        or a list [height, width] for rectangular images.
+    in_channels : int
+        Number of channels in the input image.
+    out_channels : int
+        Number of channels in the output image.
+    label_dim : int, optional
+        Number of class labels; 0 indicates an unconditional model. By default 0.
+    augment_dim : int, optional
+        Dimensionality of augmentation labels; 0 means no augmentation. By default 0.
+    model_channels : int, optional
+        Base multiplier for the number of channels across the network. By default 128.
+    channel_mult : List[int], optional
+        Per-resolution multipliers for the number of channels. By default [1,2,2,2,2].
+    channel_mult_emb : int, optional
+        Multiplier for the dimensionality of the embedding vector. By default 4.
+    num_blocks : int, optional
+        Number of residual blocks per resolution. By default 4.
+    attn_resolutions : List[int], optional
+        Resolutions at which self-attention layers are applied. By default [28].
+    dropout : float, optional
+        Dropout probability applied to intermediate activations. By default 0.13.
+    label_dropout : float, optional
+        Dropout probability of class labels for classifier-free guidance. By default 0.0.
+    embedding_type : str, optional
+        Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
+        By default 'positional'.
+    channel_mult_noise : int, optional
+        Timestep embedding size: 1 for DDPM++, 2 for NCSN++. By default 1.
+    encoder_type : str, optional
+        Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++, 'skip' for skip connections.
+        By default 'standard'.
+    decoder_type : str, optional
+        Decoder architecture: 'standard' or 'skip' for skip connections. By default 'standard'.
+    resample_filter : List[int], optional
+        Resampling filter coefficients: [1,1] for DDPM++, [1,3,3,1] for NCSN++. By default [1,1].
+    gridtype : str, optional
+        Type of positional grid to use: 'sinusoidal', 'learnable', 'linear', or 'test'.
+        Controls how positional information is encoded. By default 'sinusoidal'.
+    N_grid_channels : int, optional
+        Number of channels in the positional embedding grid. For 'sinusoidal' must be 4 or
+        multiple of 4. For 'linear' must be 2. By default 4.
+    lead_time_channels : int, optional
+        Number of channels in the lead time embedding. These are learned embeddings that
+        encode temporal forecast information. By default None.
+    lead_time_steps : int, optional
+        Number of discrete lead time steps to support. Each step gets its own learned
+        embedding vector. By default 9.
+    prob_channels : List[int], optional
+        Indices of probability output channels that should use softmax activation.
+        Used for classification outputs. By default empty list.
+    checkpoint_level : int, optional
+        Number of layers that should use gradient checkpointing (0 disables checkpointing).
+        Higher values trade memory for computation. By default 0.
+    additive_pos_embed : bool, optional
+        If True, adds a learned positional embedding after the first convolution layer.
+        Used in StormCast model. By default False.
+    use_apex_gn : bool, optional
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
+        Need to set this as False on cpu. Defaults to False.
+    act : str, optional
+        The activation function to use when fusing activation with GroupNorm. Defaults to None.
+    profile_mode:
+        A boolean flag indicating whether to enable all nvtx annotations during profiling.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
+
+    Note
+    -----
+    Equivalent to the original implementation by Song et al., available at
+    https://github.com/yang-song/score_sde_pytorch
+
+    Example
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.diffusion.song_unet import SongUNetPosLtEmbd
+    >>> from physicsnemo.utils.patching import GridPatching2D
+    >>>
+    >>> # Model initialization - in_channels must include original input channels (2),
+    >>> # positional embedding channels (N_grid_channels=4 by default) and
+    >>> # lead time embedding channels (4)
+    >>> model = SongUNetPosLtEmbd(
+    ...     img_resolution=16, in_channels=2+4+4, out_channels=2,
+    ...     lead_time_channels=4, lead_time_steps=9
+    ... )
+    >>> noise_labels = torch.randn([1])
+    >>> class_labels = torch.randint(0, 1, (1, 1))
+    >>> # The input has only the original 2 channels - positional embeddings and
+    >>> # lead time embeddings are added automatically inside the forward method
+    >>> input_image = torch.ones([1, 2, 16, 16])
+    >>> lead_time_label = torch.tensor([3])
+    >>> output_image = model(
+    ...     input_image, noise_labels, class_labels,
+    ...     lead_time_label=lead_time_label
+    ... )
+    >>> output_image.shape
+    torch.Size([1, 2, 16, 16])
+    >>>
+    >>> # Using global_index to select all the positional and lead time embeddings
+    >>> patching = GridPatching2D(img_shape=(16, 16), patch_shape=(16, 16))
+    >>> global_index = patching.global_index(batch_size=1)
+    >>> output_image = model(
+    ...     input_image, noise_labels, class_labels,
+    ...     lead_time_label=lead_time_label,
+    ...     global_index=global_index
+    ... )
+    >>> output_image.shape
+    torch.Size([1, 2, 16, 16])
+    >>>
+    >>> # Using custom embedding selector to select all the positional and lead time embeddings
+    >>> def patch_embedding_selector(emb):
+    ...     return patching.apply(emb[None].expand(1, -1, -1, -1))
+    >>> output_image = model(
+    ...     input_image, noise_labels, class_labels,
+    ...     lead_time_label=lead_time_label,
+    ...     embedding_selector=patch_embedding_selector
+    ... )
+    >>> output_image.shape
+    torch.Size([1, 2, 16, 16])
+
+    """
+
+    def __init__(
+        self,
+        img_resolution: Union[List[int], int],
+        in_channels: int,
+        out_channels: int,
+        label_dim: int = 0,
+        augment_dim: int = 0,
+        model_channels: int = 128,
+        channel_mult: List[int] = [1, 2, 2, 2, 2],
+        channel_mult_emb: int = 4,
+        num_blocks: int = 4,
+        attn_resolutions: List[int] = [28],
+        dropout: float = 0.13,
+        label_dropout: float = 0.0,
+        embedding_type: str = "positional",
+        channel_mult_noise: int = 1,
+        encoder_type: str = "standard",
+        decoder_type: str = "standard",
+        resample_filter: List[int] = [1, 1],
+        gridtype: str = "sinusoidal",
+        N_grid_channels: int = 4,
+        lead_time_channels: int = None,
+        lead_time_steps: int = 9,
+        prob_channels: List[int] = [],
+        checkpoint_level: int = 0,
+        additive_pos_embed: bool = False,
+        use_apex_gn: bool = False,
+        act: str = "silu",
+        profile_mode: bool = False,
+        amp_mode: bool = False,
+    ):
+        super().__init__(
+            img_resolution,
+            in_channels,
+            out_channels,
+            label_dim,
+            augment_dim,
+            model_channels,
+            channel_mult,
+            channel_mult_emb,
+            num_blocks,
+            attn_resolutions,
+            dropout,
+            label_dropout,
+            embedding_type,
+            channel_mult_noise,
+            encoder_type,
+            decoder_type,
+            resample_filter,
+            gridtype,
+            N_grid_channels,
+            checkpoint_level,
+            additive_pos_embed,
+            use_apex_gn,
+            act,
+            profile_mode,
+            amp_mode,
+            True,  # Note: lead_time_mode=True is enforced here
+            lead_time_channels,
+            lead_time_steps,
+            prob_channels,
+        )
+
+    # Nothing else is re-implemented, because everything is already in the parent SongUNetPosEmb

@@ -246,22 +246,24 @@ def main(cfg: DictConfig) -> None:
         use_torch_compile = cfg.training.perf.torch_compile
     if hasattr(cfg.training.perf, "use_apex_gn"):
         use_apex_gn = cfg.training.perf.use_apex_gn
+        model_args.update(
+            {
+                "use_apex_gn": use_apex_gn,
+            }
+        )
     if hasattr(cfg.training.perf, "profile_mode"):
         profile_mode = cfg.training.perf.profile_mode
-
-    model_args.update(
-        {
-            "use_apex_gn": use_apex_gn,
-            "profile_mode": profile_mode,
-            "amp_mode": enable_amp,
-        }
-    )
-
-    if (
-        cfg.model.name == "lt_aware_ce_regression"
-        or cfg.model.name == "lt_aware_patched_diffusion"
-    ):
-        model_args.update({"lead_time_mode": True})
+        model_args.update(
+            {
+                "profile_mode": profile_mode,
+            }
+        )
+    if enable_amp:
+        model_args.update(
+            {
+                "amp_mode": enable_amp,
+            }
+        )
 
     if cfg.model.name == "regression":
         model = UNet(
