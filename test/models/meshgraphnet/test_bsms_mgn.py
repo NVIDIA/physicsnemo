@@ -17,15 +17,14 @@
 import pytest
 import torch
 from models.common import validate_forward_accuracy
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 
 dgl = pytest.importorskip("dgl")
 
 
 @pytest.fixture
-def ahmed_data_dir():
-    path = "/data/nfs/modulus-data/datasets/ahmed_body/"
-    return path
+def ahmed_data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
 @import_or_fail(["sparse_dot_mkl", "dgl"])
@@ -89,7 +88,6 @@ def test_bsms_mgn_forward(pytestconfig, device):
     )
 
 
-@nfsdata_or_fail
 @import_or_fail(["sparse_dot_mkl", "dgl"])
 def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
