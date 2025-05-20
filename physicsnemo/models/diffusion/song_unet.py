@@ -845,47 +845,53 @@ class SongUNetPosEmbd(SongUNet):
                 )  # (B, N_pe, H, W)
 
         else:
-            B = x.shape[0] // len(global_index)
-            patch_shape = (x.shape[-2], x.shape[-1])
-            out = torch.zeros(
-                x.shape[0],
-                self.pos_embd.shape[0],
-                patch_shape[0],
-                patch_shape[1],
-                device=x.device,
-            )
-            if self.lead_time_mode:
-                out_lt = torch.zeros(
-                    x.shape[0],
-                    self.lead_time_channels,
-                    patch_shape[0],
-                    patch_shape[1],
-                    device=x.device,
-                )
+            P = global_index.shape[0]
+            B = x.shape[0] // P
+            H = global_index.shape[2]
+            W = global_index.shape[3]
 
-            for i, (py, px) in enumerate(global_index):
-                out[B * i : B * (i + 1),] = self.pos_embd[
-                    :,
-                    py : py + patch_shape[0],
-                    px : px + patch_shape[1],
-                ]
-                if self.lead_time_mode:
-                    out_lt[B * i : B * (i + 1),] = self.lt_embd[lead_time_label.int()][
-                        :,
-                        :,
-                        py : py + patch_shape[0],
-                        px : px + patch_shape[1],
-                    ]
+            global_index = torch.reshape(
+                torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
+            )  # (P, 2, X, Y) to (2, P*X*Y)
+            selected_pos_embd = self.pos_embd[
+                :, global_index[0], global_index[1]
+            ]  # (N_pe, P*X*Y)
+            selected_pos_embd = torch.permute(
+                torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], P, H, W)),
+                (1, 0, 2, 3),
+            )  # (P, N_pe, X, Y)
 
+            selected_pos_embd = selected_pos_embd.repeat(
+                B, 1, 1, 1
+            )  # (B*P, N_pe, X, Y)
+
+            # Append positional and lead time embeddings to input conditioning
             if self.lead_time_mode:
-                selected_pos_embd = []
-                selected_pos_embd.append(out)
+                embeds = []
+                if self.pos_embd is not None:
+                    embeds.append(selected_pos_embd)  # reuse code below
                 if self.lt_embd is not None:
-                    selected_pos_embd.append(out_lt)
-                if len(selected_pos_embd) > 0:
-                    selected_pos_embd = torch.cat(selected_pos_embd, dim=1)
-            else:
-                selected_pos_embd = out
+                    lt_embds = self.lt_embd[
+                        lead_time_label.int()
+                    ]  # (B, self.lead_time_channels, self.img_shape_y, self.img_shape_x),
+
+                    selected_lt_pos_embd = lt_embds[
+                        :, :, global_index[0], global_index[1]
+                    ]  # (B, N_lt, P*X*Y)
+                    selected_lt_pos_embd = torch.reshape(
+                        torch.permute(
+                            torch.reshape(
+                                selected_lt_pos_embd,
+                                (B, self.lead_time_channels, P, H, W),
+                            ),
+                            (0, 2, 1, 3, 4),
+                        ).contiguous(),
+                        (B * P, self.lead_time_channels, H, W),
+                    )  # (B*P, N_pe, X, Y)
+                    embeds.append(selected_lt_pos_embd)
+
+                if len(embeds) > 0:
+                    selected_pos_embd = torch.cat(embeds, dim=1)
 
         return selected_pos_embd
 

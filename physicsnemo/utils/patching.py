@@ -133,16 +133,14 @@ class BasePatching2D(ABC):
         Returns
         -------
         Tensor
-            A tensor of shape (batch_size * self.patch_num, 2, patch_shape_y,
+            A tensor of shape (self.patch_num, 2, patch_shape_y,
             patch_shape_x). `global_index[:, 0, :, :]` contains the
             y-coordinate (height), and `global_index[:, 1, :, :]` contains the
             x-coordinate (width).
         """
         Ny = torch.arange(self.img_shape[0], device=device).int()
         Nx = torch.arange(self.img_shape[1], device=device).int()
-        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0)[
-            None,
-        ].expand(batch_size, -1, -1, -1)
+        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0).unsqueeze(0)
         global_index = self.apply(grid).long()
         return global_index
 
