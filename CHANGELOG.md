@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored `ResidualLoss` to support patch-accumlating training for
   amortizing regression costs
 - Explicit handling of Warp device for ball query and sdf
+- Merged SongUNetPosLtEmb with SongUNetPosEmb, add support for batch>1
 
 ### Deprecated
 
