@@ -36,7 +36,8 @@ def test_dgcnn_forward(device, knn_cnt, sample_pts):
 
     bsize = 2
     in_pts = torch.randn(bsize, sample_pts, 3).to(device)
-    edge_index = torch_geometric.nn.knn_graph(torch.FloatTensor(in_pts), knn_cnt)
+    in_pts = in_pts.contiguous()
+    edge_index = torch_geometric.nn.knn_graph(in_pts, knn_cnt)
     invar = torch_geometric.data.Data(x=in_pts, edge_index=edge_index)
     assert common.validate_forward_accuracy(
         model,
