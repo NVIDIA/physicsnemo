@@ -63,6 +63,7 @@ def training_loop(cfg):
     assert batch_size % (local_batch_size * dist.world_size) == 0
     # gradient accumulation rounds per step
     num_accumulation_rounds = batch_size // (local_batch_size * dist.world_size)
+
     log_to_wandb = cfg.training.log_to_wandb
 
     loss_type = cfg.training.loss
@@ -307,7 +308,6 @@ def training_loop(cfg):
                 state = [
                     s.to(device=device, dtype=torch.float32) for s in batch["state"]
                 ]
-
                 with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
                     (condition, target, reg_out) = build_network_condition_and_target(
                         background,

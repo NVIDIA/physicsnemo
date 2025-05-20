@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored CorrDiff NVTX annotation workflow to be configurable
 - Refactored `ResidualLoss` to support patch-accumlating training for
   amortizing regression costs
+- Explicit handling of Warp device for ball query and sdf
 
 ### Deprecated
 
@@ -120,6 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross entropy loss.
 - Option to offload checkpoints to further reduce memory usage
 - Added StormCast model training and simple inference to examples
+- Multi-scale geometry features for DoMINO model.
 
 ### Changed
 

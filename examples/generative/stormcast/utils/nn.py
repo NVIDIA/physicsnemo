@@ -142,6 +142,7 @@ def regression_model_forward(
     (x, _, _) = build_network_condition_and_target(
         background, (state, None), invariant_tensor, condition_list=condition_list
     )
+
     return model(x)
 
 

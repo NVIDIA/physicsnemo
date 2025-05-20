@@ -37,6 +37,10 @@ def validate_domino(
 ):
     # Perform a foward pass of the model
     output = model.forward(input_dict)
+
+    assert not torch.isnan(output[0]).any()
+    assert not torch.isnan(output[1]).any()
+
     if file_name is None:
         file_name = model.meta.name + "_output.pth"
     file_name = (
@@ -74,9 +78,9 @@ def test_domino_forward(device, pytestconfig):
             class geo_conv:
                 base_neurons: int = 32
                 base_neurons_out: int = 1
-                radius_short: float = 0.1
-                radius_long: float = 0.5
                 hops: int = 1
+                volume_radii: Sequence = (0.1, 0.5)
+                surface_radii: Sequence = (0.05,)
 
             @dataclass
             class geo_processor:
@@ -93,36 +97,43 @@ def test_domino_forward(device, pytestconfig):
 
         @dataclass
         class geometry_local:
-            base_layer: int = 128
-            neighbors_in_radius: int = 64
-            radius: float = 0.05
+            base_layer: int = 512
+            volume_neighbors_in_radius: Sequence = (128, 128)
+            surface_neighbors_in_radius: Sequence = (128,)
+            volume_radii: Sequence = (0.05, 0.1)
+            surface_radii: Sequence = (0.05,)
 
         @dataclass
         class nn_basis_functions:
-            base_layer: int = 128
+            base_layer: int = 512
+            fourier_features: bool = False
+            num_modes: int = 5
 
         @dataclass
         class aggregation_model:
-            base_layer: int = 128
+            base_layer: int = 512
 
         @dataclass
         class position_encoder:
-            base_neurons: int = 128
+            base_neurons: int = 512
 
         @dataclass
         class parameter_model:
-            base_layer: int = 128
+            base_layer: int = 512
             scaling_params: Sequence = (30.0, 1.226)
+            fourier_features: bool = True
+            num_modes: int = 5
 
         model_type: str = "combined"
-        interp_res: Sequence = (128, 64, 48)
+        interp_res: Sequence = (128, 128, 128)
         use_sdf_in_basis_func: bool = True
         positional_encoding: bool = False
         surface_neighbors: bool = True
-        num_surface_neighbors: int = 21
+        num_surface_neighbors: int = 7
         use_surface_normals: bool = True
-        use_only_normals: bool = True
+        use_surface_area: bool = True
         encode_parameters: bool = False
+        geometry_encoding_type: str = "both"
         geometry_rep = geometry_rep
         nn_basis_functions = nn_basis_functions
         aggregation_model = aggregation_model
@@ -132,7 +143,7 @@ def test_domino_forward(device, pytestconfig):
     model = DoMINO(
         input_features=3,
         output_features_vol=4,
-        output_features_surf=4,
+        output_features_surf=5,
         model_parameters=model_params,
     ).to(device)
 
@@ -153,8 +164,8 @@ def test_domino_forward(device, pytestconfig):
     surface_neighbors = torch.randn(bsize, 100, num_neigh, 3).to(device)
     surface_normals = torch.randn(bsize, 100, 3).to(device)
     surface_neighbors_normals = torch.randn(bsize, 100, num_neigh, 3).to(device)
-    surface_sizes = torch.randn(bsize, 100, 3).to(device)
-    surface_neighbors_sizes = torch.randn(bsize, 100, num_neigh, 3).to(device)
+    surface_sizes = torch.rand(bsize, 100).to(device)
+    surface_neighbors_sizes = torch.rand(bsize, 100, num_neigh).to(device)
     volume_coordinates = torch.randn(bsize, 100, 3).to(device)
     vol_grid_max_min = torch.randn(bsize, 2, 3).to(device)
     surf_grid_max_min = torch.randn(bsize, 2, 3).to(device)
