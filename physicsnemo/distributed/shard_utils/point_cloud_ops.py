@@ -21,8 +21,8 @@ import torch.distributed as dist
 import warp as wp
 
 from physicsnemo.models.layers.ball_query import (
-    _ball_query_backward_primative_,
-    _ball_query_forward_primative_,
+    _ball_query_backward_primitive_,
+    _ball_query_forward_primitive_,
     ball_query_layer,
 )
 from physicsnemo.utils.version_check import check_module_requirements
@@ -392,7 +392,7 @@ class RingBallQuery(torch.autograd.Function):
                 local_mapping,
                 local_num_neighbors,
                 local_outputs,
-            ) = _ball_query_forward_primative_(
+            ) = _ball_query_forward_primitive_(
                 current_p1[0],
                 current_p2[0],
                 ctx.k,
@@ -475,7 +475,7 @@ class RingBallQuery(torch.autograd.Function):
         # for i in range(world_size):
         # Calculate which source rank this data is from
 
-        local_p2_grad = _ball_query_backward_primative_(
+        local_p2_grad = _ball_query_backward_primitive_(
             points1[0],
             points2[0],
             current_mapping,

@@ -108,7 +108,7 @@ def sparse_ball_query(
         outputs[0, tid, _k, 2] = pos[2]
 
 
-def _ball_query_forward_primative_(
+def _ball_query_forward_primitive_(
     points1: torch.Tensor,
     points2: torch.Tensor,
     k: int,
@@ -185,7 +185,7 @@ def _ball_query_forward_primative_(
     return mapping, num_neighbors, outputs
 
 
-def _ball_query_backward_primative_(
+def _ball_query_backward_primitive_(
     points1,
     points2,
     mapping,
@@ -267,7 +267,7 @@ class BallQuery(torch.autograd.Function):
         ctx.hash_grid = hash_grid
 
         # Apply the primitive.  Note the batch index is removed.
-        mapping, num_neighbors, outputs = _ball_query_forward_primative_(
+        mapping, num_neighbors, outputs = _ball_query_forward_primitive_(
             points1[0],
             points2[0],
             k,
@@ -283,7 +283,7 @@ class BallQuery(torch.autograd.Function):
 
         points1, points2, mapping, num_neighbors, outputs = ctx.saved_tensors
         # Apply the primitive
-        p2_grad = _ball_query_backward_primative_(
+        p2_grad = _ball_query_backward_primitive_(
             points1[0],
             points2[0],
             mapping,
