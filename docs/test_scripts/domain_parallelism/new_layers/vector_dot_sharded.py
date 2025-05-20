@@ -77,10 +77,18 @@ def f(x, y):
 # Get the baseline result
 c_baseline = f(a,b)
 
-mesh = dm.initialize_mesh([-1,], ["domain"])
+# DeviceMesh is a pytorch object - you can initialize it directly, or for added
+# flexibility physicsnemo can infer up to one mesh dimension for you 
+# (as a -1, like in a tensor.reshape() call...)
+mesh = dm.initialize_mesh(mesh_shape = [-1,], mesh_dim_names = ["domain"])
+# Shard(i) indicates we want the final tensor to be sharded along the tensor dimension i
+# But the placements is a tuple or list, indicating the desired placement along the mesh.
 placements = (Shard(0),)
-a_sharded = scatter_tensor(a, 0, mesh, placements)
-b_sharded = scatter_tensor(b, 0, mesh, placements)
+# This function will distribute the tensor from global_src to the specified mesh,
+# using the input placements.
+# Note that in multi-level parallelism, the source is the _global_ rank not the mesh group rank.
+a_sharded = scatter_tensor(tensor = a, global_src = 0, mesh = mesh, placements = placements)
+b_sharded = scatter_tensor(tensor = b, global_src = 0, mesh = mesh, placements = placements)
 
 
 c_sharded = f(a_sharded,b_sharded)
