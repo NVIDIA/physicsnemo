@@ -70,11 +70,14 @@ MdlsUNet = Module.from_torch(UNet, meta=MdlsUNetMetaData)
 # [physicsnemo model]
 
 # [physicsnemo sym model]
-
-from typing import Dict, Optional
-
-from physicsnemo.sym.key import Key
-from physicsnemo.sym.models.arch import Arch
+try:
+    from physicsnemo.sym.key import Key
+    from physicsnemo.sym.models.arch import Arch
+except ImportError as e:
+    raise ImportError(
+        "This optional test depends on the `physicsnemo.sym` package.\n"
+        "If desired, you can install it with instructions from https://github.com/NVIDIA/physicsnemo-sym."
+    ) from e
 
 
 class MdlsSymUNet(Arch):
@@ -91,7 +94,7 @@ class MdlsSymUNet(Arch):
 
         self.mdls_model = MdlsUNet(in_channels, out_channels)  # MdlsUNet defined above
 
-    def forward(self, dict_tensor: Dict[str, torch.Tensor]):
+    def forward(self, dict_tensor: dict[str, torch.Tensor]):
         x = self.concat_input(
             dict_tensor,
             self.input_key_dict,
