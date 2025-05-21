@@ -444,7 +444,7 @@ def _infer_shard_tensor_spec_from_local_chunks(
         of this spec is that each ShardTensor knows the shape and size of
         other shards, and can compute global offsets and reductions properly
     """
-    # Sharding_shapes, if a string, must be one of "blocking_infer" "chunk" "infer"
+    # Sharding_shapes, if a string, must be one of "chunk" "infer"
     if isinstance(sharding_shapes, str) and sharding_shapes not in [
         "chunk",
         "infer",

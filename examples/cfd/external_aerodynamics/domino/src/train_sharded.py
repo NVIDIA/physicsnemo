@@ -55,10 +55,9 @@ import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
-from physicsnemo.distributed import register_custom_ops
-from physicsnemo.distributed import ShardTensor
+from typing import Literal
 
-register_custom_ops()
+from physicsnemo.distributed import ShardTensor
 
 from torch.cuda.amp import GradScaler, autocast
 
@@ -141,20 +140,41 @@ def validation_step(
 
 @profile
 def train_epoch(
-    dataloader,
-    model,
-    optimizer,
-    scaler,
-    tb_writer,
-    logger,
-    gpu_handles,
-    epoch_index,
-    device,
-    integral_scaling_factor,
-    loss_fn_type,
-    vol_loss_scaling=None,
-    surf_loss_scaling=None,
-):
+    dataloader: DataLoader,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.cuda.amp.GradScaler,
+    tb_writer: SummaryWriter,
+    logger: PythonLogger,
+    gpu_handles: List[int],
+    epoch_index: int,
+    device: torch.device,
+    integral_scaling_factor: float,
+    loss_fn_type: Literal["mse", "rmse"],
+    vol_loss_scaling: Optional[float] = None,
+    surf_loss_scaling: Optional[float] = None,
+) -> float:
+    """
+    Train a single epoch of the model.
+
+    Args:
+        dataloader: DataLoader for the training data, preprocessing w. DoMINO Pipeline
+        model: DoMINO model to train
+        optimizer: Optimizer for training
+        scaler: GradScaler for mixed precision training
+        tb_writer: SummaryWriter for logging to TensorBoard
+        logger: PythonLogger for logging to console
+        gpu_handles: List of GPU handles from pynvml for tracking GPU memory
+        epoch_index: Index of the current epoch
+        device: Device to run the model on
+        integral_scaling_factor: Scaling factor for the integral loss
+        loss_fn_type: Type of loss function to use
+        vol_loss_scaling: Scaling factor for the volume loss
+        surf_loss_scaling: Scaling factor for the surface loss
+
+    Returns:
+        Average loss for the epoch
+    """
 
     dist = DistributedManager()
 
@@ -344,19 +364,19 @@ def main(cfg: DictConfig) -> None:
 
     train_dataset = create_domino_dataset(
         cfg,
-        "train",
-        volume_variable_names,
-        surface_variable_names,
-        vol_factors,
-        surf_factors,
+        phase="train",
+        volume_variable_names=volume_variable_names,
+        surface_variable_names=surface_variable_names,
+        vol_factors=vol_factors,
+        surf_factors=surf_factors,
     )
     val_dataset = create_domino_dataset(
         cfg,
-        "val",
-        volume_variable_names,
-        surface_variable_names,
-        vol_factors,
-        surf_factors,
+        phase="val",
+        volume_variable_names=volume_variable_names,
+        surface_variable_names=surface_variable_names,
+        vol_factors=vol_factors,
+        surf_factors=surf_factors,
     )
 
     #################################

@@ -41,6 +41,9 @@ def repackage_interpolate_args(
 ) -> Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]:
     """Repackages interpolation arguments into standard format.
 
+    For allowed modes, and details on other arguments, see upstream pytorch documentation:
+    https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.interpolate.html
+
     Args:
         input: Input tensor to interpolate
         size: Output spatial size

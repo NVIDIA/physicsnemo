@@ -566,15 +566,8 @@ reduction_mapping: Dict[str, Callable] = {
 }
 
 
-def register_reduction_functions() -> None:
-    """
-    Register reduction functions with the ShardTensor class.
-
-    This function gatekeeps the registration of these ops
-    to ensure they don't fire unless wanted.
-    """
-    # Register handlers for standalone functions and methods
-    ShardTensor.register_function_handler(torch.mean, mean_wrapper)
-    ShardTensor.register_function_handler(torch.Tensor.mean, mean_wrapper)
-    ShardTensor.register_function_handler(torch.sum, sum_wrapper)
-    ShardTensor.register_function_handler(torch.Tensor.sum, sum_wrapper)
+# Register handlers for standalone functions and methods
+ShardTensor.register_function_handler(torch.mean, mean_wrapper)
+ShardTensor.register_function_handler(torch.Tensor.mean, mean_wrapper)
+ShardTensor.register_function_handler(torch.sum, sum_wrapper)
+ShardTensor.register_function_handler(torch.Tensor.sum, sum_wrapper)

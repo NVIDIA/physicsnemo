@@ -66,7 +66,7 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 
 ### Training with Domain Parallelism
 
-DoMINO has support for training and inference using domain parallelism in physicsnemo,
+DoMINO has support for training and inference using domain parallelism in PhysicsNeMo,
 via the `ShardTensor` mechanisms and pytorch's FSDP tools.  `ShardTensor`, built on
 PyTorch's `DTensor` object, is a domain-parallel-aware tensor that can live on multiple
 GPUs and perform operations in a numerically consistent way.  For more information
@@ -91,7 +91,7 @@ domain_parallelism:
   shard_points: True
 ```
 
-The domain_size represents the number of GPUs used for each batch - setting
+The `domain_size` represents the number of GPUs used for each batch - setting
 `domain_size: 1` is not advised since that is the standard training regime,
 but with extra overhead.  `shard_grid` and `shard_points` will enable domain
 parallelism over the latent space and input/output points, respectively.
@@ -105,8 +105,9 @@ techniques (numerically identical) to calculate the output.  Due to the
 overhead of potential communication at each operation, it's recommended to
 use the `one-loop` mode with `model.solution_calculation_mode` when doing
 sharded training.  This technique launches vectorized kernels with less
-launch overhead at the cost of slightly more memory use.  For non-sharded
-gtraining, the `two-loop` setting is more optimal.
+launch overhead at the cost of more memory use.  For non-sharded
+training, the `two-loop` setting is more optimal. The difference in `one-loop`
+or `two-loop` is purely computational, not algorithmic.
 
 ## Retraining recipe for DoMINO model
 

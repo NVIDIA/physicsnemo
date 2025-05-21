@@ -520,6 +520,7 @@ class DistributedManager(object):
 
         return self._global_mesh
 
+    # Device mesh available in torch 2.4 or higher
     @require_version("torch", "2.4")
     def get_mesh_group(self, mesh: dist.DeviceMesh) -> dist.ProcessGroup:
         """

@@ -49,7 +49,6 @@ from torch.utils.tensorboard import SummaryWriter
 from nvtx import annotate as nvtx_annotate
 import torch.cuda.nvtx as nvtx
 
-import torch.cuda.nvtx as nvtx
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
@@ -261,12 +260,25 @@ def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
 def compute_loss_dict(
     prediction_vol: torch.Tensor,
     prediction_surf: torch.Tensor,
-    batch_inputs: Dict,
-    loss_fn_type: Dict,
+    batch_inputs: dict,
+    loss_fn_type: dict,
     integral_scaling_factor: float,
     surf_loss_scaling: float,
     vol_loss_scaling: float,
-):
+) -> Tuple[torch.Tensor, dict]:
+    """
+    Compute the loss terms in a single function call.
+
+    Computes:
+    - Volume loss if prediction_vol is not None
+    - Surface loss if prediction_surf is not None
+    - Integral loss if prediction_surf is not None
+    - Total loss as a weighted sum of the above
+
+    Returns:
+    - Total loss as a scalar tensor
+    - Dictionary of loss terms (for logging, etc)
+    """
     nvtx.range_push("Loss Calculation")
     total_loss_terms = []
     loss_dict = {}
@@ -522,19 +534,19 @@ def main(cfg: DictConfig) -> None:
 
     train_dataset = create_domino_dataset(
         cfg,
-        "train",
-        volume_variable_names,
-        surface_variable_names,
-        vol_factors,
-        surf_factors,
+        phase="train",
+        volume_variable_names=volume_variable_names,
+        surface_variable_names=surface_variable_names,
+        vol_factors=vol_factors,
+        surf_factors=surf_factors,
     )
     val_dataset = create_domino_dataset(
         cfg,
-        "val",
-        volume_variable_names,
-        surface_variable_names,
-        vol_factors,
-        surf_factors,
+        phase="val",
+        volume_variable_names=volume_variable_names,
+        surface_variable_names=surface_variable_names,
+        vol_factors=vol_factors,
+        surf_factors=surf_factors,
     )
 
     train_sampler = DistributedSampler(

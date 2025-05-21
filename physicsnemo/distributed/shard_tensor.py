@@ -155,11 +155,8 @@ class _FromTorchTensor(torch.autograd.Function):
             device_mesh: Device mesh specifying process groups
             placements: Tuple of placement rules for sharding
             sharding_shapes: Controls how shard tensor spec is generated:
-                - "blocking_infer": Use blocking collective communication to infer shapes
                 - "chunk": Use torch.chunk shapes to infer shapes from global shape (no communication)
-                - "infer": Assume shapes are not even, but defer inference until needed.
-                    Note that infer will launch async RPC calls to infer the shapes, but won't
-                    block on them until they are called upon.
+                - "infer": Use collective communication to infer shapes from mesh neighbors.
                 - Manual dict mapping mesh dim to list of shard shapes: Use provided shapes.  Must pass on each rank!
 
         Returns:
@@ -470,8 +467,10 @@ class ShardTensor(DTensor):
                 of the same rank and concatable across the mesh dimensions
             device_mesh: Target Device Mesh, if not specified will use the current mesh
             placements: Target placements, must have same number of elements as device_mesh.ndim
-            sharding_shapes: Passed to _infer_shard_tensor_spec_from_local_chunks to control
-                how the sharding sizes are inferred.
+            sharding_shapes: Controls how shard tensor spec is generated:
+                - "chunk": Use torch.chunk shapes to infer shapes from global shape (no communication)
+                - "infer": Use collective communication to infer shapes from mesh neighbors.
+                - Manual dict mapping mesh dim to list of shard shapes: Use provided shapes.  Must pass on each rank!
         Returns:
             A new ShardTensor instance
         """

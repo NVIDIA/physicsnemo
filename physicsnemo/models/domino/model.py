@@ -449,9 +449,6 @@ class NNBasisFunctions(nn.Module):
         self.fc1 = nn.Linear(input_features_calculated, base_layer)
         self.fc2 = nn.Linear(base_layer, int(base_layer))
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
-        # self.bn1 = nn.BatchNorm1d(base_layer)
-        # self.bn2 = nn.BatchNorm1d(int(base_layer))
-        # self.bn3 = nn.BatchNorm1d(int(base_layer))
 
         self.activation = F.relu
 
@@ -574,10 +571,7 @@ class AggregationModel(nn.Module):
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
         self.fc4 = nn.Linear(int(base_layer), int(base_layer))
         self.fc5 = nn.Linear(int(base_layer), self.output_features)
-        # self.bn1 = nn.BatchNorm1d(base_layer)
-        # self.bn2 = nn.BatchNorm1d(int(base_layer))
-        # self.bn3 = nn.BatchNorm1d(int(base_layer))
-        # self.bn4 = nn.BatchNorm1d(int(base_layer))
+
         self.activation = F.relu
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

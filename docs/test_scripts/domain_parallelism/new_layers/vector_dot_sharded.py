@@ -5,7 +5,31 @@ import time
 from physicsnemo.distributed import DistributedManager, scatter_tensor, ShardTensor
 from torch.distributed.tensor.placement_types import Shard, Replicate
 
-def sharded_dot_product(func, types, args, kwargs):
+def sharded_dot_product(func: Callable, types: Tuple, args: Tuple, kwargs: Dict):
+    """
+    Overload for torch.dot to support sharded tensors.
+    
+    This function enables mutli-gpu dot product operations on ShardTensors,
+    by computing the dot product locally on each rank and then summin across 
+    all GPUs.  Requires the placements and mesh to agree across the two tensors.
+    
+    This is tutorial code: it does not handle all cases and you should 
+    not use it in production.
+    
+    Note the function signature: we are using this function in the 
+    __torch_function__ protocol and it has to follow the specific signature
+    requirements.
+    
+    Args:
+        func (Callable): The function to overload (e.g., torch.dot).
+        types (Tuple): Tuple of types passed by __torch_function__ protocol.
+        args (Tuple): Positional arguments passed to the function.
+        kwargs (Dict): Keyword arguments passed to the function.
+        
+    In general, torch will use the values in `types` to determine which
+    path of execution to take.  In this function, we don't have to worry
+    about that as much because it's already selected for execution.
+    """
     # NOTE: all functions overloaded and used by __torch_function__ will have 
     # the same input signature.  You can use python argument unpacking to 
     # extract what you need:
@@ -48,6 +72,11 @@ def sharded_dot_product(func, types, args, kwargs):
     # We do want to return the result as a ShardTensor, for consistency.
     # We can easily create one on the same mesh as a "Replicated" tensor:
 
+
+    # The output placements are now Replicated, not sharded.  We have used all_reduce
+    # to sum the local results across all ranks, and each rank has the full data - 
+    # exactly what the Replicate() placement expects.
+    # (Even though it's a scalar output, we still have to specify a placement)
     output = ShardTensor.from_local(
         local_tensor = local_dot_product, 
         device_mesh =  mesh, 

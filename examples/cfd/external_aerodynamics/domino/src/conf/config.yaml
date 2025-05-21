@@ -74,6 +74,14 @@ data: # Input directory for training and validation data
     max: [4.5 , 1.2  , 1.2]
 
 # ┌───────────────────────────────────────────┐
+# │          Domain Parallelism Settings      │
+# └───────────────────────────────────────────┘  
+domain_parallelism:
+  domain_size: 1
+  shard_grid: false
+  shard_points: false
+
+# ┌───────────────────────────────────────────┐
 # │          Model Parameters                 │
 # └───────────────────────────────────────────┘  
 model:

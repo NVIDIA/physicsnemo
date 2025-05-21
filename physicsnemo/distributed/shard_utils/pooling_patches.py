@@ -152,7 +152,10 @@ def generic_avg_pool_nd_wrapper(
 
     # Reject cases where stride != kernel_size
     if pool_kwargs.get("stride") != pool_kwargs.get("kernel_size"):
-        raise MissingShardPatch("Stride must equal kernel_size for pooling operations")
+        raise MissingShardPatch(
+            "Sharded pooling is not implemented for kernels without matching stride. "
+            "If you need this functionality, please open an issue at https://github.com/NVIDIA/PhysicsNemo/issues"
+        )
 
     # Check divisibility by stride only for sharded dimensions
     stride = pool_kwargs.get("stride")
