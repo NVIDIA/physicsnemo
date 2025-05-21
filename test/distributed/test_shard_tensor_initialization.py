@@ -89,21 +89,21 @@ def run_shard_tensor_initialization_from_data_rank(
         )
 
         # Create the raw data on the first rank of the first dimension of the domain mesh:
-        source = dist.get_global_rank(domain_mesh.get_group(0), 0)
-        source = int(domain_mesh.mesh.min())
+        first_axis_group = domain_mesh.get_group(0)
+        first_axis_ranks = dist.get_process_group_ranks(first_axis_group)
+        source = min(first_axis_ranks)
 
         if rank == source:
             raw_data = torch.randn(
                 global_shape, device=torch.device(f"cuda:{dm.local_rank}")
             )
         else:
-            raw_data = torch.empty(0)
+            raw_data = None
 
         st = scatter_tensor(raw_data, source, domain_mesh, placements)
 
         # Check that the local shape matches the expected shape:
         local_data = st.to_local()
-        print(f"local shape: {local_data.shape}")
         # Check the dimensions on the sharded mesh:
         checked_dims = []
         for mesh_dim, placement in enumerate(placements):
@@ -158,7 +158,10 @@ def run_shard_tensor_initialization_from_all_dtensor(
 
         st = ShardTensor.from_dtensor(dt)
 
-        assert torch.allclose(dt.full_tensor(), st.full_tensor())
+        dt_full = dt.full_tensor()
+        st_full = st.full_tensor()
+
+        assert torch.allclose(dt_full, st_full)
 
         # on the "source" rank of the mesh, we should have agreement with raw data.
         # on the "not-source" rank of the mesh, we shouldn't
@@ -202,9 +205,7 @@ def run_shard_tensor_initialization_from_local_chunks(
         local_shape = list(global_shape)
         first_shard_dim = placements[0].dim
         replacement_size = int(random.uniform(0.5, 1.5) * local_shape[first_shard_dim])
-
         local_shape[first_shard_dim] = replacement_size
-
         # replace the dimension with a new one
 
         # Create the raw data everywhere, but it will mostly get thrown away
@@ -213,10 +214,13 @@ def run_shard_tensor_initialization_from_local_chunks(
             local_shape, device=torch.device(f"cuda:{dm.local_rank}")
         )
         st = ShardTensor.from_local(
-            raw_data, device_mesh=domain_mesh, placements=placements, infer_shape=True
+            raw_data,
+            device_mesh=domain_mesh,
+            placements=placements,
+            sharding_shapes="infer",
         )
 
-        # Data comes back ok:
+        # Local data comes back ok:
         assert torch.allclose(st.to_local(), raw_data)
 
         # Gather the shapes along the random placement and make sure they agree:
@@ -239,7 +243,6 @@ def run_shard_tensor_initialization_from_local_chunks(
         index = index.to(raw_data.device)
 
         local_slice = st.full_tensor().index_select(placements[0].dim, index)
-
         # Slice out what should be the original tensor
 
         agreement_with_original_data = torch.allclose(local_slice, raw_data)
@@ -306,7 +309,7 @@ def test_shard_tensor_initialization_from_data_rank(
 @pytest.mark.parametrize(
     "domain_W",
     [
-        1,
+        1,  # Lock this to 1.  This test will randomize the shape of one axis of the local tensor, a 2D mesh breaks that.
     ],
 )
 def test_shard_tensor_initialization_from_local_chunks(
@@ -404,3 +407,7 @@ def test_shard_tensor_initialization_from_all_dtensor(
         join=True,
         daemon=True,
     )
+
+
+if __name__ == "__main__":
+    test_shard_tensor_initialization_from_all_dtensor(-1, 2, 1)

@@ -14,9 +14,220 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Tuple
 
 import torch
 import warp as wp
+from torch.overrides import handle_torch_function, has_torch_function
+
+
+@wp.kernel
+def ball_query(
+    points1: wp.array(dtype=wp.vec3),
+    points2: wp.array(dtype=wp.vec3),
+    grid: wp.uint64,
+    k: wp.int32,
+    radius: wp.float32,
+    mapping: wp.array3d(dtype=wp.int32),
+    num_neighbors: wp.array2d(dtype=wp.int32),
+):
+    """
+    Performs ball query operation to find neighboring points within a specified radius.
+
+    For each point in points1, finds up to k neighboring points from points2 that are
+    within the specified radius. Uses a hash grid for efficient spatial queries.
+
+    Note that the neighbors found are not strictly guaranteed to be the closest k neighbors,
+    in the event that more than k neighbors are found within the radius.
+
+    Args:
+        points1: Array of query points
+        points2: Array of points to search
+        grid: Pre-computed hash grid for accelerated spatial queries
+        k: Maximum number of neighbors to find for each query point
+        radius: Maximum search radius for finding neighbors
+        mapping: Output array to store indices of neighboring points. Should be instantiated as zeros(1, len(points1), k)
+        num_neighbors: Output array to store the number of neighbors found for each query point. Should be instantiated as zeros(1, len(points1))
+    """
+    tid = wp.tid()
+
+    # Get position from points1
+    pos = points1[tid]
+
+    # particle contact
+    neighbors = wp.hash_grid_query(id=grid, point=pos, max_dist=radius)
+
+    # Keep track of the number of neighbors found
+    neighbors_found = wp.int32(0)
+
+    # loop through neighbors to compute density
+    for index in neighbors:
+        # Check if outside the radius
+        pos2 = points2[index]
+        if wp.length(pos - pos2) > radius:
+            continue
+
+        # Add neighbor to the list
+        mapping[0, tid, neighbors_found] = index
+
+        # Increment the number of neighbors found
+        neighbors_found += 1
+
+        # Break if we have found enough neighbors
+        if neighbors_found == k:
+            num_neighbors[0, tid] = k
+            break
+
+    # Set the number of neighbors
+    num_neighbors[0, tid] = neighbors_found
+
+
+@wp.kernel
+def sparse_ball_query(
+    points2: wp.array(dtype=wp.vec3),
+    mapping: wp.array3d(dtype=wp.int32),
+    num_neighbors: wp.array2d(dtype=wp.int32),
+    outputs: wp.array4d(dtype=wp.float32),
+):
+    tid = wp.tid()
+
+    # Get number of neighbors
+    k = num_neighbors[0, tid]
+
+    # Loop through neighbors
+    for _k in range(k):
+        # Get point2 index
+        index = mapping[0, tid, _k]
+
+        # Get position from points2
+        pos = points2[index]
+
+        # Set the output
+        outputs[0, tid, _k, 0] = pos[0]
+        outputs[0, tid, _k, 1] = pos[1]
+        outputs[0, tid, _k, 2] = pos[2]
+
+
+def _ball_query_forward_primitive_(
+    points1: torch.Tensor,
+    points2: torch.Tensor,
+    k: int,
+    radius: float,
+    hash_grid: wp.HashGrid,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    # Create output tensors:
+    mapping = torch.zeros(
+        (1, points1.shape[0], k),
+        dtype=torch.int32,
+        device=points1.device,
+        requires_grad=False,
+    )
+    num_neighbors = torch.zeros(
+        (1, points1.shape[0]),
+        dtype=torch.int32,
+        device=points1.device,
+        requires_grad=False,
+    )
+    outputs = torch.zeros(
+        (1, points1.shape[0], k, 3),
+        dtype=torch.float32,
+        device=points1.device,
+        requires_grad=(points1.requires_grad or points2.requires_grad),
+    )
+
+    # Convert from torch to warp
+    points1 = wp.from_torch(points1, dtype=wp.vec3, requires_grad=points1.requires_grad)
+    points2 = wp.from_torch(points2, dtype=wp.vec3, requires_grad=points2.requires_grad)
+
+    wp_mapping = wp.from_torch(mapping, dtype=wp.int32, requires_grad=False)
+    wp_num_neighbors = wp.from_torch(num_neighbors, dtype=wp.int32, requires_grad=False)
+    wp_outputs = wp.from_torch(
+        outputs,
+        dtype=wp.float32,
+        requires_grad=(points1.requires_grad or points2.requires_grad),
+    )
+
+    # Build the grid
+    hash_grid.build(points2, radius)
+
+    # Run the kernel to get mapping
+    wp.launch(
+        ball_query,
+        inputs=[
+            points1,
+            points2,
+            hash_grid.id,
+            k,
+            radius,
+        ],
+        outputs=[
+            wp_mapping,
+            wp_num_neighbors,
+        ],
+        dim=[points1.shape[0]],
+    )
+
+    # Run the kernel to get outputs
+    wp.launch(
+        sparse_ball_query,
+        inputs=[
+            points2,
+            wp_mapping,
+            wp_num_neighbors,
+        ],
+        outputs=[
+            wp_outputs,
+        ],
+        dim=[points1.shape[0]],
+    )
+
+    return mapping, num_neighbors, outputs
+
+
+def _ball_query_backward_primitive_(
+    points1,
+    points2,
+    mapping,
+    num_neighbors,
+    outputs,
+    grad_mapping,
+    grad_num_neighbors,
+    grad_outputs,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    p2_grad = torch.zeros_like(points2)
+
+    # Run the kernel in adjoint mode
+    wp.launch(
+        sparse_ball_query,
+        inputs=[
+            wp.from_torch(points2, dtype=wp.vec3, requires_grad=points2.requires_grad),
+            wp.from_torch(mapping, dtype=wp.int32, requires_grad=False),
+            wp.from_torch(num_neighbors, dtype=wp.int32, requires_grad=False),
+        ],
+        outputs=[
+            wp.from_torch(outputs, dtype=wp.float32, requires_grad=False),
+        ],
+        adj_inputs=[
+            wp.from_torch(p2_grad, dtype=wp.vec3, requires_grad=points2.requires_grad),
+            wp.from_torch(
+                grad_mapping, dtype=wp.int32, requires_grad=mapping.requires_grad
+            ),
+            wp.from_torch(
+                grad_num_neighbors,
+                dtype=wp.int32,
+                requires_grad=num_neighbors.requires_grad,
+            ),
+        ],
+        adj_outputs=[
+            wp.from_torch(grad_outputs, dtype=wp.float32),
+        ],
+        dim=[points1.shape[0]],
+        adjoint=True,
+    )
+
+    return p2_grad
 
 
 class BallQuery(torch.autograd.Function):
@@ -26,242 +237,89 @@ class BallQuery(torch.autograd.Function):
     Note: only differentiable with respect to points1 and points2.
     """
 
-    @wp.kernel
-    def ball_query(
-        points1: wp.array(dtype=wp.vec3),
-        points2: wp.array(dtype=wp.vec3),
-        grid: wp.uint64,
-        k: wp.int32,
-        radius: wp.float32,
-        mapping: wp.array3d(dtype=wp.int32),
-        num_neighbors: wp.array2d(dtype=wp.int32),
-    ):
-        """
-        Performs ball query operation to find neighboring points within a specified radius.
-
-        For each point in points1, finds up to k neighboring points from points2 that are
-        within the specified radius. Uses a hash grid for efficient spatial queries.
-
-        Note that the neighbors found are not strictly guaranteed to be the closest k neighbors,
-        in the event that more than k neighbors are found within the radius.
-
-        Args:
-            points1: Array of query points
-            points2: Array of points to search
-            grid: Pre-computed hash grid for accelerated spatial queries
-            k: Maximum number of neighbors to find for each query point
-            radius: Maximum search radius for finding neighbors
-            mapping: Output array to store indices of neighboring points. Should be instantiated as zeros(1, len(points1), k)
-            num_neighbors: Output array to store the number of neighbors found for each query point. Should be instantiated as zeros(1, len(points1))
-        """
-        tid = wp.tid()
-
-        # Get position from points1
-        pos = points1[tid]
-
-        # particle contact
-        neighbors = wp.hash_grid_query(id=grid, point=pos, max_dist=radius)
-
-        # Keep track of the number of neighbors found
-        neighbors_found = wp.int32(0)
-
-        # loop through neighbors to compute density
-        for index in neighbors:
-            # Check if outside the radius
-            pos2 = points2[index]
-            if wp.length(pos - pos2) > radius:
-                continue
-
-            # Add neighbor to the list
-            mapping[0, tid, neighbors_found] = index
-
-            # Increment the number of neighbors found
-            neighbors_found += 1
-
-            # Break if we have found enough neighbors
-            if neighbors_found == k:
-                num_neighbors[0, tid] = k
-                break
-
-        # Set the number of neighbors
-        num_neighbors[0, tid] = neighbors_found
-
-    @wp.kernel
-    def sparse_ball_query(
-        points2: wp.array(dtype=wp.vec3),
-        mapping: wp.array3d(dtype=wp.int32),
-        num_neighbors: wp.array2d(dtype=wp.int32),
-        outputs: wp.array4d(dtype=wp.float32),
-    ):
-        tid = wp.tid()
-
-        # Get number of neighbors
-        k = num_neighbors[0, tid]
-
-        # Loop through neighbors
-        for _k in range(k):
-            # Get point2 index
-            index = mapping[0, tid, _k]
-
-            # Get position from points2
-            pos = points2[index]
-
-            # Set the output
-            outputs[0, tid, _k, 0] = pos[0]
-            outputs[0, tid, _k, 1] = pos[1]
-            outputs[0, tid, _k, 2] = pos[2]
-
     @staticmethod
     def forward(
         ctx,
         points1: torch.Tensor,
         points2: torch.Tensor,
-        # lengths1: torch.Tensor,
-        # lengths2: torch.Tensor,
         k: int,
         radius: float,
         hash_grid: wp.HashGrid,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # Only works for batch size 1
         if points1.shape[0] != 1:
-            raise AssertionError("Only works for batch size 1")
+            raise AssertionError("Ball Query only works for batch size 1")
 
-        try:
-            device = str(wp.get_device())
-        except Exception:
-            device = "cuda"
+        # CJA - 5/15/25 - This was added recently, but it looks like I also
+        # addressed it.  The primitive functions below handle device selection
+        # via compute-follows-data: they will allocate new tensors on the device
+        # where points1 currently resides (forward) and points2 resides (backward).
+        # there isn't checking that the devices match, but it will crash if they do not.
+        # try:
+        #     device = str(wp.get_device())
+        # except Exception:
+        #     device = "cuda"
 
-        # Convert from torch to warp
-        ctx.points1 = wp.from_torch(
-            points1[0], dtype=wp.vec3, requires_grad=points1.requires_grad
-        )
-        ctx.points2 = wp.from_torch(
-            points2[0], dtype=wp.vec3, requires_grad=points2.requires_grad
-        )
-        # ctx.lengths1 = wp.from_torch(lengths1, dtype=wp.int32, requires_grad=False)
-        # ctx.lengths2 = wp.from_torch(lengths2, dtype=wp.int32, requires_grad=False)
         ctx.k = k
         ctx.radius = radius
-
-        # Allocate the mapping and outputs
-        mapping = torch.zeros(
-            1,
-            points1.shape[1],
-            k,
-            dtype=torch.int32,
-            device=device,
-            requires_grad=False,
-        )
-        ctx.mapping = wp.from_torch(mapping, dtype=wp.int32, requires_grad=False)
-        num_neighbors = torch.zeros(
-            1,
-            points1.shape[1],
-            dtype=torch.int32,
-            device=device,
-            requires_grad=False,
-        )
-        ctx.num_neighbors = wp.from_torch(
-            num_neighbors, dtype=wp.int32, requires_grad=False
-        )
-        outputs = torch.zeros(
-            1,
-            points1.shape[1],
-            k,
-            3,
-            dtype=torch.float32,
-            device=device,
-            requires_grad=(points1.requires_grad or points2.requires_grad),
-        )
-        ctx.outputs = wp.from_torch(
-            outputs,
-            dtype=wp.float32,
-            requires_grad=(points1.requires_grad or points2.requires_grad),
-        )
 
         # Make grid
         ctx.hash_grid = hash_grid
 
-        # Build the grid
-        ctx.hash_grid.build(ctx.points2, radius)
-
-        ctx.dim = [ctx.points1.shape[0]]
-
-        # Run the kernel to get mapping
-        wp.launch(
-            BallQuery.ball_query,
-            inputs=[
-                ctx.points1,
-                ctx.points2,
-                ctx.hash_grid.id,
-                k,
-                radius,
-            ],
-            outputs=[
-                ctx.mapping,
-                ctx.num_neighbors,
-            ],
-            dim=ctx.dim,
+        # Apply the primitive.  Note the batch index is removed.
+        mapping, num_neighbors, outputs = _ball_query_forward_primitive_(
+            points1[0],
+            points2[0],
+            k,
+            radius,
+            hash_grid,
         )
+        ctx.save_for_backward(points1, points2, mapping, num_neighbors, outputs)
 
-        # Run the kernel to get outputs
-        wp.launch(
-            BallQuery.sparse_ball_query,
-            inputs=[
-                ctx.points2,
-                ctx.mapping,
-                ctx.num_neighbors,
-            ],
-            outputs=[
-                ctx.outputs,
-            ],
-            dim=ctx.dim,
-        )
-
-        return (
-            wp.to_torch(ctx.mapping),
-            wp.to_torch(ctx.num_neighbors),
-            wp.to_torch(ctx.outputs),
-        )
+        return mapping, num_neighbors, outputs
 
     @staticmethod
-    def backward(
-        ctx,
-        grad_mapping: torch.Tensor,
-        grad_num_neighbors: torch.Tensor,
-        grad_outputs: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, None, None, None]:
-        # Map incoming torch grads to our output variable
-        ctx.outputs.grad = wp.from_torch(grad_outputs, dtype=wp.float32)
+    def backward(ctx, grad_mapping, grad_num_neighbors, grad_outputs):
 
-        # Run the kernel in adjoint mode
-        wp.launch(
-            BallQuery.sparse_ball_query,
-            inputs=[
-                ctx.points2,
-                ctx.mapping,
-                ctx.num_neighbors,
-            ],
-            outputs=[
-                ctx.outputs,
-            ],
-            adj_inputs=[ctx.points2.grad, ctx.mapping.grad, ctx.num_neighbors.grad],
-            adj_outputs=[
-                ctx.outputs.grad,
-            ],
-            dim=ctx.dim,
-            adjoint=True,
+        points1, points2, mapping, num_neighbors, outputs = ctx.saved_tensors
+        # Apply the primitive
+        p2_grad = _ball_query_backward_primitive_(
+            points1[0],
+            points2[0],
+            mapping,
+            num_neighbors,
+            outputs,
+            grad_mapping,
+            grad_num_neighbors,
+            grad_outputs,
         )
+        p2_grad = p2_grad.unsqueeze(0)
 
         # Return the gradients
         return (
-            wp.to_torch(ctx.points1.grad).unsqueeze(0),
-            wp.to_torch(ctx.points2.grad).unsqueeze(0),
-            # None,
-            # None,
+            torch.zeros_like(points1),
+            p2_grad,
             None,
             None,
             None,
         )
+
+
+def ball_query_layer(
+    points1: torch.Tensor,
+    points2: torch.Tensor,
+    k: int,
+    radius: float,
+    hash_grid: wp.HashGrid,
+):
+    """
+    Wrapper for BallQuery.apply to support a functional interface.
+    """
+    if has_torch_function((points1, points2)):
+        return handle_torch_function(
+            ball_query_layer, (points1, points2), points1, points2, k, radius, hash_grid
+        )
+    return BallQuery.apply(points1, points2, k, radius, hash_grid)
 
 
 class BallQueryLayer(torch.nn.Module):
@@ -300,11 +358,9 @@ class BallQueryLayer(torch.nn.Module):
                 - num_neighbors: Tensor containing the number of neighbors found for each query point
                 - outputs: Tensor containing features or coordinates of the neighboring points
         """
-        return BallQuery.apply(
+        return ball_query_layer(
             points1,
             points2,
-            # lengths1,
-            # lengths2,
             self.k,
             self.radius,
             self.hash_grid,
@@ -328,8 +384,6 @@ if __name__ == "__main__":
     points1 = torch.rand(n, p1, d, device="cuda", requires_grad=True)
 
     points2 = torch.rand(n, p2, d, device="cuda", requires_grad=True)
-    # lengths1 = torch.full((n,), p1, dtype=torch.int32).cuda()
-    # lengths2 = torch.full((n,), p2, dtype=torch.int32).cuda()
     k = 256  # maximum number of neighbors
     radius = 0.1
 
@@ -341,8 +395,6 @@ if __name__ == "__main__":
         mapping, num_neighbors, outputs = layer(
             points1,
             points2,
-            # lengths1,
-            # lengths2,
         )
 
     for i in range(20):
@@ -350,14 +402,10 @@ if __name__ == "__main__":
         p2 += 100
         points1 = torch.rand(n, p1, d, device="cuda", requires_grad=False)
         points2 = torch.rand(n, p2, d, device="cuda", requires_grad=False)
-        # lengths1 = torch.full((n,), p1, dtype=torch.int32).cuda()
-        # lengths2 = torch.full((n,), p2, dtype=torch.int32).cuda()
 
         mapping, num_neighbors, outputs = layer(
             points1,
             points2,
-            # lengths1,
-            # lengths2,
         )
 
     # Perform matrix multiplication as comparison for timing

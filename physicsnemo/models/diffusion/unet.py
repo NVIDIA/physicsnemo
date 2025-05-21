@@ -16,7 +16,7 @@
 
 import importlib
 from dataclasses import dataclass
-from typing import List, Literal, Tuple, Union
+from typing import Any, Dict, List, Literal, Tuple, Union
 
 import torch
 
@@ -83,6 +83,47 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
     Generative Residual Diffusion Modeling for Km-scale Atmospheric Downscaling.
     arXiv preprint arXiv:2309.15214.
     """
+
+    __model_checkpoint_version__ = "0.2.0"
+    __supported_model_checkpoint_version__ = {
+        "0.1.0": "Loading UNet checkpoint from older version 0.1.0 (current version is 0.2.0). This version is still supported, but consider re-saving the model to upgrade to version 0.2.0 and remove this warning."
+    }
+
+    @classmethod
+    def _backward_compat_arg_mapper(
+        cls, version: str, args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Map arguments from older versions to current version format.
+
+        Parameters
+        ----------
+        version : str
+            Version of the checkpoint being loaded
+        args : Dict[str, Any]
+            Arguments dictionary from the checkpoint
+
+        Returns
+        -------
+        Dict[str, Any]
+            Updated arguments dictionary compatible with current version
+        """
+        # Call parent class method first
+        args = super()._backward_compat_arg_mapper(version, args)
+
+        if version == "0.1.0":
+            # In version 0.1.0, img_channels was unused
+            if "img_channels" in args:
+                _ = args.pop("img_channels")
+
+            # Sigma parameters are also unused
+            if "sigma_min" in args:
+                _ = args.pop("sigma_min")
+            if "sigma_max" in args:
+                _ = args.pop("sigma_max")
+            if "sigma_data" in args:
+                _ = args.pop("sigma_data")
+
+        return args
 
     def __init__(
         self,

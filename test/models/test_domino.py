@@ -57,7 +57,6 @@ def validate_domino(
     else:
         tensor_dict = torch.load(str(file_name))
         output_target = tuple([value.to(device) for value in tensor_dict.values()])
-
         return compare_output(output, output_target, rtol, atol)
 
 
@@ -134,6 +133,7 @@ def test_domino_forward(device, pytestconfig):
         use_surface_area: bool = True
         encode_parameters: bool = False
         geometry_encoding_type: str = "both"
+        solution_calculation_mode: str = "two-loop"
         geometry_rep = geometry_rep
         nn_basis_functions = nn_basis_functions
         aggregation_model = aggregation_model

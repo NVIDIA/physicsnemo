@@ -22,9 +22,6 @@ import torch.distributed as dist
 import torch.distributed._functional_collectives as funcol
 from torch.distributed.device_mesh import DeviceMesh
 
-from physicsnemo.distributed.autograd import (
-    all_gather_v,
-)
 from physicsnemo.utils.version_check import check_module_requirements
 
 # This is to make sure the torch minimum version is installed.
@@ -78,22 +75,34 @@ def _to_replicate_tensor(
     Note:
         This function handles uneven sharding by using all_gather_v instead of regular all_gather
     """
-
     # Get the mesh for the group:
     mesh = current_spec.mesh
     group = mesh.get_group(mesh_dim)
 
-    # Get all sizes:
-    sizes = current_spec.sharding_sizes()
-    this_sizes = tuple(s[tensor_dim] for s in sizes[mesh_dim])
-    # # Ensure contiguous data for the reduction:
+    # Ensure contiguous data for the reduction:
     local_tensor = local_tensor.contiguous()
-    # We can implement this with a straightforward allgather_v
-    local_tensor = all_gather_v(
-        local_tensor, sizes=this_sizes, dim=tensor_dim, group=group
-    )
 
-    return local_tensor
+    # # Get all sizes:
+    # TODO: We don't need to summon all sizes across all mesh dimensions.
+    # Optimize the spec function to only get the sizes for the relevant mesh dimensions.
+    sizes = current_spec.sharding_shapes()
+
+    # Consecutive redistributes _don't_ update full sizes.
+    # So, extract the shape from this tensor, and assume all other tensor
+    # dims match.
+    tensor_dim_shapes = tuple(s[tensor_dim] for s in sizes[mesh_dim])
+    base_shapes = [list(local_tensor.shape) for _ in tensor_dim_shapes]
+    for i, t in enumerate(tensor_dim_shapes):
+        base_shapes[i][tensor_dim] = tensor_dim_shapes[i]
+
+    # Create a spot for the output:
+    output = [
+        torch.empty(s, device=local_tensor.device, dtype=local_tensor.dtype)
+        for s in base_shapes
+    ]
+    dist.all_gather(output, local_tensor, group=group)
+
+    return torch.cat(output, dim=tensor_dim).contiguous()
 
 
 def _select_slice_from_replicate(
@@ -121,7 +130,6 @@ def _select_slice_from_replicate(
     """
 
     # TODO - This needs a rework to enable caching of shapes for a grad pass.
-
     # We really only need the sizes from this dimension:
     tensor_dim = target_spec.placements[mesh_dim].dim
     mesh_size = target_spec.mesh.size(mesh_dim=mesh_dim)
@@ -132,10 +140,16 @@ def _select_slice_from_replicate(
 
     # Split the tensor:
     if sizes is None:
-        chunks = torch.tensor_split(local_tensor, mesh_size, dim=tensor_dim)
+        # Use chunk, not split, when dividing without a plan
+        chunks = torch.chunk(local_tensor, mesh_size, dim=tensor_dim)
     else:
-        chunks = torch.tensor_split(local_tensor, sizes[:-1], dim=tensor_dim)
-
+        # Convert sizes to cumulative sum using basic Python
+        chunk_starts = []
+        running_sum = 0
+        for size in sizes[:-1]:
+            running_sum += size
+            chunk_starts.append(running_sum)
+        chunks = torch.tensor_split(local_tensor, chunk_starts, dim=tensor_dim)
     return chunks[mesh_coord], sizes
 
 
@@ -166,7 +180,7 @@ def _to_new_shard_dim(
 
     # First, we need to split the tensor along the target dimension:
     if size_hint is None:
-        chunks = torch.tensor_split(local_tensor, mesh_size, dim=target_dim)
+        chunks = torch.chunk(local_tensor, mesh_size, dim=target_dim)
     else:
         chunk_starts = list(accumulate(size_hint))
         chunks = torch.tensor_split(local_tensor, chunk_starts[:-1], dim=target_dim)
@@ -214,7 +228,7 @@ def redistribute_local_shard_tensor(
     *,
     async_op: bool = False,
     is_backward: bool = False,
-    target_sharding_sizes: Optional[dict[int, Tuple[torch.Size, ...]]] = {},
+    target_sharding_shapes: Optional[dict[int, Tuple[torch.Size, ...]]] = {},
 ) -> torch.Tensor:
     """
     This redistribute the local tensor (torch.Tensor) from the current ShardTensorSpec to
@@ -251,12 +265,12 @@ def redistribute_local_shard_tensor(
     # as the current, but is missing sharding sizes, we can use the current spec's sharding sizes.
     # if target_spec._sharding_sizes is None:
     #     if target_spec.placements == current_spec.placements and target_spec.mesh == current_spec.mesh:
-    #         target_spec._sharding_sizes = current_spec.sharding_sizes()
+    #         target_spec._sharding_sizes = current_spec.sharding_shapes()
 
     # For sharded tensors, we use the same order of transformation as DTensor.
     # However, often we need to ignore the provided logical shape and substitute
     # a sharded shape instead.
-    # This is done by providing a target_sharding_sizes dict above.
+    # This is done by providing a target_sharding_shapes dict above.
 
     transform_infos = _gen_transform_infos(current_spec, target_spec)
 
@@ -264,7 +278,6 @@ def redistribute_local_shard_tensor(
         return local_tensor
 
     for transform_info in transform_infos:
-        dist.barrier()
         i = transform_info.mesh_dim
         current, target = transform_info.src_dst_placements
         device_mesh.size(mesh_dim=i)
@@ -306,8 +319,8 @@ def redistribute_local_shard_tensor(
             elif current.is_replicate():
                 # split the tensor and return the corresponding cloned local shard
                 # Are there suggested placements for the shards?
-                if target_placement.dim in target_sharding_sizes:
-                    size_hint = target_sharding_sizes[target_placement.dim]
+                if target_placement.dim in target_sharding_shapes:
+                    size_hint = target_sharding_shapes[target_placement.dim]
                 else:
                     size_hint = None
                 new_local_tensor, size_hint = _select_slice_from_replicate(
@@ -319,9 +332,9 @@ def redistribute_local_shard_tensor(
                 )
                 if (
                     size_hint is not None
-                    and target_placement.dim in target_sharding_sizes
+                    and target_placement.dim in target_sharding_shapes
                 ):
-                    target_sharding_sizes[target_placement.dim] = size_hint
+                    target_sharding_shapes[target_placement.dim] = size_hint
 
             else:
                 if not current.is_shard():
@@ -335,8 +348,8 @@ def redistribute_local_shard_tensor(
                     # So, if the target tensor dimension is in there,
                     # That is how we're going to shard the local tensor on the tensor_dim,
                     # and it also defines how we'll receive the tensor .
-                    if target_placement.dim in target_sharding_sizes:
-                        size_hint = target_sharding_sizes[target_placement.dim]
+                    if target_placement.dim in target_sharding_shapes:
+                        size_hint = target_sharding_shapes[target_placement.dim]
                     else:
                         size_hint = None
 
@@ -350,11 +363,11 @@ def redistribute_local_shard_tensor(
                     )
                     if (
                         size_hint is None
-                        and target_placement.dim in target_sharding_sizes
+                        and target_placement.dim in target_sharding_shapes
                     ):
-                        target_sharding_sizes.pop(target_placement.dim)
-                    if size_hint is not None and current.dim in target_sharding_sizes:
-                        target_sharding_sizes.pop(current.dim)
+                        target_sharding_shapes.pop(target_placement.dim)
+                    if size_hint is not None and current.dim in target_sharding_shapes:
+                        target_sharding_shapes.pop(current.dim)
 
         elif target.is_partial():
             if current.is_replicate():
@@ -409,7 +422,7 @@ def get_tensor_sharding_shapes_by_dim(
     Generate a target spec from the current spec and target_placements.
     """
 
-    target_sharding_sizes = {}
+    target_sharding_shapes = {}
     # Look through the target placements for shardings:
     for target_mesh_dim, target_placement in enumerate(target_placements):
         if isinstance(target_placement, Shard):
@@ -427,12 +440,12 @@ def get_tensor_sharding_shapes_by_dim(
                     # The tensor dim is the same in both current and target,
                     # But the rest of the tensors dimensions may change.
                     # Therefore only save the dimension on this axis.
-                    current_shardings = current_spec.sharding_sizes()[current_mesh_dim]
-                    target_sharding_sizes[target_tensor_dim] = [
+                    current_shardings = current_spec.sharding_shapes()[current_mesh_dim]
+                    target_sharding_shapes[target_tensor_dim] = [
                         c[target_tensor_dim] for c in current_shardings
                     ]
 
-    return target_sharding_sizes
+    return target_sharding_shapes
 
 
 class ShardRedistribute(torch.autograd.Function):
@@ -472,8 +485,8 @@ class ShardRedistribute(torch.autograd.Function):
 
         if current_spec.placements != placements:
 
-            # We have to assume, here, that the current spec has correct sharding_sizes.
-            # Therefore, we can use the target placement + current sharding_sizes
+            # We have to assume, here, that the current spec has correct sharding_shapes.
+            # Therefore, we can use the target placement + current sharding_shapes
             # to get the target sharding sizes correctly.
 
             # target_spec = generate_target_spec_from_current_and_placements(
@@ -489,17 +502,17 @@ class ShardRedistribute(torch.autograd.Function):
 
             # The target sharding sizes are potentially incomplete.
             # They're only provided for shardings that are the same in input/output.
-            target_sharding_sizes = get_tensor_sharding_shapes_by_dim(
+            target_sharding_shapes = get_tensor_sharding_shapes_by_dim(
                 current_spec, placements
             )
-            # ctx.target_sharding_sizes = target_sharding_sizes
+            # ctx.target_sharding_shapes = target_sharding_shapes
             local_tensor = input._local_tensor
             output = redistribute_local_shard_tensor(
                 local_tensor,
                 current_spec,
                 target_spec,
                 async_op=async_op,
-                target_sharding_sizes=target_sharding_sizes,
+                target_sharding_shapes=target_sharding_shapes,
             )
             # Set the local shape:
             target_spec._local_shape = output.shape
@@ -509,7 +522,7 @@ class ShardRedistribute(torch.autograd.Function):
             target_spec = current_spec
 
         return shard_tensor.ShardTensor(
-            output,
+            output.contiguous(),
             target_spec,
             requires_grad=input.requires_grad,
         )
@@ -539,17 +552,16 @@ class ShardRedistribute(torch.autograd.Function):
         async_op = ctx.async_op
 
         local_tensor = grad_output._local_tensor
-        target_sharding_sizes = get_tensor_sharding_shapes_by_dim(
+        target_sharding_shapes = get_tensor_sharding_shapes_by_dim(
             previous_spec, previous_spec.placements
         )
-
         output = redistribute_local_shard_tensor(
             local_tensor,
             current_spec,
             previous_spec,
             async_op=async_op,
             is_backward=True,
-            target_sharding_sizes=target_sharding_sizes,
+            target_sharding_shapes=target_sharding_shapes,
         )
 
         # normalize the target placement to replicate if it is partial
@@ -576,7 +588,6 @@ class ShardRedistribute(torch.autograd.Function):
             spec,
             requires_grad=grad_output.requires_grad,
         )
-
         return (
             output_shard_tensor,
             None,

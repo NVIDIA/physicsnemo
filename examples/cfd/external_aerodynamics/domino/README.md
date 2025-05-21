@@ -64,6 +64,51 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 6. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
 
+### Training with Domain Parallelism
+
+DoMINO has support for training and inference using domain parallelism in PhysicsNeMo,
+via the `ShardTensor` mechanisms and pytorch's FSDP tools.  `ShardTensor`, built on
+PyTorch's `DTensor` object, is a domain-parallel-aware tensor that can live on multiple
+GPUs and perform operations in a numerically consistent way.  For more information
+about the techniques of domain parallelism and `ShardTensor`, refer to PhysicsNeMo
+tutorials such as [`ShardTensor`](shard_tensor_tutorial.html).
+
+In DoMINO specifically, domain parallelism has been abled in two ways, which
+can be used concurrently or separately.  First, the input sampled volumetric
+and surface points can be sharded to accomodate higher resolution point sampling
+Second, the latent space of the model - typically a regularlized grid - can be
+sharded to reduce computational complexity of the latent processing.  When training
+with sharded models in DoMINO, the primary objective is to enable higher
+resolution inputs and larger latent spaces without sacrificing substantial compute time.
+
+When configuring DoMINO for sharded training, adjust the following parameters
+from `src/conf/config.yaml`:
+
+```yaml
+domain_parallelism:
+  domain_size: 2
+  shard_grid: True
+  shard_points: True
+```
+
+The `domain_size` represents the number of GPUs used for each batch - setting
+`domain_size: 1` is not advised since that is the standard training regime,
+but with extra overhead.  `shard_grid` and `shard_points` will enable domain
+parallelism over the latent space and input/output points, respectively.
+
+Please see `src/train_sharded.py` for more details regarding the changes
+from the standard training script required for domain parallel DoMINO training.
+
+As one last note regarding domain-parallel training: in the phase of the DoMINO
+where the output solutions are calculated, the model can used two different
+techniques (numerically identical) to calculate the output.  Due to the
+overhead of potential communication at each operation, it's recommended to
+use the `one-loop` mode with `model.solution_calculation_mode` when doing
+sharded training.  This technique launches vectorized kernels with less
+launch overhead at the cost of more memory use.  For non-sharded
+training, the `two-loop` setting is more optimal. The difference in `one-loop`
+or `two-loop` is purely computational, not algorithmic.
+
 ## Retraining recipe for DoMINO model
 
 To enable retraining the DoMINO model from a pre-trained checkpoint, follow the steps:

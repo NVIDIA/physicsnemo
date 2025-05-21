@@ -48,12 +48,15 @@ try:
         # These imports will register the custom ops with the ShardTensor class.
         # It's done here to avoid an import cycle.
         from .custom_ops import (
-            sharded_mean_wrapper,
+            mean_wrapper,
+            sum_wrapper,
             unbind_rules,
         )
         from .shard_utils import register_shard_wrappers
 
         register_shard_wrappers()
+
+    register_custom_ops()
 
 except ImportError:
     pass

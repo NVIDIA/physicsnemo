@@ -40,7 +40,7 @@ import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
-
+import torch.distributed as dist
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -48,6 +48,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from nvtx import annotate as nvtx_annotate
 import torch.cuda.nvtx as nvtx
+
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
@@ -57,7 +58,6 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
     compute_scaling_factors,
     create_domino_dataset,
-    # domino_collate_fn,
 )
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
@@ -218,8 +218,13 @@ def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
     output_true = target * mask * area * (vel_inlet) ** 2.0
     output_pred = output * mask * area * (vel_inlet) ** 2.0
 
-    pres_true = output_true[:, :, 0] * normals[:, :, 2]
-    pres_pred = output_pred[:, :, 0] * normals[:, :, 2]
+    normals = torch.select(normals, 2, 2)
+    # output_true_0 = output_true[:, :, 0]
+    output_true_0 = output_true.select(2, 0)
+    output_pred_0 = output_pred.select(2, 0)
+
+    pres_true = output_true_0 * normals
+    pres_pred = output_pred_0 * normals
 
     wz_true = output_true[:, :, -1]
     wz_pred = output_pred[:, :, -1]
@@ -252,6 +257,91 @@ def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_val
     return loss
 
 
+def compute_loss_dict(
+    prediction_vol: torch.Tensor,
+    prediction_surf: torch.Tensor,
+    batch_inputs: dict,
+    loss_fn_type: dict,
+    integral_scaling_factor: float,
+    surf_loss_scaling: float,
+    vol_loss_scaling: float,
+) -> Tuple[torch.Tensor, dict]:
+    """
+    Compute the loss terms in a single function call.
+
+    Computes:
+    - Volume loss if prediction_vol is not None
+    - Surface loss if prediction_surf is not None
+    - Integral loss if prediction_surf is not None
+    - Total loss as a weighted sum of the above
+
+    Returns:
+    - Total loss as a scalar tensor
+    - Dictionary of loss terms (for logging, etc)
+    """
+    nvtx.range_push("Loss Calculation")
+    total_loss_terms = []
+    loss_dict = {}
+
+    if prediction_vol is not None:
+        target_vol = batch_inputs["volume_fields"]
+
+        loss_vol = loss_fn(
+            prediction_vol, target_vol, loss_fn_type.loss_type, padded_value=-10
+        )
+        loss_dict["loss_vol"] = loss_vol
+        total_loss_terms.append(loss_vol)
+
+    if prediction_surf is not None:
+
+        target_surf = batch_inputs["surface_fields"]
+        surface_areas = batch_inputs["surface_areas"]
+        surface_areas = torch.unsqueeze(surface_areas, -1)
+        surface_normals = batch_inputs["surface_normals"]
+        stream_velocity = batch_inputs["stream_velocity"]
+        loss_surf = loss_fn_surface(
+            prediction_surf,
+            target_surf,
+            loss_fn_type.loss_type,
+        )
+
+        loss_surf_area = loss_fn_area(
+            prediction_surf,
+            target_surf,
+            surface_normals,
+            surface_areas,
+            area_scaling_factor=loss_fn_type.area_weighing_factor,
+            loss_type=loss_fn_type.loss_type,
+        )
+
+        if loss_fn_type.loss_type == "mse":
+            loss_surf = loss_surf * surf_loss_scaling
+            loss_surf_area = loss_surf_area * surf_loss_scaling
+
+        total_loss_terms.append(0.5 * loss_surf)
+        loss_dict["loss_surf"] = 0.5 * loss_surf
+        total_loss_terms.append(0.5 * loss_surf_area)
+        loss_dict["loss_surf_area"] = 0.5 * loss_surf_area
+        loss_integral = (
+            integral_loss_fn(
+                prediction_surf,
+                target_surf,
+                surface_areas,
+                surface_normals,
+                stream_velocity,
+                padded_value=-10,
+            )
+        ) * integral_scaling_factor
+        loss_dict["loss_integral"] = loss_integral
+        total_loss_terms.append(loss_integral)
+
+    total_loss = sum(total_loss_terms)
+    loss_dict["total_loss"] = total_loss
+    nvtx.range_pop()
+
+    return total_loss, loss_dict
+
+
 def validation_step(
     dataloader,
     model,
@@ -272,62 +362,17 @@ def validation_step(
             with autocast(enabled=True):
 
                 prediction_vol, prediction_surf = model(sampled_batched)
-                total_loss_terms = []
-                if prediction_vol is not None:
-                    target_vol = sampled_batched["volume_fields"]
+                loss, loss_dict = compute_loss_dict(
+                    prediction_vol,
+                    prediction_surf,
+                    sampled_batched,
+                    loss_fn_type,
+                    integral_scaling_factor,
+                    surf_loss_scaling,
+                    vol_loss_scaling,
+                )
 
-                    alternate_loss_vol = loss_fn(
-                        prediction_vol,
-                        target_vol,
-                        loss_fn_type.loss_type,
-                        padded_value=-10,
-                    )
-                    total_loss_terms.append(alternate_loss_vol)
-
-                if prediction_surf is not None:
-                    target_surf = sampled_batched["surface_fields"]
-                    surface_normals = sampled_batched["surface_normals"]
-                    surface_areas = sampled_batched["surface_areas"]
-                    stream_velocity = sampled_batched["stream_velocity"]
-                    surface_areas = torch.unsqueeze(surface_areas, -1)
-
-                    loss_integral = (
-                        integral_loss_fn(
-                            prediction_surf,
-                            target_surf,
-                            surface_areas,
-                            surface_normals,
-                            stream_velocity,
-                            padded_value=-10,
-                        )
-                    ) * integral_scaling_factor  # * 0.0
-
-                    alternate_loss_surf = loss_fn_surface(
-                        prediction_surf,
-                        target_surf,
-                        loss_fn_type.loss_type,
-                    )
-                    alternate_loss_surf_area = loss_fn_area(
-                        prediction_surf,
-                        target_surf,
-                        surface_normals,
-                        surface_areas,
-                        area_scaling_factor=loss_fn_type.area_weighing_factor,
-                        loss_type=loss_fn_type.loss_type,
-                    )
-                    if loss_fn_type.loss_type == "mse":
-                        alternate_loss_surf = alternate_loss_surf * surf_loss_scaling
-                        alternate_loss_surf_area = (
-                            alternate_loss_surf_area * surf_loss_scaling
-                        )
-
-                    total_loss_terms.append(0.5 * alternate_loss_surf)
-                    total_loss_terms.append(0.5 * alternate_loss_surf_area)
-                    total_loss_terms.append(loss_integral)
-
-                total_loss = sum(total_loss_terms)
-
-            running_vloss += total_loss.item()
+            running_vloss += loss.item()
 
     avg_vloss = running_vloss / (i_batch + 1)
 
@@ -358,6 +403,7 @@ def train_epoch(
     loss_interval = 1
 
     gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+    start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
 
         sampled_batched = dict_to_device(sample_batched, device)
@@ -365,63 +411,17 @@ def train_epoch(
         with autocast(enabled=True):
             with nvtx.range("Model Forward Pass"):
                 prediction_vol, prediction_surf = model(sampled_batched)
-            total_loss_terms = []
-            nvtx.range_push("Loss Calculation")
-            if prediction_vol is not None:
-                target_vol = sampled_batched["volume_fields"]
 
-                alternate_loss_vol = loss_fn(
-                    prediction_vol, target_vol, loss_fn_type.loss_type, padded_value=-10
-                )
-                total_loss_terms.append(alternate_loss_vol)
+            loss, loss_dict = compute_loss_dict(
+                prediction_vol,
+                prediction_surf,
+                sampled_batched,
+                loss_fn_type,
+                integral_scaling_factor,
+                surf_loss_scaling,
+                vol_loss_scaling,
+            )
 
-            if prediction_surf is not None:
-
-                target_surf = sampled_batched["surface_fields"]
-                surface_areas = sampled_batched["surface_areas"]
-                surface_areas = torch.unsqueeze(surface_areas, -1)
-                surface_normals = sampled_batched["surface_normals"]
-                stream_velocity = sampled_batched["stream_velocity"]
-                alternate_loss_surf = loss_fn_surface(
-                    prediction_surf,
-                    target_surf,
-                    loss_fn_type.loss_type,
-                )
-                alternate_loss_surf_area = loss_fn_area(
-                    prediction_surf,
-                    target_surf,
-                    surface_normals,
-                    surface_areas,
-                    area_scaling_factor=loss_fn_type.area_weighing_factor,
-                    loss_type=loss_fn_type.loss_type,
-                )
-
-                if loss_fn_type.loss_type == "mse":
-                    alternate_loss_surf = alternate_loss_surf * surf_loss_scaling
-                    alternate_loss_surf_area = (
-                        alternate_loss_surf_area * surf_loss_scaling
-                    )
-
-                total_loss_terms.append(0.5 * alternate_loss_surf)
-                total_loss_terms.append(0.5 * alternate_loss_surf_area)
-                loss_integral = (
-                    integral_loss_fn(
-                        prediction_surf,
-                        target_surf,
-                        surface_areas,
-                        surface_normals,
-                        stream_velocity,
-                        padded_value=-10,
-                    )
-                ) * integral_scaling_factor  # * 0.0
-                total_loss_terms.append(loss_integral)
-
-            total_loss = sum(total_loss_terms)
-
-            nvtx.range_pop()
-
-        # loss = loss_norm
-        loss = total_loss
         loss = loss / loss_interval
         scaler.scale(loss).backward()
 
@@ -429,25 +429,32 @@ def train_epoch(
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
+
         # Gather data and report
         running_loss += loss.item()
-
+        elapsed_time = time.perf_counter() - start_time
+        start_time = time.perf_counter()
         gpu_end_info = nvmlDeviceGetMemoryInfo(gpu_handle)
         gpu_memory_used = gpu_end_info.used / (1024**3)
         gpu_memory_delta = (gpu_end_info.used - gpu_start_info.used) / (1024**3)
 
         logging_string = f"Device {device}, batch processed: {i_batch + 1}\n"
-        logging_string += f"  total loss: {total_loss.item():.5f}\n"
-        if prediction_vol is not None:
-            logging_string += f"    loss volume: {alternate_loss_vol.item():.5f}\n"
-        if prediction_surf is not None:
-            logging_string += f"    loss surface: {alternate_loss_surf.item():.5f}\n"
-            logging_string += (
-                f"    loss surface area: {alternate_loss_surf_area.item():.5f}\n"
-            )
-            logging_string += f"    loss integral: {loss_integral.item():.5f}\n"
-        logging_string += f"  GPU memory used: {gpu_memory_used} Gb\n"
-        logging_string += f"  GPU memory delta: {gpu_memory_delta} Gb\n"
+        # Format the loss dict into a string:
+        loss_string = (
+            "  "
+            + "\t".join([f"{key.replace('loss_',''):<10}" for key in loss_dict.keys()])
+            + "\n"
+        )
+        loss_string += (
+            "  " + f"\t".join([f"{l.item():<10.3e}" for l in loss_dict.values()]) + "\n"
+        )
+
+        logging_string += loss_string
+        # for key, value in loss_dict.items():
+        #     logging_string += f"    {key}: {value.item():.5f}\n"
+        logging_string += f"  GPU memory used: {gpu_memory_used:.3f} Gb\n"
+        logging_string += f"  GPU memory delta: {gpu_memory_delta:.3f} Gb\n"
+        logging_string += f"  Time taken: {elapsed_time:.2f} seconds\n"
         logger.info(logging_string)
         gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
 
@@ -468,6 +475,9 @@ def main(cfg: DictConfig) -> None:
     # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()
+
+    # Initialize NVML
+    nvmlInit()
 
     gpu_handle = nvmlDeviceGetHandleByIndex(dist.device.index)
 
@@ -524,19 +534,19 @@ def main(cfg: DictConfig) -> None:
 
     train_dataset = create_domino_dataset(
         cfg,
-        "train",
-        volume_variable_names,
-        surface_variable_names,
-        vol_factors,
-        surf_factors,
+        phase="train",
+        volume_variable_names=volume_variable_names,
+        surface_variable_names=surface_variable_names,
+        vol_factors=vol_factors,
+        surf_factors=surf_factors,
     )
     val_dataset = create_domino_dataset(
         cfg,
-        "val",
-        volume_variable_names,
-        surface_variable_names,
-        vol_factors,
-        surf_factors,
+        phase="val",
+        volume_variable_names=volume_variable_names,
+        surface_variable_names=surface_variable_names,
+        vol_factors=vol_factors,
+        surf_factors=surf_factors,
     )
 
     train_sampler = DistributedSampler(
@@ -668,7 +678,7 @@ def main(cfg: DictConfig) -> None:
         )
         epoch_end_time = time.perf_counter()
         logger.info(
-            f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time} seconds"
+            f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time:.3f} seconds"
         )
         epoch_end_time = time.perf_counter()
 
@@ -691,7 +701,7 @@ def main(cfg: DictConfig) -> None:
             f"Device {dist.device} "
             f"LOSS train {avg_loss:.5f} "
             f"valid {avg_vloss:.5f} "
-            f"Current lr {scheduler.get_last_lr()[0]}"
+            f"Current lr {scheduler.get_last_lr()[0]} "
             f"Integral factor {initial_integral_factor}"
         )
 
@@ -710,7 +720,8 @@ def main(cfg: DictConfig) -> None:
         if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
             best_vloss = avg_vloss
 
-        print(f"Device { dist.device}, Best val loss {best_vloss}")
+        if dist.rank == 0:
+            print(f"Device { dist.device}, Best val loss {best_vloss}")
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
             save_checkpoint(
