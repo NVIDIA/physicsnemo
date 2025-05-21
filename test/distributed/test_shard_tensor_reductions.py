@@ -35,9 +35,7 @@ if ST_AVAILABLE:
     )
     from torch.distributed.tensor.placement_types import Shard
 
-    from physicsnemo.distributed import register_custom_ops, scatter_tensor
-
-    register_custom_ops()
+    from physicsnemo.distributed import scatter_tensor
 
 
 import torch
