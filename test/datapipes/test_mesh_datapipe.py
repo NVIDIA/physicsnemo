@@ -20,13 +20,10 @@ import random
 import pytest
 from pytest_utils import import_or_fail
 
-# from pytest_utils import nfsdata_or_fail
-
 
 @pytest.fixture
-def cgns_data_dir():
-    path = "/data/nfs/modulus-data/datasets/sample_formats/"
-    return path
+def cgns_data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/sample_formats")
 
 
 @import_or_fail(["vtk", "warp"])
@@ -156,7 +153,6 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
         assert data[0]["x"].shape == (1, 10, 1)
 
 
-# @nfsdata_or_fail
 # @import_or_fail(["vtk"])
 # @pytest.mark.parametrize("device", ["cuda", "cpu"])
 # def test_mesh_datapipe_cgns(device, cgns_data_dir, pytestconfig):

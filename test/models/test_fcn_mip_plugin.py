@@ -22,18 +22,16 @@ import shutil
 import numpy as np
 import pytest
 import torch
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 
 from physicsnemo.models.dlwp import DLWP
 from physicsnemo.utils.filesystem import Package
 
 
 @pytest.fixture
-def dlwp_data_dir():
+def dlwp_data_dir(nfs_data_dir):
     """Data dir for dlwp package"""
-
-    path = "/data/nfs/modulus-data/plugin_data/dlwp/"
-    return path
+    return nfs_data_dir.joinpath("plugin_data/dlwp/")
 
 
 def _copy_directory(src, dst):
@@ -106,7 +104,6 @@ def save_checkpoint(model, check_point_path, del_device_buffer=False):
 #     return package
 
 
-# @nfsdata_or_fail
 # @import_or_fail(["dgl", "ruamel.yaml", "tensorly", "torch_harmonics", "tltorch"])
 # def test_sfno(tmp_path, pytestconfig):
 #     """Test SFNO plugin"""
@@ -148,17 +145,15 @@ def save_untrained_dlwp(path):
     return package
 
 
-@nfsdata_or_fail
 @import_or_fail(["dgl", "ruamel.yaml", "tensorly", "torch_harmonics", "tltorch"])
 @pytest.mark.parametrize("batch_size", [1, 4])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_dlwp(tmp_path, batch_size, device, pytestconfig):
+def test_dlwp(tmp_path, batch_size, device, dlwp_data_dir, pytestconfig):
 
     from physicsnemo.models.fcn_mip_plugin import dlwp
 
     package = save_untrained_dlwp(tmp_path)
-    source_dir = "/data/nfs/modulus-data/plugin_data/dlwp/"
-    _copy_directory(source_dir, tmp_path)
+    _copy_directory(dlwp_data_dir, tmp_path)
 
     model = dlwp(package, pretrained=True).to(device)
     x = torch.ones(batch_size, 2, 7, 721, 1440).to(device)
@@ -168,7 +163,6 @@ def test_dlwp(tmp_path, batch_size, device, pytestconfig):
     assert out.shape == x.shape
 
 
-@nfsdata_or_fail
 @import_or_fail(["dgl", "ruamel.yaml", "tensorly", "torch_harmonics", "tltorch"])
 @pytest.mark.parametrize("batch_size", [1, 2])
 def test__CozZenWrapper(batch_size, pytestconfig):

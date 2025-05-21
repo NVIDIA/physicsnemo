@@ -214,14 +214,16 @@ The pipeline has following stages:
     test, you will have to review your changes and fix the issues.
     To run pytest locally you can simply run `pytest` inside the `test` folder.
 
-    While writing these tests, we encourage you to make use of the
-    [`@nfs_data_or_fail`](https://github.com/NVIDIA/physicsnemo/blob/main/test/pytest_utils.py#L92)
-    and the [`@import_of_fail`](https://github.com/NVIDIA/physicsnemo/blob/main/test/pytest_utils.py#L25)
-    decorators to appropriately skip your tests for developers and users not having your
-    test specific datasets and dependencies respectively. The CI has these datasets and
-    dependencies so your tests will get executed during CI.
-    This mechanism helps us provide a better developer and user experience
-    when working with the unit tests.
+    While writing these tests, we encourage you to make use of the [`@import_of_fail`](https://github.com/NVIDIA/physicsnemo/blob/main/test/pytest_utils.py#L25)
+    decorator to appropriately skip your tests for developers and users not having your
+    test specific dependencies. This mechanism helps us provide a better developer and
+    user experience when working with the unit tests.
+
+    Some of the tests require test data to be run; otherwise, they will be skipped.
+    To get the data (available to NVIDIANs only), set the `TEST_DATA_DIR` environment variable
+    to a desired value and run make get-data. After that, pytest will use the same
+    variable to find the test data. Alternatively, you can pass it explicitly using
+    `pytest --nfs-data-dir=<path to test data>`.
 
 6. `doctest`
     Checks if the examples in the docstrings run and produce desired outputs.

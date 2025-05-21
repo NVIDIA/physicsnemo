@@ -43,7 +43,7 @@ from torch.utils.tensorboard import SummaryWriter
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
-from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
+from physicsnemo.datapipes.cae.domino_datapipe import create_domino_dataset
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
 
@@ -560,8 +560,6 @@ def train_epoch(
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-    input_path = cfg.data.input_dir
-    input_path_val = cfg.data.input_dir_val
     model_type = cfg.model.model_type
 
     # initialize distributed manager
@@ -595,12 +593,8 @@ def main(cfg: DictConfig) -> None:
     else:
         num_surf_vars = None
 
-    vol_save_path = os.path.join(
-        "outputs", cfg.project.name, "volume_scaling_factors.npy"
-    )
-    surf_save_path = os.path.join(
-        "outputs", cfg.project.name, "surface_scaling_factors.npy"
-    )
+    vol_save_path = os.path.join(cfg.project_dir, "volume_scaling_factors.npy")
+    surf_save_path = os.path.join(cfg.project_dir, "surface_scaling_factors.npy")
     if os.path.exists(vol_save_path) and os.path.exists(surf_save_path):
         vol_factors = np.load(vol_save_path)
         surf_factors = np.load(surf_save_path)
@@ -608,48 +602,21 @@ def main(cfg: DictConfig) -> None:
         vol_factors = None
         surf_factors = None
 
-    train_dataset = DoMINODataPipe(
-        input_path,
-        phase="train",
-        grid_resolution=cfg.model.interp_res,
-        volume_variables=volume_variable_names,
-        surface_variables=surface_variable_names,
-        normalize_coordinates=True,
-        sampling=True,
-        sample_in_bbox=True,
-        volume_points_sample=cfg.model.volume_points_sample,
-        surface_points_sample=cfg.model.surface_points_sample,
-        geom_points_sample=cfg.model.geom_points_sample,
-        positional_encoding=cfg.model.positional_encoding,
-        volume_factors=vol_factors,
-        surface_factors=surf_factors,
-        scaling_type=cfg.model.normalization,
-        model_type=cfg.model.model_type,
-        bounding_box_dims=cfg.data.bounding_box,
-        bounding_box_dims_surf=cfg.data.bounding_box_surface,
-        num_surface_neighbors=cfg.model.num_surface_neighbors,
+    train_dataset = create_domino_dataset(
+        cfg,
+        "train",
+        volume_variable_names,
+        surface_variable_names,
+        vol_factors,
+        surf_factors,
     )
-
-    val_dataset = DoMINODataPipe(
-        input_path_val,
-        phase="val",
-        grid_resolution=cfg.model.interp_res,
-        volume_variables=volume_variable_names,
-        surface_variables=surface_variable_names,
-        normalize_coordinates=True,
-        sampling=True,
-        sample_in_bbox=True,
-        volume_points_sample=cfg.model.volume_points_sample,
-        surface_points_sample=cfg.model.surface_points_sample,
-        geom_points_sample=cfg.model.geom_points_sample,
-        positional_encoding=cfg.model.positional_encoding,
-        volume_factors=vol_factors,
-        surface_factors=surf_factors,
-        scaling_type=cfg.model.normalization,
-        model_type=cfg.model.model_type,
-        bounding_box_dims=cfg.data.bounding_box,
-        bounding_box_dims_surf=cfg.data.bounding_box_surface,
-        num_surface_neighbors=cfg.model.num_surface_neighbors,
+    val_dataset = create_domino_dataset(
+        cfg,
+        "val",
+        volume_variable_names,
+        surface_variable_names,
+        vol_factors,
+        surf_factors,
     )
 
     train_sampler = DistributedSampler(
