@@ -16,10 +16,23 @@
 
 import pytest
 import torch
+
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.utils.version_check import check_module_requirements
+
+try:
+    check_module_requirements("physicsnemo.distributed.shard_tensor")
+except ImportError:
+    pytest.skip(
+        "Skipping test because physicsnemo.distributed.shard_tensor is not available",
+        allow_module_level=True,
+    )
+
+from distributed_utils_for_testing import modify_environment
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor.placement_types import Replicate
 
-from physicsnemo.distributed import ShardTensor
+from physicsnemo.distributed.shard_tensor import ShardTensor
 
 # Global to track execution paths
 torch_function_paths = []
@@ -89,15 +102,23 @@ def setup_registry():
 
 @pytest.fixture(scope="module")
 def device_mesh():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    yield DeviceMesh(
-        device,
-        mesh=[
-            0,
-        ],
-    )
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
+
+    with modify_environment(
+        RANK="0",
+        WORLD_SIZE="1",
+        MASTER_ADDR="localhost",
+        MASTER_PORT=str(13245),
+        LOCAL_RANK="0",
+    ):
+        DistributedManager.initialize()
+
+        yield DeviceMesh(
+            DistributedManager().device.type,
+            mesh=[
+                0,
+            ],
+        )
+        DistributedManager.cleanup()
 
 
 def test_function_registration_with_tensors(setup_registry):
