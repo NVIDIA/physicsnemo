@@ -19,6 +19,7 @@ from contextlib import nullcontext
 from typing import Tuple
 
 import torch
+from torch._dynamo.backends.debugging import ExplainWithBackend
 
 import physicsnemo
 
@@ -194,6 +195,57 @@ def validate_amp(
 def validate_torch_fx() -> bool:
     """TODO"""
     return True
+
+
+def nop_backend(gm, inputs):
+    def forward(*args, **kwargs):
+        return gm.forward(*args, **kwargs)
+
+    return forward
+
+
+def validate_torch_compile(
+    model: physicsnemo.Module,
+    in_args: Tuple[Tensor] = (),
+    fullgraph: bool = True,
+    error_on_recompile: bool = False,
+    debug: bool = False,
+) -> bool:
+    """Test that model supports torch compilation, optionally print debug information about the model graph
+
+    Parameters
+    ----------
+    model : physicsnemo.Module
+        PhysicsNeMo module
+    in_args : Tuple[Tensor], optional
+        Input arguments, keywords not supported, by default ()
+    fullgraph : bool, optional
+        If true, use fullgraph compilation which will fail upon graph breaks
+    error_on_recompile : bool, optional
+        If true, raise an error if recompilations are detected
+    debug : bool, optional
+        If true, print debug information about the model graph
+    Returns
+    -------
+    bool
+        True if models compiles with options specified, False otherwise
+    """
+    backend = (
+        nop_backend  # for fast compilation for fx graph capture, use a nop backend
+    )
+    retval = True
+    torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = error_on_recompile
+    if debug:
+        backend = ExplainWithBackend(backend)
+    try:
+        model = torch.compile(model, backend=backend, fullgraph=fullgraph)
+        model(*in_args)
+    except Exception:
+        retval = False
+    if debug:
+        print(backend.output())
+    return retval
 
 
 def validate_combo_optims(

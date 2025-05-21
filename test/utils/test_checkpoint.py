@@ -13,22 +13,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa: F401
 
 import os
 import shutil
 from pathlib import Path
 from typing import Callable
 
-import boto3
 import fsspec
 import pytest
 import torch
 import torch.nn as nn
-from moto import mock_aws
 from pytest_utils import import_or_fail
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.models.mlp import FullyConnected
+
+mock_aws = pytest.importorskip("moto.mock_aws")
 
 
 @pytest.fixture(params=["./checkpoints", "msc://checkpoint-test/checkpoints"])
@@ -62,7 +63,7 @@ def model_generator(request) -> Callable:
 
 
 @mock_aws
-@import_or_fail(["wandb", "mlflow"])
+@import_or_fail(["wandb", "mlflow", "boto3"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_model_checkpointing(
     device,
@@ -73,6 +74,9 @@ def test_model_checkpointing(
     atol: float = 1e-3,
 ):
     """Test checkpointing util for model"""
+
+    import boto3
+    from moto import mock_aws
 
     from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 
@@ -170,3 +174,48 @@ def test_get_checkpoint_dir():
         get_checkpoint_dir("msc://test_profile/bucket/", "model")
         == "msc://test_profile/bucket/checkpoints_model"
     )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_compiled_model_checkpointing(
+    tmp_path, device, rtol: float = 1e-3, atol: float = 1e-3
+):
+    """Ensure save/load utilities strip torch.compile wrappers correctly."""
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA not available in the test environment")
+
+    from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
+
+    # Create and compile a simple model
+    in_feats = 4
+    base_model = FullyConnected(
+        in_features=in_feats,
+        out_features=in_feats,
+        num_layers=2,
+        layer_size=8,
+    ).to(device)
+
+    compiled_model = torch.compile(base_model, backend="eager")
+
+    # Prime the compiled model (compilation happens on first run)
+    sample_input = torch.randn(2, in_feats, device=device)
+    original_output = compiled_model(sample_input).detach().cpu()
+
+    # Save the compiled model; the utility should unwrap the wrapper
+    ckpt_dir = tmp_path / "compiled_ckpt"
+    save_checkpoint(ckpt_dir.as_posix(), models=[compiled_model])
+
+    # Build a fresh, *uncompiled* model and load the checkpoint
+    uncompiled_model = FullyConnected(
+        in_features=in_feats,
+        out_features=in_feats,
+        num_layers=2,
+        layer_size=8,
+    ).to(device)
+
+    load_checkpoint(ckpt_dir.as_posix(), models=[uncompiled_model], device=device)
+
+    new_output = uncompiled_model(sample_input).detach().cpu()
+
+    assert torch.allclose(original_output, new_output, rtol=rtol, atol=atol)

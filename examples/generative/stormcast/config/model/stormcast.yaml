@@ -18,13 +18,15 @@
 # Model name
 model_name: 'regression' # 'regression', 'diffusion', or custom model added by user
 
+# Model conditions
+regression_conditions: ["state", "background", "invariant"] # list consisting of "state", "background", "invariant" (default from StormCast paper)
+diffusion_conditions: ["state", "regression", "invariant"] # list consisting of "state", "regression", "background", "invariant" (default from StormCast paper)
+
 # Model hyperparameters
-previous_step_conditioning: False # Whether or not to condition on the previous step outputs as well (enable for diffusion)
 spatial_pos_embed: False # Whether or not to add an additive position embed after the first conv in the U-Net
 P_mean: -1.2 # Center of the EDM lognormal noise sampling distribution
 attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention (empty list == no self-attention)
 
 # Pretrained regression model
-use_regression_net: False # Whether or not to use a regression net as a first step (enable for diffusion training)
 regression_weights: "stormcast_checkpoints/regression/UNet.0.0.mdlus" # Path to pretrained regression network,
-                                                                      # used if use_regression_net=True
+                                                                      # used if 'regression' is included in diffusion_conditions

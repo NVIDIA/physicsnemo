@@ -206,6 +206,14 @@ def test_song_unet_optims(device):
     model, invar = setup_model()
     assert common.validate_combo_optims(model, (*invar,))
 
+    # Check fullgraph compilation
+    # run only on GPU
+    if device == "cuda:0":
+        model, invar = setup_model()
+        assert common.validate_torch_compile(
+            model, (*invar,), fullgraph=True, error_on_recompile=True
+        )
+
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_song_unet_checkpoint(device):
@@ -233,7 +241,7 @@ def test_song_unet_checkpoint(device):
 
 @common.check_ort_version()
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_son_unet_deploy(device):
+def test_song_unet_deploy(device):
     """Test Song UNet deployment support"""
     model = UNet(
         img_resolution=16,

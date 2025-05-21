@@ -142,6 +142,9 @@ def main(cfg: DictConfig) -> None:
         net_res = net_res.eval().to(device).to(memory_format=torch.channels_last)
         if cfg.generation.perf.force_fp16:
             net_res.use_fp16 = True
+        # Disable AMP for inference (even if model is trained with AMP)
+        if hasattr(net_res, "amp_mode"):
+            net_res.amp_mode = False
     else:
         net_res = None
 
@@ -153,6 +156,9 @@ def main(cfg: DictConfig) -> None:
         net_reg = net_reg.eval().to(device).to(memory_format=torch.channels_last)
         if cfg.generation.perf.force_fp16:
             net_reg.use_fp16 = True
+        # Disable AMP for inference (even if model is trained with AMP)
+        if hasattr(net_reg, "amp_mode"):
+            net_reg.amp_mode = False
     else:
         net_reg = None
 

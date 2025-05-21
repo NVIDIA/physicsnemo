@@ -14,11 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ┌───────────────────────────────────────────┐
+# │            Project Details                │
+# └───────────────────────────────────────────┘  
 project: # Project name
   name: AWS_Dataset
   
 exp_tag: 1 # Experiment tag
 # Main output directory.
+project_dir: outputs/${project.name}/
 output: outputs/${project.name}/${exp_tag}
 
 hydra: # Hydra config
@@ -26,19 +30,23 @@ hydra: # Hydra config
     dir: ${output}
   output_subdir: hydra  # Default is .hydra which causes files not being uploaded in W&B.
 
-data: # Input directory for training and validation data
-  input_dir: /lustre/rranade/physicsnemo_dev/data/volume_data/
-  input_dir_val: /lustre/rranade/physicsnemo_dev/data/volume_data_val/
-  bounding_box: # Bounding box dimensions for computational domain
-    min: [-3.5, -2.25 , -0.32]
-    max: [8.5 , 2.25  , 3.00]
-  bounding_box_surface: # Bounding box dimensions for car surface
-    min: [-1.1, -1.2 , -0.32]
-    max: [4.5 , 1.2  , 1.2]
-
 # The directory to search for checkpoints to continue training.
 resume_dir: ${output}/models
 
+# ┌───────────────────────────────────────────┐
+# │            Data Preprocessing             │
+# └───────────────────────────────────────────┘  
+data_processor: # Data processor configurable parameters
+  kind: drivaer_aws # must be either drivesim or drivaer_aws
+  output_dir: /lustre/rranade/aws_data_all/
+  input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
+  cached_dir: /lustre/cached/drivaer_aws/drivaer_data_full/
+  use_cache: false
+  num_processors: 12
+
+# ┌───────────────────────────────────────────┐
+# │            Solution variables             │
+# └───────────────────────────────────────────┘  
 variables:
   surface:
     solution:
@@ -52,29 +60,53 @@ variables:
       pMeanTrim: scalar
       nutMeanTrim: scalar
 
+# ┌───────────────────────────────────────────┐
+# │          Training Data Configs            │
+# └───────────────────────────────────────────┘  
+data: # Input directory for training and validation data
+  input_dir: /lustre/rranade/aws_data_all/
+  input_dir_val: /lustre/rranade/aws_data_all_val/
+  bounding_box: # Bounding box dimensions for computational domain
+    min: [-3.5, -2.25 , -0.32]
+    max: [8.5 , 2.25  , 3.00]
+  bounding_box_surface: # Bounding box dimensions for car surface
+    min: [-1.1, -1.2 , -0.32]
+    max: [4.5 , 1.2  , 1.2]
+
+# ┌───────────────────────────────────────────┐
+# │          Model Parameters                 │
+# └───────────────────────────────────────────┘  
 model:
   model_type: combined # train which model? surface, volume, combined
-  loss_function: "mse" # mse or rmse
-  interp_res: [128, 64, 48] # resolution of latent space
+  loss_function: 
+    loss_type: "mse" # mse or rmse
+    area_weighing_factor: 10000 # Generally inverse of maximum area
+  interp_res: [128, 64, 64] # resolution of latent space 128, 64, 48
   use_sdf_in_basis_func: true # SDF in basis function network
   positional_encoding: false # calculate positional encoding?
   volume_points_sample: 8192 # Number of points to sample in volume per epoch
   surface_points_sample: 8192 # Number of points to sample on surface per epoch
-  geom_points_sample: 200_000 # Number of points to sample on STL per epoch
+  surface_sampling_algorithm: area_weighted # random or area_weighted
+  geom_points_sample: 300_000 # Number of points to sample on STL per epoch
   surface_neighbors: true # Pre-compute surface neighborhood from input data
   num_surface_neighbors: 7 # How many neighbors?
   use_surface_normals: true # Use surface normals and surface areas for surface computation?
-  use_only_normals: true # Use only surface normals and not surface area
-  integral_loss_scaling_factor: 0 # Scale integral loss by this factor
+  use_surface_area: true # Use only surface normals and not surface area
+  integral_loss_scaling_factor: 100 # Scale integral loss by this factor
   normalization: min_max_scaling # or mean_std_scaling
-  encode_parameters: true # encode inlet velocity and air density in the model
+  encode_parameters: false # encode inlet velocity and air density in the model
+  surf_loss_scaling: 5.0 # scale surface loss with this factor in combined mode
+  vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
+  geometry_encoding_type: both # geometry encoder type, sdf, stl, both
+  resampling_surface_mesh: # resampling of surface mesh before constructing kd tree
+    resample: false #false or true
+    points: 1_000_000 # number of points
   geometry_rep: # Hyperparameters for geometry representation network
-    base_filters: 16
     geo_conv:
       base_neurons: 32 # 256 or 64
       base_neurons_out: 1
-      radius_short: 0.1
-      radius_long: 0.5 # 1.0, 1.5
+      volume_radii: [0.1, 0.5, 2.5, 5.0]
+      surface_radii: [0.01, 0.05, 0.1] # 0.05
       hops: 1
     geo_processor:
       base_filters: 8
@@ -82,44 +114,56 @@ model:
       base_filters: 8
   nn_basis_functions: # Hyperparameters for basis function network
     base_layer: 512
+    fourier_features: false
+    num_modes: 5
   aggregation_model: # Hyperparameters for aggregation network
     base_layer: 512
   position_encoder: # Hyperparameters for position encoding network
     base_neurons: 512
   geometry_local: # Hyperparameters for local geometry extraction
-    neighbors_in_radius: 64
-    radius: 0.05 # 0.2 in expt 7
+    volume_neighbors_in_radius: [64, 128, 256] # [64, 128]
+    surface_neighbors_in_radius: [64, 128, 256] # [64]
+    volume_radii: [0.05, 0.25, 1.0] # [0.05. 0.1]
+    surface_radii: [0.05, 0.25, 1.0] # [0.05]
     base_layer: 512
   parameter_model:
     base_layer: 512
     scaling_params: [30.0, 1.226] # [inlet_velocity, air_density]
+    fourier_features: false
+    num_modes: 5
 
+# ┌───────────────────────────────────────────┐
+# │          Training Configs                 │
+# └───────────────────────────────────────────┘  
 train: # Training configurable parameters
-  epochs: 500
+  epochs: 1000
   checkpoint_interval: 1
   dataloader:
     batch_size: 1
-    pin_memory: true
+    pin_memory: false # if the preprocessing is outputing GPU data, set this to false
   sampler:
     shuffle: true
     drop_last: false
-  checkpoint_dir: /lustre/rranade/physicsnemo_dev/physicsnemo_forked/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/3/models/
+  checkpoint_dir: /lustre/rranade/models/ # Use only for retraining
   
+# ┌───────────────────────────────────────────┐
+# │          Validation Configs               │
+# └───────────────────────────────────────────┘  
 val: # Validation configurable parameters
   dataloader:
-    batch_size: 1
-    pin_memory: true
+    batch_size: 1 # Set to 1
+    pin_memory: false # if the preprocessing is outputing GPU data, set this to false
   sampler:
     shuffle: true
     drop_last: false
 
+# ┌───────────────────────────────────────────┐
+# │          Testing data Configs             │
+# └───────────────────────────────────────────┘  
 eval: # Testing configurable parameters
-  test_path: /lustre/rranade/benchmarking/drivaer_aws_surface_test_new/
-  save_path: /lustre/rranade/domino/mesh_predictions_surf_final1/
-  checkpoint_name: DoMINO.0.50.pt
-
-data_processor: # Data processor configurable parameters
-  kind: drivaer_aws # must be either drivesim or drivaer_aws
-  output_dir: /lustre/rranade/physicsnemo_dev/data/volume_data/
-  input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
-  num_processors: 12
+  test_path: /lustre/rranade/testing_data # Dir for testing data in raw format (vtp, vtu ,stls)
+  save_path: /lustre/rranade/predicted_data # Dir to save predicted results in raw format (vtp, vtu)
+  checkpoint_name: DoMINO.0.455.pt # Name of checkpoint to select from saved checkpoints
+  scaling_param_path: /lustre/rranade/scaling_params
+  refine_stl: False # Automatically refine STL during inference
+  stencil_size: 7 # Stencil size for evaluating surface and volume model
