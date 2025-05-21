@@ -254,6 +254,7 @@ def test_shard_tensor_reduction(op, backward, dim, in_place):
     )
 
 
+@pytest.mark.multigpu
 def test_consecutive_reductions():
 
     num_gpus = torch.cuda.device_count()
