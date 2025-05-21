@@ -70,7 +70,7 @@ DoMINO has support for training and inference using domain parallelism in physic
 via the `ShardTensor` mechanisms and pytorch's FSDP tools.  `ShardTensor`, built on
 PyTorch's `DTensor` object, is a domain-parallel-aware tensor that can live on multiple
 GPUs and perform operations in a numerically consistent way.  For more information
-about the techniques of domain parallelism and `ShardTensor`, refer to physicsnemo
+about the techniques of domain parallelism and `ShardTensor`, refer to PhysicsNeMo
 tutorials such as [`ShardTensor`](shard_tensor_tutorial.html).
 
 In DoMINO specifically, domain parallelism has been abled in two ways, which
