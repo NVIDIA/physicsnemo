@@ -772,7 +772,17 @@ class DoMINO(nn.Module):
             raise ValueError(
                 "At least one of `output_features_vol` or `output_features_surf` must be specified"
             )
-        self.solution_calculation_mode = model_parameters.solution_calculation_mode
+        if hasattr(model_parameters, "solution_calculation_mode"):
+            if model_parameters.solution_calculation_mode not in [
+                "one-loop",
+                "two-loop",
+            ]:
+                raise ValueError(
+                    f"Invalid solution_calculation_mode: {model_parameters.solution_calculation_mode}, select 'one-loop' or 'two-loop'."
+                )
+            self.solution_calculation_mode = model_parameters.solution_calculation_mode
+        else:
+            self.solution_calculation_mode = "two-loop"
         self.num_variables_vol = output_features_vol
         self.num_variables_surf = output_features_surf
         self.grid_resolution = model_parameters.interp_res
@@ -1141,10 +1151,7 @@ class DoMINO(nn.Module):
                     axis=-1,
                 )
 
-        if (
-            self.solution_calculation_mode == "one-loop"
-            or self.solution_calculation_mode == "compare"
-        ):
+        if self.solution_calculation_mode == "one-loop":
             encoding_list = [
                 encoding_node.unsqueeze(2).expand(-1, -1, num_sample_points, -1),
                 encoding_g.unsqueeze(2).expand(-1, -1, num_sample_points, -1),
@@ -1204,13 +1211,9 @@ class DoMINO(nn.Module):
                         (one_loop_output_all, one_loop_output_res), axis=-1
                     )
 
-            if self.solution_calculation_mode != "compare":
-                return one_loop_output_all
+            return one_loop_output_all
 
-        if (
-            self.solution_calculation_mode == "two-loop"
-            or self.solution_calculation_mode == "compare"
-        ):
+        if self.solution_calculation_mode == "two-loop":
             for f in range(num_variables):
                 for p in range(num_sample_points):
                     if p == 0:
@@ -1241,16 +1244,9 @@ class DoMINO(nn.Module):
                     output_all = output_res
                 else:
                     output_all = torch.cat((output_all, output_res), axis=-1)
-            if self.solution_calculation_mode != "compare":
-                return output_all
 
-        if self.solution_calculation_mode == "compare":
-            print(
-                f"NEIGHBORS: 2-loop vs. 1-loop Agreement? {torch.allclose(one_loop_output_all, output_all)}"
-            )
-        return output_all
+            return output_all
 
-    # @to_local_tensors
     def calculate_solution(
         self,
         volume_mesh_centers,
@@ -1290,21 +1286,7 @@ class DoMINO(nn.Module):
             params = torch.cat((inlet_velocity, air_density), axis=-1)
             param_encoding = self.parameter_model(params)
 
-        if self.solution_calculation_mode == "compare":
-            full_random_noise = torch.rand(
-                (
-                    num_variables,
-                    num_sample_points,
-                )
-                + tuple(volume_mesh_centers.shape),
-                dtype=volume_mesh_centers.dtype,
-                device=volume_mesh_centers.device,
-            )
-
-        if (
-            self.solution_calculation_mode == "one-loop"
-            or self.solution_calculation_mode == "compare"
-        ):
+        if self.solution_calculation_mode == "one-loop":
 
             # Stretch these out to num_sample_points
             one_loop_encoding_node = encoding_node.unsqueeze(0).expand(
@@ -1325,19 +1307,13 @@ class DoMINO(nn.Module):
 
             for f in range(num_variables):
 
-                if self.solution_calculation_mode == "one-loop":
-                    one_loop_volume_mesh_centers_expanded = (
-                        volume_mesh_centers.unsqueeze(0).expand(
-                            num_sample_points, -1, -1, -1
-                        )
-                    )
-                    # Bulk_random_noise has shape (num_sample_points, batch_size, num_points, 3)
-                    one_loop_bulk_random_noise = torch.rand_like(
-                        one_loop_volume_mesh_centers_expanded
-                    )
-
-                elif self.solution_calculation_mode == "compare":
-                    one_loop_bulk_random_noise = full_random_noise[f]
+                one_loop_volume_mesh_centers_expanded = volume_mesh_centers.unsqueeze(
+                    0
+                ).expand(num_sample_points, -1, -1, -1)
+                # Bulk_random_noise has shape (num_sample_points, batch_size, num_points, 3)
+                one_loop_bulk_random_noise = torch.rand_like(
+                    one_loop_volume_mesh_centers_expanded
+                )
 
                 one_loop_bulk_random_noise = 2 * (one_loop_bulk_random_noise - 0.5)
                 one_loop_bulk_random_noise = (
@@ -1398,30 +1374,21 @@ class DoMINO(nn.Module):
                         (one_loop_output_all, one_loop_output_res), axis=-1
                     )
 
-            if self.solution_calculation_mode != "compare":
-                return one_loop_output_all
+            return one_loop_output_all
 
-        if (
-            self.solution_calculation_mode == "two-loop"
-            or self.solution_calculation_mode == "compare"
-        ):
+        if self.solution_calculation_mode == "two-loop":
 
             for f in range(num_variables):
                 for p in range(num_sample_points):
                     if p == 0:
                         volume_m_c = volume_mesh_centers
                     else:
-                        if self.solution_calculation_mode == "two-loop":
-                            noise = torch.rand_like(volume_mesh_centers)
-                        elif self.solution_calculation_mode == "compare":
-                            # Reuse the bulk random noise for precise comparison
-                            noise = full_random_noise[f, p]
+                        noise = torch.rand_like(volume_mesh_centers)
                         noise = 2 * (noise - 0.5)
                         noise = noise / noise_intensity
                         dist = torch.norm(noise, dim=-1, keepdim=True)
 
                         volume_m_c = volume_mesh_centers + noise
-                    # print(f"volume_m_c shape: {volume_m_c.shape}")
                     basis_f = nn_basis[f](volume_m_c)
                     output = torch.cat((basis_f, encoding_node, encoding_g), axis=-1)
                     if self.encode_parameters:
@@ -1444,15 +1411,7 @@ class DoMINO(nn.Module):
                 else:
                     output_all = torch.cat((output_all, output_res), axis=-1)
 
-            if self.solution_calculation_mode == "two-loop":
-                return output_all
-
-        if self.solution_calculation_mode == "compare":
-            print(
-                f"STANDARD: 2-loop vs. 1-loop Agreement? {torch.allclose(one_loop_output_all, output_all)}"
-            )
-
-        return output_all
+            return output_all
 
     @profile
     def forward(
