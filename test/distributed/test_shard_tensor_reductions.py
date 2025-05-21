@@ -122,7 +122,7 @@ def run_shard_tensor_reduction(
         dm = DistributedManager()
 
         # Create a random-valued tensor of at least rank 3:
-        full_input = torch.randn(2, 27, 2, requires_grad=backward).to(dm.device)
+        full_input = torch.randn(2, 128, 2, requires_grad=backward).to(dm.device)
 
         # Scatter it:
         global_mesh = dm.initialize_mesh(mesh_sizes, mesh_names)  # noqa: F841
@@ -243,7 +243,7 @@ def test_shard_tensor_reduction(op, backward, dim, in_place):
     mesh_names = ["domain"]
     mesh_sizes = [-1]
 
-    verbose = True  # Change to True for debug
+    verbose = False  # Change to True for debug
 
     torch.multiprocessing.set_start_method("spawn", force=True)
 

@@ -407,3 +407,7 @@ def test_shard_tensor_initialization_from_all_dtensor(
         join=True,
         daemon=True,
     )
+
+
+if __name__ == "__main__":
+    test_shard_tensor_initialization_from_all_dtensor(-1, 2, 1)

@@ -40,11 +40,8 @@ from torch.distributed.tensor.placement_types import (  # noqa: E402
 )
 
 from physicsnemo.distributed import (
-    register_custom_ops,  # noqa: E402
     scatter_tensor,
 )
-
-register_custom_ops()
 
 
 def convert_input_dict_to_shard_tensor(
@@ -179,7 +176,6 @@ def run_sharded_ball_query_layer_forward(
 
         # Create the model:
         model = BQWarp(
-            input_features=3,
             grid_resolution=[nx, ny, nz],
             radius=1.0,
             neighbors_in_radius=num_neigh,
@@ -210,11 +206,6 @@ def run_sharded_ball_query_layer_forward(
             sharded_mapping.full_tensor(), dim=-1, descending=True
         )
 
-        # print(f"sorted_sharded_mapping: {sorted_sharded_mapping}")
-        # mapping_diff = sorted_single_gpu_mapping - sorted_sharded_mapping
-        # batch_loc, point_loc, ind_loc = torch.where(mapping_diff != 0)
-        # print(f"sorted_single_gpu_mapping: {sorted_single_gpu_mapping[batch_loc, point_loc]}")
-        # print(f"sorted_sharded_mapping: {sorted_sharded_mapping[batch_loc, point_loc]}")
         assert torch.allclose(sorted_single_gpu_mapping, sorted_sharded_mapping)
 
         # To check the outputs, we apply the sorted indexes into the outputs
@@ -267,7 +258,7 @@ def test_shard_tensor_ball_query(shard_points, shard_grid, reverse_mapping):
 
     """
     num_gpus = torch.cuda.device_count()
-    num_gpus = 3
+
     if num_gpus < 2:
         pytest.skip("Not enough GPUs available for distributed tests")
 

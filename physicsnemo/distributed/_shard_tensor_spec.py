@@ -382,9 +382,13 @@ def compute_sharding_shapes_from_chunking_global_shape(
             # Compute the chunk size for this dimension:
             input_dim = global_shape[placements[i].dim]
             chunked_shapes = compute_split_shapes(input_dim, mesh.size(i))
-            # This needs to be a tuple of torch.Size
+
+            # for each tensor in the list
 
             temp_sharding_shapes[i] = chunked_shapes
+
+    # Temp sharding shapes always has a key for each mesh dim.
+    # Each is a list with length = size of that mesh dim.
 
     # Initialize shapes for all sharded dimensions, but using the global shape.
     # We will update next.
@@ -393,12 +397,18 @@ def compute_sharding_shapes_from_chunking_global_shape(
         for mesh_dim, chunks in temp_sharding_shapes.items()
     }
 
-    # For every sharded dimension, update the tensor size along it's axis for all mesh dims
-    for mesh_dim in temp_sharding_shapes.keys():
-        placement = placements[mesh_dim]
-        tensor_dim = placement.dim
-        for i, shard_size in enumerate(temp_sharding_shapes[mesh_dim]):
-            sharding_shapes[mesh_dim][i][tensor_dim] = shard_size
+    # Go through and reduce each mesh dim to the right shape for _this_ rank
+    for mesh_dim, shape_list in temp_sharding_shapes.items():
+        this_rank = mesh.get_local_rank(mesh_dim)
+        temp_sharding_shapes[mesh_dim] = shape_list[this_rank]
+
+    # Finally, update the sharded shape with the right chunk size:
+    for shape_list in sharding_shapes.values():
+        for inner_mesh_dim, chunk_size in temp_sharding_shapes.items():
+
+            tensor_dim = placements[inner_mesh_dim].dim
+            for shape in shape_list:
+                shape[tensor_dim] = chunk_size
 
     # Convert to immutable torch.Size
     return {

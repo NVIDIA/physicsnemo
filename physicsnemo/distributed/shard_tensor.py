@@ -425,7 +425,7 @@ class ShardTensor(DTensor):
                 for arg in input_args:
                     if (
                         isinstance(arg, ShardTensor)
-                        and dtensor._spec.tensor_meta == arg._spec.tensor_meta.shape
+                        and dtensor._spec.tensor_meta == arg._spec.tensor_meta
                         and dtensor._spec.placements == arg._spec.placements
                     ):
                         return ShardTensor.__new__(

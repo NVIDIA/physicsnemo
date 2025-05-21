@@ -233,9 +233,10 @@ def run_shard_tensor_input_gradient_local_loss(
         shard_tensor = shard_tensor_factory(
             mesh_names, mesh_sizes, requires_grad=True, uneven=uneven
         )
-        shard_tensor = (
-            shard_tensor.detach()
-        )  # Make it a leaf tensor by calling detach andrequires_grad_
+
+        # shard_tensor = (
+        #     shard_tensor.detach()
+        # )  # Make it a leaf tensor by calling detach andrequires_grad_
         shard_tensor = shard_tensor.detach().requires_grad_(
             True
         )  # Make it a leaf tensor by calling detach andrequires_grad_
@@ -325,3 +326,7 @@ def test_shard_tensor_input_gradient_local_loss(
         join=True,
         daemon=True,
     )
+
+
+if __name__ == "__main__":
+    test_shard_tensor_input_gradient_local_loss(-1, 2, 2, True)
