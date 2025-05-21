@@ -107,6 +107,9 @@ def perform_ring_iteration(
         # Swap
         id_for_send, id_for_recv = id_for_recv, id_for_send
 
+    if not tensor.is_contiguous():
+        tensor = tensor.contiguous()
+
     if recv_shape is None:
         tensor_recv = torch.empty_like(tensor)
     else:
@@ -131,7 +134,7 @@ def perform_ring_iteration(
         p2p_op_list.append(
             dist.P2POp(
                 op=dist.isend,
-                tensor=tensor.contiguous(),
+                tensor=tensor,
                 peer=id_for_send,
                 group=local_group,
             )
