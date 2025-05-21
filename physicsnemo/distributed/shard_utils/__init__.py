@@ -40,7 +40,5 @@ try:
         from .pooling_patches import generic_avg_pool_nd_wrapper
         from .unpooling_patches import generic_interpolate_wrapper
 
-    register_shard_wrappers()
-
 except ImportError:
     pass
