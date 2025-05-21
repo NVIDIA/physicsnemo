@@ -57,6 +57,9 @@ class Module(torch.nn.Module):
     __model_checkpoint_version__ = (
         "0.1.0"  # Used for file versioning and is not the same as physicsnemo version
     )
+    __supported_model_checkpoint_version__ = (
+        {}
+    )  # Dict of supported model checkpoints and corresponding warnings messages
 
     def __new__(cls, *args, **kwargs):
         out = super().__new__(cls)
@@ -122,6 +125,81 @@ class Module(torch.nn.Module):
                 print(f"Skipping potentially malicious file: {member.name}")
 
     @classmethod
+    def _backward_compat_arg_mapper(
+        cls, version: str, args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Map arguments from older versions to current version format.
+
+        This base implementation does nothing. Child classes should override this method
+        to handle version-specific argument mappings.
+
+        Parameters
+        ----------
+        version : str
+            Version of the checkpoint being loaded
+        args : Dict[str, Any]
+            Arguments dictionary from the checkpoint
+
+        Returns
+        -------
+        Dict[str, Any]
+            Updated arguments dictionary compatible with current version
+        """
+        return args
+
+    @classmethod
+    def _get_class_from_args(cls, arg_dict: Dict[str, Any]) -> type:
+        """Get the class from a dictionary of arguments.
+
+        Parameters
+        ----------
+        arg_dict : Dict[str, Any]
+            Dictionary of arguments containing '__name__' and '__module__' keys.
+
+        Returns
+        -------
+        type
+            The class to instantiate.
+
+        Raises
+        ------
+        AttributeError
+            If the class cannot be found.
+        """
+        _cls_name = arg_dict["__name__"]
+        registry = ModelRegistry()
+
+        if cls.__name__ == arg_dict["__name__"]:  # If cls is the class
+            return cls
+        elif _cls_name in registry.list_models():  # Built in registry
+            return registry.factory(_cls_name)
+        else:
+            try:
+                # Check if module is using modulus import and change it to physicsnemo instead
+                if arg_dict["__module__"].split(".")[0] == "modulus":
+                    warnings.warn(
+                        "Using modulus import in model checkpoint. This is deprecated and will be removed in future versions. Please use physicsnemo instead."
+                    )
+                    arg_module = (
+                        "physicsnemo" + arg_dict["__module__"][len("modulus") :]
+                    )
+                else:
+                    arg_module = arg_dict["__module__"]
+
+                # Otherwise, try to import the class
+                _mod = importlib.import_module(arg_module)
+                _cls = getattr(_mod, arg_dict["__name__"])
+            except AttributeError:
+                # Cross fingers and hope for the best (maybe the class name changed)
+                _cls = cls
+
+        # This works with the importlib.metadata.EntryPoint
+        if isinstance(_cls, importlib.metadata.EntryPoint):
+            _cls = _cls.load()
+
+        return _cls
+
+    @classmethod
     def instantiate(cls, arg_dict: Dict[str, Any]) -> "Module":
         """Instantiate a model from a dictionary of arguments
 
@@ -163,37 +241,7 @@ class Module(torch.nn.Module):
           )
         )
         """
-
-        _cls_name = arg_dict["__name__"]
-        registry = ModelRegistry()
-        if cls.__name__ == arg_dict["__name__"]:  # If cls is the class
-            _cls = cls
-        elif _cls_name in registry.list_models():  # Built in registry
-            _cls = registry.factory(_cls_name)
-        else:
-            try:
-                # Check if module is using modulus import and change it to physicsnemo instead
-                if arg_dict["__module__"].split(".")[0] == "modulus":
-                    warnings.warn(
-                        "Using modulus import in model checkpoint. This is deprecated and will be removed in future versions. Please use physicsnemo instead."
-                    )
-                    arg_module = (
-                        "physicsnemo" + arg_dict["__module__"][len("modulus") :]
-                    )
-                else:
-                    arg_module = arg_dict["__module__"]
-
-                # Otherwise, try to import the class
-                _mod = importlib.import_module(arg_module)
-                _cls = getattr(_mod, arg_dict["__name__"])
-            except AttributeError:
-                # Cross fingers and hope for the best (maybe the class name changed)
-                _cls = cls
-
-        # This works with the importlib.metadata.EntryPoint
-        if isinstance(_cls, importlib.metadata.EntryPoint):
-            _cls = _cls.load()
-
+        _cls = cls._get_class_from_args(arg_dict)
         return _cls(**arg_dict["__args__"])
 
     def debug(self):
@@ -286,16 +334,8 @@ class Module(torch.nn.Module):
         if not local_path.joinpath("model.pt").exists():
             raise IOError("Model weights 'model.pt' not found in checkpoint")
 
-        # Check if the checkpoint version is compatible with the current version
-        with open(local_path.joinpath("metadata.json"), "r") as f:
-            metadata_info = json.load(f)
-            if (
-                metadata_info["mdlus_file_version"]
-                != Module.__model_checkpoint_version__
-            ):
-                raise IOError(
-                    f"Model checkpoint version {metadata_info['mdlus_file_version']} is not compatible with current version {Module.__version__}"
-                )
+        if not local_path.joinpath("metadata.json").exists():
+            raise IOError("Metadata 'metadata.json' not found in checkpoint")
 
     def load(
         self,
@@ -374,7 +414,7 @@ class Module(torch.nn.Module):
             # Open the tar file and extract its contents to the temporary directory
             with tarfile.open(cached_file_name, "r") as tar:
                 tar.extractall(
-                    path=local_path, members=list(cls._safe_members(tar, local_path))
+                    path=local_path, members=list(Module._safe_members(tar, local_path))
                 )
 
             # Check if the checkpoint is valid
@@ -386,11 +426,35 @@ class Module(torch.nn.Module):
 
             ckp_args = copy.deepcopy(args)
 
+            # Load metadata to get version
+            with open(local_path.joinpath("metadata.json"), "r") as f:
+                metadata = json.load(f)
+                version = metadata.get(
+                    "mdlus_file_version", cls.__model_checkpoint_version__
+                )
+
+            # Get class from args
+            _cls = Module._get_class_from_args(args)
+
+            # Check if the checkpoint version is compatible with the current version
+            # If not, apply backward compatibility mapping if method exists
+            if version != _cls.__model_checkpoint_version__:
+                if version in _cls.__supported_model_checkpoint_version__:
+                    warnings.warn(_cls.__supported_model_checkpoint_version__[version])
+                    args["__args__"] = _cls._backward_compat_arg_mapper(
+                        version, args["__args__"]
+                    )
+                else:
+                    raise IOError(
+                        f"Model checkpoint version {version} is not compatible with current version {_cls.__model_checkpoint_version__}"
+                    )
+
             # Merge model_args (adding new keys and updating existing ones)
             if model_args is not None:
                 args["__args__"].update(model_args)
 
-            model = cls.instantiate(args)
+            # Instantiate the model
+            model = Module.instantiate(args)
 
             # Load the model weights
             model_dict = torch.load(

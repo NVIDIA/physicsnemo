@@ -17,6 +17,7 @@
 # ruff: noqa: E402
 import os
 import sys
+from pathlib import Path
 
 import pytest
 import torch
@@ -159,3 +160,19 @@ def test_unet_amp_mode_property(device):
     for sub in model.model.modules():
         if hasattr(sub, "amp_mode"):
             assert sub.amp_mode is False
+
+
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_unet_backward_compat(device):
+    """Test backward compatibility of UNet wrappers"""
+
+    # Construct Load UNet from older version
+    UNet.from_checkpoint(
+        file_name=(
+            str(
+                Path(__file__).parents[1].resolve()
+                / Path("data")
+                / Path("diffusion_unet_0.1.0.mdlus")
+            )
+        )
+    )
