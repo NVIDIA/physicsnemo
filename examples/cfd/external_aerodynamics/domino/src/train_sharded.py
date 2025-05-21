@@ -14,6 +14,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This code defines a distributed pipeline for training the DoMINO model on
 CFD datasets. It includes the computation of scaling factors, instantiating 
@@ -33,320 +49,64 @@ import re
 import torch
 import torchinfo
 
-from typing import Literal
-
 import apex
 import numpy as np
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
-import torch.distributed as dist
+
+from typing import Literal
+
+from physicsnemo.distributed import ShardTensor
+
 from torch.cuda.amp import GradScaler, autocast
-from torch.nn.parallel import DistributedDataParallel
+
+from torch.distributed.fsdp import (
+    FullyShardedDataParallel as FSDP,
+    ShardingStrategy,
+)
+
+from contextlib import nullcontext
+
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from torch.distributed.tensor import distribute_module
 from torch.utils.tensorboard import SummaryWriter
 from nvtx import annotate as nvtx_annotate
 import torch.cuda.nvtx as nvtx
-
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
 from physicsnemo.datapipes.cae.domino_datapipe import (
-    DoMINODataPipe,
     compute_scaling_factors,
     create_domino_dataset,
 )
+from physicsnemo.datapipes.cae.domino_sharded_datapipe import (
+    create_sharded_domino_dataset,
+)
+
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
+
+# Bring these from the single-gpu script.
+from train import (
+    compute_loss_dict,
+)
 
 # This is included for GPU memory tracking:
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import time
 
-# Initialize NVML
-nvmlInit()
-
 
 from physicsnemo.utils.profiling import profile, Profiler
-
-# Profiler().enable("line_profiler")
-# Profiler().initialize()
-
-
-def loss_fn(
-    output: torch.Tensor,
-    target: torch.Tensor,
-    loss_type: Literal["mse", "rmse"],
-    padded_value: float = -10,
-) -> torch.Tensor:
-    """Calculate mean squared error or root mean squared error with masking for padded values.
-
-    Args:
-        output: Predicted values from the model
-        target: Ground truth values
-        loss_type: Type of loss to calculate ("mse" or "rmse")
-        padded_value: Value used for padding in the tensor
-
-    Returns:
-        Calculated loss as a scalar tensor
-    """
-    mask = abs(target - padded_value) > 1e-3
-
-    if loss_type == "rmse":
-        dims = (0, 1)
-    else:
-        dims = None
-
-    num = torch.sum(mask * (output - target) ** 2.0, dims)
-    if loss_type == "rmse":
-        denom = torch.sum(mask * target**2.0, dims)
-    else:
-        denom = torch.sum(mask)
-
-    return torch.mean(num / denom)
-
-
-def loss_fn_surface(
-    output: torch.Tensor, target: torch.Tensor, loss_type: Literal["mse", "rmse"]
-) -> torch.Tensor:
-    """Calculate loss for surface data by handling scalar and vector components separately.
-
-    Args:
-        output: Predicted surface values from the model
-        target: Ground truth surface values
-        loss_type: Type of loss to calculate ("mse" or "rmse")
-
-    Returns:
-        Combined scalar and vector loss as a scalar tensor
-    """
-    # Separate the scalar and vector components:
-    output_scalar, output_vector = torch.split(output, [1, 3], dim=2)
-    target_scalar, target_vector = torch.split(target, [1, 3], dim=2)
-
-    numerator = torch.mean((output_scalar - target_scalar) ** 2.0)
-    vector_diff_sq = torch.mean((target_vector - output_vector) ** 2.0, (0, 1))
-    if loss_type == "mse":
-        masked_loss_pres = numerator
-        masked_loss_ws = torch.sum(vector_diff_sq)
-    else:
-        denom = torch.mean((target_scalar) ** 2.0)
-        masked_loss_pres = numerator / denom
-
-        # Compute the mean diff**2 of the vector component, leave the last dimension:
-        masked_loss_ws_num = vector_diff_sq
-        masked_loss_ws_denom = torch.mean((target_vector) ** 2.0, (0, 1))
-        masked_loss_ws = torch.sum(masked_loss_ws_num / masked_loss_ws_denom)
-
-    loss = masked_loss_pres + masked_loss_ws
-
-    return loss / 4.0
-
-
-def loss_fn_area(
-    output: torch.Tensor,
-    target: torch.Tensor,
-    normals: torch.Tensor,
-    area: torch.Tensor,
-    area_scaling_factor: float,
-    loss_type: Literal["mse", "rmse"],
-) -> torch.Tensor:
-    """Calculate area-weighted loss for surface data considering normal vectors.
-
-    Args:
-        output: Predicted surface values from the model
-        target: Ground truth surface values
-        normals: Normal vectors for the surface
-        area: Area values for surface elements
-        area_scaling_factor: Scaling factor for area weighting
-        loss_type: Type of loss to calculate ("mse" or "rmse")
-
-    Returns:
-        Area-weighted loss as a scalar tensor
-    """
-    area = area * area_scaling_factor
-    area_scale_factor = area
-
-    # Separate the scalar and vector components.
-    target_scalar, target_vector = torch.split(
-        target * area_scale_factor, [1, 3], dim=2
-    )
-    output_scalar, output_vector = torch.split(
-        output * area_scale_factor, [1, 3], dim=2
-    )
-
-    # Apply the normals to the scalar components (only [:,:,0]):
-    normals, _ = torch.split(normals, [1, normals.shape[-1] - 1], dim=2)
-    target_scalar = target_scalar * normals
-    output_scalar = output_scalar * normals
-
-    # Compute the mean diff**2 of the scalar component:
-    masked_loss_pres = torch.mean(((output_scalar - target_scalar) ** 2.0), dim=(0, 1))
-    if loss_type == "rmse":
-        masked_loss_pres /= torch.mean(target_scalar**2.0, dim=(0, 1))
-
-    # Compute the mean diff**2 of the vector component, leave the last dimension:
-    masked_loss_ws = torch.mean((target_vector - output_vector) ** 2.0, (0, 1))
-
-    if loss_type == "rmse":
-        masked_loss_ws /= torch.mean((target_vector) ** 2.0, (0, 1))
-
-    # Combine the scalar and vector components:
-    loss = 0.25 * (masked_loss_pres + torch.sum(masked_loss_ws))
-
-    return loss
-
-
-def integral_loss_fn(
-    output, target, area, normals, stream_velocity=None, padded_value=-10
-):
-    drag_loss = drag_loss_fn(
-        output, target, area, normals, stream_velocity, padded_value=-10
-    )
-    lift_loss = lift_loss_fn(
-        output, target, area, normals, stream_velocity, padded_value=-10
-    )
-    return lift_loss + drag_loss
-
-
-def lift_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
-    vel_inlet = stream_velocity  # Get this from the dataset
-    mask = abs(target - padded_value) > 1e-3
-
-    output_true = target * mask * area * (vel_inlet) ** 2.0
-    output_pred = output * mask * area * (vel_inlet) ** 2.0
-
-    normals = torch.select(normals, 2, 2)
-    # output_true_0 = output_true[:, :, 0]
-    output_true_0 = output_true.select(2, 0)
-    output_pred_0 = output_pred.select(2, 0)
-
-    pres_true = output_true_0 * normals
-    pres_pred = output_pred_0 * normals
-
-    wz_true = output_true[:, :, -1]
-    wz_pred = output_pred[:, :, -1]
-
-    masked_pred = torch.mean(pres_pred + wz_pred, (1))
-    masked_truth = torch.mean(pres_true + wz_true, (1))
-
-    loss = (masked_pred - masked_truth) ** 2.0
-    loss = torch.mean(loss)
-    return loss
-
-
-def drag_loss_fn(output, target, area, normals, stream_velocity=None, padded_value=-10):
-    vel_inlet = stream_velocity  # Get this from the dataset
-    mask = abs(target - padded_value) > 1e-3
-    output_true = target * mask * area * (vel_inlet) ** 2.0
-    output_pred = output * mask * area * (vel_inlet) ** 2.0
-
-    pres_true = output_true[:, :, 0] * normals[:, :, 0]
-    pres_pred = output_pred[:, :, 0] * normals[:, :, 0]
-
-    wx_true = output_true[:, :, 1]
-    wx_pred = output_pred[:, :, 1]
-
-    masked_pred = torch.mean(pres_pred + wx_pred, (1))
-    masked_truth = torch.mean(pres_true + wx_true, (1))
-
-    loss = (masked_pred - masked_truth) ** 2.0
-    loss = torch.mean(loss)
-    return loss
-
-
-def compute_loss_dict(
-    prediction_vol: torch.Tensor,
-    prediction_surf: torch.Tensor,
-    batch_inputs: dict,
-    loss_fn_type: dict,
-    integral_scaling_factor: float,
-    surf_loss_scaling: float,
-    vol_loss_scaling: float,
-) -> Tuple[torch.Tensor, dict]:
-    """
-    Compute the loss terms in a single function call.
-
-    Computes:
-    - Volume loss if prediction_vol is not None
-    - Surface loss if prediction_surf is not None
-    - Integral loss if prediction_surf is not None
-    - Total loss as a weighted sum of the above
-
-    Returns:
-    - Total loss as a scalar tensor
-    - Dictionary of loss terms (for logging, etc)
-    """
-    nvtx.range_push("Loss Calculation")
-    total_loss_terms = []
-    loss_dict = {}
-
-    if prediction_vol is not None:
-        target_vol = batch_inputs["volume_fields"]
-
-        loss_vol = loss_fn(
-            prediction_vol, target_vol, loss_fn_type.loss_type, padded_value=-10
-        )
-        loss_dict["loss_vol"] = loss_vol
-        total_loss_terms.append(loss_vol)
-
-    if prediction_surf is not None:
-
-        target_surf = batch_inputs["surface_fields"]
-        surface_areas = batch_inputs["surface_areas"]
-        surface_areas = torch.unsqueeze(surface_areas, -1)
-        surface_normals = batch_inputs["surface_normals"]
-        stream_velocity = batch_inputs["stream_velocity"]
-        loss_surf = loss_fn_surface(
-            prediction_surf,
-            target_surf,
-            loss_fn_type.loss_type,
-        )
-
-        loss_surf_area = loss_fn_area(
-            prediction_surf,
-            target_surf,
-            surface_normals,
-            surface_areas,
-            area_scaling_factor=loss_fn_type.area_weighing_factor,
-            loss_type=loss_fn_type.loss_type,
-        )
-
-        if loss_fn_type.loss_type == "mse":
-            loss_surf = loss_surf * surf_loss_scaling
-            loss_surf_area = loss_surf_area * surf_loss_scaling
-
-        total_loss_terms.append(0.5 * loss_surf)
-        loss_dict["loss_surf"] = 0.5 * loss_surf
-        total_loss_terms.append(0.5 * loss_surf_area)
-        loss_dict["loss_surf_area"] = 0.5 * loss_surf_area
-        loss_integral = (
-            integral_loss_fn(
-                prediction_surf,
-                target_surf,
-                surface_areas,
-                surface_normals,
-                stream_velocity,
-                padded_value=-10,
-            )
-        ) * integral_scaling_factor
-        loss_dict["loss_integral"] = loss_integral
-        total_loss_terms.append(loss_integral)
-
-    total_loss = sum(total_loss_terms)
-    loss_dict["total_loss"] = total_loss
-    nvtx.range_pop()
-
-    return total_loss, loss_dict
 
 
 def validation_step(
     dataloader,
     model,
     device,
-    logger,
     use_sdf_basis=False,
     use_surface_normals=False,
     integral_scaling_factor=1.0,
@@ -356,8 +116,8 @@ def validation_step(
 ):
     running_vloss = 0.0
     with torch.no_grad():
-        for i_batch, sample_batched in enumerate(dataloader):
-            sampled_batched = dict_to_device(sample_batched, device)
+        for i_batch, sampled_batched in enumerate(dataloader):
+            # sampled_batched = dict_to_device(sample_batched, device)
 
             with autocast(enabled=True):
 
@@ -371,30 +131,50 @@ def validation_step(
                     surf_loss_scaling,
                     vol_loss_scaling,
                 )
-
-            running_vloss += loss.item()
+            running_vloss += loss.full_tensor()
 
     avg_vloss = running_vloss / (i_batch + 1)
 
-    return avg_vloss
+    return avg_vloss.item()
 
 
 @profile
 def train_epoch(
-    dataloader,
-    model,
-    optimizer,
-    scaler,
-    tb_writer,
-    logger,
-    gpu_handle,
-    epoch_index,
-    device,
-    integral_scaling_factor,
-    loss_fn_type,
-    vol_loss_scaling=None,
-    surf_loss_scaling=None,
-):
+    dataloader: DataLoader,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.cuda.amp.GradScaler,
+    tb_writer: SummaryWriter,
+    logger: PythonLogger,
+    gpu_handles: List[int],
+    epoch_index: int,
+    device: torch.device,
+    integral_scaling_factor: float,
+    loss_fn_type: Literal["mse", "rmse"],
+    vol_loss_scaling: Optional[float] = None,
+    surf_loss_scaling: Optional[float] = None,
+) -> float:
+    """
+    Train a single epoch of the model.
+
+    Args:
+        dataloader: DataLoader for the training data, preprocessing w. DoMINO Pipeline
+        model: DoMINO model to train
+        optimizer: Optimizer for training
+        scaler: GradScaler for mixed precision training
+        tb_writer: SummaryWriter for logging to TensorBoard
+        logger: PythonLogger for logging to console
+        gpu_handles: List of GPU handles from pynvml for tracking GPU memory
+        epoch_index: Index of the current epoch
+        device: Device to run the model on
+        integral_scaling_factor: Scaling factor for the integral loss
+        loss_fn_type: Type of loss function to use
+        vol_loss_scaling: Scaling factor for the volume loss
+        surf_loss_scaling: Scaling factor for the surface loss
+
+    Returns:
+        Average loss for the epoch
+    """
 
     dist = DistributedManager()
 
@@ -402,16 +182,18 @@ def train_epoch(
     last_loss = 0.0
     loss_interval = 1
 
-    gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+    gpu_start_info = [nvmlDeviceGetMemoryInfo(gpu_handle) for gpu_handle in gpu_handles]
     start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
 
-        sampled_batched = dict_to_device(sample_batched, device)
+        sampled_batched = sample_batched
 
         with autocast(enabled=True):
             with nvtx.range("Model Forward Pass"):
                 prediction_vol, prediction_surf = model(sampled_batched)
 
+            nvtx.range_push("Loss Calculation")
+            # The loss calculation is the same as singel GPU
             loss, loss_dict = compute_loss_dict(
                 prediction_vol,
                 prediction_surf,
@@ -422,46 +204,67 @@ def train_epoch(
                 vol_loss_scaling,
             )
 
-        loss = loss / loss_interval
-        scaler.scale(loss).backward()
+            loss = loss / loss_interval
+            scaler.scale(loss).backward()
 
         if ((i_batch + 1) % loss_interval == 0) or (i_batch + 1 == len(dataloader)):
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-
         # Gather data and report
-        running_loss += loss.item()
+        running_loss += loss.full_tensor().item()
+
+        gpu_end_info = [
+            nvmlDeviceGetMemoryInfo(gpu_handle) for gpu_handle in gpu_handles
+        ]
+        gpu_memory_used = [
+            gpu_end_info.used / (1024**3) for gpu_end_info in gpu_end_info
+        ]
+        gpu_memory_delta = [
+            (gpu_end_info.used - gpu_start_info.used) / (1024**3)
+            for gpu_end_info, gpu_start_info in zip(gpu_end_info, gpu_start_info)
+        ]
         elapsed_time = time.perf_counter() - start_time
         start_time = time.perf_counter()
-        gpu_end_info = nvmlDeviceGetMemoryInfo(gpu_handle)
-        gpu_memory_used = gpu_end_info.used / (1024**3)
-        gpu_memory_delta = (gpu_end_info.used - gpu_start_info.used) / (1024**3)
-
         logging_string = f"Device {device}, batch processed: {i_batch + 1}\n"
-        # Format the loss dict into a string:
+
+        # Format the loss dict into a string (use full_tensor to reduce across the domain.):
+        # **** Note ****
+        # We have to use full_tensor to reduce across the domain.
+        # You could use `.to_local()` to use just the local gpus version.
+        # the full_tensor() reduction is only over the mesh domain.`
         loss_string = (
             "  "
             + "\t".join([f"{key.replace('loss_',''):<10}" for key in loss_dict.keys()])
             + "\n"
         )
         loss_string += (
-            "  " + f"\t".join([f"{l.item():<10.3e}" for l in loss_dict.values()]) + "\n"
+            "  "
+            + f"\t".join(
+                [f"{l.full_tensor().item():<10.2e}" for l in loss_dict.values()]
+            )
+            + "\n"
         )
-
         logging_string += loss_string
-        # for key, value in loss_dict.items():
-        #     logging_string += f"    {key}: {value.item():.5f}\n"
-        logging_string += f"  GPU memory used: {gpu_memory_used:.3f} Gb\n"
-        logging_string += f"  GPU memory delta: {gpu_memory_delta:.3f} Gb\n"
-        logging_string += f"  Time taken: {elapsed_time:.2f} seconds\n"
+
+        mem_used_str = " ".join(
+            [f"{gpu_memory_used[i]:.2f}" for i in range(len(gpu_memory_used))]
+        )
+        mem_delta_str = " ".join(
+            [f"{gpu_memory_delta[i]:.2f}" for i in range(len(gpu_memory_delta))]
+        )
+        logging_string += f"  GPU memory used: {mem_used_str} Gb\n"
+        logging_string += f"  GPU memory delta: {mem_delta_str} Gb\n"
+        logging_string += f"  Elapsed time: {elapsed_time:.2f} seconds\n"
         logger.info(logging_string)
-        gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
+        gpu_start_info = [
+            nvmlDeviceGetMemoryInfo(gpu_handle) for gpu_handle in gpu_handles
+        ]
 
     last_loss = running_loss / (i_batch + 1)  # loss per batch
     if dist.rank == 0:
         logger.info(
-            f" Device {device},  batch: {i_batch + 1}, loss norm: {loss.item():.5f}"
+            f" Device {device},  batch: {i_batch + 1}, loss norm: {loss.full_tensor().item():.5f}"
         )
         tb_x = epoch_index * len(dataloader) + i_batch + 1
         tb_writer.add_scalar("Loss/train", last_loss, tb_x)
@@ -479,7 +282,34 @@ def main(cfg: DictConfig) -> None:
     # Initialize NVML
     nvmlInit()
 
-    gpu_handle = nvmlDeviceGetHandleByIndex(dist.device.index)
+    # Use this to monitor GPU memory usage for visible GPUs:
+    gpu_count = torch.cuda.device_count()
+    # This will allocate a little memory on all visible GPUS:
+    # Change to just the local GPU if you don't want that.
+    gpu_handles = [
+        nvmlDeviceGetHandleByIndex(dist.local_rank),
+    ]
+    # gpu_handles = [nvmlDeviceGetHandleByIndex(i) for i in range(gpu_count)]
+
+    #################################
+    # Mesh Creation
+    # For Sharded training, we utilize pytorch's device mesh.
+    # The distributed manager can create it for us.  We'll use a mesh
+    # with two devices and the rest of the GPUs are the data-parallel
+    # dimension.
+    #################################
+
+    # The global mesh represents all the GPUs in the process, in a multi-dimensional grid.
+    # Think of the global mesh as a tensor, with rank = len(mesh_shape)
+    domain_size = int(cfg.domain_parallelism.domain_size)
+    # You can use -1 to one axis to indicate that you want to use all the GPUs in that dimension.
+    mesh = dist.initialize_mesh(
+        mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
+    )
+    # This is a subset of all the GPUs, and will vary depending on the process.
+    # Think of this as slicing the global mesh along the domain axis.
+    # It will contain only the GPUs that this process is sharing data with.
+    domain_mesh = mesh["domain"]
 
     compute_scaling_factors(
         cfg, cfg.data_processor.output_dir, use_cache=cfg.data_processor.use_cache
@@ -549,17 +379,45 @@ def main(cfg: DictConfig) -> None:
         surf_factors=surf_factors,
     )
 
+    #################################
+    # Using a Sharded Dataset
+    #################################
+    # Physicsnemo has a built-in wrapper for the DoMino dataset
+    # that allows for sharding the dataset across multiple GPUs.
+    # (it's nothing fancy - each rank that shares data loads the entire image,
+    # and then slices to it's own chunks)
+    train_dataset = create_sharded_domino_dataset(
+        train_dataset,
+        domain_mesh,  # The dataloader needs to know the mesh for sharing data.
+        shard_point_cloud=cfg.domain_parallelism.shard_points,  # We can shard the point
+        shard_grid=cfg.domain_parallelism.shard_grid,  # Or the grid (or both)
+    )
+
+    val_dataset = create_sharded_domino_dataset(
+        val_dataset,
+        domain_mesh,
+        shard_point_cloud=cfg.domain_parallelism.shard_points,
+        shard_grid=cfg.domain_parallelism.shard_grid,
+    )
+
+    # The distributed sampler needs to know that the dataset is not
+    # being used in a usual way.  We have to tell it how many "real"
+    # times the dataset is sharded (world size / shard_size).
+    # It also needs to know its rank in the global "ddp" dimension.
+    sampler_num_replicas = mesh["ddp"].size()
+    sampler_rank = mesh["ddp"].get_local_rank()
+
     train_sampler = DistributedSampler(
         train_dataset,
-        num_replicas=dist.world_size,
-        rank=dist.rank,
+        num_replicas=sampler_num_replicas,
+        rank=sampler_rank,
         **cfg.train.sampler,
     )
 
     val_sampler = DistributedSampler(
         val_dataset,
-        num_replicas=dist.world_size,
-        rank=dist.rank,
+        num_replicas=sampler_num_replicas,
+        rank=sampler_rank,
         **cfg.val.sampler,
     )
 
@@ -586,14 +444,16 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Model summary:\n{torchinfo.summary(model, verbose=0, depth=2)}\n")
 
     if dist.world_size > 1:
-        model = DistributedDataParallel(
+        # Instead of DDP, for sharding we use FSDP.  It's possible to use FSDP in the DDP
+        # mode, but since it's not pure data parallel we have to me more careful.
+
+        # First, distribute the model so that each GPU has the copy with DTensor weights:
+        model = distribute_module(model, domain_mesh)
+
+        model = FSDP(
             model,
-            device_ids=[dist.local_rank],
-            output_device=dist.device,
-            broadcast_buffers=dist.broadcast_buffers,
-            find_unused_parameters=dist.find_unused_parameters,
-            gradient_as_bucket_view=True,
-            static_graph=True,
+            device_mesh=mesh["ddp"],
+            sharding_strategy=ShardingStrategy.NO_SHARD,
         )
 
     # optimizer = apex.optimizers.FusedAdam(model.parameters(), lr=0.001)
@@ -668,7 +528,7 @@ def main(cfg: DictConfig) -> None:
             scaler=scaler,
             tb_writer=writer,
             logger=logger,
-            gpu_handle=gpu_handle,
+            gpu_handles=gpu_handles,
             epoch_index=epoch,
             device=dist.device,
             integral_scaling_factor=initial_integral_factor,
@@ -680,14 +540,12 @@ def main(cfg: DictConfig) -> None:
         logger.info(
             f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time:.3f} seconds"
         )
-        epoch_end_time = time.perf_counter()
 
         model.eval()
         avg_vloss = validation_step(
             dataloader=val_dataloader,
             model=model,
             device=dist.device,
-            logger=logger,
             use_sdf_basis=cfg.model.use_sdf_in_basis_func,
             use_surface_normals=cfg.model.use_surface_normals,
             integral_scaling_factor=initial_integral_factor,
@@ -701,14 +559,17 @@ def main(cfg: DictConfig) -> None:
             f"Device {dist.device} "
             f"LOSS train {avg_loss:.5f} "
             f"valid {avg_vloss:.5f} "
-            f"Current lr {scheduler.get_last_lr()[0]} "
+            f"Current lr {scheduler.get_last_lr()[0]}"
             f"Integral factor {initial_integral_factor}"
         )
 
         if dist.rank == 0:
             writer.add_scalars(
                 "Training vs. Validation Loss",
-                {"Training": avg_loss, "Validation": avg_vloss},
+                {
+                    "Training": avg_loss,
+                    # "Validation": avg_vloss
+                },
                 epoch_number,
             )
             writer.flush()
@@ -719,9 +580,19 @@ def main(cfg: DictConfig) -> None:
 
         if avg_vloss < best_vloss:  # This only considers GPU: 0, is that okay?
             best_vloss = avg_vloss
-
+            # if dist.rank == 0:
+            save_checkpoint(
+                to_absolute_path(best_model_path),
+                models=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                scaler=scaler,
+                epoch=str(best_vloss),  # hacky way of using epoch to store metadata
+            )
         if dist.rank == 0:
-            print(f"Device { dist.device}, Best val loss {best_vloss}")
+            print(
+                f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.perf_counter() - start_time:.3f}"
+            )
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
             save_checkpoint(

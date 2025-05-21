@@ -1,4 +1,4 @@
-Domain Decomposition, ``ShardTensor`` and ``FSDP`` Tutorial
+Domain Decomposition, ShardTensor and FSDP Tutorial
 ============================================================
 
 This tutorial demonstrates how to use PhysicsNeMo's ``ShardTensor`` functionality alongside PyTorch's ``FSDP``   (Fully Sharded Data Parallel) to train a simple convolutional neural network. We'll show how to:

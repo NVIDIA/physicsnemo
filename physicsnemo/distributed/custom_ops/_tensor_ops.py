@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import torch
 
 from physicsnemo.utils.version_check import check_module_requirements
@@ -27,7 +28,9 @@ from torch.distributed.tensor._op_schema import (  # noqa: E402
     OutputSharding,
     RuntimeSchemaInfo,
 )
-from torch.distributed.tensor._ops.utils import register_prop_rule  # noqa: E402
+from torch.distributed.tensor._ops.utils import (  # noqa: E402
+    register_prop_rule,
+)
 from torch.distributed.tensor.placement_types import (  # noqa: E402
     Partial,
     Replicate,

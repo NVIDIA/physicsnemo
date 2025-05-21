@@ -52,20 +52,6 @@ def run_shard_tensor_detach(rank, num_gpus, mesh_names, mesh_sizes, uneven, verb
         )
         shard_tensor_detached = shard_tensor.detach()
 
-        print(f"Original spec: {shard_tensor._spec} of type {type(shard_tensor._spec)}")
-        print(
-            f"Detached spec: {shard_tensor_detached._spec} of type {type(shard_tensor_detached._spec)}"
-        )
-
-        print(
-            f"Original sharding sizes: {shard_tensor._spec.sharding_sizes()}",
-            flush=True,
-        )
-        print(
-            f"Detached sharding sizes: {shard_tensor_detached._spec.sharding_sizes()}",
-            flush=True,
-        )
-
         # Detaching should not change the original data nor should it change the spec:
         assert shard_tensor._spec == shard_tensor_detached._spec
 
@@ -77,6 +63,7 @@ def run_shard_tensor_detach(rank, num_gpus, mesh_names, mesh_sizes, uneven, verb
 
 
 @pytest.mark.multigpu
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("data_parallel_size", [-1])
 @pytest.mark.parametrize("domain_H", [2, 4])
 @pytest.mark.parametrize("domain_W", [1, 2])
@@ -169,8 +156,8 @@ def run_shard_tensor_input_gradient_full_loss(
 
         # Now compute the sharded gradients with FULL TENSOR LOSS:
         sharded_loss = loss(shard_tensor)
-
         sharded_loss.backward()
+
         # Check if shard_tensor requires grad
         assert shard_tensor.requires_grad, "ShardTensor should require grad"
         assert shard_tensor.grad is not None
@@ -180,6 +167,7 @@ def run_shard_tensor_input_gradient_full_loss(
 
 
 @pytest.mark.multigpu
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("data_parallel_size", [-1])
 @pytest.mark.parametrize("domain_H", [2, 4])
 @pytest.mark.parametrize("domain_W", [1, 2])
@@ -245,9 +233,10 @@ def run_shard_tensor_input_gradient_local_loss(
         shard_tensor = shard_tensor_factory(
             mesh_names, mesh_sizes, requires_grad=True, uneven=uneven
         )
-        shard_tensor = (
-            shard_tensor.detach()
-        )  # Make it a leaf tensor by calling detach andrequires_grad_
+
+        # shard_tensor = (
+        #     shard_tensor.detach()
+        # )  # Make it a leaf tensor by calling detach andrequires_grad_
         shard_tensor = shard_tensor.detach().requires_grad_(
             True
         )  # Make it a leaf tensor by calling detach andrequires_grad_
@@ -289,6 +278,7 @@ def run_shard_tensor_input_gradient_local_loss(
 
 
 @pytest.mark.multigpu
+@pytest.mark.timeout(120)
 @pytest.mark.parametrize("data_parallel_size", [-1])
 @pytest.mark.parametrize("domain_H", [2, 4])
 @pytest.mark.parametrize("domain_W", [1, 2])
@@ -339,7 +329,4 @@ def test_shard_tensor_input_gradient_local_loss(
 
 
 if __name__ == "__main__":
-
-    # test_shard_tensor_detach(-1,2, 1, True)
-    test_shard_tensor_input_gradient_local_loss(-1, 2, 1, True)
-    test_shard_tensor_input_gradient_full_loss(-1, 2, 1, True)
+    test_shard_tensor_input_gradient_local_loss(-1, 2, 2, True)

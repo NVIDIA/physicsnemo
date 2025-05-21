@@ -520,6 +520,40 @@ class DistributedManager(object):
 
         return self._global_mesh
 
+    # Device mesh available in torch 2.4 or higher
+    @require_version("torch", "2.4")
+    def get_mesh_group(self, mesh: dist.DeviceMesh) -> dist.ProcessGroup:
+        """
+        Get the process group for a given mesh.
+
+        Creating a group is an expensive operation, so we cache the result manually.
+
+        We hash the mesh and use that as the key.
+        """
+
+        key = hash(mesh)
+
+        # Initialize a cache for the groups
+        if not hasattr(self, "_mesh_groups"):
+            self._mesh_groups = {}
+
+        if key in self._mesh_groups.keys():
+            return self._mesh_groups[key]
+        else:
+
+            if mesh.ndim != 1:
+                # We need to get all ranks in this mesh and spawn a group.
+                # The mesh.mesh object is a GPU tensor and using it will block.
+                ranks = mesh.mesh.cpu()
+                ranks = list(ranks.flatten().tolist())
+                group = dist.new_group(ranks=ranks, use_local_synchronization=True)
+                self._mesh_groups[key] = group
+                return group
+
+            else:
+                self._mesh_groups[key] = mesh.get_group()
+                return mesh.get_group()
+
     @staticmethod
     def setup(
         rank=0,

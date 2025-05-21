@@ -74,6 +74,14 @@ data: # Input directory for training and validation data
     max: [4.5 , 1.2  , 1.2]
 
 # ┌───────────────────────────────────────────┐
+# │          Domain Parallelism Settings      │
+# └───────────────────────────────────────────┘  
+domain_parallelism:
+  domain_size: 1
+  shard_grid: false
+  shard_points: false
+
+# ┌───────────────────────────────────────────┐
 # │          Model Parameters                 │
 # └───────────────────────────────────────────┘  
 model:
@@ -98,6 +106,7 @@ model:
   surf_loss_scaling: 5.0 # scale surface loss with this factor in combined mode
   vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
   geometry_encoding_type: both # geometry encoder type, sdf, stl, both
+  solution_calculation_mode: two-loop # one-loop is better for sharded, two-loop is lower memory but more overhead
   resampling_surface_mesh: # resampling of surface mesh before constructing kd tree
     resample: false #false or true
     points: 1_000_000 # number of points
