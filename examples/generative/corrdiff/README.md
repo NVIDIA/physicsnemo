@@ -413,13 +413,15 @@ model. During training, you can fine-tune various parameters. The most commonly 
 
 > **Note on Patch Size Selection**  
 > When implementing a patch-based training, choosing the right patch size is critical for model performance. The patch dimensions are controlled by `patch_shape_x` and `patch_shape_y` in your configuration file. To determine optimal patch sizes:
-> 1. Calculate the auto-correlation function of your data using the provided utilities in [`inference/power_spectra.py`](./inference/power_spectra.py):
+> 1. Train a regression model on the full domain.
+> 2. Compute the residuals `x_res = x_data - regression_model(x_data)` on multiple samples, where `x_data` are ground truth samples.
+> 3. Calculate the auto-correlation function of your residuals using the provided utilities in [`inference/power_spectra.py`](./inference/power_spectra.py):
 >    - `average_power_spectrum()`
 >    - `power_spectra_to_acf()`
-> 2. Set patch dimensions to match or exceed the distance at which auto-correlation approaches zero
-> 3. This ensures each patch captures the full spatial correlation structure of your data
+> 4. Set patch dimensions to match or exceed the distance at which auto-correlation approaches zero.
+> 5. This ensures each patch captures the full spatial correlation structure of your data.
 >
-> This analysis helps balance computational efficiency with the preservation of important physical relationships in your data.
+> This analysis helps balance computational efficiency with the preservation of local physical relationships in your data.
 
 ### Generation configuration
 
