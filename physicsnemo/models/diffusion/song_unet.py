@@ -698,10 +698,10 @@ class SongUNetPosEmbd(SongUNet):
         x,
         noise_labels,
         class_labels,
-        lead_time_label=None,
         global_index: Optional[torch.Tensor] = None,
         embedding_selector: Optional[Callable] = None,
         augment_labels=None,
+        lead_time_label=None,
     ):
         with nvtx.annotate(
             message="SongUNetPosEmbd", color="blue"
@@ -1222,6 +1222,26 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
             lead_time_channels,
             lead_time_steps,
             prob_channels,
+        )
+
+    def forward(
+        self,
+        x,
+        noise_labels,
+        class_labels,
+        lead_time_label=None,
+        global_index: Optional[torch.Tensor] = None,
+        embedding_selector: Optional[Callable] = None,
+        augment_labels=None,
+    ):
+        return super().forward(
+            x=x,
+            noise_labels=noise_labels,
+            class_labels=class_labels,
+            global_index=global_index,
+            embedding_selector=embedding_selector,
+            augment_labels=augment_labels,
+            lead_time_label=lead_time_label,
         )
 
     # Nothing else is re-implemented, because everything is already in the parent SongUNetPosEmb
