@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Configuration file for HydroGraphNet training.
+# This file is used by Hydra to configure the training run.
+
+hydra:
+  job:
+    chdir: True  # Change directory to the job's working directory.
+  run:
+    dir: ./outputs_phy/  # Directory to save outputs.
+
+# Data configuration: paths for training and testing datasets.
+data_dir: ./data
+test_dir: ./data/Test
+
+# Training configuration.
+batch_size: 1
+epochs: 100
+num_training_samples: 400
+num_training_time_steps: 300
+lr: 0.0001
+lr_decay_rate: 0.9999979
+weight_decay: 0.0001
+num_input_features: 16    # Number of node input features.
+num_output_features: 2    # Number of output features (e.g., depth and volume differences).
+num_edge_features: 3      # Number of edge features.
+
+# Noise settings.
+noise_type: "none"        # Options: "none", "pushforward", "only_last", "correlated", etc.
+n_time_steps: 2           # Number of time steps in the sliding window.
+
+# Physics loss settings.
+use_physics_loss: true
+delta_t: 1200.0
+physics_loss_weight: 1.0
+
+# Performance and optimization configurations.
+use_apex: True            # Use NVIDIA Apex for mixed precision if available.
+amp: False                # Automatic mixed precision flag.
+jit: False                # Use TorchScript JIT compilation.
+num_dataloader_workers: 4
+do_concat_trick: False
+num_processor_checkpoint_segments: 0
+recompute_activation: False
+
+# WandB logging configuration.
+wandb_mode: disabled
+watch_model: False
+
+# Checkpoint path.
+ckpt_path: "./checkpoints_phy"
+
+# Test and visualization configuration.
+num_test_samples: 10
+num_test_time_steps: 30
