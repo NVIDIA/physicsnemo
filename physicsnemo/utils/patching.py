@@ -19,7 +19,7 @@ import math
 import random
 import warnings
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 from einops import rearrange
@@ -133,16 +133,14 @@ class BasePatching2D(ABC):
         Returns
         -------
         Tensor
-            A tensor of shape (batch_size * self.patch_num, 2, patch_shape_y,
+            A tensor of shape (self.patch_num, 2, patch_shape_y,
             patch_shape_x). `global_index[:, 0, :, :]` contains the
             y-coordinate (height), and `global_index[:, 1, :, :]` contains the
             x-coordinate (width).
         """
         Ny = torch.arange(self.img_shape[0], device=device).int()
         Nx = torch.arange(self.img_shape[1], device=device).int()
-        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0)[
-            None,
-        ].expand(batch_size, -1, -1, -1)
+        grid = torch.stack(torch.meshgrid(Ny, Nx, indexing="ij"), dim=0).unsqueeze(0)
         global_index = self.apply(grid).long()
         return global_index
 
@@ -249,6 +247,20 @@ class RandomPatching2D(BasePatching2D):
             for _ in range(self.patch_num)
         ]
         return
+
+    def get_patch_indices(self) -> List[Tuple[int, int]]:
+        """
+        Get the current list of patch starting indices.
+
+        These are the upper-left coordinates of each extracted patch
+        from the full image.
+
+        Returns
+        -------
+        List[Tuple[int, int]]
+            A list of (row, column) tuples representing patch starting positions.
+        """
+        return self.patch_indices
 
     def apply(
         self,
