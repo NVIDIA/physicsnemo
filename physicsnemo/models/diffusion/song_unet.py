@@ -21,7 +21,7 @@ Diffusion-Based Generative Models".
 
 import contextlib
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 import nvtx
@@ -764,7 +764,7 @@ class SongUNetPosEmbd(SongUNet):
     def positional_embedding_indexing(
         self,
         x: torch.Tensor,
-        global_index: List[Tuple[int, int]] = None,
+        global_index: Optional[torch.Tensor] = None,
         lead_time_label=None,
     ) -> torch.Tensor:
         """Select positional embeddings using global indices.
@@ -783,7 +783,7 @@ class SongUNetPosEmbd(SongUNet):
         global_index : Optional[torch.Tensor]
             Optional tensor of indices for selecting embeddings. These should
             correspond to the spatial indices of the batch elements in the
-            input tensor x. When provided, should have shape (B, 2, H, W) where
+            input tensor x. When provided, should have shape (P, 2, H, W) where
             the second dimension contains y,x coordinates (indices of the
             positional embedding grid).
 
