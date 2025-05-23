@@ -449,12 +449,16 @@ class NNBasisFunctions(nn.Module):
         self.fc1 = nn.Linear(input_features_calculated, base_layer)
         self.fc2 = nn.Linear(base_layer, int(base_layer))
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
+        self.bn1 = nn.BatchNorm1d(base_layer)
+        self.bn2 = nn.BatchNorm1d(int(base_layer))
+        self.bn3 = nn.BatchNorm1d(int(base_layer))
 
         self.activation = F.relu
 
-        self.register_buffer(
-            "freqs", torch.exp(torch.linspace(0, math.pi, self.num_modes))
-        )
+        if self.fourier_features:
+            self.register_buffer(
+                "freqs", torch.exp(torch.linspace(0, math.pi, self.num_modes))
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -526,7 +530,7 @@ class ParameterModel(nn.Module):
             Tensor containing encoded parameter representation
         """
         if self.fourier_features:
-            params = torch.cat((x, fourier_encode(x, self.num_modes)), axis=-1)
+            params = torch.cat((x, fourier_encode_vectorized(x, self.num_modes)), axis=-1)
         else:
             params = x
         params = self.activation(self.fc1(params))
@@ -571,6 +575,10 @@ class AggregationModel(nn.Module):
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
         self.fc4 = nn.Linear(int(base_layer), int(base_layer))
         self.fc5 = nn.Linear(int(base_layer), self.output_features)
+        self.bn1 = nn.BatchNorm1d(base_layer)
+        self.bn2 = nn.BatchNorm1d(int(base_layer))
+        self.bn3 = nn.BatchNorm1d(int(base_layer))
+        self.bn4 = nn.BatchNorm1d(int(base_layer))
 
         self.activation = F.relu
 
