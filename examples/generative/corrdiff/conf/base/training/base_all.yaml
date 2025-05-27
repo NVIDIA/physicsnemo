@@ -30,6 +30,8 @@ hp:
     # LR decay rate
     lr_rampup: 0
     # Rampup for learning rate, in number of samples
+    lr_decay_rate: 5e5
+    # Learning rate decay threshold in number of samples, applied every lr_decay_rate samples.
 
 # Performance
 perf:

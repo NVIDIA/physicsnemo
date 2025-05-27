@@ -599,7 +599,8 @@ def main(cfg: DictConfig) -> None:
                                 )
                             if cur_nimg >= lr_rampup:
                                 g["lr"] *= cfg.training.hp.lr_decay ** (
-                                    (cur_nimg - lr_rampup) // 5e6
+                                    (cur_nimg - lr_rampup)
+                                    // cfg.training.hp.lr_decay_rate
                                 )
                             current_lr = g["lr"]
                             if dist.rank == 0:
