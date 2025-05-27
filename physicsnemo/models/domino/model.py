@@ -500,7 +500,7 @@ class ParameterModel(nn.Module):
         """
         super(ParameterModel, self).__init__()
         self.fourier_features = model_parameters.fourier_features
-        self.num_modes = model_parameters.num_modes            
+        self.num_modes = model_parameters.num_modes
 
         if self.fourier_features:
             input_features_calculated = (
