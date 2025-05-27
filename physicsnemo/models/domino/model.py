@@ -500,11 +500,14 @@ class ParameterModel(nn.Module):
         """
         super(ParameterModel, self).__init__()
         self.fourier_features = model_parameters.fourier_features
-        self.num_modes = model_parameters.num_modes
+        self.num_modes = model_parameters.num_modes            
 
         if self.fourier_features:
             input_features_calculated = (
                 input_features + input_features * self.num_modes * 2
+            )
+            self.register_buffer(
+                "freqs", torch.exp(torch.linspace(0, math.pi, self.num_modes))
             )
         else:
             input_features_calculated = input_features
@@ -530,7 +533,7 @@ class ParameterModel(nn.Module):
             Tensor containing encoded parameter representation
         """
         if self.fourier_features:
-            params = torch.cat((x, fourier_encode_vectorized(x, self.num_modes)), axis=-1)
+            params = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
         else:
             params = x
         params = self.activation(self.fc1(params))
