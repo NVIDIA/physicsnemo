@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+name: data_loader_hrrr_era5.HrrrEra5Dataset # Dataset class module and name, in any module in `datasets` folder
+
 # Main dataset
 location: 'data' # Path to the dataset
 conus_dataset_name: 'hrrr_v3' # Version name for the dataset
@@ -33,38 +35,104 @@ valid_years: [2022] # Years to use for validation
 invariants: ["lsm", "orog"] # Invariant quantitites to include
 input_channels: 'all' #'all' or list of channels to condition on
 diffusion_channels: "all" #'all' or list of channels to condition on
-exclude_channels: # Dataset channels to exclude from inputs/predicitons
-  - u35
-  - u40
-  - v35
-  - v40
-  - t35
-  - t40
-  - q35
-  - q40
-  - w1
-  - w2
-  - w3
-  - w4
-  - w5
-  - w6
-  - w7
-  - w8
-  - w9
-  - w10
-  - w11
-  - w13
-  - w15
-  - w20
-  - w25
-  - w30
-  - w35
-  - w40
-  - p25
-  - p30
-  - p35
-  - p40
-  - z35
-  - z40
-  - tcwv
-  - vil
+kept_era5_channels: "all"
+kept_hrrr_channels:
+ - u10m
+ - v10m
+ - t2m
+ - msl
+ - u1
+ - u2
+ - u3
+ - u4
+ - u5
+ - u6
+ - u7
+ - u8
+ - u9
+ - u10
+ - u11
+ - u13
+ - u15
+ - u20
+ - u25
+ - u30
+ - v1
+ - v2
+ - v3
+ - v4
+ - v5
+ - v6
+ - v7
+ - v8
+ - v9
+ - v10
+ - v11
+ - v13
+ - v15
+ - v20
+ - v25
+ - v30
+ - t1
+ - t2
+ - t3
+ - t4
+ - t5
+ - t6
+ - t7
+ - t8
+ - t9
+ - t10
+ - t11
+ - t13
+ - t15
+ - t20
+ - t25
+ - t30
+ - q1
+ - q2
+ - q3
+ - q4
+ - q5
+ - q6
+ - q7
+ - q8
+ - q9
+ - q10
+ - q11
+ - q13
+ - q15
+ - q20
+ - q25
+ - q30
+ - z1
+ - z2
+ - z3
+ - z4
+ - z5
+ - z6
+ - z7
+ - z8
+ - z9
+ - z10
+ - z11
+ - z13
+ - z15
+ - z20
+ - z25
+ - z30
+ - p1
+ - p2
+ - p3
+ - p4
+ - p5
+ - p6
+ - p7
+ - p8
+ - p9
+ - p10
+ - p11
+ - p13
+ - p15
+ - p20
+ - refc

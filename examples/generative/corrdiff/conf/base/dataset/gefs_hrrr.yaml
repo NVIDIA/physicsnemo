@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Dataset type. Do not modify.
+type: gefs_hrrr
+# Path to .nc data file. Must be overridden.
+data_path: ???
+# Path to json stats file. Must be overriden.
+stats_path: ???
+# Names of output channels.
+output_variables: ["u10m", "v10m", "t2m", "precip", "cat_snow", "cat_ice", "cat_freez", "cat_rain", "cat_none"]
+# Names of probability variables.
+prob_variables: ["cat_snow", "cat_ice", "cat_freez", "cat_rain"]
+# Names of input surface variables.
+input_surface_variables: ["u10m", "v10m", "t2m", "q2m", "sp", "msl", "precipitable_water"]
+# Names of input isobaric variables.
+input_isobaric_variables: ['u1000', 'u925', 'u850', 'u700', 'u500', 'u250', 'v1000', 'v925', 'v850', 'v700', 'v500', 'v250', 'z1000', 'z925', 'z850', 'z700', 'z500', 'z200', 't1000', 't925', 't850', 't700', 't500', 't100',  'r1000', 'r925', 'r850', 'r700', 'r500', 'r100']
+# Factor to downscale the image.
+ds_factor: 4
+train: False
+# Years to train the model.
+train_years: [2020, 2021, 2022, 2023]
+# Years to validate the model.
+valid_years: [2024]
+# Whether to normalize the data.
+normalize: True
+# Whether to shard the data.
+shard: False
+overfit: False
+# Whether to use all the data.
+use_all: False
+sample_shape: [-1, -1]
+hrrr_window: [[1,1057], [4,1796]] # need dims to be divisible by 16

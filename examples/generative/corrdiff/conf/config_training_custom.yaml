@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+hydra:
+    job:
+          chdir: false
+          name: <my_job_name> # Change `my_job_name`
+    run:
+          dir: ./<my_output_dir>/${hydra:job.name} # Change `my_output_dir`
+    searchpath:
+          - pkg://conf/base # Do not modify
+
+# Base parameters for dataset, model, training, and validation
+defaults:
+
+    - dataset: custom
+    # The dataset type for training.
+    # Accepted values:
+    #   `gefs_hrrr`: full GEFS-HRRR dataset for continental US.
+    #   `hrrr_mini`: smaller HRRR dataset (continental US), for fast experiments.
+    #   `cwb`: full CWB dataset for Taiwan.
+    #   `custom`: user-defined dataset. Parameters need to be specified below.
+
+    - model: diffusion
+    # The model type.
+    # Accepted values:
+    #     `regression`: a regression UNet for deterministic predictions
+    #     `lt_aware_ce_regression`: similar to `regression` but with lead time
+    #       conditioning
+    #     `diffusion`: a diffusion UNet for residual predictions
+    #     `patched_diffusion`: a more memory-efficient diffusion model
+    #     `lt_aware_patched_diffusion`: similar to `patched_diffusion` but
+    #       with lead time conditioning
+
+    - model_size: normal
+    # The model size configuration.
+    # Accepted values:
+    #     `normal`: normal model size
+    #     `mini`: smaller model size for fast experiments
+
+    - training: ${model}
+    # The base training parameters. Determined by the model type.
+
+
+# Dataset parameters. Used for `custom` dataset type.
+# Modify or add below parameters that should be passed as argument to the
+# user-defined dataset class.
+dataset:
+    type: <path/to/dataset.py::DatasetClass>
+    # Path to the user-defined dataset class. The user-defined dataset class is
+    # automatically loaded from the path. The user-defined class "DatasetClass"
+    # must be defined in the path "path/to/dataset.py".
+    data_path: <path_to_data_file>
+    # Path to .nc data file
+    stats_path: <path_to_stats_file>
+    # Path to json stats file
+    input_variables: []
+    # Names or indices of input channels
+    output_variables: []
+    # Names or indices of output channels
+    invariant_variables: null
+    # Names or indices of invariant channels. Optional.
+
+# Training parameters
+training:
+    hp:
+        training_duration: 10000000
+        # Training duration based on the number of processed samples
+        total_batch_size: 256
+        # Total batch size
+        batch_size_per_gpu: "auto"
+        # Batch size per GPU. Set to "auto" to automatically determine the batch
+        # size based on the number of GPUs.
+        patch_shape_x: 448
+        patch_shape_y: 448
+        # Patch size. Only used for `model: patched_diffusion` or `model:
+        # lt_aware_patched_diffusion`. For custom dataset, this should be
+        # determined based on an autocorrelation plot.
+        patch_num: 10
+        # Number of patches from a single sample. Total number of patches is
+        # patch_num * total_batch_size. Only used for `model: patched_diffusion`
+        # or `model: lt_aware_patched_diffusion`.
+        lr: 0.0002
+        # Learning rate
+        lr_rampup: 0
+        # Rampup for learning rate, in number of samples
+    io:
+        regression_checkpoint_path: <path/to/checkpoint.mdlus>
+        # Path to load the regression checkpoint
+
+# Parameters for wandb logging
+wandb:
+    mode: offline
+    # Configure whether to use wandb: "offline", "online", "disabled"
+    results_dir: "./wandb"
+    # Directory to store wandb results
+    watch_model: false
+    # If true, wandb will track model parameters and gradients

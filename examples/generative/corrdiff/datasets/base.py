@@ -32,7 +32,11 @@ class ChannelMetadata:
 
 
 class DownscalingDataset(torch.utils.data.Dataset, ABC):
-    """An abstract class that defines the interface for downscaling datasets."""
+    """Abstract class for dataset with downscaling paired data
+
+    A DownscalingDataset has high-resolution output data (target) paired with
+    low-resolution input data.
+    """
 
     @abstractmethod
     def longitude(self) -> np.ndarray:

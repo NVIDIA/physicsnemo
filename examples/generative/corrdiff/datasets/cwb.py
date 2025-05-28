@@ -97,12 +97,11 @@ class _ZarrDataset(DownscalingDataset):
         idx_to_load = self._get_valid_time_index(idx)
         target = self.group["cwb"][idx_to_load]
         input = self.group["era5"][idx_to_load]
-        label = 0
 
         target = self.normalize_output(target[None, ...])[0]
         input = self.normalize_input(input[None, ...])[0]
 
-        return target, input, label
+        return target, input
 
     def longitude(self):
         """The longitude. useful for plotting"""
@@ -396,7 +395,7 @@ class ZarrDataset(DownscalingDataset):
         return self._dataset.info()
 
     def __getitem__(self, idx):
-        (target, input, _) = self._dataset[idx]
+        (target, input) = self._dataset[idx]
         # crop and downsamples
         # rolling
         if self.train and self.roll:
@@ -437,7 +436,7 @@ class ZarrDataset(DownscalingDataset):
             target, "tar", *reshape_args, normalize=False
         )  # 3x720x1440
 
-        return target, input, idx
+        return target, input
 
     def input_channels(self):
         """Metadata for the input channels. A list of dictionaries, one for each channel"""

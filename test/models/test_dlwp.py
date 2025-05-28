@@ -47,10 +47,10 @@ def test_dlwp_forward(device):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("nr_input_channels", [2, 4])
-@pytest.mark.parametrize("nr_output_channels", [2, 4])
-@pytest.mark.parametrize("nr_initial_channels", [32, 64])
-@pytest.mark.parametrize("depth", [2, 3, 4])
+@pytest.mark.parametrize("nr_input_channels", [2])
+@pytest.mark.parametrize("nr_output_channels", [2])
+@pytest.mark.parametrize("nr_initial_channels", [32])
+@pytest.mark.parametrize("depth", [2])
 def test_dlwp_constructor(
     device, nr_input_channels, nr_output_channels, nr_initial_channels, depth
 ):

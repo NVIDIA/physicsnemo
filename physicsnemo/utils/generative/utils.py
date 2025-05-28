@@ -29,7 +29,7 @@ import shutil
 import sys
 import types
 import warnings
-from typing import Any, List, Tuple, Union
+from typing import Any, Iterator, List, Tuple, Union
 
 import cftime
 import numpy as np
@@ -553,14 +553,37 @@ def profiled_function(fn):  # pragma: no cover
 # indefinitely, shuffling items as it goes.
 
 
-class InfiniteSampler(torch.utils.data.Sampler):  # pragma: no cover
-    """
-    Sampler for torch.utils.data.DataLoader that loops over the dataset
-    indefinitely, shuffling items as it goes.
+class InfiniteSampler(torch.utils.data.Sampler[int]):  # pragma: no cover
+    """Sampler for torch.utils.data.DataLoader that loops over the dataset indefinitely.
+
+    This sampler yields indices indefinitely, optionally shuffling items as it goes.
+    It can also perform distributed sampling when rank and num_replicas are specified.
+
+    Parameters
+    ----------
+    dataset : torch.utils.data.Dataset
+        The dataset to sample from
+    rank : int, default=0
+        The rank of the current process within num_replicas processes
+    num_replicas : int, default=1
+        The number of processes participating in distributed sampling
+    shuffle : bool, default=True
+        Whether to shuffle the indices
+    seed : int, default=0
+        Random seed for reproducibility when shuffling
+    window_size : float, default=0.5
+        Fraction of dataset to use as window for shuffling. Must be between 0 and 1.
+        A larger window means more thorough shuffling but slower iteration.
     """
 
     def __init__(
-        self, dataset, rank=0, num_replicas=1, shuffle=True, seed=0, window_size=0.5
+        self,
+        dataset: torch.utils.data.Dataset,
+        rank: int = 0,
+        num_replicas: int = 1,
+        shuffle: bool = True,
+        seed: int = 0,
+        window_size: float = 0.5,
     ):
         if not len(dataset) > 0:
             raise ValueError("Dataset must contain at least one item")
@@ -578,7 +601,7 @@ class InfiniteSampler(torch.utils.data.Sampler):  # pragma: no cover
         self.seed = seed
         self.window_size = window_size
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[int]:
         order = np.arange(len(self.dataset))
         rnd = None
         window = 0

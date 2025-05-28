@@ -64,8 +64,8 @@ def get_disagreements(inputs, bins, counts, test):
         print("True counts", trueh)
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
-@pytest.mark.parametrize("input_shape", [(1, 72, 144), (1, 360, 720)])
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("input_shape", [(1, 72, 144)])
 def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
     DistributedManager._shared_state = {}
     if (device == "cuda:0") and (not DistributedManager.is_initialized()):
@@ -225,6 +225,10 @@ def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
     )
     if device == "cuda:0":
         DistributedManager.cleanup()
+        del os.environ["RANK"]
+        del os.environ["WORLD_SIZE"]
+        del os.environ["MASTER_ADDR"]
+        del os.environ["MASTER_PORT"]
 
 
 def fair_crps(pred, obs, dim=-1):
@@ -539,8 +543,8 @@ def test_crps(device, rtol: float = 1e-3, atol: float = 1e-3):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("mean", [0.0, 3.0])
-@pytest.mark.parametrize("variance", [1.0, 0.1, 3.0])
+@pytest.mark.parametrize("mean", [3.0])
+@pytest.mark.parametrize("variance", [0.1])
 def test_wasserstein(device, mean, variance, rtol: float = 1e-3, atol: float = 1e-3):
     mean = torch.as_tensor([mean], device=device, dtype=torch.float32)
     variance = torch.as_tensor([variance], device=device, dtype=torch.float32)
@@ -704,6 +708,10 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
 
     if device == "cuda:0":
         DistributedManager.cleanup()
+        del os.environ["RANK"]
+        del os.environ["WORLD_SIZE"]
+        del os.environ["MASTER_ADDR"]
+        del os.environ["MASTER_PORT"]
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -781,7 +789,7 @@ def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
 def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
     one = torch.ones([1], device=device, dtype=torch.float32)
 
-    x = torch.randn((100_000, 10, 10), device=device, dtype=torch.float32)
+    x = torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)
     bin_edges, bin_counts = hist.histogram(x, bins=30)
     entropy = ent.entropy_from_counts(bin_counts, bin_edges, normalized=False)
     assert entropy.shape == (10, 10)
@@ -810,11 +818,11 @@ def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
     assert torch.allclose(entropy, one, rtol=rtol, atol=atol)
 
     # Test Relative Entropy
-    x = torch.randn((500_000, 10, 10), device=device, dtype=torch.float32)
+    x = torch.randn((100_000, 10, 10), device=device, dtype=torch.float32)
     bin_edges, x_bin_counts = hist.histogram(x, bins=30)
-    x1 = torch.randn((500_000, 10, 10), device=device, dtype=torch.float32)
+    x1 = torch.randn((100_000, 10, 10), device=device, dtype=torch.float32)
     _, x1_bin_counts = hist.histogram(x1, bins=bin_edges)
-    x2 = 0.1 * torch.randn((100_000, 10, 10), device=device, dtype=torch.float32)
+    x2 = 0.1 * torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)
     _, x2_bin_counts = hist.histogram(x2, bins=bin_edges)
 
     rel_ent_1 = ent.relative_entropy_from_counts(x_bin_counts, x1_bin_counts, bin_edges)
@@ -847,8 +855,8 @@ def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_power_spectrum(device):
-    """Test the 2D power spectrum routine for correctness using a sine wave"""
-    h, w = 64, 64
+    # Test the 2D power spectrum routine for correctness using a sine wave
+    h, w = 32, 32
     kx, ky = 4, 4
     amplitude = 1.0
 

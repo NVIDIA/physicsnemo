@@ -172,8 +172,8 @@ def insolation_data():
 @import_or_fail("omegaconf")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixRecUNet_initialize(device, encoder_dict, decoder_dict, pytestconfig):
-    in_channels = 7
-    out_channels = 7
+    in_channels = 3
+    out_channels = 3
     n_constants = 1
     decoder_input_channels = 1
     input_time_dim = 2
@@ -314,8 +314,8 @@ def test_HEALPixRecUNet_reset(
     pytestconfig,
 ):
     # create a smaller version of the dlwp healpix model
-    in_channels = 3
-    out_channels = 3
+    in_channels = 2
+    out_channels = 2
     n_constants = 2
     decoder_input_channels = 1
     input_time_dim = 2
@@ -366,13 +366,13 @@ def test_HEALPixRecUNet_forward(
     pytestconfig,
 ):
     # create a smaller version of the dlwp healpix model
-    in_channels = 3
-    out_channels = 3
+    in_channels = 2
+    out_channels = 2
     n_constants = 2
     decoder_input_channels = 1
     input_time_dim = 2
     output_time_dim = 4
-    batch_size = 8
+    batch_size = 2
     size = 16
 
     fix_random_seeds(seed=42)

@@ -19,7 +19,7 @@ flexibly select different meteorological variables for their training dataset.
 ## How to Use
 
 1. Make sure you have the CDS API key setup following
-    [these instructions](https://cds.climate.copernicus.eu/api-how-to).
+    [these instructions](https://cds.climate.copernicus.eu/how-to-api).
 2. Run the main script, `python start_mirror.py`. This will perform all actions to
     generate HDF5 files needed for training. First it will download and save all
     variables as Zarr arrays. This may take a substantial amount of time. If the process

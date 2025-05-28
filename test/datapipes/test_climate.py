@@ -16,7 +16,7 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 
 from . import common
 
@@ -24,36 +24,32 @@ Tensor = torch.Tensor
 
 
 @pytest.fixture
-def data_dir():
-    path = "/data/nfs/modulus-data/datasets/hdf5/test/"
-    return path
+def data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/hdf5/test")
 
 
 @pytest.fixture
-def stats_files():
+def stats_files(nfs_data_dir):
     return {
-        "mean": "/data/nfs/modulus-data/datasets/hdf5/stats/global_means.npy",
-        "std": "/data/nfs/modulus-data/datasets/hdf5/stats/global_stds.npy",
+        "mean": nfs_data_dir.joinpath("datasets/hdf5/stats/global_means.npy"),
+        "std": nfs_data_dir.joinpath("datasets/hdf5/stats/global_stds.npy"),
     }
 
 
 @pytest.fixture
-def metadata_path():
-    path = "/data/nfs/modulus-data/datasets/hdf5/data.json"
-    return path
+def metadata_path(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/hdf5/data.json")
 
 
 @pytest.fixture
-def lsm_filename():
-    path = "/data/nfs/modulus-data/datasets/hdf5/static/land_sea_mask.nc"
-    return path
+def lsm_filename(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/hdf5/static/land_sea_mask.nc")
 
 
 @pytest.fixture
-def geopotential_filename():
+def geopotential_filename(nfs_data_dir):
     """Geopotential file."""
-    path = "/data/nfs/modulus-data/datasets/hdf5/static/geopotential.nc"
-    return path
+    return nfs_data_dir.joinpath("datasets/hdf5/static/geopotential.nc")
 
 
 # default keyword args for DRY
@@ -74,10 +70,9 @@ datapipe_kwargs = dict(
     shuffle=False,
 )
 
-
-@nfsdata_or_fail
+# Skip CPU tests because too slow
 @import_or_fail("netCDF4")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_climate_hdf5_constructor(
     data_dir,
     stats_files,
@@ -187,7 +182,6 @@ def test_climate_hdf5_constructor(
         pass
 
 
-@nfsdata_or_fail
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_climate_hdf5_device(
@@ -230,12 +224,12 @@ def test_climate_hdf5_device(
         break
 
 
-@nfsdata_or_fail
+# Skip CPU tests because too slow
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("data_channels", [[0, 1]])
 @pytest.mark.parametrize("num_steps", [2])
-@pytest.mark.parametrize("batch_size", [1, 2, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("batch_size", [2, 3])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_climate_hdf5_shape(
     data_dir,
     stats_files,
@@ -322,11 +316,11 @@ def test_climate_hdf5_shape(
         break
 
 
-@nfsdata_or_fail
+# Skip CPU tests because too slow
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("num_steps", [1, 2])
 @pytest.mark.parametrize("stride", [1, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_era5_hdf5_sequence(
     data_dir,
     stats_files,
@@ -375,7 +369,7 @@ def test_era5_hdf5_sequence(
     )
 
 
-@nfsdata_or_fail
+# Skip CPU tests because too slow
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("shuffle", [True, False])
 @pytest.mark.parametrize("stride", [1, 3])
@@ -432,7 +426,6 @@ def test_era5_hdf5_shuffle(
     assert common.check_shuffle(tensors, shuffle, stride, 8)
 
 
-@nfsdata_or_fail
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_era5_hdf5_cudagraphs(

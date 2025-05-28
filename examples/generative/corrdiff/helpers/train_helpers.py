@@ -17,6 +17,7 @@
 import torch
 import numpy as np
 from omegaconf import ListConfig
+import warnings
 
 
 def set_patch_shape(img_shape, patch_shape):
@@ -26,12 +27,21 @@ def set_patch_shape(img_shape, patch_shape):
         patch_shape_x = img_shape_x
     if (patch_shape_y is None) or (patch_shape_y > img_shape_y):
         patch_shape_y = img_shape_y
-    if patch_shape_x != img_shape_x or patch_shape_y != img_shape_y:
+    if patch_shape_x == img_shape_x and patch_shape_y == img_shape_y:
+        use_patching = False
+    else:
+        use_patching = True
+    if use_patching:
         if patch_shape_x != patch_shape_y:
+            warnings.warn(
+                f"You are using rectangular patches "
+                f"of shape {(patch_shape_y, patch_shape_x)}, "
+                f"which are an experimental feature."
+            )
             raise NotImplementedError("Rectangular patch not supported yet")
         if patch_shape_x % 32 != 0 or patch_shape_y % 32 != 0:
             raise ValueError("Patch shape needs to be a multiple of 32")
-    return (img_shape_y, img_shape_x), (patch_shape_y, patch_shape_x)
+    return use_patching, (img_shape_y, img_shape_x), (patch_shape_y, patch_shape_x)
 
 
 def set_seed(rank):

@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterable
+
 import torch
 from physicsnemo.models import Module
 from physicsnemo.models.diffusion import EDMPrecond, StormCastUNet
@@ -25,9 +27,9 @@ def get_preconditioned_architecture(
     target_channels: int,
     conditional_channels: int = 0,
     spatial_embedding: bool = True,
-    hrrr_resolution: tuple = (512, 640),
+    img_resolution: tuple = (512, 640),
     attn_resolutions: list = [],
-):
+) -> EDMPrecond | StormCastUNet:
     """
 
     Args:
@@ -35,14 +37,14 @@ def get_preconditioned_architecture(
         target_channels: The number of channels in the target
         conditional_channels: The number of channels in the conditioning
         spatial_embedding: whether or not to use the additive spatial embedding in the U-Net
-        hrrr_resolution: resolution of HRRR data (U-Net inputs/outputs)
+        img_resolution: resolution of the data (U-Net inputs/outputs)
         attn_resolutions: resolution of internal U-Net stages to use self-attention
     Returns:
         EDMPrecond or StormCastUNet: a wrapped torch module net(x+n, sigma, condition, class_labels) -> x
     """
     if name == "diffusion":
         return EDMPrecond(
-            img_resolution=hrrr_resolution,
+            img_resolution=img_resolution,
             img_channels=target_channels + conditional_channels,
             img_out_channels=target_channels,
             model_type="SongUNet",
@@ -53,7 +55,7 @@ def get_preconditioned_architecture(
 
     elif name == "regression":
         return StormCastUNet(
-            img_resolution=hrrr_resolution,
+            img_resolution=img_resolution,
             img_in_channels=conditional_channels,
             img_out_channels=target_channels,
             model_type="SongUNet",
@@ -64,30 +66,82 @@ def get_preconditioned_architecture(
         )
 
 
-def diffusion_model_forward(
-    model, hrrr_0, diffusion_channel_indices, invariant_tensor, sampler_args={}
-):
+def build_network_condition_and_target(
+    background: torch.Tensor,
+    state: tuple[torch.Tensor, torch.Tensor],
+    invariant_tensor: torch.Tensor | None,
+    regression_net: Module | None = None,
+    condition_list: Iterable[str] = ("state", "background"),
+    regression_condition_list: Iterable[str] = ("state", "background"),
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Build the condition and target tensors for the network.
+
+    Args:
+        background: background tensor
+        state: tuple of previous state and target state
+        invariant_tensor: invariant tensor or None if no invariant is used
+        regression_net: regression model, can be None if 'regression' is not in condition_list
+        condition_list: list of conditions to include, may include 'state', 'background', 'regression' and 'invariant'
+        regression_condition_list: list of conditions for the regression network, may include 'state', 'background', and 'invariant'
+            This is only used if regression_net is set.
+    Returns:
+        A tuple of tensors: (
+            condition: model condition concatenated from conditions specified in condition_list,
+            target: training target,
+            regression: regression model output
+        ). The regression model output will be None if 'regression' is not in condition_list.
+    """
+    if ("regression" in condition_list) and (regression_net is None):
+        raise ValueError(
+            "regression_net must be provided if 'regression' is in condition_list"
+        )
+    target = state[1]
+
+    condition_tensors = {
+        "state": state[0],
+        "background": background,
+        "invariant": invariant_tensor,
+        "regression": None,
+    }
+
+    with torch.no_grad():
+        if "regression" in condition_list:
+            # Inference regression model
+            condition_tensors["regression"] = regression_model_forward(
+                regression_net,
+                state[0],
+                background,
+                invariant_tensor,
+                condition_list=regression_condition_list,
+            )
+            target = target - condition_tensors["regression"]
+
+        condition = [
+            y for c in condition_list if (y := condition_tensors[c]) is not None
+        ]
+        condition = torch.cat(condition, dim=1)
+
+    return (condition, target, condition_tensors["regression"])
+
+
+def diffusion_model_forward(model, condition, shape, sampler_args={}):
     """Helper function to run diffusion model sampling"""
 
-    b, c, h, w = hrrr_0[:, diffusion_channel_indices, :, :].shape
+    latents = torch.randn(*shape, device=condition.device, dtype=condition.dtype)
 
-    latents = torch.randn(b, c, h, w, device=hrrr_0.device, dtype=hrrr_0.dtype)
-
-    if b > 1 and invariant_tensor.shape[0] != b:
-        invariant_tensor = invariant_tensor.expand(b, -1, -1, -1)
-    condition = torch.cat((hrrr_0, invariant_tensor), dim=1)
-
-    output_images = deterministic_sampler(
+    return deterministic_sampler(
         model, latents=latents, img_lr=condition, **sampler_args
     )
 
-    return output_images
 
-
-def regression_model_forward(model, hrrr, era5, invariant_tensor):
+def regression_model_forward(
+    model, state, background, invariant_tensor, condition_list=("state", "background")
+):
     """Helper function to run regression model forward pass in inference"""
 
-    x = torch.cat([hrrr, era5, invariant_tensor], dim=1)
+    (x, _, _) = build_network_condition_and_target(
+        background, (state, None), invariant_tensor, condition_list=condition_list
+    )
 
     return model(x)
 

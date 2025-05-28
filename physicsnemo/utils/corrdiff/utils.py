@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import datetime
+from typing import Optional
 
 import cftime
 import nvtx
@@ -32,33 +33,55 @@ def regression_step(
     net: torch.nn.Module,
     img_lr: torch.Tensor,
     latents_shape: torch.Size,
-    lead_time_label: torch.Tensor = None,
+    lead_time_label: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
-    Given a low-res input, performs a regression step to produce ensemble mean.
-    This function performs the regression on a single instance and then replicates
-    the results across the batch dimension.
+    Perform a regression step to produce ensemble mean prediction.
 
-    Args:
-        net (torch.nn.Module): U-Net model for regression.
-        img_lr (torch.Tensor): Low-resolution input.
-        latents_shape (torch.Size): Shape of the latent representation. Typically
-        (batch_size, out_channels, image_shape_x, image_shape_y).
+    This function takes a low-resolution input and performs a regression step to produce
+    an ensemble mean prediction. It processes a single instance and then replicates
+    the results across the batch dimension if needed.
 
+    Parameters
+    ----------
+    net : torch.nn.Module
+        U-Net model for regression.
+    img_lr : torch.Tensor
+        Low-resolution input to the network with shape (1, channels, height, width).
+        Must have a batch dimension of 1.
+    latents_shape : torch.Size
+        Shape of the latent representation with format
+        (batch_size, out_channels, image_shape_y, image_shape_x).
+    lead_time_label : Optional[torch.Tensor], optional
+        Lead time label tensor for lead time conditioning,
+        with shape (1, lead_time_dims). Default is None.
 
-    Returns:
-        torch.Tensor: Predicted output at the next time step.
+    Returns
+    -------
+    torch.Tensor
+        Predicted ensemble mean at the next time step with shape matching latents_shape.
+
+    Raises
+    ------
+    ValueError
+        If img_lr has a batch size greater than 1.
     """
     # Create a tensor of zeros with the given shape and move it to the appropriate device
     x_hat = torch.zeros(latents_shape, dtype=torch.float64, device=net.device)
-    t_hat = torch.tensor(1.0, dtype=torch.float64, device=net.device)
+
+    # Safety check: avoid silently ignoring batch elements in img_lr
+    if img_lr.shape[0] > 1:
+        raise ValueError(
+            f"Expected img_lr to have a batch size of 1, "
+            f"but found {img_lr.shape[0]}."
+        )
 
     # Perform regression on a single batch element
     with torch.inference_mode():
         if lead_time_label is not None:
-            x = net(x_hat[0:1], img_lr, t_hat, lead_time_label=lead_time_label)
+            x = net(x=x_hat[0:1], img_lr=img_lr, lead_time_label=lead_time_label)
         else:
-            x = net(x_hat[0:1], img_lr, t_hat)
+            x = net(x=x_hat[0:1], img_lr=img_lr)
 
     # If the batch size is greater than 1, repeat the prediction
     if x_hat.shape[0] > 1:
@@ -67,48 +90,85 @@ def regression_step(
     return x
 
 
-def diffusion_step(  # TODO generalize the module and add defaults
+def diffusion_step(
     net: torch.nn.Module,
     sampler_fn: callable,
-    seed_batch_size: int,
     img_shape: tuple,
     img_out_channels: int,
     rank_batches: list,
     img_lr: torch.Tensor,
     rank: int,
     device: torch.device,
-    hr_mean: torch.Tensor = None,
+    mean_hr: torch.Tensor = None,
     lead_time_label: torch.Tensor = None,
 ) -> torch.Tensor:
 
     """
     Generate images using diffusion techniques as described in the relevant paper.
 
-    Args:
-        net (torch.nn.Module): The diffusion model network.
-        sampler_fn (callable): Function used to sample images from the diffusion model.
-        seed_batch_size (int): Number of seeds per batch.
-        img_shape (tuple): Shape of the images, (height, width).
-        img_out_channels (int): Number of output channels for the image.
-        rank_batches (list): List of batches of seeds to process.
-        img_lr (torch.Tensor): Low-resolution input image.
-        rank (int): Rank of the current process for distributed processing.
-        device (torch.device): Device to perform computations.
-        mean_hr (torch.Tensor, optional): High-resolution mean tensor, to be used as an additional input. By default None.
+    This function applies a diffusion model to generate high-resolution images based on
+    low-resolution inputs. It supports optional conditioning on high-resolution mean
+    predictions and lead time labels.
 
-    Returns:
-        torch.Tensor: Generated images concatenated across batches.
+    For each low-resolution sample in `img_lr`, the function generates multiple
+    high-resolution samples, with different random seeds, specified in `rank_batches`.
+    The function then concatenates these high-resolution samples across the batch dimension.
+
+    Parameters
+    ----------
+    net : torch.nn.Module
+        The diffusion model network.
+    sampler_fn : callable
+        Function used to sample images from the diffusion model.
+    img_shape : tuple
+        Shape of the images, (height, width).
+    img_out_channels : int
+        Number of output channels for the image.
+    rank_batches : list
+        List of batches of seeds to process.
+    img_lr : torch.Tensor
+        Low-resolution input image with shape (seed_batch_size, channels_lr, height, width).
+    rank : int, optional
+        Rank of the current process for distributed processing.
+    device : torch.device, optional
+        Device to perform computations.
+    mean_hr : torch.Tensor, optional
+        High-resolution mean tensor to be used as an additional input,
+        with shape (1, channels_hr, height, width). Default is None.
+    lead_time_label : torch.Tensor, optional
+        Lead time label tensor for temporal conditioning,
+        with shape (batch_size, lead_time_dims). Default is None.
+
+    Returns
+    -------
+    torch.Tensor
+        Generated images concatenated across batches with shape
+        (seed_batch_size * len(rank_batches), out_channels, height, width).
     """
+
+    # Check img_lr dimensions match expected shape
+    if img_lr.shape[2:] != img_shape:
+        raise ValueError(
+            f"img_lr shape {img_lr.shape[2:]} does not match expected shape img_shape {img_shape}"
+        )
+
+    # Check mean_hr dimensions if provided
+    if mean_hr is not None:
+        if mean_hr.shape[2:] != img_shape:
+            raise ValueError(
+                f"mean_hr shape {mean_hr.shape[2:]} does not match expected shape img_shape {img_shape}"
+            )
+        if mean_hr.shape[0] != 1:
+            raise ValueError(f"mean_hr must have batch size 1, got {mean_hr.shape[0]}")
 
     img_lr = img_lr.to(memory_format=torch.channels_last)
 
     # Handling of the high-res mean
     additional_args = {}
-    if hr_mean is not None:
-        additional_args["mean_hr"] = hr_mean
+    if mean_hr is not None:
+        additional_args["mean_hr"] = mean_hr
     if lead_time_label is not None:
         additional_args["lead_time_label"] = lead_time_label
-    additional_args["img_shape"] = img_shape
 
     # Loop over batches
     all_images = []
@@ -122,7 +182,7 @@ def diffusion_step(  # TODO generalize the module and add defaults
             rnd = StackedRandomGenerator(device, batch_seeds)
             latents = rnd.randn(
                 [
-                    seed_batch_size,
+                    img_lr.shape[0],
                     img_out_channels,
                     img_shape[0],
                     img_shape[1],

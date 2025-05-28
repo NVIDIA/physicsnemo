@@ -61,18 +61,21 @@ def main(cfg: DictConfig) -> None:
 
     # Save mean and std
     if cfg.compute_mean_std:
+        train_era5_xarray = era5_xarray.sel(
+            time=era5_xarray.time.dt.year.isin(train_years)
+        )
         stats_path = os.path.join(cfg.hdf5_store_path, "stats")
         print(f"Saving global mean and std at {stats_path}")
         if not os.path.exists(stats_path):
             os.makedirs(stats_path)
         era5_mean = np.array(
-            era5_xarray.mean(dim=("time", "latitude", "longitude")).values
+            train_era5_xarray.mean(dim=("time", "latitude", "longitude")).values
         )
         np.save(
             os.path.join(stats_path, "global_means.npy"), era5_mean.reshape(1, -1, 1, 1)
         )
         era5_std = np.array(
-            era5_xarray.std(dim=("time", "latitude", "longitude")).values
+            train_era5_xarray.std(dim=("time", "latitude", "longitude")).values
         )
         np.save(
             os.path.join(stats_path, "global_stds.npy"), era5_std.reshape(1, -1, 1, 1)

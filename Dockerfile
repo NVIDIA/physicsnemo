@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.01-py3
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.04-py3
 FROM ${BASE_CONTAINER} as builder
 
 ARG TARGETPLATFORM
 
 # Update pip and setuptools
-RUN pip install "pip==23.2.1" "setuptools==68.2.2"
+RUN pip install "pip>=23.2.1" "setuptools>=77.0.3"
 
 # Setup git lfs, graphviz gl1(vtk dep)
 RUN apt-get update && \
@@ -45,8 +45,15 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$PYSPNG_ARM64_WHEEL" != "unkn
     fi
 
 # Install other dependencies
+# Remove packaging==23.2 from constraint.txt in the PyTorch container
+RUN FILE="/etc/pip/constraint.txt" && \
+    if [ -f "$FILE" ]; then \
+        sed -i '/packaging/d' "$FILE"; \
+    else \
+        echo "File not found: $FILE"; \
+    fi
 RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
-RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio>=2.28.1" "moviepy>=1.0.3" "tqdm>=4.60.0" "gcsfs==2024.2.0"
+RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio" "moviepy" "tqdm>=4.60.0"
 
 # Install Numcodecs (This needs a separate install because Numcodecs ARM pip install has issues)
 # A fix is being added here: https://github.com/zarr-developers/numcodecs/pull/315 but the public release is not ready yet.
@@ -141,35 +148,61 @@ RUN pip install --no-cache-dir "netcdf4>=1.6.3,<1.7.1"
 RUN pip install --no-cache-dir "mlflow>=2.1.1"
 
 COPY . /physicsnemo/
-RUN cd /physicsnemo/ && pip install -e .[makani,fignet] && pip uninstall nvidia-physicsnemo -y
+
+# Install torch-scatter, torch-cluster, and pyg
+ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 9.0 10.0 12.0+PTX"
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl" ]; then \
+        echo "Installing torch_scatter and for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl; \
+    else \
+        echo "No custom wheel present for scatter, building from source"; \
+        mkdir -p /physicsnemo/deps/; \
+        cd /physicsnemo/deps/; \
+        git clone https://github.com/rusty1s/pytorch_scatter.git; \
+        cd pytorch_scatter; \
+        git checkout tags/2.1.2; \
+	FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
+        pip install dist/*.whl --force-reinstall --no-cache-dir && \
+        cd ../ && rm -r pytorch_scatter; \
+    fi
+
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl" ]; then \
+        echo "Installing torch_cluster and for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl; \
+    else \
+        echo "No custom wheel present for cluster, building from source"; \
+        mkdir -p /physicsnemo/deps/; \
+        cd /physicsnemo/deps/; \
+        git clone https://github.com/rusty1s/pytorch_cluster.git; \
+        cd pytorch_cluster; \
+        git checkout tags/1.6.3; \
+	FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
+        pip install dist/*.whl --force-reinstall --no-cache-dir && \
+        cd ../ && rm -r pytorch_cluster; \
+    fi
+
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Installing tensorflow and warp-lang for: $TARGETPLATFORM" && \
         pip install --no-cache-dir "tensorflow>=2.9.0" "warp-lang>=0.6.0"; \
     elif [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         echo "Installing tensorflow and warp-lang for: $TARGETPLATFORM is not supported presently"; \
     fi
-RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==6.5.0" "protobuf==3.20.3"
+
+# Install the fignet and makani dependencies
+RUN pip install --no-cache-dir "torch-harmonics>=0.6.5,<0.7.1" "tensorly>=0.8.1" "tensorly-torch>=0.4.0" "jaxtyping>=0.2" "torchinfo>=1.8" "webdataset>=0.2"
 
 # TODO(akamenev): install Makani via direct URL, see comments in pyproject.toml.
 RUN pip install --no-cache-dir --no-deps -e git+https://github.com/NVIDIA/modulus-makani.git@v0.1.0#egg=makani
 
-# Install torch-scatter, torch-cluster, and pyg
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl" ]; then \
-        echo "Installing torch_scatter and for: $TARGETPLATFORM" && \
-        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl; \
-    else \
-        echo "No custom wheel present, skipping"; \
-    fi
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl" ]; then \
-        echo "Installing torch_cluster and for: $TARGETPLATFORM" && \
-        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl; \
-    else \
-        echo "No custom wheel present, skipping"; \
-    fi
+RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==6.5.0" "protobuf==3.20.3" "moto[s3]>=5.0.28"
+
 RUN pip install --no-cache-dir "torch_geometric==2.5.3"
 
 # Install scikit-image and stl
 RUN pip install --no-cache-dir "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely" "numpy<2.0"
+
+# Install MSC
+RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.14.0"
 
 # cleanup of stage
 RUN rm -rf /physicsnemo/
@@ -178,7 +211,6 @@ RUN rm -rf /physicsnemo/
 FROM builder as deploy
 COPY . /physicsnemo/
 RUN cd /physicsnemo/ && pip install .
-RUN pip install --no-cache-dir "protobuf==3.20.3"
 
 # Set Git Hash as a environment variable
 ARG PHYSICSNEMO_GIT_HASH
