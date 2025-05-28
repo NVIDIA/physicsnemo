@@ -18,6 +18,7 @@
 # There is a minimum version of pytorch required for shard tensor.
 # 2.6.0+ works
 # 2.5.X and lower does not work
+import torch
 
 from physicsnemo.utils.version_check import check_module_requirements
 
@@ -55,8 +56,10 @@ try:
         from .shard_utils import register_shard_wrappers
 
         register_shard_wrappers()
-
-    register_custom_ops()
+        
+    # Protect the automatic imports by checking cuda is available.
+    if torch.cuda.is_available():
+        register_custom_ops()
 
 except ImportError:
     pass
