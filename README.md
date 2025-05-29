@@ -243,6 +243,7 @@ way is to start with a reference sample and then update it for your own use case
 - [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=modulus&sort=relevance&sortDir=desc)
   
 ## Installation
+The following instructions help you install the base PhysicsNeMo modules to get started. The training recipes are not packaged into the pip wheels or the container to keep the footprint low. We recommend users clone the appropriate training recipes and use them as a starting point. These training recipes may require additional dependencies specific to the use case and they come with the requirements file.
 
 ### PyPi
 
