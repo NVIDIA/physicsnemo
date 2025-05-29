@@ -179,6 +179,21 @@ python
 >>> output.shape
 torch.Size([128, 64])
 ```
+To use the distributed module, you will do the following:
+
+```python
+
+```
+To use the PDE module, you will do the following:
+
+```python
+>>> from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes
+>>> ns = NavierStokes(nu=0.01, rho=1, dim=2)
+>>> ns.pprint()
+continuity: u__x + v__y
+momentum_x: u*u__x + v*u__y + p__x + u__t - 0.01*u__x__x - 0.01*u__y__y
+momentum_y: u*v__x + v*v__y + p__y + v__t - 0.01*v__x__x - 0.01*v__y__y
+```
 
 ## Who is using and contributing to PhysicsNeMo
 
