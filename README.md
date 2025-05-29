@@ -19,10 +19,10 @@
 ## What is PhysicsNeMo?
 
 NVIDIA PhysicsNeMo is an open-source deep-learning framework for building, training,
-and fine-tuning deep learning models using state-of-the-art SciML methods for
+fine-tuning and inferring Physics AI models using state-of-the-art SciML methods for
 AI4science and engineering.
 
-PhysicsNeMo provides utilities and optimized pipelines to develop AI models that combine
+PhysicsNeMo provides python modules to compose scalable and optimized training and inference pipelines to explore, develop, validate and deploy  AI models that combine
 physics knowledge with data, enabling real-time predictions.
 
 Whether you are exploring the use of Neural operators, GNNs, or transformers or are
@@ -57,22 +57,22 @@ provides you with an optimized stack that will enable you to train your models a
 
 ## More About PhysicsNeMo
 
-At a granular level, PhysicsNeMo provides a library of a few key components:
+At a granular level, PhysicsNeMo is developed as modular functionality and therefore provides built-in composable modules that are packaged into few key components:
 
 <!-- markdownlint-disable -->
 Component | Description |
 ---- | --- |
-[**physicsnemo.models**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html) | A collection of optimized, customizable, and easy-to-use models such as Fourier Neural Operators, Graph Neural Networks, and many more|
-[**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | A data pipeline and data loader library, including benchmark datapipes, weather daptapipes, and graph datapipes|
-[**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing library build on top of `torch.distributed` to enable parallel training with just a few steps|
-[**physicsnemo.sym.geometry**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html) | A library to handle geometry for DL training using the Constructive Solid Geometry modeling and CAD files in STL format.|
-[**physicsnemo.sym.eq**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/nodes.html) | A library to use PDEs in your DL training with several implementations of commonly observed equations and easy ways for customization.|
+[**physicsnemo.models**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html) | A collection of optimized, customizable, and easy-to-use families of model architectures such as Neural Operators, Graph Neural Networks, Diffusion models, Transformer models and many more|
+[**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | Optimized and scalable built-in data pipelines fine tuned to handle engineering and scientific data structures like point clouds, meshes etc|
+[**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing sub-module built on top of `torch.distributed` to enable parallel training with just a few steps|
+[**physicsnemo.curator**](xxx) | A sub-module to streamline and accelerate the data curation for engineering and scientific datasets for training and inference.|
+[**physicsnemo.sym.geometry**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html) | A sub-module to handle geometry for DL training using the Constructive Solid Geometry modeling and CAD files in STL format.|
+[**physicsnemo.sym.eq**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/nodes.html) | A sub-module to use PDEs in your DL training with several implementations of commonly observed equations and easy ways for customization.|
 <!-- markdownlint-enable -->
 
 For a complete list, refer to the PhysicsNeMo API documentation for
-[PhysicsNeMo Core](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
-and
-[PhysicsNeMo Sym](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/api_index.html).
+[PhysicsNeMo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
+
 
 Usually, PhysicsNeMo is used either as:
 
