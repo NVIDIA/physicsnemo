@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add lead time embedding support for `positional_embedding_selector`. Enable  
 arbitrary positioning of probabilistic variables
 - Enable lead time aware regression without CE loss
+- Bumped minimum PyTorch version from 2.0.0 to 2.4.0, to minimize
+  support surface for `physicsnemo.distributed` functionality.
 
 ### Deprecated
 
