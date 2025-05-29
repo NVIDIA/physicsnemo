@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bumped minimum PyTorch version from 2.0.0 to 2.4.0, to minimize
   support surface for `physicsnemo.distributed` functionality.
 - Merged SongUNetPosLtEmb with SongUNetPosEmb, add support for batch>1
+- Add lead time embedding support for `positional_embedding_selector`. Enable  
+arbitrary positioning of probabilistic variables
 
 ### Dependencies
 
