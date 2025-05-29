@@ -9,10 +9,10 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 <!-- markdownlint-enable -->
 [**Getting Started**](#getting-started)
+| [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 | [**Install guide**](#installation)
+| [**Getting Started**](#Getting-started)
 | [**Contributing Guidelines**](#contributing-to-physicsnemo)
-| [**Resources**](#resources)
-| [**PhysicsNeMo Migration Guide**](#physicsnemo-migration-guide)
 | [**Communication**](#communication)
 | [**License**](#license)
 
