@@ -8,7 +8,7 @@
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 <!-- markdownlint-enable -->
-[**Nvidia PhyicsNeMo*](#What-is-PhysicsNeMo)
+[**Nvidia PhyicsNeMo**](#What-is-PhysicsNeMo)
 | [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 | [**Install guide**](#installation)
 | [**Getting Started**](#Getting-started)
