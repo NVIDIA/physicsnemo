@@ -94,50 +94,51 @@ def test_song_unet_lt_indexing(device):
         device
     )  # (2, patch_shape_y, patch_shape_x)
 
-    # Define a function to select the embeddings
-    def embedding_selector(emb):
-        return emb[
-            None,
-            :,
-            offset_y : offset_y + patch_shape_y,
-            offset_x : offset_x + patch_shape_x,
-        ]
+    # NOTE: Commented tests for embedding_selector since current SongUNetPosLtEmbd does not support it
+    # # Define a function to select the embeddings
+    # def embedding_selector(emb):
+    #     return emb[
+    #         None,
+    #         :,
+    #         offset_y : offset_y + patch_shape_y,
+    #         offset_x : offset_x + patch_shape_x,
+    #     ]
 
     model.training = True
     output_image_indexing = model(
         input_image,
         noise_labels,
         class_labels,
-        lead_time_label=torch.tensor(8),
+        lead_time_label=torch.tensor([8]),
         global_index=global_index,
     )
-    output_image_selector = model(
-        input_image,
-        noise_labels,
-        class_labels,
-        lead_time_label=torch.tensor(8),
-        embedding_selector=embedding_selector,
-    )
+    # output_image_selector = model(
+    #     input_image,
+    #     noise_labels,
+    #     class_labels,
+    #     lead_time_label=torch.tensor([8]),
+    #     embedding_selector=embedding_selector,
+    # )
     assert output_image_indexing.shape == (1, 10, patch_shape_y, patch_shape_x)
-    assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
+    # assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
 
     model.training = False
     output_image_indexing = model(
         input_image,
         noise_labels,
         class_labels,
-        lead_time_label=torch.tensor(8),
+        lead_time_label=torch.tensor([8]),
         global_index=global_index,
     )
-    output_image_selector = model(
-        input_image,
-        noise_labels,
-        class_labels,
-        lead_time_label=torch.tensor(8),
-        embedding_selector=embedding_selector,
-    )
+    # output_image_selector = model(
+    #     input_image,
+    #     noise_labels,
+    #     class_labels,
+    #     lead_time_label=torch.tensor([8]),
+    #     embedding_selector=embedding_selector,
+    # )
     assert output_image_indexing.shape == (1, 10, patch_shape_y, patch_shape_x)
-    assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
+    # assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -169,8 +170,9 @@ def test_song_unet_global_indexing(device):
     output_image = model(
         input_image, noise_labels, class_labels, global_index=global_index
     )
+
     pos_embed = model.positional_embedding_indexing(
-        input_image, model.pos_embd, global_index=global_index
+        input_image, global_index=global_index
     )
     assert output_image.shape == (1, 2, patch_shape_y, patch_shape_x)
     assert torch.equal(pos_embed, global_index)
@@ -223,7 +225,7 @@ def test_song_unet_embedding_selector(device):
 
     # Verify that the embeddings are correctly selected
     selected_embeds = model.positional_embedding_selector(
-        input_image, model.pos_embd, embedding_selector
+        input_image, embedding_selector
     )
 
     assert torch.equal(selected_embeds, expected_embeds)

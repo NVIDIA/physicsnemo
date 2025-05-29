@@ -56,6 +56,7 @@ torch._dynamo.reset()
 torch._dynamo.config.cache_size_limit = 264  # Set to a higher value
 torch._dynamo.config.verbose = True  # Enable verbose logging
 torch._dynamo.config.suppress_errors = False  # Forces the error to show all details
+torch._logging.set_logs(recompiles=True, graph_breaks=True)
 
 
 def checkpoint_list(path, suffix=".mdlus"):
@@ -245,16 +246,14 @@ def main(cfg: DictConfig) -> None:
         use_torch_compile = cfg.training.perf.torch_compile
     if hasattr(cfg.training.perf, "use_apex_gn"):
         use_apex_gn = cfg.training.perf.use_apex_gn
+        model_args["use_apex_gn"] = use_apex_gn
+
     if hasattr(cfg.training.perf, "profile_mode"):
         profile_mode = cfg.training.perf.profile_mode
+        model_args["profile_mode"] = profile_mode
 
-    model_args.update(
-        {
-            "use_apex_gn": use_apex_gn,
-            "profile_mode": profile_mode,
-            "amp_mode": enable_amp,
-        }
-    )
+    if enable_amp:
+        model_args["amp_mode"] = enable_amp
 
     if cfg.model.name == "regression":
         model = UNet(
@@ -289,6 +288,7 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"Invalid model: {cfg.model.name}")
 
     model.train().requires_grad_(True).to(dist.device)
+
     if use_apex_gn:
         model.to(memory_format=torch.channels_last)
 
