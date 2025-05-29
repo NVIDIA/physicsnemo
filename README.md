@@ -73,12 +73,24 @@ Component | Description |
 For a complete list, refer to the PhysicsNeMo API documentation for
 [PhysicsNeMo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 
-
+## AI4Science Library
 Usually, PhysicsNeMo is used either as:
 
 - A complementary tool to Pytorch when exploring AI for SciML and AI4Science applications.
 - A deep learning research platform that provides scale and optimal performance on
 NVIDIA GPUs.
+
+#### Domain Specific Packages
+
+The following are packages dedicated for domain experts of specific communities catering
+to their unique exploration needs.
+
+- [PhysicsNeMo CFD](https://github.com/NVIDIA/physicsnemo-cfd): Inference sub-module of PhysicsNeMo
+  to enable CFD domain experts to explore, experiment and validate using pretrained
+  AI models for CFD use cases.
+- [Earth-2 Studio](https://github.com/NVIDIA/earth2studio): Inference sub-module of PhysicsNeMo
+  to enable climate researchers and scientists to explore and experiment with pretrained
+  AI models for weather and climate.
 
 Elaborating Further:
 
@@ -168,34 +180,6 @@ python
 >>> output.shape
 torch.Size([128, 64])
 ```
-
-### AI4Science Library
-
-- [PhysicsNeMo Symbolic](https://github.com/NVIDIA/physicsnemo-sym): This repository of
-  algorithms and utilities allows SciML researchers and developers to physics inform model
-  training and model validation. It also provides a higher level abstraction
-  for domain experts that is native to science and engineering.
-
-#### Domain Specific Packages
-
-The following are packages dedicated for domain experts of specific communities catering
-to their unique exploration needs.
-
-- [Earth-2 Studio](https://github.com/NVIDIA/earth2studio): Open source project
-  to enable climate researchers and scientists to explore and experiment with
-  AI models for weather and climate.
-
-#### Research packages
-
-The following are research packages that get packaged into PhysicsNeMo once they are stable.
-
-- [PhysicsNeMo Makani](https://github.com/NVIDIA/modulus-makani): Experimental library
-  designed to enable the research and development of machine-learning based weather and
-  climate models.
-- [Earth2 Grid](https://github.com/NVlabs/earth2grid): Experimental library with
-  utilities for working geographic data defined on various grids.
-- [Earth-2 MIP](https://github.com/NVIDIA/earth2mip): Experimental library with
-  utilities for model intercomparison for weather and climate models.
 
 ## Who is using and contributing to PhysicsNeMo
 
