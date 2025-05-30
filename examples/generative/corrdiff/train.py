@@ -547,7 +547,11 @@ def main(cfg: DictConfig) -> None:
                                         loss = loss_fn(**loss_fn_kwargs)
 
                                 loss = loss.sum() / batch_size_per_gpu
-                                loss_accum += loss / num_accumulation_rounds
+                                loss_accum += (
+                                    loss
+                                    / num_accumulation_rounds
+                                    / len(patch_nums_iter)
+                                )
                                 with nvtx.annotate(f"loss backward", color="yellow"):
                                     loss.backward()
 
@@ -684,7 +688,7 @@ def main(cfg: DictConfig) -> None:
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
                                             patching.set_patch_num(patch_num_per_iter)
-                                            loss_fn_kwargs.update(
+                                            loss_valid_kwargs.update(
                                                 {"patching": patching}
                                             )
                                         with torch.autocast(
@@ -700,6 +704,7 @@ def main(cfg: DictConfig) -> None:
                                         valid_loss_accum += (
                                             loss_valid
                                             / cfg.training.io.validation_steps
+                                            / len(patch_nums_iter)
                                         )
                                 valid_loss_sum = torch.tensor(
                                     [valid_loss_accum], device=dist.device
