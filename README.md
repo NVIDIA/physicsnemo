@@ -120,8 +120,8 @@ The [Model Zoo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-cor
 includes optimized implementation of family of model architectures such as
 Neural Operators:
 
-- [Fourier Neural Operators (FNOs)](physicsnemo/models/fno),
-- [DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html),
+- [Fourier Neural Operators (FNOs)](physicsnemo/models/fno)
+- [DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html)
 - [DoMINO](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/external_aerodynamics/domino/readme.html)
 - [Graph Neural Networks (GNNs)](physicsnemo/models/gnn_layers)
 - [MeshGraphNet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/vortex_shedding_mgn/readme.html)
