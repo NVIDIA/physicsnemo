@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import torch
 from dataclasses import asdict
 
 from physicsnemo.utils.version_check import check_module_requirements
@@ -64,6 +65,9 @@ class ShardedDoMINODataPipe(DoMINODataPipe):
         shard_grid,
         **config_overrides,
     ):
+
+        # if 'gpu_output' not in config_overrides:
+        config_overrides['gpu_output'] = True
 
         # First, initialize the super class.
         super().__init__(
@@ -122,9 +126,10 @@ class ShardedDoMINODataPipe(DoMINODataPipe):
             Replicate(),
         ]
         for key, value in single_dict.items():
-            single_dict[key] = ShardTensor.from_local(
-                value, self.domain_mesh, default_placement
-            )
+            if isinstance(value, torch.Tensor):
+                single_dict[key] = ShardTensor.from_local(
+                    value, self.domain_mesh, default_placement
+                )
 
         # # Now, shard the data.
         sharding = [
