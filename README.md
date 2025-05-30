@@ -126,7 +126,8 @@ Neural Operators:
 * [Correction Diffusion Model](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/generative/corrdiff/readme.html)
 * [DDPM](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/generative/diffusion/readme.html)
 [Transfomer Models]
-* []()
+*[PhysicsNeMo GraphCast](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/weather/graphcast/readme.html)
+*[Transsolver](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/darcy_transolver)
 [RNN Models](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models)
 *[RNN](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/gray_scott_rnn/readme.html)
 *[swinvrnn](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/swinvrnn)
