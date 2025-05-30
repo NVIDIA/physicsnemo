@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
 from dataclasses import asdict
+
+import torch
 
 from physicsnemo.utils.version_check import check_module_requirements
 
@@ -67,7 +68,7 @@ class ShardedDoMINODataPipe(DoMINODataPipe):
     ):
 
         # if 'gpu_output' not in config_overrides:
-        config_overrides['gpu_output'] = True
+        config_overrides["gpu_output"] = True
 
         # First, initialize the super class.
         super().__init__(
