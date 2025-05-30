@@ -109,17 +109,30 @@ to enhance the end to end training speed.
 
 ### A suite of Physics Informed ML Models
 
-PhysicsNeMo offers a comprehensive library of state-of-the-art models specifically designed
-for physics-ML applications.
+PhysicsNeMo offers a library of state-of-the-art models specifically designed
+for physics-ML applications. Users can build any model architecture using the underlying PyTorch layers and combine with curated PhysicsNeMo layers.
+
 The [Model Zoo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html#model-zoo)
-includes generalizable model architectures such as
-[Fourier Neural Operators (FNOs)](physicsnemo/models/fno),
-[DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html),
-[Physics-Informed Neural Networks (PINNs)](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html),
-[Graph Neural Networks (GNNs)](physicsnemo/models/gnn_layers),
-and generative AI models like [Diffusion Models](physicsnemo/models/diffusion)
-as well as domain-specific models such as [Deep Learning Weather Prediction (DLWP)](physicsnemo/models/dlwp)
-and [Super Resolution Network (SrNN)](physicsnemo/models/srrn) among others.
+includes optimized implementation of family of model architectures such as
+Neural Operators:
+* [Fourier Neural Operators (FNOs)](physicsnemo/models/fno),
+* [DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html),
+* [DoMINO](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/external_aerodynamics/domino/readme.html)
+[Graph Neural Networks (GNNs)](physicsnemo/models/gnn_layers)
+* [MeshGraphNet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/vortex_shedding_mgn/readme.html)
+* [MeshGraphNet for Lagrangian](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/lagrangian_mgn/readme.html)
+* [XAeroNet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/external_aerodynamics/xaeronet/readme.html)
+[Diffusion Models](physicsnemo/models/diffusion)
+* [Correction Diffusion Model](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/generative/corrdiff/readme.html)
+* [DDPM](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/generative/diffusion/readme.html)
+[Transfomer Models]
+* []()
+[RNN Models](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models)
+*[RNN](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/gray_scott_rnn/readme.html)
+*[swinvrnn](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/swinvrnn)
+[Physics-Informed Neural Networks (PINNs)](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html)
+And many others.
+
 These models are optimized for various physics domains, such as computational fluid
 dynamics, structural mechanics, and electromagnetics. Users can download, customize, and
 build upon these models to suit their specific needs, significantly reducing the time
@@ -257,7 +270,8 @@ way is to start with a reference sample and then update it for your own use case
 - [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=modulus&sort=relevance&sortDir=desc)
   
 ## Installation
-The following instructions help you install the base PhysicsNeMo modules to get started. The training recipes are not packaged into the pip wheels or the container to keep the footprint low. We recommend users clone the appropriate training recipes and use them as a starting point. These training recipes may require additional dependencies specific to the use case and they come with the requirements file.
+The following instructions help you install the base PhysicsNeMo modules to get started. There are additional optional dependencies for specific models that are listed under [optional dependencies](#Optional-dependencies).
+The training recipes are not packaged into the pip wheels or the container to keep the footprint low. We recommend users clone the appropriate training recipes and use them as a starting point. These training recipes may require additional dependencies specific to the use case and they come with the requirements file.
 
 ### PyPi
 
