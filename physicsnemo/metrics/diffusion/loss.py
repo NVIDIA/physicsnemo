@@ -379,6 +379,7 @@ class RegressionLoss:
         net: torch.nn.Module,
         img_clean: torch.Tensor,
         img_lr: torch.Tensor,
+        lead_time_label: Optional[torch.Tensor] = None,
         augment_pipe: Optional[
             Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
         ] = None,
@@ -391,10 +392,11 @@ class RegressionLoss:
         ----------
         net : torch.nn.Module
             The neural network model that will make predictions.
-            Expected signature: `net(x, img_lr,
+            Expected signature: `net(x, img_lr, lead_time_label=lead_time_label,
             augment_labels=augment_labels, force_fp32=False)`, where:
                 x (torch.Tensor): Tensor of shape (B, C_hr, H, W). Is zero-filled.
                 img_lr (torch.Tensor): Low-resolution input of shape (B, C_lr, H, W)
+                lead_time_label (torch.Tensor, optional): Optional lead time labels
                 augment_labels (torch.Tensor, optional): Optional augmentation
                 labels, returned by `augment_pipe`.
                 force_fp32 (bool, optional): Whether to force the model to use
@@ -409,6 +411,10 @@ class RegressionLoss:
         img_lr : torch.Tensor
             Low-resolution input images of shape (B, C_lr, H, W).
             Used as input to the neural network.
+
+        lead_time_label : Optional[torch.Tensor], optional
+            Lead time labels for temporal predictions, by default None.
+            Shape can vary based on model requirements, typically (B,) or scalar.
 
         augment_pipe : callable, optional
             An optional data augmentation function.
@@ -441,7 +447,18 @@ class RegressionLoss:
         y_lr = y_tot[:, img_clean.shape[1] :, :, :]
 
         zero_input = torch.zeros_like(y, device=img_clean.device)
-        D_yn = net(zero_input, y_lr, force_fp32=False, augment_labels=augment_labels)
+        if lead_time_label is not None:
+            D_yn = net(
+                zero_input,
+                y_lr,
+                lead_time_label=lead_time_label,
+                force_fp32=False,
+                augment_labels=augment_labels,
+            )
+        else:
+            D_yn = net(
+                zero_input, y_lr, force_fp32=False, augment_labels=augment_labels
+            )
         loss = weight * ((D_yn - y) ** 2)
 
         return loss
