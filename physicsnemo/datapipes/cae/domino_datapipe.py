@@ -1013,7 +1013,6 @@ class DoMINODataPipe(Dataset):
                 if isinstance(value, torch.Tensor) and value.is_cuda:
                     return_dict[key] = value.cpu()
 
-
         return return_dict
 
 
