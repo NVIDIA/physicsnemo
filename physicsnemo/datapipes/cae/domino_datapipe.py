@@ -1418,6 +1418,13 @@ def create_domino_dataset(
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
         )
     else:
+        overrides = {}
+        if hasattr(cfg.data, "gpu_preprocessing"):
+            overrides["gpu_preprocessing"] = cfg.data.gpu_preprocessing
+
+        if hasattr(cfg.data, "gpu_output"):
+            overrides["gpu_output"] = cfg.data.gpu_output
+
         return DoMINODataPipe(
             input_path,
             phase=phase,
@@ -1441,6 +1448,7 @@ def create_domino_dataset(
             resample_surfaces=cfg.model.resampling_surface_mesh.resample,
             resampling_points=cfg.model.resampling_surface_mesh.points,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
+            **overrides,
         )
 
 
