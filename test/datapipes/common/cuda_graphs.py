@@ -64,7 +64,7 @@ def check_cuda_graphs(
     iterations: int = 5,
     warmup_length: int = 3,
 ) -> bool:
-    """Tests if a datapipe is compatable with cuda graphs
+    """Tests if a datapipe is compatible with cuda graphs
 
     Parameters
     ----------
@@ -89,7 +89,7 @@ def check_cuda_graphs(
     one should use the `input_fn` to preprocess a batch to that form.
     """
     if not datapipe.meta.cuda_graphs:
-        logger.warn("Datapipe does not support cuda graphs, skipping")
+        logger.warning("Datapipe does not support cuda graphs, skipping")
         return True
 
     model = MiniNetwork().cuda()
