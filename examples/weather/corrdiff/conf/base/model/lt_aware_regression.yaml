@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: lt_aware_regression
+  # Model type.
+hr_mean_conditioning: False
+  # No high-res conditioning for regression.
+
+# Default model parameters.
+model_args:
+  N_grid_channels: 4
+  # Number of channels for positional grid embeddings
+  embedding_type: "zero"
+  # Type of timestep embedding: 'positional' for DDPM++, 'fourier' for NCSN++,
+  # 'zero' for none
+  lead_time_channels: 4
+  # Number of channels for lead-time embeddings
+  lead_time_steps: 9
+  # Number of lead-time steps
+  model_type: "SongUNetPosLtEmbd"
+  # Type of model architecture: 'SongUNetPosLtEmbd' for lead-time aware UNet with
+  # positional embeddings, 'SongUNetPosEmbd' for UNet with positional
+  # embeddings, 'SongUNet' for UNet without positional embeddings,
+  # 'DhariwalUNet' for UNet with Fourier embeddings. If not provided, default
+  # to 'SongUNetPosEmbd'.
