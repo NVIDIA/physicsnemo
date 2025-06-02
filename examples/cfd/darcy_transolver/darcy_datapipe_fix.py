@@ -29,7 +29,9 @@ from physicsnemo.datapipes.benchmarks.kernels.finite_difference import (
     darcy_mgrid_jacobi_iterative_batched_2d,
     mgrid_inf_residual_batched_2d,
 )
-from physicsnemo.datapipes.benchmarks.kernels.initialization import init_uniform_random_4d
+from physicsnemo.datapipes.benchmarks.kernels.initialization import (
+    init_uniform_random_4d,
+)
 from physicsnemo.datapipes.benchmarks.kernels.utils import (
     bilinear_upsample_batched_2d,
     fourier_to_array_batched_2d,
