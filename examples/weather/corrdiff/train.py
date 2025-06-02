@@ -260,7 +260,10 @@ def main(cfg: DictConfig) -> None:
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
-    elif cfg.model.name == "lt_aware_ce_regression":
+    elif (
+        cfg.model.name == "lt_aware_ce_regression"
+        or cfg.model.name == "lt_aware_regression"
+    ):
         model = UNet(
             img_in_channels=img_in_channels
             + model_args["N_grid_channels"]
@@ -294,7 +297,8 @@ def main(cfg: DictConfig) -> None:
 
     # Check if regression model is used with patching
     if (
-        cfg.model.name in ["regression", "lt_aware_ce_regression"]
+        cfg.model.name
+        in ["regression", "lt_aware_regression", "lt_aware_ce_regression"]
         and patching is not None
     ):
         raise ValueError(
@@ -417,7 +421,7 @@ def main(cfg: DictConfig) -> None:
             regression_net=regression_net,
             hr_mean_conditioning=cfg.model.hr_mean_conditioning,
         )
-    elif cfg.model.name == "regression":
+    elif cfg.model.name == "regression" or cfg.model.name == "lt_aware_regression":
         loss_fn = RegressionLoss()
     elif cfg.model.name == "lt_aware_ce_regression":
         loss_fn = RegressionLossCE(prob_channels=prob_channels)
@@ -688,7 +692,7 @@ def main(cfg: DictConfig) -> None:
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
                                             patching.set_patch_num(patch_num_per_iter)
-                                            loss_valid_kwargs.update(
+                                            loss_fn_kwargs.update(
                                                 {"patching": patching}
                                             )
                                         with torch.autocast(
@@ -704,7 +708,6 @@ def main(cfg: DictConfig) -> None:
                                         valid_loss_accum += (
                                             loss_valid
                                             / cfg.training.io.validation_steps
-                                            / len(patch_nums_iter)
                                         )
                                 valid_loss_sum = torch.tensor(
                                     [valid_loss_accum], device=dist.device
