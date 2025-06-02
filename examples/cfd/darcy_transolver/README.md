@@ -14,7 +14,7 @@ This example runs on a single GPU.
 
 ## Getting Started
 
-To train the model following physicsnemo's settings, simply run
+To train the model following PhysicsNeMo's settings, simply run
 
 ```bash
 python train_transolver_darcy.py
