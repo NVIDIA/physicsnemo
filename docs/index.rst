@@ -58,6 +58,7 @@ NVIDIA PhysicsNeMo Core (Latest Release)
    examples/cfd/lid_driven_cavity/README.rst
    examples/cfd/swe_distributed_gnn/README.rst
    examples/cfd/vortex_shedding_mesh_reduced/README.rst
+   examples/cfd/darcy_transolver/README.rst
 
 .. toctree::
    :maxdepth: 1
