@@ -16,14 +16,15 @@
 
 from typing import Iterable, Tuple, Union
 import copy
-import torch
 import importlib.util
 from pathlib import Path
+
+import torch
 
 from physicsnemo.utils.generative import InfiniteSampler
 from physicsnemo.distributed import DistributedManager
 
-from . import base, cwb, hrrrmini, gefs_hrrr
+from datasets import base, cwb, hrrrmini, gefs_hrrr
 
 
 # this maps all known dataset types to the corresponding init function
