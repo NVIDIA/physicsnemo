@@ -23,6 +23,14 @@ discrete points.
 A preprint describing additional details about the model architecture can be found here
 [paper](https://arxiv.org/abs/2501.13350).
 
+## Prerequisites
+
+Install the required dependencies by running below:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Getting started with the DrivAerML example
 
 ### Configuration basics
