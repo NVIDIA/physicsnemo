@@ -14,22 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, time, psutil, hydra, torch
+import os
+import time
+import psutil
+from contextlib import nullcontext
+
+import hydra
 from hydra.utils import to_absolute_path
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
+import nvtx
 import wandb
-from hydra.core.hydra_config import HydraConfig
-from contextlib import nullcontext
 
 from physicsnemo import Module
 from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
 from physicsnemo.distributed import DistributedManager
-
 from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE
 from physicsnemo.utils.patching import RandomPatching2D
-
 from physicsnemo.launch.logging.wandb import initialize_wandb
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.launch.utils import (
@@ -39,7 +43,6 @@ from physicsnemo.launch.utils import (
 )
 
 from datasets.dataset import init_train_valid_datasets_from_config, register_dataset
-
 from helpers.train_helpers import (
     set_patch_shape,
     set_seed,
@@ -48,8 +51,6 @@ from helpers.train_helpers import (
     handle_and_clip_gradients,
     is_time_for_periodic_task,
 )
-import nvtx
-
 
 torch._dynamo.reset()
 # Increase the cache size limit
