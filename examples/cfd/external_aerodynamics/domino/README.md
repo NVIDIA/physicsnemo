@@ -176,6 +176,49 @@ The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
 4. The surface predictions are carried out on the STL surface. The drag and lift
  accuracy will depend on the resolution of the STL.
 
+## Extending DoMINO to a custom dataset
+
+This repository includes examples of **DoMINO** training on the DrivAerML dataset. However, many use cases require training **DoMINO** on a **custom dataset**. The steps below outline the process.
+
+1. Reorganize that dataset to have the same directory structure as DrivAerML. The raw data directory should contain a sepearte directory for each simulation. Each simulation directory needs to contain mainly 3 files, `stl`, `vtp` and `vtu`, correspoinding to the geometry, surface and volume fields information. Additional details such as boundary condition information, for example inlet velocity, may be added in a separate `.csv` file, in case these vary from one case to the next.
+2. Modify the following parameters in `conf/config.yaml`
+   - `project.name`: Specify a name for your project.
+   - `expt`: This is the experiment tag.
+   - `data_processor.input_dir`: Input directory where the raw simulation dataset is stored.
+   - `data_processor.output_dir`: Output directory where the processed dataset (`.npy`) needs to be saved.
+   - `data_processor.num_processors`: Number of parallel processors for data processing.
+   - `variables.surface`: Variable names of surface fields and fields type (vector or scalar).
+   - `variables.volume`: Variable names of volume fields and fields type (vector or scalar).
+   - `data.input_dir`: Processed files used for training.
+   - `data.input_dir_val`: Processed files used for validation.
+   - `data.bounding_box`: Dimensions of computational domain where most prominent solution field variations. Volume fields are modeled inside this bounding box.
+   - `data.bounding_box_surface`: Dimensions of bounding box enclosing the biggest geometry in dataset. Surface fields are modeled inside this bounding box.
+   - `train.epochs`: Set the number of training epochs.
+   - `model.volume_points_sample`: Number of points to sample in the volume mesh per epoch per batch. Tune based on GPU memory.
+   - `model.surface_points_sample`: Number of points to sample on the surface mesh per epoch per batch. Tune based on GPU memory.
+   - `model.geom_points_sample`: Number of points to sample on STL mesh per epoch per batch. Ensure point sampled is lesser than number of points on STL (for coarser STLs).
+   - `eval.test_path`: Path of directory where the raw simulations files are populated for testing and verification.
+   - `eval.save_path`: Path of directory where the AI predicted simulations files are saved.
+   - `eval.checkpoint_name`: Use this checkpoint from `outputs/{project.name}/models` to evaluate the trained model.
+   - `eval.scaling_param_path`: Scaling parameters populated in `outputs/{project.name}`.
+3. Before running `process_data.py` to process the data, be sure to modify `openfoam_datapipe.py`. This is the entry point for the user to modify the datapipe for dataprocessing. A couple of things that might need to be changed are non-dimensionalizing schemes based on the order of your variables and the `DrivAerAwsPaths` class with the internal directory structure of your dataset. For example, here is the custom class written for a different dataset.
+```python
+class DriveSimPaths:
+    @staticmethod
+    def geometry_path(car_dir: Path) -> Path:
+        return car_dir / "body.stl" # Specify the name of the STL in your dataset
+
+    @staticmethod
+    def volume_path(car_dir: Path) -> Path:
+        return car_dir / "VTK/simpleFoam_steady_3000/internal.vtu" # Specify the name of the VTU and directory structure in your dataset
+
+    @staticmethod
+    def surface_path(car_dir: Path) -> Path:
+        return car_dir / "VTK/simpleFoam_steady_3000/boundary/aero_suv.vtp"  # Specify the name of the VTP and directory structure in your dataset
+```
+4. Before running `train.py`, modify the loss functions. The surface loss functions currently, specifically `integral_loss_fn`, `loss_fn_surface` and `loss_fn_area`, assume the variables to be in a specific order, Pressure followed by Wall-Shear-Stress vector. Please modify these formulations if your variables are in a different order or don't require these losses.
+5. Run `test.py` to validate the trained model.
+6. Use `inference_on_stl.py` script to deploy the model in applications where inference is needed only from STL inputs and the volume mesh is not calculated.
 
 The DoMINO model architecture is used to support the
 [Real Time Digital Twin Blueprint](https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation)
