@@ -72,17 +72,22 @@ processor for message aggregation. A learning rate of 0.0001 is used, decaying
 exponentially with a rate of 0.9999991. Training is performed on 8 NVIDIA A100
 GPUs, leveraging data parallelism for 25 epochs.
 
-## Getting Started
+## Prerequisites
 
 This example requires the `tensorflow` library to load the data in the `.tfrecord`
-format. Install with
-
-```bash
-pip install tensorflow
-```
+format.
 
 Note: If installing tensorflow inside the PhysicsNeMo docker container, it's recommended
 to use `pip install "tensorflow<=2.17.1"`
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
+```
+
+## Getting Started
 
 To download the data from DeepMind's repo, run
 

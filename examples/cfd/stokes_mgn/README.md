@@ -81,16 +81,20 @@ exponentially with a rate of 0.99985.
 ground truth for velocity and pressure for one
 of the samples from the test dataset.](../../../docs/img/stokes.png)
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
+pip install nvidia-physicsnemo.sym --no-build-isolation
+```
+
 ## Getting Started
 
 The dataset for this example is not publicly available. To get access, please reach out
 to the [NVIDIA PhysicsNeMo team](simnet-team@nvidia.com).
-
-This example requires the `pyvista` and `vtk` libraries. Install with
-
-```bash
-pip install pyvista vtk
-```
 
 Once you've obtained the dataset, follow these steps to preprocess it:
 
