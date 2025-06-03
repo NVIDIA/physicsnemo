@@ -15,17 +15,17 @@
 # limitations under the License.
 
 import datetime
-import json
 import math
 from typing import List, Tuple, Union
 
+import json
 import numpy as np
 from numba import jit, prange
 import xarray as xr
 
 from physicsnemo.utils.generative import convert_datetime_to_cftime
 
-from .base import ChannelMetadata, DownscalingDataset
+from datasets.base import ChannelMetadata, DownscalingDataset
 
 
 class HRRRMiniDataset(DownscalingDataset):

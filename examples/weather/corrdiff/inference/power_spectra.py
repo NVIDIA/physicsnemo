@@ -18,7 +18,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
-import typer
+
 import xarray
 from scipy.fft import irfft
 from scipy.signal import periodogram
