@@ -8,21 +8,21 @@
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 <!-- markdownlint-enable -->
-[**Getting Started**](#getting-started)
+[**Nvidia PhyicsNeMo**](#what-is-physicsnemo)
+| [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 | [**Install guide**](#installation)
+| [**Getting Started**](#getting-started)
 | [**Contributing Guidelines**](#contributing-to-physicsnemo)
-| [**Resources**](#resources)
-| [**PhysicsNeMo Migration Guide**](#physicsnemo-migration-guide)
-| [**Communication**](#communication)
 | [**License**](#license)
 
 ## What is PhysicsNeMo?
 
 NVIDIA PhysicsNeMo is an open-source deep-learning framework for building, training,
-and fine-tuning deep learning models using state-of-the-art SciML methods for
+fine-tuning and inferring Physics AI models using state-of-the-art SciML methods for
 AI4science and engineering.
 
-PhysicsNeMo provides utilities and optimized pipelines to develop AI models that combine
+PhysicsNeMo provides python modules to compose scalable and optimized training and
+inference pipelines to explore, develop, validate and deploy  AI models that combine
 physics knowledge with data, enabling real-time predictions.
 
 Whether you are exploring the use of Neural operators, GNNs, or transformers or are
@@ -57,28 +57,42 @@ provides you with an optimized stack that will enable you to train your models a
 
 ## More About PhysicsNeMo
 
-At a granular level, PhysicsNeMo provides a library of a few key components:
+At a granular level, PhysicsNeMo is developed as modular functionality and therefore
+provides built-in composable modules that are packaged into few key components:
 
 <!-- markdownlint-disable -->
 Component | Description |
 ---- | --- |
-[**physicsnemo.models**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html) | A collection of optimized, customizable, and easy-to-use models such as Fourier Neural Operators, Graph Neural Networks, and many more|
-[**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | A data pipeline and data loader library, including benchmark datapipes, weather daptapipes, and graph datapipes|
-[**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing library build on top of `torch.distributed` to enable parallel training with just a few steps|
-[**physicsnemo.sym.geometry**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html) | A library to handle geometry for DL training using the Constructive Solid Geometry modeling and CAD files in STL format.|
-[**physicsnemo.sym.eq**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/nodes.html) | A library to use PDEs in your DL training with several implementations of commonly observed equations and easy ways for customization.|
+[**physicsnemo.models**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html) | A collection of optimized, customizable, and easy-to-use families of model architectures such as Neural Operators, Graph Neural Networks, Diffusion models, Transformer models and many more|
+[**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | Optimized and scalable built-in data pipelines fine tuned to handle engineering and scientific data structures like point clouds, meshes etc|
+[**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing sub-module built on top of `torch.distributed` to enable parallel training with just a few steps|
+[**physicsnemo.curator**](xxx) | A sub-module to streamline and accelerate the data curation for engineering and scientific datasets for training and inference. (coming soon)|
+[**physicsnemo.sym.geometry**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html) | A sub-module to handle geometry for DL training using the Constructive Solid Geometry modeling and CAD files in STL format.|
+[**physicsnemo.sym.eq**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/nodes.html) | A sub-module to use PDEs in your DL training with several implementations of commonly observed equations and easy ways for customization.|
 <!-- markdownlint-enable -->
 
 For a complete list, refer to the PhysicsNeMo API documentation for
-[PhysicsNeMo Core](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
-and
-[PhysicsNeMo Sym](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/api_index.html).
+[PhysicsNeMo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
+
+## AI4Science Library
 
 Usually, PhysicsNeMo is used either as:
 
 - A complementary tool to Pytorch when exploring AI for SciML and AI4Science applications.
 - A deep learning research platform that provides scale and optimal performance on
 NVIDIA GPUs.
+
+### Domain Specific Packages
+
+The following are packages dedicated for domain experts of specific communities catering
+to their unique exploration needs.
+
+- [PhysicsNeMo CFD](https://github.com/NVIDIA/physicsnemo-cfd): Inference sub-module of PhysicsNeMo
+  to enable CFD domain experts to explore, experiment and validate using pretrained
+  AI models for CFD use cases.
+- [Earth-2 Studio](https://github.com/NVIDIA/earth2studio): Inference sub-module of PhysicsNeMo
+  to enable climate researchers and scientists to explore and experiment with pretrained
+  AI models for weather and climate.
 
 Elaborating Further:
 
@@ -98,17 +112,32 @@ to enhance the end to end training speed.
 
 ### A suite of Physics Informed ML Models
 
-PhysicsNeMo offers a comprehensive library of state-of-the-art models specifically designed
-for physics-ML applications.
+PhysicsNeMo offers a library of state-of-the-art models specifically designed
+for physics-ML applications. Users can build any model architecture using the underlying
+PyTorch layers and combine with curated PhysicsNeMo layers.
+
 The [Model Zoo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html#model-zoo)
-includes generalizable model architectures such as
-[Fourier Neural Operators (FNOs)](physicsnemo/models/fno),
-[DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html),
-[Physics-Informed Neural Networks (PINNs)](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html),
-[Graph Neural Networks (GNNs)](physicsnemo/models/gnn_layers),
-and generative AI models like [Diffusion Models](physicsnemo/models/diffusion)
-as well as domain-specific models such as [Deep Learning Weather Prediction (DLWP)](physicsnemo/models/dlwp)
-and [Super Resolution Network (SrNN)](physicsnemo/models/srrn) among others.
+includes optimized implementation of family of model architectures such as
+Neural Operators:
+
+- [Fourier Neural Operators (FNOs)](physicsnemo/models/fno)
+- [DeepONet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/neural_operators/deeponet.html)
+- [DoMINO](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/external_aerodynamics/domino/readme.html)
+- [Graph Neural Networks (GNNs)](physicsnemo/models/gnn_layers)
+- [MeshGraphNet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/vortex_shedding_mgn/readme.html)
+- [MeshGraphNet for Lagrangian](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/lagrangian_mgn/readme.html)
+- [XAeroNet](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/cfd/external_aerodynamics/xaeronet/readme.html)
+- [Diffusion Models](physicsnemo/models/diffusion)
+- [Correction Diffusion Model](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/generative/corrdiff/readme.html)
+- [DDPM](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/generative/diffusion/readme.html)
+- [PhysicsNeMo GraphCast](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/examples/weather/graphcast/readme.html)
+- [Transsolver](https://github.com/NVIDIA/physicsnemo/tree/main/examples/cfd/darcy_transolver)
+- [RNNs](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models)
+- [SwinVRNN](https://github.com/NVIDIA/physicsnemo/tree/main/physicsnemo/models/swinvrnn)
+- [Physics-Informed Neural Networks (PINNs)](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/foundational/1d_wave_equation.html)
+
+And many others.
+
 These models are optimized for various physics domains, such as computational fluid
 dynamics, structural mechanics, and electromagnetics. Users can download, customize, and
 build upon these models to suit their specific needs, significantly reducing the time
@@ -169,33 +198,70 @@ python
 torch.Size([128, 64])
 ```
 
-### AI4Science Library
+To use the distributed module, you can do the following (Example for
+distributed data parallel training. For a more in-depth tutorial refer
+[PhysicsNeMo Distributed](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html#)):
 
-- [PhysicsNeMo Symbolic](https://github.com/NVIDIA/physicsnemo-sym): This repository of
-  algorithms and utilities allows SciML researchers and developers to physics inform model
-  training and model validation. It also provides a higher level abstraction
-  for domain experts that is native to science and engineering.
+```python
+import torch
+from torch.nn.parallel import DistributedDataParallel
+from physicsnemo.distributed import DistributedManager
+from physicsnemo.models.mlp.fully_connected import FullyConnected
 
-#### Domain Specific Packages
+def main():
+    DistributedManager.initialize()
+    dist = DistributedManager()
+    
+    arch = FullyConnected(in_features=32, out_features=64).to(dist.device)
+    
+    if dist.distributed:
+        ddps = torch.cuda.Stream()
+        with torch.cuda.stream(ddps):
+            arch = DistributedDataParallel(
+                arch,
+                device_ids=[dist.local_rank],
+                output_device=dist.device,
+                broadcast_buffers=dist.broadcast_buffers,
+                find_unused_parameters=dist.find_unused_parameters,
+            )
+        torch.cuda.current_stream().wait_stream(ddps)
 
-The following are packages dedicated for domain experts of specific communities catering
-to their unique exploration needs.
+    # Set up the optimizer
+    optimizer = torch.optim.Adam(
+        arch.parameters(),
+        lr=0.001,
+    )
 
-- [Earth-2 Studio](https://github.com/NVIDIA/earth2studio): Open source project
-  to enable climate researchers and scientists to explore and experiment with
-  AI models for weather and climate.
+    def training_step(input, target):
+        pred = arch(invar)
+        loss = torch.sum(torch.pow(pred - target, 2))
+        loss.backward()
+        optimizer.step()
+        return loss
 
-#### Research packages
+    # Sample training loop
+    for i in range(20):
+        # Random inputs and targets for simplicity
+        input = torch.randn(128, 32, device=dist.device)
+        target = torch.randn(128, 64, device=dist.device)
 
-The following are research packages that get packaged into PhysicsNeMo once they are stable.
+        # Training step
+        loss = training_step(input, target)
 
-- [PhysicsNeMo Makani](https://github.com/NVIDIA/modulus-makani): Experimental library
-  designed to enable the research and development of machine-learning based weather and
-  climate models.
-- [Earth2 Grid](https://github.com/NVlabs/earth2grid): Experimental library with
-  utilities for working geographic data defined on various grids.
-- [Earth-2 MIP](https://github.com/NVIDIA/earth2mip): Experimental library with
-  utilities for model intercomparison for weather and climate models.
+if __name__ == "__main__":
+    main()
+```
+
+To use the PDE module, you can do the following:
+
+```python
+>>> from physicsnemo.sym.eq.pdes.navier_stokes import NavierStokes
+>>> ns = NavierStokes(nu=0.01, rho=1, dim=2)
+>>> ns.pprint()
+continuity: u__x + v__y
+momentum_x: u*u__x + v*u__y + p__x + u__t - 0.01*u__x__x - 0.01*u__y__y
+momentum_y: u*v__x + v*v__y + p__y + v__t - 0.01*v__x__x - 0.01*v__y__y
+```
 
 ## Who is using and contributing to PhysicsNeMo
 
@@ -216,7 +282,7 @@ Latest examples of research teams using PhysicsNeMo are
 [TU Munich CFD team](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62237/) etc.
 
 Please navigate to this page for a complete list of research work leveraging PhysicsNeMo.
-For a list of enterprises using PhysicsNeMo refer [here](https://developer.nvidia.com/physicsnemo).
+For a list of enterprises using PhysicsNeMo refer [PhysicsNeMo Webpage](https://developer.nvidia.com/physicsnemo).
 
 Using PhysicsNeMo and interested in showcasing your work on
 [NVIDIA Blogs](https://developer.nvidia.com/blog/category/simulation-modeling-design/)?
@@ -260,6 +326,14 @@ way is to start with a reference sample and then update it for your own use case
   
 ## Installation
 
+The following instructions help you install the base PhysicsNeMo modules to get started.
+There are additional optional dependencies for specific models that are listed under
+[optional dependencies](#optional-dependencies).
+The training recipes are not packaged into the pip wheels or the container to keep the
+footprint low. We recommend users clone the appropriate training recipes and use them
+as a starting point. These training recipes may require additional dependencies
+specific to the use case and they come with the requirements file.
+
 ### PyPi
 
 The recommended method for installing the latest version of PhysicsNeMo is using PyPi:
@@ -268,7 +342,7 @@ The recommended method for installing the latest version of PhysicsNeMo is using
 pip install nvidia-physicsnemo
 ```
 
-The installation can be verified by running the hello world example as demonstrated [here](#hello-world).
+The installation can be verified by running the [hello world](#hello-world) example.
 
 #### Optional dependencies
 
@@ -383,8 +457,7 @@ discussions, collaboration, etc.
 
 ## Feedback
 
-Want to suggest some improvements to PhysicsNeMo? Use our feedback form
-[here](https://docs.google.com/forms/d/e/1FAIpQLSfX4zZ0Lp7MMxzi3xqvzX4IQDdWbkNh5H_a_clzIhclE2oSBQ/viewform?usp=sf_link).
+Want to suggest some improvements to PhysicsNeMo? Use our [feedback form](https://docs.google.com/forms/d/e/1FAIpQLSfX4zZ0Lp7MMxzi3xqvzX4IQDdWbkNh5H_a_clzIhclE2oSBQ/viewform?usp=sf_link).
 
 ## License
 

@@ -16,9 +16,14 @@
 
 # ruff: noqa: F401
 
+import time
+
+import cupy as cp
 import numpy as np
 import warp as wp
 from numpy.typing import NDArray
+
+wp.config.quiet = True
 
 
 @wp.kernel
@@ -104,20 +109,37 @@ def signed_distance_field(
     >>> mesh_vertices = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]
     >>> mesh_indices = np.array((0, 1, 2))
     >>> input_points = [(0.5, 0.5, 0.5)]
-    >>> signed_distance_field(mesh_vertices, mesh_indices, input_points).numpy()
-    Module ...
+    >>> signed_distance_field(mesh_vertices, mesh_indices, input_points)
     array([0.5], dtype=float32)
     """
-
     wp.init()
-    mesh = wp.Mesh(
-        wp.array(mesh_vertices, dtype=wp.vec3), wp.array(mesh_indices, dtype=wp.int32)
-    )
 
-    sdf_points = wp.array(input_points, dtype=wp.vec3)
-    sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32)
-    sdf_hit_point = wp.zeros(shape=sdf_points.shape, dtype=wp.vec3f)
-    sdf_hit_point_id = wp.zeros(shape=sdf_points.shape, dtype=wp.int32)
+    # Get the current warp device string (e.g., "cuda:2")
+    try:
+        device = str(wp.get_device())
+    except Exception:
+        device = "cuda"
+
+    # If cupy arrays come in, we have to convert them to numpy arrays:
+    return_cupy = False
+    if isinstance(mesh_vertices, cp.ndarray):
+        return_cupy = True
+    if isinstance(mesh_indices, cp.ndarray):
+        return_cupy = True
+    if isinstance(input_points, cp.ndarray):
+        return_cupy = True
+
+    # Convert numpy to warp arrays:
+    mesh_vertices = wp.array(mesh_vertices, dtype=wp.vec3, device=device)
+    mesh_indices = wp.array(mesh_indices, dtype=wp.int32, device=device)
+
+    sdf_points = wp.array(input_points, dtype=wp.vec3, device=device)
+
+    mesh = wp.Mesh(mesh_vertices, mesh_indices)
+
+    sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=device)
+    sdf_hit_point = wp.zeros(shape=sdf_points.shape, dtype=wp.vec3f, device=device)
+    sdf_hit_point_id = wp.zeros(shape=sdf_points.shape, dtype=wp.int32, device=device)
 
     wp.launch(
         kernel=_bvh_query_distance,
@@ -131,13 +153,28 @@ def signed_distance_field(
             sdf_hit_point_id,
             use_sign_winding_number,
         ],
+        device=device,
     )
 
-    if include_hit_points and include_hit_points_id:
-        return (sdf, sdf_hit_point, sdf_hit_point_id)
-    elif include_hit_points:
-        return (sdf, sdf_hit_point)
-    elif include_hit_points_id:
-        return (sdf, sdf_hit_point_id)
+    if return_cupy:
+        if include_hit_points and include_hit_points_id:
+            return (
+                cp.asarray(sdf),
+                cp.asarray(sdf_hit_point),
+                cp.asarray(sdf_hit_point_id),
+            )
+        elif include_hit_points:
+            return (cp.asarray(sdf), cp.asarray(sdf_hit_point))
+        elif include_hit_points_id:
+            return (cp.asarray(sdf), cp.asarray(sdf_hit_point_id))
+        else:
+            return cp.asarray(sdf)
     else:
-        return sdf
+        if include_hit_points and include_hit_points_id:
+            return (sdf.numpy(), sdf_hit_point.numpy(), sdf_hit_point_id.numpy())
+        elif include_hit_points:
+            return (sdf.numpy(), sdf_hit_point.numpy())
+        elif include_hit_points_id:
+            return (sdf.numpy(), sdf_hit_point_id.numpy())
+        else:
+            return sdf.numpy()

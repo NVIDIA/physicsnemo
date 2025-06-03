@@ -30,6 +30,7 @@ from .unet import UNet, StormCastUNet
 from .preconditioning import (
     EDMPrecond,
     EDMPrecondSuperResolution,
+    EDMPrecondSR,
     VEPrecond,
     VPPrecond,
     iDDPMPrecond,

@@ -14,13 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.01-py3
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.04-py3
 FROM ${BASE_CONTAINER} as builder
 
 ARG TARGETPLATFORM
 
 # Update pip and setuptools
-RUN pip install "pip==23.2.1" "setuptools==68.2.2"
+RUN pip install "pip>=23.2.1" "setuptools>=77.0.3"
 
 # Setup git lfs, graphviz gl1(vtk dep)
 RUN apt-get update && \
@@ -45,8 +45,15 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$PYSPNG_ARM64_WHEEL" != "unkn
     fi
 
 # Install other dependencies
+# Remove packaging==23.2 from constraint.txt in the PyTorch container
+RUN FILE="/etc/pip/constraint.txt" && \
+    if [ -f "$FILE" ]; then \
+        sed -i '/packaging/d' "$FILE"; \
+    else \
+        echo "File not found: $FILE"; \
+    fi
 RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
-RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio>=2.28.1" "moviepy>=1.0.3" "tqdm>=4.60.0" "gcsfs==2024.2.0"
+RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio" "moviepy" "tqdm>=4.60.0"
 
 # Install Numcodecs (This needs a separate install because Numcodecs ARM pip install has issues)
 # A fix is being added here: https://github.com/zarr-developers/numcodecs/pull/315 but the public release is not ready yet.
@@ -204,7 +211,6 @@ RUN rm -rf /physicsnemo/
 FROM builder as deploy
 COPY . /physicsnemo/
 RUN cd /physicsnemo/ && pip install .
-RUN pip install --no-cache-dir "protobuf==3.20.3"
 
 # Set Git Hash as a environment variable
 ARG PHYSICSNEMO_GIT_HASH

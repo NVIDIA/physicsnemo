@@ -22,9 +22,8 @@ dgl = pytest.importorskip("dgl")
 
 
 @pytest.fixture
-def ahmed_data_dir():
-    path = "/data/nfs/modulus-data/datasets/ahmed_body/"
-    return path
+def ahmed_data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
 @import_or_fail("sparse_dot_mkl")

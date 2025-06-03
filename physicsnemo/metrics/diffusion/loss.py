@@ -382,6 +382,7 @@ class RegressionLoss:
         augment_pipe: Optional[
             Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]
         ] = None,
+        lead_time_label: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Calculate and return the regression loss for
@@ -420,6 +421,10 @@ class RegressionLoss:
                     - Augmented images of shape (B, C_hr+C_lr, H, W)
                     - Optional augmentation labels
 
+        lead_time_label : Optional[torch.Tensor], optional
+            Lead time labels for temporal predictions, by default None.
+            Shape can vary based on model requirements, typically (B,) or scalar.
+
         Returns
         -------
         torch.Tensor
@@ -441,7 +446,23 @@ class RegressionLoss:
         y_lr = y_tot[:, img_clean.shape[1] :, :, :]
 
         zero_input = torch.zeros_like(y, device=img_clean.device)
-        D_yn = net(zero_input, y_lr, force_fp32=False, augment_labels=augment_labels)
+
+        if lead_time_label is not None:
+            D_yn = net(
+                zero_input,
+                y_lr,
+                force_fp32=False,
+                lead_time_label=lead_time_label,
+                augment_labels=augment_labels,
+            )
+        else:
+            D_yn = net(
+                zero_input,
+                y_lr,
+                force_fp32=False,
+                augment_labels=augment_labels,
+            )
+
         loss = weight * ((D_yn - y) ** 2)
 
         return loss
@@ -518,6 +539,7 @@ class ResidualLoss:
         self.P_std = P_std
         self.sigma_data = sigma_data
         self.hr_mean_conditioning = hr_mean_conditioning
+        self.y_mean = None
 
     def __call__(
         self,
@@ -529,6 +551,7 @@ class ResidualLoss:
         augment_pipe: Optional[
             Callable[[Tensor], Tuple[Tensor, Optional[Tensor]]]
         ] = None,
+        use_patch_grad_acc: bool = False,
     ) -> Tensor:
         """
         Calculate and return the loss for denoising score matching.
@@ -611,6 +634,9 @@ class ResidualLoss:
                 Tuple[torch.Tensor, Optional[torch.Tensor]]:
                     - Augmented images of shape (B, C_hr+C_lr, H, W)
                     - Optional augmentation labels
+        use_patch_grad_acc: bool, optional
+            A boolean flag indicating whether to enable multi-iterations of patching accumulations
+            for amortizing regression cost. Default False.
 
         Returns
         -------
@@ -642,10 +668,6 @@ class ResidualLoss:
                 f"Batch size, height and width must match."
             )
 
-        rnd_normal = torch.randn([img_clean.shape[0], 1, 1, 1], device=img_clean.device)
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
-
         # augment for conditional generation
         img_tot = torch.cat((img_clean, img_lr), dim=1)
         y_tot, augment_labels = (
@@ -656,28 +678,52 @@ class ResidualLoss:
         y_lr_res = y_lr
         batch_size = y.shape[0]
 
-        # form residual
-        if lead_time_label is not None:
-            y_mean = self.regression_net(
-                torch.zeros_like(y, device=img_clean.device),
-                y_lr_res,
-                lead_time_label=lead_time_label,
-                augment_labels=augment_labels,
-            )
-        else:
-            y_mean = self.regression_net(
-                torch.zeros_like(y, device=img_clean.device),
-                y_lr_res,
-                augment_labels=augment_labels,
-            )
+        # if using multi-iterations of patching, switch to optimized version
+        if use_patch_grad_acc:
+            # form residual
+            if self.y_mean is None:
+                if lead_time_label is not None:
+                    y_mean = self.regression_net(
+                        torch.zeros_like(y, device=img_clean.device),
+                        y_lr_res,
+                        lead_time_label=lead_time_label,
+                        augment_labels=augment_labels,
+                    )
+                else:
+                    y_mean = self.regression_net(
+                        torch.zeros_like(y, device=img_clean.device),
+                        y_lr_res,
+                        augment_labels=augment_labels,
+                    )
+                self.y_mean = y_mean
 
-        y = y - y_mean
+        # if on full domain, or if using patching without multi-iterations
+        else:
+            # form residual
+            if lead_time_label is not None:
+                y_mean = self.regression_net(
+                    torch.zeros_like(y, device=img_clean.device),
+                    y_lr_res,
+                    lead_time_label=lead_time_label,
+                    augment_labels=augment_labels,
+                )
+            else:
+                y_mean = self.regression_net(
+                    torch.zeros_like(y, device=img_clean.device),
+                    y_lr_res,
+                    augment_labels=augment_labels,
+                )
+
+            self.y_mean = y_mean
+
+        y = y - self.y_mean
 
         if self.hr_mean_conditioning:
-            y_lr = torch.cat((y_mean, y_lr), dim=1).contiguous()
+            y_lr = torch.cat((self.y_mean, y_lr), dim=1)
 
         # patchified training
         # conditioning: cat(y_mean, y_lr, input_interp, pos_embd), 4+12+100+4
+        # removed patch_embedding_selector due to compilation issue with dynamo.
         if patching:
             # Patched residual
             # (batch_size * patch_num, c_out, patch_shape_y, patch_shape_x)
@@ -686,17 +732,8 @@ class ResidualLoss:
             # (batch_size * patch_num, 2*c_in, patch_shape_y, patch_shape_x)
             y_lr_patched = patching.apply(input=y_lr, additional_input=img_lr)
 
-            # Function to select the correct positional embedding for each
-            # patch
-            def patch_embedding_selector(emb):
-                # emb: (N_pe, image_shape_y, image_shape_x)
-                # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
-                return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
-
             y = y_patched
             y_lr = y_lr_patched
-        else:
-            patch_embedding_selector = None
 
         # Noise
         rnd_normal = torch.randn([y.shape[0], 1, 1, 1], device=img_clean.device)
@@ -711,7 +748,12 @@ class ResidualLoss:
                 latent,
                 y_lr,
                 sigma,
-                embedding_selector=patch_embedding_selector,
+                embedding_selector=None,
+                global_index=(
+                    patching.global_index(batch_size, img_clean.device)
+                    if patching is not None
+                    else None
+                ),
                 lead_time_label=lead_time_label,
                 augment_labels=augment_labels,
             )
@@ -720,7 +762,12 @@ class ResidualLoss:
                 latent,
                 y_lr,
                 sigma,
-                embedding_selector=patch_embedding_selector,
+                embedding_selector=None,
+                global_index=(
+                    patching.global_index(batch_size, img_clean.device)
+                    if patching is not None
+                    else None
+                ),
                 augment_labels=augment_labels,
             )
         loss = weight * ((D_yn - y) ** 2)

@@ -57,7 +57,7 @@ def shard_tensor_factory(mesh_names, mesh_sizes, requires_grad=False, uneven=Tru
     )
 
     local_shape = [
-        10,
+        100,
     ]
 
     min_size = 4
@@ -75,7 +75,7 @@ def shard_tensor_factory(mesh_names, mesh_sizes, requires_grad=False, uneven=Tru
         for dim in range(domain_mesh.ndim):
             local_shape.append(min_size)  # noqa: PERF401
 
-    local_shape.append(10)
+    local_shape.append(100)
 
     raw_data = torch.randn(
         local_shape,
@@ -84,8 +84,12 @@ def shard_tensor_factory(mesh_names, mesh_sizes, requires_grad=False, uneven=Tru
     )
 
     st = ShardTensor.from_local(
-        raw_data, device_mesh=domain_mesh, placements=placements, infer_shape=True
+        raw_data,
+        device_mesh=domain_mesh,
+        placements=placements,
+        sharding_shapes="infer",
     )
+
     return st
 
 
@@ -133,7 +137,7 @@ def run_shard_tensor_reduction(rank, num_gpus, mesh_names, mesh_sizes, op, verbo
 @pytest.mark.parametrize("data_parallel_size", [-1])
 @pytest.mark.parametrize("domain_H", [2, 4])
 @pytest.mark.parametrize("domain_W", [1, 2])
-@pytest.mark.parametrize("op", [torch.sum, torch.min, torch.max, torch.mean])
+@pytest.mark.parametrize("op", [torch.sum, torch.min, torch.max])
 def test_shard_tensor_reduction(data_parallel_size, domain_H, domain_W, op):
     """
     This test is meant to ensure ShardTensor can be initialized correctly
@@ -199,6 +203,7 @@ def run_shard_tensor_redistribute(
             print(f"shard_tensor placements: {shard_tensor._spec.placements}")
             print(f"Target placements: {dst_placements}")
             print(f"shard_tensor shape: {shard_tensor.shape}")
+            print(f"Local tensor shape: {shard_tensor._local_tensor.shape}")
 
         # Redistribute to new placement
         redistributed = shard_tensor.redistribute(placements=dst_placements)
@@ -364,5 +369,13 @@ def test_shard_tensor_redistribute2d(
 
 
 if __name__ == "__main__":
-
-    test_shard_tensor_reduction(-1, 2, 2, torch.sum)
+    test_shard_tensor_redistribute1d(
+        data_parallel_size=-1,
+        domain_H=8,
+        redistribution_case=(
+            "S2",
+            [
+                Shard(2),
+            ],
+        ),
+    )

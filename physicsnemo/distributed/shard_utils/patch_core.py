@@ -47,6 +47,10 @@ def promote_to_iterable(input_obj, target_iterable):
         An iterable of the same type as the target iterable.
     """
 
+    # Don't do anything to strings:
+    if isinstance(input_obj, str):
+        return input_obj
+
     # If input_obj is a string or not iterable, wrap it in the target's type.
     if isinstance(input_obj, str) or not isinstance(input_obj, Iterable):
         # Also extend it with copies to the same length:

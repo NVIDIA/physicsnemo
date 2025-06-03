@@ -143,14 +143,17 @@ def _get_checkpoint_filename(
 
 def _unique_model_names(
     models: List[torch.nn.Module],
+    loading: bool = False,
 ) -> Dict[str, torch.nn.Module]:
     """Util to clean model names and index if repeat names, will also strip DDP wrappers
-    if they exist.
+     and torch dynamo wrappers if they exist.
 
     Parameters
     ----------
     model :  List[torch.nn.Module]
-        List of models to generate names for
+        List of models to generate names for.
+    loading : bool, optional
+        Whether the models are being loaded, by default False.
 
     Returns
     -------
@@ -163,10 +166,21 @@ def _unique_model_names(
         if hasattr(model0, "module"):
             # Strip out DDP layer
             model0 = model0.module
+        # Strip out torch dynamo wrapper
+        if isinstance(model0, torch._dynamo.eval_frame.OptimizedModule):
+            model0 = model0._orig_mod
+            is_compiled = True
+        else:
+            is_compiled = False
         # Base name of model is meta.name unless pytorch model
         base_name = model0.__class__.__name__
         if isinstance(model0, physicsnemo.models.Module):
             base_name = model0.meta.name
+        # Warning in case of attempt to load into a compiled model
+        if is_compiled and loading:
+            checkpoint_logging.warning(
+                f"Model {base_name} is already compiled, consider loading first and then compiling."
+            )
         # If we have multiple models of the same name, introduce another index
         if base_name in model_dict:
             model_dict[base_name].append(model0)
@@ -257,13 +271,20 @@ def save_checkpoint(
     checkpoint_dict = {}
     # Optimizer state dict
     if optimizer:
-        checkpoint_dict["optimizer_state_dict"] = optimizer.state_dict()
+        opt_state_dict = optimizer.state_dict()
+        # Strip out torch dynamo wrapper prefix
+        for pg in opt_state_dict.get("param_groups", []):
+            param_names = pg.get("param_names")
+            if param_names is None:
+                continue
+            pg["param_names"] = [pn.removeprefix("_orig_mod.") for pn in param_names]
+        checkpoint_dict["optimizer_state_dict"] = opt_state_dict
 
     # Scheduler state dict
     if scheduler:
         checkpoint_dict["scheduler_state_dict"] = scheduler.state_dict()
 
-    # Scheduler state dict
+    # Scaler state dict
     if scaler:
         checkpoint_dict["scaler_state_dict"] = scaler.state_dict()
     # Static capture is being used, save its grad scaler
@@ -347,7 +368,7 @@ def load_checkpoint(
     if models:
         if not isinstance(models, list):
             models = [models]
-        models = _unique_model_names(models)
+        models = _unique_model_names(models, loading=True)
         for name, model in models.items():
             # Get model type
             model_type = (

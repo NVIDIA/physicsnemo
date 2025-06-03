@@ -22,5 +22,6 @@ from .optimization import (
     validate_combo_optims,
     validate_cuda_graphs,
     validate_jit,
+    validate_torch_compile,
 )
 from .utils import compare_output

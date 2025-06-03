@@ -20,11 +20,11 @@ Diffusion-Based Generative Models".
 """
 
 import importlib
+import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Tuple, Union
 
 import numpy as np
-import nvtx
 import torch
 
 from physicsnemo.models.meta import ModelMetaData
@@ -821,7 +821,6 @@ class EDMPrecondSuperResolution(Module):
         """
         return torch.cat([c_in * x, img_lr.to(x.dtype)], dim=1)
 
-    @nvtx.annotate(message="EDMPrecondSuperResolution", color="orange")
     def forward(
         self,
         x: torch.Tensor,
@@ -918,6 +917,178 @@ class EDMPrecondSuperResolution(Module):
         EDMPrecond.round_sigma
         """
         return EDMPrecond.round_sigma(sigma)
+
+    @property
+    def amp_mode(self):
+        """
+        Return the *amp_mode* flag of the wrapped model or *None*.
+        """
+        return getattr(self.model, "amp_mode", None)
+
+    @amp_mode.setter
+    def amp_mode(self, value: bool):
+        """
+        Propagate *amp_mode* to the model and all its sub-modules.
+        """
+
+        if not isinstance(value, bool):
+            raise TypeError("amp_mode must be a boolean value.")
+
+        if hasattr(self.model, "amp_mode"):
+            self.model.amp_mode = value
+
+        for sub_module in self.model.modules():
+            if hasattr(sub_module, "amp_mode"):
+                sub_module.amp_mode = value
+
+
+# NOTE: This is a deprecated version of the EDMPrecondSuperResolution model.
+# This was used to maintain backwards compatibility and allow loading old models.
+@dataclass
+class EDMPrecondSRMetaData(ModelMetaData):
+    """EDMPrecondSR meta data"""
+
+    name: str = "EDMPrecondSR"
+    # Optimization
+    jit: bool = False
+    cuda_graphs: bool = False
+    amp_cpu: bool = False
+    amp_gpu: bool = True
+    torch_fx: bool = False
+    # Data type
+    bf16: bool = False
+    # Inference
+    onnx: bool = False
+    # Physics informed
+    func_torch: bool = False
+    auto_grad: bool = False
+
+
+class EDMPrecondSR(EDMPrecondSuperResolution):
+    """
+    NOTE: This is a deprecated version of the EDMPrecondSuperResolution model.
+    This was used to maintain backwards compatibility and allow loading old models.
+    Please use the EDMPrecondSuperResolution model instead.
+
+    Improved preconditioning proposed in the paper "Elucidating the Design Space of
+    Diffusion-Based Generative Models" (EDM) for super-resolution tasks
+
+    Parameters
+    ----------
+    img_resolution : int
+        Image resolution.
+    img_channels : int
+        Number of color channels (deprecated, not used).
+    img_in_channels : int
+        Number of input color channels.
+    img_out_channels : int
+        Number of output color channels.
+    use_fp16 : bool
+        Execute the underlying model at FP16 precision?, by default False.
+    sigma_min : float
+        Minimum supported noise level, by default 0.0.
+    sigma_max : float
+        Maximum supported noise level, by default inf.
+    sigma_data : float
+        Expected standard deviation of the training data, by default 0.5.
+    model_type :str
+        Class name of the underlying model, by default "SongUNetPosEmbd".
+    scale_cond_input : bool
+        Whether to scale the conditional input (deprecated), by default True.
+    **model_kwargs : dict
+        Keyword arguments for the underlying model.
+
+    Note
+    ----
+    References:
+    - Karras, T., Aittala, M., Aila, T. and Laine, S., 2022. Elucidating the
+    design space of diffusion-based generative models. Advances in Neural Information
+    Processing Systems, 35, pp.26565-26577.
+    - Mardani, M., Brenowitz, N., Cohen, Y., Pathak, J., Chen, C.Y.,
+    Liu, C.C.,Vahdat, A., Kashinath, K., Kautz, J. and Pritchard, M., 2023.
+    Generative Residual Diffusion Modeling for Km-scale Atmospheric Downscaling.
+    arXiv preprint arXiv:2309.15214.
+    """
+
+    def __init__(
+        self,
+        img_resolution,
+        img_channels,  # deprecated
+        img_in_channels,
+        img_out_channels,
+        use_fp16=False,
+        sigma_min=0.0,
+        sigma_max=float("inf"),
+        sigma_data=0.5,
+        model_type="SongUNetPosEmbd",
+        scale_cond_input=True,  # deprecated
+        **model_kwargs,
+    ):
+        warnings.warn(
+            "EDMPrecondSR is deprecated and will be removed in a future version. "
+            "Please use EDMPrecondSuperResolution instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        if scale_cond_input:
+            warnings.warn(
+                "scale_cond_input=True does not properly scale the conditional input. "
+                "(see https://github.com/NVIDIA/modulus/issues/229). "
+                "This setup will be deprecated. "
+                "Please set scale_cond_input=False.",
+                DeprecationWarning,
+            )
+
+        super().__init__(
+            img_resolution=img_resolution,
+            img_in_channels=img_in_channels,
+            img_out_channels=img_out_channels,
+            use_fp16=use_fp16,
+            sigma_min=sigma_min,
+            sigma_max=sigma_max,
+            sigma_data=sigma_data,
+            model_type=model_type,
+            **model_kwargs,
+        )
+
+        # Store deprecated parameters for backward compatibility
+        self.img_channels = img_channels
+        self.scale_cond_input = scale_cond_input
+
+    def forward(
+        self,
+        x,
+        img_lr,
+        sigma,
+        force_fp32=False,
+        **model_kwargs,
+    ):
+        """
+        Forward pass of the EDMPrecondSR model wrapper.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy high-resolution image of shape (B, C_hr, H, W).
+        img_lr : torch.Tensor
+            Low-resolution conditioning image of shape (B, C_lr, H, W).
+        sigma : torch.Tensor
+            Noise level of shape (B) or (B, 1) or (B, 1, 1, 1).
+        force_fp32 : bool, optional
+            Whether to force FP32 precision regardless of the `use_fp16` attribute,
+            by default False.
+        **model_kwargs : dict
+            Additional keyword arguments to pass to the underlying model.
+
+        Returns
+        -------
+        torch.Tensor
+            Denoised high-resolution image of shape (B, C_hr, H, W).
+        """
+        return super().forward(
+            x=x, img_lr=img_lr, sigma=sigma, force_fp32=force_fp32, **model_kwargs
+        )
 
 
 class VEPrecond_dfsr(torch.nn.Module):

@@ -20,7 +20,7 @@ import warnings
 from pathlib import Path
 
 import pytest
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
@@ -32,9 +32,8 @@ xr = pytest.importorskip("xarray")
 
 
 @pytest.fixture
-def data_dir():
-    path = "/data/nfs/modulus-data/datasets/healpix/"
-    return path
+def data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/healpix")
 
 
 @pytest.fixture
@@ -44,9 +43,8 @@ def dataset_name():
 
 
 @pytest.fixture
-def create_path():
-    path = "/data/nfs/modulus-data/datasets/healpix/merge"
-    return path
+def create_path(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/healpix/merge")
 
 
 def delete_dataset(create_path, dataset_name):
@@ -94,7 +92,6 @@ def scaling_double_dict():
 
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
-@nfsdata_or_fail
 def test_open_time_series_on_the_fly(create_path, pytestconfig):
     from physicsnemo.datapipes.healpix.data_modules import (
         open_time_series_dataset_classic_on_the_fly,
@@ -112,7 +109,7 @@ def test_open_time_series_on_the_fly(create_path, pytestconfig):
     assert isinstance(ds, xr.Dataset)
 
     test_var = variables[0]
-    base = xr.open_dataset(create_path + "/" + test_var + ".nc")
+    base = xr.open_dataset(str(create_path.joinpath(f"{test_var}.nc")))
     ds_var = ds.inputs.sel(channel_in=test_var)
 
     assert ds_var.equals(base[test_var])
@@ -121,7 +118,6 @@ def test_open_time_series_on_the_fly(create_path, pytestconfig):
 
 
 @import_or_fail("omegaconf")
-@nfsdata_or_fail
 def test_open_time_series(data_dir, dataset_name, pytestconfig):
     # check for failure of non-existant dataset
     from physicsnemo.datapipes.healpix.data_modules import (
@@ -139,7 +135,6 @@ def test_open_time_series(data_dir, dataset_name, pytestconfig):
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
 @import_or_fail("numpy")
-@nfsdata_or_fail
 def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
 
     from physicsnemo.datapipes.healpix.data_modules import (
@@ -162,7 +157,7 @@ def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
     # create new dataset
     # open a base dataset to compare against
     test_var = list(scaling.keys())[0]
-    base = xr.open_dataset(create_path + "/" + test_var + ".nc")
+    base = xr.open_dataset(str(create_path.joinpath(f"{test_var}.nc")))
     # scale our test variable
     base[test_var] = np.log(base[test_var] + scaling[test_var]["log_epsilon"]) - np.log(
         scaling[test_var]["log_epsilon"]
@@ -185,7 +180,7 @@ def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
 
     # and with constants
     const = list(constants.keys())[0]
-    const_ds = xr.open_dataset(create_path + "/" + const + ".nc")
+    const_ds = xr.open_dataset(str(create_path.joinpath(f"{const}.nc")))
     ds = create_time_series_dataset_classic(
         src_directory=create_path,
         dst_directory=create_path,
@@ -204,7 +199,6 @@ def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
 
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
-@nfsdata_or_fail
 def test_TimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -302,7 +296,6 @@ def test_TimeSeriesDataset_initialization(
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
 @import_or_fail("numpy")
-@nfsdata_or_fail
 def test_TimeSeriesDataset_get_constants(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
@@ -329,7 +322,6 @@ def test_TimeSeriesDataset_get_constants(
 
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
-@nfsdata_or_fail
 def test_TimeSeriesDataset_len(data_dir, dataset_name, scaling_dict, pytestconfig):
     from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
@@ -374,7 +366,6 @@ def test_TimeSeriesDataset_len(data_dir, dataset_name, scaling_dict, pytestconfi
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
 @import_or_fail("numpy")
-@nfsdata_or_fail
 def test_TimeSeriesDataset_get(
     data_dir, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -484,7 +475,6 @@ def test_TimeSeriesDataset_get(
 
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
-@nfsdata_or_fail
 def test_TimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -573,7 +563,6 @@ def test_TimeSeriesDataModule_initialization(
 @import_or_fail("omegaconf")
 @import_or_fail("netCDF4")
 @import_or_fail("numpy")
-@nfsdata_or_fail
 def test_TimeSeriesDataModule_get_constants(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
@@ -651,7 +640,6 @@ def test_TimeSeriesDataModule_get_constants(
 
 
 @import_or_fail("omegaconf")
-@nfsdata_or_fail
 def test_TimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):

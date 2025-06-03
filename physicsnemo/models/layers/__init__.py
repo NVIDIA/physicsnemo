@@ -33,6 +33,7 @@ from .fully_connected_layers import (
     ConvNdKernel1Layer,
     FCLayer,
 )
+from .kan_layers import KolmogorovArnoldNetwork
 from .mlp_layers import Mlp
 from .resample_layers import (
     DownSample2D,

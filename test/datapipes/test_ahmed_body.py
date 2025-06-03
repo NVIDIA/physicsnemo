@@ -16,7 +16,7 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail, nfsdata_or_fail
+from pytest_utils import import_or_fail
 
 from . import common
 
@@ -24,17 +24,13 @@ Tensor = torch.Tensor
 
 
 @pytest.fixture
-def data_dir():
-    path = "/data/nfs/modulus-data/datasets/ahmed_body/"
-    return path
+def data_dir(nfs_data_dir):
+    return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
-@nfsdata_or_fail
 @import_or_fail(["vtk", "pyvista", "dgl"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_ahmed_body_constructor(data_dir, device, pytestconfig):
-
-    # _nfsdata_or_fail(pytestconfig)
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
 
     # construct dataset

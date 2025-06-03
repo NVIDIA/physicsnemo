@@ -25,7 +25,6 @@ from typing import Any, Callable, Dict, NewType, Optional, Union
 import torch
 
 import physicsnemo
-from physicsnemo.distributed import DistributedManager
 
 float16 = NewType("float16", torch.float16)
 bfloat16 = NewType("bfloat16", torch.bfloat16)
@@ -203,6 +202,9 @@ class _StaticCapture(object):
                 self.logger.warning(f"Recording graph of '{self.function.__name__}'")
                 self._zero_grads()
                 torch.cuda.synchronize()
+                # Delayed import to avoid circular import
+                from physicsnemo.distributed import DistributedManager
+
                 if DistributedManager().distributed:
                     torch.distributed.barrier()
                     # TODO: temporary workaround till this issue is fixed:
