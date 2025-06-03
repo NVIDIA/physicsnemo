@@ -1,3 +1,2 @@
 torchinfo
-warp-lang>=1.7.0
-timm==1.0.14
+warp-lang
