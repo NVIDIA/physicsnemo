@@ -90,11 +90,14 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 4. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
 
-**Training Details:**
+**Training Guidelines:**
 - Duration: A couple of days on a single node of H100 GPU
 - Checkpointing: Automatically resumes from latest checkpoint if interrupted
 - Multi-GPU Support: Compatible with `torchrun` or MPI for distributed training
-- If the training crashes because of OOO, modify the points sampled in volume `model.volume_points_sample` and surface `model.volume_points_sample` to manage memory requirements for your GPU 
+- If the training crashes because of OOO, modify the points sampled in volume `model.volume_points_sample` and surface `model.volume_points_sample` to manage memory requirements for your GPU
+- The DoMINO model allows for training both volume and surface fields using a single model but currently the recommendation is to train the volume and surface models separately. This can be controlled through the `conf/config.yaml`.
+- MSE loss for both volume and surface model gives the best results.
+- Bounding box is configurable and will depend on the usecase. The presets are suitable for the DriveAer-ML dataset.
 
 ### Training with Domain Parallelism
 
@@ -173,20 +176,6 @@ The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
 4. The surface predictions are carried out on the STL surface. The drag and lift
  accuracy will depend on the resolution of the STL.
 
-## Guidelines for training DoMINO model
-
-1. The DoMINO model allows for training both volume and surface fields using a single model
- but currently the recommendation is to train the volume and surface models separately. This
-  can be controlled through the config file.
-
-2. MSE loss for both volume and surface model gives the best results.
-
-3. The surface and volume variable names can change but currently the code only
- supports the variables in that specific order. For example, Pressure, wall-shear
-  and turb-visc for surface and velocity, pressure and turb-visc for volume.
-
-4. Bounding box is configurable and will depend on the usecase. The presets are
- suitable for the DriveAer-ML dataset.
 
 The DoMINO model architecture is used to support the
 [Real Time Digital Twin Blueprint](https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation)
