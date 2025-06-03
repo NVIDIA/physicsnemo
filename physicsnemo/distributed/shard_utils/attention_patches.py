@@ -118,10 +118,6 @@ def stable_signed_accumulate(
     return log_abs_new, sign_new
 
 
-# Create a persistent communication stream for the ring attention:
-comm_stream = torch.cuda.Stream()
-
-
 class RingSDPA(torch.autograd.Function):
     """
     Performs scaled dot product attention on sharded Q, K, V.
@@ -185,6 +181,7 @@ class RingSDPA(torch.autograd.Function):
 
         # Create streams that persist for the duration of the ring computation.
         compute_stream = torch.cuda.default_stream()
+        comm_stream = torch.cuda.Stream()
 
         for i in range(ring_config.mesh_size):
             # Launch communication for the next iteration early

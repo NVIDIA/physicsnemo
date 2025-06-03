@@ -19,6 +19,8 @@
 # 2.6.0+ works
 # 2.5.X and lower does not work
 
+import torch
+
 from physicsnemo.utils.version_check import check_module_requirements
 
 from .autograd import all_gather_v, gather_v, indexed_all_to_all_v, scatter_v
@@ -56,7 +58,9 @@ try:
 
         register_shard_wrappers()
 
-    register_custom_ops()
+    # Protect the automatic imports by checking cuda is available.
+    if torch.cuda.is_available():
+        register_custom_ops()
 
 except ImportError:
     pass
