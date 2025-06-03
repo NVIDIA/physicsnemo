@@ -41,14 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support surface for `physicsnemo.distributed` functionality.
 - Merged SongUNetPosLtEmb with SongUNetPosEmb, add support for batch>1
 
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
-
 ### Dependencies
 
 - Made `nvidia.dali` an optional dependency
