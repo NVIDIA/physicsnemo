@@ -24,7 +24,36 @@ A preprint describing additional details about the model architecture can be fou
 [paper](https://arxiv.org/abs/2501.13350).
 
 ## Getting started with the DrivAerML example
-### Dataset
+
+### Configuration basics
+
+DoMINO data processing, training and testing is managed through YAML configuration files powered by Hydra. The base configuration file, `config.yaml` is located in `src/conf` directory.
+
+To select a specific configuration, use the `--config-name` option when running the scripts. 
+You can modify configuration options in two ways:
+1. **Direct Editing:** Modify the YAML files directly
+2. **Command Line Override:** Use Hydra's `++` syntax to override settings at runtime
+
+For example, to change the training epochs (controlled by `train.epochs`):
+```bash
+python train.py ++training.epochs=200  # Sets number of epochs to 200
+```
+This modular configuration system allows for flexible experimentation while maintaining reproducibility.
+
+#### Project logs
+Save and track project logs, experiments, tensorboard files etc. by specifying a project directory with `project.name`. Tag experiments with `expt`.
+
+#### Data processing
+The first step for running the DoMINO pipeline requires processing the raw data (vtp, vtu and stl). The related configs can be set in the `data_processor` tab. Also, specify the variable names used in the raw dataset and their types in `variables.surface` and `variables.volume`.
+For example, you can set the input directory for raw data using `data_processor.input_dir` and output directory for processed files using `data_processor.output_dir`.
+
+#### Training
+Specify the training and validation data paths, bounding box sizes etc. in the `data` tab and the training configs such as epochs, batch size etc. in the `train` tab.
+
+#### Testing
+The testing is directly carried out on raw files. Specify the testing configs in the `test` tab.
+
+### Dataset details
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
 [CAE ML Dataset collection](https://caemldatasets.org/drivaerml/).
