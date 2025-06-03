@@ -71,15 +71,15 @@ NVIDIA PhysicsNeMo Core (Latest Release)
    examples/weather/dlwp_healpix/README.rst
    examples/weather/diagnostic/README.rst
    examples/weather/unified_recipe/README.rst
-   examples/generative/corrdiff/README.rst
-   examples/generative/stormcast/README.rst
+   examples/weather/corrdiff/README.rst
+   examples/weather/stormcast/README.rst
 
 .. toctree::
    :maxdepth: 1
    :caption: Examples: Generative
    :name: Examples: Generative
 
-   examples/generative/diffusion/README.rst
+   examples/cfd/flow_reconstruction_diffusion/README.rst
 
 .. toctree::
    :maxdepth: 1
