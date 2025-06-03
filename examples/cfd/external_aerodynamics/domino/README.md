@@ -23,7 +23,8 @@ discrete points.
 A preprint describing additional details about the model architecture can be found here
 [paper](https://arxiv.org/abs/2501.13350).
 
-## Dataset
+## Getting started with the DrivAerML example
+### Dataset
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
 [CAE ML Dataset collection](https://caemldatasets.org/drivaerml/).
@@ -35,7 +36,7 @@ automatic workflows that represent the industrial state-of-the-art. Geometries a
 aerodynamic data are published in open-source formats. For more technical details about this
 dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
-## Training the DoMINO model
+### Training the DoMINO model
 
 To train and test the DoMINO model on AWS dataset, follow these steps:
 
@@ -109,7 +110,7 @@ launch overhead at the cost of more memory use.  For non-sharded
 training, the `two-loop` setting is more optimal. The difference in `one-loop`
 or `two-loop` is purely computational, not algorithmic.
 
-## Retraining recipe for DoMINO model
+### Retraining recipe for DoMINO model
 
 To enable retraining the DoMINO model from a pre-trained checkpoint, follow the steps:
 
@@ -126,7 +127,7 @@ To enable retraining the DoMINO model from a pre-trained checkpoint, follow the 
 5. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
 
-## DoMINO model inference on STLs
+### DoMINO model inference on STLs
 
 The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
  checkpoint. Follow the steps outlined below:
