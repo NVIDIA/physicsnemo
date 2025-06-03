@@ -41,14 +41,13 @@ variables:
 
 """
 # %%
-import sys
-import os
+import multiprocessing
+from functools import partial
+import argparse
+
+import tqdm
 import dask.diagnostics
 import dask
-import multiprocessing
-import tqdm
-import argparse
-from functools import partial
 
 import xarray as xr
 

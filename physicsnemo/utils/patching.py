@@ -598,7 +598,7 @@ def image_batching(
             patch_shape_y - overlap_pix - boundary_pix,
             patch_shape_x - overlap_pix - boundary_pix,
         ),
-    ).to(input_padded.dtype)
+    ).view(input_padded.dtype)
     x_unfold = rearrange(
         x_unfold,
         "b (c p_h p_w) (nb_p_h nb_p_w) -> (nb_p_w nb_p_h b) c p_h p_w",
