@@ -34,6 +34,14 @@ model in PhysicsNeMo.
 ![Comparison between the 3D RNN model prediction and the
 ground truth](../../../docs/img/gray_scott_predictions_blog_2.gif)
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Getting Started
 
 The example script contains code to download and do any pre-processing for the dataset.

@@ -6,15 +6,15 @@ Training progress can be tracked through [MLFlow](https://mlflow.org/docs/latest
 This example runs on a single GPU, go to the
 `darcy_nested_fno` example for exploring a multi-GPU training.
 
-## Getting Started
-
-### Prerequisites
+## Prerequisites
 
 Install the required dependencies by running below:
 
 ```bash
 pip install -r requirements.txt
 ```
+
+## Getting Started
 
 To train the model, run
 

@@ -1,0 +1,7 @@
+hydra-core>=1.2.0
+wandb>=0.15.1
+psutil>=6.0.0
+scipy>=1.15.0
+vtk>=9.2.6
+termcolor>=2.1.1
+pyvista>=0.40.1
