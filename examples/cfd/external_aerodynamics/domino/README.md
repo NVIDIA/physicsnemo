@@ -35,9 +35,12 @@ pip install -r requirements.txt
 
 ### Configuration basics
 
-DoMINO data processing, training and testing is managed through YAML configuration files powered by Hydra. The base configuration file, `config.yaml` is located in `src/conf` directory.
+DoMINO data processing, training and testing is managed through YAML configuration files
+powered by Hydra. The base configuration file, `config.yaml` is located in `src/conf`
+directory.
 
-To select a specific configuration, use the `--config-name` option when running the scripts. 
+To select a specific configuration, use the `--config-name` option when running
+the scripts.
 You can modify configuration options in two ways:
 1. **Direct Editing:** Modify the YAML files directly
 2. **Command Line Override:** Use Hydra's `++` syntax to override settings at runtime
@@ -46,40 +49,63 @@ For example, to change the training epochs (controlled by `train.epochs`):
 ```bash
 python train.py ++training.epochs=200  # Sets number of epochs to 200
 ```
-This modular configuration system allows for flexible experimentation while maintaining reproducibility.
+This modular configuration system allows for flexible experimentation while
+maintaining reproducibility.
 
 #### Project logs
-Save and track project logs, experiments, tensorboard files etc. by specifying a project directory with `project.name`. Tag experiments with `expt`.
+Save and track project logs, experiments, tensorboard files etc. by specifying a
+project directory with `project.name`. Tag experiments with `expt`.
 
 #### Data processing
-The first step for running the DoMINO pipeline requires processing the raw data (vtp, vtu and stl). The related configs can be set in the `data_processor` tab. Also, specify the variable names used in the raw dataset and their types in `variables.surface` and `variables.volume`.
-For example, you can set the input directory for raw data using `data_processor.input_dir` and output directory for processed files using `data_processor.output_dir`.
+The first step for running the DoMINO pipeline requires processing the raw data
+(vtp, vtu and stl). The related configs can be set in the `data_processor` tab.
+Also, specify the variable names used in the raw dataset and their types
+in `variables.surface` and `variables.volume`.
+For example, you can set the input directory for raw data using
+`data_processor.input_dir` and output directory for processed files using
+`data_processor.output_dir`.
 
 #### Training
-Specify the training and validation data paths, bounding box sizes etc. in the `data` tab and the training configs such as epochs, batch size etc. in the `train` tab.
+Specify the training and validation data paths, bounding box sizes etc. in the
+`data` tab and the training configs such as epochs, batch size etc.
+in the `train` tab.
 
 #### Testing
-The testing is directly carried out on raw files. Specify the testing configs in the `test` tab.
+The testing is directly carried out on raw files.
+Specify the testing configs in the `test` tab.
 
 ### Dataset details
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
 [CAE ML Dataset collection](https://caemldatasets.org/drivaerml/).
-This high-fidelity, open-source (CC-BY-SA) public dataset is specifically designed
-for automotive aerodynamics research. It comprises 500 parametrically morphed variants
-of the widely utilized DrivAer notchback generic vehicle. Mesh generation and scale-resolving
-computational fluid dynamics (CFD) simulations were executed using consistent and validated
-automatic workflows that represent the industrial state-of-the-art. Geometries and comprehensive
-aerodynamic data are published in open-source formats. For more technical details about this
-dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
+This high-fidelity, open-source (CC-BY-SA) public dataset is specifically 
+designed for automotive aerodynamics research. It comprises 500 parametrically
+morphed variants of the widely utilized DrivAer notchback generic vehicle.
+Mesh generation and scale-resolving computational fluid dynamics (CFD) simulations
+were executed using consistent and validated automatic workflows that represent
+the industrial state-of-the-art. Geometries and comprehensive aerodynamic data
+are published in open-source formats. For more technical details about this dataset,
+please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
-Download the DrivAer ML dataset using the provided `download_aws_dataset.sh` script or using the [Hugging Face repo](https://huggingface.co/datasets/neashton/drivaerml).
+Download the DrivAer ML dataset using the provided `download_aws_dataset.sh`
+script or using the [Hugging Face repo](https://huggingface.co/datasets/neashton/drivaerml).
 
 ### Data processing for DoMINO model
 
-Each of the raw simulations files in the `vtp`, `vtu` and `stl` format need to be processed and saved into `npy` files. The data processing script extracts minmal information from these raw files such as STL mesh, surface mesh and fields, volume point cloud and fields. Run `process_data.py` with the correct configurations for kicking off data processing. Additionally, run `cache_data.py` to save outputs of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate Signed Distance Field and Nearest Neighbor interpolations on-the-fly during training. Caching will save these as a preprocessing step and should be used in cases where the STL surface meshes are upwards of 30 million cells. Data processing is parallelized and takes a couple of hours to write all the processed files.
+Each of the raw simulations files in the `vtp`, `vtu` and `stl` format need to be
+processed and saved into `npy` files. The data processing script extracts minmal
+information from these raw files such as STL mesh, surface mesh and fields,
+volume point cloud and fields. Run `process_data.py` with the correct configurations
+for kicking off data processing. Additionally, run `cache_data.py` to save outputs
+of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate
+Signed Distance Field and Nearest Neighbor interpolations on-the-fly during
+training. Caching will save these as a preprocessing step and should be used in
+cases where the STL surface meshes are upwards of 30 million cells.
+Data processing is parallelized and takes a couple of hours to write all the
+processed files.
 
-The final processed dataset should be divided and saved into 2 directories, for training and validation. 
+The final processed dataset should be divided and saved into 2 directories,
+for training and validation.
 
 ### Training the DoMINO model
 
@@ -102,10 +128,15 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
 - Duration: A couple of days on a single node of H100 GPU
 - Checkpointing: Automatically resumes from latest checkpoint if interrupted
 - Multi-GPU Support: Compatible with `torchrun` or MPI for distributed training
-- If the training crashes because of OOO, modify the points sampled in volume `model.volume_points_sample` and surface `model.volume_points_sample` to manage memory requirements for your GPU
-- The DoMINO model allows for training both volume and surface fields using a single model but currently the recommendation is to train the volume and surface models separately. This can be controlled through the `conf/config.yaml`.
+- If the training crashes because of OOO, modify the points sampled in volume
+  `model.volume_points_sample` and surface `model.volume_points_sample`
+  to manage memory requirements for your GPU
+- The DoMINO model allows for training both volume and surface fields using a
+  single model but currently the recommendation is to train the volume and
+  surface models separately. This can be controlled through the `conf/config.yaml`.
 - MSE loss for both volume and surface model gives the best results.
-- Bounding box is configurable and will depend on the usecase. The presets are suitable for the DriveAer-ML dataset.
+- Bounding box is configurable and will depend on the usecase.
+  The presets are suitable for the DriveAer-ML dataset.
 
 ### Training with Domain Parallelism
 
@@ -186,47 +217,72 @@ The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
 
 ## Extending DoMINO to a custom dataset
 
-This repository includes examples of **DoMINO** training on the DrivAerML dataset. However, many use cases require training **DoMINO** on a **custom dataset**. The steps below outline the process.
+This repository includes examples of **DoMINO** training on the DrivAerML dataset.
+However, many use cases require training **DoMINO** on a **custom dataset**.
+The steps below outline the process.
 
-1. Reorganize that dataset to have the same directory structure as DrivAerML. The raw data directory should contain a sepearte directory for each simulation. Each simulation directory needs to contain mainly 3 files, `stl`, `vtp` and `vtu`, correspoinding to the geometry, surface and volume fields information. Additional details such as boundary condition information, for example inlet velocity, may be added in a separate `.csv` file, in case these vary from one case to the next.
+1. Reorganize that dataset to have the same directory structure as DrivAerML. The
+   raw data directory should contain a sepearte directory for each simulation.
+   Each simulation directory needs to contain mainly 3 files, `stl`, `vtp` and `vtu`,
+   correspoinding to the geometry, surface and volume fields information.
+   Additional details such as boundary condition information, for example inlet velocity,
+   may be added in a separate `.csv` file, in case these vary from one case to the next.
 2. Modify the following parameters in `conf/config.yaml`
    - `project.name`: Specify a name for your project.
    - `expt`: This is the experiment tag.
    - `data_processor.input_dir`: Input directory where the raw simulation dataset is stored.
-   - `data_processor.output_dir`: Output directory where the processed dataset (`.npy`) needs to be saved.
+   - `data_processor.output_dir`: Output directory to save the processed dataset (`.npy`).
    - `data_processor.num_processors`: Number of parallel processors for data processing.
    - `variables.surface`: Variable names of surface fields and fields type (vector or scalar).
    - `variables.volume`: Variable names of volume fields and fields type (vector or scalar).
    - `data.input_dir`: Processed files used for training.
    - `data.input_dir_val`: Processed files used for validation.
-   - `data.bounding_box`: Dimensions of computational domain where most prominent solution field variations. Volume fields are modeled inside this bounding box.
-   - `data.bounding_box_surface`: Dimensions of bounding box enclosing the biggest geometry in dataset. Surface fields are modeled inside this bounding box.
+   - `data.bounding_box`: Dimensions of computational domain where most prominent solution
+     field variations. Volume fields are modeled inside this bounding box.
+   - `data.bounding_box_surface`: Dimensions of bounding box enclosing the biggest geometry
+     in dataset. Surface fields are modeled inside this bounding box.
    - `train.epochs`: Set the number of training epochs.
-   - `model.volume_points_sample`: Number of points to sample in the volume mesh per epoch per batch. Tune based on GPU memory.
-   - `model.surface_points_sample`: Number of points to sample on the surface mesh per epoch per batch. Tune based on GPU memory.
-   - `model.geom_points_sample`: Number of points to sample on STL mesh per epoch per batch. Ensure point sampled is lesser than number of points on STL (for coarser STLs).
-   - `eval.test_path`: Path of directory where the raw simulations files are populated for testing and verification.
+   - `model.volume_points_sample`: Number of points to sample in the volume mesh per epoch per batch.
+     Tune based on GPU memory.
+   - `model.surface_points_sample`: Number of points to sample on the surface mesh per epoch per batch.
+     Tune based on GPU memory.
+   - `model.geom_points_sample`: Number of points to sample on STL mesh per epoch per batch.
+     Ensure point sampled is lesser than number of points on STL (for coarser STLs).
+   - `eval.test_path`: Path of directory of raw simulations files for testing and verification.
    - `eval.save_path`: Path of directory where the AI predicted simulations files are saved.
-   - `eval.checkpoint_name`: Use this checkpoint from `outputs/{project.name}/models` to evaluate the trained model.
+   - `eval.checkpoint_name`: Checkpoint name `outputs/{project.name}/models` to evaluate model.
    - `eval.scaling_param_path`: Scaling parameters populated in `outputs/{project.name}`.
-3. Before running `process_data.py` to process the data, be sure to modify `openfoam_datapipe.py`. This is the entry point for the user to modify the datapipe for dataprocessing. A couple of things that might need to be changed are non-dimensionalizing schemes based on the order of your variables and the `DrivAerAwsPaths` class with the internal directory structure of your dataset. For example, here is the custom class written for a different dataset.
-```python
-class DriveSimPaths:
-    @staticmethod
-    def geometry_path(car_dir: Path) -> Path:
-        return car_dir / "body.stl" # Specify the name of the STL in your dataset
-
-    @staticmethod
-    def volume_path(car_dir: Path) -> Path:
-        return car_dir / "VTK/simpleFoam_steady_3000/internal.vtu" # Specify the name of the VTU and directory structure in your dataset
-
-    @staticmethod
-    def surface_path(car_dir: Path) -> Path:
-        return car_dir / "VTK/simpleFoam_steady_3000/boundary/aero_suv.vtp"  # Specify the name of the VTP and directory structure in your dataset
-```
-4. Before running `train.py`, modify the loss functions. The surface loss functions currently, specifically `integral_loss_fn`, `loss_fn_surface` and `loss_fn_area`, assume the variables to be in a specific order, Pressure followed by Wall-Shear-Stress vector. Please modify these formulations if your variables are in a different order or don't require these losses.
-5. Run `test.py` to validate the trained model.
-6. Use `inference_on_stl.py` script to deploy the model in applications where inference is needed only from STL inputs and the volume mesh is not calculated.
+3. Before running `process_data.py` to process the data, be sure to modify `openfoam_datapipe.py`.
+   This is the entry point for the user to modify the datapipe for dataprocessing.
+   A couple of things that might need to be changed are non-dimensionalizing schemes
+   based on the order of your variables and the `DrivAerAwsPaths` class with the
+   internal directory structure of your dataset.
+   For example, here is the custom class written for a different dataset.
+  ```python
+  class DriveSimPaths:
+      # Specify the name of the STL in your dataset
+      @staticmethod
+      def geometry_path(car_dir: Path) -> Path:
+          return car_dir / "body.stl"
+  
+      # Specify the name of the VTU and directory structure in your dataset
+      @staticmethod
+      def volume_path(car_dir: Path) -> Path:
+          return car_dir / "VTK/simpleFoam_steady_3000/internal.vtu"
+  
+      # Specify the name of the VTP and directory structure in your dataset
+      @staticmethod
+      def surface_path(car_dir: Path) -> Path:
+          return car_dir / "VTK/simpleFoam_steady_3000/boundary/aero_suv.vtp"
+  ```
+4. Before running `train.py`, modify the loss functions. The surface loss functions
+  currently, specifically `integral_loss_fn`, `loss_fn_surface` and `loss_fn_area`,
+  assume the variables to be in a specific order, Pressure followed by Wall-Shear-Stress vector.
+  Please modify these formulations if your variables are in a different order
+  or don't require these losses.
+6. Run `test.py` to validate the trained model.
+7. Use `inference_on_stl.py` script to deploy the model in applications where inference is
+   needed only from STL inputs and the volume mesh is not calculated.
 
 The DoMINO model architecture is used to support the
 [Real Time Digital Twin Blueprint](https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation)
