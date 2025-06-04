@@ -21,6 +21,7 @@ Diffusion-Based Generative Models".
 
 import contextlib
 import importlib
+import math
 from typing import Any, Dict, List
 
 import numpy as np
@@ -476,6 +477,74 @@ class AttentionOp(torch.autograd.Function):
         return dq, dk
 
 
+class Attention(torch.nn.Module):
+    """
+    Unified U-Net block with optional up/downsampling and self-attention.
+    Represents the union of all features employed by the DDPM++, NCSN++, and
+    ADM architectures.
+    """
+
+    def __init__(
+        self,
+        *,
+        out_channels,
+        eps,
+        init_zero,
+        init_attn,
+        init,
+        num_heads,
+        use_apex_gn,
+        amp_mode,
+        fused_conv_bias,
+    ) -> None:
+        super().__init__()
+        self.norm2 = GroupNorm(
+            num_channels=out_channels,
+            eps=eps,
+            use_apex_gn=use_apex_gn,
+            amp_mode=amp_mode,
+        )
+        self.qkv = Conv2d(
+            in_channels=out_channels,
+            out_channels=out_channels * 3,
+            kernel=1,
+            fused_conv_bias=fused_conv_bias,
+            amp_mode=amp_mode,
+            **(init_attn if init_attn is not None else init),
+        )
+        self.proj = Conv2d(
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel=1,
+            fused_conv_bias=fused_conv_bias,
+            amp_mode=amp_mode,
+            **init_zero,
+        )
+        self.num_heads = num_heads
+
+    def forward(self, x):
+        q, k, v = (
+            torch.permute(
+                self.qkv(self.norm2(x)), (0, 2, 3, 1)
+            )  # [B,H,W,C*3] in memory layout, shape [B,C*3,H,W] -> [B,H,W,C*3]
+            .reshape(  # -> [X.shape[0], heads, (H*W), C//heads, 3]
+                x.shape[0],
+                self.num_heads,
+                x.shape[2] * x.shape[3],
+                x.shape[1] // self.num_heads,
+                3,
+            )
+            .unbind(-1)
+        )  # [B, heads, H*W, C//heads]
+
+        attn = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, scale=1 / math.sqrt(k.shape[-1])
+        )
+        attn = attn.transpose(-1, -2)  # [B, 1, C, H*W]
+        x = self.proj(attn.reshape(*x.shape)).add_(x)
+        return x
+
+
 class UNetBlock(torch.nn.Module):
     """
     Unified U-Net block with optional up/downsampling and self-attention. Represents
@@ -569,6 +638,7 @@ class UNetBlock(torch.nn.Module):
             if num_heads is not None
             else out_channels // channels_per_head
         )
+        self.attention = attention
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
@@ -640,29 +710,20 @@ class UNetBlock(torch.nn.Module):
                 **init,
             )
 
-        if self.num_heads:
-            self.norm2 = GroupNorm(
-                num_channels=out_channels,
+        if self.attention:
+            self.attn = Attention(
+                out_channels=out_channels,
                 eps=eps,
+                init_zero=init_zero,
+                init_attn=init_attn,
+                init=init,
+                num_heads=self.num_heads,
                 use_apex_gn=use_apex_gn,
                 amp_mode=amp_mode,
-            )
-            self.qkv = Conv2d(
-                in_channels=out_channels,
-                out_channels=out_channels * 3,
-                kernel=1,
                 fused_conv_bias=fused_conv_bias,
-                amp_mode=amp_mode,
-                **(init_attn if init_attn is not None else init),
             )
-            self.proj = Conv2d(
-                in_channels=out_channels,
-                out_channels=out_channels,
-                kernel=1,
-                fused_conv_bias=fused_conv_bias,
-                amp_mode=amp_mode,
-                **init_zero,
-            )
+        else:
+            self.attn = None
 
     def forward(self, x, emb):
         with nvtx.annotate(
@@ -687,22 +748,9 @@ class UNetBlock(torch.nn.Module):
             x = x.add_(self.skip(orig) if self.skip is not None else orig)
             x = x * self.skip_scale
 
-            if self.num_heads:
-                q, k, v = (
-                    self.qkv(self.norm2(x))
-                    .reshape(
-                        x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1
-                    )
-                    .unbind(3)
-                )
-                # w = AttentionOp.apply(q, k)
-                # a = torch.einsum("nqk,nck->ncq", w, v)
-                # Compute attention in one step
-                with amp.autocast(enabled=self.amp_mode):
-                    attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-                x = self.proj(attn.reshape(*x.shape)).add_(x)
+            if self.attn:
+                x = self.attn(x)
                 x = x * self.skip_scale
-
             return x
 
 
