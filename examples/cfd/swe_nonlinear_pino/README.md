@@ -55,12 +55,6 @@ definition and other things is taken care of implicitly, you may refer
 
 The training and validation datasets for this example can be found on the
 [PINO Applications Github page](https://github.com/shawnrosofsky/PINO_Applications).
-The downloading and pre-processing of the data can also be done by running
-the below set of commands:
-
-```bash
-python download_data.py
-```
 
 To demonstrate the usefulness of the Physics loss, we will deliberately choose a smaller
 dataset size of 45 samples. In such regiemes, the effect of physics loss is more
@@ -82,7 +76,23 @@ Electromagnetics, etc. pre-defined which can be used directly in physics-informi
 applications. We will also give you the option to choose between the
 derivative functions from PhysicsNeMo-Sym or from the original paper.  
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install nvidia-physicsnemo.sym --no-build-isolation
+```
+
 ## Getting Started
+
+The downloading and pre-processing of the data can also be done by running
+the below set of commands:
+
+```bash
+python download_data.py
+```
 
 To get started with the example, simply run,
 
