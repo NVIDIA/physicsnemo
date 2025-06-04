@@ -52,6 +52,7 @@ RUN FILE="/etc/pip/constraint.txt" && \
     else \
         echo "File not found: $FILE"; \
     fi
+RUN pip install --no-cache-dir "nvidia_dali_cuda120>=1.35.0"
 RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
 RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio" "moviepy" "tqdm>=4.60.0"
 
