@@ -49,7 +49,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
     # initialize monitoring
     log = PythonLogger(name="darcy_fno")
     log.file_logging()
-    LaunchLogger.initialize(use_mlflow=False)  # PhysicsNeMo launch logger
+    LaunchLogger.initialize()  # PhysicsNeMo launch logger
 
     # define model, loss, optimiser, scheduler, data loader
     model = FNO(

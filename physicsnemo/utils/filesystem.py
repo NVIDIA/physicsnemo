@@ -28,16 +28,14 @@ import fsspec.utils
 import requests
 import s3fs
 from tqdm import tqdm
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 try:
     LOCAL_CACHE = os.environ["LOCAL_CACHE"]
 except KeyError:
-    if os.name == "nt":  # Windows
-        LOCAL_CACHE = os.path.join(os.environ["USERPROFILE"], ".cache", "physicsnemo")
-    else:  # Unix-like
-        LOCAL_CACHE = os.path.join(os.environ["HOME"], ".cache", "physicsnemo")
+    LOCAL_CACHE = Path.home() / ".cache" / "physicsnemo"
 
 
 def _cache_fs(fs):
