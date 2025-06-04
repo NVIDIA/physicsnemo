@@ -48,6 +48,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Shallow Water Equations using PINO (Data + Physics Driven)*](./cfd/swe_nonlinear_pino/)|FNO|YES|
 |[Shallow Water Equations using Distributed GNNs](./cfd/swe_distributed_gnn/)|GraphCast|YES|
 |[Vortex Shedding with Temporal Attention](./cfd/vortex_shedding_mesh_reduced/)|MeshGraphNet|YES|
+|[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
 
 ### Weather
 

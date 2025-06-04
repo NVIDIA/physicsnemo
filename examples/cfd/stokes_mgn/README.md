@@ -43,6 +43,11 @@ using PINNs when the PDE is available. The fine-tuning during inference is much 
 than training the PINN model from the scratch as the model has a better initialization
 from the data-driven training.
 
+For the fine-tuning step, we formulate two losses. First loss is to match the
+predictions of the original MeshGraphNet model. Second loss includes the physics
+losses, i.e. the PDE residuals and the boundary conditions. Having the data loss
+helps the PINN model converge faster than training from scratch.
+
 ## Dataset
 
 Our dataset provides  numerical simulations of Stokes flow in a pipe domain obstructed
