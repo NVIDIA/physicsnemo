@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0a0] - 2025-05-XX
+## [1.1.0] - 2025-06-05
 
 ### Added
 
@@ -41,15 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support surface for `physicsnemo.distributed` functionality.
 - Merged SongUNetPosLtEmb with SongUNetPosEmb, add support for batch>1
 
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
-
 ### Dependencies
+
+- Made `nvidia.dali` an optional dependency
 
 ## [1.0.1] - 2025-03-25
 
