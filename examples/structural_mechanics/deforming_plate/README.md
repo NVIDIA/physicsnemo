@@ -63,6 +63,15 @@ exponentially with a rate of 0.9999991. Training is performed on 8 NVIDIA H100
 GPUs, leveraging data parallelism for 25 epochs. The total training time was
 20 hours.
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
+```
+
 ## Getting Started
 
 This example requires the `tensorflow` library to load the data in the `.tfrecord`

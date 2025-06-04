@@ -27,7 +27,16 @@ Datasets used for model training and sampling can be downloaded via the followin
 - Low resolution data measured from random grid locations (input data for the super-resolution task) (<a href="https://figshare.com/ndownloader/files/39214622">link</a>)
 
 
-## Running the Experiments
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Getting Started
+
 Download the high res and low res data and save the data files to the subdirectory ``physicsnemo/examples/cfd/flow_reconstruction_diffusion/Kolmogorov_2D_data/``.
 
 - Note: The directory from which the downloaded dataset files are loaded is specified in the configuration yaml files at ``physicsnemo/examples/cfd/flow_reconstruction_diffusion/conf/``. In the case when the default relative file location in a yaml file cannot be correctly recognized, please replace the relative location with the absolute location. For example, in the configuration file `physicsnemo/examples/cfd/flow_reconstruction_diffusion/conf/config_dfsr_train.yaml`, Line 24, the value of the key 'data' can be changed to an absolute file directory of the dataset file, e.g., ``/<directory of physicsnemo>/examples/cfd/flow_reconstruction_diffusion/Kolmogorov_2D_data/kf_2d_re1000_256_40seed.npy``
