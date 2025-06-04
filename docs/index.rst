@@ -3,8 +3,8 @@ NVIDIA PhysicsNeMo Core (Latest Release)
 
 .. toctree::
    :maxdepth: 2
-   :caption: PhysicsNeMo Tutorials
-   :name: PhysicsNeMo Tutorials
+   :caption: PhysicsNeMo User Guide
+   :name: PhysicsNeMo User Guide
 
    tutorials/simple_training_example.rst
    tutorials/simple_logging_and_checkpointing.rst
