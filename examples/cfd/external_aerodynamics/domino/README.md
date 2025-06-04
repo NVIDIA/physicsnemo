@@ -42,21 +42,26 @@ directory.
 To select a specific configuration, use the `--config-name` option when running
 the scripts.
 You can modify configuration options in two ways:
+
 1. **Direct Editing:** Modify the YAML files directly
 2. **Command Line Override:** Use Hydra's `++` syntax to override settings at runtime
 
 For example, to change the training epochs (controlled by `train.epochs`):
+
 ```bash
 python train.py ++training.epochs=200  # Sets number of epochs to 200
 ```
+
 This modular configuration system allows for flexible experimentation while
 maintaining reproducibility.
 
 #### Project logs
+
 Save and track project logs, experiments, tensorboard files etc. by specifying a
 project directory with `project.name`. Tag experiments with `expt`.
 
 #### Data processing
+
 The first step for running the DoMINO pipeline requires processing the raw data
 (vtp, vtu and stl). The related configs can be set in the `data_processor` tab.
 Also, specify the variable names used in the raw dataset and their types
@@ -66,11 +71,13 @@ For example, you can set the input directory for raw data using
 `data_processor.output_dir`.
 
 #### Training
+
 Specify the training and validation data paths, bounding box sizes etc. in the
 `data` tab and the training configs such as epochs, batch size etc.
 in the `train` tab.
 
 #### Testing
+
 The testing is directly carried out on raw files.
 Specify the testing configs in the `test` tab.
 
@@ -78,7 +85,7 @@ Specify the testing configs in the `test` tab.
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
 [CAE ML Dataset collection](https://caemldatasets.org/drivaerml/).
-This high-fidelity, open-source (CC-BY-SA) public dataset is specifically 
+This high-fidelity, open-source (CC-BY-SA) public dataset is specifically
 designed for automotive aerodynamics research. It comprises 500 parametrically
 morphed variants of the widely utilized DrivAer notchback generic vehicle.
 Mesh generation and scale-resolving computational fluid dynamics (CFD) simulations
@@ -125,6 +132,7 @@ To train and test the DoMINO model on AWS dataset, follow these steps:
    and visualize in Paraview.
 
 **Training Guidelines:**
+
 - Duration: A couple of days on a single node of H100 GPU
 - Checkpointing: Automatically resumes from latest checkpoint if interrupted
 - Multi-GPU Support: Compatible with `torchrun` or MPI for distributed training
@@ -242,15 +250,18 @@ The steps below outline the process.
    - `data.bounding_box_surface`: Dimensions of bounding box enclosing the biggest geometry
      in dataset. Surface fields are modeled inside this bounding box.
    - `train.epochs`: Set the number of training epochs.
-   - `model.volume_points_sample`: Number of points to sample in the volume mesh per epoch per batch.
+   - `model.volume_points_sample`: Number of points to sample in the volume mesh per epoch
+   per batch.
      Tune based on GPU memory.
-   - `model.surface_points_sample`: Number of points to sample on the surface mesh per epoch per batch.
+   - `model.surface_points_sample`: Number of points to sample on the surface mesh per epoch
+   per batch.
      Tune based on GPU memory.
    - `model.geom_points_sample`: Number of points to sample on STL mesh per epoch per batch.
      Ensure point sampled is lesser than number of points on STL (for coarser STLs).
    - `eval.test_path`: Path of directory of raw simulations files for testing and verification.
    - `eval.save_path`: Path of directory where the AI predicted simulations files are saved.
-   - `eval.checkpoint_name`: Checkpoint name `outputs/{project.name}/models` to evaluate model.
+   - `eval.checkpoint_name`: Checkpoint name `outputs/{project.name}/models` to evaluate
+   model.
    - `eval.scaling_param_path`: Scaling parameters populated in `outputs/{project.name}`.
 3. Before running `process_data.py` to process the data, be sure to modify `openfoam_datapipe.py`.
    This is the entry point for the user to modify the datapipe for dataprocessing.
@@ -258,30 +269,33 @@ The steps below outline the process.
    based on the order of your variables and the `DrivAerAwsPaths` class with the
    internal directory structure of your dataset.
    For example, here is the custom class written for a different dataset.
-  ```python
-  class DriveSimPaths:
-      # Specify the name of the STL in your dataset
-      @staticmethod
-      def geometry_path(car_dir: Path) -> Path:
-          return car_dir / "body.stl"
-  
-      # Specify the name of the VTU and directory structure in your dataset
-      @staticmethod
-      def volume_path(car_dir: Path) -> Path:
-          return car_dir / "VTK/simpleFoam_steady_3000/internal.vtu"
-  
-      # Specify the name of the VTP and directory structure in your dataset
-      @staticmethod
-      def surface_path(car_dir: Path) -> Path:
-          return car_dir / "VTK/simpleFoam_steady_3000/boundary/aero_suv.vtp"
-  ```
+
+    ```python
+    class DriveSimPaths:
+        # Specify the name of the STL in your dataset
+        @staticmethod
+        def geometry_path(car_dir: Path) -> Path:
+            return car_dir / "body.stl"
+
+        # Specify the name of the VTU and directory structure in your dataset
+        @staticmethod
+        def volume_path(car_dir: Path) -> Path:
+            return car_dir / "VTK/simpleFoam_steady_3000/internal.vtu"
+
+        # Specify the name of the VTP and directory structure in your dataset
+        @staticmethod
+        def surface_path(car_dir: Path) -> Path:
+            return car_dir / "VTK/simpleFoam_steady_3000/boundary/aero_suv.vtp"
+    ```
+
 4. Before running `train.py`, modify the loss functions. The surface loss functions
   currently, specifically `integral_loss_fn`, `loss_fn_surface` and `loss_fn_area`,
-  assume the variables to be in a specific order, Pressure followed by Wall-Shear-Stress vector.
+  assume the variables to be in a specific order, Pressure followed by Wall-Shear-Stress
+  vector.
   Please modify these formulations if your variables are in a different order
   or don't require these losses.
-6. Run `test.py` to validate the trained model.
-7. Use `inference_on_stl.py` script to deploy the model in applications where inference is
+5. Run `test.py` to validate the trained model.
+6. Use `inference_on_stl.py` script to deploy the model in applications where inference is
    needed only from STL inputs and the volume mesh is not calculated.
 
 The DoMINO model architecture is used to support the
