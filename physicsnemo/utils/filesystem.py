@@ -21,6 +21,7 @@ import os
 import re
 import urllib.request
 import zipfile
+from pathlib import Path
 
 import fsspec
 import fsspec.implementations.cached
@@ -28,7 +29,6 @@ import fsspec.utils
 import requests
 import s3fs
 from tqdm import tqdm
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
