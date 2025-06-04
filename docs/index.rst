@@ -9,6 +9,7 @@ NVIDIA PhysicsNeMo Core (Latest Release)
    tutorials/simple_training_example.rst
    tutorials/simple_logging_and_checkpointing.rst
    tutorials/profiling.rst
+   tutorials/performance.rst
    tutorials/domain_parallelism_entry_point.rst
 
 .. toctree::
