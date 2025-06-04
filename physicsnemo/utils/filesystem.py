@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 try:
     LOCAL_CACHE = os.environ["LOCAL_CACHE"]
 except KeyError:
-    LOCAL_CACHE = os.environ["HOME"] + "/.cache/physicsnemo"
+    if os.name == "nt":  # Windows
+        LOCAL_CACHE = os.path.join(os.environ["USERPROFILE"], ".cache", "physicsnemo")
+    else:  # Unix-like
+        LOCAL_CACHE = os.path.join(os.environ["HOME"], ".cache", "physicsnemo")
 
 
 def _cache_fs(fs):
