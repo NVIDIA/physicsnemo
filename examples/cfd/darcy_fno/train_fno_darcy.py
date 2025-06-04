@@ -27,7 +27,6 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, LaunchLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
 
@@ -50,15 +49,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
     # initialize monitoring
     log = PythonLogger(name="darcy_fno")
     log.file_logging()
-    initialize_mlflow(
-        experiment_name=f"Darcy_FNO",
-        experiment_desc=f"training an FNO model for the Darcy problem",
-        run_name=f"Darcy FNO training",
-        run_desc=f"training FNO for Darcy",
-        user_name="Gretchen Ross",
-        mode="offline",
-    )
-    LaunchLogger.initialize(use_mlflow=True)  # PhysicsNeMo launch logger
+    LaunchLogger.initialize()  # PhysicsNeMo launch logger
 
     # define model, loss, optimiser, scheduler, data loader
     model = FNO(
