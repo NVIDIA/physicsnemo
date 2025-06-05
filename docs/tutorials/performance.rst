@@ -33,13 +33,13 @@ When it comes time to evaluate your model for performance optimization, keep the
    * - Topic
      - Description
    * - :doc:`performance_docs/torch_compile_support`
-     - **Torch Compile and External Kernels** - Learn how to integrate other kernels effectively into your models and use ``torch.compile`` to enable end-to-end model compilation for maximum performance.
+     - Learn how to integrate other kernels effectively into your models and use ``torch.compile`` to enable end-to-end model compilation for maximum performance.
    * - Hardware Features 
-     - *[Coming Soon]* **Nvidia Hardware Features** - Beyond Tensor Cores and mixed precision, discover other hardware features that can accelerate your Scientific AI workloads.
+     - *[Coming Soon]* Beyond Tensor Cores and mixed precision, discover other hardware features that can accelerate your Scientific AI workloads.
    * - IO
-     - *[Coming Soon]* **Asynchronous and Accelerated IO** - When IO becomes a bottleneck, learn how to read and write data asynchronously, prefetch data to overlap IO and computation, and leverage GPU acceleration.
+     - *[Coming Soon]* When IO becomes a bottleneck, learn how to read and write data asynchronously, prefetch data to overlap IO and computation, and leverage GPU acceleration.
    * - Streams and Asynchronous Tools
-     - *[Coming Soon]* **Asychronous Computations** - Keep your GPU fully occupied using CUDA Streams, MPS mode, and other concurrency tools for high-throughput workloads.
+     - *[Coming Soon]* Keep your GPU fully occupied using CUDA Streams, MPS mode, and other concurrency tools for high-throughput workloads.
 
 .. note::
    These performance guides are works in progress. Look for much more updated content in our next release!
