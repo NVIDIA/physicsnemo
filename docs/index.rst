@@ -1,6 +1,25 @@
 NVIDIA PhysicsNeMo Core (Latest Release)
 ========================================
 
+NVIDIA PhysicsNeMo is an open-source deep-learning framework for building, training,
+fine-tuning and inferring Physics AI models using state-of-the-art SciML methods
+for AI4science and engineering.
+
+PhysicsNeMo provides python modules to compose scalable and optimized training and
+inference pipelines to explore, develop, validate and deploy AI models that combine
+physics knowledge with data, enabling real-time predictions.
+
+Whether you are exploring the use of Neural operators, GNNs, or transformers or are
+interested in Physics-informed Neural Networks or a hybrid approach in between,
+PhysicsNeMo provides you with an optimized stack that will enable you to train your
+models at scale.
+
+.. figure:: /img/value_prop/Knowledge_guided_models.gif
+   :alt: PhysicsNeMo Value Prop
+   :width: 80.0%
+   :align: center
+
+
 .. toctree::
    :maxdepth: 2
    :caption: PhysicsNeMo Tutorials
