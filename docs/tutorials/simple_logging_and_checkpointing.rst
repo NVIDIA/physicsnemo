@@ -1,8 +1,8 @@
 Simple Logging and Checkpointing recipe
 ========================================
 
-Logging and checkpointing are important comonents of model training workflow. It allows
-users to keep a record of the model hyper-parameters and its performance on training.
+Logging and checkpointing are important components of model training workflow. It allows
+users to keep a record of the model hyperparameters and its performance on training.
 
 In this tutorial we will look at some of the utilities from PhysicsNeMo to simplify this
 important aspect of model training. 
@@ -182,7 +182,7 @@ The logger output can also be seen below.
    wandb: Find logs at: ./wandb/wandb/offline-run-20231115_212638-ib4ylq4e/logs
 
 
-To visulaize the logs interactively, simply follow the instructions printed in the outputs. 
+To visualize the logs interactively, simply follow the instructions printed in the outputs. 
 
 
 Checkpointing in PhysicsNeMo
