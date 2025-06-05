@@ -512,7 +512,7 @@ A few things to note when using the ``least_squares`` method:
         },
     )
 
-A full example using this loss can be referenced in the `Physics Informed Darcy Flow Example <../examples/cfd/stokes_mgn/README.rst>`_
+A full example using this loss can be referenced in the `Stokes Flow Example <../examples/cfd/stokes_mgn/README.rst>`_
 
 Customizing the PDEs
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -551,16 +551,6 @@ From computing signed distance fields for implicit geometry representation, to s
 utilities from PhysicsNeMo and more specifically PhysicsNeMo-Sym can be used to enrich the model training
 using geometry information.
 
-Explain how SDF can be computed
-
-Explain how point cloud can be sampled, on the surface and inside
-
-Explain how that can be used to compute loss
-
-Explain the Geometry Dataloader
-
-Link different examples
-
 Below is a non-exhaustive list of different ways geometry information, derived from PhysicsNeMo sym can be
 used:
 
@@ -569,3 +559,112 @@ used:
   to train surrogate models in the absence of / addition to mesh information
 - Apply boundary conditions
 - ...
+
+Let's review some of these below.
+
+Computing Signed Distance Fields
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Mathematically, signed distance field or signed distance function (SDF) is defined as the orthonogal distance
+of a given point to the boundary / surface of a geometric shape. It is widely used to describe the geometry
+in mathematics, rendering, and similar applications. In physics-informed learning, it is also used to represent
+`geometric inputs to the neural networks <https://www.research.autodesk.com/app/uploads/2023/03/convolutional-neural-networks-for.pdf_rectr0tDKzFYVAAJe.pdf>`_.
+
+Inside PhysicsNeMo, there are several ways to compute the SDF of a geometry. 
+
+- Using the ``physicsnemo.utils.sdf.signed_distance_field``:
+  
+  This function is useful for computing SDF from a given mesh and input points.
+  Below code gives a sample implementation
+
+  .. code-block:: python
+
+    import pyvista as pv
+    import numpy as np
+    from physicsnemo.utils.sdf import signed_distance_field
+
+    # Download the Stanford Bunny STL from https://commons.wikimedia.org/wiki/File:Stanford_Bunny.stl
+    mesh = pv.read("Stanford_Bunny.stl")
+    faces = mesh.faces.reshape((-1, 4))
+    mesh_vertices = [tuple(face[1:]) for face in faces]
+    mesh_indices = np.arange(0, mesh.points.shape[0])
+
+    # Compute the signed distance field at the (0, 0, 0)
+    signed_distance_field(mesh_vertices, mesh_indices, (0, 0, 0))
+
+- Using the ``.sdf`` attribute of the ``Tessellation`` module from PhysicsNeMo Sym:
+
+  PhysicsNeMo Sym allows you to load STL files and also define custom geometries
+  using Constructive Solid Geometry and use it for computing the SDF. The 
+  `geometry module documentation from PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html#>`_
+  provides a comprehensive documentation of this functionality. Below code shows
+  a sample implementation of this
+
+  .. code-block:: python
+
+    import numpy as np
+    from physicsnemo.sym.geometry.tessellation import Tessellation
+
+    # read the Stanford Bunny stl
+    geo = Tessellation.from_stl("./Stanford_Bunny.stl")
+
+    # compute the SDF on the (0, 0, 0) points
+    sdf = geo.sdf(
+            {
+                "x": np.array([[0]]),   # each coordinate must be of shape (N, 1)
+                "y": np.array([[0]]),
+                "z": np.array([[0]]),
+            },
+        params={}
+    )["sdf"]
+
+A few examples using SDF during training / inference can be referenced in the 
+`External Aerodynamics using DoMINO Example <../examples/cfd/external_aerodynamics/domino/README.rst>`_, 
+`Datacenter CFD example <../examples/cfd/datacenter/README.rst>`_.
+
+Sampling point clouds
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The `geometry module from PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html#>`_
+also allows sampling of uniform point clouds in the interior (volume) and surface
+of the geometry. The sampled point clouds can be used to apply variety of physics constraints
+during training, for example boundary conditions or even used during model inference
+to bypass the need for mesh generation.
+
+The ``sample_interior()`` and ``sample_boundary()`` methods can be used on the geometry objects
+to sample the points in the interior and on the surface respectively. Please refer Sym's docs for
+more details. 
+
+This capability can be further extended to form a geometry datapipe. For example,
+one can create a datapipe to sample points on the surface of multiple STLs or
+multiple CSG type of geometries. You can use the ``GeometryDatapipe`` from PhysicsNeMo Sym
+for this purpose. Refer API docs for `GeometryDatapipe <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.geometry.html#module-physicsnemo.sym.geometry.geometry_dataloader>`_ for more details. 
+
+Below code shows a sample datapipe.
+
+.. code-block:: python
+
+    from physicsnemo.sym.geometry.geometry_dataloader import GeometryDatapipe
+    from physicsnemo.sym.geometry.tessellation import Tessellation
+
+    geoms = []
+    # We will just create a datapipe of 10 same Stanford Bunny geometries
+    for i in range(10):
+        geo = Tessellation.from_stl("./Stanford_bunny.stl")
+        geoms.append(geo)
+    
+    datapipe = GeometryDatapipe(
+        geom_objects=geoms,
+        sample_type="surface",
+        num_points=100,
+        batch_size=2,
+        num_workers=1,
+        device="cuda",
+    )
+
+    for data in datapipe:
+        print(data[0].keys()) # For surface sampling, this should print ["x", "y", "z", "area", "normal_x", "normal_y", "normal_z"]
+
+A full example using this for boundary and interior sampling can be referenced in the `Lid Driven Cavity Flow Example <../examples/cfd/ldc_pinns/README.rst>`_.
+Furthermore, several examples from `PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/index.html>`_ leverage
+similar functionality to solve a variety of problems using PINNs. 
