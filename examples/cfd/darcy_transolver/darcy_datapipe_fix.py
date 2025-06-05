@@ -23,14 +23,16 @@ import torch
 import warp as wp
 import scipy.io as scio
 
-from ..datapipe import Datapipe
-from ..meta import DatapipeMetaData
-from .kernels.finite_difference import (
+from physicsnemo.datapipes.datapipe import Datapipe
+from physicsnemo.datapipes.meta import DatapipeMetaData
+from physicsnemo.datapipes.benchmarks.kernels.finite_difference import (
     darcy_mgrid_jacobi_iterative_batched_2d,
     mgrid_inf_residual_batched_2d,
 )
-from .kernels.initialization import init_uniform_random_4d
-from .kernels.utils import (
+from physicsnemo.datapipes.benchmarks.kernels.initialization import (
+    init_uniform_random_4d,
+)
+from physicsnemo.datapipes.benchmarks.kernels.utils import (
     bilinear_upsample_batched_2d,
     fourier_to_array_batched_2d,
     threshold_3d,

@@ -6,7 +6,7 @@ Numerical derivatives (PINO).
 
 ## Problem overview
 
-This is an extension of the 2D darcy flow data-driven problem. In addition to the
+This is an extension of the 2D Darcy flow data-driven problem. In addition to the
 data loss, we will demonstrate the use of physics constranints, specifically
 the equation residual loss. [PhysicsNeMo Sym](https://github.com/NVIDIA/physicsnemo-sym)
 has utilities tailored for physics-informed machine learning. It also presents an
