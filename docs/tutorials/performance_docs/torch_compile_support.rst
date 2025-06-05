@@ -532,4 +532,400 @@ This improves the runtime by a further ~3ms (which is > 20% faster on an already
 What about the backwards pass?
 ==============================
 
-[Coming Next]
+Yes - the backwards pass is supported too.  Our original example didn't actually need the backwards pass of the kNN operator.  Let's write a new kernel that does need one so we can see how this backwards incorporation works.  Instead of a kNN, we'll use **all** points within a specified radius to compute the same distance weighted feature aggregation.  In pytorch, it looks like this:
+
+.. code-block:: python
+
+    def radius_bounded_feature_aggregation(
+        p1: torch.Tensor, 
+        p2: torch.Tensor,
+        p2_features: torch.Tensor, 
+        radius: float, 
+        sigma: float,
+        ) -> torch.Tensor:
+        """
+        Perform differentiable radius-bounded feature aggregation.
+
+        Args:
+            p1 (torch.Tensor): Query points, shape (B, M, D)
+            p2 (torch.Tensor): Reference points, shape (B, N, D)
+            p2_features (torch.Tensor): Features at reference points, shape (B, N, D_feat)
+            radius (float): Radius for neighbor search
+            sigma (float): RBF temperature parameter
+
+        Returns:
+            torch.Tensor: Aggregated features at p1, shape (B, M, D_feat)
+        """
+        
+        # Compute pairwise distances: (M, N)
+        dists = torch.norm(p1[:,None,:] - p2[None,:,:], dim=-1)
+        
+        # Create mask for neighbors within radius
+        mask = dists <= radius
+        
+        # Compute weights from all distances first
+        weights = torch.softmax(-dists / sigma, dim=-1)
+        
+        # Apply mask to zero out weights for points outside radius
+        weights = torch.where(mask, weights, torch.zeros_like(weights))
+        
+        # Renormalize weights so they sum to 1 for each query point
+        weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-8)
+        
+        # Weighted sum of all reference features: (M, D_feat)
+        agg = torch.sum(weights.unsqueeze(-1) * p2_features.unsqueeze(0), dim=1)
+        
+        return agg
+
+
+Everything else about the pretend application can stay the same: an MLP on the features before the aggregation, an MLP on the aggregated features. You may need to decrease the number of points in the point cloud though - the pure-torch version of this operator is more memory hungry than the kNN query.
+
+With 25k points in the point cloud, and grids of 30x30x30 points (27k), the uncompiled timing looks like this:
+
+.. code-block:: text 
+
+    Time taken in forward: 161.396 ms per iteration
+    Time taken in backward: 260.719 ms per iteration
+
+While compiled, we have a bit better performance:
+
+.. code-block:: text
+
+    Time taken in forward: 38.718 ms per iteration
+    Time taken in backward: 86.226 ms per iteration
+
+To implement this better, we'll turn to NVIDIA's `Warp <https://nvidia.github.io/warp/>`_ kernel language.  Warp is designed for differentiable physics simulation - and for this kernel, we can write it directly in Warp and it will generate the adjoint (aka, the backward pass) for us automatically.  The trick is that we can write a much more efficient version using Warp's ``HashGrid`` (`docs <https://nvidia.github.io/warp/modules/runtime.html#hash-grids>`_) object.
+
+.. code-block:: python
+
+    @wp.kernel
+    def warp_radius_bounded_feature_aggregation(
+        query_points: wp.array(dtype=wp.vec3),
+        ref_points:  wp.array(dtype=wp.vec3),
+        ref_features: wp.array2d(dtype=wp.float32),
+        grid: wp.uint64,
+        radius: float,
+        sigma: float,
+        output_features: wp.array2d(dtype=wp.float32),
+    ):
+        # Get the thread ID:
+        tid = wp.tid()
+
+        # Get position from query points
+        pos = query_points[tid]
+
+        feature_dim = ref_features.shape[1]
+        local_output = output_features[tid]
+        
+        # Find all the neighbors using the hash grid:
+        neighbors = wp.hash_grid_query(id=grid, point=pos, max_dist=radius)
+
+        weight = float(0.0)
+        # Loop through neighbors.  Compute a weighted distance and accumulate it, 
+        # but also track the weight to normalize at the end.
+        for index in neighbors:
+            # Get the neighbor position:
+            pos2 = ref_points[index]
+            
+            # Compute the distance:
+            
+            dist = wp.length(pos - pos2)
+            # disp = pos - pos2 
+            # dist = wp.sqrt(disp[0]**2. + disp[1]**2. + disp[2]**2.)
+            
+            if dist > radius:
+                continue
+            
+            # Get the features at this index:
+            feature = ref_features[index]
+            
+            # Compute the weight:
+            this_weight = wp.exp( - dist / sigma)
+            
+            # Accumulate the weight, and weight * feature
+            weight += this_weight
+            # Work directly with the 2D array indexing instead of the slice
+            for j in range(feature_dim):
+                local_output[j] += feature[j] * this_weight 
+        
+        if weight > 0.0:
+            # Normalize by working directly with the 2D array
+            for j in range(feature_dim):
+                local_output[j] /= (weight + 1e-8)
+        
+        # Write the output
+        for j in range(feature_dim):
+            output_features[tid,j] = local_output[j]
+
+.. note::
+
+    The function above is a ``warp`` *kernel*, not a python function.  It's written in python, but in reality it's compiled to CUDA and launched like any other kernel - but all from python itself.  Read more about warp kernels `here <https://nvidia.github.io/warp/basics.html#kernels>`_
+
+This kernel replaces nearly the entirety of the ``torch`` code: it finds all the points within the radius and then directly accumulates them into the output.  Launching a ``warp`` kernel from pytorch is straightforward, due to Warp's interoperability with several other languages:
+
+.. code-block:: python
+
+    @torch.library.custom_op("warp::radius_bounded_feature_aggregation", mutates_args=())
+    def radius_bounded_feature_aggregation_impl(
+        query_points: torch.Tensor, 
+        ref_points: torch.Tensor, 
+        ref_features: torch.Tensor, 
+        radius: float, 
+        sigma: float,
+    ) -> torch.Tensor:
+
+
+        # Convert to warp
+        # We can only build and query the points in wp.vec3 format:
+        wp_query_points = wp.from_torch(
+            query_points, 
+            dtype=wp.vec3, # vec3 here!
+            requires_grad=query_points.requires_grad
+        )
+        wp_ref_points = wp.from_torch(
+            ref_points, 
+            dtype=wp.vec3, # and here!
+            requires_grad=ref_points.requires_grad
+        )
+        wp_ref_features = wp.from_torch(
+            ref_features, 
+            dtype=wp.float32, # but, the features we keep as an array!
+            requires_grad=ref_features.requires_grad
+        )
+        
+        
+        # In the data generation, we had set the grid to range over -1 to 1 with 30 points.
+        # We can use that to dictate the grid size:
+        grid_size = int(2. / radius) + 1
+        
+        # **In general** to do this, you'd have to incur a performance penalty:
+        # 1. Find the min max of all the points in your query set.
+        # 2. Divide the range by the radius to get the grid size.
+        # 3. Move the grid size to the CPU (which is blocking if done wrong)
+        # 4. Construct the grid on the CPU.
+        
+        # But, it's **likely** you'd be constructing the grid once and caching it, anyways.
+        
+
+        
+        # Build the grid used in the kernel:
+        hash_grid = wp.HashGrid(grid_size, grid_size, grid_size)
+
+        # This actually loops over the points and does the hashing
+        hash_grid.build(wp_ref_points, radius)
+        
+                
+        # Allocate output space (with pytorch!) and convert to warp:
+        output_features = torch.zeros(
+            (query_points.shape[0], ref_features.shape[1], ),
+            device=ref_features.device, 
+            dtype=ref_features.dtype,
+            requires_grad=ref_features.requires_grad
+        )
+        
+        wp_output = wp.from_torch(
+            output_features,
+            dtype=wp.float32,
+            requires_grad=ref_features.requires_grad
+        )
+        
+        # Launch the kernel:
+        feature_dim = ref_features.shape[1]
+        wp.launch(
+            warp_radius_bounded_feature_aggregation,
+            inputs=[
+                wp_query_points, 
+                wp_ref_points, 
+                wp_ref_features, 
+                hash_grid.id, 
+                radius, 
+                sigma,
+            ],
+            outputs =[
+                wp_output,
+            ],
+            dim=[query_points.shape[0]],
+        )
+
+        
+        # return the output features:
+        return output_features
+
+For more details on Warp, it's interface, and tools available, head over to their `documentation <https://nvidia.github.io/warp/>`_.
+
+If you followed along with the first half, you'll recognize the declaration to the function: ``@torch.library.custom_op("warp::radius_bounded_feature_aggregation", mutates_args=())``.   The fake registration is still necessary too:
+
+.. code-block:: python
+
+    @radius_bounded_feature_aggregation_impl.register_fake
+    def _(
+        query_points: torch.Tensor, 
+        ref_points: torch.Tensor, 
+        ref_features: torch.Tensor, 
+        radius: float, 
+        sigma: float,
+    ) -> torch.Tensor:
+
+        assert query_points.is_cuda
+        assert ref_points.is_cuda
+        assert ref_features.is_cuda
+        
+        output = torch.empty(
+            (query_points.shape[0], ref_features.shape[1], ),
+            device=query_points.device, 
+            dtype=query_points.dtype)
+        
+        return output
+
+Now, we do the fun part: going backwards.  The actual backwards pass to launch the warp kernel is very similar to the forwards pass: 
+
+.. code-block:: python
+
+    @torch.library.custom_op("warp::radius_bounded_feature_aggregation_bwd", mutates_args=())
+    def radius_bounded_feature_aggregation_bwd_impl(    
+        query_points: torch.Tensor, 
+        ref_points: torch.Tensor, 
+        ref_features: torch.Tensor, 
+        radius: float, 
+        sigma: float,
+        output_features: torch.Tensor,
+        grad_outputs : torch.Tensor,
+    ) -> torch.Tensor:
+        
+        # This function only needs to get the gradients of p2_features,
+        # based on the grad_output of the forward outputs. 
+        # Everything else is None for a grad.
+        
+        # Convert to warp:
+        wp_query_points = wp.from_torch(
+            query_points,
+            dtype=wp.vec3,
+            requires_grad=False
+        )
+        # We can only build and query the points in float32:
+        wp_ref_points = wp.from_torch(
+            ref_points,
+            dtype=wp.vec3,
+            requires_grad=False
+        )
+        #########################################################
+        # Because we set requires_grad True here, warp will 
+        # populate gradients HERE in the .grad attribute.
+        #########################################################
+        wp_ref_features = wp.from_torch(
+            ref_features,
+            dtype=wp.float32,
+            requires_grad=True,
+        )
+
+        # In the data generation below, we set the grid to range over -1 to 1 with 30 points.
+        # We can use that to dictate the grid size:
+        grid_size = int(2. / radius) + 1
+        
+        # Build the grid used in the kernel:
+        # In a real application, you'd cache and retrieve this in the backwards pass.
+        # The trick would be to make sure the hash_grid object persists but is not 
+        # actually in the torch interface (it would break things for the compiler!)
+        hash_grid = wp.HashGrid(grid_size, grid_size, grid_size)
+
+        # We're rebuilding here just to make the implementation straightforward
+        hash_grid.build(wp_ref_points, radius)
+        
+        wp_output = wp.from_torch(output_features)
+        
+        wp_grad_outputs = wp.from_torch(grad_outputs)
+
+        
+        feature_dim = ref_features.shape[1]
+        # Launch the kernel:
+        wp.launch(
+            warp_radius_bounded_feature_aggregation,
+            inputs=[
+                wp_query_points, 
+                wp_ref_points, 
+                wp_ref_features, 
+                hash_grid.id, 
+                radius, 
+                sigma,
+            ],
+            outputs =[
+                wp_output,
+            ],
+            adj_inputs = [
+                None,
+                None,
+                wp_ref_features.grad,
+                None,
+                None,
+                None,
+            ],
+            adj_outputs = [
+                wp_grad_outputs,
+            ],
+            adjoint=True,  ############ Pay attention here!  Launch the kernel adjoint!
+            dim=[query_points.shape[0]],
+        )
+
+        # return the gradient of the features:
+        return ref_features.grad
+
+Registering the fake is also straightforward and just like the forward pass:
+
+.. code-block:: python
+
+    @radius_bounded_feature_aggregation_bwd_impl.register_fake
+    def _(
+        query_points: torch.Tensor, 
+        ref_points: torch.Tensor, 
+        ref_features: torch.Tensor, 
+        radius: float, 
+        sigma: float,
+        output_features: torch.Tensor,
+        grad_outputs : torch.Tensor
+    ) -> torch.Tensor:
+        grad_outputs = torch.empty_like(ref_features)
+        return grad_outputs
+
+So far, we haven't actually told PyTorch this is a backwards pass function.  Instead, we've just declared a similar function, that happens to have ``bwd`` in the name.  For the autograd system in PyTorch, we need two more steps to enable this all to connect.  First, we have to set up the context, which is useful to save the forward pass objects for the backwards calculations.  And second, we need to tell PyTorch exactly which function is the backwards pass and which function is the context setup - a simple one-liner to register them in the autograd system:
+ 
+.. code-block:: python
+
+    # Use this to save any inputs or outputs for the backward pass.
+    def setup_context(ctx: torch.autograd.function.FunctionCtx, inputs, output):
+        query_points, ref_points, ref_features, radius, sigma = inputs
+        out_features = output
+        ctx.save_for_backward(query_points, ref_points, ref_features, out_features)
+
+        ctx.radius = radius
+        ctx.sigma = sigma
+        
+    # And this connects the forward pass to the backward pass with pytorch.
+    radius_bounded_feature_aggregation_impl.register_autograd(radius_bounded_feature_aggregation_backward_worker, setup_context=setup_context)
+ 
+.. note:: 
+
+    If you've written a ``torch.autograd.Function`` subclass before, you're familiar with the context though it may look different to you in this form.  PyTorch recommends this syntax to enable their functional API as well, but, if you don't need that you are welcome to use your tried and true inheritance from ``torch.autograd.Function``.
+
+    If you're **not** familiar with how PyTorch does autograd work - check out their excellent guide `here <https://docs.pytorch.org/tutorials/beginner/examples_autograd/two_layer_net_custom_function.html>`_
+
+
+The rest of the application proceeds just like before. With Warp, though, the performance is even better than compiled pytorch:
+
+.. code-block:: text
+
+    Time taken in forward: 13.511 ms per iteration
+    Time taken in backward: 29.953 ms per iteration
+
+Success!
+
+Conclusion
+==========
+
+In this tutorial, we saw some cool features of integrating highly performance code into pytorch applications, and how to combine them with ``torch.compile``.  Some key takeaways:
+
+- ``torch.compile`` is generally great for performance.  Use it unless there is a reason you can't!
+- If the reason you can't use ``torch.compile`` is that you have to leave the pytorch ecosystem to get a better performing kernel - then use `this method <https://docs.pytorch.org/tutorials/advanced/custom_ops_landing_page.html>`_ to register your wrapper functions and enable the compiler to seamlessly incorporate them.
+- If you're calling out to other libraries in the NVIDIA ecosystem, like RAPIDS, you can get **even better** performance sharing a memory manager!  Check out the `RAPIDS Memory Manager <https://github.com/rapidsai/rmm>`_, which plugs in to pytorch (and also ``cupy`` and ``numba``!)
+- You can just as easily incorporate a backwards pass as a forwards pass.  In this tutorial we leveraged the autograd capabilites of ``warp``, but in other cases you can of course write the backwards pass yourself.
+
+Without these techniques, for many scientific AI workloads users are faced with a choice: use torch.compile on their model, including inefficient functions; or, skip ``torch.compile`` and leverage fast, accelerated calls in the NVIDIA python ecosystem.  The reality is, though, that you don't need to make that choice: you can have both performance enhancements.
