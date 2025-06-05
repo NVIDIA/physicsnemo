@@ -34,8 +34,9 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(
     optimizer, lr_lambda=lambda step: 0.85**step
 )
 
-# load the epoch and optimizer, model ans scheduler parameters from the checkpoint if
-# it exists
+# load the epoch and optimizer, model and scheduler parameters from the checkpoint if
+# it exists. Here we will use the `load_checkpoint` function to load the checkpoint,
+# optimizer, and scheduler parameters from the checkpoint.
 loaded_epoch = load_checkpoint(
     "./checkpoints",
     models=model,
@@ -46,10 +47,11 @@ loaded_epoch = load_checkpoint(
 
 # we will setup the training to run for 20 epochs each epoch running for 5 iterations
 # starting with the loaded epoch
+dataloader = iter(dataloader)
 for i in range(max(1, loaded_epoch), 20):
     # this would be iterations through different batches
     for _ in range(5):
-        batch = next(iter(dataloader))
+        batch = next(dataloader)
         true = batch["darcy"]
         pred = model(batch["permeability"])
         loss = mse(pred, true)
