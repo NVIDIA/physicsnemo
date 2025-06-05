@@ -87,6 +87,29 @@ Some general comments for the ``PhysicsInformer``:
   can access the value of ``.required_inputs`` property.
 
 
+The various methods and their applicability based on the model output type can be summarized below
+
+- **Automatic Differentiation**: Suitable for outputs from models which are differentiable w.r.t model inputs.
+  Model inputs must include coordinates as inputs. Ideal for MLP type of architectures, and can operate on point clouds,
+  structured grids or unstructured meshes as long as the differentiability and input constraints are satisfied.
+  Computationally expensive but more accurate than other numerical gradient methods.
+
+- **Meshless Finite Difference**: Numerical gradient method suitable for models that can
+  predict field values on stencil points in addition to the original points. The points can come from a point cloud, 
+  grid (structured or unstructured), but most suitable for point clouds. 
+  Fast, but can present numerical instability if ``fd_dx`` is too small.
+
+- **Finite Difference**: Numerical gradient method suitable for models that output predictions on
+  structured grids with uniform spacing (each dimension can have a different spacing of its own).
+
+- **Spectral Derivatives**: Numerical gradient method suitable for models that output predictions
+  on structured grids with uniform spacing (each dimension can have a different spacing of its own) and have
+  periodic boundaries.
+
+- **Least Squares Method**: Numerical gradient method most suitable for models predict output on unstructured
+  grids or structured grids with non-uniform spacing. 
+
+
 Computing PDE losses using Automatic Differentiation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
