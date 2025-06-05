@@ -3,31 +3,31 @@ Adding Physics-based constraints using PhysicsNeMo
 
 In this tutorial, we'll learn how to add physics-based constraints to your model training
 using PhysicsNeMo. `PhysicsNeMo-Sym <https://github.com/NVIDIA/physicsnemo-sym>`_
-is a sub-module of PhysicsNeMo that provides algorithms and utilities to physics-inform
-the training of AI models. In this tutorial, we will explore the different utilites from
-PhysicsNeMo-Sym followed by some sample examples of end-to-end training workflows.
+is a submodule of PhysicsNeMo that provides algorithms and utilities to physics-inform
+the training of AI models. In this tutorial, we will explore the different utilities from
+PhysicsNeMo-Sym, followed by sample end-to-end training workflows.
 
 Adding physics-based constraints
 ---------------------------------
 
-A lot of the AI models trained on physical data are trained to minimize the difference
+Many AI models trained on physical data are designed to minimize the difference
 between the model predictions and the true data. Typical loss functions used for this
-purpose include MSE, RMSE, MAE, etc. Chosing the right loss function is an important
-step for AI model training and there is a lot of active research in the area. For the
-Physics-AI application, we can take this idea even further and craft loss functions
-that are suitable for the data. More specifically, typically the data used to train the
-models in Physics-AI space is coming from experimental measurements, or from results
-of a different numerical method. The system being studied is typically governed by governing laws
-of physics (such as conservation of mass, energy, etc.) and these methods / measurements
-aim to satisfy these constraints. Adding these governing laws / equations, as loss functions
-can the neural network to satisfy these constraints better and make the predictions more
-physically interpretable. 
+purpose include MSE, RMSE, MAE, etc. Choosing the right loss function is an important
+step for AI model training, and there is a lot of active research in this area. For
+Physics-AI applications, we can take this idea even further and craft loss functions
+that are suitable for the data. More specifically, the data used to train
+models in the Physics-AI space typically comes from experimental measurements or from results
+of a different numerical method. The system being studied is usually governed by physical laws
+(such as conservation of mass, energy, etc.), and these methods or measurements
+aim to satisfy these constraints. Adding these governing laws or equations as loss functions
+can help the neural network satisfy these constraints better and make the predictions more
+physically interpretable.
 
-Let's look at a example from the molecular dynamics domain. 
-Assume a system of molecules at equilibrium. Assume we are training
-a neural network to predict the forces on each of the molecule given the positions of the molecules. 
+Let's look at an example from the molecular dynamics domain.
+Assume a system of molecules at equilibrium. Suppose we are training
+a neural network to predict the forces on each molecule given the positions of the molecules.
 Since the system is in equilibrium, we want to enforce that the total sum of all the
-forces on each of the molecules is zero. This can be added as an constraint simply by doing the following:
+forces on each of the molecules is zero. This can be added as a constraint simply by doing the following:
 
 .. code-block:: python
 
@@ -49,15 +49,15 @@ forces on each of the molecules is zero. This can be added as an constraint simp
 
 Adding this, enforces an equilibrium condition on the model's prediction and is a
 demonstration of how physics knowledge can be incorporated in your training workflow. 
-A full example using this loss can be referenced in the `Molecular Dynamics Example <../examples/molecular_dynamics/lennard_jones/README.rst>`_
+A full example using this loss can be found in the `Molecular Dynamics Example <../examples/molecular_dynamics/lennard_jones/README.rst>`_
 
 Adding PDE constraints
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Sometimes, the governing equations for the problem can include Partial Differential Equations.
-This is especially true for problems in physics / scientific domains. Computing these
+This is especially true for problems in physics and other scientific domains. Computing these
 PDEs on model predictions involves computing spatial and temporal gradients and the methods
-used for that can change based on the model predictions. 
+used can vary based on the model architecture. 
 
 PhysicsNeMo-Sym aims to simplify this process. 
 The `PhysicsInformer <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#module-physicsnemo.sym.eq.phy_informer>`_
@@ -72,10 +72,10 @@ Some general comments for the ``PhysicsInformer``:
 
 
 - Using PhysicsInformer, you can physics-inform almost any model architecture
-  (point-cloud based, grid based, graph based, etc.), eg. MLPs, DeepONets, FNOs, CNNs, Diffusion Models,
+  (point-cloud based, grid based, graph based, etc.), e.g. MLPs, DeepONets, FNOs, CNNs, Diffusion Models,
   Graph networks, etc.
-- The utility support for gradients via Automatic Differentiation, Spectral,
-  Finite Difference, Meshless Finite Difference and Least Squares
+- The utility supports gradients via Automatic Differentiation, Spectral,
+  Finite Difference, Meshless Finite Difference and Least Squares methods.
 - Given the equations and required_outputs, this utility constructs the computational graph,
   and computes the gradients in an efficient way, to output the residuals.
 - This utility simplifies the spatial derivative computation. 
@@ -90,14 +90,14 @@ Some general comments for the ``PhysicsInformer``:
 Computing PDE losses using Automatic Differentiation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below code shows an example of using the ``autodiff`` method to compute the residuals.
+The code below shows an example of using the ``autodiff`` method to compute the residuals.
 A few things to note when using the ``autodiff`` method:
 
 - Ensure the model is differentiable, e.g. a model that uses ReLU activation
   function will have it's second derivatives zero. 
 - Set ``.requires_grad_()`` to ``True``. 
 - Coordinates is a (N, 1) shaped tensor for 1D, (N, 2) for 2D and (N, 3) for 3D.
-- This method is accurate but more computationally expensive compared to some of the 
+- This method is accurate but more computationally expensive compared to some 
   other numerical methods due to automatic differentiation. 
 
 .. code-block:: python
@@ -164,23 +164,23 @@ A few things to note when using the ``autodiff`` method:
         },
     )
 
-A full example using this loss can be referenced in the `Physics Informed Darcy Flow Example <../examples/cfd/darcy_physics_informed/README.rst>`_
+A full example using this loss can be found in the `Physics Informed Darcy Flow Example <../examples/cfd/darcy_physics_informed/README.rst>`_
 
-Computing PDE losses using Mesh-less Finite Differece
+Computing PDE losses using Mesh-less Finite Difference
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below code shows an example of using the ``meshless_finite_difference`` method to compute the residuals.
+The code below shows an example of using the ``meshless_finite_difference`` method to compute the residuals.
 A few things to note when using the ``meshless_finite_difference`` method:
 
-- In addtion to the outputs at the original data points, outputs are needed on the 
+- In Addition to the outputs at the original data points, outputs are needed on the 
   stencil points. The stencil points can be computed using 
   ``physicsnemo.sym.eq.spatial_grads.spatial_grads.compute_stencil3d`` function
   from PhysicsNeMo Sym. Stencil points are defined using the following convention
-  ”u>>x::1”: u(i+1, j) “u>>x::-1”: u(i-1, j) “u>>x::1&&y::1”: u(i+1, j+1) “u>>x::-1&&y::-1”: u(i-1, j-1) etc.
+  "u>>x::1": u(i+1, j) "u>>x::-1": u(i-1, j) "u>>x::1&&y::1": u(i+1, j+1) "u>>x::-1&&y::-1": u(i-1, j-1) etc.
   To identify the inputs that need to be passed to the ``forward()`` call, you 
   can access the value of ``.required_inputs`` property.
-- ``fd_dx`` is a hyper-parameter. Smaller value typically yeilds more accurate
-  gradients, but can lead to numerical instability. a value of 0.001 is a good
+- ``fd_dx`` is a hyperparameter. Smaller value typically yields more accurate
+  gradients, but can lead to numerical instability. A value of 0.001 is a good
   value to start.
 
 .. code-block:: python
@@ -273,10 +273,10 @@ A few things to note when using the ``meshless_finite_difference`` method:
         },
     )
 
-Computing PDE losses using Finite Differece
+Computing PDE losses using Finite Difference
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below code shows an example of using the ``finite_difference`` method to compute the residuals.
+The code below shows an example of using the ``finite_difference`` method to compute the residuals.
 A few things to note when using the ``finite_difference`` method:
 
 - This method uses the second-order central finite difference scheme to compute the
@@ -343,12 +343,12 @@ A few things to note when using the ``finite_difference`` method:
         },
     )
 
-A full example using this loss can be referenced in the `Physics Informed Darcy Flow Example <../examples/cfd/darcy_physics_informed/README.rst>`_
+A full example using this loss can be found in the `Physics Informed Darcy Flow Example <../examples/cfd/darcy_physics_informed/README.rst>`_
 
 Computing PDE losses using Spectral Derivatives
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below code shows an example of using the ``spectral`` method to compute the residuals.
+The code below shows an example of using the ``spectral`` method to compute the residuals.
 A few things to note when using the ``spectral`` method:
 
 - This method works well for periodic domains, while for non-periodic domains, it 
@@ -388,7 +388,7 @@ A few things to note when using the ``spectral`` method:
     # instantiate model
     model = Model()
 
-    # use the Navier Stokes PDE from Sym's PDE module
+    # use the Navier Stokes PDE from Sym'ss PDE module
     ns = NavierStokes(nu=0.01, rho=1.0, dim=3, time=False)
     coords = torch.stack([xx, yy, zz], dim=0).unsqueeze(0)  # Coords shape: (1, 3, 100, 100, 100)
     
@@ -418,7 +418,7 @@ A few things to note when using the ``spectral`` method:
 Computing PDE losses using Least-Squares Method
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Below code shows an example of using the ``least_squares`` method to compute the residuals.
+The code below shows an example of using the ``least_squares`` method to compute the residuals.
 A few things to note when using the ``least_squares`` method:
 
 - This method is designed to compute gradients for unstructured meshes / grids.
@@ -512,22 +512,22 @@ A few things to note when using the ``least_squares`` method:
         },
     )
 
-A full example using this loss can be referenced in the `Stokes Flow Example <../examples/cfd/stokes_mgn/README.rst>`_
+A full example using this loss can be found in the `Stokes Flow Example <../examples/cfd/stokes_mgn/README.rst>`_
 
 Customizing the PDEs
 ~~~~~~~~~~~~~~~~~~~~~~
 
-PhysicsNeMo Sym’ symbolic library, 
+PhysicsNeMo Sym's symbolic library, 
 allows users to define the equations using SymPy.
 PhysicsNeMo Sym comes with several built-in PDEs that are customizable such that they can
 be applied to steady-state or transient problems in 1D/2D/3D
-(this is not applicable to all the PDEs). 
-A nonexhaustive list of PDEs that are currently available in PhysicsNeMo Sym include:
+(this is not applicable to all PDEs). 
+A non-exhaustive list of PDEs that are currently available in PhysicsNeMo Sym include:
 
 - AdvectionDiffusion: Advection diffusion equation
 - GradNormal: Normal gradient of a scalar
 - Diffusion: Diffusion equation
-- MaxwellFreqReal: Frequency domain Maxwell’s equation
+- MaxwellFreqReal: Frequency domain Maxwell's equation
 - LinearElasticity: Linear elasticity equations
 - LinearElasticityPlaneStress: Linear elasticity plane stress equations
 - NavierStokes: Navier stokes equations for fluid flow
@@ -546,12 +546,12 @@ directly. Refer to the API docs for more details.
 Using geometry information
 ------------------------------
 
-PhysicsNeMo also provide several ways to incorporate geometry information into the training pipelines.
+PhysicsNeMo also provides several ways to incorporate geometry information into the training pipelines.
 From computing signed distance fields for implicit geometry representation, to sampling point-clouds,
 utilities from PhysicsNeMo and more specifically PhysicsNeMo-Sym can be used to enrich the model training
 using geometry information.
 
-Below is a non-exhaustive list of different ways geometry information, derived from PhysicsNeMo sym can be
+Below is a non-exhaustive list of different ways geometry information, derived from PhysicsNeMo can be
 used:
 
 - Compute point-clouds for training and inference
@@ -565,17 +565,17 @@ Let's review some of these below.
 Computing Signed Distance Fields
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Mathematically, signed distance field or signed distance function (SDF) is defined as the orthonogal distance
+Mathematically, signed distance field or signed distance function (SDF) is defined as the orthogonal distance
 of a given point to the boundary / surface of a geometric shape. It is widely used to describe the geometry
-in mathematics, rendering, and similar applications. In physics-informed learning, it is also used to represent
-`geometric inputs to the neural networks <https://www.research.autodesk.com/app/uploads/2023/03/convolutional-neural-networks-for.pdf_rectr0tDKzFYVAAJe.pdf>`_.
+in mathematics, rendering, and similar applications. In physics-informed learning, it is also used to represent as
+`geometric inputs to neural networks <https://www.research.autodesk.com/app/uploads/2023/03/convolutional-neural-networks-for.pdf_rectr0tDKzFYVAAJe.pdf>`_.
 
 Inside PhysicsNeMo, there are several ways to compute the SDF of a geometry. 
 
 - Using the ``physicsnemo.utils.sdf.signed_distance_field``:
   
   This function is useful for computing SDF from a given mesh and input points.
-  Below code gives a sample implementation
+  The code below gives a sample implementation
 
   .. code-block:: python
 
@@ -597,7 +597,7 @@ Inside PhysicsNeMo, there are several ways to compute the SDF of a geometry.
   PhysicsNeMo Sym allows you to load STL files and also define custom geometries
   using Constructive Solid Geometry and use it for computing the SDF. The 
   `geometry module documentation from PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html#>`_
-  provides a comprehensive documentation of this functionality. Below code shows
+  provides a comprehensive documentation of this functionality. The code below shows
   a sample implementation of this
 
   .. code-block:: python
@@ -611,14 +611,14 @@ Inside PhysicsNeMo, there are several ways to compute the SDF of a geometry.
     # compute the SDF on the (0, 0, 0) points
     sdf = geo.sdf(
             {
-                "x": np.array([[0]]),   # each coordinate must be of shape (N, 1)
+                "x": np.array([[0]]),   # each coordinate must have shape (N, 1)
                 "y": np.array([[0]]),
                 "z": np.array([[0]]),
             },
         params={}
     )["sdf"]
 
-A few examples using SDF during training / inference can be referenced in the 
+A few examples using SDF during training / inference can be found in the 
 `External Aerodynamics using DoMINO Example <../examples/cfd/external_aerodynamics/domino/README.rst>`_, 
 `Datacenter CFD example <../examples/cfd/datacenter/README.rst>`_.
 
@@ -627,7 +627,7 @@ Sampling point clouds
 
 The `geometry module from PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html#>`_
 also allows sampling of uniform point clouds in the interior (volume) and surface
-of the geometry. The sampled point clouds can be used to apply variety of physics constraints
+of the geometry. The sampled point clouds can be used to apply a variety of physics constraints
 during training, for example boundary conditions or even used during model inference
 to bypass the need for mesh generation.
 
@@ -640,7 +640,7 @@ one can create a datapipe to sample points on the surface of multiple STLs or
 multiple CSG type of geometries. You can use the ``GeometryDatapipe`` from PhysicsNeMo Sym
 for this purpose. Refer API docs for `GeometryDatapipe <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.geometry.html#module-physicsnemo.sym.geometry.geometry_dataloader>`_ for more details. 
 
-Below code shows a sample datapipe.
+The code below shows a sample datapipe.
 
 .. code-block:: python
 
@@ -665,6 +665,6 @@ Below code shows a sample datapipe.
     for data in datapipe:
         print(data[0].keys()) # For surface sampling, this should print ["x", "y", "z", "area", "normal_x", "normal_y", "normal_z"]
 
-A full example using this for boundary and interior sampling can be referenced in the `Lid Driven Cavity Flow Example <../examples/cfd/ldc_pinns/README.rst>`_.
+A full example using this for boundary and interior sampling can be found in the `Lid Driven Cavity Flow Example <../examples/cfd/ldc_pinns/README.rst>`_.
 Furthermore, several examples from `PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/index.html>`_ leverage
 similar functionality to solve a variety of problems using PINNs. 
