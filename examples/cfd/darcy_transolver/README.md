@@ -59,6 +59,12 @@ python train_transolver_darcy_fix.py
 In this case, the train set and test set are fixed after the construction of Dataset,
 corresponding to Transolver's setting.
 
+### Customization
+
+To train Transolver on the same 2D Darcy flow problem with different physical parameters or ML hyperparameters, modify the `config.yaml` file.
+
+To train Transolver on your own physics problem, modify the `dataloader` in `train_transolver_darcy.py` to use your own pre-computed data or on-the-fly solver.
+
 ## Additional Information
 
 More components are added for convenience. `Validators` calculate the loss between
