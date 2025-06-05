@@ -15,7 +15,7 @@ As it applies to performance of AI applications, Amdahl's law reminds us to view
 
 - **Model Performance** Once inputs are loaded on to the GPU, the AI model itself has a number of tools for improving computational performance.  We'll get in to some of these below, but ``torch.compile`` (`tutorial <https://docs.pytorch.org/tutorials/intermediate/torch_compile_tutorial.html>`_), ``CUDA Graphs`` (`blog post <https://pytorch.org/blog/accelerating-pytorch-with-cuda-graphs/>`_), ``mixed precision`` (`examples <https://docs.pytorch.org/docs/stable/notes/amp_examples.html>`_), ``multi-device parallelism with NCCL`` (`docs <https://docs.pytorch.org/docs/stable/distributed.html>`_), and specialized kernels from the Nvidia ecosystem such as ``cuML`` (`docs <https://docs.rapids.ai/api/cuml/stable/>`_), ``cuGraphs`` (`docs <https://docs.rapids.ai/api/cugraph/stable/>`_), and ``Warp`` (`docs <https://nvidia.github.io/warp/>`_) are all powerful tools to improve model performance.
 
-- **Data Loading** In small scale AI applications, a dataset might be loaded to CPU RAM and streamed to the GPU in batches, as needed.  For Scientific AI, however, datasets often are measured in units of **TB** and data loading can become a serious bottleneck for application performance, in both training and inference.  Several libraries exist (``HDF5`` (`docs <https://docs.h5py.org/en/stable/index.html>`_), ``Zarr`` (`docs <https://zarr.dev/>`_), and `higher level tools <https://docs.pytorch.org/tutorials/beginner/basics/data_tutorial.html>`_) that can load data faster than pure numpy.  But interactions with storage systems, CPU cores, CPU-GPU transfers, and other hardware components can quickly complicate data loading, often with unexpected performance degregations.
+- **Data Loading** In small scale AI applications, a dataset might be loaded to CPU RAM and streamed to the GPU in batches, as needed.  For Scientific AI, however, datasets often are measured in units of **TB**.  Data loading can become a serious bottleneck for application performance, in both training and inference.  Several libraries exist (``HDF5`` (`docs <https://docs.h5py.org/en/stable/index.html>`_), ``Zarr`` (`docs <https://zarr.dev/>`_), and `higher level tools <https://docs.pytorch.org/tutorials/beginner/basics/data_tutorial.html>`_) that can load data faster than pure numpy.  But interactions with storage systems, CPU cores, CPU-GPU transfers, and other hardware components can quickly complicate data loading, often with unexpected performance degregations.  Some out of the box solutions can be easily handled with tools like `NVIDIA DALI <https://docs.nvidia.com/deeplearning/dali/user-guide/docs/index.html>`_, while other applications take more effort.
 
 - **Data Preprocessing** Once data has been loaded from file, there are often preprocessing steps required before the data can flow to the AI model.  This can include anything from deterministic data transformations (padding data for your model, normalization, or others) to stochastic, run-time transformations (subsampling of large data, augmentation of data with noise, random cropping, mirroring, etc.). If done on the GPU, this can limit application performance by starving the GPU of work.
 
@@ -23,21 +23,33 @@ As it applies to performance of AI applications, Amdahl's law reminds us to view
 
 When it comes time to evaluate your model for performance optimization, keep these ideas in mind.  The sub-sections below can help you improve performance of certain areas, but where you spend your time for optimizations should be guided empirically by application performance and bottlenecks.  Meaning, of course: you need to profile your whole application, and often with multiple tools to get a full picture of performance bottlenecks.  Further - after you've made improvements, make sure to *reprofile* before you decide what to optimize next.
 
-Organization
-------------
 
-This tutorial is organized into multiple subsections sections, and each one is designed to be read and used independently - feel free to skip around and focus on what you need for your application. 
+**Performance Topics**
+
+.. list-table:: 
+   :widths: 25 75
+   :header-rows: 1
+
+   * - Topic
+     - Description
+   * - :doc:`performance_docs/torch_compile_support`
+     - **Torch Compile and External Kernels** - Learn how to integrate other kernels effectively into your models and use ``torch.compile`` to enable end-to-end model compilation for maximum performance.
+   * - Hardware Features 
+     - *[Coming Soon]* **Nvidia Hardware Features** - Beyond Tensor Cores and mixed precision, discover other hardware features that can accelerate your Scientific AI workloads.
+   * - IO
+     - *[Coming Soon]* **Asynchronous and Accelerated IO** - When IO becomes a bottleneck, learn how to read and write data asynchronously, prefetch data to overlap IO and computation, and leverage GPU acceleration.
+   * - Streams and Asynchronous Tools
+     - *[Coming Soon]* **Asychronous Computations** - Keep your GPU fully occupied using CUDA Streams, MPS mode, and other concurrency tools for high-throughput workloads.
 
 .. note::
-    This performance guide is a work in progress.  Look for much more updated content in our next release!
+   These performance guides are works in progress. Look for much more updated content in our next release!
 
-- **Compilation**:  :ref:`Torch Compile and External Kernels` provides an overview of how to integrate other kernels effectively into your models - and use ``torch.compile`` to enable end-to-end model compilation.
-
-- *[More Coming soon]* **Taking advantage of Nvidia Hardware Features**.  Nvidia GPUs lead the way with hardware features for accelerated AI.  You likely already know about tensorcores and mixed precision, learn more about the other hardware features that can be used for Scientific AI enablement.
-
-- *[More Coming soon]* **Enabling Asynchronous and Accelerated IO** When IO is a challenge in an application, the standard tools of asynchronous computation and accelerated computation can help.  Learn how to read and write data asynchronously, how to prefetch data to overlap IO and computation, and learn how to leverage the GPU for your IO components.
-
-- *[More Coming soon]* **Overlapping computations** Keeping the GPU fully occupied at all times is often one of the best ways improve performance, for training workloads but especially high-throughput inference workloads.  Learn how to leverage high level concurrency tools like CUDA Streams and MPS mode to improve end to end application performance.
+Is there a performance critical component of PhysicsNeMo or scientific AI workloads that doesn't get enough attention? Let us know on `GitHub <https://github.com/NVIDIA/physicsnemo>`_!
 
 
-Is there a performance critical component of PhysicsNeMo or scientific AI workloads that doesn't get enough attention?  Let us know on `GitHub <https://github.com/NVIDIA/physicsnemo>`_!
+.. toctree::
+   :maxdepth: 1
+   :titlesonly:
+   :hidden:
+
+   performance_docs/torch_compile_support

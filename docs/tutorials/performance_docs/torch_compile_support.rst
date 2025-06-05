@@ -1,10 +1,39 @@
 Torch Compile and External Kernels
 ==================================
 
-In 2023, with the `release of PyTorch 2.0 <https://pytorch.org/blog/pytorch-2-0-release/>`_, PyTorch deployed the ``torch.compile`` API as a user facing, ready-to-use model compiler.  ``torch.compile`` is a handy tool for improving performance of AI models, in both training and inference, but often there can be edge cases where certain functionality needed in the model is impossible to use with ``torch.compile``.  In this tutorial, we'll look at a small, toy example application that benefits from functionality that torch can't offer - and then we'll see how to enable ``torch.compile`` to use this functionality without graph breaks.
+**The Challenge: Getting the Best of Both Worlds**
+
+Scientific AI applications often face a performance dilemma: ``torch.compile`` can accelerate PyTorch models, but many scientific workloads require specialized libraries outside the PyTorch ecosystem—like RAPIDS cuML for accelerated k-nearest neighbors, NVIDIA Warp for differentiable physics simulation, or other domain-specific kernels. Using these external libraries typically causes "graph breaks" in ``torch.compile``, limiting the potential performance benefits.
+
+.. note::
+    PyTorch deployed ``torch.compile`` in version 2.0 - older versions of pytorch will not be compatible with this tutorial.
+
+This tutorial demonstrates how to solve this challenge by integrating external kernels with ``torch.compile`` using PyTorch's custom operator API, enabling you to leverage both PyTorch's graph optimization and high-performance external libraries simultaneously.
+
+**What You'll Learn**
+
+By the end of this tutorial, you'll understand how to:
+
+- Register external library functions as PyTorch custom operators
+- Enable ``torch.compile`` to work seamlessly with libraries like cuML and Warp
+- Implement custom backward passes for external kernels
+- Share memory pools between PyTorch and RAPIDS for additional performance gains
+- Achieve significant speedups (10x+ in our toy examples) without sacrificing ``torch.compile`` benefits
+
+**Who is this for?**
+
+This is a more advanced tutorial, for AI developers who are actively working on new models, applications, data pipelines, etc.  Strong familiarity with ``torch`` is a prerequisite, and basic familiarity with unstructed data operations (like k-Nearest Neighbors) is good to have.  And, you should know the `basics <https://docs.pytorch.org/tutorials/intermediate/torch_compile_tutorial_.html>`_ of how ``torch.compile`` works and how to use it on your code.
+
+
+
+**Table of Contents**
+
+.. contents::
+   :local:
+   :depth: 3
 
 What does ``torch.compile`` do?
-------------------------------
+-------------------------------
 
 If you're interested in ``torch.compile``, you've probably already found the `tutorial from PyTorch <https://docs.pytorch.org/tutorials/intermediate/torch_compile_tutorial_.html>`_.  At a high level, ``torch.compile`` is a tool that allows pytorch to inspect your model ahead of time, find places where kernels can be optimized or combined, and enable those optimizations.  The performance gain is heavily dependent on the application: kernel fusion (like a convolution + activation) can help reduce runtime by mitigating the memory-bound characteristics of one kernel when fusing it to compute bound kernel.  Further, performance gains are highly dependent on compute precision as well: the thresholds for what is "compute-bound" and what is "memory-bound" are different depending on the precision. Lower precisions can take advantage of smaller memory footprints (so less bandwidth is necessary from memory) as well as dedicated processing units like Tensor cores for faster math operations.
 
@@ -15,7 +44,9 @@ This tutorial is broken into two models: first, we'll work on a k-Nearest-Neighb
 Introducing the Application
 ---------------------------
 
-For demonstration purposes, we've invented a small operator that works on point-cloud like data.  For PhysicsNeMo users, you'll recognize similar ideas in architectures such as DoMINO and FigConvNet.  We're not specifically using these models, however, this is a fully independent example application.
+For demonstration purposes, we've invented a small operator that works on point-cloud like data.  This means the input to the operator is a , 2D ``torch.Tensor`` of 3D points, unstructured and unordered.  You can find small scale point-cloud data, for example, in "ModelNet-10 - Princeton 3D Object Dataset" (`link <https://www.kaggle.com/datasets/balraj98/modelnet10-princeton-3d-object-dataset>`_) - but the exact features of the data aren't the focus here in this tutorial, so don't worry about the details of the input/outputs.  
+
+Regarding the application - for PhysicsNeMo users, you'll recognize similar ideas in architectures such as DoMINO and FigConvNet, and local aggregation of points is a well studied topic in many graph neural networks on point clouds.  We're not specifically using these models, however, this is a fully independent example application.
 
 We start with a simple, 3-layer MLP:
 
@@ -52,7 +83,7 @@ This MLP is used twice, in a simple model:
             
         def forward(self, p1: torch.Tensor, p2: torch.Tensor) -> torch.Tensor:
             """
-            Accept two point clouds, p1 and p2.  Compute a learnable projection on p2 to 
+            Accept two point clouds, p1 and p2.  Compute a learnable projection onto p2 to 
             learn features.  Then, use a kNN-weighted aggregation to project those features
             on to p1.
             """
@@ -111,7 +142,8 @@ In basic terms, this model operates on two sets of point clouds.  A reference se
 
 You make recognize this as a brute-force implementation of a kNN, followed by a weight calculation based on how far apart two points are.  
 
-.. note:: 
+.. seealso::
+
     Don't read into the high level algorithm too closely!  Remember, we're here in this tutorial to talk about computational performance.  This is just a made-up example that uses a kNN.
 
 Just for completeness, so you can run this example on your own, here are some helper functions needed to initialize the data and, optionally, ensure deterministic inputs:
@@ -254,14 +286,21 @@ On an A100 GPU, we see performance like this:
     Time taken in forward: 144.045 ms per iteration
     Time taken in backward: 144.758 ms per iteration
 
-And, by introducing `model = torch.compile(model)` and no other changes, performance jumps by a factor of two:
+And, by introducing ``model = torch.compile(model)`` and no other changes, performance jumps by a factor of two:
 
 .. code-block:: text
 
     Time taken in forward: 74.237 ms per iteration
     Time taken in backward: 74.657 ms per iteration
 
+Sidebar: Profiling the compiled application
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 Why?  It's interesting to explore exactly what happened, here, to enable a 2x performance boost in this pretend application.  If you run this application with profiling on, and look at the two profiles (with and without compilation) you'll see pretty clearly some top kernels.
+
+.. seealso::
+
+    Want to learn more about how to profile your pytorch code?  Check out our profiling tutorial: :ref:`Profiling Applications in PhysicsNeMo`
 
 **Uncompiled Application Performance (Top Operations):**
 
@@ -384,8 +423,8 @@ Why?  It's interesting to explore exactly what happened, here, to enable a 2x pe
 Take note of the top kernels before compilation: ``aten::topk`` was (and still is) dominant.  But right before we call ``topk`` in user code, we compute the norm of all the points together in the point cloud: ``aten::linalg_vector_norm`` takes 55ms and it's significantly less in the compiled version (and, it shows up under a different name!)  This doesn't account for all of the difference, though it's a lot.  To learn more about understanding the profiling results, check out :ref:`Profiling Applications in PhysicsNeMo`.
 
 
-How can we make this faster?
-----------------------------
+Improving Performance with RAPIDS
+---------------------------------
 
 Now, we've seen that torch.compile can accelerate our code, but if we step back at think about the kNN algorithm, we'll realize it's not ideal.  We are computing this with an N*M algorithm (every point in ``p1`` compared to every point in ``p2``) - and it's expensive particularly in memory usage.  Better algorithms exist - and it's not the subject of this tutorial to get into them - and we already have a good example in Nvidia's RAPIDS ecosystem: `cuML Nearest Neighbors <https://docs.rapids.ai/api/cuml/stable/api/#neighbors>`_.  These days, integrating into pytorch is straightforward.  Update our ``knn_weighted_feature_aggregation`` function:
 
@@ -462,7 +501,12 @@ And, performance is a little worse:
     Time taken in forward: 15.697 ms per iteration
     Time taken in backward: 17.670 ms per iteration
 
-The issue of course is our function, ``knn_search_with_cuml``, is calling operations that pytorch has no idea what to do with.  However, if you follow along with the `PyTorch Custom Ops Tutorial <https://docs.pytorch.org/tutorials/advanced/python_custom_ops.html#python-custom-ops-tutorial>`_, it's not hard to see how to extend this.  We have to register the function with pytorch:
+The issue of course is our function, ``knn_search_with_cuml``, is calling operations that pytorch has no idea what to do with.  
+
+Registering External Ops With PyTorch
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+However, if you follow along with the `PyTorch Custom Ops Tutorial <https://docs.pytorch.org/tutorials/advanced/python_custom_ops.html#python-custom-ops-tutorial>`_, it's not hard to see how to extend this.  We have to register the function with pytorch:
 
 .. code-block:: python
 
@@ -500,8 +544,8 @@ And, we have to define a "fake" tensor function for this function: based on the 
 
 With these changes, now ``torch.compile`` will work! You won't actually see a significant speedup, though - in fact you'll probably see negligible change in performance (< 1ms difference).  The challenge, here, is that while the ``cuml`` implementation is much much faster, it includes  cuda synchronize calls - which block execution on the GPU.  Since the rest of the model is so tiny, the compilation does almost nothing to improve it: we're bound now by kernel launch latency outside of that call.  You can - and should! - run the profiles and take a look to see that the GPU is now significantly more idle than it was in the first iteration of the code.  However, for real models, with much deeper and larger layers, which will not be a major issue.
 
-Bonus!
-------
+Performance Bonus! Shared Memory Pools
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 If you do look at the profile, you'll see a lot of memory operations in the ``cuml`` region of the code.  Why?  It has to allocate memory for itself, and while both RAPIDS and PyTorch have dedicated memory management tools to accelerate this, they are not using the same pool of memory.  Fortunately, PyTorch easily allows you to swap in another memory allocator tool, and RAPID's memory mananger is easy to plug in.  Add these to your imports:
 
@@ -530,7 +574,10 @@ This improves the runtime by a further ~3ms (which is > 20% faster on an already
     Time taken in backward: 12.571 ms per iteration
 
 What about the backwards pass?
-==============================
+------------------------------
+
+Implementing Custom Backward Passes with NVIDIA Warp
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Yes - the backwards pass is supported too.  Our original example didn't actually need the backwards pass of the kNN operator.  Let's write a new kernel that does need one so we can see how this backwards incorporation works.  Instead of a kNN, we'll use **all** points within a specified radius to compute the same distance weighted feature aggregation.  In pytorch, it looks like this:
 
@@ -886,6 +933,9 @@ Registering the fake is also straightforward and just like the forward pass:
         grad_outputs = torch.empty_like(ref_features)
         return grad_outputs
 
+Connecting all the pieces
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
 So far, we haven't actually told PyTorch this is a backwards pass function.  Instead, we've just declared a similar function, that happens to have ``bwd`` in the name.  For the autograd system in PyTorch, we need two more steps to enable this all to connect.  First, we have to set up the context, which is useful to save the forward pass objects for the backwards calculations.  And second, we need to tell PyTorch exactly which function is the backwards pass and which function is the context setup - a simple one-liner to register them in the autograd system:
  
 .. code-block:: python
@@ -919,7 +969,7 @@ The rest of the application proceeds just like before. With Warp, though, the pe
 Success!
 
 Conclusion
-==========
+----------
 
 In this tutorial, we saw some cool features of integrating highly performance code into pytorch applications, and how to combine them with ``torch.compile``.  Some key takeaways:
 
@@ -929,3 +979,9 @@ In this tutorial, we saw some cool features of integrating highly performance co
 - You can just as easily incorporate a backwards pass as a forwards pass.  In this tutorial we leveraged the autograd capabilites of ``warp``, but in other cases you can of course write the backwards pass yourself.
 
 Without these techniques, for many scientific AI workloads users are faced with a choice: use torch.compile on their model, including inefficient functions; or, skip ``torch.compile`` and leverage fast, accelerated calls in the NVIDIA python ecosystem.  The reality is, though, that you don't need to make that choice: you can have both performance enhancements.
+
+
+.. toctree::
+    :local:
+    :depth: 1
+    :hidden:
