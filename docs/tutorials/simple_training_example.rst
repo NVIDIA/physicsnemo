@@ -29,12 +29,13 @@ quality-of-life functionalites like checkpointing and model entrypoints.
 
 Later we will also see how to customize these models in PhysicsNeMo.
 
-In this example we will use the 
-FNO model from PhysicsNeMo. To demonstrate the training using this model, we would need some
-dataset to train the model. To allow for fast prototyping of models, PhysicsNeMo provides
-a set of benchmark datasets that can be used out of the box without the need to setup
-data-loading pipelines. In this example, we will use one such datapipe called `Darcy2D`
-to get the training data. 
+In this example we will use the Fourier Neural Operator (FNO) model from PhysicsNeMo. 
+To demonstrate the training using this model, we would need some dataset to train the model.
+To allow for fast prototyping of models, PhysicsNeMo provides a set of benchmark datasets 
+that can be used out of the box without the need to setup data-loading pipelines. 
+In this example, we will use one such datapipe called `Darcy2D`, which is a 2D Darcy problem
+with a random permeability field. For more information on the FNO model or 2D-Darcy problem,
+refer to `Li et al., 2020 <https://arxiv.org/abs/2010.08895>`_.
 
 Let's start with importing a few utils and packages. 
 
@@ -178,7 +179,7 @@ and make inference scripts easier by providing a unified way to configure and qu
 associated with distributed environment.
 
 In this example, we will see how to convert our existing workflow to use data-parallelism.
-For an deep-dive on PhysicsNeMo Distributed utilities, refer :ref:`PhysicsNeMo Distributed`.
+For a deep-dive on PhysicsNeMo Distributed utilities, refer :ref:`PhysicsNeMo Distributed`.
 
 
 .. literalinclude:: ../test_scripts/test_simple_distributed.py
