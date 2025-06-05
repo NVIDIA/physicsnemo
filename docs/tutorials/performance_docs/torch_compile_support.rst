@@ -61,7 +61,9 @@ We start with a simple, 3-layer MLP:
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             """
-            A simple 3 layer MLP that takes in a tensor of shape (N, k) and outputs a tensor of shape (N, 1)
+            A simple 3 layer MLP that takes in a tensor of 
+            shape (N, input_dim) and outputs a tensor of 
+            shape (N, output_dim)
             """
             x = torch.relu(self.fc1(x))
             x = torch.relu(self.fc2(x))
@@ -85,7 +87,7 @@ This MLP is used twice, in a simple model:
             """
             Accept two point clouds, p1 and p2.  Compute a learnable projection onto p2 to 
             learn features.  Then, use a kNN-weighted aggregation to project those features
-            on to p1.
+            onto p1.
             """
             p2_features = self.proj(p2)
             
@@ -971,7 +973,7 @@ Success!
 Conclusion
 ----------
 
-In this tutorial, we saw some cool features of integrating highly performance code into pytorch applications, and how to combine them with ``torch.compile``.  Some key takeaways:
+In this tutorial, we saw some cool features of integrating highly performant code into pytorch applications, and how to combine them with ``torch.compile``.  Some key takeaways:
 
 - ``torch.compile`` is generally great for performance.  Use it unless there is a reason you can't!
 - If the reason you can't use ``torch.compile`` is that you have to leave the pytorch ecosystem to get a better performing kernel - then use `this method <https://docs.pytorch.org/tutorials/advanced/custom_ops_landing_page.html>`_ to register your wrapper functions and enable the compiler to seamlessly incorporate them.
