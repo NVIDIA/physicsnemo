@@ -1,7 +1,7 @@
 Training and Inference recipe
 ===============================
 
-In this tutorial, we will see how to use utilites from PhysicsNeMo to setup a model
+In this tutorial, we will see how to use utilities from PhysicsNeMo to setup a model
 training pipeline. Once the initial setup is complete, we will look into optimizing
 the training loop, and also run it in a distributed fashion. 
 We will finish the tutorial with an inference workflow that will demonstrate how to use

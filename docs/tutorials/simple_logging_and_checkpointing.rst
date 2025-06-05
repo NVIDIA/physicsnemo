@@ -233,6 +233,6 @@ something like below.
 Loading checkpoints during inference
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-For loading the checkpoint in inference, the process is and you can refer the samples
-provided in :ref:`running-inference-on-trained-models` and :ref:`saving-and-loading-physicsnemo-models` .
+For loading the checkpoint in inference, the process is, and you can refer the samples
+provided in :ref:`running-inference-on-trained-models` and :ref:`saving-and-loading-physicsnemo-models`.
 
