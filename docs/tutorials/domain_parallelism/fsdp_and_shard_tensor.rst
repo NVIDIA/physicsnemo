@@ -1,32 +1,49 @@
 Domain Decomposition, ShardTensor and FSDP Tutorial
 ============================================================
 
-This tutorial demonstrates how to use PhysicsNeMo's ``ShardTensor`` functionality alongside PyTorch's ``FSDP``   (Fully Sharded Data Parallel) to train a simple convolutional neural network. We'll show how to:
+In this tutorial, we will see how to combine domain parallelism, ``ShardTensor``, and a training or inference recipe.  Before diving too deeply into this tutorial, we recommend you read the other domain parallelism tutorial:
 
-1. Create a simple CNN model
-2. Set up input data sharding across multiple GPUs
-3. Combine FSDP with domain decomposition
-4. Train the model
+- :ref:`Domain Parallelism and Shard Tensor`
+- :ref:`Implementing new layers for ShardTensor`
 
-Simple CNN Model
+
+This tutorial demonstrates how to use PhysicsNeMo's ``ShardTensor`` functionality alongside PyTorch's ``FSDP``   (Fully Sharded Data Parallel) to train or evaluate a simple ViT.  Here's what's in the tutorial:
+
+1. ViT Model Overview
+2. Benchmarking the ViT on a single GPU
+3. Enabling domain parallelism with ``ShardTensor``
+4. Training and evaluating the model with domain parallelism
+
+Simple ViT Model
 ----------------
 
-The preamble to the training script has an important patch to make sure that the conv2d operation works with ``ShardTensor``:
+The model we'll use for this tutorial is a really straightforward and simple ViT. It's very similar to the spirit of the original vision transformer from "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale" `Dosovitskiy et al. <https://arxiv.org/abs/2010.11929>`_. The model consists of two main conceptual pieces.  First, there is a convolutional tokenizer: it is a convolution with stride==kernel_size (so, non-overlapping image pieces) followed by a reshape to a sequence-like tensor with channels last.  Second, there is a transformer block with residual attention and a residual MLP.
 
-.. code-block:: python
+The overall model architecture is straightforward, as well: the input image is tokenized using the convolutional tokenizer, a positional embedding is added, and then a series of transformer blocks are applied.  At the end of the transformer layers, all of the tokens are averaged together.  The entire architecture has one final layer to project the embedding dimension onto the output dimension.
 
-    import torch
+.. note::
 
-    # This is necessary to patch Conv2d to work with ShardTensor
-    from physicsnemo.distributed.shard_utils import patch_operations
+   This isn't really how you might implement a transformer for a vision classification task in practice - there are better, more sophisticated techniques.  Since the original ViT publication, technical advances such as `Convolution Transformers <https://arxiv.org/abs/2103.15808>`_, `Shifted Windows <https://arxiv.org/abs/2103.14030>`_, `Neighborhood Attention <https://arxiv.org/abs/2204.07143>`_, and others have outperformed vanilla ViTs like this for classification.  We encourage you to pick the model architecture most suitable for your task; for simplicitly to demonstrate the domain parallel techniques, we've pick a "Standard" vision transformer here.
 
-    import torch.nn as nn
 
-    from physicsnemo.distributed import DistributedManager
-    from physicsnemo.distributed.shard_tensor import ShardTensor
-    from torch.distributed.tensor import distribute_module, distribute_tensor
-    from torch.distributed.tensor.placement_types import Shard, Replicate
-    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+The full model architecture is here:
+
+.. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/baseline_model.py
+    :caption: Example 1: Vector Dot Product, single device
+    :language: python
+
+
+Training the ViT on a single GPU
+--------------------------------
+
+The training script for this tutorial is very simple: there is no data or labels, only synthetic data.  We loop over image sizes, initialize the ViT model, and then evaluate it's performance (computational performance, not model accuracy!) in a simple loop.  We measure both inference as well as training performance using ``torch.cuda.Event`` objects to capture timing information, and average over a few iterations.
+
+
+
+
+
+
+
 
 Next, setup the distributed environment including the device mesh.  Here we do it globally, 
 but you can do it locally as well and pass device_mesh objects around.
