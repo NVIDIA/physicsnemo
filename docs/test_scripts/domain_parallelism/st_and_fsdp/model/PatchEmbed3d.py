@@ -32,6 +32,6 @@ class PatchEmbedding3d(nn.Module):
         x = rearrange(x, 'b c h w d -> b (h w d) c')
         x = self.norm(x)
         # Keep in BHWC format for efficient downstream processing
-        x = F.relu(x)
+        x = nn.functional.relu(x)
         
         return x

@@ -25,21 +25,78 @@ The overall model architecture is straightforward, as well: the input image is t
 
    This isn't really how you might implement a transformer for a vision classification task in practice - there are better, more sophisticated techniques.  Since the original ViT publication, technical advances such as `Convolution Transformers <https://arxiv.org/abs/2103.15808>`_, `Shifted Windows <https://arxiv.org/abs/2103.14030>`_, `Neighborhood Attention <https://arxiv.org/abs/2204.07143>`_, and others have outperformed vanilla ViTs like this for classification.  We encourage you to pick the model architecture most suitable for your task; for simplicitly to demonstrate the domain parallel techniques, we've pick a "Standard" vision transformer here.
 
-.. Tutorial Organization - we are showing an end-to-end application benchmarking here with synthetic data.  You can see in this tutorial a comparison of 3 techniques: single-GPU running, distributed data parallel (DDP), and 2D Parallelism with ShardTensor + FSDP.  When the techniques differ, we show all three in tabs.  
+Here's the core of the model:
 
-.. The full model architecture is here:
+.. dropdown:: Model Implementation
+   :open:
 
-.. .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/baseline_model.py
-..     :caption: Example 1: Vector Dot Product, single device
-..     :language: python
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/ViT.py
+      :caption: Example 1: ViT Model
+      :language: python
+
+If you want to get deeper into the components, you should expand the following sections to see the code:
+
+
+.. dropdown:: Patch Embedding Implementations
+
+   .. tab-set::
+
+       .. tab-item:: 2D
+
+           .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/PatchEmbed2D.py
+              :caption: Convolutional Patch Embedding in 2D
+              :language: python
+
+       .. tab-item:: 3D
+
+           .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/PatchEmbed3D.py
+              :caption: Convolutional Patch Embedding in 3D
+              :language: python
+
+.. dropdown:: Transformer Block
+
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/TransformerBlock.py
+      :caption: Transformer Block
+      :language: python
+
+.. dropdown:: MLP
+
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/MLP.py
+      :caption: Simple Multi-layer Perceptron
+      :language: python
+
+.. dropdown:: Multi-head Attention
+
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/MultiHeadAttention.py
+      :caption: Multi-head Attention with pytorch scaled dot product attention
+      :language: python
 
 
 
+Running the ViT
+---------------
 
-Training the ViT on a single GPU
---------------------------------
+The training script for this tutorial is very simple: there is no data or labels, only synthetic data.  We loop over image sizes, initialize the ViT model, and then evaluate it's performance (computational performance, not model accuracy!) in a simple loop.  We measure both inference as well as training performance using ``torch.cuda.Event`` objects to capture timing information, and average over a few iterations.  For simplicity, we've package each of those pieces into simple functions to make it easier to run and reproduce this code:
 
-The training script for this tutorial is very simple: there is no data or labels, only synthetic data.  We loop over image sizes, initialize the ViT model, and then evaluate it's performance (computational performance, not model accuracy!) in a simple loop.  We measure both inference as well as training performance using ``torch.cuda.Event`` objects to capture timing information, and average over a few iterations.
+.. dropdown:: Transformer Block
+
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/TransformerBlock.py
+      :caption: Transformer Block
+      :language: python
+
+.. dropdown:: MLP
+
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/MLP.py
+      :caption: Simple Multi-layer Perceptron
+      :language: python
+
+.. dropdown:: Multi-head Attention
+
+   .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/model/MultiHeadAttention.py
+      :caption: Multi-head Attention with pytorch scaled dot product attention
+      :language: python
+
+
 
 
 
