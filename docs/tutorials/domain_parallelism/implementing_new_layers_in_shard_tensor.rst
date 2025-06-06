@@ -1,10 +1,10 @@
 Implementing new layers for ShardTensor
-=========================================
+=======================================
 
-This tutorial is a walkthrough of how to extend domain parallel functionality via ``ShardTensor``.  We'll first discuss at a high level some parallelism techniques, and then look at exactly how to implement a domain parallel layer with a few examples.  For some background on what `ShardTensor` is and when to use it, check out the tutorial :ref:`domain_parallelism.rst`.
+This tutorial is a walkthrough of how to extend domain parallel functionality via ``ShardTensor``.  We'll first discuss at a high level some parallelism techniques, and then look at exactly how to implement a domain parallel layer with a few examples.  For some background on what `ShardTensor` is and when to use it, check out the tutorial: :doc:`domain_parallelism`.
 
 When is extending ``ShardTensor`` needed?
----------------------------------------
+-----------------------------------------
 
 ``ShardTensor`` is designed to support domain-parallel operations, or operations that can be performed on a tensor that resides across multiple devices. Many operations are supported already - out of the box - by the upstream ``DTensor`` class that ``ShardTensor`` inherits from.  Some operations - many convolutions, interpolations, poolings, normalizations, and attention - are supported through ``PhysicsNeMo``.  In this tutorial, we'll look at a few increasingly-complicated situations and see how ``ShardTensor`` handles them - or doesn't - and how to fix cases that aren't supported or aren't performant.
 
@@ -241,10 +241,14 @@ Up to here, we've seen a couple examples of distributed computation with ``Shard
 - Not every function you want to use, of course, is part of ``torch``.  In this case, you can use PyTorch's overrides system to inform torch about the function and then route calls appropriately.
 - Even though many operations are functional out of the box from ``DTensor``, it does not mean they are efficient.  ``DTensor`` is optimized for Large Language Model applications.  In ``PhysicsNeMo``, we are providing a number of efficient distributed operations for common scientific AI needs - and if want you need isn't supported, feel free to reach out on `GitHub <https://github.com/NVIDIA/physicsnemo/tree/main>`_ for support!
 
-``ShardTensor`` is still under active development, and we're working to add more model support.  To see how to use it with an end-to-end training example, see the :ref:`fsdp_and_shard_tensor` tutorial.  In particular, ``ShardTensor`` is fully compatible with ``torch.distributed.fsdp.FullyShardedDataParallel`` enabling you to even deploy multiple levels of parallelism: domain parallelism + batch parallelism (+ model parallelism, if needed!).
+``ShardTensor`` is still under active development, and we're working to add more model support.  To see how to use it with an end-to-end training example, see the :doc:`fsdp_and_shard_tensor` tutorial.  In particular, ``ShardTensor`` is fully compatible with ``torch.distributed.fsdp.FullyShardedDataParallel`` enabling you to even deploy multiple levels of parallelism: domain parallelism + batch parallelism (+ model parallelism, if needed!).
 
-In general, ``ShardTensor`` is meant to be a seamless, nearly drop in replacement to ``torch.Tensor`` that will parallelize your model - see :ref:`fsdp_and_shard_tensor` for more info.
+In general, ``ShardTensor`` is meant to be a seamless, nearly drop in replacement to ``torch.Tensor`` that will parallelize your model - see :doc:`fsdp_and_shard_tensor` for more info.
 
-``ShardTensor`` is especially useful when memory constraints limit the ability to run a model during training or inference on a single GPU.  See :ref:`domain_parallelism.rst` for more discussion of this topic.  With extra computation and bookkeeping needed, we can never expect ``ShardTensor`` to outperform single-device computations when run on very small data and very small models.  However, as the data grows, the extra overhead becomes a very small portion of the computational cost.  And, datasets that don't fit into memory even with batch size 1 can be enabled.
+``ShardTensor`` is especially useful when memory constraints limit the ability to run a model during training or inference on a single GPU.  See :doc:`domain_parallelism` for more discussion of this topic.  With extra computation and bookkeeping needed, we can never expect ``ShardTensor`` to outperform single-device computations when run on very small data and very small models.  However, as the data grows, the extra overhead becomes a very small portion of the computational cost.  And, datasets that don't fit into memory even with batch size 1 can be enabled.
 
 
+.. toctree::
+    :local:
+    :depth: 1
+    :hidden:

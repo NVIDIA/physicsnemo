@@ -1,5 +1,5 @@
 Domain Decomposition, ShardTensor and FSDP Tutorial
-============================================================
+===================================================
 
 In this tutorial, we will see how to combine domain parallelism, ``ShardTensor``, and a training or inference recipe.  Before diving too deeply into this tutorial, we recommend you read the other domain parallelism tutorial:
 
@@ -25,12 +25,15 @@ The overall model architecture is straightforward, as well: the input image is t
 
    This isn't really how you might implement a transformer for a vision classification task in practice - there are better, more sophisticated techniques.  Since the original ViT publication, technical advances such as `Convolution Transformers <https://arxiv.org/abs/2103.15808>`_, `Shifted Windows <https://arxiv.org/abs/2103.14030>`_, `Neighborhood Attention <https://arxiv.org/abs/2204.07143>`_, and others have outperformed vanilla ViTs like this for classification.  We encourage you to pick the model architecture most suitable for your task; for simplicitly to demonstrate the domain parallel techniques, we've pick a "Standard" vision transformer here.
 
+.. Tutorial Organization - we are showing an end-to-end application benchmarking here with synthetic data.  You can see in this tutorial a comparison of 3 techniques: single-GPU running, distributed data parallel (DDP), and 2D Parallelism with ShardTensor + FSDP.  When the techniques differ, we show all three in tabs.  
 
-The full model architecture is here:
+.. The full model architecture is here:
 
-.. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/baseline_model.py
-    :caption: Example 1: Vector Dot Product, single device
-    :language: python
+.. .. literalinclude:: ../../test_scripts/domain_parallelism/st_and_fsdp/baseline_model.py
+..     :caption: Example 1: Vector Dot Product, single device
+..     :language: python
+
+
 
 
 Training the ViT on a single GPU
@@ -40,30 +43,51 @@ The training script for this tutorial is very simple: there is no data or labels
 
 
 
-
-
-
-
-
 Next, setup the distributed environment including the device mesh.  Here we do it globally, 
 but you can do it locally as well and pass device_mesh objects around.
 
 Setting Up the Environment
 --------------------------
 
-.. code-block:: python
+.. tab-set::
 
-    # Initialize distributed environment
-    DistributedManager.initialize()
-    dm = DistributedManager()
+    .. tab-item:: Single GPU
 
-    # Create a 2D mesh for hybrid parallelism
-    # First dimension for data parallel, second for spatial decomposition
-    mesh = dm.initialize_mesh((-1, 2), mesh_dim_names=["data", "spatial"])
+        .. code-block:: python
 
-    # Get submeshes for different parallel strategies
-    data_mesh = mesh["data"]      # For FSDP
-    spatial_mesh = mesh["spatial"] # For spatial decomposition
+            import torch
+            import torch.nn as nn
+
+    .. tab-item:: DDP 
+
+        .. code-block:: python
+
+            import torch
+            import torch.nn as nn
+
+            from physicsnemo.distributed import DistributedManager
+
+            # Add DDP import
+            from torch.nn.parallel import DistributedDataParallel as DDP
+
+    .. tab-item:: ShardTensor + FSDP
+
+        .. code-block:: python
+
+            import torch
+            import torch.nn as nn
+
+            # Imports for Domain Parallelism
+            from physicsnemo.distributed import DistributedManager, scatter_tensor
+            from torch.distributed.tensor import distribute_module, distribute_tensor
+
+            # FSDP instead of DDP
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            from torch.distributed.tensor.placement_types import (  # noqa: E402
+                Replicate,
+                Shard,
+            )
+
 
 First, let's create a simple one-layer CNN model:
 

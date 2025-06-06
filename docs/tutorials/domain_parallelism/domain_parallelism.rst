@@ -30,7 +30,7 @@ To address this challenge, in PhysicsNeMo we have developed a domain-parallelism
 The remainder of this tutorial will focus on the high level concepts of ``ShardTensor`` and domain parallelism, and :ref:`Implementing new layers for ShardTensor`  will be covered in a separate tutorial.
 
 Starting with an Example
-----------------------
+------------------------
 
 As a high level example, let's consider a simple 2D convolution operation.  There have been many tutorials on the mathematics and efficient computation of convolutions; let's not focus on that here.  Instead, consider if the input data to the convolution is spread across two GPUs, and we want to correctly compute the ouput of the convolution but without ever coalescing the input data on a single GPU.
 
@@ -140,7 +140,7 @@ ShardTensor also has dedicated implementations of common reduction operations ``
 There is a substantial amount of care needed to implement layers in ``ShardTensor`` (or ``DTensor``!).  If you're interested in doing so for your custom model, please check out a full tutorial on this subject: :ref:`Implementing new layers for ShardTensor`
 
 When Should You Use ``ShardTensor``?
-==================================
+------------------------------------
 
 ``ShardTensor`` and domain parallelism solve a very specific problem in Scientific AI: input data is such high resolution that models can't train, even at Batch Size of 1, due to memory limitations.  And while that challenge can be partially surmounted with reduced precision and input spatial downsampling, not all models can tolerate those techniques without sacrificing accuracy.  In this case, you should view ``ShardTensor`` as a solution to that problem: it will enable you to run training and inference on higher resolution data than a single GPU can accommodate.  It is not the only technique for this, and in some cases it isn't the best choice.  In this section we'll compare and contrast ``ShardTensor`` to some other techniques for high resolution data, which can highlight some strengths and weaknesses of ``ShardTensor.``
 
@@ -189,12 +189,12 @@ For the best efficiency training with ``ShardTensor``, look for:
 For inference, on the other hand, ``ShardTensor`` can still be useful for lower latency inference on extremely high resolution data.  Especially if the model is primarly composed of compute- or bandwidth-bound kernels, and the commmunication overhead is small, ``ShardTensor`` can provide reductions of inference latency.
 
 Summary
-=======
+-------
 
 In this tutorial, we saw details about PhysicsNeMo's ``ShardTensor`` object, and how it can be used to enable domain parallelism.  For more behind-the-scenes details of how layers are enabled, see :ref:`Implementing new layers for ShardTensor`.  For an example of combining domain parallelism with other parallelisms through FSDP, see `fsdp_and_shard_tensor :ref:`Domain Decomposition, ShardTensor and FSDP Tutorial`.
 
 Glossary
-========
+--------
 
 - **DeviceMesh**: A pytorch abstraction that represents a set of connected GPUs.  See `DeviceMesh <https://docs.pytorch.org/docs/stable/distributed.html#devicemesh>`_ for more details.  ``DeviceMesh`` is particularly useful for multilevel parallelism (data parallel training + domain parallelism, for example).
 
@@ -211,3 +211,9 @@ Glossary
 - **DeepSpeed**: A distributed training and inference framework for large language models, built fully sharding weights, gradients, and optimizer states.  See `DeepSpeed <https://www.deepspeed.ai/>`_ for more details.
 
 - **MegaTron**: Another distributed training and inference framework for large language models, built on sharding weights along the channel dimension with optimized Attention collectives.  See `MegaTron <https://developer.nvidia.com/megatron-core>`_ for more details.
+
+
+.. toctree::
+    :local:
+    :depth: 1
+    :hidden:
