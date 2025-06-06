@@ -1,5 +1,5 @@
-Adding Physics-based information to training
-============================================
+Adding Physics-based Information
+==================================
 
 Adding inductive bias to the model training can be useful to improve the generalization
 capability of the model. For Physics-AI, one way to do this is via designing neural
@@ -17,7 +17,7 @@ is a submodule of PhysicsNeMo that provides algorithms and utilities to physics-
 the training of AI models. In this tutorial, we will explore the different utilities from
 PhysicsNeMo-Sym, followed by sample end-to-end training workflows.
 
-Adding physics-based losses
+Adding Physics-based Losses
 ---------------------------------
 
 Many AI models trained on physical data are designed to minimize the difference
