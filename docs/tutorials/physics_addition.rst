@@ -1,13 +1,23 @@
-Adding Physics-based constraints using PhysicsNeMo
-===================================================
+Adding Physics-based information to training
+============================================
 
-In this tutorial, we'll learn how to add physics-based constraints to your model training
+Adding inductive bias to the model training can be useful to improve the generalization
+capability of the model. For Physics-AI, one way to do this is via designing neural
+network architectures that are specifically designed to operate on data encountered in
+this domain. FNOs, that use FFTs, Mesh Graph Networks that operate on directly on
+simulation meshes, DoMINO model that operates on point clouds and has stencils similar
+to some numerical methods are a great way to introduce inductive bias.
+
+Additionally, one can also add the governing equations as loss functions to further
+regularize the model predictions to obey the physics of the problem.
+
+In this tutorial, we'll learn how to add physics-based loss terms to your model training
 using PhysicsNeMo. `PhysicsNeMo-Sym <https://github.com/NVIDIA/physicsnemo-sym>`_
 is a submodule of PhysicsNeMo that provides algorithms and utilities to physics-inform
 the training of AI models. In this tutorial, we will explore the different utilities from
 PhysicsNeMo-Sym, followed by sample end-to-end training workflows.
 
-Adding physics-based constraints
+Adding physics-based losses
 ---------------------------------
 
 Many AI models trained on physical data are designed to minimize the difference
@@ -20,7 +30,7 @@ models in the Physics-AI space typically comes from experimental measurements or
 of a different numerical method. The system being studied is usually governed by physical laws
 (such as conservation of mass, energy, etc.), and these methods or measurements
 aim to satisfy these constraints. Adding these governing laws or equations as loss functions
-can help the neural network satisfy these constraints better and make the predictions more
+can help the neural network satisfy these equations better and make the predictions more
 physically interpretable.
 
 Let's look at an example from the molecular dynamics domain.
@@ -51,17 +61,17 @@ Adding this, enforces an equilibrium condition on the model's prediction and is 
 demonstration of how physics knowledge can be incorporated in your training workflow. 
 A full example using this loss can be found in the `Molecular Dynamics Example <../examples/molecular_dynamics/lennard_jones/README.rst>`_
 
-Adding PDE constraints
+Adding PDE losses
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Sometimes, the governing equations for the problem can include Partial Differential Equations.
-This is especially true for problems in physics and other scientific domains. Computing these
-PDEs on model predictions involves computing spatial and temporal gradients and the methods
+This is especially true for problems in physics and other scientific domains. Computing local residuals
+of these PDEs on a model predictions involves computing spatial and temporal gradients and the methods
 used can vary based on the model architecture. 
 
 PhysicsNeMo-Sym aims to simplify this process. 
 The `PhysicsInformer <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#module-physicsnemo.sym.eq.phy_informer>`_
-utility can compute the PDE losses on point clouds, grids or graphs/meshes using
+utility can compute the PDE losses on point clouds, grids, or graphs/meshes using
 techniques such as Automatic Differentiation, Finite Difference, Meshless Finite Difference,
 Least Squares, Spectral Differentiation, etc. 
 
@@ -71,13 +81,13 @@ must be in the form of PhysicsNeMo-Sym's PDE. Custom PDEs are also supported.
 Some general comments for the ``PhysicsInformer``:
 
 
-- Using PhysicsInformer, you can physics-inform almost any model architecture
+- Using ``PhysicsInformer``, you can physics-inform almost any model architecture
   (point-cloud based, grid based, graph based, etc.), e.g. MLPs, DeepONets, FNOs, CNNs, Diffusion Models,
   Graph networks, etc.
 - The utility supports gradients via Automatic Differentiation, Spectral,
-  Finite Difference, Meshless Finite Difference and Least Squares methods.
-- Given the equations and required_outputs, this utility constructs the computational graph,
-  and computes the gradients in an efficient way, to output the residuals.
+  Finite Difference, Meshless Finite Difference and Least Squares methods. (See following section for more info)
+- Given the PDE governing equations and ``required_outputs``, this utility constructs the computational graph,
+  and computes the gradients efficiently, to output the residuals.
 - This utility simplifies the spatial derivative computation. 
   If using transient PDEs, the temporal derivative will have to be computed separately
   and passed as an input to the ``forward()`` call.
@@ -87,26 +97,26 @@ Some general comments for the ``PhysicsInformer``:
   can access the value of ``.required_inputs`` property.
 
 
-The various methods and their applicability based on the model output type can be summarized below
+The various spatial derivative methods and their applicability based on the model output type can be summarized below
 
-- **Automatic Differentiation**: Suitable for outputs from models which are differentiable w.r.t model inputs.
+- `**Automatic Differentiation** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsAutoDiff>`_: Suitable for outputs from models which are differentiable w.r.t model inputs.
   Model inputs must include coordinates as inputs. Ideal for MLP type of architectures, and can operate on point clouds,
-  structured grids or unstructured meshes as long as the differentiability and input constraints are satisfied.
+  structured grids, or unstructured meshes as long as the differentiability and input constraints are satisfied.
   Computationally expensive but more accurate than other numerical gradient methods.
 
-- **Meshless Finite Difference**: Numerical gradient method suitable for models that can
-  predict field values on stencil points in addition to the original points. The points can come from a point cloud, 
-  grid (structured or unstructured), but most suitable for point clouds. 
+- `**Meshless Finite Difference** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsMeshlessFiniteDifference>`_: Numerical gradient method suitable for models that can
+  predict field values on stencil points in addition to the original points. The points can come from either a point cloud or 
+  grid (structured or unstructured); point clouds are most suitable applications. 
   Fast, but can present numerical instability if ``fd_dx`` is too small.
 
-- **Finite Difference**: Numerical gradient method suitable for models that output predictions on
+- `**Finite Difference** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsFiniteDifference>`_: Numerical gradient method suitable for models that output predictions on
   structured grids with uniform spacing (each dimension can have a different spacing of its own).
 
-- **Spectral Derivatives**: Numerical gradient method suitable for models that output predictions
+- `**Spectral Derivatives** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsSpectral>`_: Numerical gradient method suitable for models that output predictions
   on structured grids with uniform spacing (each dimension can have a different spacing of its own) and have
   periodic boundaries.
 
-- **Least Squares Method**: Numerical gradient method most suitable for models predict output on unstructured
+- `**Least Squares Method** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsLeastSquares>`_: Numerical gradient method most suitable for models predict output on unstructured
   grids or structured grids with non-uniform spacing. 
 
 
@@ -116,10 +126,14 @@ Computing PDE losses using Automatic Differentiation
 The code below shows an example of using the ``autodiff`` method to compute the residuals.
 A few things to note when using the ``autodiff`` method:
 
-- Ensure the model is differentiable, e.g. a model that uses ReLU activation
-  function will have it's second derivatives zero. 
-- Set ``.requires_grad_()`` to ``True``. 
-- Coordinates is a (N, 1) shaped tensor for 1D, (N, 2) for 2D and (N, 3) for 3D.
+- Ensure the model is differentiable enough for the PDE being used. 
+  - C\ :sup:`1`\ Continuous for a First-Order PDE
+  - C\ :sup:`2`\ Continuous for a Second-Order PDE
+  - ...
+- E.g. a model that uses ReLU activation function will have it's second derivatives zero.
+  So using automatic differentiation based gradients is not recommended. 
+- For all spatial coordinate tensors (e.g., `x`, `y`, and `z`), call the method ``x.requires_grad_(True)`` to enable gradient tracking.
+- Coordinates is a tensor of shape ``(N, D)`` shaped tensor, where ``D`` is the number of spatial dimensions.
 - This method is accurate but more computationally expensive compared to some 
   other numerical methods due to automatic differentiation. 
 
@@ -170,8 +184,8 @@ A few things to note when using the ``autodiff`` method:
     )
 
     # model forward pass
-    # this needs to be fully differentiable for auto-diff gradients to work
-    # if the model is not fully differentiable, follow along this tutorial to
+    # this needs to be differentiable as explained above for auto-diff gradients to work
+    # if the model does not satisfy these requirements, follow along this tutorial to
     # see numerical ways to compute the derivatives.
     out = model(coords)
 
@@ -204,7 +218,7 @@ A few things to note when using the ``meshless_finite_difference`` method:
   can access the value of ``.required_inputs`` property.
 - ``fd_dx`` is a hyperparameter. Smaller value typically yields more accurate
   gradients, but can lead to numerical instability. A value of 0.001 is a good
-  value to start.
+  value to start, assuming the variation of spatial coordinates in the problem is $\mathcal{O}(1)$.
 
 .. code-block:: python
 
@@ -589,7 +603,7 @@ Computing Signed Distance Fields
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Mathematically, signed distance field or signed distance function (SDF) is defined as the orthogonal distance
-of a given point to the boundary / surface of a geometric shape. It is widely used to describe the geometry
+of a given point to the nearest boundary / surface of a geometric shape. It is widely used to describe the geometry
 in mathematics, rendering, and similar applications. In physics-informed learning, it is also used to represent as
 `geometric inputs to neural networks <https://www.research.autodesk.com/app/uploads/2023/03/convolutional-neural-networks-for.pdf_rectr0tDKzFYVAAJe.pdf>`_.
 
@@ -645,7 +659,7 @@ A few examples using SDF during training / inference can be found in the
 `External Aerodynamics using DoMINO Example <../examples/cfd/external_aerodynamics/domino/README.rst>`_, 
 `Datacenter CFD example <../examples/cfd/datacenter/README.rst>`_.
 
-Sampling point clouds
+Sampling Point Clouds
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The `geometry module from PhysicsNeMo Sym <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html#>`_

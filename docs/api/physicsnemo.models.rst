@@ -313,7 +313,7 @@ model from the ``.mdlus`` file.
 
 
 .. note::
-   In order to make use of this functionality, the model must have .json serializable
+   In order to make use of this functionality, the model must have ``.json`` serializable
    inputs to the ``__init__`` function. It is highly recommended that all PhysicsNeMo
    models be developed with this requirement in mind.
 
