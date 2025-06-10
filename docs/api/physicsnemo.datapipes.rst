@@ -94,7 +94,7 @@ Each category of datapipes is designed to handle specific data formats and prepr
 requirements. The datapipes automatically handle data loading, preprocessing,
 and device placement, making it easy to integrate them into training or inference pipelines.
 
-    .. autosummary::
+.. autosummary::
    :toctree: generated
 
 Benchmark datapipes
