@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - General purpose patching API for patch-based diffusion
 - New positional embedding selection strategy for CorrDiff SongUNet models
 - Added Multi-Storage Client to allow checkpointing to/from Object Storage
+- InfiniteHashSampler a memory-efficient sampler for very large datasets
 
 ### Changed
 
