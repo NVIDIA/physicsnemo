@@ -43,6 +43,11 @@ using PINNs when the PDE is available. The fine-tuning during inference is much 
 than training the PINN model from the scratch as the model has a better initialization
 from the data-driven training.
 
+For the fine-tuning step, we formulate two losses. First loss is to match the
+predictions of the original MeshGraphNet model. Second loss includes the physics
+losses, i.e. the PDE residuals and the boundary conditions. Having the data loss
+helps the PINN model converge faster than training from scratch.
+
 ## Dataset
 
 Our dataset provides  numerical simulations of Stokes flow in a pipe domain obstructed
@@ -81,16 +86,20 @@ exponentially with a rate of 0.99985.
 ground truth for velocity and pressure for one
 of the samples from the test dataset.](../../../docs/img/stokes.png)
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
+pip install nvidia-physicsnemo.sym --no-build-isolation
+```
+
 ## Getting Started
 
 The dataset for this example is not publicly available. To get access, please reach out
 to the [NVIDIA PhysicsNeMo team](simnet-team@nvidia.com).
-
-This example requires the `pyvista` and `vtk` libraries. Install with
-
-```bash
-pip install pyvista vtk
-```
 
 Once you've obtained the dataset, follow these steps to preprocess it:
 

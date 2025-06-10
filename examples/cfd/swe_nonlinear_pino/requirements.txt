@@ -1,0 +1,5 @@
+h5py>=3.7.0
+matplotlib>=3.8.0
+hydra-core>=1.2.0
+termcolor>=2.1.1
+imageio>=2.31.0

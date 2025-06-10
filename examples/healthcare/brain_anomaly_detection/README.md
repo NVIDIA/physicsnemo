@@ -100,6 +100,14 @@ both the size and position of the anomaly.
 </p>
 <!-- markdownlint-enable -->
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Getting Started
 
 To train the model:

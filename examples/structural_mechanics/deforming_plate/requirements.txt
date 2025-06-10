@@ -1,0 +1,6 @@
+hydra-core>=1.3.0
+matplotlib>=3.10.0
+omegaconf>=2.3.0
+tensorflow<=2.17.1
+vtk>=9.2.6
+wandb>=0.13.7

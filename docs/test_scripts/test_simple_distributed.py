@@ -77,11 +77,12 @@ def main():
         return loss
 
     # run for 20 iterations
+    dataloader = iter(dataloader)
     for i in range(20):
-        batch = next(iter(dataloader))
-        true = batch["darcy"]
+        batch = next(dataloader)
+        truth = batch["darcy"]
         input = batch["permeability"]
-        loss = training_step(input, true)
+        loss = training_step(input, truth)
         scheduler.step()
 
 

@@ -94,7 +94,7 @@ Output of the model are:
 
 ![Comparison between the AeroGraphNet prediction and the
 ground truth for surface pressure, wall shear stresses, and the drag coefficient for one
-of the samples from the test dataset.](../../../docs/img/ahmed_body_results.png)
+of the samples from the test dataset.](../../../../docs/img/ahmed_body_results.png)
 
 The input to the model is in form of a `.vtp` file and is then converted to
 bi-directional DGL graphs in the dataloader. The final results are also written in the
@@ -122,7 +122,7 @@ dataset caching (on by default) to speed up the subsequent data loading and trai
 
 ![Comparison between the AeroGraphNet prediction and the
 ground truth for surface pressure, wall shear stresses, and absolute error for one
-of the samples from the test dataset.](../../../docs/img/drivaernet_results.png)
+of the samples from the test dataset.](../../../../docs/img/drivaernet_results.png)
 
 ## Model training
 

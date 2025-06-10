@@ -392,9 +392,11 @@ class SongUNet(Module):
                 )
 
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
-        with nvtx.annotate(
-            message="SongUNet", color="blue"
-        ) if self.profile_mode else contextlib.nullcontext():
+        with (
+            nvtx.annotate(message="SongUNet", color="blue")
+            if self.profile_mode
+            else contextlib.nullcontext()
+        ):
             if self.embedding_type != "zero":
                 # Mapping.
                 emb = self.map_noise(noise_labels)
@@ -424,9 +426,11 @@ class SongUNet(Module):
             skips = []
             aux = x
             for name, block in self.enc.items():
-                with nvtx.annotate(
-                    f"SongUNet encoder: {name}", color="blue"
-                ) if self.profile_mode else contextlib.nullcontext():
+                with (
+                    nvtx.annotate(f"SongUNet encoder: {name}", color="blue")
+                    if self.profile_mode
+                    else contextlib.nullcontext()
+                ):
                     if "aux_down" in name:
                         aux = block(aux)
                     elif "aux_skip" in name:
@@ -456,9 +460,11 @@ class SongUNet(Module):
             aux = None
             tmp = None
             for name, block in self.dec.items():
-                with nvtx.annotate(
-                    f"SongUNet decoder: {name}", color="blue"
-                ) if self.profile_mode else contextlib.nullcontext():
+                with (
+                    nvtx.annotate(f"SongUNet decoder: {name}", color="blue")
+                    if self.profile_mode
+                    else contextlib.nullcontext()
+                ):
                     if "aux_up" in name:
                         aux = block(aux)
                     elif "aux_norm" in name:
@@ -703,9 +709,11 @@ class SongUNetPosEmbd(SongUNet):
         augment_labels=None,
         lead_time_label=None,
     ):
-        with nvtx.annotate(
-            message="SongUNetPosEmbd", color="blue"
-        ) if self.profile_mode else contextlib.nullcontext():
+        with (
+            nvtx.annotate(message="SongUNetPosEmbd", color="blue")
+            if self.profile_mode
+            else contextlib.nullcontext()
+        ):
             if embedding_selector is not None and global_index is not None:
                 raise ValueError(
                     "Cannot provide both embedding_selector and global_index. "
@@ -720,7 +728,7 @@ class SongUNetPosEmbd(SongUNet):
                 # Select positional embeddings with a selector function
                 if embedding_selector is not None:
                     selected_pos_embd = self.positional_embedding_selector(
-                        x, embedding_selector
+                        x, embedding_selector, lead_time_label=lead_time_label
                     )
                 # Select positional embeddings using global indices (selects all
                 # embeddings if global_index is None)
@@ -735,30 +743,16 @@ class SongUNetPosEmbd(SongUNet):
             if self.lead_time_mode:
                 # if training mode, let crossEntropyLoss do softmax. The model outputs logits.
                 # if eval mode, the model outputs probability
-                all_channels = list(range(out.shape[1]))  # [0, 1, 2, ..., 10]
-                scalar_channels = [
-                    item for item in all_channels if item not in self.prob_channels
-                ]
+                if self.prob_channels and out.dtype != self.scalar.dtype:
+                    self.scalar.data = self.scalar.data.to(out.dtype)
                 if self.prob_channels and (not self.training):
-                    out_final = torch.cat(
-                        (
-                            out[:, scalar_channels],
-                            (out[:, self.prob_channels] * self.scalar).softmax(dim=1),
-                        ),
-                        dim=1,
-                    )
+                    out[:, self.prob_channels] = (
+                        out[:, self.prob_channels] * self.scalar
+                    ).softmax(dim=1)
                 elif self.prob_channels and self.training:
-                    out_final = torch.cat(
-                        (
-                            out[:, scalar_channels],
-                            (out[:, self.prob_channels] * self.scalar),
-                        ),
-                        dim=1,
+                    out[:, self.prob_channels] = (
+                        out[:, self.prob_channels] * self.scalar
                     )
-                else:
-                    out_final = out
-                return out_final
-
             return out
 
     def positional_embedding_indexing(
@@ -899,6 +893,7 @@ class SongUNetPosEmbd(SongUNet):
         self,
         x: torch.Tensor,
         embedding_selector: Callable[[torch.Tensor], torch.Tensor],
+        lead_time_label=None,
     ) -> torch.Tensor:
         """Select positional embeddings using a selector function.
 
@@ -923,12 +918,17 @@ class SongUNetPosEmbd(SongUNet):
             maintain consistency with patch extraction.
         embeds : Optional[torch.Tensor]
             Optional tensor for combined positional and lead time embeddings tensor
+        lead_time_label : List[int] or torch.Tensor, optional
+            If provided, this list of integers is used to generate lead-time-aware positional embeddings.
+            Each integer represents a lead time index, and the corresponding embeddings are generated and
+            concatenated with the positional embedding. The combined embedding is then produced by
+            `embedding_selector`.
 
         Returns
         -------
         torch.Tensor
-            Selected positional embeddings with shape (B, N_pe, H, W)
-            where N_pe is the number of positional embedding channels.
+            A tensor of shape (batch_size, N_pe, H, W). N_pe is the number of positional embedding channels,
+            which may include additional lead-time embedding channels if `lead_time_label` is provided.
 
         Example
         -------
@@ -947,8 +947,14 @@ class SongUNetPosEmbd(SongUNet):
         """
         if x.dtype != self.pos_embd.dtype:
             self.pos_embd = self.pos_embd.to(x.dtype)
-
-        return embedding_selector(self.pos_embd)  # (B, N_pe, H, W)
+        if lead_time_label is not None:
+            # all patches share same lead_time_label
+            embeddings = torch.cat(
+                [self.pos_embd, self.lt_embd[lead_time_label[0].int()]]
+            )
+        else:
+            embeddings = self.pos_embd
+        return embedding_selector(embeddings)  # (B, N_pe, H, W)
 
     def _get_positional_embedding(self):
         if self.N_grid_channels == 0:
