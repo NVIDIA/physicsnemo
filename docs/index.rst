@@ -54,7 +54,7 @@ models at scale.
 
    examples/cfd/darcy_fno/README.rst
    examples/cfd/darcy_physics_informed/README.rst
-   examples/cfd/lid_driven_cavity/README.rst
+   examples/cfd/ldc_pinns/README.rst
    examples/cfd/vortex_shedding_mgn/README.rst
    examples/weather/fcn_afno/README.rst
    examples/cfd/lagrangian_mgn/README.rst
