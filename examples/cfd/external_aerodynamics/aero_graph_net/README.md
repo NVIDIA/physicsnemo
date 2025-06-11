@@ -122,7 +122,7 @@ dataset caching (on by default) to speed up the subsequent data loading and trai
 
 ![Comparison between the AeroGraphNet prediction and the
 ground truth for surface pressure, wall shear stresses, and absolute error for one
-of the samples from the test dataset.](../../../docs/img/drivaernet_results.png)
+of the samples from the test dataset.](../../../../docs/img/drivaernet_results.png)
 
 ## Model training
 
