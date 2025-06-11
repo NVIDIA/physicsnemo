@@ -79,6 +79,7 @@ models at scale.
    examples/cfd/lid_driven_cavity/README.rst
    examples/cfd/swe_distributed_gnn/README.rst
    examples/cfd/vortex_shedding_mesh_reduced/README.rst
+   examples/cfd/darcy_transolver/README.rst
    examples/cfd/flow_reconstruction_diffusion/README.rst
    examples/cfd/datacenter/README.rst
 
