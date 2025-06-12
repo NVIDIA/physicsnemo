@@ -187,7 +187,7 @@ class GeoConvOut(nn.Module):
 
         self.grid_resolution = grid_resolution
 
-        self.activation = F.relu
+        self.activation = F.gelu
 
     def forward(
         self, x: torch.Tensor, radius: float = 0.025, neighbors_in_radius: int = 10
@@ -257,7 +257,7 @@ class GeoProcessor(nn.Module):
         self.avg_pool = torch.nn.AvgPool3d((2, 2, 2))
         self.max_pool = nn.MaxPool3d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
-        self.activation = F.relu
+        self.activation = F.gelu
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -292,7 +292,7 @@ class GeoProcessor(nn.Module):
         x = self.max_pool(x)
 
         # Processor loop
-        x = F.relu(self.conv3_1(x))
+        x = F.gelu(self.conv3_1(x))
 
         # Decoder
         x = self.conv4(x)
@@ -370,7 +370,7 @@ class GeometryRep(nn.Module):
         self.geo_processor_sdf = GeoProcessor(
             input_filters=6, model_parameters=geometry_rep.geo_processor
         )
-        self.activation = F.relu
+        self.activation = F.gelu
         self.radii = radii
         self.hops = geometry_rep.geo_conv.hops
 
@@ -453,7 +453,7 @@ class NNBasisFunctions(nn.Module):
         self.bn2 = nn.BatchNorm1d(int(base_layer))
         self.bn3 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = F.relu
+        self.activation = F.gelu
 
         if self.fourier_features:
             self.register_buffer(
@@ -520,7 +520,7 @@ class ParameterModel(nn.Module):
         self.bn2 = nn.BatchNorm1d(int(base_layer))
         self.bn3 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = F.relu
+        self.activation = F.gelu
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -583,7 +583,7 @@ class AggregationModel(nn.Module):
         self.bn3 = nn.BatchNorm1d(int(base_layer))
         self.bn4 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = F.relu
+        self.activation = F.gelu
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -625,7 +625,7 @@ class LocalPointConv(nn.Module):
         self.output_features = output_features
         self.fc1 = nn.Linear(self.input_features, base_layer)
         self.fc2 = nn.Linear(base_layer, self.output_features)
-        self.activation = F.relu
+        self.activation = F.gelu
 
     def forward(self, x):
         out = self.activation(self.fc1(x))
@@ -857,7 +857,7 @@ class DoMINO(nn.Module):
 
         # Positional encoding
         position_encoder_base_neurons = model_parameters.position_encoder.base_neurons
-        self.activation = F.relu
+        self.activation = F.gelu
         self.use_sdf_in_basis_func = model_parameters.use_sdf_in_basis_func
         if self.output_features_vol is not None:
             if model_parameters.positional_encoding:
