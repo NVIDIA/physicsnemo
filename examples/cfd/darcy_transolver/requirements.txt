@@ -1,0 +1,7 @@
+einops>=0.7.0
+hydra-core>=1.2.0
+omegaconf>=2.3.0
+scipy>=1.15.0
+warp-lang>=1.7.0
+termcolor>=2.1.1
+mlflow>=2.1.1

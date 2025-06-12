@@ -61,7 +61,7 @@ How to write your own PhysicsNeMo model
 
 There are a few different ways to construct a PhysicsNeMo model. If you are a seasoned
 PyTorch user, the easiest way would be to write your model using the optimized layers and
-utilities from PhysicsNeMo or Pytorch. Lets take a look at a simple example of a UNet model
+utilities from PhysicsNeMo or Pytorch. Let's take a look at a simple example of a UNet model
 first showing a simple PyTorch implementation and then a PhysicsNeMo implementation that
 supports CUDA Graphs and Automatic Mixed-Precision.
 
@@ -99,12 +99,12 @@ supports CUDA Graphs and Automatic Mixed-Precision.
             x = self.dec1(x2)
             return self.final(x)
 
-Now we show this model rewritten in PhysicsNeMo. First, let's subclass the model from
+Now we show this model rewritten in PhysicsNeMo. First, let us subclass the model from
 ``physicsnemo.Module`` instead of ``torch.nn.Module``. The
 ``physicsnemo.Module`` class acts like a direct replacement for the
 ``torch.nn.Module`` and provides additional functionality for saving and loading
 checkpoints, etc. Refer to the API docs of ``physicsnemo.Module`` for further
-details. Additionally we will add metadata to the model to capture the optimizations
+details. Additionally, we will add metadata to the model to capture the optimizations
 that this model supports. In this case we will enable CUDA Graphs and Automatic Mixed-Precision.
 
 .. code:: python
@@ -211,7 +211,7 @@ complex models.
 Converting PyTorch Models to PhysicsNeMo Models
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-In the above example we show constructing a PhysicsNeMo model from scratch. However you
+In the above example we show constructing a PhysicsNeMo model from scratch. However, you
 can also convert existing PyTorch models to PhysicsNeMo models in order to leverage
 PhysicsNeMo features. To do this, you can use the ``Module.from_torch`` method as shown
 below.
@@ -313,7 +313,7 @@ model from the ``.mdlus`` file.
 
 
 .. note::
-   In order to make use of this functionality, the model must have json serializable
+   In order to make use of this functionality, the model must have ``.json`` serializable
    inputs to the ``__init__`` function. It is highly recommended that all PhysicsNeMo
    models be developed with this requirement in mind.
 

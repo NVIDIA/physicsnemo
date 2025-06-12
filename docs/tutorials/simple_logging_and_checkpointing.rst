@@ -1,8 +1,8 @@
-Simple Logging and Checkpointing recipe
-========================================
+Logging and Checkpointing recipe
+==================================
 
-Logging and checkpointing are important comonents of model training workflow. It allows
-users to keep a record of the model hyper-parameters and its performance on training.
+Logging and checkpointing are important components of model training workflow. It allows
+users to keep a record of the model hyperparameters and its performance on training.
 
 In this tutorial we will look at some of the utilities from PhysicsNeMo to simplify this
 important aspect of model training. 
@@ -20,7 +20,7 @@ provide a standardized output format. Let's get started.
 Console logging
 ^^^^^^^^^^^^^^^^^
 
-The below example shows a simple setup using the console logging.
+The below example shows a setup using the console logging.
 
 .. literalinclude:: ../test_scripts/test_console_logger.py
    :language: python
@@ -73,7 +73,7 @@ The logger output can be seen below.
 MLFlow logging
 ^^^^^^^^^^^^^^^^^
 
-The below example shows a simple setup using the MLFlow logging. The only difference from
+The below example shows a setup using the MLFlow logging. The only difference from
 the previous example is that, we will use ``initialize_mlflow`` function to initialize
 the MLFlow client and also set ``use_mlflow=True`` when initializing the ``LaunchLogger``.
 
@@ -106,7 +106,7 @@ And then navigate to localhost:5000 in your favorite browser.
 Weight and Biases logging
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The below example shows a simple setup using the Weights and Biases logging. The only
+The below example shows a  setup using the Weights and Biases logging. The only
 difference from the previous example is that, we will use ``initialize_wandb`` function
 to initialize the Weights and Biases logger and also set ``use_wandb=True`` when 
 initializing the ``LaunchLogger``.
@@ -182,7 +182,7 @@ The logger output can also be seen below.
    wandb: Find logs at: ./wandb/wandb/offline-run-20231115_212638-ib4ylq4e/logs
 
 
-To visulaize the logs interactively, simply follow the instructions printed in the outputs. 
+To visualize the logs interactively, simply follow the instructions printed in the outputs. 
 
 
 Checkpointing in PhysicsNeMo
@@ -233,6 +233,6 @@ something like below.
 Loading checkpoints during inference
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-For loading the checkpoint in inference, the process is simple and you can refer the samples
-provided in :ref:`running-inference-on-trained-models` and :ref:`saving-and-loading-physicsnemo-models` .
+For loading the checkpoint in inference, the process is, and you can refer the samples
+provided in :ref:`running-inference-on-trained-models` and :ref:`saving-and-loading-physicsnemo-models`.
 

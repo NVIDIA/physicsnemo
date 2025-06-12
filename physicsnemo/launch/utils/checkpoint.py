@@ -16,7 +16,7 @@
 
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Dict, List, NewType, Optional, Union
 
 import fsspec
@@ -115,19 +115,16 @@ def _get_checkpoint_filename(
             # This is the most likely line to error since it will fail with
             # invalid checkpoint names
 
-            # Remove protocol prefix if present to allow generic matching
-            _, path_without_protocol = fsspec.core.split_protocol(path)
-            file_idx = [
-                int(
-                    re.sub(
-                        f"^{path_without_protocol}/{base_name}.{model_parallel_rank}.|"
-                        + file_extension,
-                        "",
-                        fname,
-                    )
-                )
-                for fname in file_names
-            ]
+            file_idx = []
+
+            for fname in file_names:
+                fname_path = PurePath(fname)
+                file_stem = fname_path.name
+
+                pattern = rf"^{re.escape(base_name)}\.{model_parallel_rank}\.(\d+){re.escape(file_extension)}$"
+                match = re.match(pattern, file_stem)
+                if match:
+                    file_idx.append(int(match.group(1)))
             file_idx.sort()
             # If we are saving index by 1 to get the next free file name
             if saving:
