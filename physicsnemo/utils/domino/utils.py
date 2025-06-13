@@ -19,7 +19,8 @@ Important utilities for data processing and training, testing DoMINO.
 """
 
 import os
-from typing import Any, List, Optional, Sequence, Tuple, Union
+from pathlib import Path
+from typing import Any, List, Optional, Sequence, Tuple, Union, Iterable
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -335,28 +336,25 @@ def shuffle_array_without_sampling(arr: ArrayType) -> Tuple[ArrayType, ArrayType
     xp.random.shuffle(idx)
     return arr[idx], idx
 
-
-def create_directory(filepath: str) -> None:
+def create_directory(filepath: str | Path) -> None:
     """Function to create directories"""
-    if not os.path.exists(filepath):
-        os.makedirs(filepath)
+    path = Path(filepath)
+    path.mkdir(parents=True, exist_ok=True)
 
 
-def get_filenames(filepath: str, exclude_dirs: bool = False) -> List[str]:
+def get_filenames(filepath: str | Path, exclude_dirs: bool = False) -> list[Path]:
     """Function to get filenames from a directory"""
-    if os.path.exists(filepath):
+    path = Path(filepath)
+    if path.exists():
         filenames = []
-        for item in os.listdir(filepath):
-            item_path = os.path.join(filepath, item)
-            if exclude_dirs and os.path.isdir(item_path):
-                # Include directories ending with .zarr even when exclude_dirs is True
-                if item.endswith(".zarr"):
-                    filenames.append(item)
-                continue
-            filenames.append(item)
+        for item in path.iterdir():
+            if item.is_dir() and exclude_dirs and not item.suffix == ".zarr":
+                pass
+            else:
+                filenames.append(item)
         return filenames
     else:
-        FileNotFoundError()
+        raise FileNotFoundError(f"The directory {filepath} does not exist.")
 
 
 def calculate_pos_encoding(nx: ArrayType, d: int = 8) -> ArrayType:
@@ -376,7 +374,7 @@ def combine_dict(old_dict, new_dict):
     return old_dict
 
 
-def merge(*lists):
+def merge(*lists: list):
     """Function to merge lists"""
     newlist = lists[:]
     for x in lists:
