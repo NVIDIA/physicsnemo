@@ -298,17 +298,17 @@ class GeoProcessor(nn.Module):
         x = self.conv4(x)
         x = self.activation(x)
         x = self.upsample(x)
-        x = torch.cat((x, x2), axis=1)
+        x = torch.cat((x, x2), dim=1)
 
         x = self.conv5(x)
         x = self.activation(x)
         x = self.upsample(x)
-        x = torch.cat((x, x1), axis=1)
+        x = torch.cat((x, x1), dim=1)
 
         x = self.conv6(x)
         x = self.activation(x)
         x = self.upsample(x)
-        x = torch.cat((x, x0), axis=1)
+        x = torch.cat((x, x0), dim=1)
 
         x = self.activation(self.conv7(x))
         x = self.conv8(x)
@@ -403,7 +403,7 @@ class GeometryRep(nn.Module):
                     dx = self.geo_processors[j](x_encoding_inter) / self.hops
                     x_encoding_inter = x_encoding_inter + dx
                 x_encoding.append(x_encoding_inter)
-            x_encoding = torch.cat(x_encoding, axis=1)
+            x_encoding = torch.cat(x_encoding, dim=1)
 
         if self.geo_encoding_type == "both" or self.geo_encoding_type == "sdf":
             # Expand SDF
@@ -471,7 +471,7 @@ class NNBasisFunctions(nn.Module):
             Tensor containing basis function coefficients
         """
         if self.fourier_features:
-            facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
+            facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), dim=-1)
         else:
             facets = x
         facets = self.activation(self.fc1(facets))
@@ -533,7 +533,7 @@ class ParameterModel(nn.Module):
             Tensor containing encoded parameter representation
         """
         if self.fourier_features:
-            params = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
+            params = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), dim=-1)
         else:
             params = x
         params = self.activation(self.fc1(params))
@@ -1077,11 +1077,11 @@ class DoMINO(nn.Module):
                 geo_encoding_sampled = geo_encoding_sampled * mask
 
                 encoding_g_inner.append(geo_encoding_sampled)
-            encoding_g_inner = torch.cat(encoding_g_inner, axis=2)
+            encoding_g_inner = torch.cat(encoding_g_inner, dim=2)
             encoding_g_inner = point_conv[p](encoding_g_inner)
             encoding_outer.append(encoding_g_inner)
 
-        encoding_g = torch.cat(encoding_outer, axis=-1)
+        encoding_g = torch.cat(encoding_outer, dim=-1)
 
         return encoding_g
 
@@ -1121,21 +1121,21 @@ class DoMINO(nn.Module):
             )
             air_density = air_density / self.param_scaling_factors[1]
 
-            params = torch.cat((inlet_velocity, air_density), axis=-1)
+            params = torch.cat((inlet_velocity, air_density), dim=-1)
             param_encoding = self.parameter_model(params)
 
         if self.use_surface_normals:
             if not self.use_surface_area:
                 surface_mesh_centers = torch.cat(
                     (surface_mesh_centers, surface_normals),
-                    axis=-1,
+                    dim=-1,
                 )
                 surface_mesh_neighbors = torch.cat(
                     (
                         surface_mesh_neighbors,
                         surface_neighbors_normals,
                     ),
-                    axis=-1,
+                    dim=-1,
                 )
 
             else:
@@ -1145,7 +1145,7 @@ class DoMINO(nn.Module):
                         surface_normals,
                         torch.log(surface_areas) / 10,
                     ),
-                    axis=-1,
+                    dim=-1,
                 )
                 surface_mesh_neighbors = torch.cat(
                     (
@@ -1153,7 +1153,7 @@ class DoMINO(nn.Module):
                         surface_neighbors_normals,
                         torch.log(surface_neighbors_areas) / 10,
                     ),
-                    axis=-1,
+                    dim=-1,
                 )
 
         if self.solution_calculation_mode == "one-loop":
@@ -1181,12 +1181,12 @@ class DoMINO(nn.Module):
                                         one_loop_centers_expanded,
                                         surface_mesh_neighbors + 1e-6,
                                     ),
-                                    axis=2,
+                                    dim=2,
                                 )
                             ),
                             *encoding_list,
                         ),
-                        axis=-1,
+                        dim=-1,
                     )
                 )
 
@@ -1213,7 +1213,7 @@ class DoMINO(nn.Module):
                     one_loop_output_all = one_loop_output_res
                 else:
                     one_loop_output_all = torch.cat(
-                        (one_loop_output_all, one_loop_output_res), axis=-1
+                        (one_loop_output_all, one_loop_output_res), dim=-1
                     )
 
             return one_loop_output_all
@@ -1229,9 +1229,9 @@ class DoMINO(nn.Module):
                         dist = torch.norm(noise, dim=-1, keepdim=True)
 
                     basis_f = nn_basis[f](volume_m_c)
-                    output = torch.cat((basis_f, encoding_node, encoding_g), axis=-1)
+                    output = torch.cat((basis_f, encoding_node, encoding_g), dim=-1)
                     if self.encode_parameters:
-                        output = torch.cat((output, param_encoding), axis=-1)
+                        output = torch.cat((output, param_encoding), dim=-1)
                     if p == 0:
                         output_center = agg_model[f](output)
                     else:
@@ -1248,7 +1248,7 @@ class DoMINO(nn.Module):
                 if f == 0:
                     output_all = output_res
                 else:
-                    output_all = torch.cat((output_all, output_res), axis=-1)
+                    output_all = torch.cat((output_all, output_res), dim=-1)
 
             return output_all
 
@@ -1288,7 +1288,7 @@ class DoMINO(nn.Module):
             )
             air_density = air_density / self.param_scaling_factors[1]
 
-            params = torch.cat((inlet_velocity, air_density), axis=-1)
+            params = torch.cat((inlet_velocity, air_density), dim=-1)
             param_encoding = self.parameter_model(params)
 
         if self.solution_calculation_mode == "one-loop":
@@ -1346,7 +1346,7 @@ class DoMINO(nn.Module):
                 one_loop_output = agg_model[f](
                     torch.cat(
                         (nn_basis[f](one_loop_volume_m_c), *one_loop_other_terms),
-                        axis=-1,
+                        dim=-1,
                     )
                 )
 
@@ -1376,7 +1376,7 @@ class DoMINO(nn.Module):
                     one_loop_output_all = one_loop_output_res
                 else:
                     one_loop_output_all = torch.cat(
-                        (one_loop_output_all, one_loop_output_res), axis=-1
+                        (one_loop_output_all, one_loop_output_res), dim=-1
                     )
 
             return one_loop_output_all
@@ -1395,9 +1395,9 @@ class DoMINO(nn.Module):
 
                         volume_m_c = volume_mesh_centers + noise
                     basis_f = nn_basis[f](volume_m_c)
-                    output = torch.cat((basis_f, encoding_node, encoding_g), axis=-1)
+                    output = torch.cat((basis_f, encoding_node, encoding_g), dim=-1)
                     if self.encode_parameters:
-                        output = torch.cat((output, param_encoding), axis=-1)
+                        output = torch.cat((output, param_encoding), dim=-1)
                     if p == 0:
                         output_center = agg_model[f](output)
                     else:
@@ -1414,7 +1414,7 @@ class DoMINO(nn.Module):
                 if f == 0:
                     output_all = output_res
                 else:
-                    output_all = torch.cat((output_all, output_res), axis=-1)
+                    output_all = torch.cat((output_all, output_res), dim=-1)
 
             return output_all
 
@@ -1471,7 +1471,7 @@ class DoMINO(nn.Module):
             pos_volume_center_of_mass = data_dict["pos_volume_center_of_mass"]
             if self.use_sdf_in_basis_func:
                 encoding_node_vol = torch.cat(
-                    (sdf_nodes, pos_volume_closest, pos_volume_center_of_mass), axis=-1
+                    (sdf_nodes, pos_volume_closest, pos_volume_center_of_mass), dim=-1
                 )
             else:
                 encoding_node_vol = pos_volume_center_of_mass
