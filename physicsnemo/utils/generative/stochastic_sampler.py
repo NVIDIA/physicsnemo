@@ -169,6 +169,14 @@ def stochastic_sampler(
 
     batch_size = img_lr.shape[0]
 
+    @torch.compile()
+    def apply_wrapper(patching, input, additional_input=None):
+        return patching.apply(input=input, additional_input=additional_input)
+
+    @torch.compile()
+    def fuse_wrapper(patching, input, batch_size=batch_size):
+        return patching.fuse(input=input, batch_size=batch_size)
+
     # conditioning = [mean_hr, img_lr, global_lr, pos_embd]
     x_lr = img_lr
     if mean_hr is not None:
@@ -183,7 +191,7 @@ def stochastic_sampler(
     if patching:
         # Patched conditioning [x_lr, mean_hr]
         # (batch_size * patch_num, C_in + C_out, patch_shape_y, patch_shape_x)
-        x_lr = patching.apply(input=x_lr, additional_input=img_lr)
+        x_lr = apply_wrapper(patching=patching, input=x_lr, additional_input=img_lr)
 
         # Function to select the correct positional embedding for each patch
         def patch_embedding_selector(emb):
@@ -207,10 +215,10 @@ def stochastic_sampler(
         # Euler step. Perform patching operation on score tensor if patch-based
         # generation is used denoised = net(x_hat, t_hat,
         # class_labels,lead_time_label=lead_time_label).to(torch.float64)
+        x_hat_batch = (
+            apply_wrapper(patching=patching, input=x_hat) if patching else x_hat
+        ).to(latents.device)
 
-        x_hat_batch = (patching.apply(input=x_hat) if patching else x_hat).to(
-            latents.device
-        )
         x_lr = x_lr.to(latents.device)
 
         if lead_time_label is not None:
@@ -233,7 +241,9 @@ def stochastic_sampler(
         if patching:
             # Un-patch the denoised image
             # (batch_size, C_out, img_shape_y, img_shape_x)
-            denoised = patching.fuse(input=denoised, batch_size=batch_size)
+            denoised = fuse_wrapper(
+                patching=patching, input=denoised, batch_size=batch_size
+            )
 
         d_cur = (x_hat - denoised) / t_hat
         x_next = x_hat + (t_next - t_hat) * d_cur
@@ -242,9 +252,9 @@ def stochastic_sampler(
         if i < num_steps - 1:
             # Patched input
             # (batch_size * patch_num, C_out, patch_shape_y, patch_shape_x)
-            x_next_batch = (patching.apply(input=x_next) if patching else x_next).to(
-                latents.device
-            )
+            x_next_batch = (
+                apply_wrapper(patching=patching, input=x_next) if patching else x_next
+            ).to(latents.device)
 
             if lead_time_label is not None:
                 denoised = net(
@@ -266,7 +276,9 @@ def stochastic_sampler(
             if patching:
                 # Un-patch the denoised image
                 # (batch_size, C_out, img_shape_y, img_shape_x)
-                denoised = patching.fuse(input=denoised, batch_size=batch_size)
+                denoised = fuse_wrapper(
+                    patching=patching, input=denoised, batch_size=batch_size
+                )
 
             d_prime = (x_next - denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * d_cur + 0.5 * d_prime)
