@@ -23,6 +23,7 @@ sampled in the volume around the STL and on the surface of the STL. They are sto
 in a dictionary, which can be written out for visualization.
 """
 
+from pathlib import Path
 import os
 import time
 import copy
@@ -40,7 +41,7 @@ import vtk
 from vtk.util import numpy_support
 
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.utils.domino.utils import *
+from physicsnemo.utils.domino.utils import get_filenames, write_to_vtp
 from torch.cuda.amp import autocast
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
@@ -54,15 +55,17 @@ import matplotlib.pyplot as plt
 import pyvista as pv
 from design_datapipe import DesignDatapipe
 
-try:
-    from physicsnemo.sym.geometry.tessellation import Tessellation
 
-    SYM_AVAILABLE = True
-except ImportError:
-    SYM_AVAILABLE = False
+def combine_stls(stl_path: str, stl_files: List[str]) -> pv.PolyData:
+    """Combines multiple STL files into a single PyVista mesh.
 
+    Args:
+        stl_path: Directory path containing the STL files
+        stl_files: List of STL filenames to combine
 
-def combine_stls(stl_path, stl_files):
+    Returns:
+        Combined PyVista PolyData mesh containing all STL geometries
+    """
     meshes = []
     for file in stl_files:
         if ".stl" in file:
@@ -74,12 +77,12 @@ def combine_stls(stl_path, stl_files):
     return combined_mesh
 
 
-class dominoInference:
+class DoMINOInference:
     def __init__(
         self,
         cfg: DictConfig,
-        dist: None,
-        cached_geo_encoding: False,
+        dist: None | DistributedManager,
+        cached_geo_encoding: bool = False,
     ):
 
         self.cfg = cfg
@@ -126,19 +129,19 @@ class dominoInference:
     def clear_out_dict(self):
         self.out_dict.clear()
 
-    def initialize_data_processor(self):
-        self.ifp = inferenceDataPipe(
-            device=self.device,
-            surface_vertices=self.stl_vertices,
-            surface_indices=self.mesh_indices_flattened,
-            surface_areas=self.surface_areas,
-            surface_centers=self.stl_centers,
-            grid_resolution=self.grid_resolution,
-            normalize_coordinates=True,
-            geom_points_sample=70_000,
-            positional_encoding=False,
-            use_sdf_basis=self.cfg.model.use_sdf_in_basis_func,
-        )
+    # def initialize_data_processor(self):
+    #     self.ifp = inferenceDataPipe(
+    #         device=self.device,
+    #         surface_vertices=self.stl_vertices,
+    #         surface_indices=self.mesh_indices_flattened,
+    #         surface_areas=self.surface_areas,
+    #         surface_centers=self.stl_centers,
+    #         grid_resolution=self.grid_resolution,
+    #         normalize_coordinates=True,
+    #         geom_points_sample=70_000,
+    #         positional_encoding=False,
+    #         use_sdf_basis=self.cfg.model.use_sdf_in_basis_func,
+    #     )
 
     def load_bounding_box(self):
         if (
@@ -160,7 +163,7 @@ class dominoInference:
 
             self.bounding_box_surface_min_max = [c_min, c_max]
 
-    def load_volume_scaling_factors(self):
+    def load_volume_scaling_factors(self) -> torch.Tensor:
         vol_factors = np.array(
             [
                 [2.1508515, 1.0027921, 1.0663894, 1.1288369, 0.05063211, 0.00381244],
@@ -180,7 +183,7 @@ class dominoInference:
 
         return vol_factors
 
-    def load_surface_scaling_factors(self):
+    def load_surface_scaling_factors(self) -> torch.Tensor:
         surf_factors = np.array(
             [
                 [0.98881036, 0.00550783, 0.00854675, 0.00452144],
@@ -192,7 +195,7 @@ class dominoInference:
         surf_factors = torch.from_numpy(surf_factors).to(self.device)
         return surf_factors
 
-    def read_stl(self):
+    def read_stl(self) -> None:
         stl_files = get_filenames(self.stl_path)
         mesh_stl = combine_stls(self.stl_path, stl_files)
         stl_vertices = mesh_stl.points
@@ -223,7 +226,7 @@ class dominoInference:
 
     def read_stl_trimesh(
         self, stl_vertices, stl_faces, stl_centers, surface_normals, surface_areas
-    ):
+    ) -> None:
         mesh_indices_flattened = stl_faces.flatten()
         length_scale = np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0))
         self.stl_vertices = torch.from_numpy(stl_vertices).to(self.device)
@@ -237,7 +240,7 @@ class dominoInference:
 
     def set_datapipe(
         self,
-    ):
+    ) -> None:
         fd = DesignDatapipe(
             self.mesh_stl,
             self.bounding_box_min_max,
@@ -250,7 +253,7 @@ class dominoInference:
         self.train_dataloader = DataLoader(fd, batch_size=8_000, shuffle=False)
         self.input_dict = fd.out_dict
 
-    def get_num_variables(self):
+    def get_num_variables(self) -> tuple[int, int]:
         volume_variable_names = list(self.cfg.variables.volume.solution.keys())
         num_vol_vars = 0
         for j in volume_variable_names:
@@ -268,7 +271,7 @@ class dominoInference:
                 num_surf_vars += 1
         return num_vol_vars, num_surf_vars
 
-    def initialize_model(self, model_path):
+    def initialize_model(self, model_path: str) -> None:
         model = (
             DoMINO(
                 input_features=3,
@@ -432,7 +435,7 @@ class dominoInference:
 
 
 if __name__ == "__main__":
-    OmegaConf.register_new_resolver("eval", eval)
+    OmegaConf.register_new_resolver(name="eval", resolver=eval, replace=True)
     with initialize(version_base="1.3", config_path="conf"):
         cfg = compose(config_name="config")
 
@@ -442,7 +445,7 @@ if __name__ == "__main__":
     if dist.world_size > 1:
         torch.distributed.barrier()
 
-    input_path = "/lustre/rranade/design_opt_data/decimated_stl/"
+    input_path = Path("./geometries")
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
     num_files = int(len(dirnames) / 1)
@@ -450,10 +453,8 @@ if __name__ == "__main__":
         dirnames  # [int(num_files * dev_id) : int(num_files * (dev_id + 1))]
     )
 
-    domino = dominoInference(cfg, dist, False)
-    domino.initialize_model(
-        model_path="/home/psharpe/GitHub/modulus/examples/cfd/external_aerodynamics/domino_sensitivity/DoMINO.0.0.pt"
-    )
+    domino = DoMINOInference(cfg, dist, False)
+    domino.initialize_model(model_path="./DoMINO.0.0.pt")
     for count, dirname in enumerate(dirnames_per_gpu):
         # print(f"Processing file {dirname}")
         filepath = os.path.join(input_path, dirname)
