@@ -18,9 +18,8 @@
 Important utilities for data processing and training, testing DoMINO.
 """
 
-import os
 from pathlib import Path
-from typing import Any, List, Optional, Sequence, Tuple, Union, Iterable
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -336,6 +335,7 @@ def shuffle_array_without_sampling(arr: ArrayType) -> Tuple[ArrayType, ArrayType
     xp.random.shuffle(idx)
     return arr[idx], idx
 
+
 def create_directory(filepath: str | Path) -> None:
     """Function to create directories"""
     path = Path(filepath)
@@ -372,15 +372,6 @@ def combine_dict(old_dict, new_dict):
     for j in old_dict.keys():
         old_dict[j] += new_dict[j]
     return old_dict
-
-
-def merge(*lists: list):
-    """Function to merge lists"""
-    newlist = lists[:]
-    for x in lists:
-        if x not in newlist:
-            newlist.extend(x)
-    return newlist
 
 
 def create_grid(mx: ArrayType, mn: ArrayType, nres: ArrayType) -> ArrayType:
