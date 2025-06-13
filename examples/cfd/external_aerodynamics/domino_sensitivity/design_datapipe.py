@@ -142,9 +142,9 @@ class DesignDatapipe(Dataset):
 
         # SDF on grid
         sdf_grid = signed_distance_field(
-            self.stl_vertices,
-            mesh_indices_flattened,
-            grid_reshaped,
+            mesh_vertices=self.stl_vertices,
+            mesh_indices=mesh_indices_flattened,
+            input_points=grid_reshaped,
             use_sign_winding_number=True,
         )
         sdf_grid = sdf_grid.numpy().reshape(nx, ny, nz)
@@ -153,9 +153,9 @@ class DesignDatapipe(Dataset):
         surf_grid_reshaped = s_grid.reshape(nx * ny * nz, 3)
 
         surf_sdf_grid = signed_distance_field(
-            self.stl_vertices,
-            mesh_indices_flattened,
-            surf_grid_reshaped,
+            mesh_vertices=self.stl_vertices,
+            mesh_indices=mesh_indices_flattened,
+            input_points=surf_grid_reshaped,
             use_sign_winding_number=True,
         )
         surf_sdf_grid = surf_sdf_grid.numpy().reshape(nx, ny, nz)
