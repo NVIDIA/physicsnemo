@@ -23,6 +23,16 @@ from torch import Tensor
 from physicsnemo.utils.patching import GridPatching2D
 
 
+@torch.compile()
+def apply_wrapper(patching, input, additional_input=None):
+    return patching.apply(input=input, additional_input=additional_input)
+
+
+@torch.compile()
+def fuse_wrapper(patching, input, batch_size):
+    return patching.fuse(input=input, batch_size=batch_size)
+
+
 def stochastic_sampler(
     net: torch.nn.Module,
     latents: Tensor,
@@ -168,14 +178,6 @@ def stochastic_sampler(
     )  # t_N = 0
 
     batch_size = img_lr.shape[0]
-
-    @torch.compile()
-    def apply_wrapper(patching, input, additional_input=None):
-        return patching.apply(input=input, additional_input=additional_input)
-
-    @torch.compile()
-    def fuse_wrapper(patching, input, batch_size=batch_size):
-        return patching.fuse(input=input, batch_size=batch_size)
 
     # conditioning = [mean_hr, img_lr, global_lr, pos_embd]
     x_lr = img_lr
