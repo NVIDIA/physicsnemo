@@ -334,8 +334,7 @@ def deterministic_sampler(
                 ).to(torch.float64)
             d_prime = (
                 sigma_deriv(t_prime) / sigma(t_prime) + s_deriv(t_prime) / s(t_prime)
-            ) * x_prime
-            -sigma_deriv(t_prime) * s(t_prime) / sigma(t_prime) * denoised
+            ) * x_prime - sigma_deriv(t_prime) * s(t_prime) / sigma(t_prime) * denoised
             x_next = x_hat + h * (
                 (1 - 1 / (2 * alpha)) * d_cur + 1 / (2 * alpha) * d_prime
             )
