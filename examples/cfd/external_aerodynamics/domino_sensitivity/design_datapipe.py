@@ -40,17 +40,24 @@ import numpy as np
 import pandas as pd
 import pyvista as pv
 import vtk
-from physicsnemo.utils.domino.utils import normalize, create_grid, calculate_center_of_mass
+from physicsnemo.utils.domino.utils import (
+    normalize,
+    create_grid,
+    calculate_center_of_mass,
+)
 from torch.utils.data import Dataset
 from physicsnemo.utils.sdf import signed_distance_field
 from scipy.spatial import KDTree
 from numpy.typing import NDArray
+
+
 class DesignDatapipe(Dataset):
     def __init__(
         self,
         mesh: pv.PolyData,
         bounding_box: np.ndarray | tuple[NDArray[np.float32], NDArray[np.float32]],
-        bounding_box_surface: np.ndarray | tuple[NDArray[np.float32], NDArray[np.float32]],
+        bounding_box_surface: np.ndarray
+        | tuple[NDArray[np.float32], NDArray[np.float32]],
         grid_resolution: Sequence[int],
         stencil_size: int = 7,
         seed: int = 0,
@@ -189,10 +196,10 @@ class DesignDatapipe(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
         """Get a single sample from the dataset.
-        
+
         Args:
             idx: Index of the sample to retrieve
-            
+
         Returns:
             Dictionary containing surface mesh data for the specified index
         """
@@ -212,9 +219,7 @@ class DesignDatapipe(Dataset):
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    mesh: pv.PolyData = pv.read(
-        "./geometries/drivaer_1_single_solid_decimated3.stl"
-    )
+    mesh: pv.PolyData = pv.read("./geometries/drivaer_1_single_solid_decimated3.stl")
     bounding_box: np.ndarray = np.array([[-3.5, -2.25, -0.32], [8.5, 2.25, 3.00]])
     bounding_box_surface: np.ndarray = np.array([[-1.1, -1.2, -0.32], [4.5, 1.2, 1.2]])
 

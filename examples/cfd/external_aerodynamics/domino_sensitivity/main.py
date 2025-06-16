@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-This code defines a standalone distributed inference pipeline the DoMINO model. 
+This code defines a standalone distributed inference pipeline the DoMINO model.
 This inference pipeline can be used to evaluate the model given an STL and
 an inflow speed. The pre-trained model checkpoint can be specified in this script
 or inferred from the config file. The results are calculated on a point cloud
@@ -245,7 +245,7 @@ class DoMINOInference:
         Returns:
             dict: Dictionary containing the following keys:
                 - 'geometry_coordinates': Array of geometry point coordinates
-                - 'geometry_coordinates_sensitivity': Array of sensitivity values for each point
+                - 'geometry_normal_sensitivity': Array of sensitivity values for each point
                 - 'pred_surf_pressure': Array of predicted surface pressure values [Pa]
                 - 'pred_surf_wall_shear_stress': Array of predicted wall shear stress values [τx, τy, τz] [Pa]
                 - 'aerodynamic_force': Array of total computed aerodynamic force [Fx, Fy, Fz] [N]
@@ -253,13 +253,13 @@ class DoMINOInference:
         Example:
             >>> import pyvista as pv
             >>> from domino_sensitivity import DoMINOInference
-            >>> 
+            >>>
             >>> # Load geometry
             >>> mesh = pv.read("car.stl")
-            >>> 
+            >>>
             >>> # Initialize inference
             >>> domino = DoMINOInference(cfg)
-            >>> 
+            >>>
             >>> # Run inference
             >>> results = domino(
             ...     mesh=mesh,
@@ -267,7 +267,7 @@ class DoMINOInference:
             ...     stencil_size=7,
             ...     air_density=1.205
             ... )
-            >>> 
+            >>>
             >>> # Access results
             >>> forces = results['aerodynamic_force']
             >>> print(f"Drag force: {forces[0]:.2f} N")
@@ -311,9 +311,7 @@ class DoMINOInference:
         geometry_coordinates = (
             input_dict["geometry_coordinates"].detach().cpu().numpy()[0]
         )
-        geometry_coordinates_sensitivity: np.ndarray = np.zeros_like(
-            geometry_coordinates
-        )
+        geometry_sensitivity: np.ndarray = np.zeros_like(geometry_coordinates)
 
         def _print_memory_usage(label: str) -> None:
             return
@@ -325,7 +323,10 @@ class DoMINOInference:
             # Update input dictionary with surface mesh data from sampled batch
             input_dict_batch = {
                 **input_dict,
-                **{k: torch.unsqueeze(sample_batched[k], dim=0).to(self.device) for k in surface_keys},
+                **{
+                    k: torch.unsqueeze(sample_batched[k], dim=0).to(self.device)
+                    for k in surface_keys
+                },
             }
             input_dict_batch["geometry_coordinates"].requires_grad_(True)
 
@@ -334,12 +335,14 @@ class DoMINOInference:
             prediction_vol_batch, prediction_surf_batch = self.model(input_dict_batch)
 
             _print_memory_usage("model forward")
-            
+
             # Required to free memory
             del prediction_vol_batch
-            
+
             prediction_surf_batch = (
-                unnormalize(prediction_surf_batch, self.surf_factors[0], self.surf_factors[1])
+                unnormalize(
+                    prediction_surf_batch, self.surf_factors[0], self.surf_factors[1]
+                )
                 * stream_velocity**2.0
                 * air_density
             )
@@ -357,12 +360,17 @@ class DoMINOInference:
                 dim=0,  # Sums over all points in the batch
             )
             drag_force_batch = aerodynamic_force_batch[0]
-            (-1 * drag_force_batch).backward()  # Vectors represent how you should modify the geometry to *reduce* drag
+            (
+                -1 * drag_force_batch
+            ).backward()  # Vectors represent how you should modify the geometry to *reduce* drag
             _print_memory_usage("surface backward")
 
-            geometry_coordinates_sensitivity += (
-                input_dict_batch["geometry_coordinates"].grad.cpu().detach().numpy()[0]
-            )
+            # Compute the sensitivity of the drag force to the geometry coordinates, from this batch
+            geometry_sensitivity_batch = input_dict_batch["geometry_coordinates"].grad[
+                0
+            ]
+
+            geometry_sensitivity += geometry_sensitivity_batch.cpu().detach().numpy()
             aerodynamic_force += aerodynamic_force_batch.cpu().detach().numpy()
 
             pred_surf_batches.append(prediction_surf_batch[0].detach().cpu().numpy())
@@ -371,7 +379,7 @@ class DoMINOInference:
 
         return {
             "geometry_coordinates": geometry_coordinates,
-            "geometry_coordinates_sensitivity": geometry_coordinates_sensitivity,
+            "geometry_sensitivity": geometry_sensitivity,
             "pred_surf_pressure": pred_surf[:, 0],
             "pred_surf_wall_shear_stress": pred_surf[:, 1:4],
             "aerodynamic_force": aerodynamic_force,
@@ -393,7 +401,9 @@ if __name__ == "__main__":
     # input_files = (Path(__file__).parent / "geometries").glob("*.stl")
     input_files = [
         # Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
-        Path(__file__).parent / "geometries" / "drivaer_1_single_solid.stl"
+        Path(__file__).parent
+        / "geometries"
+        / "drivaer_1_single_solid.stl"
     ]
 
     domino = DoMINOInference(
@@ -413,17 +423,34 @@ if __name__ == "__main__":
 
         mesh["pred_surf_pressure"] = results["pred_surf_pressure"]
         mesh["pred_surf_wall_shear_stress"] = results["pred_surf_wall_shear_stress"]
-        mesh["geometry_coordinates"] = results["geometry_coordinates"]
-        mesh["geometry_coordinates_sensitivity"] = results["geometry_coordinates_sensitivity"]
-        mesh["geometry_coordinates_normal_sensitivity"] = np.einsum("ij,ij->i",results["geometry_coordinates_sensitivity"], mesh.cell_normals)
 
-        # Creates "geometry_coordinates_smoothed_sensitivity", a Nx3 array where each 
-        n_laplacian_smoothing_steps = 10
+        raw_sensitivity = results["geometry_sensitivity"]
+        mesh["raw_sensitivity"] = raw_sensitivity
+        normal_sensitivity = np.einsum(
+            "ij,ij->i",
+            raw_sensitivity,
+            mesh.cell_normals,
+        )
+        sensitivity = np.einsum(
+            "i,ij->ij",
+            normal_sensitivity,
+            mesh.cell_normals,
+        )
+        mesh["sensitivity"] = sensitivity
+        mesh["normal_sensitivity"] = normal_sensitivity
 
+        from utilities.mesh_postprocessing import laplacian_smoothing
 
-
-        # for _ in range(n_laplacian_smoothing_steps):
-
-
+        mesh["normal_sensitivity_smoothed"] = laplacian_smoothing(
+            mesh,
+            normal_sensitivity,
+            location="cells",
+            iterations=20,
+        )
+        mesh["sensitivity_smoothed"] = np.einsum(
+            "i,ij->ij",
+            mesh["normal_sensitivity_smoothed"],
+            mesh.cell_normals,
+        )
 
         mesh.save(file.with_suffix(".vtk"))
