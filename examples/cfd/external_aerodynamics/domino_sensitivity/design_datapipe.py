@@ -22,7 +22,17 @@ in npy format.
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Iterable, List, Literal, Mapping, Optional, Union, Callable, Sequence
+from typing import (
+    Any,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    Callable,
+    Sequence,
+)
 
 import numpy as np
 import pandas as pd
@@ -65,9 +75,7 @@ class DesignDatapipe(Dataset):
     ):
         self.mesh = mesh
 
-        length_scale = (
-            np.amax(self.mesh.points, 0) - np.amin(self.mesh.points, 0)
-        )
+        length_scale = np.amax(self.mesh.points, 0) - np.amin(self.mesh.points, 0)
 
         stl_centers = self.mesh.cell_centers().points
 
@@ -94,7 +102,7 @@ class DesignDatapipe(Dataset):
 
         grid = create_grid(v_max, v_min, grid_resolution)
         grid_reshaped = grid.reshape(nx * ny * nz, 3)
-        
+
         # SDF on grid
         sdf_grid = signed_distance_field(
             mesh_vertices=mesh.points,
@@ -121,7 +129,7 @@ class DesignDatapipe(Dataset):
 
         surface_coordinates = stl_centers
         interp_func = KDTree(surface_coordinates)
-        
+
         dd, ii = interp_func.query(surface_coordinates, k=stencil_size)
         surface_neighbors = surface_coordinates[ii]
         surface_neighbors = surface_neighbors[:, 1:] + 1e-6
@@ -193,17 +201,18 @@ class DesignDatapipe(Dataset):
             "surface_neighbors_normals",
             "surface_areas",
             "surface_neighbors_areas",
-            "pos_surface_center_of_mass"
+            "pos_surface_center_of_mass",
         ]
 
-        return {
-            k: self.out_dict[k][idx].astype(np.float32) for k in keys
-        }
+        return {k: self.out_dict[k][idx].astype(np.float32) for k in keys}
+
 
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    mesh_stl: pv.PolyData = pv.read("./geometries/drivaer_1_single_solid_decimated3.stl")
+    mesh_stl: pv.PolyData = pv.read(
+        "./geometries/drivaer_1_single_solid_decimated3.stl"
+    )
     bounding_box: np.ndarray = np.array([[-3.5, -2.25, -0.32], [8.5, 2.25, 3.00]])
     bounding_box_surface: np.ndarray = np.array([[-1.1, -1.2, -0.32], [4.5, 1.2, 1.2]])
 

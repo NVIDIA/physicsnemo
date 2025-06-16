@@ -83,13 +83,17 @@ class DoMINOInference:
                 self.device = torch.device("cpu")
 
         if self.model is None:
-            self.model = DoMINO(
-                input_features=3,
-                output_features_vol=self.num_vol_vars,
-                output_features_surf=self.num_surf_vars,
-                model_parameters=self.cfg.model,
-            ).to(self.device).eval()
-    
+            self.model = (
+                DoMINO(
+                    input_features=3,
+                    output_features_vol=self.num_vol_vars,
+                    output_features_surf=self.num_surf_vars,
+                    model_parameters=self.cfg.model,
+                )
+                .to(self.device)
+                .eval()
+            )
+
             for param in self.model.parameters():
                 param.requires_grad = False
 
@@ -97,23 +101,21 @@ class DoMINOInference:
 
             if self.model_checkpoint_path is not None:
                 with open(self.model_checkpoint_path, "rb") as f:
-                    self.model.load_state_dict(
-                        torch.load(f, map_location=self.device)
-                    )
+                    self.model.load_state_dict(torch.load(f, map_location=self.device))
                 print("Model loaded with checkpoint...")
             else:
                 print("Model loaded without checkpoint...")
 
             if (self.dist is not None) and (self.dist.world_size > 1):
-                    self.model = DistributedDataParallel(
-                        self.model,
-                        device_ids=[self.dist.local_rank],
-                        output_device=self.dist.device,
-                        broadcast_buffers=self.dist.broadcast_buffers,
-                        find_unused_parameters=self.dist.find_unused_parameters,
-                        gradient_as_bucket_view=True,
-                        static_graph=True,
-                    )
+                self.model = DistributedDataParallel(
+                    self.model,
+                    device_ids=[self.dist.local_rank],
+                    output_device=self.dist.device,
+                    broadcast_buffers=self.dist.broadcast_buffers,
+                    find_unused_parameters=self.dist.find_unused_parameters,
+                    gradient_as_bucket_view=True,
+                    static_graph=True,
+                )
 
     @cached_property
     def num_vol_vars(self) -> int:
@@ -132,38 +134,44 @@ class DoMINOInference:
     @cached_property
     def bounding_box_min_max(self) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         """Get the minimum and maximum coordinates of the bounding box from config.
-        
+
         Returns:
             tuple[NDArray[np.float32], NDArray[np.float32]]: Min and max coordinates
-            
+
         Raises:
             ValueError: If min or max coordinates are not specified in config
         """
         try:
             return (
                 np.array(self.cfg.data.bounding_box.min, dtype=np.float32),
-                np.array(self.cfg.data.bounding_box.max, dtype=np.float32)
+                np.array(self.cfg.data.bounding_box.max, dtype=np.float32),
             )
         except AttributeError:
-            raise ValueError("Config must specify both `bounding_box.min` and `bounding_box.max`")
+            raise ValueError(
+                "Config must specify both `bounding_box.min` and `bounding_box.max`"
+            )
 
     @cached_property
-    def bounding_box_surface_min_max(self) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    def bounding_box_surface_min_max(
+        self,
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         """Get the minimum and maximum coordinates of the surface bounding box from config.
-        
+
         Returns:
             tuple[NDArray[np.float32], NDArray[np.float32]]: Min and max coordinates
-            
+
         Raises:
             ValueError: If min or max coordinates are not specified in config
         """
         try:
             return (
                 np.array(self.cfg.data.bounding_box_surface.min, dtype=np.float32),
-                np.array(self.cfg.data.bounding_box_surface.max, dtype=np.float32)
+                np.array(self.cfg.data.bounding_box_surface.max, dtype=np.float32),
             )
         except AttributeError:
-            raise ValueError("Config must specify both `bounding_box_surface.min` and `bounding_box_surface.max`")
+            raise ValueError(
+                "Config must specify both `bounding_box_surface.min` and `bounding_box_surface.max`"
+            )
 
     @cached_property
     def vol_factors(self) -> torch.Tensor:
@@ -203,106 +211,109 @@ class DoMINOInference:
             )
         ).to(self.device)
 
-
     def __call__(
-            self,
-            stl_path: Path | str,
-            stream_velocity: float = 38.889,
-            stencil_size: int = 7,
-            air_density: float = 1.205,
+        self,
+        mesh: pv.PolyData,
+        stream_velocity: float = 38.889,
+        stencil_size: int = 7,
+        air_density: float = 1.205,
     ):
-        mesh_stl = pv.read(stl_path)
         datapipe = DesignDatapipe(
-            mesh=mesh_stl,
+            mesh=mesh,
             bounding_box=self.bounding_box_min_max,
             bounding_box_surface=self.bounding_box_surface_min_max,
             grid_resolution=self.cfg.model.interp_res,
             stencil_size=stencil_size,
         )
-        dataloader = torch.utils.data.DataLoader(datapipe, batch_size=4096, shuffle=False)
+        dataloader = torch.utils.data.DataLoader(
+            datapipe, batch_size=2**13, shuffle=False
+        )
 
         input_dict = {
             k: torch.from_numpy(np.expand_dims(np.float32(v), axis=0)).to(self.device)
             for k, v in datapipe.out_dict.items()
         }
-        input_dict["stream_velocity"] = torch.tensor(stream_velocity, dtype=torch.float32, device=self.device)
-        input_dict["air_density"] = torch.tensor(air_density, dtype=torch.float32, device=self.device)
+        input_dict["stream_velocity"] = torch.tensor(
+            stream_velocity, dtype=torch.float32, device=self.device
+        )
+        input_dict["air_density"] = torch.tensor(
+            air_density, dtype=torch.float32, device=self.device
+        )
 
         surface_keys: list[str] = [
             "surface_mesh_centers",
-            "surface_mesh_neighbors", 
+            "surface_mesh_neighbors",
             "surface_normals",
             "surface_neighbors_normals",
             "surface_areas",
             "surface_neighbors_areas",
-            "pos_surface_center_of_mass"
+            "pos_surface_center_of_mass",
         ]
 
         aerodynamic_force = torch.zeros(3, dtype=torch.float32, device=self.device)
-        surface_area_batches: list[np.ndarray] = []
         pred_surf_batches: list[np.ndarray] = []
+        geometry_coordinates = (
+            input_dict["geometry_coordinates"].detach().cpu().numpy()[0]
+        )
+        geometry_coordinates_sensitivity: np.ndarray = np.zeros_like(
+            geometry_coordinates
+        )
 
-        for i_batch, sample_batched in enumerate(dataloader):
-            sample_batched = {
-                key: torch.unsqueeze(value, dim=0).to(self.device) for key, value in sample_batched.items()
-            }
+        for sample_batched in dataloader:
+            # sample_batched = {
+            #     key: torch.unsqueeze(value, dim=0).to(self.device)
+            #     for key, value in sample_batched.items()
+            # }
             # Update input dictionary with surface mesh data from sampled batch
+            input_dict_batch = {
+                **input_dict,
+                **{k: torch.unsqueeze(sample_batched[k], dim=0).to(self.device) for k in surface_keys},
+            }
+            input_dict_batch["geometry_coordinates"].requires_grad_(True)
 
-            input_dict.update({k: sample_batched[k] for k in surface_keys})
-            input_dict["geometry_coordinates"].requires_grad_(True)
-            
-            print(f"Allocated memory after data loading: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB")
-            with torch.amp.autocast('cuda', enabled=True):
-                prediction_vol, prediction_surf = self.model(input_dict)
-
-                prediction_surf = (
-                    unnormalize(
-                        prediction_surf, self.surf_factors[0], self.surf_factors[1]
-                    )
-                    * stream_velocity ** 2.0
-                    * air_density
-                )
-                surface_normals = input_dict["surface_normals"]
-
-                aerodynamic_force_batch = torch.sum(
-                    input_dict["surface_areas"][0][: , None] * (
-                        surface_normals[0] * prediction_surf[0][:, 0]  # Pressure
-                        - prediction_surf[0][:, 1:4]  # Wall shear stress
-                    ),
-                    dim=0
-                )
-                aerodynamic_force += aerodynamic_force_batch
-
-                # TODO double check if indexing is correct in the expression above
-                print(f"{aerodynamic_force_batch=}, {prediction_surf.shape=}, {(i_batch + 1) * 8000=}")
-
-            surface_area_batches.append(
-                input_dict["surface_areas"][0].detach().cpu().numpy()
+            print(
+                f"Allocated memory after data loading: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
             )
-            pred_surf_batches.append(
-                prediction_surf[0, :].detach().cpu().numpy()
+
+            prediction_vol_batch, prediction_surf_batch = self.model(input_dict_batch)
+            prediction_surf_batch = (
+                unnormalize(prediction_surf_batch, self.surf_factors[0], self.surf_factors[1])
+                * stream_velocity**2.0
+                * air_density
             )
-        
-        surface_areas = np.concatenate(surface_area_batches, 0)
+            surface_areas_batch = input_dict_batch["surface_areas"][0]
+            surface_normals_batch = input_dict_batch["surface_normals"][0]
+            pressure_batch = prediction_surf_batch[0][:, 0]
+            wall_shear_stress_batch = prediction_surf_batch[0][:, 1:4]
+
+            aerodynamic_force_batch = torch.sum(
+                surface_areas_batch[:, None]
+                * (
+                    surface_normals_batch * pressure_batch[:, None]  # Pressure
+                    - wall_shear_stress_batch  # Wall shear stress
+                ),
+                dim=0,
+            )
+            drag_force_batch = aerodynamic_force_batch[0]
+            drag_force_batch.backward()
+            geometry_coordinates_sensitivity += (
+                input_dict_batch["geometry_coordinates"].grad.cpu().detach().numpy()[0]
+            )
+            aerodynamic_force += aerodynamic_force_batch
+
+            pred_surf_batches.append(prediction_surf_batch[0].detach().cpu().numpy())
+
         pred_surf = np.concatenate(pred_surf_batches, 0)
-
         drag_force = aerodynamic_force[0]
 
-        loss = (drag_force / 400) ** 2.0
-
-        print(f"Allocated memory after loss calc: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB")
-
-        loss.backward()
-
-        sensitivities = input_dict["geometry_coordinates"].grad.cpu().detach().numpy()
-        coordinates = input_dict["geometry_coordinates"].detach().cpu().numpy()
-
         return {
-            "sensitivities": sensitivities,
-            "coordinates": coordinates,
-            "surface_areas": surface_areas,
-            "pred_surf": pred_surf,
+            "geometry_coordinates": geometry_coordinates,
+            "geometry_coordinates_sensitivity": geometry_coordinates_sensitivity,
+            "pred_surf_pressure": pred_surf[:, 0],
+            "pred_surf_wall_shear_stress": pred_surf[:, 1:4],
+            "drag_force": drag_force,
         }
+
 
 if __name__ == "__main__":
     with hydra.initialize(version_base="1.3", config_path="conf"):
@@ -315,18 +326,30 @@ if __name__ == "__main__":
         torch.distributed.barrier()
 
     # input_files = (Path(__file__).parent / "geometries").glob("*.stl")
-    input_files = [Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"]
+    input_files = [
+        Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
+        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid.stl"
+    ]
 
     domino = DoMINOInference(
         cfg=cfg,
-        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.0.pt").absolute(),
+        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.41.pt").absolute(),
         dist=dist,
     )
 
     for file in input_files:
+        mesh: pv.PolyData = pv.read(file.absolute())
         results = domino(
-            stl_path=file.absolute(),
+            mesh=mesh,
             stream_velocity=38.889,
             stencil_size=7,
             air_density=1.205,
         )
+
+        mesh["pred_surf_pressure"] = results["pred_surf_pressure"]
+        mesh["pred_surf_wall_shear_stress"] = results["pred_surf_wall_shear_stress"]
+        mesh["geometry_coordinates"] = results["geometry_coordinates"]
+        mesh["geometry_coordinates_sensitivity"] = results["geometry_coordinates_sensitivity"]
+        mesh["geometry_coordinates_normal_sensitivity"] = np.einsum("ij,ij->i",results["geometry_coordinates_sensitivity"], mesh.cell_normals)
+        
+        mesh.save(file.with_suffix(".vtk"))
