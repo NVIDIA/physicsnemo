@@ -163,10 +163,7 @@ class DesignDatapipe(Dataset):
         vol_grid_max_min = np.float32(np.asarray([v_min, v_max]))
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
 
-        geometry_points = 300_000
-        geometry_coordinates_sampled, idx_geometry = shuffle_array(
-            stl_centers, geometry_points
-        )
+        geometry_coordinates_sampled = stl_centers
 
         self.out_dict = dict(
             pos_volume_closest=pos_normals_closest,

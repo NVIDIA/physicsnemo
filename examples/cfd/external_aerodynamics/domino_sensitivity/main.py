@@ -28,6 +28,7 @@ from pathlib import Path
 import os
 import hydra
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -175,6 +176,11 @@ class DoMINOInference:
 
     @cached_property
     def vol_factors(self) -> torch.Tensor:
+        """
+        Computes the factors that are later used to unnormalize the volume predictions.
+
+        These are saved at training time based on statistics of the training data, and re-used at each inference call.
+        """
         return torch.from_numpy(
             np.array(
                 [
@@ -201,6 +207,11 @@ class DoMINOInference:
 
     @cached_property
     def surf_factors(self) -> torch.Tensor:
+        """
+        Computes the factors that are later used to unnormalize the surface predictions.
+
+        These are saved at training time based on statistics of the training data, and re-used at each inference call.
+        """
         return torch.from_numpy(
             np.array(
                 [
@@ -217,7 +228,51 @@ class DoMINOInference:
         stream_velocity: float = 38.889,
         stencil_size: int = 7,
         air_density: float = 1.205,
-    ):
+    ) -> dict[str, np.ndarray]:
+        """Performs DoMINO inference on a given geometry to predict aerodynamic quantities.
+
+        This method takes a PyVista mesh representing a 3D geometry and computes the
+        aerodynamic predictions using the DoMINO model. It handles the data preprocessing,
+        model inference, and post-processing of results.
+
+        Args:
+            mesh: PyVista PolyData mesh representing the 3D geometry to analyze
+            stream_velocity: Inlet flow velocity in m/s. Defaults to 38.889 m/s.
+            stencil_size: Number of neighboring points to consider for surface calculations.
+                Defaults to 7.
+            air_density: Air density in kg/m³. Defaults to 1.205 kg/m³.
+
+        Returns:
+            dict: Dictionary containing the following keys:
+                - 'geometry_coordinates': Array of geometry point coordinates
+                - 'geometry_coordinates_sensitivity': Array of sensitivity values for each point
+                - 'pred_surf_pressure': Array of predicted surface pressure values [Pa]
+                - 'pred_surf_wall_shear_stress': Array of predicted wall shear stress values [τx, τy, τz] [Pa]
+                - 'aerodynamic_force': Array of total computed aerodynamic force [Fx, Fy, Fz] [N]
+
+        Example:
+            >>> import pyvista as pv
+            >>> from domino_sensitivity import DoMINOInference
+            >>> 
+            >>> # Load geometry
+            >>> mesh = pv.read("car.stl")
+            >>> 
+            >>> # Initialize inference
+            >>> domino = DoMINOInference(cfg)
+            >>> 
+            >>> # Run inference
+            >>> results = domino(
+            ...     mesh=mesh,
+            ...     stream_velocity=30.0,
+            ...     stencil_size=7,
+            ...     air_density=1.205
+            ... )
+            >>> 
+            >>> # Access results
+            >>> forces = results['aerodynamic_force']
+            >>> print(f"Drag force: {forces[0]:.2f} N")
+        """
+
         datapipe = DesignDatapipe(
             mesh=mesh,
             bounding_box=self.bounding_box_min_max,
@@ -250,7 +305,8 @@ class DoMINOInference:
             "pos_surface_center_of_mass",
         ]
 
-        aerodynamic_force = torch.zeros(3, dtype=torch.float32, device=self.device)
+        # aerodynamic_force = torch.zeros(3, dtype=torch.float32, device=self.device)
+        aerodynamic_force = np.zeros(3, dtype=np.float32)
         pred_surf_batches: list[np.ndarray] = []
         geometry_coordinates = (
             input_dict["geometry_coordinates"].detach().cpu().numpy()[0]
@@ -259,11 +315,13 @@ class DoMINOInference:
             geometry_coordinates
         )
 
-        for sample_batched in dataloader:
-            # sample_batched = {
-            #     key: torch.unsqueeze(value, dim=0).to(self.device)
-            #     for key, value in sample_batched.items()
-            # }
+        def _print_memory_usage(label: str) -> None:
+            return
+            print(
+                f"VRAM usage after {label:<20}: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
+            )
+
+        for sample_batched in tqdm(dataloader, desc="Processing batches"):
             # Update input dictionary with surface mesh data from sampled batch
             input_dict_batch = {
                 **input_dict,
@@ -271,11 +329,15 @@ class DoMINOInference:
             }
             input_dict_batch["geometry_coordinates"].requires_grad_(True)
 
-            print(
-                f"Allocated memory after data loading: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
-            )
+            _print_memory_usage("data loading")
 
             prediction_vol_batch, prediction_surf_batch = self.model(input_dict_batch)
+
+            _print_memory_usage("model forward")
+            
+            # Required to free memory
+            del prediction_vol_batch
+            
             prediction_surf_batch = (
                 unnormalize(prediction_surf_batch, self.surf_factors[0], self.surf_factors[1])
                 * stream_velocity**2.0
@@ -292,30 +354,33 @@ class DoMINOInference:
                     surface_normals_batch * pressure_batch[:, None]  # Pressure
                     - wall_shear_stress_batch  # Wall shear stress
                 ),
-                dim=0,
+                dim=0,  # Sums over all points in the batch
             )
             drag_force_batch = aerodynamic_force_batch[0]
-            drag_force_batch.backward()
+            (-1 * drag_force_batch).backward()  # Vectors represent how you should modify the geometry to *reduce* drag
+            _print_memory_usage("surface backward")
+
             geometry_coordinates_sensitivity += (
                 input_dict_batch["geometry_coordinates"].grad.cpu().detach().numpy()[0]
             )
-            aerodynamic_force += aerodynamic_force_batch
+            aerodynamic_force += aerodynamic_force_batch.cpu().detach().numpy()
 
             pred_surf_batches.append(prediction_surf_batch[0].detach().cpu().numpy())
 
         pred_surf = np.concatenate(pred_surf_batches, 0)
-        drag_force = aerodynamic_force[0]
 
         return {
             "geometry_coordinates": geometry_coordinates,
             "geometry_coordinates_sensitivity": geometry_coordinates_sensitivity,
             "pred_surf_pressure": pred_surf[:, 0],
             "pred_surf_wall_shear_stress": pred_surf[:, 1:4],
-            "drag_force": drag_force,
+            "aerodynamic_force": aerodynamic_force,
         }
 
 
 if __name__ == "__main__":
+    torch.cuda.set_per_process_memory_fraction(0.8)
+
     with hydra.initialize(version_base="1.3", config_path="conf"):
         cfg = hydra.compose(config_name="config")
 
@@ -327,8 +392,8 @@ if __name__ == "__main__":
 
     # input_files = (Path(__file__).parent / "geometries").glob("*.stl")
     input_files = [
-        Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
-        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid.stl"
+        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
+        Path(__file__).parent / "geometries" / "drivaer_1_single_solid.stl"
     ]
 
     domino = DoMINOInference(
@@ -351,5 +416,14 @@ if __name__ == "__main__":
         mesh["geometry_coordinates"] = results["geometry_coordinates"]
         mesh["geometry_coordinates_sensitivity"] = results["geometry_coordinates_sensitivity"]
         mesh["geometry_coordinates_normal_sensitivity"] = np.einsum("ij,ij->i",results["geometry_coordinates_sensitivity"], mesh.cell_normals)
-        
+
+        # Creates "geometry_coordinates_smoothed_sensitivity", a Nx3 array where each 
+        n_laplacian_smoothing_steps = 10
+
+
+
+        # for _ in range(n_laplacian_smoothing_steps):
+
+
+
         mesh.save(file.with_suffix(".vtk"))
