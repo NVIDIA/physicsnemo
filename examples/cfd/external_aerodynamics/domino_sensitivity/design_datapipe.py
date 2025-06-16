@@ -18,6 +18,8 @@
 This is the datapipe to read OpenFoam files (vtp/vtu/stl) and save them as point clouds 
 in npy format. 
 
+The datapipe processes surface meshes to create structured representations suitable for
+machine learning tasks, computing various geometric properties and signed distance fields.
 """
 
 from collections import defaultdict
@@ -38,50 +40,49 @@ import numpy as np
 import pandas as pd
 import pyvista as pv
 import vtk
-from physicsnemo.utils.domino.utils import *
+from physicsnemo.utils.domino.utils import normalize, create_grid, calculate_center_of_mass
 from torch.utils.data import Dataset
 from physicsnemo.utils.sdf import signed_distance_field
-from physicsnemo.utils.domino.utils import *
-
-AIR_DENSITY = 1.205
-STREAM_VELOCITY = 30.00
-
-
-def combine_stls(stl_path, stl_files):
-    meshes = []
-    for file in stl_files:
-        if ".stl" in file:
-            stl_file_path = os.path.join(stl_path, file)
-            reader = pv.get_reader(stl_file_path)
-            mesh_stl = reader.read()
-            meshes.append(mesh_stl)
-    combined_mesh = pv.merge(meshes)
-    return combined_mesh
-
-
+from scipy.spatial import KDTree
+from numpy.typing import NDArray
 class DesignDatapipe(Dataset):
-    """
-    Datapipe for converting openfoam dataset to npy
-
-    """
-
     def __init__(
         self,
         mesh: pv.PolyData,
-        bounding_box: np.ndarray,
-        bounding_box_surface: np.ndarray,
+        bounding_box: np.ndarray | tuple[NDArray[np.float32], NDArray[np.float32]],
+        bounding_box_surface: np.ndarray | tuple[NDArray[np.float32], NDArray[np.float32]],
         grid_resolution: Sequence[int],
         stencil_size: int = 7,
+        seed: int = 0,
     ):
-        self.mesh = mesh
+        """Initialize a DesignDatapipe dataset based on a surface mesh sample.
 
+        Args:
+            mesh: A PyVista PolyData mesh representing the surface geometry.
+            bounding_box: A 2x3 numpy array containing the min and max coordinates of the volume
+                bounding box. Shape: [[x_min, y_min, z_min], [x_max, y_max, z_max]].
+            bounding_box_surface: A 2x3 numpy array containing the min and max coordinates of the
+                surface bounding box. Shape: [[x_min, y_min, z_min], [x_max, y_max, z_max]].
+            grid_resolution: A sequence of 3 integers specifying the number of points along each
+                dimension (nx, ny, nz) for the structured grid.
+            stencil_size: The size of the stencil used for local operations. Defaults to 7.
+            seed: Random seed for reproducibility. Defaults to 0.
+
+        Raises:
+            ValueError: If grid_resolution does not contain exactly 3 values
+            ValueError: If bounding_box or bounding_box_surface are not 2x3 arrays
+        """
+        if len(grid_resolution) != 3:
+            raise ValueError("grid_resolution must contain exactly 3 values")
+
+        self.mesh = mesh
+        rng = np.random.RandomState(seed)
+
+        # Compute basic mesh properties
         length_scale = np.amax(self.mesh.points, 0) - np.amin(self.mesh.points, 0)
 
         stl_centers = self.mesh.cell_centers().points
-
-        # Assuming triangular elements
-        stl_faces = np.array(self.mesh.faces).reshape((-1, 4))[:, 1:]
-
+        stl_faces = self.mesh.regular_faces
         mesh_indices_flattened = stl_faces.flatten()
 
         surface_areas = mesh.compute_cell_sizes(
@@ -99,7 +100,6 @@ class DesignDatapipe(Dataset):
         v_min = np.asarray(bounding_box[0])
 
         nx, ny, nz = grid_resolution
-
         grid = create_grid(v_max, v_min, grid_resolution)
         grid_reshaped = grid.reshape(nx * ny * nz, 3)
 
@@ -124,8 +124,8 @@ class DesignDatapipe(Dataset):
         surf_sdf_grid = np.array(surf_sdf_grid).reshape(nx, ny, nz)
 
         # Sample surface_vertices
-        grid = 2.0 * (grid - v_min) / (v_max - v_min) - 1.0
-        s_grid = 2.0 * (s_grid - s_min) / (s_max - s_min) - 1.0
+        grid = normalize(grid, v_max, v_min)
+        s_grid = normalize(s_grid, s_max, s_min)
 
         surface_coordinates = stl_centers
         interp_func = KDTree(surface_coordinates)
@@ -140,13 +140,11 @@ class DesignDatapipe(Dataset):
 
         pos_normals_com_surface = surface_coordinates - center_of_mass
 
-        surface_coordinates = (
-            2.0 * (surface_coordinates - s_min) / (s_max - s_min) - 1.0
-        )
-        surface_neighbors = 2.0 * (surface_neighbors - s_min) / (s_max - s_min) - 1.0
+        surface_coordinates = normalize(surface_coordinates, s_max, s_min)
+        surface_neighbors = normalize(surface_neighbors, s_max, s_min)
 
         # Volume processing
-        volume_coordinates = (v_max - v_min) * np.random.rand(10, 3) + v_min
+        volume_coordinates = (v_max - v_min) * rng.rand(1000, 3) + v_min
 
         sdf_nodes, sdf_node_closest_point = signed_distance_field(
             mesh.points,
@@ -159,17 +157,15 @@ class DesignDatapipe(Dataset):
         sdf_node_closest_point = np.array(sdf_node_closest_point)
         pos_normals_closest = volume_coordinates - sdf_node_closest_point
         pos_normals_com = volume_coordinates - center_of_mass
-        volume_coordinates = 2.0 * (volume_coordinates - v_min) / (v_max - v_min) - 1.0
+        volume_coordinates = normalize(volume_coordinates, v_max, v_min)
         vol_grid_max_min = np.float32(np.asarray([v_min, v_max]))
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
-
-        geometry_coordinates_sampled = stl_centers
 
         self.out_dict = dict(
             pos_volume_closest=pos_normals_closest,
             pos_volume_center_of_mass=pos_normals_com,
             pos_surface_center_of_mass=pos_normals_com_surface,
-            geometry_coordinates=geometry_coordinates_sampled,
+            geometry_coordinates=stl_centers,
             grid=grid,
             surf_grid=s_grid,
             sdf_grid=sdf_grid,
@@ -187,10 +183,19 @@ class DesignDatapipe(Dataset):
             length_scale=length_scale,
         )
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Return the number of faces in the mesh."""
         return self.mesh.n_faces_strict
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
+        """Get a single sample from the dataset.
+        
+        Args:
+            idx: Index of the sample to retrieve
+            
+        Returns:
+            Dictionary containing surface mesh data for the specified index
+        """
         keys = [
             "surface_mesh_centers",
             "surface_mesh_neighbors",
@@ -207,22 +212,20 @@ class DesignDatapipe(Dataset):
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    mesh_stl: pv.PolyData = pv.read(
+    mesh: pv.PolyData = pv.read(
         "./geometries/drivaer_1_single_solid_decimated3.stl"
     )
     bounding_box: np.ndarray = np.array([[-3.5, -2.25, -0.32], [8.5, 2.25, 3.00]])
     bounding_box_surface: np.ndarray = np.array([[-1.1, -1.2, -0.32], [4.5, 1.2, 1.2]])
 
     fd = DesignDatapipe(
-        mesh_stl,
-        bounding_box,
-        bounding_box_surface,
+        mesh=mesh,
+        bounding_box=bounding_box,
+        bounding_box_surface=bounding_box_surface,
         grid_resolution=[128, 64, 48],
-        stream_velocity=30.0,
-        air_density=1.205,
     )
 
     train_dataloader = DataLoader(fd, batch_size=256_000, shuffle=False)
 
-    for i_batch, sample_batched in enumerate(train_dataloader):
-        print(f"{i_batch=}, {sample_batched['surface_mesh_centers'].shape=}")
+    for i, sample_batched in enumerate(train_dataloader):
+        print(f"{i=}, {sample_batched['surface_mesh_centers'].shape=}")
