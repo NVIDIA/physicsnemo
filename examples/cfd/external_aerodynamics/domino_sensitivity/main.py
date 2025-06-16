@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-This code defines a standalone distributed inference pipeline the DoMINO model. 
+This code defines a standalone distributed inference pipeline the DoMINO model.
 This inference pipeline can be used to evaluate the model given an STL and
 an inflow speed. The pre-trained model checkpoint can be specified in this script
 or inferred from the config file. The results are calculated on a point cloud
@@ -23,46 +23,37 @@ sampled in the volume around the STL and on the surface of the STL. They are sto
 in a dictionary, which can be written out for visualization.
 """
 
+from functools import cached_property
+from pathlib import Path
 import os
-import time
-import copy
-import apex
 import hydra
-import re
-from hydra import compose, initialize
-from hydra.utils import to_absolute_path
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
+from tqdm import tqdm
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-import vtk
-from vtk.util import numpy_support
 
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.utils.domino.utils import *
-from torch.cuda.amp import autocast
+from physicsnemo.utils.domino.utils import unnormalize
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
 
 from numpy.typing import NDArray
-from typing import Any, Iterable, List, Literal, Mapping, Optional, Union, Callable
-import warp as wp
-from pathlib import Path
-import pandas as pd
-import matplotlib.pyplot as plt
 import pyvista as pv
 from design_datapipe import DesignDatapipe
-
-try:
-    from physicsnemo.sym.geometry.tessellation import Tessellation
-
-    SYM_AVAILABLE = True
-except ImportError:
-    SYM_AVAILABLE = False
+from dataclasses import dataclass
 
 
-def combine_stls(stl_path, stl_files):
+def combine_stls(stl_path: str, stl_files: list[str]) -> pv.PolyData:
+    """Combines multiple STL files into a single PyVista mesh.
+
+    Args:
+        stl_path: Directory path containing the STL files
+        stl_files: List of STL filenames to combine
+
+    Returns:
+        Combined PyVista PolyData mesh containing all STL geometries
+    """
     meshes = []
     for file in stl_files:
         if ".stl" in file:
@@ -74,223 +65,51 @@ def combine_stls(stl_path, stl_files):
     return combined_mesh
 
 
-class dominoInference:
-    def __init__(
-        self,
-        cfg: DictConfig,
-        dist: None,
-        cached_geo_encoding: False,
-    ):
+@dataclass
+class DoMINOInference:
 
-        self.cfg = cfg
-        self.dist = dist
-        self.stream_velocity = None
-        self.stencil_size = None
-        self.stl_path = None
-        self.stl_vertices = None
-        self.stl_centers = None
-        self.surface_areas = None
-        self.mesh_indices_flattened = None
-        self.length_scale = 1.0
-        if self.dist is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = self.dist.device
+    cfg: DictConfig
+    model_checkpoint_path: Path | str | None = None
+    dist: DistributedManager | None = None
+    device: torch.device | None = None  # If not set, default set in __post_init__
+    model: torch.nn.Module | None = None  # If not set, constructed in __post_init__
 
-        # self.air_density = torch.full((1, 1), 1.205, dtype=torch.float32).to(
-        #     self.device
-        # )
-        self.air_density = 1.205
-        self.num_vol_vars, self.num_surf_vars = self.get_num_variables()
-        self.model = None
-        self.grid_resolution = torch.tensor(self.cfg.model.interp_res).to(self.device)
-        self.vol_factors = None
-        self.bounding_box_min_max = None
-        self.bounding_box_surface_min_max = None
-        self.center_of_mass = None
-        self.grid = None
-        self.geometry_encoding = None
-        self.geometry_encoding_surface = None
-        self.cached_geo_encoding = cached_geo_encoding
-        self.out_dict = {}
-
-    def get_geometry_encoding(self):
-        return self.geometry_encoding
-
-    def get_geometry_encoding_surface(self):
-        return self.geometry_encoding_surface
-
-    def get_out_dict(self):
-        return self.out_dict
-
-    def clear_out_dict(self):
-        self.out_dict.clear()
-
-    def initialize_data_processor(self):
-        self.ifp = inferenceDataPipe(
-            device=self.device,
-            surface_vertices=self.stl_vertices,
-            surface_indices=self.mesh_indices_flattened,
-            surface_areas=self.surface_areas,
-            surface_centers=self.stl_centers,
-            grid_resolution=self.grid_resolution,
-            normalize_coordinates=True,
-            geom_points_sample=70_000,
-            positional_encoding=False,
-            use_sdf_basis=self.cfg.model.use_sdf_in_basis_func,
-        )
-
-    def load_bounding_box(self):
-        if (
-            self.cfg.data.bounding_box.min is not None
-            and self.cfg.data.bounding_box.max is not None
-        ):
-            c_min = np.array(self.cfg.data.bounding_box.min, dtype=np.float32)
-
-            c_max = np.array(self.cfg.data.bounding_box.max, dtype=np.float32)
-
-            self.bounding_box_min_max = [c_min, c_max]
-
-        if (
-            self.cfg.data.bounding_box_surface.min is not None
-            and self.cfg.data.bounding_box_surface.max is not None
-        ):
-            c_min = np.array(self.cfg.data.bounding_box_surface.min, dtype=np.float32)
-            c_max = np.array(self.cfg.data.bounding_box_surface.max, dtype=np.float32)
-
-            self.bounding_box_surface_min_max = [c_min, c_max]
-
-    def load_volume_scaling_factors(self):
-        vol_factors = np.array(
-            [
-                [2.1508515, 1.0027921, 1.0663894, 1.1288369, 0.05063211, 0.00381244],
-                [
-                    -1.9028450e00,
-                    -1.0032533e00,
-                    -1.0505041e00,
-                    -1.4412953e00,
-                    1.5563720e-18,
-                    -2.7427445e-20,
-                ],
-            ],
-            dtype=np.float32,
-        )
-
-        vol_factors = torch.from_numpy(vol_factors).to(self.device)
-
-        return vol_factors
-
-    def load_surface_scaling_factors(self):
-        surf_factors = np.array(
-            [
-                [0.98881036, 0.00550783, 0.00854675, 0.00452144],
-                [-2.4203062, -0.00740275, -0.00848471, -0.00448634],
-            ],
-            dtype=np.float32,
-        )
-
-        surf_factors = torch.from_numpy(surf_factors).to(self.device)
-        return surf_factors
-
-    def read_stl(self):
-        stl_files = get_filenames(self.stl_path)
-        mesh_stl = combine_stls(self.stl_path, stl_files)
-        stl_vertices = mesh_stl.points
-        length_scale = np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0))
-        stl_centers = mesh_stl.cell_centers().points
-        # Assuming triangular elements
-        stl_faces = np.array(mesh_stl.faces).reshape((-1, 4))[:, 1:]
-        mesh_indices_flattened = stl_faces.flatten()
-
-        surface_areas = mesh_stl.compute_cell_sizes(
-            length=False, area=True, volume=False
-        )
-        surface_areas = np.array(surface_areas.cell_data["Area"])
-
-        surface_normals = np.array(mesh_stl.cell_normals, dtype=np.float32)
-
-        self.stl_vertices = torch.from_numpy(np.float32(stl_vertices)).to(self.device)
-        self.stl_centers = torch.from_numpy(np.float32(stl_centers)).to(self.device)
-        self.surface_areas = torch.from_numpy(np.float32(surface_areas)).to(self.device)
-        self.stl_normals = -1.0 * torch.from_numpy(np.float32(surface_normals)).to(
-            self.device
-        )
-        self.mesh_indices_flattened = torch.from_numpy(
-            np.int32(mesh_indices_flattened)
-        ).to(self.device)
-        self.length_scale = length_scale
-        self.mesh_stl = mesh_stl
-
-    def read_stl_trimesh(
-        self, stl_vertices, stl_faces, stl_centers, surface_normals, surface_areas
-    ):
-        mesh_indices_flattened = stl_faces.flatten()
-        length_scale = np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0))
-        self.stl_vertices = torch.from_numpy(stl_vertices).to(self.device)
-        self.stl_centers = torch.from_numpy(stl_centers).to(self.device)
-        self.stl_normals = -1.0 * torch.from_numpy(surface_normals).to(self.device)
-        self.surface_areas = torch.from_numpy(surface_areas).to(self.device)
-        self.mesh_indices_flattened = torch.from_numpy(
-            np.int32(mesh_indices_flattened)
-        ).to(self.device)
-        self.length_scale = length_scale
-
-    def set_datapipe(
-        self,
-    ):
-        fd = DesignDatapipe(
-            self.mesh_stl,
-            self.bounding_box_min_max,
-            self.bounding_box_surface_min_max,
-            grid_resolution=cfg.model.interp_res,
-            stream_velocity=self.stream_velocity,
-            air_density=self.air_density,
-            device=self.device,
-        )
-        self.train_dataloader = DataLoader(fd, batch_size=8_000, shuffle=False)
-        self.input_dict = fd.out_dict
-
-    def get_num_variables(self):
-        volume_variable_names = list(self.cfg.variables.volume.solution.keys())
-        num_vol_vars = 0
-        for j in volume_variable_names:
-            if self.cfg.variables.volume.solution[j] == "vector":
-                num_vol_vars += 3
+    def __post_init__(self):
+        if self.device is None:  # Sets a default device, if not specified
+            if self.dist is not None:
+                self.device = self.dist.device
+            elif torch.cuda.is_available():
+                self.device = torch.device("cuda")
             else:
-                num_vol_vars += 1
+                self.device = torch.device("cpu")
 
-        surface_variable_names = list(self.cfg.variables.surface.solution.keys())
-        num_surf_vars = 0
-        for j in surface_variable_names:
-            if self.cfg.variables.surface.solution[j] == "vector":
-                num_surf_vars += 3
+        if self.model is None:
+            self.model = (
+                DoMINO(
+                    input_features=3,
+                    output_features_vol=self.num_vol_vars,
+                    output_features_surf=self.num_surf_vars,
+                    model_parameters=self.cfg.model,
+                )
+                .to(self.device)
+                .eval()
+            )
+
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+            self.model = torch.compile(self.model, disable=True)  # TODO review
+
+            if self.model_checkpoint_path is not None:
+                with open(self.model_checkpoint_path, "rb") as f:
+                    self.model.load_state_dict(torch.load(f, map_location=self.device))
+                print("Model loaded with checkpoint...")
             else:
-                num_surf_vars += 1
-        return num_vol_vars, num_surf_vars
+                print("Model loaded without checkpoint...")
 
-    def initialize_model(self, model_path):
-        model = (
-            DoMINO(
-                input_features=3,
-                output_features_vol=self.num_vol_vars,
-                output_features_surf=self.num_surf_vars,
-                model_parameters=self.cfg.model,
-            ).to(self.device)
-            # .eval()
-        )
-        model = torch.compile(model, disable=True)
-
-        checkpoint_iter = torch.load(
-            to_absolute_path(model_path), map_location=self.dist.device
-        )
-
-        model.load_state_dict(checkpoint_iter)
-        print("model loaded ...")
-
-        if self.dist is not None:
-            if self.dist.world_size > 1:
-                model = DistributedDataParallel(
-                    model,
+            if (self.dist is not None) and (self.dist.world_size > 1):
+                self.model = DistributedDataParallel(
+                    self.model,
                     device_ids=[self.dist.local_rank],
                     output_device=self.dist.device,
                     broadcast_buffers=self.dist.broadcast_buffers,
@@ -299,142 +118,279 @@ class dominoInference:
                     static_graph=True,
                 )
 
-        self.model = model
-        self.vol_factors = self.load_volume_scaling_factors()
-        self.surf_factors = self.load_surface_scaling_factors()
-        self.load_bounding_box()
+    @cached_property
+    def num_vol_vars(self) -> int:
+        return sum(
+            3 if v == "vector" else 1
+            for k, v in self.cfg.variables.volume.solution.items()
+        )
 
-    def set_stream_velocity(self, stream_velocity):
-        self.stream_velocity = stream_velocity
+    @cached_property
+    def num_surf_vars(self) -> int:
+        return sum(
+            3 if v == "vector" else 1
+            for k, v in self.cfg.variables.surface.solution.items()
+        )
 
-    def set_stencil_size(self, stencil_size):
-        self.stencil_size = stencil_size
+    @cached_property
+    def bounding_box_min_max(self) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        """Get the minimum and maximum coordinates of the bounding box from config.
 
-    def set_air_density(self, air_density):
-        self.air_density = air_density
+        Returns:
+            tuple[NDArray[np.float32], NDArray[np.float32]]: Min and max coordinates
 
-    def set_stl_path(self, filename):
-        self.stl_path = filename
-
-    def compute_sensitivities(self, target_force=300):
-        self.input_dict = {
-            key: torch.from_numpy(np.expand_dims(np.float32(value), 0))
-            for key, value in self.input_dict.items()
-        }
-        # input_dict = dict_to_device(self.input_dict, self.device)
-        input_dict = copy.deepcopy(self.input_dict)
-        for param in self.model.parameters():
-            param.requires_grad = False
-
-        # optimizer = apex.optimizers.FusedAdam([input_dict["geometry_coordinates"]], lr=0.001)
-
-        # print(input_dict["geometry_coordinates"].shape)
-        input_dict = dict_to_device(input_dict, self.device)
-        input_dict["geometry_coordinates"].requires_grad_(True)
-        for i_batch, sample_batched in enumerate(self.train_dataloader):
-            sample_batched = {
-                key: torch.unsqueeze(value, 0) for key, value in sample_batched.items()
-            }
-            sampled_batched = dict_to_device(sample_batched, self.device)
-            input_dict["surface_mesh_centers"] = sampled_batched["surface_mesh_centers"]
-            input_dict["surface_mesh_neighbors"] = sampled_batched[
-                "surface_mesh_neighbors"
-            ]
-            input_dict["surface_normals"] = sampled_batched["surface_normals"]
-            input_dict["surface_neighbors_normals"] = sampled_batched[
-                "surface_neighbors_normals"
-            ]
-            input_dict["surface_areas"] = sampled_batched["surface_areas"]
-            input_dict["surface_neighbors_areas"] = sampled_batched[
-                "surface_neighbors_areas"
-            ]
-            input_dict["pos_surface_center_of_mass"] = sampled_batched[
-                "pos_surface_center_of_mass"
-            ]
-
-            # input_dict_on_device = dict_to_device(input_dict, self.device)
-            # print(self.input_dict["geometry_coordinates"])
-            # print(self.input_dict["geometry_coordinates"].requires_grad)
-
-            print(
-                f"Allocated memory after data loading: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
+        Raises:
+            ValueError: If min or max coordinates are not specified in config
+        """
+        try:
+            return (
+                np.array(self.cfg.data.bounding_box.min, dtype=np.float32),
+                np.array(self.cfg.data.bounding_box.max, dtype=np.float32),
             )
-            # import pdb
-            # pdb.set_trace()
-            # print(sampled_batched["geo"])
-            # print(input_dict["geometry_coordinates"].requires_grad)
-            # input_dict["geometry_coordinates"].requires_grad_(True)
-            # print(input_dict["geometry_coordinates"].requires_grad, input_dict["geometry_coordinates"].shape)
-            with autocast(enabled=True):
-                prediction_vol, prediction_surf = self.model(input_dict)
+        except AttributeError:
+            raise ValueError(
+                "Config must specify both `bounding_box.min` and `bounding_box.max`"
+            )
 
-                print(
-                    f"Allocated memory after model eval: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
-                )
-                # print(prediction_vol.shape, prediction_surf.shape)
-                stream_velocity = input_dict["stream_velocity"]
-                air_density = input_dict["air_density"]
-                # print(stream_velocity, air_density)
-                prediction_surf = (
-                    unnormalize(
-                        prediction_surf, self.surf_factors[0], self.surf_factors[1]
-                    )
-                    * stream_velocity[0, 0] ** 2.0
-                    * air_density[0, 0]
-                )
-                surface_normals = input_dict["surface_normals"]
-                surface_sizes = torch.unsqueeze(input_dict["surface_areas"], -1)
-                # # print(surface_normals.shape, surface_sizes.shape, prediction_surf.shape)
-                d_force = torch.sum(
-                    prediction_surf[0, :, 0]
-                    * surface_normals[0, :, 0]
-                    * surface_sizes[0, :, 0]
-                    - prediction_surf[0, :, 1] * surface_sizes[0, :, 0]
-                )
-                # print(d_force.grad)
-                if i_batch == 0:
-                    drag_force = d_force
-                else:
-                    drag_force += d_force
-                # if i_batch == 20:
-                #     break
-                print(drag_force, d_force, prediction_surf.shape, (i_batch + 1) * 8000)
-                # print(drag_force)
+    @cached_property
+    def bounding_box_surface_min_max(
+        self,
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        """Get the minimum and maximum coordinates of the surface bounding box from config.
 
-            if i_batch == 0:
-                pred_surf = prediction_surf[0, :].detach().cpu().numpy()
-                surface_areas = np.expand_dims(
-                    input_dict["surface_areas"][0].detach().cpu().numpy(), -1
-                )
-                # print(surface_areas.shape)
-            else:
-                surface_areas1 = np.expand_dims(
-                    input_dict["surface_areas"][0].detach().cpu().numpy(), -1
-                )
-                surface_areas = np.concatenate((surface_areas, surface_areas1), 0)
+        Returns:
+            tuple[NDArray[np.float32], NDArray[np.float32]]: Min and max coordinates
 
-                pred_surf1 = prediction_surf[0, :].detach().cpu().numpy()
-                pred_surf = np.concatenate((pred_surf, pred_surf1), 0)
+        Raises:
+            ValueError: If min or max coordinates are not specified in config
+        """
+        try:
+            return (
+                np.array(self.cfg.data.bounding_box_surface.min, dtype=np.float32),
+                np.array(self.cfg.data.bounding_box_surface.max, dtype=np.float32),
+            )
+        except AttributeError:
+            raise ValueError(
+                "Config must specify both `bounding_box_surface.min` and `bounding_box_surface.max`"
+            )
 
-        loss = torch.square(drag_force - 420.0) / 420**2.0
-        print(
-            f"Allocated memory after loss calc: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
+    @cached_property
+    def vol_factors(self) -> torch.Tensor:
+        """
+        Computes the factors that are later used to unnormalize the volume predictions.
+
+        These are saved at training time based on statistics of the training data, and re-used at each inference call.
+        """
+        return torch.from_numpy(
+            np.array(
+                [
+                    [
+                        2.1508515,
+                        1.0027921,
+                        1.0663894,
+                        1.1288369,
+                        0.05063211,
+                        0.00381244,
+                    ],
+                    [
+                        -1.9028450e00,
+                        -1.0032533e00,
+                        -1.0505041e00,
+                        -1.4412953e00,
+                        1.5563720e-18,
+                        -2.7427445e-20,
+                    ],
+                ],
+                dtype=np.float32,
+            )
+        ).to(self.device)
+
+    @cached_property
+    def surf_factors(self) -> torch.Tensor:
+        """
+        Computes the factors that are later used to unnormalize the surface predictions.
+
+        These are saved at training time based on statistics of the training data, and re-used at each inference call.
+        """
+        return torch.from_numpy(
+            np.array(
+                [
+                    [0.98881036, 0.00550783, 0.00854675, 0.00452144],
+                    [-2.4203062, -0.00740275, -0.00848471, -0.00448634],
+                ],
+                dtype=np.float32,
+            )
+        ).to(self.device)
+
+    def __call__(
+        self,
+        mesh: pv.PolyData,
+        stream_velocity: float = 38.889,
+        stencil_size: int = 7,
+        air_density: float = 1.205,
+    ) -> dict[str, np.ndarray]:
+        """Performs DoMINO inference on a given geometry to predict aerodynamic quantities.
+
+        This method takes a PyVista mesh representing a 3D geometry and computes the
+        aerodynamic predictions using the DoMINO model. It handles the data preprocessing,
+        model inference, and post-processing of results.
+
+        Args:
+            mesh: PyVista PolyData mesh representing the 3D geometry to analyze
+            stream_velocity: Inlet flow velocity in m/s. Defaults to 38.889 m/s.
+            stencil_size: Number of neighboring points to consider for surface calculations.
+                Defaults to 7.
+            air_density: Air density in kg/m³. Defaults to 1.205 kg/m³.
+
+        Returns:
+            dict: Dictionary containing the following keys:
+                - 'geometry_coordinates': Array of geometry point coordinates
+                - 'geometry_normal_sensitivity': Array of sensitivity values for each point
+                - 'pred_surf_pressure': Array of predicted surface pressure values [Pa]
+                - 'pred_surf_wall_shear_stress': Array of predicted wall shear stress values [τx, τy, τz] [Pa]
+                - 'aerodynamic_force': Array of total computed aerodynamic force [Fx, Fy, Fz] [N]
+
+        Example:
+            >>> import pyvista as pv
+            >>> from domino_sensitivity import DoMINOInference
+            >>>
+            >>> # Load geometry
+            >>> mesh = pv.read("car.stl")
+            >>>
+            >>> # Initialize inference
+            >>> domino = DoMINOInference(cfg)
+            >>>
+            >>> # Run inference
+            >>> results = domino(
+            ...     mesh=mesh,
+            ...     stream_velocity=30.0,
+            ...     stencil_size=7,
+            ...     air_density=1.205
+            ... )
+            >>>
+            >>> # Access results
+            >>> forces = results['aerodynamic_force']
+            >>> print(f"Drag force: {forces[0]:.2f} N")
+        """
+
+        datapipe = DesignDatapipe(
+            mesh=mesh,
+            bounding_box=self.bounding_box_min_max,
+            bounding_box_surface=self.bounding_box_surface_min_max,
+            grid_resolution=self.cfg.model.interp_res,
+            stencil_size=stencil_size,
         )
-        loss.backward()
-        print(loss)
-        print(input_dict["geometry_coordinates"].grad.shape)
-        return (
-            input_dict["geometry_coordinates"].grad.cpu().detach().numpy(),
-            input_dict["geometry_coordinates"].detach().cpu().numpy(),
-            surface_areas,
-            pred_surf,
+        dataloader = torch.utils.data.DataLoader(
+            datapipe, batch_size=2**13, shuffle=False
         )
+
+        input_dict = {
+            k: torch.from_numpy(np.expand_dims(np.float32(v), axis=0)).to(self.device)
+            for k, v in datapipe.out_dict.items()
+        }
+        input_dict["stream_velocity"] = torch.tensor(
+            stream_velocity, dtype=torch.float32, device=self.device
+        )
+        input_dict["air_density"] = torch.tensor(
+            air_density, dtype=torch.float32, device=self.device
+        )
+
+        surface_keys: list[str] = [
+            "surface_mesh_centers",
+            "surface_mesh_neighbors",
+            "surface_normals",
+            "surface_neighbors_normals",
+            "surface_areas",
+            "surface_neighbors_areas",
+            "pos_surface_center_of_mass",
+        ]
+
+        # aerodynamic_force = torch.zeros(3, dtype=torch.float32, device=self.device)
+        aerodynamic_force = np.zeros(3, dtype=np.float32)
+        pred_surf_batches: list[np.ndarray] = []
+        geometry_coordinates = (
+            input_dict["geometry_coordinates"].detach().cpu().numpy()[0]
+        )
+        geometry_sensitivity: np.ndarray = np.zeros_like(geometry_coordinates)
+
+        def _print_memory_usage(label: str) -> None:
+            return
+            print(
+                f"VRAM usage after {label:<20}: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
+            )
+
+        for sample_batched in tqdm(dataloader, desc="Processing batches"):
+            # Update input dictionary with surface mesh data from sampled batch
+            input_dict_batch = {
+                **input_dict,
+                **{
+                    k: torch.unsqueeze(sample_batched[k], dim=0).to(self.device)
+                    for k in surface_keys
+                },
+            }
+            input_dict_batch["geometry_coordinates"].requires_grad_(True)
+
+            _print_memory_usage("data loading")
+
+            prediction_vol_batch, prediction_surf_batch = self.model(input_dict_batch)
+
+            _print_memory_usage("model forward")
+
+            # Required to free memory
+            del prediction_vol_batch
+
+            prediction_surf_batch = (
+                unnormalize(
+                    prediction_surf_batch, self.surf_factors[0], self.surf_factors[1]
+                )
+                * stream_velocity**2.0
+                * air_density
+            )
+            surface_areas_batch = input_dict_batch["surface_areas"][0]
+            surface_normals_batch = input_dict_batch["surface_normals"][0]
+            pressure_batch = prediction_surf_batch[0][:, 0]
+            wall_shear_stress_batch = prediction_surf_batch[0][:, 1:4]
+
+            aerodynamic_force_batch = torch.sum(
+                surface_areas_batch[:, None]
+                * (
+                    surface_normals_batch * pressure_batch[:, None]  # Pressure
+                    - wall_shear_stress_batch  # Wall shear stress
+                ),
+                dim=0,  # Sums over all points in the batch
+            )
+            drag_force_batch = aerodynamic_force_batch[0]
+            (
+                -1 * drag_force_batch
+            ).backward()  # Vectors represent how you should modify the geometry to *reduce* drag
+            _print_memory_usage("surface backward")
+
+            # Compute the sensitivity of the drag force to the geometry coordinates, from this batch
+            geometry_sensitivity_batch = input_dict_batch["geometry_coordinates"].grad[
+                0
+            ]
+
+            geometry_sensitivity += geometry_sensitivity_batch.cpu().detach().numpy()
+            aerodynamic_force += aerodynamic_force_batch.cpu().detach().numpy()
+
+            pred_surf_batches.append(prediction_surf_batch[0].detach().cpu().numpy())
+
+        pred_surf = np.concatenate(pred_surf_batches, 0)
+
+        return {
+            "geometry_coordinates": geometry_coordinates,
+            "geometry_sensitivity": geometry_sensitivity,
+            "pred_surf_pressure": pred_surf[:, 0],
+            "pred_surf_wall_shear_stress": pred_surf[:, 1:4],
+            "aerodynamic_force": aerodynamic_force,
+        }
 
 
 if __name__ == "__main__":
-    OmegaConf.register_new_resolver("eval", eval)
-    with initialize(version_base="1.3", config_path="conf"):
-        cfg = compose(config_name="config")
+    torch.cuda.set_per_process_memory_fraction(0.8)
+
+    with hydra.initialize(version_base="1.3", config_path="conf"):
+        cfg = hydra.compose(config_name="config")
 
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -442,113 +398,59 @@ if __name__ == "__main__":
     if dist.world_size > 1:
         torch.distributed.barrier()
 
-    input_path = "/lustre/rranade/design_opt_data/decimated_stl/"
-    dirnames = get_filenames(input_path)
-    dev_id = torch.cuda.current_device()
-    num_files = int(len(dirnames) / 1)
-    dirnames_per_gpu = (
-        dirnames  # [int(num_files * dev_id) : int(num_files * (dev_id + 1))]
+    # input_files = (Path(__file__).parent / "geometries").glob("*.stl")
+    input_files = [
+        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
+        Path(__file__).parent
+        / "geometries"
+        / "drivaer_1_single_solid.stl"
+    ]
+
+    domino = DoMINOInference(
+        cfg=cfg,
+        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.41.pt").absolute(),
+        dist=dist,
     )
 
-    domino = dominoInference(cfg, dist, False)
-    domino.initialize_model(
-        model_path="/home/psharpe/GitHub/modulus/examples/cfd/external_aerodynamics/domino_sensitivity/DoMINO.0.0.pt"
-    )
-    for count, dirname in enumerate(dirnames_per_gpu):
-        # print(f"Processing file {dirname}")
-        filepath = os.path.join(input_path, dirname)
-
-        STREAM_VELOCITY = 38.889
-        AIR_DENSITY = 1.205
-
-        # Neighborhood points sampled for evaluation, tradeoff between accuracy and speed
-        STENCIL_SIZE = (
-            7  # Higher stencil size -> more accuracy but more evaluation time
+    for file in input_files:
+        mesh: pv.PolyData = pv.read(file.absolute())
+        results = domino(
+            mesh=mesh,
+            stream_velocity=38.889,
+            stencil_size=7,
+            air_density=1.205,
         )
 
-        domino.set_stl_path(filepath)
-        domino.set_stream_velocity(STREAM_VELOCITY)
-        domino.set_stencil_size(STENCIL_SIZE)
+        mesh["pred_surf_pressure"] = results["pred_surf_pressure"]
+        mesh["pred_surf_wall_shear_stress"] = results["pred_surf_wall_shear_stress"]
 
-        domino.read_stl()
-
-        domino.set_datapipe()
-
-        # Calculate sensitivities
-        sensitivities, coordinates, areas, prediction = domino.compute_sensitivities(
-            target_force=350
+        raw_sensitivity = results["geometry_sensitivity"]
+        mesh["raw_sensitivity"] = raw_sensitivity
+        normal_sensitivity = np.einsum(
+            "ij,ij->i",
+            raw_sensitivity,
+            mesh.cell_normals,
         )
-        sensitivities = sensitivities[0]
-        coordinates = coordinates[0]
-        # areas = np.expand_dims(areas[0], -1)
-        print("areas:", areas.shape, sensitivities.shape)
-        # sensitivities = sensitivities * areas
-        print(sensitivities.shape, coordinates.shape)
-        interp_func = KDTree(coordinates)
-        dd, ii = interp_func.query(coordinates, k=10)
+        sensitivity = np.einsum(
+            "i,ij->ij",
+            normal_sensitivity,
+            mesh.cell_normals,
+        )
+        mesh["sensitivity"] = sensitivity
+        mesh["normal_sensitivity"] = normal_sensitivity
 
-        for _ in range(10):
-            sensitivities_neighbors = sensitivities[ii]
-            sensitivities = np.mean(sensitivities_neighbors, 1)
-            print(np.amax(sensitivities, 0), np.amin(sensitivities, 0))
-        print(sensitivities.shape)
-        # print(dd.shape)
+        from utilities.mesh_postprocessing import laplacian_smoothing
 
-        # all_data = np.concatenate((coordinates, sensitivities), axis=-1)
-        # header = "X-coordinate, Y-coordinate, Z-coordinate, X-sensitivity, Y-sensitivity, Z-sensitivity"
-        # np.savetxt(f"/lustre/rranade/modulus_dev/modulus_demo/modulus_rishi/modulus/examples/cfd/external_aerodynamics/domino_gtc_demo/sensitivity_pred_{dirname}.csv", all_data[0], comments=" ", delimiter=",", header=header)
-        vtp_path = f"/lustre/rranade/modulus_dev/modulus_demo/modulus_rishi/modulus/examples/cfd/external_aerodynamics/domino_gtc_demo/sensitivity_pred_{dirname}_3.vtp"
-        domino.mesh_stl.save(vtp_path)
-        # vtp_path = f"/lustre/rranade/modulus_dev/modulus_demo/modulus_rishi/modulus/examples/cfd/external_aerodynamics/domino_gtc_demo/sensitivity_pred_{dirname}.vtp"
-        reader = vtk.vtkXMLPolyDataReader()
-        reader.SetFileName(f"{vtp_path}")
-        reader.Update()
-        polydata_surf = reader.GetOutput()
+        mesh["normal_sensitivity_smoothed"] = laplacian_smoothing(
+            mesh,
+            normal_sensitivity,
+            location="cells",
+            iterations=20,
+        )
+        mesh["sensitivity_smoothed"] = np.einsum(
+            "i,ij->ij",
+            mesh["normal_sensitivity_smoothed"],
+            mesh.cell_normals,
+        )
 
-        surfParam_vtk = numpy_support.numpy_to_vtk(sensitivities[:, 0:3])
-        surfParam_vtk.SetName(f"Sensitivity")
-        polydata_surf.GetCellData().AddArray(surfParam_vtk)
-
-        surfParam_vtk = numpy_support.numpy_to_vtk(prediction[:, 0:1])
-        surfParam_vtk.SetName(f"Pressure")
-        polydata_surf.GetCellData().AddArray(surfParam_vtk)
-
-        surfParam_vtk = numpy_support.numpy_to_vtk(prediction[:, 1:])
-        surfParam_vtk.SetName(f"Wall-shear-stress")
-        polydata_surf.GetCellData().AddArray(surfParam_vtk)
-
-        # surfParam_vtk = numpy_support.numpy_to_vtk(sensitivities[0, :, 1:2])
-        # surfParam_vtk.SetName(f"Sensitivity-x")
-        # polydata_surf.AddArray(surfParam_vtk)
-
-        # surfParam_vtk = numpy_support.numpy_to_vtk(sensitivities[0, :, 2:3])
-        # surfParam_vtk.SetName(f"Sensitivity-x")
-        # polydata_surf.AddArray(surfParam_vtk)
-
-        write_to_vtp(polydata_surf, vtp_path)
-        # domino.initialize_data_processor()
-
-        # Calculate sensitivities
-        # domino.compute_sensitivities(target_force=350)
-
-        # Calculate geometry encoding
-        # domino.compute_geo_encoding()
-
-        # # Calculate volume solutions
-        # domino.compute_volume_solutions(
-        #     num_sample_points=10_256_000, plot_solutions=False
-        # )
-
-        # Calculate surface solutions
-        # domino.compute_surface_solutions()
-        # domino.compute_forces()
-        # out_dict = domino.get_out_dict()
-
-        # print(
-        #     "Dirname:",
-        #     dirname,
-        #     "Drag:",
-        #     out_dict["drag_force"],
-        #     "Lift:",
-        #     out_dict["lift_force"],
-        # )
+        mesh.save(file.with_suffix(".vtk"))
