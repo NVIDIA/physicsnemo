@@ -48,7 +48,7 @@ class MockNet:
 @import_or_fail("cftime")
 def test_stochastic_sampler(pytestconfig):
 
-    from physicsnemo.utils.generative import stochastic_sampler
+    from physicsnemo.utils.diffusion import stochastic_sampler
 
     net = MockNet()
     latents = torch.randn(2, 3, 448, 448)  # Mock latents
@@ -121,7 +121,7 @@ def test_stochastic_sampler(pytestconfig):
 @import_or_fail("cftime")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
-    from physicsnemo.utils.generative import stochastic_sampler
+    from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
 
     net = MockNet()
@@ -170,7 +170,7 @@ def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
 @import_or_fail("cftime")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
-    from physicsnemo.utils.generative import stochastic_sampler
+    from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
 
     # Mock network class

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import torch
 
-from physicsnemo.utils.generative import InfiniteSampler
+from physicsnemo.utils.diffusion import InfiniteSampler
 from physicsnemo.distributed import DistributedManager
 
 from datasets import base, cwb, hrrrmini, gefs_hrrr

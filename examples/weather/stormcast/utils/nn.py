@@ -19,7 +19,7 @@ from collections.abc import Iterable
 import torch
 from physicsnemo.models import Module
 from physicsnemo.models.diffusion import EDMPrecond, StormCastUNet
-from physicsnemo.utils.generative import deterministic_sampler
+from physicsnemo.utils.diffusion import deterministic_sampler
 
 
 def get_preconditioned_architecture(
