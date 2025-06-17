@@ -385,9 +385,86 @@ class DoMINOInference:
             "aerodynamic_force": aerodynamic_force,
         }
 
+    @staticmethod
+    def postprocess_point_sensitivities(
+        results: dict[str, np.ndarray], mesh: pv.PolyData, n_laplacian_iters: int = 20
+    ) -> dict[str, np.ndarray]:
+        """Postprocess the raw geometry sensitivities to compute normal and smoothed sensitivities.
+
+        This function takes the raw geometry sensitivities and computes:
+        1. Normal sensitivities by projecting onto cell normals
+        2. Full sensitivity vectors by scaling cell normals by normal sensitivities
+        3. Smoothed versions of both using Laplacian smoothing
+
+        Parameters
+        ----------
+        results : dict[str, np.ndarray]
+            Dictionary containing the raw results from the forward pass, including:
+            - geometry_sensitivity: Raw sensitivity vectors for each cell (n_cells, 3)
+            - Other keys are preserved in the output
+        mesh : pv.PolyData
+            PyVista mesh containing the geometry and cell normals
+        n_laplacian_iters : int, optional
+            Number of Laplacian smoothing iterations to apply, by default 20
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            Dictionary containing processed sensitivities:
+            - raw_sensitivity_cells: Original geometry sensitivity vectors (n_cells, 3)
+            - raw_sensitivity_normal_cells: Scalar sensitivities projected onto cell normals (n_cells,)
+            - sensitivity: Full sensitivity vectors scaled by normal components (n_cells, 3)
+            - smooth_sensitivity_normal_point: Laplacian-smoothed normal sensitivities (n_cells,)
+            - sensitivity_smoothed: Laplacian-smoothed full sensitivity vectors (n_cells, 3)
+        """
+        raw_sensitivity_cells = mesh.cell_data["geometry_sensitivity"]
+        raw_sensitivity_normal_cells = np.einsum(
+            "ij,ij->i",
+            raw_sensitivity_cells,
+            mesh.cell_normals,
+        )
+
+        from utilities.mesh_postprocessing import laplacian_smoothing
+        mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
+        mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = raw_sensitivity_normal_cells
+        mesh_pointdata = mesh_pointdata.cell_data_to_point_data()
+
+        smooth_sensitivity_normal_point = laplacian_smoothing(
+            mesh_pointdata,
+            mesh_pointdata.point_data["raw_sensitivity_normal_cells"],
+            location="points",
+            iterations=n_laplacian_iters,
+        )
+        smooth_sensitivity_point = np.einsum(
+            "i,ij->ij",
+            smooth_sensitivity_normal_point,
+            mesh.point_normals,
+        )
+
+        mesh_pointdata.clear_data()
+        mesh_pointdata.point_data["smooth_sensitivity_normal_point"] = smooth_sensitivity_normal_point
+        mesh_pointdata = mesh_pointdata.point_data_to_cell_data()
+
+        smooth_sensitivity_normal_cell = mesh_pointdata.cell_data["smooth_sensitivity_normal_point"]
+
+        smooth_sensitivity_cell = np.einsum(
+            "i,ij->ij",
+            smooth_sensitivity_normal_cell,
+            mesh.cell_normals,
+        )
+
+        return {
+            "raw_sensitivity_cells": raw_sensitivity_cells,
+            "raw_sensitivity_normal_cells": raw_sensitivity_normal_cells,
+            "smooth_sensitivity_point": smooth_sensitivity_point,
+            "smooth_sensitivity_normal_point": smooth_sensitivity_normal_point,
+            "smooth_sensitivity_cell": smooth_sensitivity_cell,
+            "smooth_sensitivity_normal_cell": smooth_sensitivity_normal_cell,
+        }
+
 
 if __name__ == "__main__":
-    torch.cuda.set_per_process_memory_fraction(0.8)
+    torch.cuda.set_per_process_memory_fraction(0.9)
 
     with hydra.initialize(version_base="1.3", config_path="conf"):
         cfg = hydra.compose(config_name="config")
@@ -414,43 +491,21 @@ if __name__ == "__main__":
 
     for file in input_files:
         mesh: pv.PolyData = pv.read(file.absolute())
-        results = domino(
+        results: dict[str, np.ndarray] = domino(
             mesh=mesh,
             stream_velocity=38.889,
             stencil_size=7,
             air_density=1.205,
         )
 
-        mesh["pred_surf_pressure"] = results["pred_surf_pressure"]
-        mesh["pred_surf_wall_shear_stress"] = results["pred_surf_wall_shear_stress"]
+        for key, value in results.items():
+            if len(value) == mesh.n_cells:
+                mesh.cell_data[key] = value
+            elif len(value) == mesh.n_points:
+                mesh.point_data[key] = value
 
-        raw_sensitivity = results["geometry_sensitivity"]
-        mesh["raw_sensitivity"] = raw_sensitivity
-        normal_sensitivity = np.einsum(
-            "ij,ij->i",
-            raw_sensitivity,
-            mesh.cell_normals,
-        )
-        sensitivity = np.einsum(
-            "i,ij->ij",
-            normal_sensitivity,
-            mesh.cell_normals,
-        )
-        mesh["sensitivity"] = sensitivity
-        mesh["normal_sensitivity"] = normal_sensitivity
+        sensitivity_results: dict[str, np.ndarray] = domino.postprocess_point_sensitivities(results, mesh)
 
-        from utilities.mesh_postprocessing import laplacian_smoothing
-
-        mesh["normal_sensitivity_smoothed"] = laplacian_smoothing(
-            mesh,
-            normal_sensitivity,
-            location="cells",
-            iterations=20,
-        )
-        mesh["sensitivity_smoothed"] = np.einsum(
-            "i,ij->ij",
-            mesh["normal_sensitivity_smoothed"],
-            mesh.cell_normals,
-        )
-
+        for key, value in sensitivity_results.items():
+            mesh[key] = value
         mesh.save(file.with_suffix(".vtk"))
