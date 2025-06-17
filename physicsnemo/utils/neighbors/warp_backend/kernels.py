@@ -1,0 +1,180 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+This file contains warp kernels for the radius search operations.
+
+It should be pure warp code, no pytorch here.
+"""
+
+import warp as wp
+
+
+@wp.kernel
+def radius_search_count(
+    hashgrid: wp.uint64,
+    points: wp.array(dtype=wp.vec3),
+    queries: wp.array(dtype=wp.vec3),
+    result_count: wp.array(dtype=wp.int32),
+    radius: wp.float32,
+):
+    """
+    Warp kernel for counting the number of points within a specified radius
+    for each query point, using a hash grid for spatial queries.
+
+    Args:
+        hashgrid: An array representing the hash grid.
+        points: An array of points in space.
+        queries: An array of query points.
+        result_count: An array to store the count of neighboring points within the radius for each query point.
+        radius: The search radius around each query point.
+    """
+    tid = wp.tid()
+
+    # create grid query around point
+    qp = queries[tid]
+    query = wp.hash_grid_query(hashgrid, qp, radius)
+    index = int(0)
+    result_count_tid = int(0)
+
+    while wp.hash_grid_query_next(query, index):
+        neighbor = points[index]
+
+        # compute distance to neighbor point
+        dist = wp.length(qp - neighbor)
+        if dist <= radius:
+            result_count_tid += 1
+
+    result_count[tid] = result_count_tid
+
+
+@wp.kernel
+def radius_search_unlimited_select(
+    hashgrid: wp.uint64,
+    points: wp.array(dtype=wp.vec3),
+    queries: wp.array(dtype=wp.vec3),
+    result_offset: wp.array(dtype=wp.int32),
+    result_point_idx: wp.array2d(dtype=wp.int32),
+    return_dists: wp.bool,
+    result_point_dist: wp.array(dtype=wp.float32),
+    return_points: wp.bool,
+    result_points: wp.array(dtype=wp.vec3),
+    radius: wp.float32,
+):
+    """
+    Warp kernel for performing radius search queries on a set of points,
+    storing the results of neighboring points within a specified radius.
+
+    Args:
+        hashgrid: An array representing the hash grid.
+        points: An array of points in space.
+        queries: An array of query points.
+        result_offset: An array to store the offset in the results array for each query point.
+        result_point_idx: An array to store the indices of neighboring points found within the radius for each query point.
+        result_point_dist: An array to store the distances to neighboring points within the radius for each query point.
+        radius: The search radius around each query point.
+    """
+    tid = wp.tid()
+
+    # create grid query around point
+    qp = queries[tid]
+    query = wp.hash_grid_query(hashgrid, qp, radius)
+    index = int(0)
+    result_count = int(0)
+    offset_tid = result_offset[tid]
+
+    while wp.hash_grid_query_next(query, index):
+        neighbor = points[index]
+
+        # compute distance to neighbor point
+        dist = wp.length(qp - neighbor)
+        if dist <= radius:
+            # Set the index as a matched pair from query set to points set:
+            result_point_idx[0, offset_tid + result_count] = tid
+            result_point_idx[1, offset_tid + result_count] = index
+            if return_dists:
+                result_point_dist[offset_tid + result_count] = dist
+            if return_points:
+                result_points[offset_tid + result_count] = neighbor
+            result_count += 1
+
+
+@wp.kernel
+def radius_search_limited_select(
+    hash_grid: wp.uint64,
+    points: wp.array(dtype=wp.vec3),
+    queries: wp.array(dtype=wp.vec3),
+    max_points: wp.int32,
+    radius: wp.float32,
+    mapping: wp.array2d(dtype=wp.int32),
+    num_neighbors: wp.array(dtype=wp.int32),
+    return_dists: wp.bool,
+    distances: wp.array2d(dtype=wp.float32),
+    return_points: wp.bool,
+    result_points: wp.array2d(dtype=wp.vec3),
+):
+    """
+    Performs ball query operation to find neighboring points within a specified radius.
+
+    For each point in points, finds up to k neighboring points from points2 that are
+    within the specified radius. Uses a hash grid for efficient spatial queries.
+
+    Note that the neighbors found are not strictly guaranteed to be the closest k neighbors,
+    in the event that more than k neighbors are found within the radius.
+
+    Args:
+        points: Array of points to search
+        queries: Array of query points
+        grid: Pre-computed hash grid for accelerated spatial queries
+        k: Maximum number of neighbors to find for each query point
+        radius: Maximum search radius for finding neighbors
+        mapping: Output array to store indices of neighboring points. Should be instantiated as zeros(1, len(points), k)
+        num_neighbors: Output array to store the number of neighbors found for each query point. Should be instantiated as zeros(1, len(points))
+    """
+    tid = wp.tid()
+
+    # Get position from points
+    pos = queries[tid]
+
+    # particle contact
+    neighbors = wp.hash_grid_query(id=hash_grid, point=pos, max_dist=radius)
+
+    # Keep track of the number of neighbors found
+    neighbors_found = wp.int32(0)
+
+    # loop through neighbors to compute density
+    for index in neighbors:
+        # Check if outside the radius
+        pos2 = points[index]
+        if wp.length(pos - pos2) > radius:
+            continue
+
+        # Add neighbor to the list
+        mapping[tid, neighbors_found] = index
+        if return_dists:
+            distances[tid, neighbors_found] = wp.length(pos - pos2)
+        if return_points:
+            result_points[tid, neighbors_found] = pos2
+        # Increment the number of neighbors found
+        neighbors_found += 1
+
+        # Break if we have found enough neighbors
+        if neighbors_found == max_points:
+            num_neighbors[tid] = max_points
+            break
+
+    # Set the number of neighbors
+    num_neighbors[tid] = neighbors_found
