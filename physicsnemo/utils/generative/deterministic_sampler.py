@@ -49,7 +49,7 @@ def deterministic_sampler(
     S_min: float = 0.0,
     S_max: float = float("inf"),
     S_noise: float = 1.0,
-    lead_time_label: bool = None,
+    lead_time_label: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Generalized sampler, representing the superset of all sampling methods
