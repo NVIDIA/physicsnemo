@@ -652,7 +652,7 @@ class SongUNetPosEmbd(SongUNet):
         profile_mode: bool = False,
         amp_mode: bool = False,
         lead_time_mode: bool = False,
-        lead_time_channels: int = None,
+        lead_time_channels: int | None = None,
         lead_time_steps: int = 9,
         prob_channels: List[int] = [],
     ):
@@ -684,7 +684,7 @@ class SongUNetPosEmbd(SongUNet):
 
         self.gridtype = gridtype
         self.N_grid_channels = N_grid_channels
-        if self.gridtype == "learnable":
+        if (self.gridtype == "learnable") or (self.N_grid_channels == 0):
             self.pos_embd = self._get_positional_embedding()
         else:
             self.register_buffer("pos_embd", self._get_positional_embedding().float())
@@ -698,6 +698,8 @@ class SongUNetPosEmbd(SongUNet):
                 self.scalar = torch.nn.Parameter(
                     torch.ones((1, len(self.prob_channels), 1, 1))
                 )
+        else:
+            self.lt_embd = None
 
     def forward(
         self,
@@ -720,11 +722,11 @@ class SongUNetPosEmbd(SongUNet):
                     "embedding_selector is the preferred approach for better efficiency."
                 )
 
-            if x.dtype != self.pos_embd.dtype:
+            if (self.pos_embd is not None) and (x.dtype != self.pos_embd.dtype):
                 self.pos_embd = self.pos_embd.to(x.dtype)
 
             # Append positional embedding to input conditioning
-            if self.pos_embd is not None:
+            if (self.pos_embd is not None) or (self.lt_embd is not None):
                 # Select positional embeddings with a selector function
                 if embedding_selector is not None:
                     selected_pos_embd = self.positional_embedding_selector(
@@ -809,7 +811,7 @@ class SongUNetPosEmbd(SongUNet):
         """
         # If no global indices are provided, select all embeddings and expand
         # to match the batch size of the input
-        if x.dtype != self.pos_embd.dtype:
+        if (self.pos_embd is not None) and (x.dtype != self.pos_embd.dtype):
             self.pos_embd = self.pos_embd.to(x.dtype)
 
         if global_index is None:
@@ -847,23 +849,25 @@ class SongUNetPosEmbd(SongUNet):
             global_index = torch.reshape(
                 torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
             )  # (P, 2, X, Y) to (2, P*X*Y)
-            selected_pos_embd = self.pos_embd[
-                :, global_index[0], global_index[1]
-            ]  # (N_pe, P*X*Y)
-            selected_pos_embd = torch.permute(
-                torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], P, H, W)),
-                (1, 0, 2, 3),
-            )  # (P, N_pe, X, Y)
+            if self.pos_embd is not None:
+                selected_pos_embd = self.pos_embd[
+                    :, global_index[0], global_index[1]
+                ]  # (N_pe, P*X*Y)
+                selected_pos_embd = torch.permute(
+                    torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], P, H, W)),
+                    (1, 0, 2, 3),
+                )  # (P, N_pe, X, Y)
 
-            selected_pos_embd = selected_pos_embd.repeat(
-                B, 1, 1, 1
-            )  # (B*P, N_pe, X, Y)
+                selected_pos_embd = selected_pos_embd.repeat(
+                    B, 1, 1, 1
+                )  # (B*P, N_pe, X, Y)
+
+                embeds = [selected_pos_embd]
+            else:
+                embeds = []
 
             # Append positional and lead time embeddings to input conditioning
             if self.lead_time_mode:
-                embeds = []
-                if self.pos_embd is not None:
-                    embeds.append(selected_pos_embd)  # reuse code below
                 if self.lt_embd is not None:
                     lt_embds = self.lt_embd[
                         lead_time_label.int()
@@ -884,8 +888,8 @@ class SongUNetPosEmbd(SongUNet):
                     )  # (B*P, N_pe, X, Y)
                     embeds.append(selected_lt_pos_embd)
 
-                if len(embeds) > 0:
-                    selected_pos_embd = torch.cat(embeds, dim=1)
+            if len(embeds) > 0:
+                selected_pos_embd = torch.cat(embeds, dim=1)
 
         return selected_pos_embd
 
@@ -945,8 +949,9 @@ class SongUNetPosEmbd(SongUNet):
         :meth:`physicsnemo.utils.patching.BasePatching2D.apply`
             For the base patching method typically used in embedding_selector.
         """
-        if x.dtype != self.pos_embd.dtype:
+        if (self.pos_embd is not None) and (x.dtype != self.pos_embd.dtype):
             self.pos_embd = self.pos_embd.to(x.dtype)
+
         if lead_time_label is not None:
             # all patches share same lead_time_label
             embeddings = torch.cat(
@@ -1191,7 +1196,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         gridtype: str = "sinusoidal",
         N_grid_channels: int = 4,
         lead_time_channels: int = None,
-        lead_time_steps: int = 9,
+        lead_time_steps: int | None = 9,
         prob_channels: List[int] = [],
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,

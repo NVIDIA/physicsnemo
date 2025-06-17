@@ -328,3 +328,41 @@ def test_son_unet_deploy(device):
     assert common.validate_onnx_runtime(
         model, (*[input_image, noise_labels, class_labels],)
     )
+
+
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("lead_time_mode", [False, True])
+@pytest.mark.parametrize("N_grid_channels", [0, 4])
+def test_song_unet_positional_leadtime(device, lead_time_mode, N_grid_channels):
+    """Test that both positional and lead-time embeddings can be used independently"""
+
+    img_resolution = 16
+    out_channels = 2
+    lead_time_channels = 4
+    lead_time_steps = 2
+    in_channels = 2 + N_grid_channels + (lead_time_channels if lead_time_mode else 0)
+    model = UNet(
+        img_resolution=img_resolution,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        N_grid_channels=N_grid_channels,
+        lead_time_mode=lead_time_mode,
+        lead_time_channels=lead_time_channels,
+        lead_time_steps=lead_time_steps,
+    ).to(device)
+    noise_labels = torch.randn([2]).to(device)
+    class_labels = torch.randint(0, 1, (2, 1)).to(device)
+    input_image = torch.ones([2, 2, 16, 16]).to(device)
+    lead_time_label = torch.as_tensor([0, 1]).to(device)
+
+    assert bool(N_grid_channels) == (model.pos_embd is not None)
+    assert lead_time_mode == (hasattr(model, "lt_embd") and (model.lt_embd is not None))
+
+    if lead_time_mode:
+        output_image = model(
+            input_image, noise_labels, class_labels, lead_time_label=lead_time_label
+        )
+    else:
+        output_image = model(input_image, noise_labels, class_labels)
+
+    assert output_image.shape == (2, out_channels, img_resolution, img_resolution)

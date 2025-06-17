@@ -33,10 +33,21 @@ class MockNet:
         return torch.tensor(sigma)
 
 
+# Version that supports lead time labels
+class MockNetLt(MockNet):
+    def __call__(self, x, img_lr, sigma, class_labels, lead_time_label=None):
+        return x
+
+
 # Define a fixture for the network
 @pytest.fixture
 def mock_net():
     return MockNet()
+
+
+@pytest.fixture
+def mock_net_lt():
+    return MockNetLt()
 
 
 # Basic functionality test
@@ -177,3 +188,19 @@ def test_deterministic_sampler_scaling_validation(mock_net, scaling, pytestconfi
             net=mock_net, latents=latents, img_lr=img_lr, scaling=scaling
         )
         assert isinstance(output, torch.Tensor)
+
+
+# Test support for lead time labels
+@import_or_fail("cftime")
+def test_deterministic_sampler_lead_time(mock_net_lt, pytestconfig):
+
+    from physicsnemo.utils.generative import deterministic_sampler
+
+    latents = torch.randn(1, 3, 64, 64)
+    img_lr = torch.randn(1, 3, 64, 64)
+    lt_label = torch.randint(0, 10, (1, 1))
+
+    output = deterministic_sampler(
+        net=mock_net_lt, latents=latents, img_lr=img_lr, lead_time_label=lt_label
+    )
+    assert isinstance(output, torch.Tensor)
