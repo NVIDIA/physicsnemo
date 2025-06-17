@@ -29,7 +29,7 @@ import hydra
 import torch
 from omegaconf import DictConfig
 from training_loop import training_loop
-from physicsnemo.utils.generative.utils import EasyDict, construct_class_by_name
+from physicsnemo.utils.diffusion.utils import EasyDict, construct_class_by_name
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper

@@ -54,7 +54,7 @@ pdf_documents = [
     ("index", "rst2pdf", "Sample rst2pdf doc", "Your Name"),
 ]
 
-napoleon_custom_sections = ["Variable Shape"]
+napoleon_custom_sections = [("Variable Shape", "notes"), ("Forward", "params_style"), ("Outputs", "returns_style")]
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -132,4 +132,4 @@ pdf_documents = [
     ("index", "rst2pdf", "Sample rst2pdf doc", "Your Name"),
 ]
 
-napoleon_custom_sections = ["Variable Shape"]
+# napoleon_custom_sections = ["Variable Shape"]

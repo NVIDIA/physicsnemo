@@ -548,16 +548,12 @@ def profiled_function(fn):  # pragma: no cover
     return decorator
 
 
-# ----------------------------------------------------------------------------
-# Sampler for torch.utils.data.DataLoader that loops over the dataset
-# indefinitely, shuffling items as it goes.
-
-
 class InfiniteSampler(torch.utils.data.Sampler[int]):  # pragma: no cover
     """Sampler for torch.utils.data.DataLoader that loops over the dataset indefinitely.
 
     This sampler yields indices indefinitely, optionally shuffling items as it goes.
-    It can also perform distributed sampling when rank and num_replicas are specified.
+    It can also perform distributed sampling when `rank` and `num_replicas` are
+    specified.
 
     Parameters
     ----------

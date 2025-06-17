@@ -10,7 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Improved documentation for diffusion models and diffusion utils.
+
 ### Changed
+
+- physicsnemo.utils.generative renamed into physicsnemo.utils.diffusion
 
 ### Deprecated
 
