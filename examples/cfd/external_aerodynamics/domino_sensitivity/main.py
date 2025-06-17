@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
+# you may not use this input_file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -18,14 +18,13 @@
 This code defines a standalone distributed inference pipeline the DoMINO model.
 This inference pipeline can be used to evaluate the model given an STL and
 an inflow speed. The pre-trained model checkpoint can be specified in this script
-or inferred from the config file. The results are calculated on a point cloud
+or inferred from the config input_file. The results are calculated on a point cloud
 sampled in the volume around the STL and on the surface of the STL. They are stored
 in a dictionary, which can be written out for visualization.
 """
 
 from functools import cached_property
 from pathlib import Path
-import os
 import hydra
 from omegaconf import DictConfig
 from tqdm import tqdm
@@ -42,28 +41,6 @@ from numpy.typing import NDArray
 import pyvista as pv
 from design_datapipe import DesignDatapipe
 from dataclasses import dataclass
-
-
-def combine_stls(stl_path: str, stl_files: list[str]) -> pv.PolyData:
-    """Combines multiple STL files into a single PyVista mesh.
-
-    Args:
-        stl_path: Directory path containing the STL files
-        stl_files: List of STL filenames to combine
-
-    Returns:
-        Combined PyVista PolyData mesh containing all STL geometries
-    """
-    meshes = []
-    for file in stl_files:
-        if ".stl" in file:
-            stl_file_path = os.path.join(stl_path, file)
-            reader = pv.get_reader(stl_file_path)
-            mesh_stl = reader.read()
-            meshes.append(mesh_stl)
-    combined_mesh = pv.merge(meshes)
-    return combined_mesh
-
 
 @dataclass
 class DoMINOInference:
@@ -482,39 +459,37 @@ if __name__ == "__main__":
     if dist.world_size > 1:
         torch.distributed.barrier()
 
-    # input_files = (Path(__file__).parent / "geometries").glob("*.stl")
-    input_files = [
-        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
-        Path(__file__).parent
-        / "geometries"
-        / "drivaer_1_single_solid.stl"
-    ]
-
     domino = DoMINOInference(
         cfg=cfg,
         model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.41.pt").absolute(),
         dist=dist,
     )
 
-    for file in input_files:
-        mesh: pv.PolyData = pv.read(file.absolute())
-        results: dict[str, np.ndarray] = domino(
-            mesh=mesh,
-            stream_velocity=38.889,
-            stencil_size=7,
-            air_density=1.205,
-        )
+    input_file = (
+        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
+        Path(__file__).parent
+        / "geometries"
+        / "drivaer_1_single_solid.stl"
+    )
 
-        for key, value in results.items():
-            if len(value) == mesh.n_cells:
-                mesh.cell_data[key] = value
-            elif len(value) == mesh.n_points:
-                mesh.point_data[key] = value
+    mesh: pv.PolyData = pv.read(input_file)
+    results: dict[str, np.ndarray] = domino(
+        mesh=mesh,
+        stream_velocity=38.889,  # m/s
+        stencil_size=7,
+        air_density=1.205,  # kg/m^3
+    )
 
-        sensitivity_results: dict[str, np.ndarray] = (
-            domino.postprocess_point_sensitivities(results, mesh)
-        )
+    for key, value in results.items():
+        if len(value) == mesh.n_cells:
+            mesh.cell_data[key] = value
+        elif len(value) == mesh.n_points:
+            mesh.point_data[key] = value
 
-        for key, value in sensitivity_results.items():
-            mesh[key] = value
-        mesh.save(file.with_suffix(".vtk"))
+    sensitivity_results: dict[str, np.ndarray] = domino.postprocess_point_sensitivities(
+        results=results, mesh=mesh
+    )
+
+    for key, value in sensitivity_results.items():
+        mesh[key] = value
+    mesh.save(input_file.with_suffix(".vtk"))
