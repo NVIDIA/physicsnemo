@@ -425,8 +425,11 @@ class DoMINOInference:
         )
 
         from utilities.mesh_postprocessing import laplacian_smoothing
+
         mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
-        mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = raw_sensitivity_normal_cells
+        mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = (
+            raw_sensitivity_normal_cells
+        )
         mesh_pointdata = mesh_pointdata.cell_data_to_point_data()
 
         smooth_sensitivity_normal_point = laplacian_smoothing(
@@ -442,10 +445,14 @@ class DoMINOInference:
         )
 
         mesh_pointdata.clear_data()
-        mesh_pointdata.point_data["smooth_sensitivity_normal_point"] = smooth_sensitivity_normal_point
+        mesh_pointdata.point_data["smooth_sensitivity_normal_point"] = (
+            smooth_sensitivity_normal_point
+        )
         mesh_pointdata = mesh_pointdata.point_data_to_cell_data()
 
-        smooth_sensitivity_normal_cell = mesh_pointdata.cell_data["smooth_sensitivity_normal_point"]
+        smooth_sensitivity_normal_cell = mesh_pointdata.cell_data[
+            "smooth_sensitivity_normal_point"
+        ]
 
         smooth_sensitivity_cell = np.einsum(
             "i,ij->ij",
@@ -504,7 +511,9 @@ if __name__ == "__main__":
             elif len(value) == mesh.n_points:
                 mesh.point_data[key] = value
 
-        sensitivity_results: dict[str, np.ndarray] = domino.postprocess_point_sensitivities(results, mesh)
+        sensitivity_results: dict[str, np.ndarray] = (
+            domino.postprocess_point_sensitivities(results, mesh)
+        )
 
         for key, value in sensitivity_results.items():
             mesh[key] = value
