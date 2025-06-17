@@ -591,14 +591,26 @@ def image_batching(
     )  # (padding_left,padding_right,padding_top,padding_bottom)
     input_padded = image_padding(input)
     patch_num = patch_num_x * patch_num_y
+
+    # Cast to float for unfold
+    if input.dtype == torch.int32:
+        input_padded = input_padded.view(torch.float32)
+    elif input.dtype == torch.int64:
+        input_padded = input_padded.view(torch.float64)
+
     x_unfold = torch.nn.functional.unfold(
-        input=input_padded.view(_cast_type(input_padded)),  # Cast to float
+        input=input_padded,
         kernel_size=(patch_shape_y, patch_shape_x),
         stride=(
             patch_shape_y - overlap_pix - boundary_pix,
             patch_shape_x - overlap_pix - boundary_pix,
         ),
-    ).view(input_padded.dtype)
+    )
+
+    # Cast back to original dtype
+    if input.dtype in [torch.int32, torch.int64]:
+        x_unfold = x_unfold.view(input.dtype)
+
     x_unfold = rearrange(
         x_unfold,
         "b (c p_h p_w) (nb_p_h nb_p_w) -> (nb_p_w nb_p_h b) c p_h p_w",
@@ -608,16 +620,7 @@ def image_batching(
         nb_p_w=patch_num_x,
     )
     if input_interp is not None:
-        input_interp_repeated = rearrange(
-            torch.repeat_interleave(
-                input=input_interp,
-                repeats=patch_num,
-                dim=0,
-                output_size=x_unfold.shape[0],
-            ),
-            "(b p) c h w -> (p b) c h w",
-            p=patch_num,
-        )
+        input_interp_repeated = input_interp.repeat(patch_num, 1, 1, 1)
         return torch.cat((x_unfold, input_interp_repeated), dim=1)
     else:
         return x_unfold
@@ -722,6 +725,13 @@ def image_fuse(
         nb_p_h=patch_num_y,
         nb_p_w=patch_num_x,
     )
+
+    # Cast to float for fold
+    if input.dtype == torch.int32:
+        x = x.view(torch.float32)
+    elif input.dtype == torch.int64:
+        x = x.view(torch.float64)
+
     # Stitch patches together (by summing over overlapping patches)
     x_folded = torch.nn.functional.fold(
         input=x,
@@ -733,6 +743,10 @@ def image_fuse(
         ),
     )
 
+    # Cast back to original dtype
+    if input.dtype in [torch.int32, torch.int64]:
+        x_folded = x_folded.view(input.dtype)
+
     # Remove padding
     x_no_padding = x_folded[
         ..., pad[2] : pad[2] + img_shape_y, pad[0] : pad[0] + img_shape_x
@@ -743,25 +757,3 @@ def image_fuse(
 
     # Normalize by overlap count
     return x_no_padding / overlap_count_no_padding
-
-
-def _cast_type(input: Tensor) -> torch.dtype:
-    """Return float type based on input tensor type.
-
-    Parameters
-    ----------
-    input : Tensor
-        Input tensor to determine float type from
-
-    Returns
-    -------
-    torch.dtype
-        Float type corresponding to input tensor type for int32/64,
-        otherwise returns original dtype
-    """
-    if input.dtype == torch.int32:
-        return torch.float32
-    elif input.dtype == torch.int64:
-        return torch.float64
-    else:
-        return input.dtype

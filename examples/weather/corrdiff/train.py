@@ -369,14 +369,17 @@ def main(cfg: DictConfig) -> None:
     batch_size_per_gpu = cfg.training.hp.batch_size_per_gpu
     logger0.info(f"Using {num_accumulation_rounds} gradient accumulation rounds")
 
-    patch_num = getattr(cfg.training.hp, "patch_num", 1)
-    max_patch_per_gpu = getattr(cfg.training.hp, "max_patch_per_gpu", 1)
-
     # calculate patch per iter
-    if hasattr(cfg.training.hp, "max_patch_per_gpu") and max_patch_per_gpu > 1:
+    patch_num = getattr(cfg.training.hp, "patch_num", 1)
+    if hasattr(cfg.training.hp, "max_patch_per_gpu"):
+        max_patch_per_gpu = cfg.training.hp.max_patch_per_gpu
+        if max_patch_per_gpu // batch_size_per_gpu < 1:
+            raise ValueError(
+                f"max_patch_per_gpu ({max_patch_per_gpu}) must be greater or equal to batch_size_per_gpu ({batch_size_per_gpu})."
+            )
         max_patch_num_per_iter = min(
             patch_num, (max_patch_per_gpu // batch_size_per_gpu)
-        )  # Ensure at least 1 patch per iter
+        )
         patch_iterations = (
             patch_num + max_patch_num_per_iter - 1
         ) // max_patch_num_per_iter
@@ -384,7 +387,7 @@ def main(cfg: DictConfig) -> None:
             min(max_patch_num_per_iter, patch_num - i * max_patch_num_per_iter)
             for i in range(patch_iterations)
         ]
-        print(
+        logger0.info(
             f"max_patch_num_per_iter is {max_patch_num_per_iter}, patch_iterations is {patch_iterations}, patch_nums_iter is {patch_nums_iter}"
         )
     else:
