@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 import glob
 import logging
 import os
-from typing import Iterable, Tuple, Union
+from typing import Iterable, Tuple, Union, List
 import copy
 
 import cftime
