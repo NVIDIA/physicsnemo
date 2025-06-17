@@ -50,17 +50,19 @@ def deterministic_sampler(
     S_max: float = float("inf"),
     S_noise: float = 1.0,
     lead_time_label: bool = None,
-):
+) -> torch.Tensor:
     """
     Generalized sampler, representing the superset of all sampling methods
     discussed in the paper "Elucidating the Design Space of Diffusion-Based
     Generative Models" (EDM).
     - https://arxiv.org/abs/2206.00364
+
     This function integrates an ODE (probability flow) or SDE over multiple
     time-steps to generate samples from the diffusion model provided by the
     argument 'net'. It can be used to combine multiple choices to
     design a custom sampler, including multiple integration solver,
     discretization method, noise schedule, and so on.
+
     Parameters:
     -----------
         net : torch.nn.Module
@@ -157,6 +159,7 @@ def deterministic_sampler(
             stochatsic sampler. Added signal noise is proportinal to
             :math:`\epsilon_i` where `\epsilon_i ~ N(0, S_{noise}^2)`. Defaults
             to 1.0.
+
     Returns
     -------
         torch.Tensor:
