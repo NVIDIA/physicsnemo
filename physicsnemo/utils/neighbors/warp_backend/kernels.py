@@ -28,8 +28,8 @@ def radius_search_count(
     hashgrid: wp.uint64,
     points: wp.array(dtype=wp.vec3),
     queries: wp.array(dtype=wp.vec3),
-    result_count: wp.array(dtype=wp.int32),
     radius: wp.float32,
+    result_count: wp.array(dtype=wp.int32),
 ):
     """
     Warp kernel for counting the number of points within a specified radius
@@ -49,13 +49,14 @@ def radius_search_count(
     query = wp.hash_grid_query(hashgrid, qp, radius)
     index = int(0)
     result_count_tid = int(0)
+    radius_squared = radius * radius
 
     while wp.hash_grid_query_next(query, index):
         neighbor = points[index]
 
         # compute distance to neighbor point
-        dist = wp.length(qp - neighbor)
-        if dist <= radius:
+        dist = wp.dot(qp - neighbor, qp - neighbor)
+        if dist <= radius_squared:
             result_count_tid += 1
 
     result_count[tid] = result_count_tid
@@ -96,12 +97,14 @@ def radius_search_unlimited_select(
     result_count = int(0)
     offset_tid = result_offset[tid]
 
+    radius_squared = radius * radius
+
     while wp.hash_grid_query_next(query, index):
         neighbor = points[index]
 
-        # compute distance to neighbor point
-        dist = wp.length(qp - neighbor)
-        if dist <= radius:
+        # compute full distance to neighbor point check avoiding the square root
+        dist = wp.dot(qp - neighbor, qp - neighbor)
+        if dist <= radius_squared:
             # Set the index as a matched pair from query set to points set:
             result_point_idx[0, offset_tid + result_count] = tid
             result_point_idx[1, offset_tid + result_count] = index
