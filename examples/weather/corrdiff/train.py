@@ -153,8 +153,16 @@ def main(cfg: DictConfig) -> None:
             cfg.training.hp.total_batch_size // dist.world_size
         )
 
+    # Load the current number of images for resuming
+    try:
+        cur_nimg = load_checkpoint(
+            path=checkpoint_dir,
+        )
+    except Exception:
+        cur_nimg = 0
+
     # Set seeds and configure CUDA and cuDNN settings to ensure consistent precision
-    set_seed(dist.rank)
+    set_seed(dist.rank + cur_nimg)
     configure_cuda_for_consistent_precision()
 
     # Instantiate the dataset
@@ -175,6 +183,7 @@ def main(cfg: DictConfig) -> None:
         seed=0,
         validation_dataset_cfg=validation_dataset_cfg,
         validation=validation,
+        sampler_start_idx=cur_nimg,
     )
 
     # Parse image configuration & update model args
@@ -322,9 +331,9 @@ def main(cfg: DictConfig) -> None:
 
     # Load the model checkpoint if applicable
     try:
-        cur_nimg_model = load_checkpoint(path=checkpoint_dir, models=model)
-    except:
-        cur_nimg_model = None
+        load_checkpoint(path=checkpoint_dir, models=model)
+    except Exception:
+        pass
 
     # Load the regression checkpoint if applicable
     if (
@@ -446,13 +455,13 @@ def main(cfg: DictConfig) -> None:
     if dist.world_size > 1:
         torch.distributed.barrier()
     try:
-        cur_nimg = load_checkpoint(
+        load_checkpoint(
             path=checkpoint_dir,
             optimizer=optimizer,
             device=dist.device,
         )
-    except:
-        cur_nimg = 0
+    except Exception:
+        pass
 
     ############################################################################
     #                            MAIN TRAINING LOOP                            #

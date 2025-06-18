@@ -570,6 +570,8 @@ class InfiniteSampler(torch.utils.data.Sampler[int]):  # pragma: no cover
     window_size : float, default=0.5
         Fraction of dataset to use as window for shuffling. Must be between 0 and 1.
         A larger window means more thorough shuffling but slower iteration.
+    start_idx : int, default=0
+        The initial index to use for the sampler. This is used for resuming training.
     """
 
     def __init__(
@@ -580,6 +582,7 @@ class InfiniteSampler(torch.utils.data.Sampler[int]):  # pragma: no cover
         shuffle: bool = True,
         seed: int = 0,
         window_size: float = 0.5,
+        start_idx: int = 0,
     ):
         if not len(dataset) > 0:
             raise ValueError("Dataset must contain at least one item")
@@ -596,6 +599,7 @@ class InfiniteSampler(torch.utils.data.Sampler[int]):  # pragma: no cover
         self.shuffle = shuffle
         self.seed = seed
         self.window_size = window_size
+        self.start_idx = start_idx
 
     def __iter__(self) -> Iterator[int]:
         order = np.arange(len(self.dataset))
@@ -606,7 +610,7 @@ class InfiniteSampler(torch.utils.data.Sampler[int]):  # pragma: no cover
             rnd.shuffle(order)
             window = int(np.rint(order.size * self.window_size))
 
-        idx = 0
+        idx = self.start_idx
         while True:
             i = idx % order.size
             if idx % self.num_replicas == self.rank:
