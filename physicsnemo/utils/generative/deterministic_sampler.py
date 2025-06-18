@@ -169,9 +169,10 @@ def deterministic_sampler(
     # conditioning
     x_lr = img_lr
 
-    labels = {"class_labels": class_labels}
-    if lead_time_label is not None:
-        labels["lead_time_label"] = lead_time_label
+    # do not pass lead time labels to nets that may not support them
+    lead_time_label = (
+        {} if lead_time_label is None else {"lead_time_label": lead_time_label}
+    )
 
     if solver not in ["euler", "heun"]:
         raise ValueError(f"Unknown solver {solver}")
@@ -304,13 +305,17 @@ def deterministic_sampler(
         h = t_next - t_hat
         if isinstance(net, EDMPrecond):
             # Conditioning info is passed as keyword arg
-            denoised = net(x_hat / s(t_hat), sigma(t_hat), condition=x_lr, **labels).to(
-                torch.float64
-            )
+            denoised = net(
+                x_hat / s(t_hat),
+                sigma(t_hat),
+                condition=x_lr,
+                class_labels=class_labels,
+                **lead_time_label,
+            ).to(torch.float64)
         else:
-            denoised = net(x_hat / s(t_hat), x_lr, sigma(t_hat), **labels).to(
-                torch.float64
-            )
+            denoised = net(
+                x_hat / s(t_hat), x_lr, sigma(t_hat), class_labels, **lead_time_label
+            ).to(torch.float64)
         d_cur = (
             sigma_deriv(t_hat) / sigma(t_hat) + s_deriv(t_hat) / s(t_hat)
         ) * x_hat - sigma_deriv(t_hat) * s(t_hat) / sigma(t_hat) * denoised
@@ -324,12 +329,20 @@ def deterministic_sampler(
             if isinstance(net, EDMPrecond):
                 # Conditioning info is passed as keyword arg
                 denoised = net(
-                    x_prime / s(t_prime), sigma(t_prime), condition=x_lr, **labels
+                    x_prime / s(t_prime),
+                    sigma(t_prime),
+                    condition=x_lr,
+                    class_labels=class_labels,
+                    **lead_time_label,
                 ).to(torch.float64)
             else:
-                denoised = net(x_prime / s(t_prime), x_lr, sigma(t_prime), **labels).to(
-                    torch.float64
-                )
+                denoised = net(
+                    x_prime / s(t_prime),
+                    x_lr,
+                    sigma(t_prime),
+                    class_labels,
+                    **lead_time_label,
+                ).to(torch.float64)
             d_prime = (
                 sigma_deriv(t_prime) / sigma(t_prime) + s_deriv(t_prime) / s(t_prime)
             ) * x_prime - sigma_deriv(t_prime) * s(t_prime) / sigma(t_prime) * denoised
