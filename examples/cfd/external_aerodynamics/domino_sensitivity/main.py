@@ -39,8 +39,9 @@ from physicsnemo.distributed import DistributedManager
 
 from numpy.typing import NDArray
 import pyvista as pv
-from design_datapipe import DesignDatapipe
+from .design_datapipe import DesignDatapipe
 from dataclasses import dataclass
+
 
 @dataclass
 class DoMINOInference:
@@ -401,7 +402,7 @@ class DoMINOInference:
             mesh.cell_normals,
         )
 
-        from utilities.mesh_postprocessing import laplacian_smoothing
+        from .utilities.mesh_postprocessing import laplacian_smoothing
 
         mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
         mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = (
@@ -465,12 +466,7 @@ if __name__ == "__main__":
         dist=dist,
     )
 
-    input_file = (
-        # Path(__file__).parent / "geometries" / "drivaer_1_single_solid_decimated3.stl"
-        Path(__file__).parent
-        / "geometries"
-        / "drivaer_1_single_solid.stl"
-    )
+    input_file = Path(__file__).parent / "geometries" / "drivaer_1_single_solid.stl"
 
     mesh: pv.PolyData = pv.read(input_file)
     results: dict[str, np.ndarray] = domino(
