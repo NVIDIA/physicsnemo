@@ -49,7 +49,7 @@ You can modify configuration options in two ways:
 For example, to change the training epochs (controlled by `train.epochs`):
 
 ```bash
-python train.py ++training.epochs=200  # Sets number of epochs to 200
+python train.py ++train.epochs=200  # Sets number of epochs to 200
 ```
 
 This modular configuration system allows for flexible experimentation while
