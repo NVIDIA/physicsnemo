@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 files = {
-    "Raw Sensitivities": Path(__file__).parent / "drag_gradients_raw.txt",
-    "Smooth Sensitivities": Path(__file__).parent / "drag_gradients_smooth.txt",
+    "Raw Sensitivities": Path(__file__).parent / "gradient_checking_results" / "drag_gradients_raw.txt",
+    "Smooth Sensitivities": Path(__file__).parent / "gradient_checking_results" / "drag_gradients_smooth.txt",
 }
 
 plt.figure(figsize=(9, 7))
@@ -23,11 +23,15 @@ for name, file in files.items():
         drag_delta,
         ".",
         label=name,
+        color="C0" if name == "Raw Sensitivities" else "C1",
     )
 
 x = np.unique(np.concatenate([line.get_xdata() for line in plt.gca().get_lines()]))
 x_minscale = np.min(np.abs(x[x != 0]))
 x_maxscale = np.max(np.abs(x[x != 0]))
+
+x_minscale = 1e-15
+# x_maxscale=1e0
 
 sorted_x = np.sort(
     np.concatenate(
@@ -53,19 +57,34 @@ plt.plot(
 plt.xscale("symlog", linthresh=x_minscale)
 plt.yscale("symlog", linthresh=np.abs(analytical_gradient) * x_minscale)
 
-plt.gca().xaxis.set_major_locator(
-    ticker.SymmetricalLogLocator(base=100, linthresh=x_minscale)
-)
-plt.gca().yaxis.set_major_locator(
-    ticker.SymmetricalLogLocator(
-        base=100, linthresh=np.abs(analytical_gradient) * x_minscale
-    )
-)
+xax = plt.gca().xaxis
+yax = plt.gca().yaxis
+
+for ax in ["x", "y"]:
+    for kind in ["major", "minor"]:
+        a = plt.gca().xaxis if ax == "x" else plt.gca().yaxis
+        locator = ticker.SymmetricalLogLocator(
+            base=1000 if kind == "major" else 10,
+            linthresh=x_minscale if ax == "x" else np.abs(analytical_gradient) * x_minscale,
+        )
+        locator.numticks = 1000
+
+        if kind == "major":
+            a.set_major_locator(locator)
+        else:
+            a.set_minor_locator(locator)
+
+plt.xticks(rotation=15, va="top")
+plt.yticks(rotation=15, va="center")
+plt.axhline(0, color="k", linewidth=1.2, zorder=1, alpha=0.2)
+plt.axvline(0, color="k", linewidth=1.2, zorder=1, alpha=0.2)
+
+
 
 # Add grid for better readability
-plt.grid(True, which="both", linestyle="--", alpha=0.6)
-plt.xlabel("Epsilon")
-plt.ylabel("(Drag) - (Drag Baseline)\n[N]")
+plt.grid(True, which="both", linestyle="--", alpha=0.5)
+plt.xlabel("Epsilon [m / (N/m)]")
+plt.ylabel("Net change in Drag Force, relative to baseline [N]")
 plt.title("Adjoint-Predicted Gradient vs. Finite-Differences")
-plt.legend()
+plt.legend(loc="lower left")
 plt.show()
