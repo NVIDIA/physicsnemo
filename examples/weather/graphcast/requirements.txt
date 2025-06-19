@@ -1,1 +1,4 @@
 git+https://github.com/NVIDIA/TransformerEngine.git@stable
+hydra-core
+wandb
+termcolor>=2.1.1

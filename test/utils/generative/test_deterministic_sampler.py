@@ -43,7 +43,7 @@ def mock_net():
 @import_or_fail("cftime")
 def test_deterministic_sampler_output_type_and_shape(mock_net, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -57,7 +57,7 @@ def test_deterministic_sampler_output_type_and_shape(mock_net, pytestconfig):
 @pytest.mark.parametrize("solver", ["invalid_solver", "euler", "heun"])
 def test_deterministic_sampler_solver_validation(mock_net, solver, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     if solver == "invalid_solver":
         with pytest.raises(ValueError):
@@ -81,7 +81,7 @@ def test_deterministic_sampler_solver_validation(mock_net, solver, pytestconfig)
 @import_or_fail("cftime")
 def test_deterministic_sampler_edge_cases(mock_net, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -97,7 +97,7 @@ def test_deterministic_sampler_edge_cases(mock_net, pytestconfig):
 @pytest.mark.parametrize("discretization", ["vp", "ve", "iddpm", "edm"])
 def test_deterministic_sampler_discretization(mock_net, discretization, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -112,7 +112,7 @@ def test_deterministic_sampler_discretization(mock_net, discretization, pytestco
 @pytest.mark.parametrize("schedule", ["vp", "ve", "linear"])
 def test_deterministic_sampler_schedule(mock_net, schedule, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -127,7 +127,7 @@ def test_deterministic_sampler_schedule(mock_net, schedule, pytestconfig):
 @pytest.mark.parametrize("num_steps", [1, 5, 18])
 def test_deterministic_sampler_num_steps(mock_net, num_steps, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -144,7 +144,7 @@ def test_deterministic_sampler_sigma_boundaries(
     mock_net, sigma_min, sigma_max, pytestconfig
 ):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -163,7 +163,7 @@ def test_deterministic_sampler_sigma_boundaries(
 @pytest.mark.parametrize("scaling", ["invalid_scaling", "vp", "none"])
 def test_deterministic_sampler_scaling_validation(mock_net, scaling, pytestconfig):
 
-    from physicsnemo.utils.generative import deterministic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)

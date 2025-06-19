@@ -35,8 +35,51 @@ different lead times.](../../../docs/img/FourCastNet.gif)
 
 ## Dataset
 
-The model is trained on a 20-channel subset of the ERA5 reanalysis data on single levels
-and pressure levels that is pre-processed and stored into HDF5 files.
+The model is trained on a 20-channel subset of the ERA5 reanalysis data.
+You can obtain the data in two ways:
+
+### Option 1: Download using ERA5 Downloader (Recommended)
+
+You can download the ERA5 data directly using the ERA5 downloader provided in the
+`dataset_download` example. This gives you more control over the variables and time
+period you want to download.
+
+1. First, ensure you have set up your CDS API key as described in the
+`dataset_download` README.
+
+2. Use the provided configuration file or create your own:
+
+```bash
+python dataset_download/start_mirror.py --config-name="config_34var.yaml"
+```
+
+The downloaded data will be organized as follows:
+
+```bash
+├── data_dir
+    ├── train/
+    │   ├── 1980.h5
+    │   ├── 1981.h5
+    │   └── ...
+    ├── test/
+    │   ├── 2017.h5
+    │   └── ...
+    ├── out_of_sample/
+    │   └── 2018.h5
+    └── stats/
+        ├── global_means.npy
+        └── global_stds.npy
+```
+
+Each HDF5 file contains:
+
+- Data shape: (time_steps, channels, latitude, longitude)
+- Latitude: 721 points (-90° to 90°)
+- Longitude: 1440 points (-180° to 180°)
+- Channels: One per variable/pressure level combination
+
+### Option 2: Download from NERSC via Globus
+
 The subset of the ERA5 training data that FCN was trained on is hosted at the
 National Energy Research Scientific Computing Center (NERSC). For convenience
 [it is available to all via Globus](https://app.globus.org/file-manager?origin_id=945b3c9e-0f8c-11ed-8daf-9f359c660fbd&origin_path=%2F~%2Fdata%2F).

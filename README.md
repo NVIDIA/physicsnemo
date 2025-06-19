@@ -232,7 +232,7 @@ def main():
         lr=0.001,
     )
 
-    def training_step(input, target):
+    def training_step(invar, target):
         pred = arch(invar)
         loss = torch.sum(torch.pow(pred - target, 2))
         loss.backward()
@@ -317,12 +317,12 @@ way is to start with a reference sample and then update it for your own use case
 
 - [Getting started Webinar](https://www.nvidia.com/en-us/on-demand/session/gtc24-dlit61460/?playlistId=playList-bd07f4dc-1397-4783-a959-65cec79aa985)
 - [AI4Science PhysicsNeMo Bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science)
-- [PhysicsNeMo Pretrained models](https://catalog.ngc.nvidia.com/models?filters=&orderBy=scoreDESC&query=Modulus&page=&pageSize=)
-- [PhysicsNeMo Datasets and Supplementary materials](https://catalog.ngc.nvidia.com/resources?filters=&orderBy=scoreDESC&query=Modulus&page=&pageSize=)
+- [PhysicsNeMo Pretrained models](https://catalog.ngc.nvidia.com/models?filters=&orderBy=scoreDESC&query=PhysicsNeMo&page=&pageSize=)
+- [PhysicsNeMo Datasets and Supplementary materials](https://catalog.ngc.nvidia.com/resources?filters=&orderBy=scoreDESC&query=PhysicsNeMo&page=&pageSize=)
 - [Self-paced PhysicsNeMo DLI training](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1)
 - [Deep Learning for Science and Engineering Lecture Series with PhysicsNeMo](https://www.nvidia.com/en-us/on-demand/deep-learning-for-science-and-engineering/)
   - [PhysicsNeMo: purpose and usage](https://www.nvidia.com/en-us/on-demand/session/dliteachingkit-setk5002/)
-- [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=modulus&sort=relevance&sortDir=desc)
+- [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=physicsnemo&sort=relevance&sortDir=desc)
   
 ## Installation
 
@@ -376,8 +376,6 @@ cd physicsnemo/examples/cfd/darcy_fno/
 pip install warp-lang # install NVIDIA Warp to run the darcy example
 python train_fno_darcy.py
 ```
-
-For enterprise supported NVAIE container, refer [PhysicsNeMo Secured Feature Branch](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/containers/modulus-sfb)
 
 ## From Source
 

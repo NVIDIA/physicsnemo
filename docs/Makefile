@@ -26,7 +26,7 @@ convert-markdown-to-rst:
 		mkdir -p "examples/$$(dirname {})"; \
 		pandoc "{}" -o "examples/$$(dirname {})/$$(basename -s .md {}).rst"; \
 		sed -i ":a; /:alt:/ { N; s/\n   / /; ta }" "examples/$$(dirname {})/$$(basename -s .md {}).rst"; \
-		sed -i "s|.. figure:: ../../../docs/img|.. figure:: ../../../img|g" "examples/$$(dirname {})/$$(basename -s .md {}).rst" \
+		sed -i "s|\(\(\.\.\/\)\+\)docs/img|\1img|g" "examples/$$(dirname {})/$$(basename -s .md {}).rst" \
 	' \;
 
 html: convert-markdown-to-rst

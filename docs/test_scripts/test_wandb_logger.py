@@ -51,15 +51,16 @@ LaunchLogger.initialize(use_wandb=True)
 logger.info("Starting Training!")
 
 # we will setup the training to run for 20 epochs each epoch running for 10 iterations
+dataloader = iter(dataloader)
 for i in range(20):
     # wrap the epoch in launch logger to control frequency of output for console logs
     with LaunchLogger("train", epoch=i) as launchlog:
         # this would be iterations through different batches
         for _ in range(10):
-            batch = next(iter(dataloader))
-            true = batch["darcy"]
+            batch = next(dataloader)
+            truth = batch["darcy"]
             pred = model(batch["permeability"])
-            loss = mse(pred, true)
+            loss = mse(pred, truth)
             loss.backward()
             optimizer.step()
             scheduler.step()
