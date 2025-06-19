@@ -18,7 +18,41 @@ pip install .[launch]
 
 in the PhysicsNeMo directory.
 
-## Preparing the data files
+### Installing dependencies
+
+You need to install the dependencies for the dataset download and the diagnostic model.
+
+```bash
+pip install -r requirements.txt
+```
+
+## Data Preparation
+
+### Downloading ERA5 Data
+
+This example requires two sets of ERA5 data:
+
+1. Atmospheric state variables (input data)
+2. Diagnostic variables (target data), i.e. precipitation
+
+You can use the ERA5 downloader in the `dataset_download` example to obtain both datasets.
+For each dataset, you'll need to:
+
+1. Create a configuration file specifying the variables you want to download
+2. Run the download script pointing to that configuration
+3. Store the datasets in separate directories
+
+For example:
+
+```bash
+# Download state variables
+python dataset_download/start_mirror.py --config-name="config_34var.yaml"
+
+# Download precipitation (create a new config with precipitation variable)
+python dataset_download/start_mirror.py --config-name="config_precip.yaml"
+```
+
+### Data Format and Structure
 
 The settings for the precipitation model training are in the
 `config/diagnostic_precip.yaml` file. The ERA5 atmospheric state data is loaded from the
@@ -27,19 +61,30 @@ data from `sources.diag_params.data_dir`. Both directories are assumed contain t
 subdirectories `train/` (for training data) and `test/` (for validation data). These
 should contain yearly data files:
 
-```text
+```bash
 ├── data_dir
-    ├── train
+    ├── train/
     │   ├── 1980.h5
     │   ├── 1981.h5
-    │   ├── 1982.h5
-    │   ├── ...
-    │   └── 2016.h5
-    ├── test
+    │   └── ...
+    ├── test/
     │   ├── 2017.h5
-    ├── out_of_sample
-    │   ├── 2018.h5
+    │   └── ...
+    ├── out_of_sample/
+    │   └── 2018.h5
+    └── stats/
+        ├── global_means.npy
+        └── global_stds.npy
 ```
+
+Each HDF5 file contains:
+
+- Data shape: (time_steps, channels, latitude, longitude)
+- Latitude: 721 points (-90° to 90°)
+- Longitude: 1440 points (-180° to 180°)
+- Channels: One per variable/pressure level combination
+
+For more details on the data format, see the `ClimateDataSourceSpec` class in `physicsnemo.datapipes.climate.climate`.
 
 Alphabetical order is used to determine the order of the files. The years you put in
 `train/`, `test/` and `out_of_sample` respectively can differ from the example above,
@@ -53,21 +98,19 @@ Additionally, to use geopotential (effectively the terrain height) and the land-
 configuration file, which will lead to the model being trained without these variables
 as inputs.
 
-## Determining the input channels
+## Input Channel Configuration
 
-The `diagnostic_precip.yaml` configuration file assumes an HDF5-format ERA5 training
-dataset constructed at NVIDIA, containing the variables specified in
-`sources.state_params.variables`. You can modify this parameter to specify different
-inputs.
+The `diagnostic_precip.yaml` configuration assumes an HDF5-format ERA5 training dataset
+with variables specified in `sources.state_params.variables`.
 
-You should also set the number of input channels in `model.in_channels`. This should be
-equal to the length of `sources.state_params.variables` plus all the additional
-channels:
+Set `model.in_channels` to match your total input channels:
 
-* if `sources.state_params.use_cos_zenith == True`, add 1
-* if `datapipe.geopotential_filename` is set, add 1
-* if `datapipe.lsm_filename` is set, add 1
-* if `datapipe.use_latlon == True`, add 4
+- Base: Length of `sources.state_params.variables`
+- Additional channels:
+  - Cosine zenith angle: +1 if `sources.state_params.use_cos_zenith == True`
+  - Geopotential: +1 if `datapipe.geopotential_filename` is set
+  - Land-sea mask: +1 if `datapipe.lsm_filename` is set
+  - Lat/lon encoding: +4 if `datapipe.use_latlon == True`
 
 ## Training
 

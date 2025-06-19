@@ -51,7 +51,15 @@ def loss_func(x, y, p=2.0):
 
 
 @torch.no_grad()
-def validation_step(eval_step, fcn_model, datapipe, channels=[0, 1], epoch=0):
+def validation_step(
+    eval_step,
+    fcn_model,
+    datapipe,
+    channels=[
+        0,
+    ],
+    epoch=0,
+):
     loss_epoch = 0
     num_examples = 0  # Number of validation examples
     # Dealing with DDP wrapper

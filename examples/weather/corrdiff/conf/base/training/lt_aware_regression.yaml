@@ -14,19 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+defaults:
+    - base_all
 
-# Sampler args 
-# Below are passed as kwargs to physicsnemo.utils.generative.determinisitic_sampler
-# Also supports stochastic sampling via S_churn and related args.
-# See EDM paper for details (https://arxiv.org/abs/2206.00364)
+# Hyperparameters
+hp:
+    training_duration: 1000000
+    # Training duration based on the number of processed samples
+    total_batch_size: 1
+    # Total batch size
+    batch_size_per_gpu: 1
+    # Batch size per GPU
 
-name: 'EDM Deterministic'
-args:
-  num_steps: 18
-  sigma_min: 0.002
-  sigma_max: 800
-  rho: 7
-  S_churn: 0.
-  S_min: 0.
-  S_max: .inf
-  S_noise: 1
+perf:
+    songunet_checkpoint_level: 2
+
+# I/O
+io:
+    print_progress_freq: 1
+    # How often to print progress
+    save_checkpoint_freq: 5
+    # How often to save the checkpoints, measured in number of processed samples

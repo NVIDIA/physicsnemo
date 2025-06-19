@@ -31,7 +31,7 @@ body:
     attributes:
       label: Version
       description: What version of PhysicsNeMo are you running?
-      placeholder: "example: 0.9.0"
+      placeholder: "example: 1.1.0"
     validations:
       required: true
 

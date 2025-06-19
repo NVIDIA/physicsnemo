@@ -6,7 +6,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0a0] - 2025-05-XX
+## [1.2.0a0] - 2025-08-XX
+
+### Added
+
+- Improved documentation for diffusion models and diffusion utils.
+
+### Changed
+
+- physicsnemo.utils.generative renamed into physicsnemo.utils.diffusion
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+### Dependencies
+
+## [1.1.1] - 2025-06-16
+
+### Fixed
+
+- Fixed an inadvertent change to the deterministic sampler 2nd order correction
+
+## [1.1.0] - 2025-06-05
 
 ### Added
 
@@ -42,16 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Merged SongUNetPosLtEmb with SongUNetPosEmb, add support for batch>1
 - Add lead time embedding support for `positional_embedding_selector`. Enable  
 arbitrary positioning of probabilistic variables
-
-### Deprecated
-
-### Removed
-
-### Fixed
-
-### Security
+- Enable lead time aware regression without CE loss
+- Bumped minimum PyTorch version from 2.0.0 to 2.4.0, to minimize
+  support surface for `physicsnemo.distributed` functionality.
 
 ### Dependencies
+
+- Made `nvidia.dali` an optional dependency
 
 ## [1.0.1] - 2025-03-25
 

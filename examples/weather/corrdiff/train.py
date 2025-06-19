@@ -14,22 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, time, psutil, hydra, torch
+import os
+import time
+import psutil
+from contextlib import nullcontext
+
+import hydra
 from hydra.utils import to_absolute_path
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
+import nvtx
 import wandb
-from hydra.core.hydra_config import HydraConfig
-from contextlib import nullcontext
 
 from physicsnemo import Module
 from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
 from physicsnemo.distributed import DistributedManager
-
 from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE
 from physicsnemo.utils.patching import RandomPatching2D
-
 from physicsnemo.launch.logging.wandb import initialize_wandb
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.launch.utils import (
@@ -39,7 +43,6 @@ from physicsnemo.launch.utils import (
 )
 
 from datasets.dataset import init_train_valid_datasets_from_config, register_dataset
-
 from helpers.train_helpers import (
     set_patch_shape,
     set_seed,
@@ -48,8 +51,6 @@ from helpers.train_helpers import (
     handle_and_clip_gradients,
     is_time_for_periodic_task,
 )
-import nvtx
-
 
 torch._dynamo.reset()
 # Increase the cache size limit
@@ -152,8 +153,16 @@ def main(cfg: DictConfig) -> None:
             cfg.training.hp.total_batch_size // dist.world_size
         )
 
+    # Load the current number of images for resuming
+    try:
+        cur_nimg = load_checkpoint(
+            path=checkpoint_dir,
+        )
+    except Exception:
+        cur_nimg = 0
+
     # Set seeds and configure CUDA and cuDNN settings to ensure consistent precision
-    set_seed(dist.rank)
+    set_seed(dist.rank + cur_nimg)
     configure_cuda_for_consistent_precision()
 
     # Instantiate the dataset
@@ -174,6 +183,7 @@ def main(cfg: DictConfig) -> None:
         seed=0,
         validation_dataset_cfg=validation_dataset_cfg,
         validation=validation,
+        sampler_start_idx=cur_nimg,
     )
 
     # Parse image configuration & update model args
@@ -260,7 +270,10 @@ def main(cfg: DictConfig) -> None:
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
-    elif cfg.model.name == "lt_aware_ce_regression":
+    elif (
+        cfg.model.name == "lt_aware_ce_regression"
+        or cfg.model.name == "lt_aware_regression"
+    ):
         model = UNet(
             img_in_channels=img_in_channels
             + model_args["N_grid_channels"]
@@ -294,7 +307,8 @@ def main(cfg: DictConfig) -> None:
 
     # Check if regression model is used with patching
     if (
-        cfg.model.name in ["regression", "lt_aware_ce_regression"]
+        cfg.model.name
+        in ["regression", "lt_aware_regression", "lt_aware_ce_regression"]
         and patching is not None
     ):
         raise ValueError(
@@ -317,9 +331,9 @@ def main(cfg: DictConfig) -> None:
 
     # Load the model checkpoint if applicable
     try:
-        cur_nimg_model = load_checkpoint(path=checkpoint_dir, models=model)
-    except:
-        cur_nimg_model = None
+        load_checkpoint(path=checkpoint_dir, models=model)
+    except Exception:
+        pass
 
     # Load the regression checkpoint if applicable
     if (
@@ -364,14 +378,17 @@ def main(cfg: DictConfig) -> None:
     batch_size_per_gpu = cfg.training.hp.batch_size_per_gpu
     logger0.info(f"Using {num_accumulation_rounds} gradient accumulation rounds")
 
-    patch_num = getattr(cfg.training.hp, "patch_num", 1)
-    max_patch_per_gpu = getattr(cfg.training.hp, "max_patch_per_gpu", 1)
-
     # calculate patch per iter
-    if hasattr(cfg.training.hp, "max_patch_per_gpu") and max_patch_per_gpu > 1:
+    patch_num = getattr(cfg.training.hp, "patch_num", 1)
+    if hasattr(cfg.training.hp, "max_patch_per_gpu"):
+        max_patch_per_gpu = cfg.training.hp.max_patch_per_gpu
+        if max_patch_per_gpu // batch_size_per_gpu < 1:
+            raise ValueError(
+                f"max_patch_per_gpu ({max_patch_per_gpu}) must be greater or equal to batch_size_per_gpu ({batch_size_per_gpu})."
+            )
         max_patch_num_per_iter = min(
             patch_num, (max_patch_per_gpu // batch_size_per_gpu)
-        )  # Ensure at least 1 patch per iter
+        )
         patch_iterations = (
             patch_num + max_patch_num_per_iter - 1
         ) // max_patch_num_per_iter
@@ -379,7 +396,7 @@ def main(cfg: DictConfig) -> None:
             min(max_patch_num_per_iter, patch_num - i * max_patch_num_per_iter)
             for i in range(patch_iterations)
         ]
-        print(
+        logger0.info(
             f"max_patch_num_per_iter is {max_patch_num_per_iter}, patch_iterations is {patch_iterations}, patch_nums_iter is {patch_nums_iter}"
         )
     else:
@@ -417,7 +434,7 @@ def main(cfg: DictConfig) -> None:
             regression_net=regression_net,
             hr_mean_conditioning=cfg.model.hr_mean_conditioning,
         )
-    elif cfg.model.name == "regression":
+    elif cfg.model.name == "regression" or cfg.model.name == "lt_aware_regression":
         loss_fn = RegressionLoss()
     elif cfg.model.name == "lt_aware_ce_regression":
         loss_fn = RegressionLossCE(prob_channels=prob_channels)
@@ -438,13 +455,13 @@ def main(cfg: DictConfig) -> None:
     if dist.world_size > 1:
         torch.distributed.barrier()
     try:
-        cur_nimg = load_checkpoint(
+        load_checkpoint(
             path=checkpoint_dir,
             optimizer=optimizer,
             device=dist.device,
         )
-    except:
-        cur_nimg = 0
+    except Exception:
+        pass
 
     ############################################################################
     #                            MAIN TRAINING LOOP                            #
@@ -688,7 +705,7 @@ def main(cfg: DictConfig) -> None:
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
                                             patching.set_patch_num(patch_num_per_iter)
-                                            loss_valid_kwargs.update(
+                                            loss_fn_kwargs.update(
                                                 {"patching": patching}
                                             )
                                         with torch.autocast(
@@ -704,7 +721,6 @@ def main(cfg: DictConfig) -> None:
                                         valid_loss_accum += (
                                             loss_valid
                                             / cfg.training.io.validation_steps
-                                            / len(patch_nums_iter)
                                         )
                                 valid_loss_sum = torch.tensor(
                                     [valid_loss_accum], device=dist.device

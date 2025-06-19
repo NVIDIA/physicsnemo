@@ -48,6 +48,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Shallow Water Equations using PINO (Data + Physics Driven)*](./cfd/swe_nonlinear_pino/)|FNO|YES|
 |[Shallow Water Equations using Distributed GNNs](./cfd/swe_distributed_gnn/)|GraphCast|YES|
 |[Vortex Shedding with Temporal Attention](./cfd/vortex_shedding_mesh_reduced/)|MeshGraphNet|YES|
+|[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
 
 ### Weather
 
@@ -61,14 +62,14 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Medium-range and S2S global weather forecast using Pangu](./weather/pangu_weather/)|Pangu|
 |[Diagonistic (Precipitation) model using AFNO](./weather/diagnostic/)|AFNO|
 |[Unified Recipe for training several Global Weather Forecasting models](./weather/unified_recipe/)|AFNO, FCN-SFNO, GraphCast|
-|[Generative Correction Diffusion Model for Km-scale Atmospheric Downscaling](./generative/corrdiff/)|CorrDiff|
-|[StormCast: Generative Diffusion Model for Km-scale, Convection allowing Model Emulation](./generative/stormcast/)|CorrDiff|
+|[Generative Correction Diffusion Model for Km-scale Atmospheric Downscaling](./weather/corrdiff/)|CorrDiff|
+|[StormCast: Generative Diffusion Model for Km-scale, Convection allowing Model Emulation](./weather/stormcast/)|StormCast|
 
 ### Generative
 
 |Use case|Model|
 | --- | --- |
-|[Fluid Super-resolution*](./generative/diffusion/)|Diffusion|
+|[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|flow_reconstruction_diffusion|
 
 ### Healthcare
 

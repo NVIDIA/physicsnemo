@@ -14,10 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+
 import torch
 import numpy as np
 from omegaconf import ListConfig
-import warnings
 
 
 def set_patch_shape(img_shape, patch_shape):

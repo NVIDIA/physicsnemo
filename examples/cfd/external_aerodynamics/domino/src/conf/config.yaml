@@ -72,6 +72,8 @@ data: # Input directory for training and validation data
   bounding_box_surface: # Bounding box dimensions for car surface
     min: [-1.1, -1.2 , -0.32]
     max: [4.5 , 1.2  , 1.2]
+  gpu_preprocessing: true
+  gpu_output: true
 
 # ┌───────────────────────────────────────────┐
 # │          Domain Parallelism Settings      │

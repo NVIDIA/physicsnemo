@@ -25,12 +25,20 @@ The graph edges are generated based on nearest-neighbor search.
 
 ![Results from PhysicsNeMo training for the LJ system.](../../../docs/img/lj_system_physicsnemo_results.png)
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
+```
+
 ## Getting Started
 
 To download the data, run
 
 ```bash
-pip install gdown
 python download_data.py
 ```
 

@@ -1031,15 +1031,6 @@ class EDMPrecondSR(EDMPrecondSuperResolution):
             stacklevel=2,
         )
 
-        if scale_cond_input:
-            warnings.warn(
-                "scale_cond_input=True does not properly scale the conditional input. "
-                "(see https://github.com/NVIDIA/modulus/issues/229). "
-                "This setup will be deprecated. "
-                "Please set scale_cond_input=False.",
-                DeprecationWarning,
-            )
-
         super().__init__(
             img_resolution=img_resolution,
             img_in_channels=img_in_channels,
@@ -1052,9 +1043,47 @@ class EDMPrecondSR(EDMPrecondSuperResolution):
             **model_kwargs,
         )
 
+        if scale_cond_input:
+            warnings.warn(
+                "The `scale_cond_input=True` option does not properly scale the conditional input "
+                "and is deprecated. It is highly recommended to set `scale_cond_input=False`. "
+                "However, for loading a checkpoint previously trained with `scale_cond_input=True`, "
+                "this flag must be set to `True` to ensure compatibility. "
+                "For more details, see https://github.com/NVIDIA/modulus/issues/229.",
+                DeprecationWarning,
+            )
+            self.scaling_fn = self._legacy_scaling_fn
+
         # Store deprecated parameters for backward compatibility
         self.img_channels = img_channels
         self.scale_cond_input = scale_cond_input
+
+    @staticmethod
+    def _legacy_scaling_fn(
+        x: torch.Tensor, img_lr: torch.Tensor, c_in: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        This function does not properly scale the conditional input
+        (see https://github.com/NVIDIA/modulus/issues/229)
+        and will be deprecated.
+
+        Concatenate and scale the high-resolution and low-resolution tensors.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy high-resolution image of shape (B, C_hr, H, W).
+        img_lr : torch.Tensor
+            Low-resolution image of shape (B, C_lr, H, W).
+        c_in : torch.Tensor
+            Scaling factor of shape (B, 1, 1, 1).
+
+        Returns
+        -------
+        torch.Tensor
+            Scaled and concatenated tensor of shape (B, C_in+C_out, H, W).
+        """
+        return c_in * torch.cat([x, img_lr.to(x.dtype)], dim=1)
 
     def forward(
         self,

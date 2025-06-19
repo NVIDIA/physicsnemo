@@ -1,7 +1,7 @@
-Simple Training and Inference recipe
-=====================================
+Training and Inference recipe
+===============================
 
-In this tutorial, we will see how to use utilites from PhysicsNeMo to setup a simple model
+In this tutorial, we will see how to use utilities from PhysicsNeMo to setup a model
 training pipeline. Once the initial setup is complete, we will look into optimizing
 the training loop, and also run it in a distributed fashion. 
 We will finish the tutorial with an inference workflow that will demonstrate how to use
@@ -23,18 +23,19 @@ Using built-in models
 In this example, we will look at different ways one can interact with Models in PhysicsNeMo.
 PhysicsNeMo presents a library of models suitable for Physics-ML applications for you to
 use directly in your training workflows. In this tutorial we will see how to use a
-simple model in PhysicsNeMo to setup a data-driven training. Using the models from PhysicsNeMo
+model in PhysicsNeMo to setup a data-driven training. Using the models from PhysicsNeMo
 will enable us to use various other PhysicsNeMo features like optimization and 
 quality-of-life functionalites like checkpointing and model entrypoints.
 
 Later we will also see how to customize these models in PhysicsNeMo.
 
-In this example we will use the 
-FNO model from PhysicsNeMo. To demonstrate the training using this model, we would need some
-dataset to train the model. To allow for fast prototyping of models, PhysicsNeMo provides
-a set of benchmark datasets that can be used out of the box without the need to setup
-data-loading pipelines. In this example, we will use one such datapipe called `Darcy2D`
-to get the training data. 
+In this example we will use the Fourier Neural Operator (FNO) model from PhysicsNeMo. 
+To demonstrate the training using this model, we would need some dataset to train the model.
+To allow for fast prototyping of models, PhysicsNeMo provides a set of benchmark datasets 
+that can be used out of the box without the need to setup data-loading pipelines. 
+In this example, we will use one such datapipe called `Darcy2D`, which is a 2D Darcy problem
+with a random permeability field. For more information on the FNO model or 2D-Darcy problem,
+refer to `Li et al., 2020 <https://arxiv.org/abs/2010.08895>`_.
 
 Let's start with importing a few utils and packages. 
 
@@ -47,7 +48,7 @@ In this example we want to develop a mapping between the permeability and its su
 pressure field for a given forcing function. Refer :ref:`PhysicsNeMo Datapipes` for
 additional details.
 
-Then a simple training loop for this example can be written as follows:
+Then a training loop for this example can be written as follows:
 
 .. literalinclude:: ../test_scripts/test_basic.py
    :language: python
@@ -69,7 +70,7 @@ at the core, PyTorch models. In this section we will see how to go from a typica
 model to a PhysicsNeMo model. 
 
 Let's get started with the same application of Darcy problem. Let's write a simple UNet
-to solve the problem. A simple PyTorch model for a UNet can be written as shown below:
+to solve the problem. A PyTorch model for a UNet can be written as shown below:
 
 .. literalinclude:: ../test_scripts/test_custom_model_demo_1.py
    :language: python
@@ -111,7 +112,7 @@ the diff would look something like below:
                 self.enc2 = self.conv_block(64, 128)
 
 
-With simple changes like this you can convert a PyTorch model to a PhysicsNeMo Model!
+With a fewchanges like this you can convert a PyTorch model to a PhysicsNeMo Model!
 
 .. note::
 
@@ -178,7 +179,7 @@ and make inference scripts easier by providing a unified way to configure and qu
 associated with distributed environment.
 
 In this example, we will see how to convert our existing workflow to use data-parallelism.
-For an deep-dive on PhysicsNeMo Distributed utilities, refer :ref:`PhysicsNeMo Distributed`.
+For a deep-dive on PhysicsNeMo Distributed utilities, refer :ref:`PhysicsNeMo Distributed`.
 
 
 .. literalinclude:: ../test_scripts/test_simple_distributed.py

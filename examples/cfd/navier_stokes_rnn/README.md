@@ -35,14 +35,17 @@ subsequent predictions can be generated using only a single input time step (one
 and other where multiple input time-steps are used to produce multiple output time-steps
 (many-to-many/seq-to-seq).
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Getting Started
 
 The example script contains code to download and do any pre-processing for the dataset.
-To download the dataset, `gdown` package is required, which can be installed using
-
-```bash
-pip install gdown
-```
 
 To get started, simply run
 

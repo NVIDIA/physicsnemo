@@ -1,0 +1,12 @@
+netCDF4>=1.7.2
+hydra-core>=1.2.0
+omegaconf>=2.3.0
+wandb>=0.13.7
+nvtx>=0.2.8
+dask>=2025.3.0
+xskillscore>=0.0.26
+cftime>=1.6.2
+opencv-python>=4.11.0.86
+numba>=0.61.0
+scipy>=1.15.1
+typer>=0.16.0
