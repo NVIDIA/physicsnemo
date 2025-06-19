@@ -232,7 +232,7 @@ def main():
         lr=0.001,
     )
 
-    def training_step(input, target):
+    def training_step(invar, target):
         pred = arch(invar)
         loss = torch.sum(torch.pow(pred - target, 2))
         loss.backward()
