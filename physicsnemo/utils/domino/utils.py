@@ -25,13 +25,13 @@ CPU (NumPy) and GPU (CuPy) operations with automatic fallbacks.
 from pathlib import Path
 from typing import Any, Sequence
 
-import numpy as np
 import cupy as cp
+import numpy as np
 import pyvista as pv
 import vtk
+from scipy.spatial import KDTree
 from vtk import vtkDataSetTriangleFilter
 from vtk.util import numpy_support
-from scipy.spatial import KDTree
 
 from physicsnemo.utils.profiling import profile
 
