@@ -1073,7 +1073,7 @@ def dict_to_device(
 
 
 def area_weighted_shuffle_array(
-    arr: ArrayType, n_points: int, area: ArrayType
+    arr: ArrayType, n_points: int, area: ArrayType, area_factor: float = 1.0
 ) -> tuple[ArrayType, ArrayType]:
     """Perform area-weighted random sampling from array.
 
@@ -1087,6 +1087,9 @@ def area_weighted_shuffle_array(
             samples all available points.
         area: Area weights for each point, shape (n_points,). Larger values
             indicate higher sampling probability.
+        area_factor: Exponent applied to area weights to control sampling bias.
+            Values > 1.0 increase bias toward larger areas, values < 1.0 reduce bias.
+            Defaults to 1.0 (linear weighting).
 
     Returns:
         Tuple containing:
@@ -1111,32 +1114,36 @@ def area_weighted_shuffle_array(
         >>> # The point with large area (index 3) should likely be selected
         >>> len(set(indices)) <= 2  # At most 2 unique indices
         True
+        >>> # Use higher area_factor for stronger bias toward large areas
+        >>> subset_biased, _ = area_weighted_shuffle_array(mesh_data, 2, cell_areas, area_factor=2.0)
     """
     xp = array_type(arr)
-    # Compute the total_area:
-    factor = 1.0
-    total_area = xp.sum(area**factor)
-    probs = area**factor / total_area
+    # Calculate area-weighted probabilities
+    sampling_probabilities = area**area_factor
+    sampling_probabilities /= xp.sum(sampling_probabilities)  # Normalize to sum to 1
 
-    if n_points > arr.shape[0]:
-        n_points = arr.shape[0]
+    # Ensure we don't request more points than available
+    n_points = min(n_points, arr.shape[0])
 
-    idx = xp.arange(arr.shape[0])
+    # Create index array for all available points
+    point_indices = xp.arange(arr.shape[0])
 
-    # This is too memory intensive to run on the GPU.
+    # Handle GPU vs CPU sampling differently due to memory constraints
     if xp == cp:
-        idx = idx.get()
-        probs = probs.get()
-        # Under the hood, this has a search over the probabilities.
-        # It's very expensive in memory, as far as I can tell.
-        # In principle, we could use the Alias method to speed this up
-        # on the GPU but it's not yet a bottleneck.
-
-        ids = np.random.choice(idx, n_points, p=probs)
-        ids = xp.asarray(ids)
+        # Note: np.random.choice performs expensive probability search on CPU
+        # Future optimization: Consider implementing Alias method for GPU acceleration
+        selected_indices = np.random.choice(
+            point_indices.get(), 
+            size=n_points, 
+            p=sampling_probabilities.get()
+        )
+        selected_indices = xp.asarray(selected_indices)
     else:
-        # Chug along on the CPU:
-        ids = xp.random.choice(idx, n_points, p=probs)
+        # Direct sampling on CPU
+        selected_indices = np.random.choice(
+            point_indices, 
+            size=n_points, 
+            p=sampling_probabilities
+        )
 
-    return arr[ids], ids
-
+    return arr[selected_indices], selected_indices
