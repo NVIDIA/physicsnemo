@@ -35,7 +35,13 @@ import numpy as np
 import torch
 
 from physicsnemo.models.domino.model import DoMINO
-from physicsnemo.utils.domino.utils import unnormalize, create_directory, nd_interpolator, get_filenames, write_to_vtp 
+from physicsnemo.utils.domino.utils import (
+    unnormalize,
+    create_directory,
+    nd_interpolator,
+    get_filenames,
+    write_to_vtp,
+)
 from torch.cuda.amp import autocast
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
@@ -663,7 +669,7 @@ class dominoInference:
         self,
         cfg: DictConfig,
         dist: None,
-        cached_geo_encoding: bool=False,
+        cached_geo_encoding: bool = False,
     ):
 
         self.cfg = cfg
