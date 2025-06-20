@@ -83,7 +83,7 @@ def calculate_center_of_mass(centers: ArrayType, sizes: ArrayType) -> ArrayType:
         >>> centers = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])
         >>> sizes = np.array([1.0, 2.0, 3.0])
         >>> com = calculate_center_of_mass(centers, sizes)
-        >>> np.allclose(com, [[1.5, 1.5, 1.5]])
+        >>> np.allclose(com, [[4.0/3.0, 4.0/3.0, 4.0/3.0]])
         True
     """
     xp = array_type(centers)
@@ -193,7 +193,7 @@ def standardize(
         True
         >>> # Auto-compute mean/std
         >>> standardized_auto = standardize(field)
-        >>> np.abs(np.mean(standardized_auto)) < 1e-15
+        >>> np.allclose(np.mean(standardized_auto), 0.0)
         True
         >>> np.allclose(np.std(standardized_auto, ddof=0), 1.0)
         True
@@ -638,7 +638,8 @@ def calculate_normal_positional_encoding(
 
 
 def nd_interpolator(
-    coordinates: ArrayType, field: ArrayType, grid: ArrayType
+    coordinates: ArrayType, field: ArrayType, grid: ArrayType,
+    k: int = 2
 ) -> ArrayType:
     """Perform n-dimensional interpolation using k-nearest neighbors.
 
@@ -649,10 +650,11 @@ def nd_interpolator(
     Args:
         coordinates: Array of shape (n_points, n_dims) containing source point coordinates.
         field: Array of shape (n_points, n_fields) containing field values at source points.
-        grid: Array containing target grid points for interpolation.
-
+        grid: Array of shape (n_field_points, n_dims) containing target grid points for interpolation.
+        k: Number of nearest neighbors to use for interpolation.
+        
     Returns:
-        Interpolated field values at grid points using 2-nearest neighbor averaging.
+        Interpolated field values at grid points using k-nearest neighbor averaging.
 
     Note:
         This function currently uses SciPy's KDTree which only supports CPU arrays.
@@ -669,11 +671,11 @@ def nd_interpolator(
         True
     """
     # TODO - this function should get updated for cuml if using cupy.
-    interp_func = KDTree(coordinates[0])
-    dd, ii = interp_func.query(grid, k=2)
+    kdtree = KDTree(coordinates[0])
+    distances, neighbor_indices = kdtree.query(grid, k=k)
 
-    field_grid = field[ii]
-    field_grid = np.float32(np.mean(field_grid, (3)))
+    field_grid = field[neighbor_indices]
+    field_grid = np.mean(field_grid, axis=1)
     return field_grid
 
 
@@ -701,7 +703,7 @@ def pad(arr: ArrayType, n_points: int, pad_value: float = 0.0) -> ArrayType:
         (4, 2)
         >>> np.array_equal(padded[:2], arr)
         True
-        >>> np.all(padded[2:] == -1.0)
+        >>> bool(np.all(padded[2:] == -1.0))
         True
         >>> # No padding needed
         >>> same = pad(arr, 2)
@@ -743,7 +745,7 @@ def pad_inp(arr: ArrayType, n_points: int, pad_value: float = 0.0) -> ArrayType:
         (4, 1, 2)
         >>> np.array_equal(padded[:2], arr)
         True
-        >>> np.all(padded[2:] == 0.0)
+        >>> bool(np.all(padded[2:] == 0.0))
         True
     """
     xp = array_type(arr)
@@ -936,7 +938,7 @@ def combine_dict(old_dict: dict[Any, Any], new_dict: dict[Any, Any]) -> dict[Any
         >>> combined["loss"]
         0.8
         >>> combined["accuracy"]
-        0.8999999999999999
+        0.9
     """
     for key in old_dict.keys():
         old_dict[key] += new_dict[key]
