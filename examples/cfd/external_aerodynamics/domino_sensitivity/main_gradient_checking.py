@@ -84,7 +84,9 @@ if __name__ == "__main__":
         )
         drag = warped_results["aerodynamic_force"][0]
         drag_grad = (drag - results["aerodynamic_force"][0]) / epsilon
-        print(f"Epsilon: {epsilon:12.2e}, Drag: {drag:20.16g}, Drag Grad: {drag_grad:20.12g}")
+        print(
+            f"Epsilon: {epsilon:12.2e}, Drag: {drag:20.16g}, Drag Grad: {drag_grad:20.12g}"
+        )
         return float(drag)
 
     epsilons = [0] + [
@@ -97,11 +99,21 @@ if __name__ == "__main__":
     mesh = mesh.cell_data_to_point_data(pass_cell_data=True)
 
     for epsilon in epsilons:
-        with open(Path(__file__).parent / "gradient_checking_results" / "drag_gradients_raw.txt", "a") as f:
+        with open(
+            Path(__file__).parent
+            / "gradient_checking_results"
+            / "drag_gradients_raw.txt",
+            "a",
+        ) as f:
             drag = get_drag(epsilon, mesh.point_data["raw_sensitivity_cells"])
             f.write(f"{epsilon},{drag}\n")
 
     for epsilon in epsilons:
-        with open(Path(__file__).parent / "gradient_checking_results" / "drag_gradients_smooth.txt", "a") as f:
+        with open(
+            Path(__file__).parent
+            / "gradient_checking_results"
+            / "drag_gradients_smooth.txt",
+            "a",
+        ) as f:
             drag = get_drag(epsilon, mesh.point_data["smooth_sensitivity_point"])
             f.write(f"{epsilon},{drag}\n")

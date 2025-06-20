@@ -307,6 +307,7 @@ def _smooth(
             new_values[i] = total / count
     return new_values
 
+
 def laplacian_smoothing(
     mesh: pv.PolyData,
     values: np.ndarray,

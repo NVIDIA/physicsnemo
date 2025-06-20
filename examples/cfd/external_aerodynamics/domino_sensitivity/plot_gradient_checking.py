@@ -4,8 +4,12 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 files = {
-    "Raw Sensitivities": Path(__file__).parent / "gradient_checking_results" / "drag_gradients_raw.txt",
-    "Smooth Sensitivities": Path(__file__).parent / "gradient_checking_results" / "drag_gradients_smooth.txt",
+    "Raw Sensitivities": Path(__file__).parent
+    / "gradient_checking_results"
+    / "drag_gradients_raw.txt",
+    "Smooth Sensitivities": Path(__file__).parent
+    / "gradient_checking_results"
+    / "drag_gradients_smooth.txt",
 }
 
 plt.figure(figsize=(9, 7))
@@ -65,7 +69,9 @@ for ax in ["x", "y"]:
         a = plt.gca().xaxis if ax == "x" else plt.gca().yaxis
         locator = ticker.SymmetricalLogLocator(
             base=1000 if kind == "major" else 10,
-            linthresh=x_minscale if ax == "x" else np.abs(analytical_gradient) * x_minscale,
+            linthresh=x_minscale
+            if ax == "x"
+            else np.abs(analytical_gradient) * x_minscale,
         )
         locator.numticks = 1000
 
@@ -78,7 +84,6 @@ plt.xticks(rotation=15, va="top")
 plt.yticks(rotation=15, va="center")
 plt.axhline(0, color="k", linewidth=1.2, zorder=1, alpha=0.2)
 plt.axvline(0, color="k", linewidth=1.2, zorder=1, alpha=0.2)
-
 
 
 # Add grid for better readability

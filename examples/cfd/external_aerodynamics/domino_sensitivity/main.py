@@ -405,9 +405,9 @@ class DoMINOInference:
         from .utilities.mesh_postprocessing import laplacian_smoothing
 
         mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
-        mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = (
-            raw_sensitivity_normal_cells
-        )
+        mesh_pointdata.cell_data[
+            "raw_sensitivity_normal_cells"
+        ] = raw_sensitivity_normal_cells
         mesh_pointdata = mesh_pointdata.cell_data_to_point_data()
 
         smooth_sensitivity_normal_point = laplacian_smoothing(
@@ -423,9 +423,9 @@ class DoMINOInference:
         )
 
         mesh_pointdata.clear_data()
-        mesh_pointdata.point_data["smooth_sensitivity_normal_point"] = (
-            smooth_sensitivity_normal_point
-        )
+        mesh_pointdata.point_data[
+            "smooth_sensitivity_normal_point"
+        ] = smooth_sensitivity_normal_point
         mesh_pointdata = mesh_pointdata.point_data_to_cell_data()
 
         smooth_sensitivity_normal_cell = mesh_pointdata.cell_data[
