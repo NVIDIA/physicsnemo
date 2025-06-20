@@ -127,7 +127,8 @@ results = domino(
 
 # Access results
 print(f"Total drag force: {results['aerodynamic_force'][0]:.2f} N")
-print(f"Geometry sensitivity shape: {results['geometry_sensitivity'].shape}")
+sensitivity_shape = results['geometry_sensitivity'].shape
+print(f"Geometry sensitivity shape: {sensitivity_shape}")
 ```
 
 ### Post-processing and Smoothing
@@ -169,6 +170,8 @@ python plot_gradient_checking.py
 
 The sensitivity analysis returns a dictionary with the following keys:
 
+<!-- markdownlint-disable -->
+
 | Key | Description | Shape | Units |
 |-----|-------------|-------|-------|
 | `geometry_coordinates` | Surface mesh coordinates | `(n_cells, 3)` | `[m]` |
@@ -177,10 +180,14 @@ The sensitivity analysis returns a dictionary with the following keys:
 | `pred_surf_wall_shear_stress` | Wall shear stress components | `(n_cells, 3)` | `[Pa]` |
 | `aerodynamic_force` | Total aerodynamic force | `(3,)` | `[N]` |
 
+<!-- markdownlint-enable -->
+
 ### Post-processed Sensitivities
 
 After calling `postprocess_point_sensitivities()`, additional fields are
 available:
+
+<!-- markdownlint-disable -->
 
 | Key | Description | Shape | Units |
 |-----|-------------|-------|-------|
@@ -190,20 +197,25 @@ available:
 | `smooth_sensitivity_normal_point` | Smoothed normal sensitivities | `(n_points,)` | `[N/m]` |
 | `smooth_sensitivity_cell` | Smoothed cell sensitivities | `(n_cells, 3)` | `[N/m]` |
 
+<!-- markdownlint-enable -->
+
 ## Configuration
 
 The pipeline uses Hydra configuration management. Key configuration parameters
 include:
 
 ### Model Parameters
+
 - `model.interp_res`: Grid resolution for interpolation `[128, 64, 48]`
 - `model_checkpoint_path`: Path to pre-trained DoMINO model
 
 ### Bounding Box Settings
+
 - `data.bounding_box.min/max`: Volume bounding box coordinates
 - `data.bounding_box_surface.min/max`: Surface bounding box coordinates
 
 ### Physics Parameters
+
 - `stream_velocity`: Inlet flow velocity [m/s]
 - `air_density`: Air density [kg/m³]
 - `stencil_size`: Number of neighboring points for surface calculations
@@ -220,6 +232,7 @@ python main_gradient_checking.py
 ```
 
 This script:
+
 1. Computes baseline drag force
 2. Perturbs geometry using computed sensitivities
 3. Evaluates drag force at perturbed geometries
@@ -233,6 +246,7 @@ python plot_gradient_checking.py
 ```
 
 Creates plots showing:
+
 - Analytical gradient predictions vs. finite differences
 - Validation across multiple perturbation scales
 - Comparison between raw and smoothed sensitivities
@@ -240,16 +254,19 @@ Creates plots showing:
 ## Performance Considerations
 
 ### Memory Management
+
 - Large geometries are processed in batches to manage GPU memory
 - Batch size can be adjusted in the DataLoader configuration
 - Memory usage is monitored and reported during processing
 
 ### Computational Efficiency
+
 - Automatic differentiation is more efficient than finite differences
 - Gradient computation scales well with geometry complexity
 - Multi-GPU support available for very large problems
 
 ### Smoothing Parameters
+
 - `n_laplacian_iters`: Controls smoothing strength (default: 20)
 - Higher values produce smoother but potentially less accurate sensitivities
 - Lower values preserve sharp features but may be noisy
@@ -257,16 +274,19 @@ Creates plots showing:
 ## Applications
 
 ### Design Optimization
+
 - Integration with gradient-based optimizers (L-BFGS, Adam, etc.)
 - Topology optimization for aerodynamic shapes
 - Parameter optimization for vehicle styling
 
 ### Sensitivity Analysis
+
 - Identify critical design regions
 - Understand trade-offs between different geometric features
 - Guide manual design modifications
 
 ### Validation and Verification
+
 - Compare with finite-difference gradients
 - Validate optimization algorithms
 - Assess numerical accuracy
@@ -285,16 +305,19 @@ Creates plots showing:
 ### Common Issues
 
 **Out of Memory Errors**:
+
 - Reduce batch size in DataLoader
 - Use gradient checkpointing
 - Enable distributed inference
 
 **Noisy Sensitivities**:
+
 - Increase Laplacian smoothing iterations
 - Check STL mesh quality
 - Verify model convergence
 
 **Gradient Checking Failures**:
+
 - Verify finite difference step sizes
 - Check numerical precision settings
 - Ensure mesh consistency
@@ -309,6 +332,7 @@ Creates plots showing:
 ## Contributing
 
 When extending this pipeline:
+
 - Follow the existing code style and documentation standards
 - Add appropriate type hints and docstrings
 - Include gradient checking for new sensitivity computations
