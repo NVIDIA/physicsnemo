@@ -347,7 +347,7 @@ def convert_to_tet_mesh(polydata: "vtk.vtkPolyData") -> "vtk.vtkUnstructuredGrid
 
     Raises:
         RuntimeError: If tetrahedralization fails (e.g., non-manifold surface).
-        
+
     """
     tetrahedral_filter = vtkDataSetTriangleFilter()
     tetrahedral_filter.SetInputData(polydata)
@@ -638,8 +638,7 @@ def calculate_normal_positional_encoding(
 
 
 def nd_interpolator(
-    coordinates: ArrayType, field: ArrayType, grid: ArrayType,
-    k: int = 2
+    coordinates: ArrayType, field: ArrayType, grid: ArrayType, k: int = 2
 ) -> ArrayType:
     """Perform n-dimensional interpolation using k-nearest neighbors.
 
@@ -652,7 +651,7 @@ def nd_interpolator(
         field: Array of shape (n_points, n_fields) containing field values at source points.
         grid: Array of shape (n_field_points, n_dims) containing target grid points for interpolation.
         k: Number of nearest neighbors to use for interpolation.
-        
+
     Returns:
         Interpolated field values at grid points using k-nearest neighbor averaging.
 
@@ -1135,17 +1134,13 @@ def area_weighted_shuffle_array(
         # Note: np.random.choice performs expensive probability search on CPU
         # Future optimization: Consider implementing Alias method for GPU acceleration
         selected_indices = np.random.choice(
-            point_indices.get(), 
-            size=n_points, 
-            p=sampling_probabilities.get()
+            point_indices.get(), size=n_points, p=sampling_probabilities.get()
         )
         selected_indices = xp.asarray(selected_indices)
     else:
         # Direct sampling on CPU
         selected_indices = np.random.choice(
-            point_indices, 
-            size=n_points, 
-            p=sampling_probabilities
+            point_indices, size=n_points, p=sampling_probabilities
         )
 
     return arr[selected_indices], selected_indices
