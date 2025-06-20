@@ -73,7 +73,7 @@ def calculate_center_of_mass(centers: ArrayType, sizes: ArrayType) -> ArrayType:
             or area of each element used as weights.
 
     Returns:
-        Array of shape (3,) containing the x, y, z coordinates of the center of mass.
+        Array of shape (1, 3) containing the x, y, z coordinates of the center of mass.
 
     Raises:
         ValueError: If centers and sizes have incompatible shapes.
@@ -82,14 +82,14 @@ def calculate_center_of_mass(centers: ArrayType, sizes: ArrayType) -> ArrayType:
         >>> centers = np.array([[0, 0, 0], [1, 1, 1], [2, 2, 2]])
         >>> sizes = np.array([1.0, 2.0, 3.0])
         >>> com = calculate_center_of_mass(centers, sizes)
-        >>> print(com)  # [1.5, 1.5, 1.5]
+        >>> print(com)  # [[1.5, 1.5, 1.5]]
     """
     xp = array_type(centers)
 
-    total_weighted_position = xp.einsum("i,ij->ij", sizes, centers)
+    total_weighted_position = xp.einsum("i,ij->j", sizes, centers)
     total_size = xp.sum(sizes)
 
-    return total_weighted_position / total_size
+    return total_weighted_position[None, ...] / total_size
 
 
 def normalize(
