@@ -79,10 +79,12 @@ def calculate_center_of_mass(centers: ArrayType, sizes: ArrayType) -> ArrayType:
         ValueError: If centers and sizes have incompatible shapes.
 
     Examples:
-        >>> centers = np.array([[0, 0, 0], [1, 1, 1], [2, 2, 2]])
+        >>> import numpy as np
+        >>> centers = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])
         >>> sizes = np.array([1.0, 2.0, 3.0])
         >>> com = calculate_center_of_mass(centers, sizes)
-        >>> print(com)  # [[1.5, 1.5, 1.5]]
+        >>> np.allclose(com, [[1.5, 1.5, 1.5]])
+        True
     """
     xp = array_type(centers)
 
@@ -115,12 +117,15 @@ def normalize(
         ZeroDivisionError: If max_val equals min_val (zero range).
 
     Examples:
+        >>> import numpy as np
         >>> field = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         >>> normalized = normalize(field, 5.0, 1.0)
-        >>> print(normalized)  # [-1, -0.5, 0, 0.5, 1]
-
+        >>> np.allclose(normalized, [-1.0, -0.5, 0.0, 0.5, 1.0])
+        True
         >>> # Auto-compute min/max
-        >>> normalized = normalize(field)
+        >>> normalized_auto = normalize(field)
+        >>> np.allclose(normalized_auto, [-1.0, -0.5, 0.0, 0.5, 1.0])
+        True
     """
     xp = array_type(field)
 
@@ -150,9 +155,11 @@ def unnormalize(
         Field values restored to their original physical range.
 
     Examples:
+        >>> import numpy as np
         >>> normalized = np.array([-1.0, -0.5, 0.0, 0.5, 1.0])
         >>> original = unnormalize(normalized, 5.0, 1.0)
-        >>> print(original)  # [1, 2, 3, 4, 5]
+        >>> np.allclose(original, [1.0, 2.0, 3.0, 4.0, 5.0])
+        True
     """
     field_range = max_val - min_val
     return (normalized_field + 1.0) * field_range * 0.5 + min_val
@@ -179,12 +186,17 @@ def standardize(
         ZeroDivisionError: If std contains zeros.
 
     Examples:
+        >>> import numpy as np
         >>> field = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         >>> standardized = standardize(field, 3.0, np.sqrt(2.5))
-        >>> print(np.mean(standardized), np.std(standardized))  # ~0.0, ~1.0
-
+        >>> np.allclose(standardized, [-1.265, -0.632, 0.0, 0.632, 1.265], atol=1e-3)
+        True
         >>> # Auto-compute mean/std
-        >>> standardized = standardize(field)
+        >>> standardized_auto = standardize(field)
+        >>> np.abs(np.mean(standardized_auto)) < 1e-15
+        True
+        >>> np.allclose(np.std(standardized_auto, ddof=0), 1.0)
+        True
     """
     xp = array_type(field)
 
@@ -213,9 +225,11 @@ def unstandardize(
         Field values restored to their original distribution.
 
     Examples:
-        >>> standardized = np.array([-1.26, -0.63, 0.0, 0.63, 1.26])
+        >>> import numpy as np
+        >>> standardized = np.array([-1.265, -0.632, 0.0, 0.632, 1.265])
         >>> original = unstandardize(standardized, 3.0, np.sqrt(2.5))
-        >>> print(original)  # approximately [1, 2, 3, 4, 5]
+        >>> np.allclose(original, [1.0, 2.0, 3.0, 4.0, 5.0], atol=1e-3)
+        True
     """
     return standardized_field * std + mean
 
@@ -235,9 +249,6 @@ def write_to_vtp(polydata: "vtk.vtkPolyData", filename: str) -> None:
     Raises:
         RuntimeError: If writing fails due to file permissions or disk space.
 
-    Examples:
-        >>> # Assuming you have a VTK polydata object
-        >>> write_to_vtp(surface_mesh, "output/surface.vtp")
     """
     # Ensure output directory exists
     output_path = Path(filename)
@@ -267,9 +278,6 @@ def write_to_vtu(unstructured_grid: "vtk.vtkUnstructuredGrid", filename: str) ->
     Raises:
         RuntimeError: If writing fails due to file permissions or disk space.
 
-    Examples:
-        >>> # Assuming you have a VTK unstructured grid object
-        >>> write_to_vtu(volume_mesh, "output/volume.vtu")
     """
     # Ensure output directory exists
     output_path = Path(filename)
@@ -300,10 +308,6 @@ def extract_surface_triangles(tetrahedral_mesh: "vtk.vtkUnstructuredGrid") -> li
     Raises:
         NotImplementedError: If the surface contains non-triangular faces.
 
-    Examples:
-        >>> # Extract surface from a tet mesh for visualization
-        >>> surface_indices = extract_surface_triangles(tet_mesh)
-        >>> # surface_indices = [v1, v2, v3, v4, v5, v6, ...] for triangles
     """
     # Extract the surface using VTK filter
     surface_filter = vtk.vtkDataSetSurfaceFilter()
@@ -343,10 +347,7 @@ def convert_to_tet_mesh(polydata: "vtk.vtkPolyData") -> "vtk.vtkUnstructuredGrid
 
     Raises:
         RuntimeError: If tetrahedralization fails (e.g., non-manifold surface).
-
-    Examples:
-        >>> # Convert a surface mesh to volume mesh for FEM analysis
-        >>> tet_mesh = convert_polydata_to_tetrahedral_mesh(surface_polydata)
+        
     """
     tetrahedral_filter = vtkDataSetTriangleFilter()
     tetrahedral_filter.SetInputData(polydata)
@@ -370,9 +371,6 @@ def convert_point_data_to_cell_data(input_data: "vtk.vtkDataSet") -> "vtk.vtkDat
         VTK dataset with the same geometry but field data moved from points to cells.
         Values are typically averaged from the surrounding points.
 
-    Examples:
-        >>> # Convert nodal pressure values to cell-centered values
-        >>> cell_data = convert_point_data_to_cell_data(point_based_mesh)
     """
     point_to_cell_filter = vtk.vtkPointDataToCellData()
     point_to_cell_filter.SetInputData(input_data)
@@ -393,8 +391,6 @@ def get_node_to_elem(polydata: "vtk.vtkDataSet") -> "vtk.vtkDataSet":
     Returns:
         VTK dataset with field data moved from points to cells.
 
-    Examples:
-        >>> cell_data = get_node_to_elem(point_based_mesh)
     """
     point_to_cell_filter = vtk.vtkPointDataToCellData()
     point_to_cell_filter.SetInputData(polydata)
@@ -423,11 +419,6 @@ def get_fields_from_cell(
     Raises:
         ValueError: If a requested variable name is not found in the cell data.
 
-    Examples:
-        >>> # Extract pressure and velocity magnitude from cell data
-        >>> variable_names = ["pressure", "velocity_magnitude"]
-        >>> fields = get_fields_from_cell(cell_data, variable_names)
-        >>> print(fields.shape)  # (n_cells, 2)
     """
     extracted_fields = []
     for variable_name in variable_names:
@@ -469,12 +460,6 @@ def get_fields(
     Raises:
         ValueError: If a requested variable is not found in the data attributes.
 
-    Examples:
-        >>> # Extract multiple variables from point data
-        >>> point_data = mesh.GetPointData()
-        >>> variable_names = ["pressure", "velocity", "temperature"]
-        >>> fields = get_fields(point_data, variable_names)
-        >>> print(len(fields))  # 3 arrays
     """
     extracted_fields = []
     for variable_name in variable_names:
@@ -507,9 +492,6 @@ def get_vertices(polydata: "vtk.vtkPolyData") -> np.ndarray:
         NumPy array of shape (n_points, 3) containing [x, y, z] coordinates
         for each vertex.
 
-    Examples:
-        >>> vertices = get_vertices(mesh)
-        >>> print(vertices.shape)  # (n_vertices, 3)
     """
     vtk_points = polydata.GetPoints()
     vertices = numpy_support.vtk_to_numpy(vtk_points.GetData())
@@ -534,10 +516,6 @@ def get_volume_data(
         - Vertex coordinates as NumPy array of shape (n_vertices, 3)
         - List of field arrays, one per variable
 
-    Examples:
-        >>> # Extract geometry and flow fields from CFD results
-        >>> vertices, fields = get_volume_data(polydata, ["pressure", "velocity"])
-        >>> print(vertices.shape, len(fields))  # (n_vertices, 3), 2
     """
     vertices = get_vertices(polydata)
     point_data = polydata.GetPointData()
@@ -568,10 +546,6 @@ def get_surface_data(
     Raises:
         ValueError: If a requested variable is not found or polygon data is missing.
 
-    Examples:
-        >>> # Extract surface mesh data for visualization
-        >>> vertices, fields, edges = get_surface_data(surface_mesh, ["pressure", "shear_stress"])
-        >>> print(vertices.shape, len(fields), len(edges))
     """
     points = polydata.GetPoints()
     vertices = np.array([points.GetPoint(i) for i in range(points.GetNumberOfPoints())])
@@ -632,13 +606,17 @@ def calculate_normal_positional_encoding(
         4 encoding dimensions per spatial axis (x, y, z).
 
     Examples:
-        >>> coords = np.random.rand(100, 3) * 10  # Random 3D points
-        >>> cell_size = [0.1, 0.1, 0.1]  # Grid resolution
-        >>> encoding = calculate_positional_encoding_for_coordinates(coords, cell_dimensions=cell_size)
-        >>> print(encoding.shape)  # (100, 12)
-
-        >>> # For relative positions between two point sets
-        >>> encoding_rel = calculate_positional_encoding_for_coordinates(coords_a, coords_b, cell_size)
+        >>> import numpy as np
+        >>> coords = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+        >>> cell_size = [0.1, 0.1, 0.1]
+        >>> encoding = calculate_normal_positional_encoding(coords, cell_dimensions=cell_size)
+        >>> encoding.shape
+        (2, 12)
+        >>> # Relative positioning example
+        >>> coords_b = np.array([[0.5, 0.5, 0.5], [0.5, 0.5, 0.5]])
+        >>> encoding_rel = calculate_normal_positional_encoding(coords, coords_b, cell_size)
+        >>> encoding_rel.shape
+        (2, 12)
     """
     dx, dy, dz = cell_dimensions[0], cell_dimensions[1], cell_dimensions[2]
     xp = array_type(coordinates_a)
@@ -681,8 +659,14 @@ def nd_interpolator(
         A future enhancement could add CuML support for GPU acceleration.
 
     Examples:
-        >>> # Interpolate scattered CFD data to regular grid
-        >>> grid_values = nd_interpolator(mesh_coords, pressure_field, regular_grid)
+        >>> import numpy as np
+        >>> # Simple 2D interpolation example
+        >>> coords = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        >>> field_vals = np.array([[1.0], [2.0], [3.0], [4.0]])
+        >>> grid_points = np.array([[0.5, 0.5]])
+        >>> result = nd_interpolator([coords], field_vals, grid_points)
+        >>> result.shape[0] == 1  # One grid point
+        True
     """
     # TODO - this function should get updated for cuml if using cupy.
     interp_func = KDTree(coordinates[0])
@@ -710,9 +694,19 @@ def pad(arr: ArrayType, n_points: int, pad_value: float = 0.0) -> ArrayType:
         returns the original array unchanged.
 
     Examples:
-        >>> arr = np.random.rand(100, 3)
-        >>> padded = pad(arr, 150, -1.0)  # Pad to 150 points with -1.0
-        >>> print(padded.shape)  # (150, 3)
+        >>> import numpy as np
+        >>> arr = np.array([[1.0, 2.0], [3.0, 4.0]])
+        >>> padded = pad(arr, 4, -1.0)
+        >>> padded.shape
+        (4, 2)
+        >>> np.array_equal(padded[:2], arr)
+        True
+        >>> np.all(padded[2:] == -1.0)
+        True
+        >>> # No padding needed
+        >>> same = pad(arr, 2)
+        >>> np.array_equal(same, arr)
+        True
     """
     xp = array_type(arr)
     if n_points <= arr.shape[0]:
@@ -742,9 +736,15 @@ def pad_inp(arr: ArrayType, n_points: int, pad_value: float = 0.0) -> ArrayType:
         returns the original array unchanged.
 
     Examples:
-        >>> arr = np.random.rand(50, 10, 5)
-        >>> padded = pad_inp(arr, 100, 0.0)  # Pad to 100 entries
-        >>> print(padded.shape)  # (100, 10, 5)
+        >>> import numpy as np
+        >>> arr = np.array([[[1.0, 2.0]], [[3.0, 4.0]]])
+        >>> padded = pad_inp(arr, 4, 0.0)
+        >>> padded.shape
+        (4, 1, 2)
+        >>> np.array_equal(padded[:2], arr)
+        True
+        >>> np.all(padded[2:] == 0.0)
+        True
     """
     xp = array_type(arr)
     if n_points <= arr.shape[0]:
@@ -779,9 +779,16 @@ def shuffle_array(
         - Indices of the selected points
 
     Examples:
-        >>> data = np.random.rand(1000, 3)
-        >>> subset, indices = shuffle_array(data, 100)
-        >>> print(subset.shape, indices.shape)  # (100, 3), (100,)
+        >>> import numpy as np
+        >>> np.random.seed(42)  # For reproducible results
+        >>> data = np.array([[1, 2], [3, 4], [5, 6], [7, 8]])
+        >>> subset, indices = shuffle_array(data, 2)
+        >>> subset.shape
+        (2, 2)
+        >>> indices.shape
+        (2,)
+        >>> len(np.unique(indices)) == 2  # No duplicates
+        True
     """
     xp = array_type(arr)
     if n_points > arr.shape[0]:
@@ -807,9 +814,16 @@ def shuffle_array_without_sampling(arr: ArrayType) -> tuple[ArrayType, ArrayType
         - Permutation indices used for shuffling
 
     Examples:
-        >>> data = np.arange(100).reshape(100, 1)
+        >>> import numpy as np
+        >>> np.random.seed(42)  # For reproducible results
+        >>> data = np.array([[1], [2], [3], [4]])
         >>> shuffled, indices = shuffle_array_without_sampling(data)
-        >>> print(shuffled.shape)  # (100, 1) - same size, different order
+        >>> shuffled.shape
+        (4, 1)
+        >>> indices.shape
+        (4,)
+        >>> set(indices) == set(range(4))  # All original indices present
+        True
     """
     xp = array_type(arr)
     idx = xp.arange(arr.shape[0])
@@ -826,9 +840,6 @@ def create_directory(filepath: str | Path) -> None:
     Args:
         filepath: Path to the directory to create. Can be string or Path object.
 
-    Examples:
-        >>> create_directory("data/processed/meshes")
-        >>> create_directory(Path("output") / "results" / "visualization")
     """
     Path(filepath).mkdir(parents=True, exist_ok=True)
 
@@ -852,9 +863,6 @@ def get_filenames(filepath: str | Path, exclude_dirs: bool = False) -> list[str]
     Raises:
         FileNotFoundError: If the specified directory does not exist.
 
-    Examples:
-        >>> files = get_filenames("data/inputs")
-        >>> data_files = get_filenames("results", exclude_dirs=True)
     """
     path = Path(filepath)
     if not path.exists():
@@ -887,9 +895,13 @@ def calculate_pos_encoding(nx: ArrayType, d: int = 8) -> list[ArrayType]:
         Each pair (sin, cos) uses progressively lower frequencies.
 
     Examples:
-        >>> positions = np.linspace(0, 100, 50)
-        >>> encodings = calculate_pos_encoding(positions, d=16)
-        >>> print(len(encodings))  # 16 encoding dimensions
+        >>> import numpy as np
+        >>> positions = np.array([0.0, 1.0, 2.0])
+        >>> encodings = calculate_pos_encoding(positions, d=4)
+        >>> len(encodings)
+        4
+        >>> all(enc.shape == (3,) for enc in encodings)
+        True
     """
     vec = []
     xp = array_type(nx)
@@ -921,7 +933,10 @@ def combine_dict(old_dict: dict[Any, Any], new_dict: dict[Any, Any]) -> dict[Any
         >>> stats1 = {"loss": 0.5, "accuracy": 0.8}
         >>> stats2 = {"loss": 0.3, "accuracy": 0.1}
         >>> combined = combine_dict(stats1, stats2)
-        >>> print(combined)  # {"loss": 0.8, "accuracy": 0.9}
+        >>> combined["loss"]
+        0.8
+        >>> combined["accuracy"]
+        0.8999999999999999
     """
     for key in old_dict.keys():
         old_dict[key] += new_dict[key]
@@ -947,12 +962,17 @@ def create_grid(
         grid point. The last dimension contains [x, y, z] coordinates.
 
     Examples:
-        >>> # Create a 10x10x10 grid from (0,0,0) to (1,1,1)
-        >>> min_bounds = np.array([0, 0, 0])
-        >>> max_bounds = np.array([1, 1, 1])
-        >>> grid_res = np.array([10, 10, 10])
+        >>> import numpy as np
+        >>> min_bounds = np.array([0.0, 0.0, 0.0])
+        >>> max_bounds = np.array([1.0, 1.0, 1.0])
+        >>> grid_res = np.array([2, 2, 2])
         >>> grid = create_grid(max_bounds, min_bounds, grid_res)
-        >>> print(grid.shape)  # (10, 10, 10, 3)
+        >>> grid.shape
+        (2, 2, 2, 3)
+        >>> np.allclose(grid[0, 0, 0], [0.0, 0.0, 0.0])
+        True
+        >>> np.allclose(grid[1, 1, 1], [1.0, 1.0, 1.0])
+        True
     """
     xp = array_type(max_coords)
 
@@ -996,12 +1016,14 @@ def mean_std_sampling(
         List of indices identifying outlier points that exceed the statistical threshold.
 
     Examples:
-        >>> # Find outliers in pressure field
-        >>> pressure_data = np.random.normal(100, 10, (1000, 1))
-        >>> pressure_mean = np.array([100.0])
-        >>> pressure_std = np.array([10.0])
-        >>> outliers = mean_std_sampling(pressure_data, pressure_mean, pressure_std, 2.5)
-        >>> print(f"Found {len(outliers)} outlier points")
+        >>> import numpy as np
+        >>> # Create test data with outliers
+        >>> field = np.array([[1.0], [2.0], [3.0], [10.0]])  # 10.0 is outlier
+        >>> field_mean = np.array([2.0])
+        >>> field_std = np.array([1.0])
+        >>> outliers = mean_std_sampling(field, field_mean, field_std, 2.0)
+        >>> 3 in outliers  # Index 3 (value 10.0) should be detected as outlier
+        True
     """
     xp = array_type(field)
     idx_all = []
@@ -1077,11 +1099,18 @@ def area_weighted_shuffle_array(
         future GPU acceleration.
 
     Examples:
-        >>> # Sample mesh points with area weighting
-        >>> mesh_data = np.random.rand(1000, 3)
-        >>> cell_areas = np.random.exponential(1.0, 1000)  # Area weights
-        >>> subset, indices = area_weighted_shuffle_array(mesh_data, 100, cell_areas)
-        >>> print(subset.shape)  # (100, 3) - larger cells more likely selected
+        >>> import numpy as np
+        >>> np.random.seed(42)  # For reproducible results
+        >>> mesh_data = np.array([[1.0], [2.0], [3.0], [4.0]])
+        >>> cell_areas = np.array([0.1, 0.1, 0.1, 10.0])  # Last point has much larger area
+        >>> subset, indices = area_weighted_shuffle_array(mesh_data, 2, cell_areas)
+        >>> subset.shape
+        (2, 1)
+        >>> indices.shape
+        (2,)
+        >>> # The point with large area (index 3) should likely be selected
+        >>> len(set(indices)) <= 2  # At most 2 unique indices
+        True
     """
     xp = array_type(arr)
     # Compute the total_area:
@@ -1110,3 +1139,4 @@ def area_weighted_shuffle_array(
         ids = xp.random.choice(idx, n_points, p=probs)
 
     return arr[ids], ids
+
