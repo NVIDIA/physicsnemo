@@ -50,11 +50,10 @@ def deterministic_sampler(
     S_max: float = float("inf"),
     S_noise: float = 1.0,
 ) -> torch.Tensor:
-    """
+    r"""
     Generalized sampler, representing the superset of all sampling methods
-    discussed in the paper "Elucidating the Design Space of Diffusion-Based
-    Generative Models" (EDM).
-    - https://arxiv.org/abs/2206.00364
+    discussed in the paper `Elucidating the Design Space of Diffusion-Based
+    Generative Models (EDM) <https://arxiv.org/abs/2206.00364>`_.
 
     This function integrates an ODE (probability flow) or SDE over multiple
     time-steps to generate samples from the diffusion model provided by the
@@ -62,107 +61,107 @@ def deterministic_sampler(
     design a custom sampler, including multiple integration solver,
     discretization method, noise schedule, and so on.
 
-    Parameters:
-    -----------
-        net : torch.nn.Module
-            The diffusion model to use in the sampling process.
-        latents : torch.Tensor
-            The latent random noise used as the initial condition for the
-            stochastic ODE.
-        img_lr : torch.Tensor
-            Low-resolution input image for conditioning the diffusion process.
-            Passed as a keywork argument to the model 'net'.
-        class_labels : Optional[torch.Tensor]
-            Labels of the classes used as input to a class-conditionned
-            diffusion model. Passed as a keyword argument to the model 'net'.
-            If provided, it must be a tensor containing  integer values.
-            Defaults to None, in which case it is ignored.
-        randn_like: Callable
-            Random Number Generator to generate random noise that is added
-            during the stochastic sampling. Must have the same signature as
-            torch.randn_like and return torch.Tensor. Defaults to
-            torch.randn_like.
-        num_steps : Optional[int]
-            Number of time-steps for the stochastic ODE integration. Defaults
-            to 18.
-        sigma_min : Optional[float]
-            Minimum noise level for the diffusion process. 'sigma_min',
-            'sigma_max', and 'rho' are used to compute the time-step
-            discretization, based on the choice of discretization. For the
-            default choice ("discretization='heun'"), the noise level schedule
-            is computed as:
-            :math:`\sigma_i = (\sigma_{max}^{1/\rho} + i / (num_steps - 1) * (\sigma_{min}^{1/\rho} - \sigma_{max}^{1/\rho}))^{rho}`.
-            For other choices of 'discretization', see details in the EDM
-            paper. Defaults to None, in which case defaults values depending
-            of the specified discretization are used.
-        sigma_max : Optional[float]
-            Maximum noise level for the diffusion process. See sigma_min for
-            details. Defaults to None, in which case defaults values depending
-            of the specified discretization are used.
-        rho : float, optional
-            Exponent used in the noise schedule. See sigma_min for details.
-            Only used when 'discretization' is 'heun'. Values in the range [5,
-            10] produce better images. Lower values lead to truncation errors
-            equalized over all time steps. Defaults to 7.
-        solver : Literal["heun", "euler"]
-            The numerical method used to integrate the stochastic ODE. "euler"
-            is 1st order solver, which is faster but produces lower-quality
-            images. "heun" is 2nd order, more expensive, but produces
-            higher-quality images. Defaults to "heun".
-        discretization : Literal["vp", "ve", "iddpm", "edm"]
-            The method to discretize time-steps :math:`t_i` in the
-            diffusion process. See the EDM papper for details. Defaults to
-            "edm".
-        schedule : Literal["vp", "ve", "linear"]
-            The type of noise level schedule.  Defaults to "linear". If
-            schedule='ve', then :math:`\sigma(t) = \sqrt{t}`. If
-            schedule='linear', then :math:`\sigma(t) = t`. If schedule='vp',
-            see EDM paper for details. Defaults to "linear".
-        scaling : Literal["vp", "none"]
-            The type of time-dependent signal scaling :math:`s(t)`, such that
-            :math:`x = s(t) \hat{x}`. See EDM paper for details on the 'vp'
-            scaling. Defaults to 'none', in which case :math:`s(t)=1`.
-        epsilon_s : float, optional
-            Parameter to compute both the noise level schedule and the
-            time-step discetization. Only used when discretization='vp' or
-            schedule='vp'. Ignored in other cases. Defaults to 1e-3.
-        C_1 : float, optional
-            Parameters to compute the time-step discetization. Only used when
-            discretization='iddpm'. Defaults to 0.001.
-        C_2 : float, optional
-            Same as for C_1. Only used when discretization='iddpm'. Defaults to
-            0.008.
-        M : int, optional
-            Same as for C_1 and C_2. Only used when discretization='iddpm'.
-            Defaults to 1000.
-        alpha : float, optional
-            Controls (i.e. multiplies) the step size :math:`t_{i+1} -
-            \hat{t}_i` in the stochastic sampler, where :math:`\hat{t}_i` is
-            the temporarily increased noise level. Defaults to 1.0, which is
-            the recommended value.
-        S_churn : int, optional
-            Controls the amount of stochasticty injected in the SDE in the
-            stochatsic sampler. Larger values of S_churn lead to larger values
-            of :math:`\hat{t}_i`, which in turn lead to injecting more
-           stochasticity in the SDE by  Defaults to 0, which means no
-           stochasticity is injected.
-        S_min : float, optional
-            S_min and S_max control the time-step range obver which
-            stochasticty is injected in the SDE. Stochasticity is injected
-            through `\hat{t}_i` for time-steps :math:`t_i` such that
-            :math:`S_{min} \leq t_i \leq S_{max}`. Defaults to 0.0.
-        S_max : float, optional
-            See S_min. Defaults to float("inf").
-        S_noise : float, optional
-            Controls the amount of stochasticty injected in the SDE in the
-            stochatsic sampler. Added signal noise is proportinal to
-            :math:`\epsilon_i` where `\epsilon_i ~ N(0, S_{noise}^2)`. Defaults
-            to 1.0.
+    Parameters
+    ----------
+    net : torch.nn.Module
+        The diffusion model to use in the sampling process.
+    latents : torch.Tensor
+        The latent random noise used as the initial condition for the
+        stochastic ODE.
+    img_lr : torch.Tensor
+        Low-resolution input image for conditioning the diffusion process.
+        Passed as a keywork argument to the model ``net``.
+    class_labels : Optional[torch.Tensor]
+        Labels of the classes used as input to a class-conditionned
+        diffusion model. Passed as a keyword argument to the model ``net``.
+        If provided, it must be a tensor containing  integer values.
+        Defaults to ``None``, in which case it is ignored.
+    randn_like: Callable
+        Random Number Generator to generate random noise that is added
+        during the stochastic sampling. Must have the same signature as
+        torch.randn_like and return torch.Tensor. Defaults to
+        torch.randn_like.
+    num_steps : Optional[int]
+        Number of time-steps for the stochastic ODE integration. Defaults
+        to 18.
+    sigma_min : Optional[float]
+        Minimum noise level for the diffusion process. ``sigma_min``,
+        ``sigma_max``, and ``rho`` are used to compute the time-step
+        discretization, based on the choice of discretization. For the
+        default choice (``discretization='heun'``), the noise level schedule
+        is computed as:
+        :math:`\sigma_i = (\sigma_{max}^{1/\rho} + i / (\text{num_steps} - 1) * (\sigma_{min}^{1/\rho} - \sigma_{max}^{1/\rho}))^{\rho}`.
+        For other choices of ``discretization``, see details in the EDM
+        paper. Defaults to ``None``, in which case defaults values depending
+        of the specified discretization are used.
+    sigma_max : Optional[float]
+        Maximum noise level for the diffusion process. See ``sigma_min`` for
+        details. Defaults to ``None``, in which case defaults values depending
+        of the specified discretization are used.
+    rho : float, optional
+        Exponent used in the noise schedule. See ``sigma_min`` for details.
+        Only used when ``discretization="heun"``. Values in the range
+        [5, 10] produce better images. Lower values lead to truncation errors
+        equalized over all time steps. Defaults to 7.
+    solver : Literal["heun", "euler"]
+        The numerical method used to integrate the stochastic ODE. ``"euler"``
+        is 1st order solver, which is faster but produces lower-quality
+        images. ``"heun"`` is 2nd order, more expensive, but produces
+        higher-quality images. Defaults to ``"heun"``.
+    discretization : Literal["vp", "ve", "iddpm", "edm"]
+        The method to discretize time-steps :math:`t_i` in the
+        diffusion process. See the EDM paper for details. Defaults to
+        ``"edm"``.
+    schedule : Literal["vp", "ve", "linear"]
+        The type of noise level schedule.  Defaults to ``"linear"``. If
+        ``schedule="ve"``, then :math:`\sigma(t) = \sqrt{t}`. If
+        ``schedule="linear"``, then :math:`\sigma(t) = t`. If ``schedule="vp"``,
+        see EDM paper for details. Defaults to ``"linear"``.
+    scaling : Literal["vp", "none"]
+        The type of time-dependent signal scaling :math:`s(t)`, such that
+        :math:`x = s(t) \hat{x}`. See EDM paper for details on the ``"vp"``
+        scaling. Defaults to ``"none"``, in which case :math:`s(t)=1`.
+    epsilon_s : float, optional
+        Parameter to compute both the noise level schedule and the
+        time-step discetization. Only used when ``discretization="vp"`` or
+        ``schedule="vp"``. Ignored in other cases. Defaults to 1e-3.
+    C_1 : float, optional
+        Parameters to compute the time-step discetization. Only used when
+        ``discretization="iddpm"``. Defaults to 0.001.
+    C_2 : float, optional
+        Same as for C_1. Only used when ``discretization="iddpm"``. Defaults to
+        0.008.
+    M : int, optional
+        Same as for C_1 and C_2. Only used when ``discretization="iddpm"``.
+        Defaults to 1000.
+    alpha : float, optional
+        Controls (i.e. multiplies) the step size :math:`t_{i+1} -
+        \hat{t}_i` in the stochastic sampler, where :math:`\hat{t}_i` is
+        the temporarily increased noise level. Defaults to 1.0, which is
+        the recommended value.
+    S_churn : int, optional
+        Controls the amount of stochasticty injected in the SDE in the
+        stochatsic sampler. Larger values of ``S_churn`` lead to larger values
+        of :math:`\hat{t}_i`, which in turn lead to injecting more
+        stochasticity in the SDE by  Defaults to 0, which means no
+        stochasticity is injected.
+    S_min : float, optional
+        ``S_min`` and ``S_max`` control the time-step range over which
+        stochasticty is injected in the SDE. Stochasticity is injected
+        through :math:`\hat{t}_i` for time-steps :math:`t_i` such that
+        :math:`S_{min} \leq t_i \leq S_{max}`. Defaults to 0.0.
+    S_max : float, optional
+        See ``S_min``. Defaults to ``float("inf")``.
+    S_noise : float, optional
+        Controls the amount of stochasticty injected in the SDE in the
+        stochatsic sampler. Added signal noise is proportinal to
+        :math:`\epsilon_i` where :math:`\epsilon_i \sim \mathcal{N}(0, S_{noise}^2)`. Defaults
+        to 1.0.
 
     Returns
     -------
         torch.Tensor:
-            Generated batch of samples. Same shape as the input 'latents'.
+            Generated batch of samples. Same shape as the input ``latents``.
     """
 
     # conditioning
@@ -334,8 +333,7 @@ def deterministic_sampler(
                 ).to(torch.float64)
             d_prime = (
                 sigma_deriv(t_prime) / sigma(t_prime) + s_deriv(t_prime) / s(t_prime)
-            ) * x_prime
-            -sigma_deriv(t_prime) * s(t_prime) / sigma(t_prime) * denoised
+            ) * x_prime - sigma_deriv(t_prime) * s(t_prime) / sigma(t_prime) * denoised
             x_next = x_hat + h * (
                 (1 - 1 / (2 * alpha)) * d_cur + 1 / (2 * alpha) * d_prime
             )

@@ -14,11 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Model architectures used in the paper "Elucidating the Design Space of 
-Diffusion-Based Generative Models".
-"""
-
 from dataclasses import dataclass
 from typing import List
 
@@ -35,6 +30,10 @@ from physicsnemo.models.diffusion import (
 )
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
+
+# ------------------------------------------------------------------------------
+# Backbone architectures
+# ------------------------------------------------------------------------------
 
 
 @dataclass
@@ -55,60 +54,102 @@ class MetaData(ModelMetaData):
     auto_grad: bool = False
 
 
+# NOTE: this module can actually be replicated as a special case of the
+# SongUnet class (with very minior extension of the SongUnet class). We should
+# consider inheriting the more general SongUnet class here.
 class DhariwalUNet(Module):
-    """
-    Reimplementation of the ADM architecture, a U-Net variant, with optional
+    r"""
+    This architecture is a diffusion backbone for 2D image generation. It
+    reimplements the `ADM architecture <https://arxiv.org/abs/2105.05233>`_, a U-Net variant, with optional
     self-attention.
 
-    This model supports conditional and unconditional setups, as well as several
-    options for various internal architectural choices such as encoder and decoder
-    type, embedding type, etc., making it flexible and adaptable to different tasks
-    and configurations.
+    It is highly similar to the U-Net backbone defined in
+    :class:`~physicsnemo.models.diffusion.song_unet.SongUNet`, and only differs
+    in a few aspects:
+
+    • The embedding conditioning mechanism relies on adaptive scaling of the
+      group normalization layers within the U-Net blocks.
+
+    • The parameters initialization follows Kaiming uniform initialization.
 
     Parameters
     -----------
-    img_resolution : int
-        The resolution of the input/output image.
+    img_resolution :int
+        The resolution :math:`H = W` of the input/output image. Assumes square images.
+
+        *Note:* This parameter is only used as a convenience to build the
+        network. In practice, the model can still be used with images of
+        different resolutions.
     in_channels : int
-        Number of channels in the input image.
+        Number of channels :math:`C_{in}` in the input image. May include channels from both the
+        latent state :math:`\mathbf{x}` and additional channels when conditioning on images. For an
+        unconditional model, this should be equal to ``out_channels``.
     out_channels : int
-        Number of channels in the output image.
-    label_dim : int, optional
-        Number of class labels; 0 indicates an unconditional model. By default 0.
-    augment_dim : int, optional
-        Dimensionality of augmentation labels; 0 means no augmentation. By default 0.
-    model_channels : int, optional
-        Base multiplier for the number of channels across the network, by default 192.
-    channel_mult : List[int], optional
-        Per-resolution multipliers for the number of channels. By default [1,2,3,4].
-    channel_mult_emb : int, optional
-        Multiplier for the dimensionality of the embedding vector. By default 4.
-    num_blocks : int, optional
-        Number of residual blocks per resolution. By default 3.
-    attn_resolutions : List[int], optional
-        Resolutions at which self-attention layers are applied. By default [32, 16, 8].
-    dropout : float, optional
-        Dropout probability applied to intermediate activations. By default 0.10.
-    label_dropout : float, optional
-       Dropout probability of class labels for classifier-free guidance. By default 0.0.
+        Number of channels :math:`C_{out}` in the output image. Should be equal to the number
+        of channels :math:`C_{\mathbf{x}}` in the latent state.
+    label_dim : int, optional, default=0
+        Dimension of the vector-valued ``class_labels`` conditioning; 0
+        indicates no conditioning on class labels.
+    augment_dim : int, optional, default=0
+        Dimension of the vector-valued ``augment_labels`` conditioning; 0 means
+        no conditioning on augmentation labels.
+    model_channels : int, optional, default=128
+        Base multiplier for the number of channels accross the entire network.
+    channel_mult : List[int], optional, default=[1,2,2,2]
+        Multipliers for the number of channels at every level in
+        the encoder and decoder. The length of ``channel_mult`` determines the
+        number of levels in the U-Net. At level ``i``, the number of channel in
+        the feature map is ``channel_mult[i] * model_channels``.
+    channel_mult_emb : int, optional, default=4
+        Multiplier for the number of channels in the embedding vector. The
+        embedding vector has ``model_channels * channel_mult_emb`` channels.
+    num_blocks : int, optional, default=3
+        Number of U-Net blocks at each level.
+    attn_resolutions : List[int], optional, default=[16]
+        Resolutions of the levels at which self-attention layers are applied.
+        Note that the feature map resolution must match exactly the value
+        provided in ``attn_resolutions`` for the self-attention layers to be
+        applied.
+    dropout : float, optional, default=0.10
+        Dropout probability applied to intermediate activations within the
+        U-Net blocks.
+    label_dropout : float, optional, default=0.0
+        Dropout probability applied to the ``class_labels``. Typically used for
+        classifier-free guidance.
 
-    Reference
-    ----------
-    Reference: Dhariwal, P. and Nichol, A., 2021. Diffusion models beat gans on image
-    synthesis. Advances in neural information processing systems, 34, pp.8780-8794.
 
-    Note
-    -----
-    Equivalent to the original implementation by Dhariwal and Nichol, available at
-    https://github.com/openai/guided-diffusion
+    Forward
+    -------
+    x : torch.Tensor
+        The input tensor of shape :math:`(B, C_{in}, H_{in}, W_{in})`. In general ``x``
+        is the channel-wise concatenation of the latent state :math:`\mathbf{x}`
+        and additional images used for conditioning. For an unconditional
+        model, ``x`` is simply the latent state :math:`\mathbf{x}`.
+    noise_labels : torch.Tensor
+        The noise labels of shape :math:`(B,)`. Used for conditioning on
+        the noise level.
+    class_labels : torch.Tensor
+        The class labels of shape :math:`(B, \text{label_dim})`. Used for
+        conditioning on any vector-valued quantity. Can pass ``None`` when
+        ``label_dim`` is 0.
+    augment_labels : torch.Tensor, optional, default=None
+        The augmentation labels of shape :math:`(B, \text{augment_dim})`. Used
+        for conditioning on any additional vector-valued quantity. Can pass
+        ``None`` when ``augment_dim`` is 0.
 
-    Example
+    Outputs
+    -------
+    torch.Tensor:
+        The denoised latent state of shape :math:`(B, C_{out}, H_{in}, W_{in})`.
+
+
+    Examples
     --------
     >>> model = DhariwalUNet(img_resolution=16, in_channels=2, out_channels=2)
     >>> noise_labels = torch.randn([1])
-    >>> class_labels = torch.randint(0, 1, (1, 1))
-    >>> input_image = torch.ones([1, 2, 16, 16])
-    >>> output_image = model(input_image, noise_labels, class_labels)
+    >>> class_labels = torch.randint(0, 1, (1, 1))  # noqa: N806
+    >>> input_image = torch.ones([1, 2, 16, 16])  # noqa: N806
+    >>> output_image = model(input_image, noise_labels, class_labels)  # noqa: N806
     """
 
     def __init__(

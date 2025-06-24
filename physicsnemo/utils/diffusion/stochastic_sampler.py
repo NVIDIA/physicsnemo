@@ -41,7 +41,7 @@ def stochastic_sampler(
     S_max: float = float("inf"),
     S_noise: float = 1,
 ) -> Tensor:
-    """
+    r"""
     Proposed EDM sampler (Algorithm 2) with minor changes to enable
     super-resolution and patch-based diffusion.
 
@@ -50,53 +50,57 @@ def stochastic_sampler(
     net : torch.nn.Module
         The neural network model that generates denoised images from noisy
         inputs.
-        Expected signature: `net(x, x_lr, t_hat, class_labels,
-        lead_time_label=lead_time_label, embedding_selector=embedding_selector)`,
-        where:
-            x (torch.Tensor): Noisy input of shape (batch_size, C_out, H, W)
-            x_lr (torch.Tensor): Conditioning input of shape (batch_size, C_cond, H, W)
-            t_hat (torch.Tensor): Noise level of shape (batch_size, 1, 1, 1) or scalar
-            class_labels (torch.Tensor, optional): Optional class labels
-            lead_time_label (torch.Tensor, optional): Optional lead time labels
-            embedding_selector (callable, optional): Function to select
+        Expected signature: ``net(x, x_lr, t_hat, class_labels,
+        lead_time_label=lead_time_label,
+        embedding_selector=embedding_selector)``.
+
+        Inputs:
+            - **x** (*torch.Tensor*): Noisy input of shape :math:`(B, C_{out}, H, W)`
+            - **x_lr** (*torch.Tensor*): Conditioning input of shape :math:`(B, C_{cond}, H, W)`
+            - **t_hat** (*torch.Tensor*): Noise level of shape :math:`(B, 1, 1, 1)` or scalar
+            - **class_labels** (*torch.Tensor, optional*): Optional class labels
+            - **lead_time_label** (*torch.Tensor, optional*): Optional lead time labels
+            - **embedding_selector** (*callable, optional*): Function to select
             positional embeddings. Used for patch-based diffusion.
-        Returns:
-            torch.Tensor: Denoised prediction of shape (batch_size, C_out, H, W)
+
+        Output:
+            - **denoised** (*torch.Tensor*): Denoised prediction of shape :math:`(B, C_{out}, H, W)`
 
         Required attributes:
-            sigma_min (float): Minimum supported noise level for the model
-            sigma_max (float): Maximum supported noise level for the model
-            round_sigma (callable): Method to convert sigma values to tensor representation
+            - **sigma_min** (*float*): Minimum supported noise level for the model
+            - **sigma_max** (*float*): Maximum supported noise level for the model
+            - **round_sigma** (*callable*): Method to convert sigma values to
+              tensor representation
+
     latents : Tensor
         The latent variables (e.g., noise) used as the initial input for the
-        sampler. Has shape (batch_size, C_out, img_shape_y, img_shape_x).
+        sampler. Has shape :math:`(B, C_{out}, H, W)`.
     img_lr : Tensor
         Low-resolution input image for conditioning the super-resolution
-        process. Must have shape (batch_size, C_lr, img_lr_ shape_y,
-        img_lr_shape_x).
+        process. Must have shape :math:`(B, C_{lr}, H, W)`.
     class_labels : Optional[Tensor], optional
         Class labels for conditional generation, if required by the model. By
-        default None.
+        default ``None``.
     randn_like : Callable[[Tensor], Tensor]
         Function to generate random noise with the same shape as the input
         tensor.
-        By default torch.randn_like.
-    patching : Optional[GridPatching2D], optional
+        By default ``torch.randn_like``.
+    patching : Optional[GridPatching2D], default=None
         A patching utility for patch-based diffusion. Implements methods to
-        extract patches from an image and batch the patches along `dim=0`.
-        Should also implement a `fuse` method to reconstruct the original image
-       from a batch of patches. See
-       :class:`physicsnemo.utils.patching.GridPatching2D` for details. By
-       default None, in which case non-patched diffusion is used.
+        extract patches from an image and batch the patches along dim=0.
+        Should also implement a ``fuse`` method to reconstruct the original
+        image from a batch of patches. See
+        :class:`~physicsnemo.utils.patching.GridPatching2D` for details. By
+        default ``None``, in which case non-patched diffusion is used.
     mean_hr : Optional[Tensor], optional
         Optional tensor containing mean high-resolution images for
-        conditioning. Must have same height and width as `img_lr`, with shape
-        (B_hr, C_hr, img_lr_shape_y, img_lr_shape_x)  where the batch dimension
-        B_hr can be either 1, either equal to batch_size, or can be omitted. If
-        B_hr = 1 or is omitted, `mean_hr` will be expanded to match the shape
-        of `img_lr`. By default None.
+        conditioning. Must have same height and width as ``img_lr``, with shape
+        :math:`(B_{hr}, C_{hr}, H, W)`  where the batch dimension
+        :math:`B_{hr}` can be either 1, either equal to batch_size, or can be omitted. If
+        :math:`B_{hr} = 1` or is omitted, ``mean_hr`` will be expanded to match the shape
+        of ``img_lr``. By default ``None``.
     lead_time_label : Optional[Tensor], optional
-        Optional lead time labels. By default None.
+        Optional lead time labels. By default ``None``.
     num_steps : int
         Number of time steps for the sampler. By default 18.
     sigma_min : float
@@ -111,7 +115,7 @@ def stochastic_sampler(
     S_min : float
         Minimum time step for applying churn. By default 0.
     S_max : float
-        Maximum time step for applying churn. By default float("inf").
+        Maximum time step for applying churn. By default ``float("inf")``.
     S_noise : float
         Noise scaling factor applied during the churn step. By default 1.
 
@@ -119,11 +123,11 @@ def stochastic_sampler(
     -------
     Tensor
         The final denoised image produced by the sampler. Same shape as
-        `latents`: (batch_size, C_out, img_shape_y, img_shape_x).
+        ``latents``: :math:`(B, C_{out}, H, W)`.
 
     See Also
     --------
-    :class:`physicsnemo.models.diffusion.EDMPrecondSuperResolution`: A model
+    :class:`~physicsnemo.models.diffusion.preconditioning.EDMPrecondSuperResolution`: A model
         wrapper that provides preconditioning for super-resolution diffusion
         models and implements the required interface for this sampler.
     """

@@ -42,7 +42,9 @@ weather forecasts.
 
 To get started with CorrDiff, we provide a simplified version called CorrDiff-Mini that combines:
 
-1. A smaller neural network architecture that reduces memory usage and training time
+1. A smaller neural network architecture that reduces memory usage and training
+   time.
+
 2. A reduced training dataset, based on the HRRR dataset, that contains fewer samples (available at [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/resources/modulus_datasets-hrrr_mini))
 
 Together, these modifications reduce training time from thousands of GPU hours to around 10 hours on A100 GPUs. The simplified data loader included with CorrDiff-Mini also serves as a helpful example for training CorrDiff on custom datasets. Note that CorrDiff-Mini is intended for learning and educational purposes only - its predictions should not be used for real applications.
@@ -74,14 +76,21 @@ CorrDiff training is managed through `train.py` and uses YAML configuration file
     - `conf/config_generate_gefs_hrrr.yaml` - Settings for generating predictions using GEFS-HRRR models
     - `conf/config_generate_custom.yaml` - Template configuration for generation with custom trained models
 
-To select a specific configuration, use the `--config-name` option when running the training script. Each training configuration file defines three main components:
-1. Training dataset parameters
-2. Model architecture settings
-3. Training hyperparameters
+To select a specific configuration, use the `--config-name` option when running
+the training script. Each training configuration file defines three main
+components:
+
+1. Training dataset parameters.
+
+2. Model architecture settings.
+
+3. Training hyperparameters.
 
 You can modify configuration options in two ways:
-1. **Direct Editing**: Modify the YAML files directly
-2. **Command Line Override**: Use Hydra's `++` syntax to override settings at runtime
+
+1. **Direct Editing**: Modify the YAML files directly.
+
+2. **Command Line Override**: Use Hydra's `++` syntax to override settings at runtime.
 
 For example, to change the training batch size (controlled by `training.hp.total_batch_size`):
 ```bash
@@ -93,8 +102,10 @@ This modular configuration system allows for flexible experimentation while main
 ### Training the regression model
 
 CorrDiff uses a two-step training process:
-1. Train a deterministic regression model
-2. Train a diffusion model using the pre-trained regression model
+
+1. Train a deterministic regression model.
+
+2. Train a diffusion model using the pre-trained regression model.
 
 For the CorrDiff-Mini regression model, we use the following configuration components:
 
@@ -113,7 +124,7 @@ This configuration automatically loads these specific files from `conf/base`:
 
 These base configuration files contain more detailed settings that are less commonly modified but give fine-grained control over the training process.
 
-To begin training, execute the following command using [`train.py`](train.py):
+To begin training, execute the following command using [train.py](train.py):
 ```bash
 python train.py --config-name=config_training_hrrr_mini_regression.yaml
 ```
@@ -132,7 +143,7 @@ After successfully training the regression model, you can proceed with training 
 
 - A pre-trained regression model checkpoint
 - The same dataset used for regression training
-- Configuration file [`conf/config_training_hrrr_mini_diffusion.yaml`](conf/config_training_hrrr_mini_diffusion.yaml)
+- Configuration file [conf/config_training_hrrr_mini_diffusion.yaml](conf/config_training_hrrr_mini_diffusion.yaml)
 
 To start the diffusion model training, execute:
 ```bash
@@ -145,12 +156,12 @@ The training will generate checkpoints in the `checkpoints_diffusion` directory.
 
 ### Generation
 
-Once both models are trained, you can use [`generate.py`](generate.py) to create new predictions. The generation process requires:
+Once both models are trained, you can use [generate.py](generate.py) to create new predictions. The generation process requires:
 
 **Required Files:**
 - Trained regression model checkpoint
 - Trained diffusion model checkpoint
-- Configuration file [`conf/config_generate_hrrr_mini.yaml`](conf/config_generate_hrrr_mini.yaml)
+- Configuration file [conf/config_generate_hrrr_mini.yaml](conf/config_generate_hrrr_mini.yaml)
 
 Execute the generation command:
 ```bash
@@ -183,9 +194,11 @@ The Taiwan example demonstrates CorrDiff training on a high-resolution weather d
 
 The Taiwan example supports three types of models, each serving a different purpose:
 
-1. **Regression Model**: Basic deterministic model
-2. **Diffusion Model**: Full probabilistic model
-3. **Patch-based Diffusion Model**: Memory-efficient variant that processes small spatial regions to improve scalability
+1. **Regression Model**: Basic deterministic model.
+
+2. **Diffusion Model**: Full probabilistic model.
+
+3. **Patch-based Diffusion Model**: Memory-efficient variant that processes small spatial regions to improve scalability.
 
 The patch-based approach divides the target region into smaller subsets during both training and generation, making it particularly useful for memory-constrained environments or large spatial domains.
 
@@ -223,20 +236,20 @@ To switch between model types, simply change the configuration name in the train
 
 The evaluation pipeline for CorrDiff models consists of two main components:
 
-1. **Sample Generation** ([`generate.py`](generate.py)):
-   Generates predictions and saves them in a netCDF file format. The process uses configuration settings from [`conf/config_generate.yaml`](conf/config_generate.yaml).
+1. **Sample Generation** ([generate.py](generate.py)):
+   Generates predictions and saves them in a netCDF file format. The process uses configuration settings from [conf/config_generate.yaml](conf/config_generate.yaml).
    ```bash
    python generate.py --config-name=config_generate_taiwan.yaml
    ```
 
-2. **Performance Scoring** ([`score_samples.py`](score_samples.py)):
+2. **Performance Scoring** ([score_samples.py](score_samples.py)):
    Computes both deterministic metrics (like MSE, MAE) and probabilistic scores for the generated samples.
    ```bash
    python score_samples.py path=<PATH_TO_NC_FILE> output=<OUTPUT_FILE>
    ```
 
 For visualization and analysis, you have several options:
-- Use the plotting scripts in the [`inference`](inference/) directory
+- Use the plotting scripts in the [inference](inference/) directory
 - Visualize results with [Earth2Studio](https://github.com/NVIDIA/earth2studio)
 - Create custom visualizations using the NetCDF4 output structure
 
@@ -302,7 +315,7 @@ This repository includes examples of **CorrDiff** training on specific datasets,
 
 ### Defining a Custom Dataset
 
-To train CorrDiff on a custom dataset, you need to implement a custom dataset class that inherits from `DownscalingDataset` defined in [`datasets/base.py`](./datasets/base.py). This base class defines the interface that all dataset implementations must follow.
+To train CorrDiff on a custom dataset, you need to implement a custom dataset class that inherits from `DownscalingDataset` defined in [datasets/base.py](./datasets/base.py). This base class defines the interface that all dataset implementations must follow.
 
 **Required Implementation:**
 
@@ -348,17 +361,21 @@ def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, Optional[to
 
 **Important Notes:**
 - The training script will automatically:
+
   1. Parse the `type` field to locate your dataset file and class
+
   2. Register your custom dataset class using `register_dataset()`
+
   3. Pass all other fields in the `dataset` section as kwargs to your class constructor
+
 - All tensors should be properly normalized (use `normalize_input`/`normalize_output` methods if needed)
 - Ensure consistent dimensions across all samples
 - Channel metadata should accurately describe your data variables
 
 
 For reference implementations of dataset classes, look at:
-- [`datasets/hrrrmini.py`](./datasets/hrrrmini.py) - Simple example using NetCDF format
-- [`datasets/cwb.py`](./datasets/cwb.py) - More complex example
+- [datasets/hrrrmini.py](./datasets/hrrrmini.py) - Simple example using NetCDF format
+- [datasets/cwb.py](./datasets/cwb.py) - More complex example
 
 
 ### Training configuration
@@ -413,12 +430,19 @@ model. During training, you can fine-tune various parameters. The most commonly 
 
 > **Note on Patch Size Selection**  
 > When implementing a patch-based training, choosing the right patch size is critical for model performance. The patch dimensions are controlled by `patch_shape_x` and `patch_shape_y` in your configuration file. To determine optimal patch sizes:
+>
 > 1. Train a regression model on the full domain.
-> 2. Compute the residuals `x_res = x_data - regression_model(x_data)` on multiple samples, where `x_data` are ground truth samples.
-> 3. Calculate the auto-correlation function of your residuals using the provided utilities in [`inference/power_spectra.py`](./inference/power_spectra.py):
+>
+> 2. Compute the residuals `x_res = x_data - regression_model(x_data)` on
+>    multiple samples, where `x_data` are ground truth samples.
+>
+> 3. Calculate the auto-correlation function of your residuals using the provided utilities in [inference/power_spectra.py](./inference/power_spectra.py):
 >    - `average_power_spectrum()`
 >    - `power_spectra_to_acf()`
-> 4. Set patch dimensions to match or exceed the distance at which auto-correlation approaches zero.
+>
+> 4. Set patch dimensions to match or exceed the distance at which
+>    auto-correlation approaches zero.
+>
 > 5. This ensures each patch captures the full spatial correlation structure of your data.
 >
 > This analysis helps balance computational efficiency with the preservation of local physical relationships in your data.
@@ -477,11 +501,11 @@ The generated samples are saved in a NetCDF file with three main components:
 
    Training from scratch is recommended for all other cases.
 
-1. **How many samples are needed to train a CorrDiff model?**  
+2. **How many samples are needed to train a CorrDiff model?**  
    The more, the better. As a rule of thumb, at least 50,000 samples are necessary.  
    *Note: For patch-based diffusion, each patch can be counted as a sample.*
 
-2. **How many GPUs are required to train CorrDiff?**  
+3. **How many GPUs are required to train CorrDiff?**  
    A single GPU is sufficient as long as memory is not exhausted, but this may
    result in extremely slow training. To accelerate training, CorrDiff
    leverages distributed data parallelism. The total training wall-clock time
@@ -491,23 +515,23 @@ The generated samples are saved in a NetCDF file with three main components:
    patch-based diffusion models, decrease the patch size—ensuring it remains
    larger than the auto-correlation distance.
 
-3. **How long does it take to train CorrDiff on a custom dataset?**  
+4. **How long does it take to train CorrDiff on a custom dataset?**  
    Training CorrDiff on the continental United States dataset required
    approximately 5,000 A100 GPU hours. This corresponds to roughly 80 hours of
    wall-clock time with 64 GPUs. You can expect the cost to scale
    linearly with the number of samples available.
 
-4. **What are CorrDiff's current limitations for custom datasets?**  
+5. **What are CorrDiff's current limitations for custom datasets?**  
    The main limitation of CorrDiff is the maximum _downscaling ratio_ it can
    achieve. For a purely spatial super-resolution task (where input and output variables are the same), CorrDiff can reliably achieve a maximum resolution scaling of ×16. If the task involves inferring new output variables, the maximum reliable spatial super-resolution is ×11.
 
-5. **What does a successful training look like?**  
+6. **What does a successful training look like?**  
    In a successful training run, the loss function should decrease monotonically, as shown below:  
   <p align="center">
 <img src="../../../docs/img/corrdiff_training_loss.png"/>
 </p>
 
-6. **Which hyperparameters are most important?**  
+7. **Which hyperparameters are most important?**  
    One of the most crucial hyperparameters is the patch size for a patch-based
    diffusion model (`patch_shape_x` and `patch_shape_y` in the configuration file). A larger
    patch size increases computational cost and GPU memory requirements, while a
@@ -530,7 +554,7 @@ The generated samples are saved in a NetCDF file with three main components:
      processed in parallel on each GPU. It needs to be reduced if you encounter
      an out-of-memory error.
 
-7. **How do I set up validation during training?**  
+8. **How do I set up validation during training?**  
    CorrDiff supports validation during training through its configuration system. The validation approach is based on a separate validation configuration that inherits from and selectively overrides the training dataset settings.
 
    **Configuration Example**:

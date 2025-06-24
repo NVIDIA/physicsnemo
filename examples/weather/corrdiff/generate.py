@@ -32,7 +32,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.patching import GridPatching2D
 from physicsnemo import Module
-from physicsnemo.utils.generative import deterministic_sampler, stochastic_sampler
+from physicsnemo.utils.diffusion import deterministic_sampler, stochastic_sampler
 from physicsnemo.utils.corrdiff import (
     NetCDFWriter,
     get_time_from_range,
