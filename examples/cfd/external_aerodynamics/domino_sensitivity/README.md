@@ -1,8 +1,8 @@
-# DoMINO Sensitivity Analysis for Aerodynamic Design Optimization
+# DoMINO Sensitivity Analysis for Aerodynamic Design
 
 This directory contains a sensitivity analysis pipeline for the DoMINO
 (Decomposable Multi-scale Iterative Neural Operator) model, specifically
-designed for aerodynamic design optimization. The pipeline computes
+designed for aerodynamic analysis. The pipeline computes
 gradient-based sensitivities that indicate how geometric modifications to a
 vehicle or aircraft surface affect aerodynamic performance metrics such as drag
 force.
