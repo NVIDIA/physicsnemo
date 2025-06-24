@@ -397,7 +397,7 @@ def laplacian_smoothing(
 if __name__ == "__main__":
     import pyvista as pv
 
-    # Example 1: Smooth a random scalar on a sphere (point data)
+    # Example: Smooth a random scalar on a sphere (point data)
     sphere = pv.Sphere(theta_resolution=200, phi_resolution=200)
     np.random.seed(0)
     vals = np.random.rand(sphere.n_points)  # random values per point
@@ -408,25 +408,3 @@ if __name__ == "__main__":
     sphere["s_vals"] = s_vals
     sphere.plot(scalars="vals", cmap="turbo")
     sphere.plot(scalars="s_vals", cmap="turbo")
-
-    # # Example 2: Smooth the point coordinates (vector data) of a slightly perturbed plane
-    # plane = pv.Plane(i_resolution=10, j_resolution=10)
-    # # Create a noisy plane by displacing z-coords randomly
-    # pts = plane.points.copy()
-    # pts[:, 2] += 0.2 * np.random.randn(pts.shape[0])
-    # plane.points = pts
-    # # Use the coordinates as a vector field to be smoothed
-    # coords = plane.points.copy()
-    # smoothed_coords = laplacian_smoothing(plane, coords, location='points', iterations=10)
-    # print("\nPlane coords sample before (first 3 pts):\n", coords[:3])
-    # print("After smoothing (first 3 pts):\n", smoothed_coords[:3])
-
-    # # Example 3: Smooth a per-cell scalar on the sphere (cell data)
-    # cell_centers = sphere.cell_centers().points
-    # # Define a simple scalar: distance of cell-center from origin (should be nearly constant for sphere)
-    # cell_vals = np.linalg.norm(cell_centers, axis=1)
-    # smoothed_cells = laplacian_smoothing(sphere, cell_vals, location='cells', iterations=3)
-    # print("\nSphere cell-values (radius) before smoothing: {:.3f} ± {:.3f}".format(
-    #     cell_vals.mean(), cell_vals.std()))
-    # print("After 3 iters: {:.3f} ± {:.3f}".format(
-    #     smoothed_cells.mean(), smoothed_cells.std()))
