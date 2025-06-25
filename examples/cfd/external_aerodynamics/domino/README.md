@@ -222,7 +222,9 @@ test samples. Follow the below steps to run the `test.py`
    where `project.name` is as defined in the `config.yaml`. Update the
    `eval.scaling_param_path` accordingly.
 
-3. Run the `test.py`.
+3. Run the `test.py`. The test script can be run in parallel as well. Refer to
+   the training guidelines for Multi-GPU. Note, for running `test.py` in parallel,
+   the number of GPUs chosen must be <= the number of test samples.
 
 ### DoMINO model pipeline for inference on STLs
 
