@@ -213,7 +213,7 @@ To enable retraining the DoMINO model from a pre-trained checkpoint, follow the 
 After training is completed, `test.py` script can be used to run inference on
 test samples. Follow the below steps to run the `test.py`
 
-1. Update the config in the `con/config.yaml` under the `Testing data Configs`
+1. Update the config in the `conf/config.yaml` under the `Testing data Configs`
    tab.
 
 2. The test script is designed to run inference on the raw `.stl`, `.vtp` and
