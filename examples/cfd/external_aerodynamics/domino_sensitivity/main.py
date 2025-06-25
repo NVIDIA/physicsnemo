@@ -39,7 +39,7 @@ from physicsnemo.distributed import DistributedManager
 
 from numpy.typing import NDArray
 import pyvista as pv
-from .design_datapipe import DesignDatapipe
+from design_datapipe import DesignDatapipe
 from dataclasses import dataclass
 
 
@@ -402,7 +402,7 @@ class DoMINOInference:
             mesh.cell_normals,
         )
 
-        from .utilities.mesh_postprocessing import laplacian_smoothing
+        from utilities.mesh_postprocessing import laplacian_smoothing
 
         mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
         mesh_pointdata.cell_data[
@@ -451,8 +451,10 @@ class DoMINOInference:
 if __name__ == "__main__":
     torch.cuda.set_per_process_memory_fraction(0.9)
 
-    with hydra.initialize(version_base="1.3", config_path="conf"):
-        cfg = hydra.compose(config_name="config")
+    config_path = Path() / ".." / "domino" / "src" / "conf"
+    assert config_path.exists(), f"{config_path=} does not exist!"
+    with hydra.initialize(version_base="1.3", config_path=str(config_path)):
+        cfg: DictConfig = hydra.compose(config_name="config")
 
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -462,7 +464,7 @@ if __name__ == "__main__":
 
     domino = DoMINOInference(
         cfg=cfg,
-        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.41.pt").absolute(),
+        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.391.pt").absolute(),
         dist=dist,
     )
 
