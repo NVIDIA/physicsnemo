@@ -81,9 +81,13 @@ class DoMINOInference:
             if self.model_checkpoint_path is not None:
                 with open(self.model_checkpoint_path, "rb") as f:
                     self.model.load_state_dict(torch.load(f, map_location=self.device))
-                print("Model loaded with checkpoint...")
             else:
-                print("Model loaded without checkpoint...")
+                import warnings
+
+                warnings.warn(
+                    "Model loaded without checkpoint. This is not recommended for production use.",
+                    stacklevel=2,
+                )
 
             if (self.dist is not None) and (self.dist.world_size > 1):
                 self.model = DistributedDataParallel(
