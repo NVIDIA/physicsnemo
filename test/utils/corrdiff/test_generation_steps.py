@@ -77,7 +77,7 @@ def test_diffusion_step(device, pytestconfig):
 
     from physicsnemo.models.diffusion import EDMPrecondSuperResolution
     from physicsnemo.utils.corrdiff import diffusion_step
-    from physicsnemo.utils.generative import deterministic_sampler, stochastic_sampler
+    from physicsnemo.utils.diffusion import deterministic_sampler, stochastic_sampler
 
     # Define the preconditioner
     mock_precond = EDMPrecondSuperResolution(
@@ -134,7 +134,7 @@ def test_diffusion_step(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_diffusion_step_rectangle(device, pytestconfig):
     from physicsnemo.utils.corrdiff import diffusion_step
-    from physicsnemo.utils.generative import stochastic_sampler
+    from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
 
     img_shape_y, img_shape_x = 32, 16

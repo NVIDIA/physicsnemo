@@ -21,7 +21,7 @@ from pytest_utils import import_or_fail
 @import_or_fail("cftime")
 def test_tuple_product(pytestconfig):
 
-    from physicsnemo.utils.generative import tuple_product
+    from physicsnemo.utils.diffusion import tuple_product
 
     # Test with an empty tuple
     assert tuple_product(()) == 1

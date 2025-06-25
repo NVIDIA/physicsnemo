@@ -56,21 +56,23 @@ consistent interfaces for data access.
     :members:
     :show-inheritance:
 
-Generative utils
+.. _diffusion_utils:
+
+Diffusion utils
 ----------------
 
-Tools for working with generative models, including deterministic and stochastic sampling utilities.
-These are particularly useful when implementing diffusion models or other generative approaches.
+Tools for working with diffusion models and other generative approaches,
+including deterministic and stochastic sampling utilities.
 
-.. automodule:: physicsnemo.utils.generative.deterministic_sampler
+.. automodule:: physicsnemo.utils.diffusion.deterministic_sampler
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.generative.stochastic_sampler
+.. automodule:: physicsnemo.utils.diffusion.stochastic_sampler
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.generative.utils
+.. automodule:: physicsnemo.utils.diffusion.utils
     :members:
     :show-inheritance:
 
@@ -100,11 +102,19 @@ and atmospheric parameters. These utilities are used extensively in weather pred
 .. automodule:: physicsnemo.utils.zenith_angle
     :show-inheritance:
 
+.. _patching_utils:
+
 Patching utils
 --------------
 
-Utilities for handling data patching operations, particularly useful in image-based deep learning
-models where processing needs to be done on patches of the input data.
+Patching utilities are particularly useful for *patch-based* diffusion, also called
+*multi-diffusion*. This approach is used to scale diffusion to very large images.
+The following patching utilities extract patches from 2D images, and typically gather
+them in the batch dimension. A batch of patches is therefore composed of multiple
+smaller patches extracted from each sample in the original batch of larger
+images. Diffusion models can then process these patches independently. These
+utilities also support fusing operations to reconstruct the entire predicted
+image from the individual predicted patches.
 
 .. automodule:: physicsnemo.utils.patching
     :members:
