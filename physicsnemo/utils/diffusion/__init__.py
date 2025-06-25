@@ -13,7 +13,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# ruff: noqa
 
 from .deterministic_sampler import deterministic_sampler
 from .stochastic_sampler import stochastic_sampler
