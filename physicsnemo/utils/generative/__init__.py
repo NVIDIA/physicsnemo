@@ -15,9 +15,16 @@
 # limitations under the License.
 # ruff: noqa
 
-from .deterministic_sampler import deterministic_sampler
-from .stochastic_sampler import stochastic_sampler
-from .utils import (
+import warnings
+
+warnings.warn(
+    "physicsnemo.utils.generative is deprecated and will be removed in a future version. "
+    "Please use physicsnemo.utils.diffusion instead."
+)
+
+from physicsnemo.utils.diffusion.deterministic_sampler import deterministic_sampler
+from physicsnemo.utils.diffusion.stochastic_sampler import stochastic_sampler
+from physicsnemo.utils.diffusion.utils import (
     EasyDict,
     InfiniteSampler,
     StackedRandomGenerator,
