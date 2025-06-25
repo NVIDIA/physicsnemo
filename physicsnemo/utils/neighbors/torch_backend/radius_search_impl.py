@@ -64,17 +64,6 @@ def radius_search_impl(
 
             points = points[indices].transpose(0, 1)
 
-        print(f"poitns shape: {points.shape}")
-
-        # # Pad with -1 if fewer points found than max_points
-        # if selected_indices.shape[0] < max_points:
-        #     pad_size = max_points - selected_indices.shape[0]
-        #     selected_indices = torch.nn.functional.pad(selected_indices, (0, pad_size), value=-1)
-        #     if return_dists:
-        #         dists = torch.nn.functional.pad(dists, (0, pad_size), value=0)
-        #     if return_points:
-        #         points = torch.nn.functional.pad(points, (0, 0, 0, pad_size), value=0)
-
     # Handle return values
     if return_points:
         if return_dists:

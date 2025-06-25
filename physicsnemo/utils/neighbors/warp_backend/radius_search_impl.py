@@ -34,21 +34,27 @@ if WARP_AVAILABLE:
     import warp as wp
 
     wp.config.quiet = True
+    # wp.config.lineinfo = True
 
     wp.init()
+
+    BLOCK_DIM = 32
 
     from .kernels import (
         radius_search_count,
         radius_search_limited_select,
         radius_search_unlimited_select,
+        radius_search_unlimited_select_with_dists,
+        radius_search_unlimited_select_with_dists_and_points,
+        radius_search_unlimited_select_with_points,
     )
 
     def count_neighbors(
         grid: wp.HashGrid,
         wp_points: wp.array(dtype=wp.vec3),
         wp_queries: wp.array(dtype=wp.vec3),
-        wp_device: wp.context.Device | None,
-        wp_stream: wp.Stream | None,
+        wp_launch_device: wp.context.Device | None,
+        wp_launch_stream: wp.Stream | None,
         radius: float,
         N_queries: int,
     ) -> tuple[int, wp.array(dtype=wp.int32)]:
@@ -63,8 +69,9 @@ if WARP_AVAILABLE:
             outputs=[
                 wp_result_count,
             ],
-            stream=wp_stream,
-            device=wp_device,
+            stream=wp_launch_stream,
+            device=wp_launch_device,
+            block_dim=BLOCK_DIM,
         )
 
         # The offset tensor is owned by warp
@@ -84,6 +91,141 @@ if WARP_AVAILABLE:
 
         # Return the count and the offsets:
         return total_count, wp_offset
+
+    def gather_neighbors(
+        grid: wp.HashGrid,
+        output_device: torch.device,
+        wp_points: wp.array(dtype=wp.vec3),
+        wp_queries: wp.array(dtype=wp.vec3),
+        wp_offset: wp.array(dtype=wp.int32),
+        wp_launch_device: wp.context.Device | None,
+        wp_launch_stream: wp.Stream | None,
+        radius: float,
+        N_queries: int,
+        return_dists: bool,
+        return_points: bool,
+        total_count: int,
+    ) -> wp.array | tuple[wp.array]:
+        """
+        Do the actual gathering of neighbors.
+
+        Select a kernel based on the return_dists and return_points flags.
+
+        Args:
+            grid: The hash grid to use for the search.
+            wp_points: The points to search in, warp array.
+            wp_queries: The queries to search for, warp array.
+            wp_offset: The offset in output for each input point , warp array.
+            wp_launch_device: The device to launch the kernel on.
+            wp_launch_stream: The stream to launch the kernel on.
+            radius: The radius that bounds the search.
+            N_queries: Total number of query points
+            return_dists: Whether to return the distances of the neighbors.
+            return_points: Whether to return the points of the neighbors.
+            total_count: The total number of neighbors found.
+        """
+        # These three tensors need to persist outside this function, potentially,
+        # So they are allocated via torch:
+        indices = torch.zeros(
+            (
+                2,
+                total_count,
+            ),
+            dtype=torch.int32,
+            device=output_device,
+        )
+
+        if return_dists:
+            distances = torch.zeros(
+                (total_count,), dtype=torch.float32, device=output_device
+            )
+
+        if return_points:
+            points = torch.zeros(
+                (total_count, 3), dtype=torch.float32, device=output_device
+            )
+
+        # Now, kernel selection:
+        if not return_dists and not return_points:
+            wp.launch(
+                kernel=radius_search_unlimited_select,
+                dim=N_queries,
+                inputs=[
+                    grid.id,
+                    wp_points,
+                    wp_queries,
+                    wp_offset,
+                    wp.from_torch(indices, return_ctype=True),
+                    radius,
+                ],
+                stream=wp_launch_stream,
+                device=wp_launch_device,
+                block_dim=BLOCK_DIM,
+            )
+
+            return indices
+
+        elif return_dists and not return_points:
+            wp.launch(
+                kernel=radius_search_unlimited_select_with_dists,
+                dim=N_queries,
+                inputs=[
+                    grid.id,
+                    wp_points,
+                    wp_queries,
+                    wp_offset,
+                    wp.from_torch(indices, return_ctype=True),
+                    wp.from_torch(distances, return_ctype=True),
+                    radius,
+                ],
+                stream=wp_launch_stream,
+                device=wp_launch_device,
+                block_dim=BLOCK_DIM,
+            )
+
+            return indices, distances
+        elif not return_dists and return_points:
+
+            wp.launch(
+                kernel=radius_search_unlimited_select_with_points,
+                dim=N_queries,
+                inputs=[
+                    grid.id,
+                    wp_points,
+                    wp_queries,
+                    wp_offset,
+                    wp.from_torch(indices, return_ctype=True),
+                    wp.from_torch(points, return_ctype=True),
+                    radius,
+                ],
+                stream=wp_launch_stream,
+                device=wp_launch_device,
+                block_dim=BLOCK_DIM,
+            )
+
+            return indices, points
+
+        else:
+
+            wp.launch(
+                kernel=radius_search_unlimited_select_with_dists_and_points,
+                dim=N_queries,
+                inputs=[
+                    grid.id,
+                    wp_points,
+                    wp_queries,
+                    wp_offset,
+                    wp.from_torch(indices, return_ctype=True),
+                    wp.from_torch(distances, return_ctype=True),
+                    wp.from_torch(points, return_ctype=True),
+                    radius,
+                ],
+                stream=wp_launch_stream,
+                device=wp_launch_device,
+                block_dim=BLOCK_DIM,
+            )
+
+            return indices, points, distances
 
     def radius_search_impl(
         points: torch.Tensor,
@@ -113,72 +255,51 @@ if WARP_AVAILABLE:
         # Get the device from queries and the stream from torch
         # This is meant to ensure if this kernel is called from a torch stream context, it uses it.
         if points.device.type == "cuda":
-            wp_stream = wp.stream_from_torch(torch.cuda.current_stream(points.device))
-            wp_device = None  # We explicitly pass None if using the stream.
+            wp_launch_stream = wp.stream_from_torch(
+                torch.cuda.current_stream(points.device)
+            )
+            wp_launch_device = None  # We explicitly pass None if using the stream.
         else:
-            wp_stream = None
-            wp_device = "cpu"  # CPUs have no streams
+            wp_launch_stream = None
+            wp_launch_device = "cpu"  # CPUs have no streams
 
         # We need to create a hash grid:
-        grid = wp.HashGrid(
-            dim_x=50, dim_y=50, dim_z=50, device=wp.device_from_torch(points.device)
-        )
-        grid.build(points=wp_points, radius=radius)
+        grid = wp.HashGrid(dim_x=64, dim_y=64, dim_z=64, device=wp_points.device)
+        grid.reserve(N_queries)
+        grid.build(points=wp_points, radius=0.5 * radius)
 
         # Now, the situations diverge based on max_points.
 
         if max_points is None:
 
             total_count, wp_offset = count_neighbors(
-                grid, wp_points, wp_queries, wp_device, wp_stream, radius, N_queries
+                grid,
+                wp_points,
+                wp_queries,
+                wp_launch_device,
+                wp_launch_stream,
+                radius,
+                N_queries,
             )
 
-            if not total_count < 2**31 - 1:
-                raise RuntimeError(
-                    f"Total result count is too large: {total_count} > 2**31 - 1"
-                )
+            # if not total_count < 2**31 - 1:
+            #     raise RuntimeError(
+            #         f"Total result count is too large: {total_count} > 2**31 - 1"
+            #     )
 
-            # These three tensors need to persist outside this function, potentially,
-            # So they are allocated via torch:
-            indices = torch.zeros(
-                (
-                    2,
-                    total_count,
-                ),
-                dtype=torch.int32,
-                device=points.device,
-            )
-            if return_dists:
-                distances = torch.zeros(
-                    (total_count,), dtype=torch.float32, device=points.device
-                )
-            else:
-                distances = torch.empty((0), dtype=torch.float32, device=points.device)
-
-            if return_points:
-                points = torch.zeros(
-                    (total_count, 3), dtype=torch.float32, device=points.device
-                )
-            else:
-                points = torch.empty((0, 3), dtype=torch.float32, device=points.device)
-
-            wp.launch(
-                kernel=radius_search_unlimited_select,
-                dim=N_queries,
-                inputs=[
-                    grid.id,
-                    wp_points,
-                    wp_queries,
-                    wp_offset,
-                    wp.from_torch(indices, return_ctype=True),
-                    return_dists,
-                    wp.from_torch(distances, return_ctype=True),
-                    return_points,
-                    wp.from_torch(points, return_ctype=True),
-                    radius,
-                ],
-                stream=wp_stream,
-                device=wp_device,
+            return gather_neighbors(
+                grid,
+                points.device,
+                wp_points,
+                wp_queries,
+                wp_offset,
+                wp_launch_device,
+                wp_launch_stream,
+                radius,
+                N_queries,
+                return_dists,
+                return_points,
+                total_count,
             )
 
         else:
@@ -221,8 +342,8 @@ if WARP_AVAILABLE:
                     return_points,
                     wp.from_torch(points, return_ctype=True) if return_points else None,
                 ],
-                stream=wp_stream,
-                device=wp_device,
+                stream=wp_launch_stream,
+                device=wp_launch_device,
             )
 
         # Handle the matrix of return values:

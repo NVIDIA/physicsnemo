@@ -199,7 +199,7 @@ if __name__ == "__main__":
         device="cpu",
         return_dists=True,
         return_points=True,
-        max_points=None,
-        backend="torch",
+        max_points=5,
+        backend="warp",
         radius=0.17,
     )
