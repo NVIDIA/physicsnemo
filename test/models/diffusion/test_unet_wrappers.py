@@ -62,7 +62,7 @@ def test_unet_fp16_forwards(device):
 
     # Construct the UNet model
     res, inc, outc = 64, 2, 3
-    model = UNet(
+    model_fp16 = UNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -70,10 +70,23 @@ def test_unet_fp16_forwards(device):
         use_fp16=True,
     ).to(device)
 
+    model_fp32 = UNet(
+        img_resolution=res,
+        img_in_channels=inc,
+        img_out_channels=outc,
+        model_type="SongUNet",
+        use_fp16=False,
+    ).to(device)
+
     input_image = torch.ones([1, inc, res, res]).to(device)
     lr_image = torch.randn([1, outc, res, res]).to(device)
-    output = model(x=input_image, img_lr=lr_image)
-    assert output.shape == (1, outc, res, res)
+    output_fp16 = model_fp16(x=input_image, img_lr=lr_image)
+    output_fp32 = model_fp32(x=input_image, img_lr=lr_image)
+
+    assert output_fp16.shape == (1, outc, res, res)
+    assert torch.allclose(
+        output_fp16, output_fp32, rtol=1e-3, atol=1e-3
+    ), "FP16 and FP32 outputs differ more than allowed"
 
     # Construct the StormCastUNet model
     model = StormCastUNet(
