@@ -32,7 +32,7 @@ has_lead_time: False
 # Whether the model has lead time.
 
 perf:
-  force_fp16: false
+  use_fp16: false
     # Whether to force fp16 precision for the model. If false, it'll use the precision
     # specified upon training.
   use_torch_compile: false

@@ -148,7 +148,7 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
 
-        self.use_fp16 = use_fp16
+        self._use_fp16 = use_fp16
         model_class = getattr(network_module, model_type)
         self.model = model_class(
             img_resolution=img_resolution,
@@ -156,6 +156,44 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
             out_channels=img_out_channels,
             **model_kwargs,
         )
+        self.use_fp16 = use_fp16
+
+    @property
+    def use_fp16(self):
+        """
+        bool: Whether the model uses float16 precision.
+
+        Returns
+        -------
+        bool
+            True if the model is in float16 mode, False otherwise.
+        """
+        return self._use_fp16
+
+    @use_fp16.setter
+    def use_fp16(self, value: bool):
+        """
+        Set whether the model should use float16 precision.
+
+        Parameters
+        ----------
+        value : bool
+            If True, moves the model to torch.float16. If False, moves to torch.float32.
+
+        Raises
+        ------
+        ValueError
+            If `value` is not a boolean.
+        """
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"`use_fp16` must be a boolean, but got {type(value).__name__}."
+            )
+        self._use_fp16 = value
+        if value:
+            self.to(torch.float16)
+        else:
+            self.to(torch.float32)
 
     def forward(
         self,

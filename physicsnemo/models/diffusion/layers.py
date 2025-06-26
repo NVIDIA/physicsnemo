@@ -27,7 +27,6 @@ from typing import Any, Dict, List
 import numpy as np
 import nvtx
 import torch
-import torch.cuda.amp as amp
 from einops import rearrange
 from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
@@ -399,7 +398,6 @@ class GroupNorm(torch.nn.Module):
         else:
             # Use custom GroupNorm implementation that supports channels last
             # memory layout for inference
-            x = x.float()
             x = rearrange(x, "b (g c) h w -> b g c h w", g=self.num_groups)
 
             mean = x.mean(dim=[2, 3, 4], keepdim=True)
@@ -479,23 +477,57 @@ class AttentionOp(torch.autograd.Function):
 
 class Attention(torch.nn.Module):
     """
-    Unified U-Net block with optional up/downsampling and self-attention.
-    Represents the union of all features employed by the DDPM++, NCSN++, and
-    ADM architectures.
+    Self-attention block used in U-Net-style architectures, such as DDPM++, NCSN++, and ADM.
+    Applies GroupNorm followed by multi-head self-attention and a projection layer.
+
+    Parameters
+    ----------
+    out_channels : int
+        Number of channels in the input and output feature maps.
+    num_heads : int
+        Number of attention heads. Must be a positive integer.
+    eps : float, optional
+        Epsilon value for numerical stability in GroupNorm. By default 1e-5.
+    init_zero : dict, optional
+        Initialization parameters with zero weights for certain layers. By default
+        {'init_weight': 0}.
+    init_attn : dict, optional
+        Initialization parameters specific to attention mechanism layers.
+        Defaults to 'init' if not provided.
+    init : dict, optional
+        Initialization parameters for convolutional and linear layers.
+    use_apex_gn : bool, optional
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
+        Need to set this as False on cpu. Defaults to False.
+    amp_mode : bool, optional
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
+    fused_conv_bias: bool, optional
+        A boolean flag indicating whether bias will be passed as a parameter of conv2d. Defaults to False.
+
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape [B, C, H, W], where B is batch size, C is `out_channels`, and H, W are spatial dimensions.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of the same shape as input: [B, C, H, W].
     """
 
     def __init__(
         self,
         *,
-        out_channels,
-        eps,
-        init_zero,
-        init_attn,
-        init,
-        num_heads,
-        use_apex_gn,
-        amp_mode,
-        fused_conv_bias,
+        out_channels: int,
+        num_heads: int,
+        eps: float = 1e-5,
+        init_zero: Dict[str, Any] = dict(init_weight=0),
+        init_attn: Any = None,
+        init: Dict[str, Any] = dict(),
+        use_apex_gn: bool = False,
+        amp_mode: bool = False,
+        fused_conv_bias: bool = False,
     ) -> None:
         super().__init__()
         self.norm2 = GroupNorm(
@@ -520,6 +552,10 @@ class Attention(torch.nn.Module):
             amp_mode=amp_mode,
             **init_zero,
         )
+        if not isinstance(num_heads, int) or num_heads <= 0:
+            raise ValueError(
+                f"`num_heads` must be a positive integer, but got {num_heads}"
+            )
         self.num_heads = num_heads
 
     def forward(self, x):
@@ -713,11 +749,11 @@ class UNetBlock(torch.nn.Module):
         if self.attention:
             self.attn = Attention(
                 out_channels=out_channels,
+                num_heads=self.num_heads,
                 eps=eps,
                 init_zero=init_zero,
                 init_attn=init_attn,
                 init=init,
-                num_heads=self.num_heads,
                 use_apex_gn=use_apex_gn,
                 amp_mode=amp_mode,
                 fused_conv_bias=fused_conv_bias,

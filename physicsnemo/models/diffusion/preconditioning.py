@@ -783,7 +783,7 @@ class EDMPrecondSuperResolution(Module):
         self.img_resolution = img_resolution
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
-        self.use_fp16 = use_fp16
+        self._use_fp16 = use_fp16
         self.sigma_data = sigma_data
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
@@ -796,6 +796,44 @@ class EDMPrecondSuperResolution(Module):
             **model_kwargs,
         )  # TODO needs better handling
         self.scaling_fn = self._scaling_fn
+        self.use_fp16 = use_fp16
+
+    @property
+    def use_fp16(self):
+        """
+        bool: Whether the model uses float16 precision.
+
+        Returns
+        -------
+        bool
+            True if the model is in float16 mode, False otherwise.
+        """
+        return self._use_fp16
+
+    @use_fp16.setter
+    def use_fp16(self, value: bool):
+        """
+        Set whether the model should use float16 precision.
+
+        Parameters
+        ----------
+        value : bool
+            If True, moves the model to torch.float16. If False, moves to torch.float32.
+
+        Raises
+        ------
+        ValueError
+            If `value` is not a boolean.
+        """
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"`use_fp16` must be a boolean, but got {type(value).__name__}."
+            )
+        self._use_fp16 = value
+        if value:
+            self.to(torch.float16)
+        else:
+            self.to(torch.float32)
 
     @staticmethod
     def _scaling_fn(

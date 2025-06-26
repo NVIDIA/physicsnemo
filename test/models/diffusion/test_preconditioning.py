@@ -56,6 +56,34 @@ def test_EDMPrecondSuperResolution_forward():
     assert output.shape == (b, c_target, x, y)
 
 
+def test_EDMPrecondSuperResolution_fp16_forward():
+    b, c_target, x, y = 1, 3, 8, 8
+    c_cond = 4
+
+    # Create an instance of the preconditioner
+    model = EDMPrecondSuperResolution(
+        img_resolution=x,
+        img_in_channels=c_cond,
+        img_out_channels=c_target,
+        model_type="SongUNet",
+        use_fp16=True,
+    )
+
+    latents = torch.ones((b, c_target, x, y))
+    img_lr = torch.arange(b * c_cond * x * y).reshape((b, c_cond, x, y))
+    sigma = torch.tensor([10.0])
+
+    # Forward pass
+    output = model(
+        x=latents,
+        img_lr=img_lr,
+        sigma=sigma,
+    )
+
+    # Assert the output shape is correct
+    assert output.shape == (b, c_target, x, y)
+
+
 @import_or_fail("termcolor")
 def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig):
 

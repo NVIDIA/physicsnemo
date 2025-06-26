@@ -130,18 +130,10 @@ def main(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"Invalid inference mode {cfg.generation.inference_mode}")
 
-    use_apex_gn = False
-    profile_mode = False
-
-    if hasattr(cfg.generation.perf, "use_apex_gn"):
-        use_apex_gn = cfg.generation.perf.use_apex_gn
-
-    if hasattr(cfg.generation.perf, "profile_mode"):
-        profile_mode = cfg.generation.perf.profile_mode
-
     model_args = {
-        "use_apex_gn": use_apex_gn,
-        "profile_mode": profile_mode,
+        "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False),
+        "profile_mode": getattr(cfg.generation.perf, "profile_mode", False),
+        "use_fp16": getattr(cfg.generation.perf, "use_fp16", False),
     }
 
     # Load diffusion network, move to device, change precision
@@ -152,9 +144,7 @@ def main(cfg: DictConfig) -> None:
             to_absolute_path(res_ckpt_filename), model_args=model_args
         )
         net_res = net_res.eval().to(device).to(memory_format=torch.channels_last)
-        if cfg.generation.perf.force_fp16:
-            net_res.use_fp16 = True
-            net_res.to(torch.float16)
+
         # Disable AMP for inference (even if model is trained with AMP)
         if hasattr(net_res, "amp_mode"):
             net_res.amp_mode = False
@@ -169,9 +159,6 @@ def main(cfg: DictConfig) -> None:
             to_absolute_path(reg_ckpt_filename), model_args=model_args
         )
         net_reg = net_reg.eval().to(device).to(memory_format=torch.channels_last)
-        if cfg.generation.perf.force_fp16:
-            net_reg.use_fp16 = True
-            net_reg.to(torch.float16)
 
         # Disable AMP for inference (even if model is trained with AMP)
         if hasattr(net_reg, "amp_mode"):
@@ -183,8 +170,6 @@ def main(cfg: DictConfig) -> None:
     if cfg.generation.perf.use_torch_compile:
         torch._dynamo.config.cache_size_limit = 264
         torch._dynamo.reset()
-        # Only compile residual network
-        # Overhead of compiling regression network outweights any benefits
         if net_res:
             net_res = torch.compile(net_res)
         if net_reg:

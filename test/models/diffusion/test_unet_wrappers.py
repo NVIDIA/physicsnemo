@@ -57,6 +57,34 @@ def test_unet_forwards(device):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_unet_fp16_forwards(device):
+    """Test forward passes of UNet wrappers with fp16"""
+
+    # Construct the UNet model
+    res, inc, outc = 64, 2, 3
+    model = UNet(
+        img_resolution=res,
+        img_in_channels=inc,
+        img_out_channels=outc,
+        model_type="SongUNet",
+        use_fp16=True,
+    ).to(device)
+
+    input_image = torch.ones([1, inc, res, res]).to(device)
+    lr_image = torch.randn([1, outc, res, res]).to(device)
+    output = model(x=input_image, img_lr=lr_image)
+    assert output.shape == (1, outc, res, res)
+
+    # Construct the StormCastUNet model
+    model = StormCastUNet(
+        img_resolution=res, img_in_channels=inc, img_out_channels=outc
+    ).to(device)
+    input_image = torch.ones([1, inc, res, res]).to(device)
+    output = model(x=input_image)
+    assert output.shape == (1, outc, res, res)
+
+
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_optims(device):
     """Test optimizations of U-Net wrappers"""
 

@@ -59,7 +59,8 @@ arbitrary positioning of probabilistic variables
 - Enable lead time aware regression without CE loss
 - Bumped minimum PyTorch version from 2.0.0 to 2.4.0, to minimize
   support surface for `physicsnemo.distributed` functionality.
-- Moved attention logic out from UNetBlock into a separate class for clarity and modularity
+- Moved attention logic out from UNetBlock into a separate class for clarity and modularity.
+  Will update the model architecture for SongUNet based diffusion models.
 
 ### Dependencies
 

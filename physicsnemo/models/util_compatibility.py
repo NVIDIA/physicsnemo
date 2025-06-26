@@ -89,7 +89,7 @@ def convert_ckp_apex(
                     )
                     filtered_state_dict[new_key] = value
                     is_duplicate = True
-                elif f"{norm_layer}.bias" in key:
+                elif f"{norm_layer}.gn.bias" in key:
                     new_key = key.replace(f"{norm_layer}.gn.bias", f"{norm_layer}.bias")
                     filtered_state_dict[new_key] = value
                     is_duplicate = True
@@ -98,5 +98,52 @@ def convert_ckp_apex(
     else:
         # no need to convert ckp
         return model_dict
+
+    return filtered_state_dict
+
+
+def convert_ckp_attn(
+    model_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    """Utility for converting Attention-related keys in a checkpoint.
+
+    This function modifies the checkpoint arguments and model dictionary
+    to ensure compatibility when switching between older and newest versions of models
+
+    Parameters
+    ----------
+    model_dict : Dict[str, Any]
+        Dictionary containing model state_dict (weights) loaded from checkpoint.
+
+    Returns
+    -------
+    Dict[str, Any]
+        Updated model_dict with necessary key modifications applied for compatibility.
+
+    """
+
+    # for each unetblock, iteratively convert each norm2, qkv, proj to attn.norm2, attn.qkv, attn.proj
+    filtered_state_dict = {}
+
+    for key, value in model_dict.items():
+        updated = False
+
+        for attn_layer in ["norm2", "qkv", "proj"]:
+            for suffix in [".weight", ".bias"]:
+                target = f".{attn_layer}{suffix}"
+                replacement = f".attn.{attn_layer}{suffix}"
+
+                if (replacement not in key) and (target in key):
+                    new_key = key.replace(target, replacement)
+                    filtered_state_dict[new_key] = value
+                    updated = True
+                    break  # Avoid double replacement
+
+            if updated:
+                break
+
+        if not updated:
+            filtered_state_dict[key] = value
 
     return filtered_state_dict
