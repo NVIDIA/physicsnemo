@@ -389,7 +389,8 @@ def main(cfg: DictConfig):
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path
-    create_directory(pred_save_path)
+    if dist.rank == 0:
+        create_directory(pred_save_path)
 
     for count, dirname in enumerate(dirnames_per_gpu):
         # print(f"Processing file {dirname}")

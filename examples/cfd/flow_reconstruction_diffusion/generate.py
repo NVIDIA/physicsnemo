@@ -23,7 +23,7 @@ import PIL.Image
 import torch
 import tqdm
 from omegaconf import DictConfig
-from physicsnemo.utils.generative.utils import StackedRandomGenerator
+from physicsnemo.utils.diffusion.utils import StackedRandomGenerator
 
 from misc import open_url
 

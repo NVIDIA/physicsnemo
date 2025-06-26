@@ -24,7 +24,7 @@ import psutil
 from physicsnemo.models import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.metrics.diffusion import EDMLoss
-from physicsnemo.utils.generative import InfiniteSampler
+from physicsnemo.utils.diffusion import InfiniteSampler
 
 from physicsnemo.launch.utils import save_checkpoint, load_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper

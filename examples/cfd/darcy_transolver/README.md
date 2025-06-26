@@ -42,7 +42,7 @@ For the modified case with a fixed (i.e., precomputed) dataset defined in
 the `Darcy2D_fix` Datapipe. In the fixed case, extra data is needed for training
 and the data path should be added when `Darcy_2D_fix` dataset is constructed.
 You can download the data
-[here](https://drive.google.com/drive/folders/1UnbQh2WWc6knEHbLn-ZaXrKUZhp7pjt-).
+[here](https://huggingface.co/datasets/lkuang/example_data).
 
 ## Model overview and architecture
 

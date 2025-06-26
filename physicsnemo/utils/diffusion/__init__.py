@@ -13,18 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# ruff: noqa
 
-import warnings
-
-warnings.warn(
-    "physicsnemo.utils.generative is deprecated and will be removed in a future version. "
-    "Please use physicsnemo.utils.diffusion instead."
-)
-
-from physicsnemo.utils.diffusion.deterministic_sampler import deterministic_sampler
-from physicsnemo.utils.diffusion.stochastic_sampler import stochastic_sampler
-from physicsnemo.utils.diffusion.utils import (
+from .deterministic_sampler import deterministic_sampler
+from .stochastic_sampler import stochastic_sampler
+from .utils import (
     EasyDict,
     InfiniteSampler,
     StackedRandomGenerator,

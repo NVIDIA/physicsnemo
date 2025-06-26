@@ -153,8 +153,16 @@ def main(cfg: DictConfig) -> None:
             cfg.training.hp.total_batch_size // dist.world_size
         )
 
+    # Load the current number of images for resuming
+    try:
+        cur_nimg = load_checkpoint(
+            path=checkpoint_dir,
+        )
+    except Exception:
+        cur_nimg = 0
+
     # Set seeds and configure CUDA and cuDNN settings to ensure consistent precision
-    set_seed(dist.rank)
+    set_seed(dist.rank + cur_nimg)
     configure_cuda_for_consistent_precision()
 
     # Instantiate the dataset
@@ -175,6 +183,7 @@ def main(cfg: DictConfig) -> None:
         seed=0,
         validation_dataset_cfg=validation_dataset_cfg,
         validation=validation,
+        sampler_start_idx=cur_nimg,
     )
 
     # Parse image configuration & update model args
@@ -322,9 +331,9 @@ def main(cfg: DictConfig) -> None:
 
     # Load the model checkpoint if applicable
     try:
-        cur_nimg_model = load_checkpoint(path=checkpoint_dir, models=model)
-    except:
-        cur_nimg_model = None
+        load_checkpoint(path=checkpoint_dir, models=model)
+    except Exception:
+        pass
 
     # Load the regression checkpoint if applicable
     if (
@@ -369,14 +378,17 @@ def main(cfg: DictConfig) -> None:
     batch_size_per_gpu = cfg.training.hp.batch_size_per_gpu
     logger0.info(f"Using {num_accumulation_rounds} gradient accumulation rounds")
 
-    patch_num = getattr(cfg.training.hp, "patch_num", 1)
-    max_patch_per_gpu = getattr(cfg.training.hp, "max_patch_per_gpu", 1)
-
     # calculate patch per iter
-    if hasattr(cfg.training.hp, "max_patch_per_gpu") and max_patch_per_gpu > 1:
+    patch_num = getattr(cfg.training.hp, "patch_num", 1)
+    if hasattr(cfg.training.hp, "max_patch_per_gpu"):
+        max_patch_per_gpu = cfg.training.hp.max_patch_per_gpu
+        if max_patch_per_gpu // batch_size_per_gpu < 1:
+            raise ValueError(
+                f"max_patch_per_gpu ({max_patch_per_gpu}) must be greater or equal to batch_size_per_gpu ({batch_size_per_gpu})."
+            )
         max_patch_num_per_iter = min(
             patch_num, (max_patch_per_gpu // batch_size_per_gpu)
-        )  # Ensure at least 1 patch per iter
+        )
         patch_iterations = (
             patch_num + max_patch_num_per_iter - 1
         ) // max_patch_num_per_iter
@@ -384,7 +396,7 @@ def main(cfg: DictConfig) -> None:
             min(max_patch_num_per_iter, patch_num - i * max_patch_num_per_iter)
             for i in range(patch_iterations)
         ]
-        print(
+        logger0.info(
             f"max_patch_num_per_iter is {max_patch_num_per_iter}, patch_iterations is {patch_iterations}, patch_nums_iter is {patch_nums_iter}"
         )
     else:
@@ -443,13 +455,13 @@ def main(cfg: DictConfig) -> None:
     if dist.world_size > 1:
         torch.distributed.barrier()
     try:
-        cur_nimg = load_checkpoint(
+        load_checkpoint(
             path=checkpoint_dir,
             optimizer=optimizer,
             device=dist.device,
         )
-    except:
-        cur_nimg = 0
+    except Exception:
+        pass
 
     ############################################################################
     #                            MAIN TRAINING LOOP                            #
