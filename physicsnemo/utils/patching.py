@@ -375,7 +375,7 @@ class GridPatching2D(BasePatching2D):
         )
 
         self.patch_num = patch_num_x * patch_num_y
-        self.overlap_count = self.get_overlap_count()
+        self._overlap_count = self._get_overlap_count()
 
     def apply(
         self,
@@ -465,11 +465,11 @@ class GridPatching2D(BasePatching2D):
             batch_size=batch_size,
             overlap_pix=self.overlap_pix,
             boundary_pix=self.boundary_pix,
-            overlap_count=self.overlap_count,
+            overlap_count=self._overlap_count,
         )
         return out
 
-    def get_overlap_count(self):
+    def _get_overlap_count(self) -> Tensor:
         """
         Compute overlap count map for image patch reconstruction.
 
@@ -478,7 +478,7 @@ class GridPatching2D(BasePatching2D):
         padding. This is useful for normalizing the reconstructed image after
         folding overlapping patches.
 
-        The overlap count is stored in `self.overlap_count`.
+        The overlap count is stored in `self._overlap_count`.
 
         Returns
         -------
