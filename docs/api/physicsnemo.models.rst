@@ -865,7 +865,7 @@ class to implement a regression model.
 
 .. autoclass:: physicsnemo.models.diffusion.unet.UNet
     :show-inheritance:
-    :members: amp_mode
+    :members: amp_mode, use_fp16
 
 .. _diffusion_preconditioners:
 
