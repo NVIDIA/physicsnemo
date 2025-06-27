@@ -48,7 +48,12 @@ def test_grid_patching_2d(pytestconfig, device):
             boundary_pix=boundary_pix,
         )
 
-        overlap_count = patching._get_overlap_count()
+        overlap_count = GridPatching2D.get_overlap_count(
+            patch_shape=(H_p, W_p),
+            img_shape=(H, W),
+            overlap_pix=overlap_pix,
+            boundary_pix=boundary_pix,
+        )
         assert validate_utils.validate_accuracy(
             overlap_count,
             file_name=f"grid_patching_2d_overlap_count_test{i}.pth",

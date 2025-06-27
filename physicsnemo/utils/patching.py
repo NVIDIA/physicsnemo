@@ -375,7 +375,9 @@ class GridPatching2D(BasePatching2D):
         )
 
         self.patch_num = patch_num_x * patch_num_y
-        self._overlap_count = self._get_overlap_count()
+        self._overlap_count = self.get_overlap_count(
+            self.patch_shape, self.img_shape, self.overlap_pix, self.boundary_pix
+        )
 
     def apply(
         self,
@@ -469,7 +471,13 @@ class GridPatching2D(BasePatching2D):
         )
         return out
 
-    def _get_overlap_count(self) -> Tensor:
+    @staticmethod
+    def get_overlap_count(
+        patch_shape: tuple[int, int],
+        img_shape: tuple[int, int],
+        overlap_pix: int,
+        boundary_pix: int,
+    ) -> Tensor:
         """
         Compute overlap count map for image patch reconstruction.
 
@@ -480,39 +488,51 @@ class GridPatching2D(BasePatching2D):
 
         The overlap count is stored in `self._overlap_count`.
 
+        Parameters
+        ----------
+        img_shape : Tuple[int, int]
+            The height and width of the full input images :math:`(H, W)`.
+        patch_shape : Tuple[int, int]
+            The height and width of the patches to extract :math:`(H_p, W_p)`.
+        overlap_pix : int
+            The number of overlapping pixels between adjacent patches.
+        boundary_pix : int
+            The number of pixels to crop as a boundary from each patch.
+
         Returns
         -------
-        None
+        Tensor
+            Tensor indicating how many times each pixel in the original input is visited by patches.
 
         Notes
         -----
-        - The input tensor is a dummy tensor of ones with shape [1, 1, H, W],
+        - The `input_ones` tensor is a dummy tensor of ones with shape [1, 1, H, W],
           where H and W are the padded image dimensions.
-        - The output is a tensor of the same shape indicating how many times
+        - The returned `overlap_count` is a tensor of the same shape indicating how many times
           each pixel is visited by patches.
         """
         # Infer sizes from input image shape
-        patch_shape_y, patch_shape_x = self.patch_shape
-        img_shape_y, img_shape_x = self.img_shape
+        patch_shape_y, patch_shape_x = patch_shape
+        img_shape_y, img_shape_x = img_shape
 
         # Calculate the number of patches in each dimension
         patch_num_x = math.ceil(
-            img_shape_x / (patch_shape_x - self.overlap_pix - self.boundary_pix)
+            img_shape_x / (patch_shape_x - overlap_pix - boundary_pix)
         )
         patch_num_y = math.ceil(
-            img_shape_y / (patch_shape_y - self.overlap_pix - self.boundary_pix)
+            img_shape_y / (patch_shape_y - overlap_pix - boundary_pix)
         )
 
         # Calculate the shape of the input after padding
         padded_shape_x = (
-            (patch_shape_x - self.overlap_pix - self.boundary_pix) * (patch_num_x - 1)
+            (patch_shape_x - overlap_pix - boundary_pix) * (patch_num_x - 1)
             + patch_shape_x
-            + self.boundary_pix
+            + boundary_pix
         )
         padded_shape_y = (
-            (patch_shape_y - self.overlap_pix - self.boundary_pix) * (patch_num_y - 1)
+            (patch_shape_y - overlap_pix - boundary_pix) * (patch_num_y - 1)
             + patch_shape_y
-            + self.boundary_pix
+            + boundary_pix
         )
 
         input_ones = torch.ones(
@@ -522,8 +542,8 @@ class GridPatching2D(BasePatching2D):
             input=input_ones,
             kernel_size=(patch_shape_y, patch_shape_x),
             stride=(
-                patch_shape_y - self.overlap_pix - self.boundary_pix,
-                patch_shape_x - self.overlap_pix - self.boundary_pix,
+                patch_shape_y - overlap_pix - boundary_pix,
+                patch_shape_x - overlap_pix - boundary_pix,
             ),
         )
         overlap_count = torch.nn.functional.fold(
@@ -531,8 +551,8 @@ class GridPatching2D(BasePatching2D):
             output_size=(padded_shape_y, padded_shape_x),
             kernel_size=(patch_shape_y, patch_shape_x),
             stride=(
-                patch_shape_y - self.overlap_pix - self.boundary_pix,
-                patch_shape_x - self.overlap_pix - self.boundary_pix,
+                patch_shape_y - overlap_pix - boundary_pix,
+                patch_shape_x - overlap_pix - boundary_pix,
             ),
         )
         return overlap_count
@@ -684,7 +704,7 @@ def image_fuse(
     batch_size: int,
     overlap_pix: int,
     boundary_pix: int,
-    overlap_count: Tensor,
+    overlap_count: Optional[Tensor] = None,
 ) -> Tensor:
     r"""
     Reconstructs a full image from a batch of patched images. Reverts the patching
@@ -719,7 +739,7 @@ def image_fuse(
         A tensor of shape :math:`(1, 1, H, W)` containing the number of
         overlaps for each pixel (i.e. the number of patches that cover each pixel).
         This is typically computed by
-        :meth:`~physicsnemo.utils.patching.GridPatching2D._get_overlap_count`.
+        :meth:`~physicsnemo.utils.patching.GridPatching2D.get_overlap_count`.
 
     Returns
     -------
@@ -751,6 +771,14 @@ def image_fuse(
     pad = (boundary_pix, pad_x_right, boundary_pix, pad_y_right)
 
     # Count local overlaps between patches
+    if overlap_count is None:
+        overlap_count = GridPatching2D.get_overlap_count(
+            (patch_shape_y, patch_shape_x),
+            (img_shape_y, img_shape_x),
+            overlap_pix,
+            boundary_pix,
+        )
+
     if overlap_count.device != input.device:
         overlap_count = overlap_count.to(input.device)
 
