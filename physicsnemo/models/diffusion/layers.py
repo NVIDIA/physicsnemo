@@ -483,37 +483,38 @@ class Attention(torch.nn.Module):
     Parameters
     ----------
     out_channels : int
-        Number of channels in the input and output feature maps.
+        Number of channels :math:`C` in the input and output feature maps.
     num_heads : int
         Number of attention heads. Must be a positive integer.
-    eps : float, optional
-        Epsilon value for numerical stability in GroupNorm. By default 1e-5.
-    init_zero : dict, optional
-        Initialization parameters with zero weights for certain layers. By default
-        {'init_weight': 0}.
-    init_attn : dict, optional
+    eps : float, optional, default=1e-5
+        Epsilon value for numerical stability in GroupNorm.
+    init_zero : dict, optional, default={'init_weight': 0}
+        Initialization parameters with zero weights for certain layers.
+    init_attn : dict, optional, default=None
         Initialization parameters specific to attention mechanism layers.
         Defaults to 'init' if not provided.
-    init : dict, optional
+    init : dict, optional, default={}
         Initialization parameters for convolutional and linear layers.
-    use_apex_gn : bool, optional
+    use_apex_gn : bool, optional, default=False
         A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
-        Need to set this as False on cpu. Defaults to False.
-    amp_mode : bool, optional
-        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
-    fused_conv_bias: bool, optional
-        A boolean flag indicating whether bias will be passed as a parameter of conv2d. Defaults to False.
+        Need to set this as False on cpu.
+    amp_mode : bool, optional, default=False
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled.
+    fused_conv_bias: bool, optional, default=False
+        A boolean flag indicating whether bias will be passed as a parameter of conv2d.
 
 
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape [B, C, H, W], where B is batch size, C is `out_channels`, and H, W are spatial dimensions.
+        Input tensor of shape :math:`(B, C, H, W)`, where :math:`B` is batch
+        size, :math:`C` is `out_channels`, and :math:`H, W` are spatial
+        dimensions.
 
     Outputs
     -------
     torch.Tensor
-        Output tensor of the same shape as input: [B, C, H, W].
+        Output tensor of the same shape as input: :math:`(B, C, H, W)`.
     """
 
     def __init__(
