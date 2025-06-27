@@ -34,14 +34,18 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
-from timm.layers import trunc_normal_
+import transformer_engine.pytorch as te
 
 import physicsnemo  # noqa: F401 for docs
 
 from ..meta import ModelMetaData
 from ..module import Module
 from .Embedding import timestep_embedding
-from .Physics_Attention import Physics_Attention_Structured_Mesh_2D
+
+# from .Physics_Attention import Physics_Attention_Structured_Mesh_2D
+from .Physics_Attention import (
+    Physics_Attention_Structured_Mesh_2D_2 as Physics_Attention_Structured_Mesh_2D,
+)
 
 ACTIVATION = {
     "gelu": nn.GELU,
@@ -107,7 +111,7 @@ class Transolver_block(nn.Module):
     ):
         super().__init__()
         self.last_layer = last_layer
-        self.ln_1 = nn.LayerNorm(hidden_dim)
+        self.ln_1 = te.LayerNorm(hidden_dim)
         self.Attn = Physics_Attention_Structured_Mesh_2D(
             hidden_dim,
             heads=num_heads,
@@ -118,24 +122,34 @@ class Transolver_block(nn.Module):
             W=W,
         )
 
-        self.ln_2 = nn.LayerNorm(hidden_dim)
-        self.mlp = MLP(
-            hidden_dim,
-            hidden_dim * mlp_ratio,
-            hidden_dim,
-            n_layers=0,
-            res=False,
-            act=act,
+        self.ln_mlp1 = te.LayerNormMLP(
+            hidden_size=hidden_dim,
+            ffn_hidden_size=hidden_dim * mlp_ratio,
         )
+
+        # self.ln_2 = te.LayerNorm(hidden_dim)
+        # self.mlp = MLP(
+        #     hidden_dim,
+        #     hidden_dim * mlp_ratio,
+        #     hidden_dim,
+        #     n_layers=0,
+        #     res=False,
+        #     act=act,
+        # )
         if self.last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Linear(hidden_dim, out_dim)
+            self.ln_mlp2 = te.LayerNormLinear(
+                in_features=hidden_dim, out_features=out_dim
+            )
+            # self.ln_3 = te.LayerNorm(hidden_dim)
+            # self.mlp2 = nn.Linear(hidden_dim, out_dim)
 
     def forward(self, fx):
         fx = self.Attn(self.ln_1(fx)) + fx
-        fx = self.mlp(self.ln_2(fx)) + fx
+        fx = self.ln_mlp1(fx) + fx
+        # fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
+            return self.ln_mlp2(fx)
+            # return self.mlp2(self.ln_3(fx))
         else:
             return fx
 
@@ -192,7 +206,6 @@ class Model(nn.Module):
             self.time_fc = nn.Sequential(
                 nn.Linear(n_hidden, n_hidden), nn.SiLU(), nn.Linear(n_hidden, n_hidden)
             )
-
         self.blocks = nn.ModuleList(
             [
                 Transolver_block(
@@ -220,10 +233,10 @@ class Model(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=0.02)
+            nn.init.trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, (nn.LayerNorm, nn.BatchNorm1d)):
+        elif isinstance(m, (nn.LayerNorm, te.LayerNorm, nn.BatchNorm1d)):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
@@ -255,26 +268,43 @@ class Model(nn.Module):
         return pos
 
     def forward(self, x, fx, T=None):
-        if self.unified_pos:
-            x = (
-                self.pos.repeat(x.shape[0], 1, 1, 1)
-                .reshape(x.shape[0], self.H * self.W, self.ref * self.ref)
-                .to(x.device)
-            )
-        if fx is not None:
-            fx = torch.cat((x, fx), -1)
-            fx = self.preprocess(fx)
-        else:
-            fx = self.preprocess(x)
-            fx = fx + self.placeholder[None, None, :]
+        with torch.autograd.profiler.record_function("prepeocess"):
+            if self.unified_pos:
+                # print(f"Applying unified pos, x shape: {x.shape}")
+                if self.pos.device != x.device:
+                    # move the position tensor:
+                    self.pos = self.pos.to(x.device)
+
+                x = (
+                    self.pos.repeat(x.shape[0], 1, 1, 1)
+                    .reshape(x.shape[0], self.H * self.W, self.ref * self.ref)
+                    .to(x.device)
+                )
+                # print(f"self.ref is {self.ref}")
+                # print(f"x shape after unified pos: {x.shape}")
+            if fx is not None:
+                # print(f"Applying fx, fx shape: {fx.shape}")
+                fx = torch.cat((x, fx), -1)
+                # print(f"fx shape after cat: {fx.shape}")
+                fx = self.preprocess(fx)
+                # print(f"fx shape after preprocess: {fx.shape}")
+            else:
+                # print(f"Applying just x, x shape: {x.shape}")
+                fx = self.preprocess(x)
+                # print(f"fx shape after preprocess: {fx.shape}")
+                fx = fx + self.placeholder[None, None, :]
+                # print(f"fx shape after placeholder: {fx.shape}")
 
         if T is not None:
-            Time_emb = timestep_embedding(T, self.n_hidden).repeat(1, x.shape[1], 1)
-            Time_emb = self.time_fc(Time_emb)
-            fx = fx + Time_emb
+            # print(f"Applying T, T shape: {T.shape}")
+            with torch.autograd.profiler.record_function("Time_Embedding"):
+                Time_emb = timestep_embedding(T, self.n_hidden).repeat(1, x.shape[1], 1)
+                Time_emb = self.time_fc(Time_emb)
+                fx = fx + Time_emb
 
-        for block in self.blocks:
-            fx = block(fx)
+        for i, block in enumerate(self.blocks):
+            with torch.autograd.profiler.record_function(f"Block_{i}"):
+                fx = block(fx)
 
         return fx
 
@@ -396,6 +426,9 @@ class Transolver(Module):
             The output tensor.
 
         """
+        # print(f"Input x shape: {x.shape}")
+        # print(f"Input fx shape: {fx.shape if fx is not None else None}")
+        # print(f"Input T shape: {T.shape if T is not None else None}")
         y = self.model(x, fx, T)
         y = y.reshape(x.shape[0], self.H, self.W, -1)
         return y
