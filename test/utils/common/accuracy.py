@@ -20,10 +20,62 @@ from typing import Tuple, Union
 
 import torch
 
-from .utils import compare_output
-
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")
+
+
+def compare_output(
+    output_1: Union[Tensor, Tuple[Tensor, ...]],
+    output_2: Union[Tensor, Tuple[Tensor, ...]],
+    rtol: float = 1e-5,
+    atol: float = 1e-5,
+) -> bool:
+    """Compares model outputs and returns if they are the same
+
+    Parameters
+    ----------
+    output_1 : Union[Tensor, Tuple[Tensor, ...]]
+        Output one
+    output_2 : Union[Tensor, Tuple[Tensor, ...]]
+        Output two
+    rtol : float, optional
+        Relative tolerance of error allowed, by default 1e-5
+    atol : float, optional
+        Absolute tolerance of error allowed, by default 1e-5
+
+    Returns
+    -------
+    bool
+        If outputs are the same
+    """
+    # Output of tensor
+    if isinstance(output_1, Tensor):
+        return torch.allclose(output_1, output_2, rtol, atol)
+    # Output of tuple of tensors
+    elif isinstance(output_1, tuple):
+        # Loop through tuple of outputs
+        for i, (out_1, out_2) in enumerate(zip(output_1, output_2)):
+            # If tensor use allclose
+            if isinstance(out_1, Tensor):
+                if not torch.allclose(out_1, out_2, rtol, atol):
+                    logger.warning(f"Failed comparison between outputs {i}")
+                    logger.warning(
+                        f"Max Difference: {torch.amax(torch.abs(out_1 - out_2))}"
+                    )
+                    logger.warning(f"Difference: {out_1 - out_2}")
+                    return False
+            # Otherwise assume primative
+            else:
+                if not out_1 == out_2:
+                    return False
+    # Unsupported output type
+    else:
+        logger.error(
+            "Model returned invalid type for unit test, should be Tensor or Tuple[Tensor]"
+        )
+        return False
+
+    return True
 
 
 def save_output(output: Union[Tensor, Tuple[Tensor, ...]], file_name: Path):
