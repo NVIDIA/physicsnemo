@@ -165,7 +165,6 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
 
-        self._use_fp16 = use_fp16
         model_class = getattr(network_module, model_type)
         self.model = model_class(
             img_resolution=img_resolution,

@@ -783,7 +783,6 @@ class EDMPrecondSuperResolution(Module):
         self.img_resolution = img_resolution
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
-        self._use_fp16 = use_fp16
         self.sigma_data = sigma_data
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
