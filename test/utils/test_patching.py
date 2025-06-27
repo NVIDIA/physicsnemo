@@ -17,10 +17,9 @@
 
 import pytest
 import torch
+import validate_utils
 from einops import rearrange, repeat
 from pytest_utils import import_or_fail
-
-from . import common
 
 
 @import_or_fail("cftime")
@@ -50,7 +49,7 @@ def test_grid_patching_2d(pytestconfig, device):
         )
 
         overlap_count = patching._get_overlap_count()
-        assert common.validate_accuracy(
+        assert validate_utils.validate_accuracy(
             overlap_count,
             file_name=f"grid_patching_2d_overlap_count_test{i}.pth",
             atol=1e-5,
@@ -59,7 +58,7 @@ def test_grid_patching_2d(pytestconfig, device):
         input_tensor = torch.randn(B, 3, H, W).to(device).float().requires_grad_(True)
         patched_input = patching.apply(input_tensor)
         assert patched_input.shape == (P * B, 3, H_p, W_p), error_msg
-        assert common.validate_accuracy(
+        assert validate_utils.validate_accuracy(
             patched_input,
             file_name=f"grid_patching_2d_apply_test{i}.pth",
             atol=1e-5,
