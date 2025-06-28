@@ -102,6 +102,7 @@ def convert_ckp_apex(
     return filtered_state_dict
 
 
+# TODO: to move to classes
 def convert_ckp_attn(
     ckp_args_dict: Dict[str, Any],
     model_dict: Dict[str, Any],
