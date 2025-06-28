@@ -478,7 +478,7 @@ class GridPatching2D(BasePatching2D):
         overlap_pix: int,
         boundary_pix: int,
     ) -> Tensor:
-        """
+        r"""
         Compute overlap count map for image patch reconstruction.
 
         Calculates how many times each pixel in the padded image is covered by
@@ -502,14 +502,14 @@ class GridPatching2D(BasePatching2D):
         Returns
         -------
         Tensor
-            Tensor indicating how many times each pixel in the original input is visited by patches.
+            Tensor indicating how many times each pixel in the original input
+            is visited (or covered) by patches. Shape is :math:`(1, 1, H_{pad},
+            W_{pad})`, where :math:`H_{pad}` and :math:`W_{pad}` are
+            the padded image dimensions. Those are computed as :math:`H_{pad} = (H_p -
+            \text{overlap_pix} - \text{boundary_pix}) \times (P_H - 1) + H_p +
+            \text{boundary_pix}`, where :math:`P_H` is the number of patches
+            along the height of the image (and similarly for :math:`W_{pad}`).
 
-        Notes
-        -----
-        - The `input_ones` tensor is a dummy tensor of ones with shape [1, 1, H, W],
-          where H and W are the padded image dimensions.
-        - The returned `overlap_count` is a tensor of the same shape indicating how many times
-          each pixel is visited by patches.
         """
         # Infer sizes from input image shape
         patch_shape_y, patch_shape_x = patch_shape
