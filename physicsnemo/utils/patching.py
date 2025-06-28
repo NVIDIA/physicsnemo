@@ -735,11 +735,12 @@ def image_fuse(
         The number of overlapping pixels between adjacent patches.
     boundary_pix : int
         The number of pixels to crop as a boundary from each patch.
-    overlap_count : Tensor
+    overlap_count : Tensor, optional, default=None
         A tensor of shape :math:`(1, 1, H, W)` containing the number of
         overlaps for each pixel (i.e. the number of patches that cover each pixel).
         This is typically computed by
         :meth:`~physicsnemo.utils.patching.GridPatching2D.get_overlap_count`.
+        If not provided, it will be computed internally.
 
     Returns
     -------
