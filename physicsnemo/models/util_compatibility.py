@@ -103,6 +103,7 @@ def convert_ckp_apex(
 
 
 def convert_ckp_attn(
+    ckp_args_dict: Dict[str, Any],
     model_dict: Dict[str, Any],
 ) -> Dict[str, Any]:
 
@@ -113,6 +114,8 @@ def convert_ckp_attn(
 
     Parameters
     ----------
+    ckp_args_dict : Dict[str, Any]
+        Dictionary of checkpoint arguments (e.g., configuration parameters saved during training).
     model_dict : Dict[str, Any]
         Dictionary containing model state_dict (weights) loaded from checkpoint.
 
@@ -122,6 +125,12 @@ def convert_ckp_attn(
         Updated model_dict with necessary key modifications applied for compatibility.
 
     """
+
+    if ("model_type" not in ckp_args_dict["__args__"].keys()) or (
+        ckp_args_dict["__args__"]["model_type"]
+        not in ["SongUNetPosLtEmbd", "SongUNetPosEmbd", "SongUNet", "DhariwalUNet"]
+    ):
+        return model_dict
 
     # for each unetblock, iteratively convert each norm2, qkv, proj to attn.norm2, attn.qkv, attn.proj
     filtered_state_dict = {}
