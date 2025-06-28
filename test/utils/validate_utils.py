@@ -156,7 +156,7 @@ def validate_accuracy(
         device = output[0].device
 
     file_name = (
-        Path(__file__).parents[1].resolve() / Path("data") / Path(file_name.lower())
+        Path(__file__).parents[0].resolve() / Path("data") / Path(file_name.lower())
     )
     # If file does not exist, we will create it then error
     # Model should then reproduce it on next pytest run
