@@ -20,6 +20,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+output_dir: ./output/darcy_transolver_fix
+run_id: fp32_dev_test_fullres
+
+data:
+  train_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz
+  test_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth2.npz
+  resolution: 421 #421, 211, 141, 106, 85 all viable
+  batch_size: 8 # This is the GLOBAL batch size
+
 model:
   space_dim: 2
   n_layers: 8
@@ -31,12 +40,13 @@ model:
   mlp_ratio: 1
   fun_dim: 1
   out_dim: 1
-  slice_dim: 32
+  # slice_dim: 64
   ref: 8
-  unified_pos: 1
-  slice_num: 64
+  unified_pos: False
+  slice_num: 256
+  transformer_engine: False
   
-
+precision: fp32
 
 normaliser:
   permeability:
@@ -53,12 +63,10 @@ scheduler:
   decay_pseudo_epochs: 8
 
 training:
-  resolution: 85
-  batch_size: 4
   rec_results_freq : 100
-  max_pseudo_epochs: 500
-  pseudo_epoch_sample_size: 1000
+  max_pseudo_epochs: 200
+  pseudo_epoch_sample_size: 1024
 
 validation:
   sample_size: 200
-  validation_pseudo_epochs: 2
+  validation_pseudo_epochs: 1

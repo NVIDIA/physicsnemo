@@ -16,7 +16,8 @@
 
 import matplotlib.pyplot as plt
 from torch import FloatTensor
-from physicsnemo.launch.logging import LaunchLogger
+import threading
+import os
 
 
 class GridValidator:
@@ -37,21 +38,50 @@ class GridValidator:
 
     def __init__(
         self,
-        loss_fun,
-        norm,
         font_size: float = 28.0,
+        output_dir: str = "./plots/",
     ):
-        self.norm = norm
-        self.criterion = loss_fun
         self.font_size = font_size
         self.headers = ("true", "prediction", "error")
+        self._plot_thread = None
+        self.output_dir = output_dir
+        os.makedirs(self.output_dir, exist_ok=True)
 
-    def compare(
+    def plot_figure(
+        self, target: FloatTensor, prediction: FloatTensor, step: int, resolution: int
+    ):
+
+        target = target.cpu().numpy().reshape(-1, resolution, resolution)[0, :, :]
+        prediction = (
+            prediction.reshape(-1, resolution, resolution)
+            .detach()
+            .cpu()
+            .numpy()[0, :, :]
+        )
+
+        plt.close("all")
+        plt.rcParams.update({"font.size": self.font_size})
+        fig, ax = plt.subplots(1, 3, figsize=(15 * 3, 15), sharey=True)
+        im = []
+        im.append(ax[0].imshow(target))
+        im.append(ax[1].imshow(prediction))
+        im.append(ax[2].imshow((prediction - target)))
+
+        for ii in range(len(im)):
+            fig.colorbar(im[ii], ax=ax[ii], location="bottom", fraction=0.046, pad=0.04)
+            ax[ii].set_title(self.headers[ii])
+
+        plt.savefig(f"{self.output_dir}/validation_step_{step:03d}.png")
+
+    def _plot_figure_thread(self, target, prediction, step, resolution):
+        self.plot_figure(target, prediction, step, resolution)
+
+    def make_plot(
         self,
         prediction: FloatTensor,
         target: FloatTensor,
         step: int,
-        logger: LaunchLogger,
+        resolution: int,
     ) -> float:
         """compares model output, target and plots everything
 
@@ -73,25 +103,16 @@ class GridValidator:
         float
             validation error
         """
-        loss = self.criterion(prediction, target)
-        # print(f"target.shape: {target.shape}, prediction.shape: {prediction.shape}")
-        print("logger begin")
-        target = target.cpu().numpy()[0, :, :]
-        prediction = prediction.reshape(-1, 85, 85).detach().cpu().numpy()[0, :, :]
 
-        plt.close("all")
-        plt.rcParams.update({"font.size": self.font_size})
-        fig, ax = plt.subplots(1, 3, figsize=(15 * 3, 15), sharey=True)
-        im = []
-        im.append(ax[0].imshow(target))
-        im.append(ax[1].imshow(prediction))
-        im.append(ax[2].imshow((prediction - target)))
+        # Wait for previous plot thread if still running
+        if self._plot_thread is not None and self._plot_thread.is_alive():
+            self._plot_thread.join()
 
-        for ii in range(len(im)):
-            fig.colorbar(im[ii], ax=ax[ii], location="bottom", fraction=0.046, pad=0.04)
-            ax[ii].set_title(self.headers[ii])
+        # Start new plot thread
+        self._plot_thread = threading.Thread(
+            target=self._plot_figure_thread,
+            args=(target, prediction, step, resolution),
+        )
+        self._plot_thread.start()
 
-        logger.log_figure(figure=fig, artifact_file=f"validation_step_{step:03d}.png")
-        print("logger finished")
-
-        return loss
+        return

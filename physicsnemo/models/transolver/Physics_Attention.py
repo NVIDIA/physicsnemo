@@ -52,7 +52,7 @@ class Physics_Attention_Base(nn.Module):
 
     """
 
-    def __init__(self, dim, heads, dim_head, dropout, slice_num):
+    def __init__(self, dim, heads, dim_head, dropout, slice_num, use_te):
         super().__init__()
         inner_dim = dim_head * heads
         self.dim_head = dim_head
@@ -68,17 +68,22 @@ class Physics_Attention_Base(nn.Module):
         for l_i in [self.in_project_slice]:
             torch.nn.init.orthogonal_(l_i.weight)  # use a principled initialization
 
-        self.to_q = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_k = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        if not use_te:
+            self.to_q = nn.Linear(dim_head, dim_head, bias=False)
+            self.to_k = nn.Linear(dim_head, dim_head, bias=False)
+            self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+        else:
+            # These are used in the transformer engine pass function:
+            self.qkv_project = nn.Linear(dim_head, 3 * dim_head, bias=False)
+            self.attn_fn = te.DotProductAttention(
+                num_attention_heads=self.heads,
+                kv_channels=self.dim_head,
+                attention_dropout=dropout,
+                qkv_format="bshd",
+                softmax_scale=self.scale,
+            )
 
-        # # These are used in the transformer engine pass function:
-        # self.qkv_project = nn.Linear(dim_head, 3 * dim_head, bias=False)
-        # self.attn_fn = te.DotProductAttention(num_attention_heads=self.heads,
-        #                                       kv_channels= self.dim_head,
-        #                                       attention_dropout=dropout,
-        #                                       qkv_format="bshd",
-        #                                       softmax_scale=self.scale)
+        self.use_te = use_te
 
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
@@ -114,12 +119,16 @@ class Physics_Attention_Base(nn.Module):
             - It then aggregates the latent features (fx) for each slice using these weights.
             - The aggregated features are normalized by the sum of weights for numerical stability.
         """
+
         # Project the latent space vectors on to the weight computation space,
         # and compute a temperature adjusted softmax.
+        clamped_temp = torch.clamp(self.temperature, min=0.1, max=5).to(
+            slice_projections.dtype
+        )
         slice_weights = nn.functional.softmax(
-            slice_projections / torch.clamp(self.temperature, min=0.1, max=5), dim=-1
+            slice_projections / clamped_temp, dim=-1
         )  # [Batch, N_heads, N_tokens, Slice_num]
-
+        slice_weights = slice_weights.to(slice_projections.dtype)
         # Average the slices over the token dimension
         slice_norm = slice_weights.sum(2)  # [Batch, N_heads, Slice_num]
 
@@ -146,7 +155,7 @@ class Physics_Attention_Base(nn.Module):
 
         return out_slice_token
 
-    def compute_slice_attention2(self, slice_tokens: torch.Tensor) -> torch.Tensor:
+    def compute_slice_attention_te(self, slice_tokens: torch.Tensor) -> torch.Tensor:
         """
         TE implementation of slice attention
         """
@@ -162,7 +171,7 @@ class Physics_Attention_Base(nn.Module):
 
         return out_slice_token2
 
-    def compute_slice_attention3(self, slice_tokens: torch.Tensor) -> torch.Tensor:
+    def compute_slice_attention_sdpa(self, slice_tokens: torch.Tensor) -> torch.Tensor:
         """
         Torch SDPA implementation of slice attention
         """
@@ -233,9 +242,11 @@ class Physics_Attention_Base(nn.Module):
         # slice_tokens has shape  [Batch, N_heads, N_tokens, head_dim]
 
         # Apply attention to the slice tokens
-        # out_slice_token = self.compute_slice_attention(slice_tokens)
-        # out_slice_token = self.compute_slice_attention2(slice_tokens)
-        out_slice_token = self.compute_slice_attention3(slice_tokens)
+        if self.use_te:
+            out_slice_token = self.compute_slice_attention_te(slice_tokens)
+        else:
+            out_slice_token = self.compute_slice_attention_sdpa(slice_tokens)
+
         # Shape unchanged
 
         # Deslice:
@@ -251,8 +262,10 @@ class Physics_Attention_Irregular_Mesh_2(Physics_Attention_Base):
     Specialization of PhysicsAttention to Irregular Meshes
     """
 
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64):
-        super().__init__(dim, heads, dim_head, dropout, slice_num)
+    def __init__(
+        self, dim, heads=8, dim_head=64, dropout=0.0, slice_num=64, use_te=True
+    ):
+        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
         inner_dim = dim_head * heads
 
         self.in_project_x = nn.Linear(dim, inner_dim)
@@ -288,8 +301,9 @@ class Physics_Attention_Structured_Mesh_2D_2(Physics_Attention_Base):
         H=101,
         W=31,
         kernel=3,
+        use_te=True,
     ):  # kernel=3):
-        super().__init__(dim, heads, dim_head, dropout, slice_num)
+        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
 
         inner_dim = dim_head * heads
         self.H = H
@@ -341,8 +355,9 @@ class Physics_Attention_Structured_Mesh_3D_2(Physics_Attention_Base):
         W=32,
         D=32,
         kernel=3,
+        use_te=True,
     ):
-        super().__init__(dim, heads, dim_head, dropout, slice_num)
+        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
 
         inner_dim = dim_head * heads
         self.H = H

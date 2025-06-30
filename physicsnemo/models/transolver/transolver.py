@@ -34,7 +34,13 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
-import transformer_engine.pytorch as te
+
+try:
+    import transformer_engine.pytorch as te
+
+    TE_AVAILABLE = True
+except ImportError:
+    TE_AVAILABLE = False
 
 import physicsnemo  # noqa: F401 for docs
 
@@ -82,7 +88,6 @@ class MLP(nn.Module):
         )
 
     def forward(self, x):
-        # print(x.shape)
         x = self.linear_pre(x)
         for i in range(self.n_layers):
             if self.res:
@@ -108,10 +113,20 @@ class Transolver_block(nn.Module):
         slice_num=32,
         H=85,
         W=85,
+        use_te=True,
     ):
         super().__init__()
+
+        if use_te and not TE_AVAILABLE:
+            raise ImportError(
+                "Transformer Engine is not installed. Please install it with `pip install transformer-engine`."
+            )
+
         self.last_layer = last_layer
-        self.ln_1 = te.LayerNorm(hidden_dim)
+        if use_te:
+            self.ln_1 = te.LayerNorm(hidden_dim)
+        else:
+            self.ln_1 = nn.LayerNorm(hidden_dim)
         self.Attn = Physics_Attention_Structured_Mesh_2D(
             hidden_dim,
             heads=num_heads,
@@ -120,28 +135,36 @@ class Transolver_block(nn.Module):
             slice_num=slice_num,
             H=H,
             W=W,
+            use_te=use_te,
         )
 
-        self.ln_mlp1 = te.LayerNormMLP(
-            hidden_size=hidden_dim,
-            ffn_hidden_size=hidden_dim * mlp_ratio,
-        )
-
-        # self.ln_2 = te.LayerNorm(hidden_dim)
-        # self.mlp = MLP(
-        #     hidden_dim,
-        #     hidden_dim * mlp_ratio,
-        #     hidden_dim,
-        #     n_layers=0,
-        #     res=False,
-        #     act=act,
-        # )
-        if self.last_layer:
-            self.ln_mlp2 = te.LayerNormLinear(
-                in_features=hidden_dim, out_features=out_dim
+        if use_te:
+            self.ln_mlp1 = te.LayerNormMLP(
+                hidden_size=hidden_dim,
+                ffn_hidden_size=hidden_dim * mlp_ratio,
             )
-            # self.ln_3 = te.LayerNorm(hidden_dim)
-            # self.mlp2 = nn.Linear(hidden_dim, out_dim)
+        else:
+            self.ln_mlp1 = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                MLP(
+                    hidden_dim,
+                    hidden_dim * mlp_ratio,
+                    hidden_dim,
+                    n_layers=0,
+                    res=False,
+                    act=act,
+                ),
+            )
+        if self.last_layer:
+            if use_te:
+                self.ln_mlp2 = te.LayerNormLinear(
+                    in_features=hidden_dim, out_features=out_dim
+                )
+            else:
+                self.ln_mlp2 = nn.Sequential(
+                    nn.LayerNorm(hidden_dim),
+                    nn.Linear(hidden_dim, out_dim),
+                )
 
     def forward(self, fx):
         fx = self.Attn(self.ln_1(fx)) + fx
@@ -172,6 +195,7 @@ class Model(nn.Module):
         unified_pos=False,
         H=85,
         W=85,
+        use_te=True,
     ):
         super().__init__()
         self.__name__ = "Transolver_2D"
@@ -219,14 +243,15 @@ class Model(nn.Module):
                     H=H,
                     W=W,
                     last_layer=(_ == n_layers - 1),
+                    use_te=use_te,
                 )
                 for _ in range(n_layers)
             ]
         )
         self.initialize_weights()
-        self.placeholder = nn.Parameter(
-            (1 / (n_hidden)) * torch.rand(n_hidden, dtype=torch.float)
-        )
+        # self.placeholder = nn.Parameter(
+        #     (1 / (n_hidden)) * torch.rand(n_hidden, dtype=torch.float)
+        # )
 
     def initialize_weights(self):
         self.apply(self._init_weights)
@@ -270,7 +295,6 @@ class Model(nn.Module):
     def forward(self, x, fx, T=None):
         with torch.autograd.profiler.record_function("prepeocess"):
             if self.unified_pos:
-                # print(f"Applying unified pos, x shape: {x.shape}")
                 if self.pos.device != x.device:
                     # move the position tensor:
                     self.pos = self.pos.to(x.device)
@@ -280,23 +304,14 @@ class Model(nn.Module):
                     .reshape(x.shape[0], self.H * self.W, self.ref * self.ref)
                     .to(x.device)
                 )
-                # print(f"self.ref is {self.ref}")
-                # print(f"x shape after unified pos: {x.shape}")
             if fx is not None:
-                # print(f"Applying fx, fx shape: {fx.shape}")
                 fx = torch.cat((x, fx), -1)
-                # print(f"fx shape after cat: {fx.shape}")
                 fx = self.preprocess(fx)
-                # print(f"fx shape after preprocess: {fx.shape}")
             else:
-                # print(f"Applying just x, x shape: {x.shape}")
                 fx = self.preprocess(x)
-                # print(f"fx shape after preprocess: {fx.shape}")
                 fx = fx + self.placeholder[None, None, :]
-                # print(f"fx shape after placeholder: {fx.shape}")
 
         if T is not None:
-            # print(f"Applying T, T shape: {T.shape}")
             with torch.autograd.profiler.record_function("Time_Embedding"):
                 Time_emb = timestep_embedding(T, self.n_hidden).repeat(1, x.shape[1], 1)
                 Time_emb = self.time_fc(Time_emb)
@@ -365,6 +380,8 @@ class Transolver(Module):
         The height of the mesh.
     W : int
         The width of the mesh.
+    use_te: bool
+        Whether to use transformer engine backend when possible.
     """
 
     def __init__(
@@ -384,6 +401,7 @@ class Transolver(Module):
         unified_pos: bool,
         H: int,
         W: int,
+        use_te: bool = True,
     ) -> None:
         super().__init__(meta=MetaData())
         self.H = H
@@ -404,6 +422,7 @@ class Transolver(Module):
             unified_pos=unified_pos,
             H=H,
             W=W,
+            use_te=use_te,
         )
 
     def forward(
