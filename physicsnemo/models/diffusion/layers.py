@@ -22,7 +22,8 @@ Diffusion-Based Generative Models".
 import contextlib
 import importlib
 import math
-from typing import Any, Dict, List
+import warnings
+from typing import Any, Dict, List, Set
 
 import numpy as np
 import nvtx
@@ -531,7 +532,7 @@ class Attention(torch.nn.Module):
         fused_conv_bias: bool = False,
     ) -> None:
         super().__init__()
-        self.norm2 = GroupNorm(
+        self.norm = GroupNorm(
             num_channels=out_channels,
             eps=eps,
             use_apex_gn=use_apex_gn,
@@ -562,7 +563,7 @@ class Attention(torch.nn.Module):
     def forward(self, x):
         q, k, v = (
             torch.permute(
-                self.qkv(self.norm2(x)), (0, 2, 3, 1)
+                self.qkv(self.norm(x)), (0, 2, 3, 1)
             )  # [B,H,W,C*3] in memory layout, shape [B,C*3,H,W] -> [B,H,W,C*3]
             .reshape(  # -> [X.shape[0], heads, (H*W), C//heads, 3]
                 x.shape[0],
@@ -637,6 +638,10 @@ class UNetBlock(torch.nn.Module):
     amp_mode : bool, optional
         A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     """
+
+    # NOTE: these attributes have specific usage in old checkpoints, do not
+    # reuse them!
+    _reserved_attributes: Set[str] = set(["norm2", "qkv", "proj"])
 
     def __init__(
         self,
@@ -789,6 +794,91 @@ class UNetBlock(torch.nn.Module):
                 x = self.attn(x)
                 x = x * self.skip_scale
             return x
+
+    def __setattr__(self, name, value):
+        """Prevent setting attributes with reserved names.
+
+        Parameters
+        ----------
+        name : str
+            Attribute name.
+        value : Any
+            Attribute value.
+        """
+        if name in getattr(self.__class__, "_reserved_attributes", set()):
+            raise AttributeError(f"Attribute '{name}' is reserved and cannot be set.")
+        super().__setattr__(name, value)
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        """Custom ``load_state_dict`` that migrates legacy keys to their
+        new locations before loading the state dict.
+
+        Parameters
+        ----------
+        state_dict : dict
+            A state-dict containing parameters and persistent buffers.
+        strict : bool, optional
+            Passed through to ``torch.nn.Module.load_state_dict``.
+        """
+        # Migrate legacy keys for the attention module
+        self._migrate_attention_module(state_dict)
+        return super().load_state_dict(state_dict, strict=strict)
+
+    def _migrate_attention_module(self, state_dict):
+        """Handle legacy checkpoints that stored attention layers at root.
+
+        The earliest versions of *UNetBlock* stored the attention-layer
+        parameters directly on the block using attribute names contained in
+        ``_reserved_attributes``.  These have since been moved under the
+        dedicated ``attn`` sub-module.  This helper migrates the parameter
+        names so that older checkpoints can still be loaded.
+        """
+
+        _mapping = {
+            "norm2.weight": "attn.norm.weight",
+            "norm2.bias": "attn.norm.bias",
+            "qkv.weight": "attn.qkv.weight",
+            "qkv.bias": "attn.qkv.bias",
+            "proj.weight": "attn.proj.weight",
+            "proj.bias": "attn.proj.bias",
+        }
+
+        # Track which legacy keys were found.
+        legacy_found = set()
+
+        for old_key, new_key in _mapping.items():
+            if old_key in state_dict:
+                legacy_found.add(old_key)
+                # NOTE: Only migrate if destination key not already present to
+                # avoid accidental overwriting when both are present.
+                if new_key not in state_dict:
+                    state_dict[new_key] = state_dict.pop(old_key)
+                else:
+                    raise ValueError(
+                        f"Checkpoint contains both legacy and new keys for {old_key}"
+                    )
+
+        # Validation and warnings
+        if not self.attention and legacy_found:
+            warnings.warn(
+                "Checkpoint contains attention parameters (legacy keys) but "
+                "the current UNetBlock instance was created with "
+                "attention=False. These parameters were ignored: "
+                f"{', '.join(legacy_found)}",
+                UserWarning,
+            )
+
+        if self.attention:
+            # After migration, ensure that all expected new keys exist.
+            missing_new = [
+                new_key for new_key in _mapping.values() if new_key not in state_dict
+            ]
+            if missing_new:
+                warnings.warn(
+                    "Attention is enabled but the checkpoint is missing the "
+                    f"following expected keys: {', '.join(missing_new)}",
+                    UserWarning,
+                )
 
 
 class PositionalEmbedding(torch.nn.Module):

@@ -30,7 +30,7 @@ import torch
 
 import physicsnemo
 from physicsnemo.models.meta import ModelMetaData
-from physicsnemo.models.util_compatibility import convert_ckp_apex, convert_ckp_attn
+from physicsnemo.models.util_compatibility import convert_ckp_apex
 from physicsnemo.registry import ModelRegistry
 from physicsnemo.utils.filesystem import _download_cached, _get_fs
 
@@ -460,7 +460,6 @@ class Module(torch.nn.Module):
             model_dict = torch.load(
                 local_path.joinpath("model.pt"), map_location=model.device
             )
-            model_dict = convert_ckp_attn(ckp_args, model_dict)
             model_dict = convert_ckp_apex(ckp_args, model_args, model_dict)
             model.load_state_dict(model_dict, strict=False)
         return model
