@@ -827,7 +827,7 @@ class UNetBlock(torch.nn.Module):
     def _migrate_attention_module(self, state_dict):
         """Handle legacy checkpoints that stored attention layers at root.
 
-        The earliest versions of *UNetBlock* stored the attention-layer
+        The earliest versions of ``UNetBlock`` stored the attention-layer
         parameters directly on the block using attribute names contained in
         ``_reserved_attributes``.  These have since been moved under the
         dedicated ``attn`` sub-module.  This helper migrates the parameter
