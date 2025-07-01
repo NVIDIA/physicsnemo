@@ -70,6 +70,7 @@ def forward_train_full_loop(
     Forward and backward pass for one iteration, with optional mixed precision training.
     Returns the loss for this minibatch
     """
+    dm = DistributedManager()
     with context:
         pred = model(pos, fx=x.unsqueeze(-1)).squeeze(-1)
         pred = y_normalizer.decode(pred)
@@ -128,19 +129,24 @@ def val_epoch(model, test_dataloader, loss_fun, y_normalizer):
             pred = y_normalizer.decode(pred)
             loss = loss_fun(pred, y)
 
-            # --- Relative L2 calculation ---
-            # print(f"pred shape: {pred.shape}")
-            # print(f"y shape: {y.shape}")
-            rel_l2 = torch.norm(pred.reshape(y.shape) - y) / torch.norm(y)
+            # Compute per-sample relative L2 error
+            diff = pred.reshape(y.shape) - y
+            rel_l2 = torch.norm(diff.view(diff.shape[0], -1), dim=1) / torch.norm(
+                y.view(y.shape[0], -1), dim=1
+            )
+            rel_l2_mean = rel_l2.mean()
+
             if RL2 is None:
-                RL2 = rel_l2
+                RL2 = rel_l2_mean
             else:
-                RL2 += rel_l2
+                RL2 += rel_l2_mean
             if val_loss is None:
                 val_loss = loss
             else:
                 val_loss += loss
+
     val_loss = val_loss / len(test_dataloader)
+    RL2 = RL2 / len(test_dataloader)
 
     dm = DistributedManager()
     if dm.world_size > 1:

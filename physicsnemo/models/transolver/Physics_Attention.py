@@ -122,21 +122,23 @@ class Physics_Attention_Base(nn.Module):
 
         # Project the latent space vectors on to the weight computation space,
         # and compute a temperature adjusted softmax.
-        clamped_temp = torch.clamp(self.temperature, min=0.1, max=5).to(
+        clamped_temp = torch.clamp(self.temperature, min=0.5, max=5).to(
             slice_projections.dtype
         )
         slice_weights = nn.functional.softmax(
             slice_projections / clamped_temp, dim=-1
         )  # [Batch, N_heads, N_tokens, Slice_num]
+
+        # Cast to the computation type (since the parameter is probably fp32)
         slice_weights = slice_weights.to(slice_projections.dtype)
         # Average the slices over the token dimension
         slice_norm = slice_weights.sum(2)  # [Batch, N_heads, Slice_num]
-
         # This does the projection of the latent space fx by the weights:
-        slice_token = torch.matmul(slice_weights.transpose(2, 3), fx)
 
-        # Apply the normalization (summed weights)
-        slice_token = slice_token / ((slice_norm[:, :, :, None] + 1e-5))  # B H G D
+        # Computing the slice tokens is a matmul followed by a normalization.
+        # It can, unfortunately, overflow in reduced precision, so normalize first:
+        slice_weights = slice_weights / (slice_norm[:, :, None, :] + 1e-2)
+        slice_token = torch.matmul(slice_weights.transpose(2, 3), fx)
 
         return slice_weights, slice_token
 
@@ -226,32 +228,61 @@ class Physics_Attention_Base(nn.Module):
 
         # Project the inputs onto learned spaces:
         x_mid, fx_mid = self.project_input_onto_slices(x)
+        # if (x_mid.isnan().any()):
+        #     print(f"Rank {dm.rank} x_mid is nan")
+        #     exit()
+        # if (fx_mid.isnan().any()):
+        #     print(f"Rank {dm.rank} fx_mid is nan")
+        #     exit()
         # x_mid and fx_mid should have shapes of [B, N_head, N_tokens, Head_dim]
 
         # Perform the linear projection of learned latent space onto slices:
         slice_projections = self.in_project_slice(x_mid)
-
+        # if (slice_projections.isnan().any()):
+        #     print(f"Rank {dm.rank} slice_projections is nan")
+        #     exit()
         # Slice projections has shape [B, N_head, N_tokens, Head_dim], but head_dim may have changed!
 
         # Use the slice projections and learned spaces to compute the slices, and their weights:
         slice_weights, slice_tokens = self.compute_slices_from_projections(
             slice_projections, fx_mid
         )
-
+        # if (slice_weights.isnan().any()):
+        #     print(f"Rank {dm.rank} slice_weights is nan")
+        #     exit()
+        # if (slice_tokens.isnan().any()) or (slice_tokens.isinf().any()):
+        #     print(f"Rank {dm.rank} slice_tokens is nan or inf")
+        #     torch.save(slice_tokens, f"slice_tokens_{dm.rank}.pt")
+        #     torch.save(slice_weights, f"slice_weights_{dm.rank}.pt")
+        #     torch.save(slice_projections, f"slice_projections_{dm.rank}.pt")
+        #     torch.save(fx_mid, f"fx_mid_{dm.rank}.pt")
+        #     exit()
         # slice_weights has shape [Batch, N_heads, N_tokens, Slice_num]
         # slice_tokens has shape  [Batch, N_heads, N_tokens, head_dim]
+
+        # print(f"Rank {dm.rank} Min/max/std of slice tokens: {slice_tokens.min()}, {slice_tokens.max()}, {slice_tokens.std()}")
 
         # Apply attention to the slice tokens
         if self.use_te:
             out_slice_token = self.compute_slice_attention_te(slice_tokens)
+            # out_slice_token = self.compute_slice_attention(slice_tokens)
         else:
             out_slice_token = self.compute_slice_attention_sdpa(slice_tokens)
 
+        # if (out_slice_token.isnan().any()):
+        #     print(f"Rank {dm.rank} out_slice_token is nan")
+        #     torch.save(slice_tokens, f"slice_tokens_{dm.rank}.pt")
+        #     torch.save(slice_weights, f"slice_weights_{dm.rank}.pt")
+        #     torch.save(slice_projections, f"slice_projections_{dm.rank}.pt")
+        #     torch.save(fx_mid, f"fx_mid_{dm.rank}.pt")
+        #     exit()
         # Shape unchanged
 
         # Deslice:
         outputs = self.project_attention_outputs(out_slice_token, slice_weights)
-
+        # if (outputs.isnan().any()):
+        #     print(f"Rank {dm.rank} outputs is nan")
+        #     exit()
         # Outputs now has the same shape as the original input x
 
         return outputs
@@ -294,20 +325,19 @@ class Physics_Attention_Structured_Mesh_2D_2(Physics_Attention_Base):
     def __init__(
         self,
         dim,
+        spatial_shape,
         heads=8,
         dim_head=64,
         dropout=0.0,
         slice_num=64,
-        H=101,
-        W=31,
         kernel=3,
         use_te=True,
     ):  # kernel=3):
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
 
         inner_dim = dim_head * heads
-        self.H = H
-        self.W = W
+        self.H = spatial_shape[0]
+        self.W = spatial_shape[1]
 
         self.in_project_x = nn.Conv2d(dim, inner_dim, kernel, 1, kernel // 2)
         self.in_project_fx = nn.Conv2d(dim, inner_dim, kernel, 1, kernel // 2)
@@ -347,22 +377,20 @@ class Physics_Attention_Structured_Mesh_3D_2(Physics_Attention_Base):
     def __init__(
         self,
         dim,
+        spatial_shape,
         heads=8,
         dim_head=64,
         dropout=0.0,
         slice_num=32,
-        H=32,
-        W=32,
-        D=32,
         kernel=3,
         use_te=True,
     ):
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
 
         inner_dim = dim_head * heads
-        self.H = H
-        self.W = W
-        self.D = D
+        self.H = spatial_shape[0]
+        self.W = spatial_shape[1]
+        self.D = spatial_shape[2]
 
         self.in_project_x = nn.Conv3d(dim, inner_dim, kernel, 1, kernel // 2)
         self.in_project_fx = nn.Conv3d(dim, inner_dim, kernel, 1, kernel // 2)

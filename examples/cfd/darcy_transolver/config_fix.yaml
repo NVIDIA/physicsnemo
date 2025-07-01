@@ -21,17 +21,17 @@
 # SOFTWARE.
 
 output_dir: ./output/darcy_transolver_fix
-run_id: fp32_dev_test_fullres
+run_id: fp32_dev_fullres_b64_s64-te
 
 data:
   train_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz
   test_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth2.npz
   resolution: 421 #421, 211, 141, 106, 85 all viable
-  batch_size: 8 # This is the GLOBAL batch size
+  batch_size: 32 # This is the GLOBAL batch size
 
 model:
   space_dim: 2
-  n_layers: 8
+  n_layers: 4
   n_hidden: 128
   dropout: 0.0
   n_head: 8
@@ -40,11 +40,10 @@ model:
   mlp_ratio: 1
   fun_dim: 1
   out_dim: 1
-  # slice_dim: 64
   ref: 8
   unified_pos: False
-  slice_num: 256
-  transformer_engine: False
+  slice_num: 64
+  transformer_engine: True
   
 precision: fp32
 
@@ -58,13 +57,13 @@ normaliser:
 
 scheduler:
   initial_lr: 1.E-3
-  decay_rate: 1.E-5
+  decay_rate: 5.E-5
   weight_decay: 1.E-5
   decay_pseudo_epochs: 8
 
 training:
   rec_results_freq : 100
-  max_pseudo_epochs: 200
+  max_pseudo_epochs: 1000
   pseudo_epoch_sample_size: 1024
 
 validation:
