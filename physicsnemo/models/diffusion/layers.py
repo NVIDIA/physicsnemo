@@ -859,26 +859,23 @@ class UNetBlock(torch.nn.Module):
                     )
 
         # Validation and warnings
-        if not self.attention and legacy_found:
+        src_keys = set(state_dict.keys()) & set(_mapping.keys())
+        target_keys = set(self.state_dict().keys()) & set(_mapping.values())
+        missing_keys, unexpected_keys = src_keys - target_keys, target_keys - src_keys
+        if missing_keys:
             warnings.warn(
-                "Checkpoint contains attention parameters (legacy keys) but "
-                "the current UNetBlock instance was created with "
-                "attention=False. These parameters were ignored: "
-                f"{', '.join(legacy_found)}",
+                "The following keys from the checkpoint were not found in the current "
+                "model and were ignored: "
+                f"{', '.join(sorted(missing_keys))}",
                 UserWarning,
             )
-
-        if self.attention:
-            # After migration, ensure that all expected new keys exist.
-            missing_new = [
-                new_key for new_key in _mapping.values() if new_key not in state_dict
-            ]
-            if missing_new:
-                warnings.warn(
-                    "Attention is enabled but the checkpoint is missing the "
-                    f"following expected keys: {', '.join(missing_new)}",
-                    UserWarning,
-                )
+        if unexpected_keys:
+            warnings.warn(
+                "The following keys of the current model are not present in the loaded "
+                "checkpoint: "
+                f"{', '.join(sorted(unexpected_keys))}",
+                UserWarning,
+            )
 
 
 class PositionalEmbedding(torch.nn.Module):
