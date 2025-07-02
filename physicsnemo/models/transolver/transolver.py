@@ -498,6 +498,7 @@ class Transolver(Module):
         self.structured_shape = structured_shape
 
         # If we're using the unified position, create and save the position embeddings:
+        self.unified_pos = unified_pos
 
         if unified_pos:
             if structured_shape is None:
