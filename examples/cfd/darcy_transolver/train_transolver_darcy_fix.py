@@ -72,7 +72,7 @@ def forward_train_full_loop(
     """
     dm = DistributedManager()
     with context:
-        pred = model(pos, fx=x.unsqueeze(-1)).squeeze(-1)
+        pred = model(embedding=pos, fx=x.unsqueeze(-1)).squeeze(-1)
         pred = y_normalizer.decode(pred)
         loss = loss_fun(pred, y)
     if scaler is not None:
@@ -125,7 +125,7 @@ def val_epoch(model, test_dataloader, loss_fun, y_normalizer):
     for i, batch in enumerate(test_dataloader):
         pos, x, y = batch
         with torch.no_grad():
-            pred = model(pos, fx=x.unsqueeze(-1)).squeeze(-1)
+            pred = model(embedding=pos, fx=x.unsqueeze(-1)).squeeze(-1)
             pred = y_normalizer.decode(pred)
             loss = loss_fun(pred, y)
 
@@ -188,22 +188,21 @@ def darcy_trainer(cfg: DictConfig) -> None:
     # define model
     ########################################################################
     model = Transolver(
-        space_dim=cfg.model.space_dim,
+        functional_dim=cfg.model.functional_dim,
+        out_dim=cfg.model.out_dim,
+        embedding_dim=cfg.model.embedding_dim,
         n_layers=cfg.model.n_layers,
         n_hidden=cfg.model.n_hidden,
         dropout=cfg.model.dropout,
         n_head=cfg.model.n_head,
-        Time_Input=cfg.model.Time_Input,
         act=cfg.model.act,
         mlp_ratio=cfg.model.mlp_ratio,
-        fun_dim=cfg.model.fun_dim,
-        out_dim=cfg.model.out_dim,
         slice_num=cfg.model.slice_num,
-        ref=cfg.model.ref,
         unified_pos=cfg.model.unified_pos,
-        H=cfg.data.resolution,
-        W=cfg.data.resolution,
-        use_te=cfg.model.transformer_engine,
+        ref=cfg.model.ref,
+        structured_shape=[cfg.data.resolution, cfg.data.resolution],
+        use_te=cfg.model.use_te,
+        Time_Input=cfg.model.Time_Input,
     ).to(dm.device)
 
     if dm.world_size > 1:
