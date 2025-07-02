@@ -19,6 +19,7 @@
 
 import argparse
 import fnmatch
+import itertools
 import json
 import re
 import shutil
@@ -157,7 +158,17 @@ def main():
 
     # Determine which files to check
     if args.all_files:
-        filenames = get_all_files(working_path, exts)
+        # Build list of files to check, excluding those in exclude-dir
+        exclude_paths = [
+            (Path(__file__).parent / Path(path)).resolve().rglob("*")
+            for path in config.get("exclude-dir", [])
+        ]
+        all_exclude_paths = itertools.chain.from_iterable(exclude_paths)
+        exclude_filenames = [p for p in all_exclude_paths if p.suffix in exts]
+        filenames = [p for p in working_path.resolve().rglob("*") if p.suffix in exts]
+        filenames = [
+            filename for filename in filenames if filename not in exclude_filenames
+        ]
     else:
         committed_files = get_committed_files()
         filenames = [Path(f) for f in committed_files if Path(f).suffix in exts]
