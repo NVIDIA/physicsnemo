@@ -11,10 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Improved documentation for diffusion models and diffusion utils.
+- Safe API to override `__init__`'s arguments saved in checkpoint file with
+  `Module.from_checkpoint("chkpt.mdlus", models_args)`.
 
 ### Changed
 
 - physicsnemo.utils.generative renamed into physicsnemo.utils.diffusion
+- In CorrDiff model wrappers (`EDMPrecondSuperResolution` and `UNet`), the
+  arguments `profile_mode` and `amp_mode` cannot be overriden by
+  `from_checkpoint`. They are now properties that can be dynamically changed
+  *after* the model instantiation.
 
 ### Deprecated
 
