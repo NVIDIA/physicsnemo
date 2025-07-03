@@ -346,6 +346,10 @@ class GroupNorm(torch.nn.Module):
             num_groups,
             (num_channels + min_channels_per_group - 1) // min_channels_per_group,
         )
+        if num_channels % self.num_groups != 0:
+            raise ValueError(
+                "num_channels must be divisible by num_groups or min_channels_per_group"
+            )
         self.eps = eps
         self.weight = torch.nn.Parameter(torch.ones(num_channels))
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
