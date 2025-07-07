@@ -208,6 +208,24 @@ To enable retraining the DoMINO model from a pre-trained checkpoint, follow the 
 5. Download the validation results (saved in form of point clouds in `.vtp` / `.vtu` format),
    and visualize in Paraview.
 
+### DoMINO model pipeline for inference on test samples
+
+After training is completed, `test.py` script can be used to run inference on
+test samples. Follow the below steps to run the `test.py`
+
+1. Update the config in the `conf/config.yaml` under the `Testing data Configs`
+   tab.
+
+2. The test script is designed to run inference on the raw `.stl`, `.vtp` and
+   `.vtu` files for each test sample. Use the same scaling parameters that
+   were generated during the training. Typically this is `outputs/<project.name>/`,
+   where `project.name` is as defined in the `config.yaml`. Update the
+   `eval.scaling_param_path` accordingly.
+
+3. Run the `test.py`. The test script can be run in parallel as well. Refer to
+   the training guidelines for Multi-GPU. Note, for running `test.py` in parallel,
+   the number of GPUs chosen must be <= the number of test samples.
+
 ### DoMINO model pipeline for inference on STLs
 
 The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
