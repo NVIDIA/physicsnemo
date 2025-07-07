@@ -16,10 +16,11 @@
 
 import importlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Tuple, Union
+from typing import Any, Dict, List, Literal, Set, Tuple, Union
 
 import torch
 
+from physicsnemo.models.diffusion.utils import _safe_setattr
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -106,6 +107,25 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         "0.1.0": "Loading UNet checkpoint from older version 0.1.0 (current version is 0.2.0). This version is still supported, but consider re-saving the model to upgrade to version 0.2.0 and remove this warning."
     }
 
+    # Classes that can be wrapped by this UNet class.
+    _wrapped_classes: Set[str] = {
+        "SongUNetPosEmbd",
+        "SongUNetPosLtEmbd",
+        "SongUNet",
+        "DhariwalUNet",
+    }
+
+    # Arguments of the __init__ method that can be overridden with the
+    # ``Module.from_checkpoint`` method. Here, since we use splatted arguments
+    # for the wrapped model instance, we allow overriding of any overridable
+    # argument of the wrapped classes.
+    _overridable_args: Set[str] = set.union(
+        *(
+            getattr(getattr(network_module, cls_name), "_overridable_args", set())
+            for cls_name in _wrapped_classes
+        )
+    )
+
     @classmethod
     def _backward_compat_arg_mapper(
         cls, version: str, args: Dict[str, Any]
@@ -154,6 +174,13 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         **model_kwargs: dict,
     ):
         super().__init__(meta=MetaData)
+
+        # Validation
+        if model_type not in self._wrapped_classes:
+            raise ValueError(
+                f"Model type '{model_type}' is not supported. "
+                f"Must be one of: {', '.join(self._wrapped_classes)}"
+            )
 
         # for compatibility with older versions that took only 1 dimension
         if isinstance(img_resolution, int):
@@ -227,28 +254,45 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
     @property
     def amp_mode(self):
         """
-        Return the *amp_mode* flag of the underlying architecture if present.
+        Property that controls the automatic mixed precision mode of the
+        underlying architecture. ``True`` means that the underlying architecture
+        will automatically cast tensors to the appropriate
+        precision. ``False`` means that the underlying architecture will not
+        automatically cast the input and output tensors to the appropriate
+        precision.
         """
         return getattr(self.model, "amp_mode", None)
 
     @amp_mode.setter
     def amp_mode(self, value: bool):
         """
-        Update *amp_mode* on the wrapped architecture and its sub-modules.
+        Update ``amp_mode`` on the wrapped architecture and its sub-modules.
         """
         if not isinstance(value, bool):
             raise TypeError("amp_mode must be a boolean value.")
+        self.model.apply(lambda m: _safe_setattr(m, "amp_mode", value))
 
-        if hasattr(self.model, "amp_mode"):
-            self.model.amp_mode = value
+    @property
+    def profile_mode(self):
+        """
+        Property that controls the profiling mode of the underlying architecture.
+        ``True`` means that the underlying architecture will be profiled.
+        ``False`` means that the underlying architecture will not be profiled.
+        """
+        return getattr(self.model, "profile_mode", None)
 
-        # Recursively update sub-modules that define *amp_mode*.
-        for sub_module in self.model.modules():
-            if hasattr(sub_module, "amp_mode"):
-                sub_module.amp_mode = value
+    @profile_mode.setter
+    def profile_mode(self, value: bool):
+        """
+        Update ``profile_mode`` on the wrapped architecture and its sub-modules.
+        """
+        if not isinstance(value, bool):
+            raise TypeError("profile_mode must be a boolean value.")
+        self.model.apply(lambda m: _safe_setattr(m, "profile_mode", value))
 
 
-# TODO: implement amp_mode property for StormCastUNet (same as UNet)
+# TODO: implement amp_mode and profile_mode properties for StormCastUNet (same
+# as UNet)
 class StormCastUNet(Module):
     """
     U-Net wrapper for StormCast; used so the same Song U-Net network can be re-used for this model.
