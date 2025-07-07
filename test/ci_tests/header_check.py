@@ -17,10 +17,13 @@
 
 """A script to check that copyright headers exists"""
 
+import argparse
 import fnmatch
 import itertools
 import json
 import re
+import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -98,7 +101,43 @@ def get_top_comments(_data):
     return comments
 
 
+def get_committed_files():
+    """
+    Get a list of files that are part of the current commit
+    """
+    git_executable = shutil.which("git")
+    if not git_executable:
+        raise RuntimeError("git executable not found in PATH")
+    result = subprocess.run(
+        [git_executable, "diff", "--name-only", "--cached"],  # noqa: S603
+        capture_output=True,
+        text=True,
+    )
+    files = result.stdout.splitlines()
+    return files
+
+
+def get_all_files(working_path, exts):
+    """
+    Get a list of all files in the directory with specified extensions
+    """
+    all_files = []
+    for ext in exts:
+        all_files.extend(working_path.rglob(f"*{ext}"))
+    return all_files
+
+
 def main():
+    """
+    Main function to check the copyright headers
+    """
+    parser = argparse.ArgumentParser(description="Check copyright headers in files.")
+    parser.add_argument(
+        "--all-files",
+        action="store_true",
+        help="Check all files in the directory instead of just committed files.",
+    )
+    args = parser.parse_args()
 
     with open(Path(__file__).parent.resolve() / Path("config.json")) as f:
         config = json.loads(f.read())
@@ -117,17 +156,22 @@ def main():
         pyheader = original.read().split("\n")
         pyheader_lines = len(pyheader)
 
-    # Build list of files to check
-    exclude_paths = [
-        (Path(__file__).parent / Path(path)).resolve().rglob("*")
-        for path in config["exclude-dir"]
-    ]
-    all_exclude_paths = itertools.chain.from_iterable(exclude_paths)
-    exclude_filenames = [p for p in all_exclude_paths if p.suffix in exts]
-    filenames = [p for p in working_path.resolve().rglob("*") if p.suffix in exts]
-    filenames = [
-        filename for filename in filenames if filename not in exclude_filenames
-    ]
+    # Determine which files to check
+    if args.all_files:
+        # Build list of files to check, excluding those in exclude-dir
+        exclude_paths = [
+            (Path(__file__).parent / Path(path)).resolve().rglob("*")
+            for path in config.get("exclude-dir", [])
+        ]
+        all_exclude_paths = itertools.chain.from_iterable(exclude_paths)
+        exclude_filenames = [p for p in all_exclude_paths if p.suffix in exts]
+        filenames = [p for p in working_path.resolve().rglob("*") if p.suffix in exts]
+        filenames = [
+            filename for filename in filenames if filename not in exclude_filenames
+        ]
+    else:
+        committed_files = get_committed_files()
+        filenames = [Path(f) for f in committed_files if Path(f).suffix in exts]
 
     problematic_files = []
     gpl_files = []
