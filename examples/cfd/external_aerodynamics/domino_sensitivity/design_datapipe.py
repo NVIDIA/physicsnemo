@@ -22,33 +22,20 @@ The datapipe processes surface meshes to create structured representations suita
 machine learning tasks, computing various geometric properties and signed distance fields.
 """
 
-from collections import defaultdict
-from pathlib import Path
-from typing import (
-    Any,
-    Iterable,
-    List,
-    Literal,
-    Mapping,
-    Optional,
-    Union,
-    Callable,
-    Sequence,
-)
+from typing import Sequence
 
 import numpy as np
-import pandas as pd
 import pyvista as pv
-import vtk
-from physicsnemo.utils.domino.utils import (
-    normalize,
-    create_grid,
-    calculate_center_of_mass,
-)
-from torch.utils.data import Dataset
-from physicsnemo.utils.sdf import signed_distance_field
-from scipy.spatial import KDTree
 from numpy.typing import NDArray
+from scipy.spatial import KDTree
+from torch.utils.data import Dataset
+
+from physicsnemo.utils.domino.utils import (
+    calculate_center_of_mass,
+    create_grid,
+    normalize,
+)
+from physicsnemo.utils.sdf import signed_distance_field
 
 
 class DesignDatapipe(Dataset):
