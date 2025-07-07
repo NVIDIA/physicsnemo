@@ -210,6 +210,7 @@ class DoMINOInference:
         stream_velocity: float = 38.889,
         stencil_size: int = 7,
         air_density: float = 1.205,
+        verbose: bool = False,
     ) -> dict[str, np.ndarray]:
         """Performs DoMINO inference on a given geometry to predict aerodynamic quantities.
 
@@ -223,6 +224,7 @@ class DoMINOInference:
             stencil_size: Number of neighboring points to consider for surface calculations.
                 Defaults to 7.
             air_density: Air density in kg/m³. Defaults to 1.205 kg/m³.
+            verbose: Whether to print verbose output. Defaults to False.
 
         Returns:
             dict: Dictionary containing the following keys:
@@ -296,10 +298,10 @@ class DoMINOInference:
         geometry_sensitivity: np.ndarray = np.zeros_like(geometry_coordinates)
 
         def _print_memory_usage(label: str) -> None:
-            return
-            print(
-                f"VRAM usage after {label:<20}: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
-            )
+            if verbose:
+                print(
+                    f"VRAM usage after {label:<20}: {(torch.cuda.memory_allocated()/(1024**3)):.2f} GB"
+                )
 
         for sample_batched in tqdm(dataloader, desc="Processing batches"):
             # Update input dictionary with surface mesh data from sampled batch
@@ -312,13 +314,16 @@ class DoMINOInference:
             }
             input_dict_batch["geometry_coordinates"].requires_grad_(True)
 
-            _print_memory_usage("data loading")
+            _print_memory_usage(label="data loading")
 
             prediction_vol_batch, prediction_surf_batch = self.model(input_dict_batch)
 
-            _print_memory_usage("model forward")
+            _print_memory_usage(label="model forward")
 
-            # Required to free memory
+            # This is required to free memory. It's a bit unconventional, but
+            # this allows us to drop all references to the PyTorch computational
+            # graph, which allows PyTorch to garbage collect the primal values
+            # stored on the graph nodes.
             del prediction_vol_batch
 
             prediction_surf_batch = (
@@ -345,7 +350,7 @@ class DoMINOInference:
             (
                 -1 * drag_force_batch
             ).backward()  # Vectors represent how you should modify the geometry to *reduce* drag
-            _print_memory_usage("surface backward")
+            _print_memory_usage(label="surface backward")
 
             # Compute the sensitivity of the drag force to the geometry coordinates, from this batch
             geometry_sensitivity_batch = input_dict_batch["geometry_coordinates"].grad[
