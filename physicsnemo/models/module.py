@@ -64,7 +64,7 @@ class Module(torch.nn.Module):
     # __init__ arguments that can be overridden. By default all arguments are
     # protected. Subclasses can override this to allow for overriding of specific
     # __init__'s arguments with the ``from_checkpoint`` method.
-    _overridable_args: Set[str] = {}
+    _overridable_args: Set[str] = set()
 
     def __new__(cls, *args, **kwargs):
         out = super().__new__(cls)
