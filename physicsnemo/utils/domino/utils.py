@@ -356,7 +356,7 @@ def get_filenames(filepath: str, exclude_dirs: bool = False) -> List[str]:
             filenames.append(item)
         return filenames
     else:
-        FileNotFoundError()
+        raise FileNotFoundError()
 
 
 def calculate_pos_encoding(nx: ArrayType, d: int = 8) -> ArrayType:
