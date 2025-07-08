@@ -24,7 +24,7 @@ import tarfile
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Set, Union
 
 import torch
 
@@ -60,6 +60,11 @@ class Module(torch.nn.Module):
     __supported_model_checkpoint_version__ = (
         {}
     )  # Dict of supported model checkpoints and corresponding warnings messages
+
+    # __init__ arguments that can be overridden. By default all arguments are
+    # protected. Subclasses can override this to allow for overriding of specific
+    # __init__'s arguments with the ``from_checkpoint`` method.
+    _overridable_args: Set[str] = set()
 
     def __new__(cls, *args, **kwargs):
         out = super().__new__(cls)
@@ -146,6 +151,37 @@ class Module(torch.nn.Module):
             Updated arguments dictionary compatible with current version
         """
         return args
+
+    @classmethod
+    def _override_args(
+        cls, args: Dict[str, Any], override_args: Dict[str, Any]
+    ) -> None:
+        """Safely override ``__init__`` arguments stored in a checkpoint.
+
+        This updates *args* *in-place* with the values provided in
+        *override_args*. Only keys defined in ``cls._overridable_args`` are
+        allowed to be modified. Attempting to override any other key will raise
+        a ``ValueError``.
+
+        Parameters
+        ----------
+        args : Dict[str, Any]
+            Keyword arguments that will be forwarded to the model
+            constructor (e.g. ``args["__args__"]`` from a checkpoint).
+        override_args : Dict[str, Any]
+            Dictionary containing the desired argument overrides.
+        """
+
+        for key, value in override_args.items():
+            if key not in cls._overridable_args:
+                raise ValueError(
+                    f"Argument '{key}' cannot be overridden for " f"{cls.__name__}."
+                )
+            if key not in args:
+                raise ValueError(
+                    f"Unexpected argument '{key}' to override for " f"{cls.__name__}."
+                )
+            args[key] = value
 
     @classmethod
     def _get_class_from_args(cls, arg_dict: Dict[str, Any]) -> type:
@@ -385,7 +421,7 @@ class Module(torch.nn.Module):
 
     @classmethod
     def from_checkpoint(
-        cls, file_name: str, model_args: Optional[Dict] = None
+        cls, file_name: str, override_args: Optional[Dict[str, Any]] = None
     ) -> "Module":
         """Simple utility for constructing a model from a checkpoint
 
@@ -393,6 +429,24 @@ class Module(torch.nn.Module):
         ----------
         file_name : str
             Checkpoint file name
+        override_args : Optional[Dict[str, Any]], optional, default=None
+            Dictionary of arguments to override the ``__init__`` method's
+            arguments saved in the checkpoint. The override of arguments occurs
+            *before* the model is instantiated, which allows for *ad-hoc*
+            modifications to the model's initialization. Argument overrides are
+            however applied *before* the state-dict is loaded, which means that
+            for parameters or buffers saved in the state-dict, the values
+            contained in the state-dict will take precedence over the override.
+            This might also result in unexpected behavior if the model is
+            instantiated with different arguments than the ones saved in the
+            checkpoint, and some mismatching keys are saved in the state-dict.
+
+            *Note*: Only arguments defined in ``cls._overridable_args`` can be
+            overridden. ``Module``'s subclasses by default disable this
+            functionality, unless they explicity define an ``_overridable_args``
+            class attribute. Attempting to override any other argument will raise
+            a ``ValueError``. This API should be used with caution and only if
+            you fully understand the implications of the override.
 
         Returns
         -------
@@ -449,9 +503,9 @@ class Module(torch.nn.Module):
                         f"Model checkpoint version {version} is not compatible with current version {_cls.__model_checkpoint_version__}"
                     )
 
-            # Merge model_args (adding new keys and updating existing ones)
-            if model_args is not None:
-                args["__args__"].update(model_args)
+            # Override args["__args__"] with override_args
+            if override_args is not None:
+                _cls._override_args(args["__args__"], override_args)
 
             # Instantiate the model
             model = Module.instantiate(args)
@@ -461,7 +515,7 @@ class Module(torch.nn.Module):
                 local_path.joinpath("model.pt"), map_location=model.device
             )
 
-            model_dict = convert_ckp_apex(ckp_args, model_args, model_dict)
+            model_dict = convert_ckp_apex(ckp_args, override_args, model_dict)
             model.load_state_dict(model_dict, strict=False)
         return model
 

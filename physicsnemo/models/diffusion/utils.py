@@ -15,6 +15,8 @@
 # limitations under the License.
 
 
+from typing import Any
+
 import numpy as np
 import torch
 
@@ -64,3 +66,11 @@ def weight_init(shape: tuple, mode: str, fan_in: int, fan_out: int):
     if mode == "kaiming_normal":
         return np.sqrt(1 / fan_in) * torch.randn(*shape)
     raise ValueError(f'Invalid init mode "{mode}"')
+
+
+def _safe_setattr(obj: torch.nn.Module, attr: str, value: Any):
+    """
+    Safely set an attribute on a module.
+    """
+    if hasattr(obj, attr):
+        setattr(obj, attr, value)
