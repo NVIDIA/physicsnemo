@@ -25,23 +25,24 @@ import numpy as np
 import pytest
 
 from physicsnemo.utils.domino.utils import (
+    area_weighted_shuffle_array,
     calculate_center_of_mass,
-    normalize,
-    unnormalize,
-    standardize,
-    unstandardize,
     calculate_normal_positional_encoding,
-    nd_interpolator,
-    pad,
-    pad_inp,
-    shuffle_array,
-    shuffle_array_without_sampling,
     calculate_pos_encoding,
     combine_dict,
     create_grid,
     mean_std_sampling,
-    area_weighted_shuffle_array,
+    nd_interpolator,
+    normalize,
+    pad,
+    pad_inp,
+    shuffle_array,
+    shuffle_array_without_sampling,
+    standardize,
+    unnormalize,
+    unstandardize,
 )
+
 
 def test_calculate_center_of_mass():
     """Test calculate_center_of_mass function with docstring example."""

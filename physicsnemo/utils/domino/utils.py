@@ -24,6 +24,7 @@ CPU (NumPy) and GPU (CuPy) operations with automatic fallbacks.
 
 from pathlib import Path
 from typing import Any, Sequence
+
 import numpy as np
 import vtk
 from scipy.spatial import KDTree
@@ -36,6 +37,7 @@ from physicsnemo.utils.profiling import profile
 
 try:
     import cupy as cp
+
     ArrayType = np.ndarray | cp.ndarray
 except ImportError:
     ArrayType = np.ndarray
@@ -61,6 +63,7 @@ def array_type(array: ArrayType) -> "type[np] | type[cp]":
     """
     try:
         import cupy as cp
+
         return cp.get_array_module(array)
     except ImportError:
         return np
@@ -322,6 +325,7 @@ def extract_surface_triangles(tetrahedral_mesh: "vtk.vtkUnstructuredGrid") -> li
 
     # Wrap with PyVista for easier manipulation
     import pyvista as pv
+
     surface_mesh = pv.wrap(surface_filter.GetOutput())
     triangle_indices = []
 
@@ -1137,9 +1141,7 @@ def area_weighted_shuffle_array(
     point_indices = xp.arange(arr.shape[0])
 
     selected_indices = xp.random.choice(
-        xp.asarray(point_indices), 
-        size=n_points, 
-        p=xp.asarray(sampling_probabilities)
+        xp.asarray(point_indices), size=n_points, p=xp.asarray(sampling_probabilities)
     )
     selected_indices = xp.asarray(selected_indices)
 
