@@ -25,7 +25,6 @@ CPU (NumPy) and GPU (CuPy) operations with automatic fallbacks.
 from pathlib import Path
 from typing import Any, Sequence
 import numpy as np
-import pyvista as pv
 import vtk
 from scipy.spatial import KDTree
 from vtk import vtkDataSetTriangleFilter
@@ -322,6 +321,7 @@ def extract_surface_triangles(tetrahedral_mesh: "vtk.vtkUnstructuredGrid") -> li
     surface_filter.Update()
 
     # Wrap with PyVista for easier manipulation
+    import pyvista as pv
     surface_mesh = pv.wrap(surface_filter.GetOutput())
     triangle_indices = []
 
