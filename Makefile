@@ -29,7 +29,7 @@ lint:
 	pre-commit run check-added-large-files -a
 
 license: 
-	pre-commit run license -a
+	python test/ci_tests/header_check.py --all-files
 
 doctest:
 	coverage run \
