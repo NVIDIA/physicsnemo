@@ -270,8 +270,7 @@ class DoMINOInference:
         )
 
         input_dict: dict[str, torch.Tensor] = {
-            k: torch.unsqueeze(v, dim=0)
-            for k, v in datapipe.out_dict.items()
+            k: torch.unsqueeze(v, dim=0) for k, v in datapipe.out_dict.items()
         }
         input_dict["stream_velocity"] = torch.tensor(stream_velocity)
         input_dict["air_density"] = torch.tensor(air_density)
@@ -303,10 +302,7 @@ class DoMINOInference:
             # Update input dictionary with surface mesh data from sampled batch
             input_dict_batch: dict[str, torch.Tensor] = {
                 **input_dict,
-                **{
-                    k: torch.unsqueeze(sample_batched[k], dim=0)
-                    for k in surface_keys
-                },
+                **{k: torch.unsqueeze(sample_batched[k], dim=0) for k in surface_keys},
             }
             input_dict_batch["geometry_coordinates"].requires_grad_(True)
 
@@ -411,9 +407,9 @@ class DoMINOInference:
         from utilities.mesh_postprocessing import laplacian_smoothing
 
         mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
-        mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = (
-            raw_sensitivity_normal_cells
-        )
+        mesh_pointdata.cell_data[
+            "raw_sensitivity_normal_cells"
+        ] = raw_sensitivity_normal_cells
         mesh_pointdata = mesh_pointdata.cell_data_to_point_data()
 
         smooth_sensitivity_normal_point = laplacian_smoothing(
@@ -429,9 +425,9 @@ class DoMINOInference:
         )
 
         mesh_pointdata.clear_data()
-        mesh_pointdata.point_data["smooth_sensitivity_normal_point"] = (
-            smooth_sensitivity_normal_point
-        )
+        mesh_pointdata.point_data[
+            "smooth_sensitivity_normal_point"
+        ] = smooth_sensitivity_normal_point
         mesh_pointdata = mesh_pointdata.point_data_to_cell_data()
 
         smooth_sensitivity_normal_cell = mesh_pointdata.cell_data[
