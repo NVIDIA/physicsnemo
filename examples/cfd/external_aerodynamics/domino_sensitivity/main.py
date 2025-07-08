@@ -268,16 +268,17 @@ class DoMINOInference:
             datapipe, batch_size=2**13, shuffle=False
         )
 
-        input_dict = {
-            k: torch.from_numpy(np.expand_dims(np.float32(v), axis=0)).to(self.device)
+        input_dict: dict[str, torch.Tensor] = {
+            k: torch.from_numpy(np.expand_dims(v, axis=0))
             for k, v in datapipe.out_dict.items()
         }
-        input_dict["stream_velocity"] = torch.tensor(
-            stream_velocity, dtype=torch.float32, device=self.device
-        )
-        input_dict["air_density"] = torch.tensor(
-            air_density, dtype=torch.float32, device=self.device
-        )
+        input_dict["stream_velocity"] = torch.tensor(stream_velocity)
+        input_dict["air_density"] = torch.tensor(air_density)
+
+        # Move and type-cast all tensors
+        input_dict = {
+            k: v.type(torch.float32).to(self.device) for k, v in input_dict.items()
+        }
 
         surface_keys: list[str] = [
             "surface_mesh_centers",
@@ -305,7 +306,7 @@ class DoMINOInference:
 
         for sample_batched in tqdm(dataloader, desc="Processing batches"):
             # Update input dictionary with surface mesh data from sampled batch
-            input_dict_batch = {
+            input_dict_batch: dict[str, torch.Tensor] = {
                 **input_dict,
                 **{
                     k: torch.unsqueeze(sample_batched[k], dim=0).to(self.device)
@@ -320,10 +321,11 @@ class DoMINOInference:
 
             _print_memory_usage(label="model forward")
 
-            # This is required to free memory. It's a bit unconventional, but
-            # this allows us to drop all references to the PyTorch computational
-            # graph, which allows PyTorch to garbage collect the primal values
-            # stored on the graph nodes.
+            # This is required to free memory. It's a bit atypical to do this,
+            # but in this case it allows us to drop all references to the
+            # PyTorch computational graph, which allows PyTorch to garbage
+            # collect the primal values stored on the graph nodes before the
+            # next forward pass.
             del prediction_vol_batch
 
             prediction_surf_batch = (
@@ -414,9 +416,9 @@ class DoMINOInference:
         from utilities.mesh_postprocessing import laplacian_smoothing
 
         mesh_pointdata = pv.PolyData(mesh.points, mesh.faces)
-        mesh_pointdata.cell_data[
-            "raw_sensitivity_normal_cells"
-        ] = raw_sensitivity_normal_cells
+        mesh_pointdata.cell_data["raw_sensitivity_normal_cells"] = (
+            raw_sensitivity_normal_cells
+        )
         mesh_pointdata = mesh_pointdata.cell_data_to_point_data()
 
         smooth_sensitivity_normal_point = laplacian_smoothing(
@@ -432,9 +434,9 @@ class DoMINOInference:
         )
 
         mesh_pointdata.clear_data()
-        mesh_pointdata.point_data[
-            "smooth_sensitivity_normal_point"
-        ] = smooth_sensitivity_normal_point
+        mesh_pointdata.point_data["smooth_sensitivity_normal_point"] = (
+            smooth_sensitivity_normal_point
+        )
         mesh_pointdata = mesh_pointdata.point_data_to_cell_data()
 
         smooth_sensitivity_normal_cell = mesh_pointdata.cell_data[
@@ -473,7 +475,7 @@ if __name__ == "__main__":
 
     domino = DoMINOInference(
         cfg=cfg,
-        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.391.pt").absolute(),
+        model_checkpoint_path=(Path(__file__).parent / "DoMINO.0.41.pt").absolute(),
         dist=dist,
     )
 
