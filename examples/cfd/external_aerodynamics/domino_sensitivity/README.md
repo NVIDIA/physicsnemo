@@ -1,10 +1,12 @@
 # DoMINO Sensitivity Analysis for Aerodynamic Design
 
 This directory contains a sensitivity analysis pipeline for the DoMINO
-(Decomposable Multi-scale Iterative Neural Operator) model, using an example of aerodynamic analysis. The pipeline computes
-gradient-based sensitivities that indicate how geometric modifications to a
-vehicle or aircraft surface affect aerodynamic performance metrics such as drag
-force. This is intended to serve as an example template of how to compute geometry sensitivities for DoMINO surrogates for any PDE it is applied to.
+(Decomposable Multi-scale Iterative Neural Operator) model, using an example of
+aerodynamic analysis. The pipeline computes gradient-based sensitivities that
+indicate how geometric modifications to a vehicle or aircraft surface affect
+aerodynamic performance metrics such as drag force. This is intended to serve as
+an example template of how to compute geometry sensitivities for DoMINO
+surrogates for any PDE it is applied to.
 
 ## Overview
 
@@ -44,7 +46,8 @@ pip install -r requirements.txt
 
 **Note**: This pipeline requires a pre-trained DoMINO model checkpoint. The
 example uses `DoMINO.0.41.pt` which should be placed in the same directory as
-the scripts. See the [main DoMINO example](../domino/) for details on how to train your own model checkpoint.
+the scripts. See the [main DoMINO example](../domino/) for details on how to
+train your own model checkpoint.
 
 ## Pipeline Components
 
@@ -155,13 +158,16 @@ mesh.save("results_with_sensitivities.vtk")
 
 ### Gradient Validation
 
-```python
-# Run gradient checking to validate sensitivity accuracy
-python main_gradient_checking.py
+The pipeline includes finite-difference gradient checking to validate
+sensitivity accuracy:
 
-# Plot validation results
-python plot_gradient_checking.py
+```bash
+python main_gradient_checking.py  # Run validation
+python plot_gradient_checking.py  # Visualize results
 ```
+
+The validation compares analytical gradients from automatic differentiation
+against finite-difference approximations across multiple perturbation scales.
 
 ## Output Data Structure
 
@@ -179,33 +185,32 @@ The sensitivity analysis returns a dictionary with the following keys:
 
 <!-- markdownlint-enable -->
 
-After calling `postprocess_point_sensitivities()`, additional smoothed sensitivity fields are available with `_point` and `_cell` suffixes for different mesh representations.
+After calling `postprocess_point_sensitivities()`, additional smoothed
+sensitivity fields are available with `_point` and `_cell` suffixes for
+different mesh representations.
 
 ## Configuration and Parameters
 
 The pipeline uses Hydra configuration management. Key parameters include:
 
-- **Model settings**: `model.interp_res` controls grid resolution `[128, 64, 48]`
-- **Bounding boxes**: `data.bounding_box` and `data.bounding_box_surface` define computational domains
-- **Physics parameters**: `stream_velocity` (inlet velocity), `air_density`, and `stencil_size` (neighbor count)
-- **Smoothing**: `n_laplacian_iters` controls sensitivity smoothing strength (default: 20)
-
-## Gradient Validation
-
-The pipeline includes finite-difference gradient checking to validate sensitivity accuracy:
-
-```bash
-python main_gradient_checking.py  # Run validation
-python plot_gradient_checking.py  # Visualize results
-```
-
-The validation compares analytical gradients from automatic differentiation against finite-difference approximations across multiple perturbation scales.
+- **Model settings**: `model.interp_res` controls grid resolution `[128, 64,
+  48]`
+- **Bounding boxes**: `data.bounding_box` and `data.bounding_box_surface` define
+  computational domains
+- **Physics parameters**: `stream_velocity` (inlet velocity), `air_density`, and
+  `stencil_size` (neighbor count)
+- **Smoothing**: `n_laplacian_iters` controls sensitivity smoothing strength
+  (default: 20)
 
 ## Limitations
 
-- **Model accuracy dependency**: Sensitivity accuracy depends on the underlying DoMINO model quality
-- **Model smoothness dependency**: If the underlying ML architecture does not produce solutions that are at least $C^1$ continuous, the sensitivity fields will be noisy
-- **STL resolution**: Mesh resolution affects sensitivity field quality and smoothness
+- **Model accuracy dependency**: Sensitivity accuracy depends on the underlying
+  DoMINO model quality
+- **Model smoothness dependency**: If the underlying ML architecture does not
+  produce solutions that are at least $C^1$ continuous, the sensitivity fields
+  will be noisy
+- **STL resolution**: Mesh resolution affects sensitivity field quality and
+  smoothness
 
 ## References
 
