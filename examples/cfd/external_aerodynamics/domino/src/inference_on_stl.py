@@ -34,11 +34,17 @@ from omegaconf import DictConfig, OmegaConf
 import numpy as np
 import torch
 
-from modulus.models.domino.model import DoMINO
-from modulus.utils.domino.utils import *
+from physicsnemo.models.domino.model import DoMINO
+from physicsnemo.utils.domino.utils import (
+    unnormalize,
+    create_directory,
+    nd_interpolator,
+    get_filenames,
+    write_to_vtp,
+)
 from torch.cuda.amp import autocast
 from torch.nn.parallel import DistributedDataParallel
-from modulus.distributed import DistributedManager
+from physicsnemo.distributed import DistributedManager
 
 from numpy.typing import NDArray
 from typing import Any, Iterable, List, Literal, Mapping, Optional, Union, Callable
@@ -49,7 +55,7 @@ import matplotlib.pyplot as plt
 import pyvista as pv
 
 try:
-    from modulus.sym.geometry.tessellation import Tessellation
+    from physicsnemo.sym.geometry.tessellation import Tessellation
 
     SYM_AVAILABLE = True
 except ImportError:
@@ -663,7 +669,7 @@ class dominoInference:
         self,
         cfg: DictConfig,
         dist: None,
-        cached_geo_encoding: False,
+        cached_geo_encoding: bool = False,
     ):
 
         self.cfg = cfg

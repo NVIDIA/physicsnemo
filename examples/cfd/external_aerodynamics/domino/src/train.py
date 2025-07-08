@@ -265,7 +265,7 @@ def compute_loss_dict(
     integral_scaling_factor: float,
     surf_loss_scaling: float,
     vol_loss_scaling: float,
-) -> Tuple[torch.Tensor, dict]:
+) -> tuple[torch.Tensor, dict]:
     """
     Compute the loss terms in a single function call.
 
