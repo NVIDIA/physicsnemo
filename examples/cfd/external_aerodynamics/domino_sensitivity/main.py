@@ -263,22 +263,18 @@ class DoMINOInference:
             bounding_box_surface=self.bounding_box_surface_min_max,
             grid_resolution=self.cfg.model.interp_res,
             stencil_size=stencil_size,
+            device=self.device,
         )
         dataloader = torch.utils.data.DataLoader(
             datapipe, batch_size=2**13, shuffle=False
         )
 
         input_dict: dict[str, torch.Tensor] = {
-            k: torch.from_numpy(np.expand_dims(v, axis=0))
+            k: torch.unsqueeze(v, dim=0)
             for k, v in datapipe.out_dict.items()
         }
         input_dict["stream_velocity"] = torch.tensor(stream_velocity)
         input_dict["air_density"] = torch.tensor(air_density)
-
-        # Move and type-cast all tensors
-        input_dict = {
-            k: v.type(torch.float32).to(self.device) for k, v in input_dict.items()
-        }
 
         surface_keys: list[str] = [
             "surface_mesh_centers",
@@ -290,7 +286,6 @@ class DoMINOInference:
             "pos_surface_center_of_mass",
         ]
 
-        # aerodynamic_force = torch.zeros(3, dtype=torch.float32, device=self.device)
         aerodynamic_force = np.zeros(3, dtype=np.float32)
         pred_surf_batches: list[np.ndarray] = []
         geometry_coordinates = (
@@ -309,7 +304,7 @@ class DoMINOInference:
             input_dict_batch: dict[str, torch.Tensor] = {
                 **input_dict,
                 **{
-                    k: torch.unsqueeze(sample_batched[k], dim=0).to(self.device)
+                    k: torch.unsqueeze(sample_batched[k], dim=0)
                     for k in surface_keys
                 },
             }

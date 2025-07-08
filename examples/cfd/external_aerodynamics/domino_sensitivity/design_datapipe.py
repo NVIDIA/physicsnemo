@@ -15,8 +15,8 @@
 # limitations under the License.
 
 """
-This is the datapipe to read OpenFoam files (vtp/vtu/stl) and save them as point clouds 
-in npy format. 
+This is the datapipe to read OpenFoam files (vtp/vtu/stl) and save them as point clouds
+in npy format.
 
 The datapipe processes surface meshes to create structured representations suitable for
 machine learning tasks, computing various geometric properties and signed distance fields.
@@ -36,6 +36,7 @@ from physicsnemo.utils.domino.utils import (
     normalize,
 )
 from physicsnemo.utils.sdf import signed_distance_field
+import torch
 
 
 class DesignDatapipe(Dataset):
@@ -43,11 +44,13 @@ class DesignDatapipe(Dataset):
         self,
         mesh: pv.PolyData,
         bounding_box: np.ndarray | tuple[NDArray[np.float32], NDArray[np.float32]],
-        bounding_box_surface: np.ndarray
-        | tuple[NDArray[np.float32], NDArray[np.float32]],
+        bounding_box_surface: (
+            np.ndarray | tuple[NDArray[np.float32], NDArray[np.float32]]
+        ),
         grid_resolution: Sequence[int],
         stencil_size: int = 7,
         seed: int = 0,
+        device: torch.device = torch.device("cpu"),
     ):
         """Initialize a DesignDatapipe dataset based on a surface mesh sample.
 
@@ -188,7 +191,10 @@ class DesignDatapipe(Dataset):
             length_scale=length_scale,
         )
 
-        self.out_dict = {k: v.astype(np.float32) for k, v in self.out_dict.items()}
+        self.out_dict = {
+            k: torch.from_numpy(v).type(torch.float32).to(device)
+            for k, v in self.out_dict.items()
+        }
 
     def __len__(self) -> int:
         """Return the number of faces in the mesh."""
