@@ -22,7 +22,6 @@ module to ensure that the documented examples work correctly.
 """
 
 import numpy as np
-import pytest
 
 from physicsnemo.utils.domino.utils import (
     area_weighted_shuffle_array,
