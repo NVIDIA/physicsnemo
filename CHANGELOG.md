@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arguments `profile_mode` and `amp_mode` cannot be overriden by
   `from_checkpoint`. They are now properties that can be dynamically changed
   *after* the model instantiation.
+- Updated healpix data module to use correct `DistributedSampler` target for
+  test data loader
 
 ### Deprecated
 
