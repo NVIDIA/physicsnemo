@@ -292,7 +292,7 @@ class GeoProcessor(nn.Module):
         x = self.max_pool(x)
 
         # Processor loop
-        x = F.gelu(self.conv3_1(x))
+        x = self.activation(self.conv3_1(x))
 
         # Decoder
         x = self.conv4(x)
