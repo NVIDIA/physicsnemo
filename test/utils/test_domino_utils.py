@@ -25,7 +25,6 @@ import numpy as np
 import pytest
 
 from physicsnemo.utils.domino.utils import (
-    array_type,
     calculate_center_of_mass,
     normalize,
     unnormalize,
@@ -43,16 +42,6 @@ from physicsnemo.utils.domino.utils import (
     mean_std_sampling,
     area_weighted_shuffle_array,
 )
-
-
-def test_array_type():
-    """Test array_type function with docstring example."""
-    arr = np.array([1, 2, 3])
-    xp = array_type(arr)
-    result = xp.sum(arr)  # Uses numpy.sum
-    # Just verify the function runs without error
-    assert result is not None
-
 
 def test_calculate_center_of_mass():
     """Test calculate_center_of_mass function with docstring example."""

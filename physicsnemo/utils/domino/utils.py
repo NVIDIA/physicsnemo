@@ -24,8 +24,6 @@ CPU (NumPy) and GPU (CuPy) operations with automatic fallbacks.
 
 from pathlib import Path
 from typing import Any, Sequence
-
-import cupy as cp
 import numpy as np
 import pyvista as pv
 import vtk
@@ -36,10 +34,15 @@ from vtk.util import numpy_support
 from physicsnemo.utils.profiling import profile
 
 # Type alias for arrays that can be either NumPy or CuPy
-ArrayType = np.ndarray | cp.ndarray
+
+try:
+    import cupy as cp
+    ArrayType = np.ndarray | cp.ndarray
+except ImportError:
+    ArrayType = np.ndarray
 
 
-def array_type(array: ArrayType) -> type[np] | type[cp]:
+def array_type(array: ArrayType) -> "type[np] | type[cp]":
     """Determine the array module (NumPy or CuPy) for the given array.
 
     This function enables array-agnostic code by returning the appropriate
@@ -57,7 +60,11 @@ def array_type(array: ArrayType) -> type[np] | type[cp]:
         >>> xp = array_type(arr)
         >>> result = xp.sum(arr)  # Uses numpy.sum
     """
-    return cp.get_array_module(array)
+    try:
+        import cupy as cp
+        return cp.get_array_module(array)
+    except ImportError:
+        return np
 
 
 def calculate_center_of_mass(centers: ArrayType, sizes: ArrayType) -> ArrayType:
@@ -1129,18 +1136,11 @@ def area_weighted_shuffle_array(
     # Create index array for all available points
     point_indices = xp.arange(arr.shape[0])
 
-    # Handle GPU vs CPU sampling differently due to memory constraints
-    if xp == cp:
-        # Note: np.random.choice performs expensive probability search on CPU
-        # Future optimization: Consider implementing Alias method for GPU acceleration
-        selected_indices = np.random.choice(
-            point_indices.get(), size=n_points, p=sampling_probabilities.get()
-        )
-        selected_indices = xp.asarray(selected_indices)
-    else:
-        # Direct sampling on CPU
-        selected_indices = np.random.choice(
-            point_indices, size=n_points, p=sampling_probabilities
-        )
+    selected_indices = xp.random.choice(
+        xp.asarray(point_indices), 
+        size=n_points, 
+        p=xp.asarray(sampling_probabilities)
+    )
+    selected_indices = xp.asarray(selected_indices)
 
     return arr[selected_indices], selected_indices
