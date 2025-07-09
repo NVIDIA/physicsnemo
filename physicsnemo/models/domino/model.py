@@ -22,7 +22,7 @@ the config.yaml file)
 """
 
 import math
-from typing import Literal
+from typing import Callable, Literal
 
 import torch
 import torch.nn as nn
@@ -30,6 +30,18 @@ import torch.nn.functional as F
 
 from physicsnemo.models.layers.ball_query import BallQueryLayer
 from physicsnemo.utils.profiling import profile
+
+
+def get_activation(activation: Literal["relu", "gelu"]) -> Callable:
+    """
+    Return a PyTorch activation function corresponding to the given name.
+    """
+    if activation == "relu":
+        return F.relu
+    elif activation == "gelu":
+        return F.gelu
+    else:
+        raise ValueError(f"Activation function {activation} not found")
 
 
 def fourier_encode(coords, num_freqs):
@@ -187,7 +199,7 @@ class GeoConvOut(nn.Module):
 
         self.grid_resolution = grid_resolution
 
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
 
     def forward(
         self, x: torch.Tensor, radius: float = 0.025, neighbors_in_radius: int = 10
@@ -257,7 +269,7 @@ class GeoProcessor(nn.Module):
         self.avg_pool = torch.nn.AvgPool3d((2, 2, 2))
         self.max_pool = nn.MaxPool3d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -370,7 +382,7 @@ class GeometryRep(nn.Module):
         self.geo_processor_sdf = GeoProcessor(
             input_filters=6, model_parameters=geometry_rep.geo_processor
         )
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
         self.radii = radii
         self.hops = geometry_rep.geo_conv.hops
 
@@ -453,7 +465,7 @@ class NNBasisFunctions(nn.Module):
         self.bn2 = nn.BatchNorm1d(int(base_layer))
         self.bn3 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
 
         if self.fourier_features:
             self.register_buffer(
@@ -520,7 +532,7 @@ class ParameterModel(nn.Module):
         self.bn2 = nn.BatchNorm1d(int(base_layer))
         self.bn3 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -583,7 +595,7 @@ class AggregationModel(nn.Module):
         self.bn3 = nn.BatchNorm1d(int(base_layer))
         self.bn4 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -617,7 +629,7 @@ class LocalPointConv(nn.Module):
         input_features,
         base_layer,
         output_features,
-        model_parameters=None,
+        model_parameters,
         new_change=True,
     ):
         super(LocalPointConv, self).__init__()
@@ -625,7 +637,7 @@ class LocalPointConv(nn.Module):
         self.output_features = output_features
         self.fc1 = nn.Linear(self.input_features, base_layer)
         self.fc2 = nn.Linear(base_layer, self.output_features)
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
 
     def forward(self, x):
         out = self.activation(self.fc1(x))
@@ -857,7 +869,7 @@ class DoMINO(nn.Module):
 
         # Positional encoding
         position_encoder_base_neurons = model_parameters.position_encoder.base_neurons
-        self.activation = F.gelu
+        self.activation = get_activation(model_parameters.activation)
         self.use_sdf_in_basis_func = model_parameters.use_sdf_in_basis_func
         if self.output_features_vol is not None:
             if model_parameters.positional_encoding:
@@ -917,6 +929,7 @@ class DoMINO(nn.Module):
                     input_features=total_neighbors_in_radius,
                     base_layer=512,
                     output_features=self.surface_neighbors_in_radius[ct],
+                    model_parameters=model_parameters.local_point_conv,
                 )
             )
 
@@ -952,6 +965,7 @@ class DoMINO(nn.Module):
                     input_features=total_neighbors_in_radius,
                     base_layer=512,
                     output_features=self.volume_neighbors_in_radius[ct],
+                    model_parameters=model_parameters.local_point_conv,
                 )
             )
 

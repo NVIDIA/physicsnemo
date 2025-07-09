@@ -88,6 +88,7 @@ domain_parallelism:
 # └───────────────────────────────────────────┘  
 model:
   model_type: combined # train which model? surface, volume, combined
+  activation: "relu" # "relu" or "gelu"
   loss_function: 
     loss_type: "mse" # mse or rmse
     area_weighing_factor: 10000 # Generally inverse of maximum area
@@ -119,16 +120,22 @@ model:
       volume_radii: [0.1, 0.5, 2.5, 5.0]
       surface_radii: [0.01, 0.05, 0.1] # 0.05
       hops: 1
+      activation: ${model.activation}
     geo_processor:
       base_filters: 8
+      activation: ${model.activation}
     geo_processor_sdf:
       base_filters: 8
   nn_basis_functions: # Hyperparameters for basis function network
     base_layer: 512
     fourier_features: false
     num_modes: 5
+    activation: ${model.activation}
+  local_point_conv:
+    activation: ${model.activation}
   aggregation_model: # Hyperparameters for aggregation network
     base_layer: 512
+    activation: ${model.activation}
   position_encoder: # Hyperparameters for position encoding network
     base_neurons: 512
   geometry_local: # Hyperparameters for local geometry extraction
