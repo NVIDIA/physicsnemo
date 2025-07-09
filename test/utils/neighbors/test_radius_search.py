@@ -18,6 +18,9 @@ import pytest
 import torch
 
 from physicsnemo.utils.neighbors import radius_search
+from physicsnemo.utils.neighbors.warp_backend import (
+    radius_search_impl as radius_search_warp,
+)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -194,12 +197,170 @@ def test_radius_search(
         assert indexes.shape[1] == expected_matches * query_space_points.shape[0]
 
 
-if __name__ == "__main__":
-    test_radius_search(
-        device="cpu",
-        return_dists=True,
-        return_points=True,
-        max_points=5,
-        backend="warp",
-        radius=0.17,
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_radius_search_torch_compile_no_graph_break(device):
+    import torch
+
+    # Only test if torch.compile is available (PyTorch 2.0+)
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile not available in this version of PyTorch")
+
+    # Prepare test data
+    points = torch.randn(207, 3, device=device)
+    queries = torch.randn(13, 3, device=device)
+    radius = 0.5
+    max_points = 8
+
+    def search_fn(points, queries):
+        return radius_search(
+            points,
+            queries,
+            radius=radius,
+            max_points=max_points,
+            return_dists=True,
+            return_points=True,
+            backend="warp",
+        )
+
+    # Run both and compare outputs
+    out_eager = search_fn(points, queries)
+
+    compiled_fn = torch.compile(search_fn, fullgraph=True)
+
+    out_compiled = compiled_fn(points, queries)
+
+    # Compare outputs (tuple of tensors)
+    for eager, compiled in zip(out_eager, out_compiled):
+        assert torch.allclose(eager, compiled, atol=1e-6)
+
+
+def test_opcheck(device="cuda"):
+
+    points = torch.randn(100, 3, device=device)
+    queries = torch.randn(10, 3, device=device)
+    radius = 0.5
+    max_points = 8
+
+    torch.library.opcheck(
+        radius_search_warp, args=(points, queries, radius, max_points, True, True)
     )
+
+
+if __name__ == "__main__":
+    test_radius_search_torch_compile_no_graph_break(device="cuda")
+    # test_opcheck(device="cuda")
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("max_points", [21, None])
+def test_radius_search_comparison(device, max_points):
+
+    torch.manual_seed(42)
+    if device == "cuda":
+        torch.cuda.manual_seed(42)
+
+    points = torch.randn(53, 3, device=device)
+    queries = torch.randn(21, 3, device=device)
+    radius = 0.5
+
+    return_points = True
+    return_dists = True
+
+    index_warp, out_points_warp, distance_warp = radius_search(
+        points, queries, radius, max_points, return_dists, return_points, backend="warp"
+    )
+    index_torch, out_points_torch, distance_torch = radius_search(
+        points,
+        queries,
+        radius,
+        max_points,
+        return_dists,
+        return_points,
+        backend="torch",
+    )
+
+    # The points may not come out in the same order in each.  So, we check only against the sums:
+    if max_points is not None:
+
+        assert torch.allclose(
+            index_warp.sum(dim=1), index_torch.to(torch.int32).sum(dim=1)
+        )
+    else:
+        assert torch.allclose(
+            index_warp.sum(dim=1), index_torch.to(torch.int32).sum(dim=1)
+        )
+
+    if max_points is not None:
+        assert torch.allclose(out_points_warp.sum(dim=1), out_points_torch.sum(dim=1))
+    else:
+        assert torch.allclose(
+            out_points_warp.sum(dim=(0)), out_points_torch.sum(dim=(0))
+        )
+
+    if max_points is not None:
+        assert torch.allclose(distance_warp.sum(dim=1), distance_torch.sum(dim=1))
+    else:
+        assert torch.allclose(distance_warp.sum(), distance_torch.sum())
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("max_points", [8, None])
+def test_radius_search_gradients(device, max_points):
+
+    # Gradients are only supported to flow through the output points.
+    # Therefore there are NO gradients if return_points=False
+
+    # Additionally, we can only compare gradients of the points
+    # Gradients of the queries doesn't make sense.
+
+    torch.manual_seed(42)
+    n_points = 88
+    n_queries = 57
+    radius = 0.5
+
+    # Create points and queries with gradients enabled
+    points = torch.randn(n_points, 3, device=device, requires_grad=True)
+    queries = torch.randn(n_queries, 3, device=device, requires_grad=True)
+
+    print(f"points shape: {points.shape}")
+    print(f"queries shape: {queries.shape}")
+
+    grads = {}
+    for backend in ["warp", "torch"]:
+        # Clone inputs for each backend to avoid in-place ops
+        pts = points.clone().detach().requires_grad_(True)
+        qrs = queries.clone().detach().requires_grad_(True)
+        index, out_points = radius_search(
+            pts,
+            qrs,
+            radius=radius,
+            max_points=max_points,
+            return_dists=False,
+            return_points=True,
+            backend=backend,
+        )
+        # Only sum over valid distances (where index != -1)
+        out_points.sum().backward()
+
+        grads[backend] = (
+            pts.grad.detach().clone() if pts.grad is not None else None,
+            qrs.grad.detach().clone() if qrs.grad is not None else None,
+        )
+    print(f"Index: {index}")
+    # Compare gradients between backends
+    pts_grad_warp, qrs_grad_warp = grads["warp"]
+    pts_grad_torch, qrs_grad_torch = grads["torch"]
+
+    print(f"Warp points grad: {pts_grad_warp}")
+    print(f"Torch points grad: {pts_grad_torch}")
+
+    assert torch.allclose(
+        pts_grad_warp, pts_grad_torch, atol=1e-5
+    ), "Point gradients do not match"
+
+    # assert torch.allclose(qrs_grad_warp, qrs_grad_torch, atol=1e-5), "Query gradients do not match"
+
+
+if __name__ == "__main__":
+    # test_radius_search_comparison(device="cuda", max_points=None)
+    test_radius_search_gradients(device="cuda", max_points=75)

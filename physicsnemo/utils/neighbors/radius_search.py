@@ -94,10 +94,21 @@ def radius_search(
         )
 
     if backend == "warp":
-        return radius_search_warp(
+        indices, points, distances = radius_search_warp(
             points, queries, radius, max_points, return_dists, return_points
         )
     elif backend == "torch":
-        return radius_search_torch(
+        indices, points, distances = radius_search_torch(
             points, queries, radius, max_points, return_dists, return_points
         )
+
+    # Handle return values
+    if return_points:
+        if return_dists:
+            return indices, points, distances
+        return indices, points
+
+    if return_dists:
+        return indices, distances
+
+    return indices

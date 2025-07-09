@@ -324,3 +324,88 @@ def radius_search_limited_select(
 
     # Set the number of neighbors
     num_neighbors[tid] = neighbors_found
+
+
+@wp.kernel
+def scatter_add(
+    indexes: wp.array2d(dtype=wp.int32),  # [num_inputs, num_indices]
+    grad_outputs: wp.array2d(dtype=wp.vec3),  # [num_outputs, vec_dim]
+    grad_inputs: wp.array(dtype=wp.vec3),  # [num_inputs, vec_dim]
+):
+    """
+    For each input (thread), sum grad_outputs at the given indexes and atomically add to grad_inputs.
+    Args:
+        indexes: 2D array of indices into grad_outputs for each input.
+        grad_outputs: 2D array of output gradients (vectors).
+        grad_inputs: 2D array of input gradients (vectors) to be updated atomically.
+    """
+
+    # Indexes is a mapping, from the forward pass of the radius search.
+    # It has shape [n_queries, max_points] and
+    # represents the points selected from `points` for each query.
+
+    # grad_outputs is the gradients on the selected points, of shape
+    # [n_queries, max_points, 3]
+
+    # grad_inputs is the to-be-updated gradient vector for the inputs.
+    # Should be initialized before the kernel, from torch, with shape
+    # [n_points, 3]
+
+    # We use one thread per query point.
+    # So this tid is used to index into `indexes` and `grad_outputs`
+
+    tid = wp.tid()
+
+    # How many indexes do we loop over?
+    num_indices = indexes.shape[1]
+
+    for j in range(num_indices):
+        # Get the index for this query point:
+        idx = indexes[tid, j]
+        # Don't use it if it's -1 : that represents invalid index.
+        if idx != -1:
+            # Select the gradient from the output:
+            grad = grad_outputs[tid, j]
+            # Atomically add each component of the vector
+            # for k in range(3):  # assuming vec3
+            wp.atomic_add(grad_inputs, idx, grad)
+
+
+@wp.kernel
+def scatter_add_unlimited(
+    indexes: wp.array2d(dtype=wp.int32),  # [num_inputs, num_indices]
+    grad_outputs: wp.array(dtype=wp.vec3),  # [num_outputs, vec_dim]
+    grad_inputs: wp.array(dtype=wp.vec3),  # [num_inputs, vec_dim]
+):
+    """
+    For each input (thread), sum grad_outputs at the given indexes and atomically add to grad_inputs.
+    Args:
+        indexes: 2D array of indices into grad_outputs for each input.
+        grad_outputs: 2D array of output gradients (vectors).
+        grad_inputs: 2D array of input gradients (vectors) to be updated atomically.
+    """
+
+    # Indexes is a mapping, from the forward pass of the radius search.
+    # It has shape [n_queries, max_points] and
+    # represents the points selected from `points` for each query.
+
+    # grad_outputs is the gradients on the selected points, of shape
+    # [n_queries, max_points, 3]
+
+    # grad_inputs is the to-be-updated gradient vector for the inputs.
+    # Should be initialized before the kernel, from torch, with shape
+    # [n_points, 3]
+
+    # We use one thread per query point.
+    # So this tid is used to index into `indexes` and `grad_outputs`
+
+    tid = wp.tid()
+
+    # Get the index for this query point:
+    neighbor_pt_idx = indexes[1, tid]
+
+    # Select the gradient from the output:
+    grad = grad_outputs[tid]
+    # Atomically add each component of the vector
+    # for k in range(3):  # assuming vec3
+    wp.atomic_add(grad_inputs, neighbor_pt_idx, grad)

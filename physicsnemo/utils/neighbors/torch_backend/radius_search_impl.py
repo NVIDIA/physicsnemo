@@ -33,24 +33,35 @@ def radius_search_impl(
     """
 
     # Without the compute mode set, this is numerically unstable.
-    dists = torch.cdist(points, queries, p=2.0, compute_mode="use_mm_for_euclid_dist")
+    dists = torch.cdist(
+        points, queries, p=2.0, compute_mode="donot_use_mm_for_euclid_dist"
+    )
 
     if max_points is None:
         # Find all points within radius
         selection = dists <= radius
         selected_indices = torch.nonzero(selection, as_tuple=False).t().contiguous()
+        selected_indices = selected_indices[[1, 0], :]
 
         if return_points:
             points = torch.index_select(points, 0, selected_indices[1])
+        else:
+            points = torch.empty(
+                (0, points.shape[1]), device=points.device, dtype=points.dtype
+            )
 
         if return_dists:
             dists = dists[selection]
+        else:
+            dists = torch.empty((0,), device=dists.device, dtype=dists.dtype)
+
     else:
 
         # Take the max_points lowest distances for each query
         closest_points = torch.topk(
             dists, k=min(max_points, dists.shape[0]), dim=0, largest=False
         )
+
         values, indices = closest_points
 
         # Filter to points within radius
@@ -59,18 +70,29 @@ def radius_search_impl(
 
         if return_dists:
             dists = torch.where(selection, values, 0).t()
+        else:
+            dists = torch.empty(
+                (0, values.shape[1]), device=values.device, dtype=values.dtype
+            )
 
         if return_points:
+            # selected_indices: (num_queries, max_points)
+            # points: (num_points, point_dim)
+            # We want: selected_points: (num_queries, max_points, point_dim)
+            # Replace -1 with 0 for safe indexing
+            safe_indices = torch.where(selected_indices == -1, 0, selected_indices)
+            selected_points = points[
+                safe_indices
+            ]  # shape: (num_queries, max_points, point_dim)
+            # Zero out rows where index was -1
+            mask = (selected_indices == -1).unsqueeze(
+                -1
+            )  # shape: (num_queries, max_points, 1)
+            selected_points = selected_points.masked_fill(mask, 0)
+            points = selected_points
+        else:
+            points = torch.empty(
+                (0, points.shape[1]), device=points.device, dtype=points.dtype
+            )
 
-            points = points[indices].transpose(0, 1)
-
-    # Handle return values
-    if return_points:
-        if return_dists:
-            return selected_indices, points, dists
-        return selected_indices, points
-
-    if return_dists:
-        return selected_indices, dists
-
-    return selected_indices
+    return selected_indices, points, dists

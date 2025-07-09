@@ -47,6 +47,8 @@ if WARP_AVAILABLE:
         radius_search_unlimited_select_with_dists,
         radius_search_unlimited_select_with_dists_and_points,
         radius_search_unlimited_select_with_points,
+        scatter_add,
+        scatter_add_unlimited,
     )
 
     def count_neighbors(
@@ -57,8 +59,22 @@ if WARP_AVAILABLE:
         wp_launch_stream: wp.Stream | None,
         radius: float,
         N_queries: int,
-    ) -> tuple[int, wp.array(dtype=wp.int32)]:
+    ) -> tuple[int, wp.array]:
+        """
+        Count the number of neighbors within a given radius for each query point.
 
+        Args:
+            grid (wp.HashGrid): The hash grid to use for the search.
+            wp_points (wp.array): The points to search in, as a warp array.
+            wp_queries (wp.array): The queries to search for, as a warp array.
+            wp_launch_device (wp.context.Device | None): The device to launch the kernel on.
+            wp_launch_stream (wp.Stream | None): The stream to launch the kernel on.
+            radius (float): The radius that bounds the search.
+            N_queries (int): Total number of query points.
+
+        Returns:
+            tuple[int, wp.array]: The total count of neighbors and the offset array.
+        """
         # For unlimited output points, we have to go through and count once:
         wp_result_count = wp.zeros(N_queries, device=wp_points.device, dtype=wp.int32)
 
@@ -105,24 +121,26 @@ if WARP_AVAILABLE:
         return_dists: bool,
         return_points: bool,
         total_count: int,
-    ) -> wp.array | tuple[wp.array]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Do the actual gathering of neighbors.
-
-        Select a kernel based on the return_dists and return_points flags.
+        Gather the neighbors for each query point.
 
         Args:
-            grid: The hash grid to use for the search.
-            wp_points: The points to search in, warp array.
-            wp_queries: The queries to search for, warp array.
-            wp_offset: The offset in output for each input point , warp array.
-            wp_launch_device: The device to launch the kernel on.
-            wp_launch_stream: The stream to launch the kernel on.
-            radius: The radius that bounds the search.
-            N_queries: Total number of query points
-            return_dists: Whether to return the distances of the neighbors.
-            return_points: Whether to return the points of the neighbors.
-            total_count: The total number of neighbors found.
+            grid (wp.HashGrid): The hash grid to use for the search.
+            output_device (torch.device): The device to allocate output tensors on.
+            wp_points (wp.array): The points to search in, as a warp array.
+            wp_queries (wp.array): The queries to search for, as a warp array.
+            wp_offset (wp.array): The offset in output for each input point, as a warp array.
+            wp_launch_device (wp.context.Device | None): The device to launch the kernel on.
+            wp_launch_stream (wp.Stream | None): The stream to launch the kernel on.
+            radius (float): The radius that bounds the search.
+            N_queries (int): Total number of query points.
+            return_dists (bool): Whether to return the distances of the neighbors.
+            return_points (bool): Whether to return the points of the neighbors.
+            total_count (int): The total number of neighbors found.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Indices, points, and distances tensors.
         """
         # These three tensors need to persist outside this function, potentially,
         # So they are allocated via torch:
@@ -139,11 +157,15 @@ if WARP_AVAILABLE:
             distances = torch.zeros(
                 (total_count,), dtype=torch.float32, device=output_device
             )
+        else:
+            distances = torch.empty(0, dtype=torch.float32, device=output_device)
 
         if return_points:
             points = torch.zeros(
                 (total_count, 3), dtype=torch.float32, device=output_device
             )
+        else:
+            points = torch.empty(0, 3, dtype=torch.float32, device=output_device)
 
         # Now, kernel selection:
         if not return_dists and not return_points:
@@ -163,8 +185,6 @@ if WARP_AVAILABLE:
                 block_dim=BLOCK_DIM,
             )
 
-            return indices
-
         elif return_dists and not return_points:
             wp.launch(
                 kernel=radius_search_unlimited_select_with_dists,
@@ -183,7 +203,6 @@ if WARP_AVAILABLE:
                 block_dim=BLOCK_DIM,
             )
 
-            return indices, distances
         elif not return_dists and return_points:
 
             wp.launch(
@@ -202,8 +221,6 @@ if WARP_AVAILABLE:
                 device=wp_launch_device,
                 block_dim=BLOCK_DIM,
             )
-
-            return indices, points
 
         else:
 
@@ -225,8 +242,10 @@ if WARP_AVAILABLE:
                 block_dim=BLOCK_DIM,
             )
 
-            return indices, points, distances
+        # Return all three
+        return indices, points, distances
 
+    @torch.library.custom_op("physicsnemo::radius_search_warp", mutates_args=())
     def radius_search_impl(
         points: torch.Tensor,
         queries: torch.Tensor,
@@ -234,11 +253,25 @@ if WARP_AVAILABLE:
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ):
+    ) -> list[torch.Tensor]:
         """
         Find and return the nearest neighbors in `points` using locations from `queries`.
 
         Implemented with warp kernels.  Make sure points and queries are on the same device.
+
+        Always returns indices, points, distances.  If return_points is False, points is an empty tensor.
+        If return_dists is False, distances is an empty tensor.
+
+        Args:
+            points (torch.Tensor): The points to search in.
+            queries (torch.Tensor): The queries to search for.
+            radius (float): The radius that bounds the search.
+            max_points (int | None, optional): The maximum number of points to return per query. If None, unlimited.
+            return_dists (bool, optional): Whether to return the distances of the neighbors.
+            return_points (bool, optional): Whether to return the points of the neighbors.
+
+        Returns:
+            list[torch.Tensor]: [indices, points, distances]
         """
 
         if points.device != queries.device:
@@ -264,7 +297,7 @@ if WARP_AVAILABLE:
             wp_launch_device = "cpu"  # CPUs have no streams
 
         # We need to create a hash grid:
-        grid = wp.HashGrid(dim_x=64, dim_y=64, dim_z=64, device=wp_points.device)
+        grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_points.device)
         grid.reserve(N_queries)
         grid.build(points=wp_points, radius=0.5 * radius)
 
@@ -282,10 +315,10 @@ if WARP_AVAILABLE:
                 N_queries,
             )
 
-            # if not total_count < 2**31 - 1:
-            #     raise RuntimeError(
-            #         f"Total result count is too large: {total_count} > 2**31 - 1"
-            #     )
+            if not total_count < 2**31 - 1:
+                raise RuntimeError(
+                    f"Total found neighbors is too large: {total_count} > 2**31 - 1"
+                )
 
             return gather_neighbors(
                 grid,
@@ -325,7 +358,9 @@ if WARP_AVAILABLE:
                 points = torch.empty(
                     (0, max_points, 3), dtype=torch.float32, device=points.device
                 )
-
+            # This kernel selects up to max_points hits per query.
+            # It is not necessarily deterministic.
+            # If the number of matches > max_points, you may get different results.
             wp.launch(
                 kernel=radius_search_limited_select,
                 dim=N_queries,
@@ -347,19 +382,222 @@ if WARP_AVAILABLE:
             )
 
         # Handle the matrix of return values:
-        if return_points:
+        return indices, points, distances
 
+    # This is to enable torch.compile:
+    @radius_search_impl.register_fake
+    def radius_search_impl_fake(
+        points: torch.Tensor,
+        queries: torch.Tensor,
+        radius: float,
+        max_points: int | None = None,
+        return_dists: bool = False,
+        return_points: bool = False,
+    ) -> list[torch.Tensor]:
+        """
+        Fake implementation for torch.compile/fake tensor support.
+
+        Args:
+            points (torch.Tensor): The points to search in.
+            queries (torch.Tensor): The queries to search for.
+            radius (float): The radius that bounds the search.
+            max_points (int | None, optional): The maximum number of points to return per query. If None, unlimited.
+            return_dists (bool, optional): Whether to return the distances of the neighbors.
+            return_points (bool, optional): Whether to return the points of the neighbors.
+
+        Returns:
+            list[torch.Tensor]: [indices, points, distances]
+        """
+
+        if max_points is not None:
+            indices = torch.empty(
+                queries.shape[0], max_points, dtype=torch.int32, device=queries.device
+            )
             if return_dists:
-                # Everything
-                return indices, points, distances
+                distances = torch.empty(
+                    queries.shape[0],
+                    max_points,
+                    dtype=torch.float32,
+                    device=queries.device,
+                )
+            else:
+                distances = torch.empty(0, dtype=torch.float32, device=queries.device)
 
-            return indices, points
+            if return_points:
+                out_points = torch.empty(
+                    queries.shape[0],
+                    max_points,
+                    3,
+                    dtype=torch.float32,
+                    device=queries.device,
+                )
+            else:
+                out_points = torch.empty(
+                    0, 3, dtype=torch.float32, device=queries.device
+                )
 
-        if return_dists:
-            return indices, distances
+            return indices, out_points, distances
 
-        # Always indices
-        return indices
+        else:
+            torch._dynamo.graph_break()
+
+    # This is for the autograd context creation.
+    def setup_radius_search_context(
+        ctx: torch.autograd.function.FunctionCtx, inputs: tuple, output: tuple
+    ) -> None:
+        """
+        Set up the autograd context for the radius search operation.
+
+        Args:
+            ctx (torch.autograd.function.FunctionCtx): The autograd context.
+            inputs (tuple): The input arguments to the forward function.
+            output (tuple): The output tensors from the forward function.
+        """
+        points, queries, radius, max_points, return_dists, return_points = inputs
+
+        indexes, ret_points, distances = output
+
+        ctx.return_points = return_points
+        ctx.max_points = max_points
+
+        # save the indexes if we return points:
+        if return_points:
+            ctx.grad_points_shape = points.shape
+            ctx.points_dtype = points.dtype
+            ctx.save_for_backward(indexes)
+
+    def backward_radius_search(
+        ctx: torch.autograd.function.FunctionCtx, grads: tuple
+    ) -> tuple:
+        """
+        Backward function for the radius search operation.
+
+        Args:
+            ctx (torch.autograd.function.FunctionCtx): The autograd context.
+            grads (tuple): The gradients of the outputs.
+
+        Returns:
+            tuple: Gradients of the inputs.
+        """
+        grad_idx, grad_points, grad_dists = grads
+
+        if ctx.return_points:
+            (indexes,) = ctx.saved_tensors
+            point_grads = apply_grad_to_points(
+                indexes,
+                grad_points,
+                ctx.grad_points_shape,
+                ctx.max_points,
+            )
+        else:
+            point_grads = None
+
+        return point_grads, None, None, None, None, None
+
+    @torch.library.custom_op(
+        "physicsnemo::radius_search_apply_grad_to_points", mutates_args=()
+    )
+    def apply_grad_to_points(
+        indexes: torch.Tensor,
+        grad_points_out: torch.Tensor,
+        points_shape: list[int],
+        max_points: int | None = None,
+    ) -> torch.Tensor:
+        """
+        Apply the gradient from the output points to the input points using the provided indices.
+
+        Args:
+            indexes (torch.Tensor): The indices mapping output points to input points.
+            grad_points_out (torch.Tensor): The gradient of the output points.
+            points_shape (torch.Size): The shape of the input points tensor.
+
+        Returns:
+            torch.Tensor: The gradient with respect to the input points.
+        """
+        point_grads = torch.zeros(
+            points_shape, dtype=grad_points_out.dtype, device=grad_points_out.device
+        )
+
+        if grad_points_out.device.type == "cuda":
+            wp_launch_stream = wp.stream_from_torch(
+                torch.cuda.current_stream(grad_points_out.device)
+            )
+            wp_launch_device = None  # We explicitly pass None if using the stream.
+        else:
+            wp_launch_stream = None
+            wp_launch_device = "cpu"  # CPUs have no streams
+
+        # Make sure the inputs are contiguous:
+        if not grad_points_out.is_contiguous():
+            grad_points_out = grad_points_out.contiguous()
+        if not indexes.is_contiguous():
+            indexes = indexes.contiguous()
+        if not point_grads.is_contiguous():
+            point_grads = point_grads.contiguous()
+
+        if max_points is None:
+            # Flatten the indexes and grad_points.  Launch one thread per element.
+
+            # Don't launch a kernel if there are not points to work on!
+            if indexes.shape[1] > 0:
+                wp.launch(
+                    kernel=scatter_add_unlimited,
+                    dim=indexes.shape[1],  # one thread per col of indexes/point_grads
+                    inputs=[
+                        wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                        wp.from_torch(
+                            grad_points_out, dtype=wp.vec3, return_ctype=True
+                        ),
+                        wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
+                    ],
+                    device=wp_launch_device,
+                    stream=wp_launch_stream,
+                    block_dim=BLOCK_DIM,
+                )
+
+        else:
+            wp.launch(
+                kernel=scatter_add,
+                dim=indexes.shape[0],  # one thread per row of indexes/point_grads
+                inputs=[
+                    wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                    wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
+                    wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
+                ],
+                device=wp_launch_device,
+                stream=wp_launch_stream,
+                block_dim=BLOCK_DIM,
+            )
+
+        return point_grads
+
+    @apply_grad_to_points.register_fake
+    def apply_grad_to_points_fake(
+        indexes: torch.Tensor,
+        grad_points_out: torch.Tensor,
+        points_shape: list[int],
+        max_points: int | None = None,
+    ) -> torch.Tensor:
+        """
+        Fake implementation for apply_grad_to_points for torch.compile/fake tensor support.
+
+        Args:
+            indexes (torch.Tensor): The indices mapping output points to input points.
+            grad_points_out (torch.Tensor): The gradient of the output points.
+            points_shape (torch.Size): The shape of the input points tensor.
+
+        Returns:
+            torch.Tensor: The gradient with respect to the input points.
+        """
+        point_grads = torch.empty(
+            points_shape, dtype=grad_points_out.dtype, device=grad_points_out.device
+        )
+
+        return point_grads
+
+    radius_search_impl.register_autograd(
+        backward_radius_search, setup_context=setup_radius_search_context
+    )
 
 else:
 
@@ -370,8 +608,21 @@ else:
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ):
-        """ """
+    ) -> None:
+        """
+        Dummy implementation for when warp is not available.
+
+        Args:
+            points (torch.Tensor): The points to search in.
+            queries (torch.Tensor): The queries to search for.
+            radius (float): The radius that bounds the search.
+            max_points (int | None, optional): The maximum number of points to return per query. If None, unlimited.
+            return_dists (bool, optional): Whether to return the distances of the neighbors.
+            return_points (bool, optional): Whether to return the points of the neighbors.
+
+        Raises:
+            ImportError: If warp is not installed.
+        """
 
         raise ImportError(
             "warp is not installed, can not be used as a backend for a radius search"
