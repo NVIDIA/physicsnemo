@@ -119,6 +119,7 @@ def test_domino_forward(device, pytestconfig):
         class aggregation_model:
             base_layer: int = 512
             activation: str = "relu"
+
         @dataclass
         class position_encoder:
             base_neurons: int = 512
