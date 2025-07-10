@@ -31,7 +31,6 @@ def _bvh_query_distance(
     sdf_hit_point_id: wp.array(dtype=wp.int32),
     use_sign_winding_number: bool = False,
 ):
-
     """
     Computes the signed distance from each point in the given array `points`
     to the mesh represented by `mesh`,within the maximum distance `max_dist`,
@@ -87,23 +86,46 @@ def signed_distance_field(
     """
     Computes the signed distance field (SDF) for a given mesh and input points.
 
-    The mesh must be a surface mesh consisting of all triangles.
+    The mesh must be a surface mesh consisting of all triangles. Uses NVIDIA
+    Warp for GPU acceleration.
 
     Parameters:
     ----------
-        mesh_vertices (np.ndarray): Coordinates of the vertices of the mesh; shape: (n_vertices, 3)
-        mesh_indices (np.ndarray): Indices corresponding to the faces of the mesh; shape: (n_faces, 3)
-        input_points (np.ndarray): Coordinates of the points for which to compute the SDF; shape: (n_points, 3)
-        max_dist (float, optional): Maximum distance within which to search for
+        mesh_vertices (np.ndarray): Coordinates of the vertices of the mesh;
+        shape: (n_vertices, 3) mesh_indices (np.ndarray): Indices corresponding
+        to the faces of the mesh; shape: (n_faces, 3) input_points (np.ndarray):
+        Coordinates of the points for which to compute the SDF; shape:
+        (n_points, 3) max_dist (float, optional): Maximum distance within which
+        to search for
             the closest point on the mesh. Default is 1e8.
         include_hit_points (bool, optional): Whether to include hit points in
             the output. Default is False.
         include_hit_points_id (bool, optional): Whether to include hit point
             IDs in the output. Default is False.
+        use_sign_winding_number (bool, optional): Whether to use sign winding
+            number method for SDF. Default is False. If False, your mesh should
+            be watertight to obtain correct results.
+        return_cupy (bool, optional): Whether to return a CuPy array. Default is
+            None, which means the function will automatically determine the
+            appropriate return type based on the input types.
 
     Returns:
     -------
-        wp.array: An array containing the computed signed distance field.
+    Returns:
+        np.ndarray | cp.ndarray or tuple:
+            - If both `include_hit_points` and `include_hit_points_id` are False
+              (default), returns a 1D array of signed distances for each input
+              point.
+            - If `include_hit_points` is True, returns a tuple: (sdf,
+              hit_points), where `hit_points` contains the closest mesh point
+              for each input point.
+            - If `include_hit_points_id` is True, returns a tuple: (sdf,
+              hit_point_ids), where `hit_point_ids` contains the face index of
+              the closest mesh face for each input point.
+            - If both `include_hit_points` and `include_hit_points_id` are True,
+              returns a tuple: (sdf, hit_points, hit_point_ids).
+            - The returned array type (NumPy or CuPy) is determined by the
+            `return_cupy` argument, or inferred from the input arrays.
 
     Example:
     -------
