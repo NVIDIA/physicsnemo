@@ -920,15 +920,24 @@ class SongUNetPosEmbd(SongUNet):
             the patches to extract from the positional embedding grid.
             :math:`P` is the number of distinct patches in the input tensor ``x``.
             The channel dimension should contain :math:`j`, :math:`i` indices that
-            should represent the indices of the pixels to extract from the embedding grid.
+            should represent the indices of the pixels to extract from the
+            embedding grid.
+        lead_time_label : Optional[torch.Tensor], default=None
+            Tensor of shape :math:`(P,)` that corresponds to the lead-time label for each patch.
+            Only used if ``lead_time_mode`` is True.
 
         Returns
         -------
         torch.Tensor
-            Selected positional embeddings with shape :math:`(P \times B, C_{PE}, H_{in}, W_{in})`
-            (same spatial resolution as ``global_index``) if ``global_index`` is provided.
-            If ``global_index`` is None, the entire positional embedding grid
-            is duplicated :math:`B` times and returned with shape :math:`(B, C_{PE}, H, W)`.
+            Selected embeddings with shape :math:`(P \times B, C_{PE} [+
+            C_{LT}], H_{in}, W_{in})`. :math:`C_{PE}` is the number of
+            embedding channels in the positional embedding grid, and
+            :math:`C_{LT}` is the number of embedding channels in the lead-time
+            embedding grid. If ``lead_time_label`` is provided, the lead-time
+            embedding channels are included. If ``global_index`` is `None`,
+            :math:`P = 1` is assumed, and the positional embedding grid is
+            duplicated :math:`B` times and returned with shape
+            :math:`(B, C_{PE} [+ C_{LT}], H, W)`.
 
         Example
         -------
