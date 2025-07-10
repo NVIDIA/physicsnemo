@@ -23,6 +23,8 @@ and not warp.  So, tensor creation and allocation is driven by torch, and
 passed to warp for computation.
 """
 
+from typing import List
+
 import torch
 
 from physicsnemo.utils.version_check import check_min_version
@@ -261,7 +263,7 @@ if WARP_AVAILABLE:
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ) -> list[torch.Tensor]:
+    ) -> List[torch.Tensor]:
         """
         Find and return the nearest neighbors in `points` using locations from `queries`.
 
@@ -279,7 +281,7 @@ if WARP_AVAILABLE:
             return_points (bool, optional): Whether to return the points of the neighbors.
 
         Returns:
-            list[torch.Tensor]: [indices, points, distances]
+            List[torch.Tensor]: [indices, points, distances]
         """
 
         if points.device != queries.device:
@@ -405,7 +407,7 @@ if WARP_AVAILABLE:
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ) -> list[torch.Tensor]:
+    ) -> List[torch.Tensor]:
         """
         Fake implementation for torch.compile/fake tensor support.
 
@@ -418,7 +420,7 @@ if WARP_AVAILABLE:
             return_points (bool, optional): Whether to return the points of the neighbors.
 
         Returns:
-            list[torch.Tensor]: [indices, points, distances]
+            List[torch.Tensor]: [indices, points, distances]
         """
 
         if max_points is not None:
