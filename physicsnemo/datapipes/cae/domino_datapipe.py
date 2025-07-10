@@ -843,7 +843,7 @@ class DoMINODataPipe(Dataset):
                 mesh_indices_flattened,
                 grid_reshaped,
                 use_sign_winding_number=True,
-            ).reshape(nx, ny, nz)
+            ).reshape((nx, ny, nz))
 
             if self.config.sampling:
                 volume_coordinates_sampled, idx_volume = shuffle_array(
