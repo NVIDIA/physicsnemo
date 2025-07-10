@@ -99,7 +99,9 @@ def signed_distance_field(
         to search for
             the closest point on the mesh. Default is 1e8.
         include_hit_points (bool, optional): Whether to include hit points in
-            the output. Default is False.
+            the output. Here, "hit points" are the points on the mesh that are
+            closest to the input points, and hence, are defining the SDF.
+            Default is False.
         include_hit_points_id (bool, optional): Whether to include hit point
             IDs in the output. Default is False.
         use_sign_winding_number (bool, optional): Whether to use sign winding
