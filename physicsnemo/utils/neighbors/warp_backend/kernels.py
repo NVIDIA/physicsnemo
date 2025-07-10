@@ -329,6 +329,7 @@ def radius_search_limited_select(
 @wp.kernel
 def scatter_add(
     indexes: wp.array2d(dtype=wp.int32),  # [num_inputs, num_indices]
+    num_neighbors: wp.array(dtype=wp.int32),  # [num_inputs]
     grad_outputs: wp.array2d(dtype=wp.vec3),  # [num_outputs, vec_dim]
     grad_inputs: wp.array(dtype=wp.vec3),  # [num_inputs, vec_dim]
 ):
@@ -357,18 +358,16 @@ def scatter_add(
     tid = wp.tid()
 
     # How many indexes do we loop over?
-    num_indices = indexes.shape[1]
+    this_neighbors = num_neighbors[tid]
 
-    for j in range(num_indices):
+    for j in range(this_neighbors):
         # Get the index for this query point:
         idx = indexes[tid, j]
-        # Don't use it if it's -1 : that represents invalid index.
-        if idx != -1:
-            # Select the gradient from the output:
-            grad = grad_outputs[tid, j]
-            # Atomically add each component of the vector
-            # for k in range(3):  # assuming vec3
-            wp.atomic_add(grad_inputs, idx, grad)
+        # Select the gradient from the output:
+        grad = grad_outputs[tid, j]
+        # Atomically add each component of the vector
+        # for k in range(3):  # assuming vec3
+        wp.atomic_add(grad_inputs, idx, grad)
 
 
 @wp.kernel

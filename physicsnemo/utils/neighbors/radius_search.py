@@ -93,8 +93,14 @@ def radius_search(
             f"radius_search backend must be either 'warp' or 'torch', got {backend}"
         )
 
+    # Num neighbors is returned, because in the warp version
+    # it's essential to get the backwards pass right.
+
+    # We never actually return it from here.
+    # (If you update to use it in the future, check it carefully!)
+
     if backend == "warp":
-        indices, points, distances = radius_search_warp(
+        indices, points, distances, num_neighbors = radius_search_warp(
             points, queries, radius, max_points, return_dists, return_points
         )
     elif backend == "torch":

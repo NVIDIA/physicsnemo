@@ -57,16 +57,19 @@ def radius_search_impl(
 
     else:
 
+        print(f"dists shape: {dists.shape}")
+
         # Take the max_points lowest distances for each query
         closest_points = torch.topk(
             dists, k=min(max_points, dists.shape[0]), dim=0, largest=False
         )
-
         values, indices = closest_points
+        # Values and indices have shape [max_points, n_queries]
+        # The first dim of indices represents the index into input points
 
         # Filter to points within radius
         selection = values <= radius
-        selected_indices = torch.where(selection, indices, -1).t()
+        selected_indices = torch.where(selection, indices, 0).t()
 
         if return_dists:
             dists = torch.where(selection, values, 0).t()
@@ -79,17 +82,25 @@ def radius_search_impl(
             # selected_indices: (num_queries, max_points)
             # points: (num_points, point_dim)
             # We want: selected_points: (num_queries, max_points, point_dim)
-            # Replace -1 with 0 for safe indexing
-            safe_indices = torch.where(selected_indices == -1, 0, selected_indices)
-            selected_points = points[
-                safe_indices
-            ]  # shape: (num_queries, max_points, point_dim)
-            # Zero out rows where index was -1
-            mask = (selected_indices == -1).unsqueeze(
-                -1
-            )  # shape: (num_queries, max_points, 1)
-            selected_points = selected_points.masked_fill(mask, 0)
-            points = selected_points
+
+            safe_indices = torch.where(selection)
+            max_points_loc, queries_loc = safe_indices
+
+            # Use these to get the input points locations:
+            input_point_locs = indices[max_points_loc, queries_loc]
+            selected_points = points[input_point_locs]
+            # Construct default output points:
+            output_points = torch.zeros(
+                queries.shape[0],
+                max_points,
+                3,
+                device=queries.device,
+                dtype=points.dtype,
+            )
+            # Put the selected points in:
+            output_points[queries_loc, max_points_loc] = selected_points
+
+            points = output_points
         else:
             points = torch.empty(
                 (0, points.shape[1]), device=points.device, dtype=points.dtype

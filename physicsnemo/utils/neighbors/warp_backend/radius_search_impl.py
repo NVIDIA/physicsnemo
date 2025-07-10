@@ -29,6 +29,11 @@ from physicsnemo.utils.version_check import check_min_version
 
 WARP_AVAILABLE = check_min_version("warp", "0.6.0")
 
+# WHERE WAS I
+# Add num_neighbors in the return, pass to the contexts for backwards.
+# make sure to use 0 and not -1 for the index.
+# Make sure tests account for this
+
 if WARP_AVAILABLE:
 
     import warp as wp
@@ -242,8 +247,11 @@ if WARP_AVAILABLE:
                 block_dim=BLOCK_DIM,
             )
 
-        # Return all three
-        return indices, points, distances
+        # Return all three + one empty tensor for consistency
+        # (We could return the proper tensor but it's not needed, and anyways
+        # warp is allocating it, not torch, so need to be careful...)
+        num_neighbors = torch.empty(0, dtype=torch.int32, device=output_device)
+        return indices, points, distances, num_neighbors
 
     @torch.library.custom_op("physicsnemo::radius_search_warp", mutates_args=())
     def radius_search_impl(
@@ -339,11 +347,14 @@ if WARP_AVAILABLE:
 
             # With a fixed number of output points, we have no need for a second kernel.
             indices = torch.full(
-                (N_queries, max_points), -1, dtype=torch.int32, device=points.device
+                (N_queries, max_points), 0, dtype=torch.int32, device=points.device
             )
-            distances = torch.zeros(
-                (N_queries, max_points), dtype=torch.float32, device=points.device
-            )
+            if return_dists:
+                distances = torch.zeros(
+                    (N_queries, max_points), dtype=torch.float32, device=points.device
+                )
+            else:
+                distances = torch.empty(0, dtype=torch.float32, device=points.device)
             num_neighbors = torch.zeros(
                 (N_queries,), dtype=torch.int32, device=points.device
             )
@@ -361,6 +372,7 @@ if WARP_AVAILABLE:
             # This kernel selects up to max_points hits per query.
             # It is not necessarily deterministic.
             # If the number of matches > max_points, you may get different results.
+
             wp.launch(
                 kernel=radius_search_limited_select,
                 dim=N_queries,
@@ -382,7 +394,7 @@ if WARP_AVAILABLE:
             )
 
         # Handle the matrix of return values:
-        return indices, points, distances
+        return indices, points, distances, num_neighbors
 
     # This is to enable torch.compile:
     @radius_search_impl.register_fake
@@ -413,6 +425,13 @@ if WARP_AVAILABLE:
             indices = torch.empty(
                 queries.shape[0], max_points, dtype=torch.int32, device=queries.device
             )
+            if max_points is not None:
+                num_neighbors = torch.empty(
+                    queries.shape[0], dtype=torch.int32, device=queries.device
+                )
+            else:
+                num_neighbors = torch.empty(0, dtype=torch.int32, device=queries.device)
+
             if return_dists:
                 distances = torch.empty(
                     queries.shape[0],
@@ -436,7 +455,7 @@ if WARP_AVAILABLE:
                     0, 3, dtype=torch.float32, device=queries.device
                 )
 
-            return indices, out_points, distances
+            return indices, out_points, distances, num_neighbors
 
         else:
             torch._dynamo.graph_break()
@@ -455,7 +474,10 @@ if WARP_AVAILABLE:
         """
         points, queries, radius, max_points, return_dists, return_points = inputs
 
-        indexes, ret_points, distances = output
+        indexes, ret_points, distances, num_neighbors = output
+
+        # For the backward pass, we need to know how many neighbors
+        # per index _if_ max points isn't none
 
         ctx.return_points = return_points
         ctx.max_points = max_points
@@ -464,7 +486,7 @@ if WARP_AVAILABLE:
         if return_points:
             ctx.grad_points_shape = points.shape
             ctx.points_dtype = points.dtype
-            ctx.save_for_backward(indexes)
+            ctx.save_for_backward(indexes, num_neighbors)
 
     def backward_radius_search(
         ctx: torch.autograd.function.FunctionCtx, grads: tuple
@@ -479,12 +501,13 @@ if WARP_AVAILABLE:
         Returns:
             tuple: Gradients of the inputs.
         """
-        grad_idx, grad_points, grad_dists = grads
+        grad_idx, grad_points, grad_dists, _ = grads
 
         if ctx.return_points:
-            (indexes,) = ctx.saved_tensors
+            (indexes, num_neighbors) = ctx.saved_tensors
             point_grads = apply_grad_to_points(
                 indexes,
+                num_neighbors,
                 grad_points,
                 ctx.grad_points_shape,
                 ctx.max_points,
@@ -499,6 +522,7 @@ if WARP_AVAILABLE:
     )
     def apply_grad_to_points(
         indexes: torch.Tensor,
+        num_neighbors: torch.Tensor,
         grad_points_out: torch.Tensor,
         points_shape: list[int],
         max_points: int | None = None,
@@ -534,6 +558,8 @@ if WARP_AVAILABLE:
             indexes = indexes.contiguous()
         if not point_grads.is_contiguous():
             point_grads = point_grads.contiguous()
+        if max_points is not None and not num_neighbors.is_contiguous():
+            num_neighbors = num_neighbors.contiguous()
 
         if max_points is None:
             # Flatten the indexes and grad_points.  Launch one thread per element.
@@ -561,6 +587,7 @@ if WARP_AVAILABLE:
                 dim=indexes.shape[0],  # one thread per row of indexes/point_grads
                 inputs=[
                     wp.from_torch(indexes, dtype=wp.int32, return_ctype=True),
+                    wp.from_torch(num_neighbors, dtype=wp.int32, return_ctype=True),
                     wp.from_torch(grad_points_out, dtype=wp.vec3, return_ctype=True),
                     wp.from_torch(point_grads, dtype=wp.vec3, return_ctype=True),
                 ],
