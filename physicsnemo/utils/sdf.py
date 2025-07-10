@@ -14,21 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ruff: noqa: F401
-
-import time
-
 import cupy as cp
 import numpy as np
 import warp as wp
-from numpy.typing import NDArray
 
 wp.config.quiet = True
 
 
 @wp.kernel
 def _bvh_query_distance(
-    mesh: wp.uint64,
+    mesh_id: wp.uint64,
     points: wp.array(dtype=wp.vec3f),
     max_dist: wp.float32,
     sdf: wp.array(dtype=wp.float32),
@@ -59,15 +54,15 @@ def _bvh_query_distance(
     tid = wp.tid()
 
     if use_sign_winding_number:
-        res = wp.mesh_query_point_sign_winding_number(mesh, points[tid], max_dist)
+        res = wp.mesh_query_point_sign_winding_number(mesh_id, points[tid], max_dist)
     else:
-        res = wp.mesh_query_point_sign_normal(mesh, points[tid], max_dist)
+        res = wp.mesh_query_point_sign_normal(mesh_id, points[tid], max_dist)
 
-    mesh_ = wp.mesh_get(mesh)
+    mesh = wp.mesh_get(mesh_id)
 
-    p0 = mesh_.points[mesh_.indices[3 * res.face + 0]]
-    p1 = mesh_.points[mesh_.indices[3 * res.face + 1]]
-    p2 = mesh_.points[mesh_.indices[3 * res.face + 2]]
+    p0 = mesh.points[mesh.indices[3 * res.face + 0]]
+    p1 = mesh.points[mesh.indices[3 * res.face + 1]]
+    p2 = mesh.points[mesh.indices[3 * res.face + 2]]
 
     p_closest = res.u * p0 + res.v * p1 + (1.0 - res.u - res.v) * p2
 
@@ -75,24 +70,28 @@ def _bvh_query_distance(
     sdf_hit_point[tid] = p_closest
     sdf_hit_point_id[tid] = res.face
 
+Array = np.ndarray | cp.ndarray
 
 def signed_distance_field(
-    mesh_vertices: list[tuple[float, float, float]],
-    mesh_indices: NDArray[float],
-    input_points: list[tuple[float, float, float]],
+    mesh_vertices: Array,
+    mesh_indices: Array,
+    input_points: Array,
     max_dist: float = 1e8,
     include_hit_points: bool = False,
     include_hit_points_id: bool = False,
     use_sign_winding_number: bool = False,
-) -> wp.array:
+    return_cupy: bool | None = None,
+) -> Array | tuple[Array, ...]:
     """
     Computes the signed distance field (SDF) for a given mesh and input points.
 
+    The mesh must be a surface mesh consisting of all triangles.
+
     Parameters:
     ----------
-        mesh_vertices (list[tuple[float, float, float]]): List of vertices defining the mesh.
-        mesh_indices (list[tuple[int, int, int]]): List of indices defining the triangles of the mesh.
-        input_points (list[tuple[float, float, float]]): List of input points for which to compute the SDF.
+        mesh_vertices (np.ndarray): Coordinates of the vertices of the mesh; shape: (n_vertices, 3)
+        mesh_indices (np.ndarray): Indices corresponding to the faces of the mesh; shape: (n_faces, 3)
+        input_points (np.ndarray): Coordinates of the points for which to compute the SDF; shape: (n_points, 3)
         max_dist (float, optional): Maximum distance within which to search for
             the closest point on the mesh. Default is 1e8.
         include_hit_points (bool, optional): Whether to include hit points in
@@ -112,30 +111,22 @@ def signed_distance_field(
     >>> signed_distance_field(mesh_vertices, mesh_indices, input_points)
     array([0.5], dtype=float32)
     """
+    if return_cupy is None:
+        return_cupy = any(
+            isinstance(arr, cp.ndarray)
+            for arr in (mesh_vertices, mesh_indices, input_points)
+        )
+
     wp.init()
 
-    # Get the current warp device string (e.g., "cuda:2")
-    try:
-        device = str(wp.get_device())
-    except Exception:
-        device = "cuda"
+    device = wp.get_device()
+    
+    mesh = wp.Mesh(
+        points=wp.array(mesh_vertices, dtype=wp.vec3f, device=device),
+        indices=wp.array(mesh_indices, dtype=wp.int32, device=device),
+    )
 
-    # If cupy arrays come in, we have to convert them to numpy arrays:
-    return_cupy = False
-    if isinstance(mesh_vertices, cp.ndarray):
-        return_cupy = True
-    if isinstance(mesh_indices, cp.ndarray):
-        return_cupy = True
-    if isinstance(input_points, cp.ndarray):
-        return_cupy = True
-
-    # Convert numpy to warp arrays:
-    mesh_vertices = wp.array(mesh_vertices, dtype=wp.vec3, device=device)
-    mesh_indices = wp.array(mesh_indices, dtype=wp.int32, device=device)
-
-    sdf_points = wp.array(input_points, dtype=wp.vec3, device=device)
-
-    mesh = wp.Mesh(mesh_vertices, mesh_indices)
+    sdf_points = wp.array(input_points, dtype=wp.vec3f, device=device)
 
     sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=device)
     sdf_hit_point = wp.zeros(shape=sdf_points.shape, dtype=wp.vec3f, device=device)
@@ -156,25 +147,20 @@ def signed_distance_field(
         device=device,
     )
 
-    if return_cupy:
-        if include_hit_points and include_hit_points_id:
-            return (
-                cp.asarray(sdf),
-                cp.asarray(sdf_hit_point),
-                cp.asarray(sdf_hit_point_id),
-            )
-        elif include_hit_points:
-            return (cp.asarray(sdf), cp.asarray(sdf_hit_point))
-        elif include_hit_points_id:
-            return (cp.asarray(sdf), cp.asarray(sdf_hit_point_id))
+    def convert(array: wp.array) -> np.ndarray | cp.ndarray:
+        """Converts a Warp array to CuPy/NumPy based on the `return_cupy` flag."""
+        if return_cupy:
+            return cp.asarray(array)
         else:
-            return cp.asarray(sdf)
-    else:
-        if include_hit_points and include_hit_points_id:
-            return (sdf.numpy(), sdf_hit_point.numpy(), sdf_hit_point_id.numpy())
-        elif include_hit_points:
-            return (sdf.numpy(), sdf_hit_point.numpy())
-        elif include_hit_points_id:
-            return (sdf.numpy(), sdf_hit_point_id.numpy())
-        else:
-            return sdf.numpy()
+            return array.numpy()
+
+    arrays_to_return: list[np.ndarray | cp.ndarray] = [
+        convert(sdf)
+    ]
+
+    if include_hit_points:
+        arrays_to_return.append(convert(sdf_hit_point))
+    if include_hit_points_id:
+        arrays_to_return.append(convert(sdf_hit_point_id))
+
+    return arrays_to_return[0] if len(arrays_to_return) == 1 else tuple(arrays_to_return)
