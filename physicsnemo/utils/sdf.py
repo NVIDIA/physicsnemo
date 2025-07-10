@@ -70,7 +70,9 @@ def _bvh_query_distance(
     sdf_hit_point[tid] = p_closest
     sdf_hit_point_id[tid] = res.face
 
+
 Array = np.ndarray | cp.ndarray
+
 
 def signed_distance_field(
     mesh_vertices: Array,
@@ -118,26 +120,25 @@ def signed_distance_field(
         )
 
     wp.init()
-
     device = wp.get_device()
-    
+
     mesh = wp.Mesh(
         points=wp.array(mesh_vertices, dtype=wp.vec3f, device=device),
         indices=wp.array(mesh_indices, dtype=wp.int32, device=device),
     )
 
-    sdf_points = wp.array(input_points, dtype=wp.vec3f, device=device)
+    N = len(input_points)
 
-    sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=device)
-    sdf_hit_point = wp.zeros(shape=sdf_points.shape, dtype=wp.vec3f, device=device)
-    sdf_hit_point_id = wp.zeros(shape=sdf_points.shape, dtype=wp.int32, device=device)
+    sdf = wp.empty(shape=(N,), dtype=wp.float32, device=device)
+    sdf_hit_point = wp.empty(shape=(N,), dtype=wp.vec3f, device=device)
+    sdf_hit_point_id = wp.empty(shape=(N,), dtype=wp.int32, device=device)
 
     wp.launch(
         kernel=_bvh_query_distance,
-        dim=len(sdf_points),
+        dim=N,
         inputs=[
             mesh.id,
-            sdf_points,
+            wp.array(input_points, dtype=wp.vec3f, device=device),
             max_dist,
             sdf,
             sdf_hit_point,
@@ -154,13 +155,13 @@ def signed_distance_field(
         else:
             return array.numpy()
 
-    arrays_to_return: list[np.ndarray | cp.ndarray] = [
-        convert(sdf)
-    ]
+    arrays_to_return: list[np.ndarray | cp.ndarray] = [convert(sdf)]
 
     if include_hit_points:
         arrays_to_return.append(convert(sdf_hit_point))
     if include_hit_points_id:
         arrays_to_return.append(convert(sdf_hit_point_id))
 
-    return arrays_to_return[0] if len(arrays_to_return) == 1 else tuple(arrays_to_return)
+    return (
+        arrays_to_return[0] if len(arrays_to_return) == 1 else tuple(arrays_to_return)
+    )
