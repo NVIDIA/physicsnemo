@@ -832,6 +832,10 @@ class SongUNetPosEmbd(SongUNet):
             self.register_buffer("pos_embd", self._get_positional_embedding().float())
         self.lead_time_mode = lead_time_mode
         if self.lead_time_mode:
+            if (lead_time_channels is None) or (lead_time_channels <= 0):
+                raise ValueError(
+                    "`lead_time_channels` must be >= 1 if `lead_time_mode` is enabled."
+                )
             self.lead_time_channels = lead_time_channels
             self.lead_time_steps = lead_time_steps
             self.lt_embd = self._get_lead_time_embedding()
@@ -841,6 +845,10 @@ class SongUNetPosEmbd(SongUNet):
                     torch.ones((1, len(self.prob_channels), 1, 1))
                 )
         else:
+            if lead_time_channels:
+                raise ValueError(
+                    "When `lead_time_mode` is disabled, `lead_time_channels` may not be set."
+                )
             self.lt_embd = None
 
     def forward(
@@ -1042,6 +1050,10 @@ class SongUNetPosEmbd(SongUNet):
 
             if len(embeds) > 0:
                 selected_pos_embd = torch.cat(embeds, dim=1)
+            else:
+                raise ValueError(
+                    "`positional_embedding_indexing` should not be called when neither lead-time nor positional embeddings are used."
+                )
 
         return selected_pos_embd
 

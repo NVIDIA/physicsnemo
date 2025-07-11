@@ -158,6 +158,9 @@ def deterministic_sampler(
         stochatsic sampler. Added signal noise is proportinal to
         :math:`\epsilon_i` where :math:`\epsilon_i \sim \mathcal{N}(0, S_{noise}^2)`. Defaults
         to 1.0.
+    lead_time_label: torch.Tensor, optional
+        Lead-time labels to pass to the model, shape (batch_size, 1).
+        If not provided, the model is called without a lead-time label input.
 
     Returns
     -------
@@ -169,7 +172,7 @@ def deterministic_sampler(
     x_lr = img_lr
 
     # do not pass lead time labels to nets that may not support them
-    lead_time_label = (
+    additional_labels = (
         {} if lead_time_label is None else {"lead_time_label": lead_time_label}
     )
 
@@ -309,11 +312,11 @@ def deterministic_sampler(
                 sigma(t_hat),
                 condition=x_lr,
                 class_labels=class_labels,
-                **lead_time_label,
+                **additional_labels,
             ).to(torch.float64)
         else:
             denoised = net(
-                x_hat / s(t_hat), x_lr, sigma(t_hat), class_labels, **lead_time_label
+                x_hat / s(t_hat), x_lr, sigma(t_hat), class_labels, **additional_labels
             ).to(torch.float64)
         d_cur = (
             sigma_deriv(t_hat) / sigma(t_hat) + s_deriv(t_hat) / s(t_hat)
@@ -332,7 +335,7 @@ def deterministic_sampler(
                     sigma(t_prime),
                     condition=x_lr,
                     class_labels=class_labels,
-                    **lead_time_label,
+                    **additional_labels,
                 ).to(torch.float64)
             else:
                 denoised = net(
@@ -340,7 +343,7 @@ def deterministic_sampler(
                     x_lr,
                     sigma(t_prime),
                     class_labels,
-                    **lead_time_label,
+                    **additional_labels,
                 ).to(torch.float64)
             d_prime = (
                 sigma_deriv(t_prime) / sigma(t_prime) + s_deriv(t_prime) / s(t_prime)

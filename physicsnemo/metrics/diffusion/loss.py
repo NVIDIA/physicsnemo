@@ -253,6 +253,10 @@ class EDMLoss:
             An optional data augmentation function that takes images as input and
             returns augmented images. If not provided, no data augmentation is applied.
 
+        lead_time_label: torch.Tensor, optional
+            Lead-time labels to pass to the model, shape (batch_size, 1).
+            If not provided, the model is called without a lead-time label input.
+
         Returns:
         -------
         torch.Tensor

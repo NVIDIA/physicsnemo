@@ -333,23 +333,35 @@ def test_son_unet_deploy(device):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("lead_time_mode", [False, True])
 @pytest.mark.parametrize("N_grid_channels", [0, 4])
-def test_song_unet_positional_leadtime(device, lead_time_mode, N_grid_channels):
+@pytest.mark.parametrize("lead_time_channels", [0, 2])
+def test_song_unet_positional_leadtime(
+    device, lead_time_mode, N_grid_channels, lead_time_channels
+):
     """Test that both positional and lead-time embeddings can be used independently"""
 
     img_resolution = 16
     out_channels = 2
-    lead_time_channels = 4
     lead_time_steps = 2
     in_channels = 2 + N_grid_channels + (lead_time_channels if lead_time_mode else 0)
-    model = UNet(
-        img_resolution=img_resolution,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        N_grid_channels=N_grid_channels,
-        lead_time_mode=lead_time_mode,
-        lead_time_channels=lead_time_channels,
-        lead_time_steps=lead_time_steps,
-    ).to(device)
+
+    def _create_model():
+        return UNet(
+            img_resolution=img_resolution,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            N_grid_channels=N_grid_channels,
+            lead_time_mode=lead_time_mode,
+            lead_time_channels=lead_time_channels,
+            lead_time_steps=lead_time_steps,
+        ).to(device)
+
+    if (lead_time_channels > 0) != lead_time_mode:
+        with pytest.raises(ValueError):
+            model = _create_model()
+        return
+    else:
+        model = _create_model()
+
     noise_labels = torch.randn([2]).to(device)
     class_labels = torch.randint(0, 1, (2, 1)).to(device)
     input_image = torch.ones([2, 2, 16, 16]).to(device)
