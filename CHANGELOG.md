@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - General purpose patching API for patch-based diffusion
 - New positional embedding selection strategy for CorrDiff SongUNet models
 - Added Multi-Storage Client to allow checkpointing to/from Object Storage
+- Added a new aerodynamics example using DoMINO to compute design sensitivities
+  (e.g., drag adjoint) with respect to underlying input geometry.
 
 ### Changed
 
