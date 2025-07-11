@@ -38,9 +38,9 @@ resume_dir: ${output}/models
 # └───────────────────────────────────────────┘  
 data_processor: # Data processor configurable parameters
   kind: drivaer_aws # must be either drivesim or drivaer_aws
-  output_dir: /lustre/rranade/aws_data_all/
-  input_dir: /lustre/datasets/drivaer_aws/drivaer_data_full/
-  cached_dir: /lustre/cached/drivaer_aws/drivaer_data_full/
+  output_dir: /user/aws_data_all/
+  input_dir: /data/drivaer_aws/drivaer_data_full/
+  cached_dir: /user/cached/drivaer_aws/drivaer_data_full/
   use_cache: false
   num_processors: 12
 
@@ -64,8 +64,8 @@ variables:
 # │          Training Data Configs            │
 # └───────────────────────────────────────────┘  
 data: # Input directory for training and validation data
-  input_dir: /lustre/rranade/aws_data_all/
-  input_dir_val: /lustre/rranade/aws_data_all_val/
+  input_dir: /user/aws_data_all/
+  input_dir_val: /user/aws_data_all_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25 , -0.32]
     max: [8.5 , 2.25  , 3.00]
@@ -88,6 +88,7 @@ domain_parallelism:
 # └───────────────────────────────────────────┘  
 model:
   model_type: combined # train which model? surface, volume, combined
+  activation: "relu" # "relu" or "gelu"
   loss_function: 
     loss_type: "mse" # mse or rmse
     area_weighing_factor: 10000 # Generally inverse of maximum area
@@ -119,16 +120,22 @@ model:
       volume_radii: [0.1, 0.5, 2.5, 5.0]
       surface_radii: [0.01, 0.05, 0.1] # 0.05
       hops: 1
+      activation: ${model.activation}
     geo_processor:
       base_filters: 8
+      activation: ${model.activation}
     geo_processor_sdf:
       base_filters: 8
   nn_basis_functions: # Hyperparameters for basis function network
     base_layer: 512
     fourier_features: false
     num_modes: 5
+    activation: ${model.activation}
+  local_point_conv:
+    activation: ${model.activation}
   aggregation_model: # Hyperparameters for aggregation network
     base_layer: 512
+    activation: ${model.activation}
   position_encoder: # Hyperparameters for position encoding network
     base_neurons: 512
   geometry_local: # Hyperparameters for local geometry extraction
@@ -155,7 +162,7 @@ train: # Training configurable parameters
   sampler:
     shuffle: true
     drop_last: false
-  checkpoint_dir: /lustre/rranade/models/ # Use only for retraining
+  checkpoint_dir: /user/models/ # Use only for retraining
   
 # ┌───────────────────────────────────────────┐
 # │          Validation Configs               │
@@ -172,9 +179,9 @@ val: # Validation configurable parameters
 # │          Testing data Configs             │
 # └───────────────────────────────────────────┘  
 eval: # Testing configurable parameters
-  test_path: /lustre/rranade/testing_data # Dir for testing data in raw format (vtp, vtu ,stls)
-  save_path: /lustre/rranade/predicted_data # Dir to save predicted results in raw format (vtp, vtu)
+  test_path: /user/testing_data # Dir for testing data in raw format (vtp, vtu ,stls)
+  save_path: /user/predicted_data # Dir to save predicted results in raw format (vtp, vtu)
   checkpoint_name: DoMINO.0.455.pt # Name of checkpoint to select from saved checkpoints
-  scaling_param_path: /lustre/rranade/scaling_params
+  scaling_param_path: /user/scaling_params
   refine_stl: False # Automatically refine STL during inference
   stencil_size: 7 # Stencil size for evaluating surface and volume model

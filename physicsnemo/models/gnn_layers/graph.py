@@ -14,12 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, List, Optional
+import warnings
+from types import NoneType
+from typing import Any, List, Optional, TypeAlias
 
-import dgl
 import torch
-from dgl import DGLGraph
 from torch import Tensor
+
+try:
+    import dgl
+    from dgl import DGLGraph
+except ImportError:
+    warnings.warn(
+        "CuGraphCSC requires the DGL library. DGL library will soon be deprecated.",
+        DeprecationWarning,
+    )
+
+    DGLGraph: TypeAlias = NoneType
 
 try:
     from typing import Self

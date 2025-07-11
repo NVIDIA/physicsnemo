@@ -80,10 +80,12 @@ def test_domino_forward(device, pytestconfig):
                 hops: int = 1
                 volume_radii: Sequence = (0.1, 0.5)
                 surface_radii: Sequence = (0.05,)
+                activation: str = "relu"
 
             @dataclass
             class geo_processor:
                 base_filters: int = 8
+                activation: str = "relu"
 
             @dataclass
             class geo_processor_sdf:
@@ -107,10 +109,16 @@ def test_domino_forward(device, pytestconfig):
             base_layer: int = 512
             fourier_features: bool = False
             num_modes: int = 5
+            activation: str = "relu"
+
+        @dataclass
+        class local_point_conv:
+            activation: str = "relu"
 
         @dataclass
         class aggregation_model:
             base_layer: int = 512
+            activation: str = "relu"
 
         @dataclass
         class position_encoder:
@@ -124,6 +132,7 @@ def test_domino_forward(device, pytestconfig):
             num_modes: int = 5
 
         model_type: str = "combined"
+        activation: str = "relu"
         interp_res: Sequence = (128, 128, 128)
         use_sdf_in_basis_func: bool = True
         positional_encoding: bool = False

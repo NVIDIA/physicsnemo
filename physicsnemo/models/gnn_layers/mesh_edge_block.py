@@ -14,17 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
-
 import torch
 import torch.nn as nn
-from dgl import DGLGraph
 from torch import Tensor
 
 from physicsnemo.utils.profiling import profile
 
 from .mesh_graph_mlp import MeshGraphEdgeMLPConcat, MeshGraphEdgeMLPSum
-from .utils import CuGraphCSC
+from .utils import GraphType
 
 
 class MeshEdgeBlock(nn.Module):
@@ -89,7 +86,7 @@ class MeshEdgeBlock(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Tensor,
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         efeat_new = self.edge_mlp(efeat, nfeat, graph)
         efeat_new = efeat_new + efeat

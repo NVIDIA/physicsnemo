@@ -1,0 +1,4 @@
+git+https://github.com/NVIDIA/apex.git
+hydra-core
+cupy-cuda12x
+numba
