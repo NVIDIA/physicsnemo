@@ -42,7 +42,7 @@ def test_warp(
     for i in range(min_tries):
         with timer:
             _ = radius_search(
-                points,
+                points=points,
                 points,
                 radius,
             )
