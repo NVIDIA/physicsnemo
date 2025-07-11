@@ -92,11 +92,11 @@ def signed_distance_field(
     Parameters:
     ----------
         mesh_vertices (np.ndarray): Coordinates of the vertices of the mesh;
-            shape: (n_vertices, 3) 
+            shape: (n_vertices, 3)
         mesh_indices (np.ndarray): Indices corresponding to the faces of the
-            mesh; shape: (n_faces, 3) 
+            mesh; shape: (n_faces, 3)
         input_points (np.ndarray): Coordinates of the points for which to
-            compute the SDF; shape: (n_points, 3) 
+            compute the SDF; shape: (n_points, 3)
         max_dist (float, optional): Maximum distance within which
             to search for the closest point on the mesh. Default is 1e8.
         include_hit_points (bool, optional): Whether to include hit points in
