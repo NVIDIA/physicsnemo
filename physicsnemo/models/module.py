@@ -158,8 +158,8 @@ class Module(torch.nn.Module):
     ) -> None:
         """Safely override ``__init__`` arguments stored in a checkpoint.
 
-        This updates *args* *in-place* with the values provided in
-        *override_args*. Only keys defined in ``cls._overridable_args`` are
+        This updates ``args`` *in-place* with the values provided in
+        ``override_args``. Only keys defined in ``cls._overridable_args`` are
         allowed to be modified. Attempting to override any other key will raise
         a ``ValueError``.
 
@@ -177,10 +177,9 @@ class Module(torch.nn.Module):
                 raise ValueError(
                     f"Argument '{key}' cannot be overridden for " f"{cls.__name__}."
                 )
+            # In this case we are not overriding, but we are adding a new arg
             if key not in args:
-                raise ValueError(
-                    f"Unexpected argument '{key}' to override for " f"{cls.__name__}."
-                )
+                warnings.warn(f"New argument '{key}' added for {cls.__name__}.")
             args[key] = value
 
     @classmethod
