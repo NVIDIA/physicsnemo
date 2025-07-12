@@ -27,6 +27,7 @@ from typing import List, Literal, Tuple, Union
 import numpy as np
 import torch
 
+from physicsnemo.models.diffusion.utils import _safe_setattr
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -765,6 +766,25 @@ class EDMPrecondSuperResolution(Module):
     arXiv preprint arXiv:2309.15214.
     """
 
+    # Classes that can be wrapped by this UNet class.
+    _wrapped_classes = {
+        "SongUNetPosEmbd",
+        "SongUNetPosLtEmbd",
+        "SongUNet",
+        "DhariwalUNet",
+    }
+
+    # Arguments of the __init__ method that can be overridden with the
+    # ``Module.from_checkpoint`` method. Here, since we use splatted arguments
+    # for the wrapped model instance, we allow overriding of any overridable
+    # argument of the wrapped classes.
+    _overridable_args = set.union(
+        *(
+            getattr(getattr(network_module, cls_name), "_overridable_args", set())
+            for cls_name in _wrapped_classes
+        )
+    )
+
     def __init__(
         self,
         img_resolution: Union[int, Tuple[int, int]],
@@ -780,6 +800,14 @@ class EDMPrecondSuperResolution(Module):
         **model_kwargs: dict,
     ):
         super().__init__(meta=EDMPrecondSuperResolutionMetaData)
+
+        # Validation
+        if model_type not in self._wrapped_classes:
+            raise ValueError(
+                f"Model type '{model_type}' is not supported. "
+                f"Must be one of: {', '.join(self._wrapped_classes)}"
+            )
+
         self.img_resolution = img_resolution
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
@@ -921,25 +949,41 @@ class EDMPrecondSuperResolution(Module):
     @property
     def amp_mode(self):
         """
-        Return the *amp_mode* flag of the wrapped model or *None*.
+        Property that controls the automatic mixed precision mode of the
+        underlying architecture. ``True`` means that the underlying architecture
+        will automatically cast tensors to the appropriate
+        precision. ``False`` means that the underlying architecture will not
+        automatically cast the input and output tensors to the appropriate
+        precision.
         """
         return getattr(self.model, "amp_mode", None)
 
     @amp_mode.setter
     def amp_mode(self, value: bool):
         """
-        Propagate *amp_mode* to the model and all its sub-modules.
+        Update ``amp_mode`` on the wrapped architecture and its sub-modules.
         """
-
         if not isinstance(value, bool):
             raise TypeError("amp_mode must be a boolean value.")
+        self.model.apply(lambda m: _safe_setattr(m, "amp_mode", value))
 
-        if hasattr(self.model, "amp_mode"):
-            self.model.amp_mode = value
+    @property
+    def profile_mode(self):
+        """
+        Property that controls the profiling mode of the underlying architecture.
+        ``True`` means that the underlying architecture will be profiled.
+        ``False`` means that the underlying architecture will not be profiled.
+        """
+        return getattr(self.model, "profile_mode", None)
 
-        for sub_module in self.model.modules():
-            if hasattr(sub_module, "amp_mode"):
-                sub_module.amp_mode = value
+    @profile_mode.setter
+    def profile_mode(self, value: bool):
+        """
+        Update ``profile_mode`` on the wrapped architecture and its sub-modules.
+        """
+        if not isinstance(value, bool):
+            raise TypeError("profile_mode must be a boolean value.")
+        self.model.apply(lambda m: _safe_setattr(m, "profile_mode", value))
 
 
 # NOTE: This is a deprecated version of the EDMPrecondSuperResolution model.
@@ -1031,15 +1075,6 @@ class EDMPrecondSR(EDMPrecondSuperResolution):
             stacklevel=2,
         )
 
-        if scale_cond_input:
-            warnings.warn(
-                "scale_cond_input=True does not properly scale the conditional input. "
-                "(see https://github.com/NVIDIA/modulus/issues/229). "
-                "This setup will be deprecated. "
-                "Please set scale_cond_input=False.",
-                DeprecationWarning,
-            )
-
         super().__init__(
             img_resolution=img_resolution,
             img_in_channels=img_in_channels,
@@ -1052,9 +1087,47 @@ class EDMPrecondSR(EDMPrecondSuperResolution):
             **model_kwargs,
         )
 
+        if scale_cond_input:
+            warnings.warn(
+                "The `scale_cond_input=True` option does not properly scale the conditional input "
+                "and is deprecated. It is highly recommended to set `scale_cond_input=False`. "
+                "However, for loading a checkpoint previously trained with `scale_cond_input=True`, "
+                "this flag must be set to `True` to ensure compatibility. "
+                "For more details, see https://github.com/NVIDIA/modulus/issues/229.",
+                DeprecationWarning,
+            )
+            self.scaling_fn = self._legacy_scaling_fn
+
         # Store deprecated parameters for backward compatibility
         self.img_channels = img_channels
         self.scale_cond_input = scale_cond_input
+
+    @staticmethod
+    def _legacy_scaling_fn(
+        x: torch.Tensor, img_lr: torch.Tensor, c_in: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        This function does not properly scale the conditional input
+        (see https://github.com/NVIDIA/modulus/issues/229)
+        and will be deprecated.
+
+        Concatenate and scale the high-resolution and low-resolution tensors.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Noisy high-resolution image of shape (B, C_hr, H, W).
+        img_lr : torch.Tensor
+            Low-resolution image of shape (B, C_lr, H, W).
+        c_in : torch.Tensor
+            Scaling factor of shape (B, 1, 1, 1).
+
+        Returns
+        -------
+        torch.Tensor
+            Scaled and concatenated tensor of shape (B, C_in+C_out, H, W).
+        """
+        return c_in * torch.cat([x, img_lr.to(x.dtype)], dim=1)
 
     def forward(
         self,

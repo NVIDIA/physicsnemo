@@ -22,7 +22,7 @@ import nvtx
 import torch
 import tqdm
 
-from physicsnemo.utils.generative import StackedRandomGenerator, time_range
+from physicsnemo.utils.diffusion import StackedRandomGenerator, time_range
 
 ############################################################################
 #                     CorrDiff Generation Utilities                        #

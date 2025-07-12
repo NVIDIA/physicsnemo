@@ -62,33 +62,39 @@ def convert_ckp_apex(
     if (not apex_in_ckp) and apex_in_workflow:
         # transfer GN weight & bias to apex GN weight & bias
         for key, value in model_dict.items():
-            filtered_state_dict[key] = value  # Keep the original key
-            # Duplicate weight/bias for Apex GroupNorm (without removing the original)
+            is_duplicate = False
             for norm_layer in ["norm0", "norm1", "norm2", "aux_norm"]:
                 if f"{norm_layer}.weight" in key:
                     new_key = key.replace(
                         f"{norm_layer}.weight", f"{norm_layer}.gn.weight"
                     )
-                    filtered_state_dict[new_key] = value  # Duplicate weight
+                    filtered_state_dict[new_key] = value
+                    is_duplicate = True
                 elif f"{norm_layer}.bias" in key:
                     new_key = key.replace(f"{norm_layer}.bias", f"{norm_layer}.gn.bias")
-                    filtered_state_dict[new_key] = value  # Duplicate bias
+                    filtered_state_dict[new_key] = value
+                    is_duplicate = True
+            if not is_duplicate:
+                filtered_state_dict[key] = value
 
     # case2: try to use optimized ckp in non-optimized workflow
     elif apex_in_ckp and (not apex_in_workflow):
         # transfer apex GN weight & bias to GN weight & bias
         for key, value in model_dict.items():
-            filtered_state_dict[key] = value  # Keep the original key
-            # Duplicate weight/bias for Apex GroupNorm (without removing the original)
+            is_duplicate = False
             for norm_layer in ["norm0", "norm1", "norm2", "aux_norm"]:
                 if f"{norm_layer}.gn.weight" in key:
                     new_key = key.replace(
                         f"{norm_layer}.gn.weight", f"{norm_layer}.weight"
                     )
-                    filtered_state_dict[new_key] = value  # Duplicate weight
+                    filtered_state_dict[new_key] = value
+                    is_duplicate = True
                 elif f"{norm_layer}.bias" in key:
                     new_key = key.replace(f"{norm_layer}.gn.bias", f"{norm_layer}.bias")
-                    filtered_state_dict[new_key] = value  # Duplicate bias
+                    filtered_state_dict[new_key] = value
+                    is_duplicate = True
+            if not is_duplicate:
+                filtered_state_dict[key] = value
     else:
         # no need to convert ckp
         return model_dict

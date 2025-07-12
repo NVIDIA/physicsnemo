@@ -16,10 +16,11 @@
 
 import importlib
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Tuple, Union
+from typing import Any, Dict, List, Literal, Set, Tuple, Union
 
 import torch
 
+from physicsnemo.models.diffusion.utils import _safe_setattr
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -45,8 +46,22 @@ class MetaData(ModelMetaData):
 
 
 class UNet(Module):  # TODO a lot of redundancy, need to clean up
-    """
-    U-Net Wrapper for CorrDiff deterministic regression model.
+    r"""
+    This interface provides a U-Net wrapper for CorrDiff deterministic
+    regression model (and other deterministic downsampling models).
+    It supports the following architectures:
+
+    - :class:`~physicsnemo.models.diffusion.song_unet.SongUNet`
+
+    - :class:`~physicsnemo.models.diffusion.song_unet.SongUNetPosEmbd`
+
+    - :class:`~physicsnemo.models.diffusion.song_unet.SongUNetPosLtEmbd`
+
+    - :class:`~physicsnemo.models.diffusion.dhariwal_unet.DhariwalUNet`
+
+    It shares the same architeture as a conditional diffusion model. It does so
+    by concatenating a conditioning image to a zero-filled latent state, and by
+    setting the noise level and the class labels to zero.
 
     Parameters
     -----------
@@ -57,37 +72,59 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         Number of channels in the input image.
     img_out_channels : int
         Number of channels in the output image.
-    use_fp16: bool, optional
-        Execute the underlying model at FP16 precision, by default False.
-    model_type: str, optional
-        Class name of the underlying model. Must be one of the following:
+    use_fp16: bool, optional, default=False
+        Execute the underlying model at FP16 precision.
+    model_type: Literal['SongUNet', 'SongUNetPosEmbd', 'SongUNetPosLtEmbd',
+    'DhariwalUNet'], default='SongUNetPosEmbd'
+        Class name of the underlying architecture. Must be one of the following:
         'SongUNet', 'SongUNetPosEmbd', 'SongUNetPosLtEmbd', 'DhariwalUNet'.
-        Defaults to 'SongUNetPosEmbd'.
     **model_kwargs : dict
-        Keyword arguments passed to the underlying model `__init__` method.
-
-    See Also
-    --------
-    For information on model types and their usage:
-    :class:`~physicsnemo.models.diffusion.SongUNet`: Basic U-Net for diffusion models
-    :class:`~physicsnemo.models.diffusion.SongUNetPosEmbd`: U-Net with positional embeddings
-    :class:`~physicsnemo.models.diffusion.SongUNetPosLtEmbd`: U-Net with positional and lead-time embeddings
+        Keyword arguments passed to the underlying architecture `__init__` method.
 
     Please refer to the documentation of these classes for details on how to call
     and use these models directly.
 
-    References
-    ----------
-    Mardani, M., Brenowitz, N., Cohen, Y., Pathak, J., Chen, C.Y.,
-    Liu, C.C.,Vahdat, A., Kashinath, K., Kautz, J. and Pritchard, M., 2023.
-    Generative Residual Diffusion Modeling for Km-scale Atmospheric Downscaling.
-    arXiv preprint arXiv:2309.15214.
+    Forward
+    -------
+    x : torch.Tensor
+        The input tensor, typically zero-filled, of shape :math:`(B, C_{in}, H_{in}, W_{in})`.
+    img_lr : torch.Tensor
+        Conditioning image of shape :math:`(B, C_{lr}, H_{in}, W_{in})`.
+    **model_kwargs : dict
+        Additional keyword arguments to pass to the underlying architecture
+        forward method.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H_{in}, W_{in})` (same
+        spatial dimensions as the input).
+
     """
 
     __model_checkpoint_version__ = "0.2.0"
     __supported_model_checkpoint_version__ = {
         "0.1.0": "Loading UNet checkpoint from older version 0.1.0 (current version is 0.2.0). This version is still supported, but consider re-saving the model to upgrade to version 0.2.0 and remove this warning."
     }
+
+    # Classes that can be wrapped by this UNet class.
+    _wrapped_classes: Set[str] = {
+        "SongUNetPosEmbd",
+        "SongUNetPosLtEmbd",
+        "SongUNet",
+        "DhariwalUNet",
+    }
+
+    # Arguments of the __init__ method that can be overridden with the
+    # ``Module.from_checkpoint`` method. Here, since we use splatted arguments
+    # for the wrapped model instance, we allow overriding of any overridable
+    # argument of the wrapped classes.
+    _overridable_args: Set[str] = set.union(
+        *(
+            getattr(getattr(network_module, cls_name), "_overridable_args", set())
+            for cls_name in _wrapped_classes
+        )
+    )
 
     @classmethod
     def _backward_compat_arg_mapper(
@@ -138,6 +175,13 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
     ):
         super().__init__(meta=MetaData)
 
+        # Validation
+        if model_type not in self._wrapped_classes:
+            raise ValueError(
+                f"Model type '{model_type}' is not supported. "
+                f"Must be one of: {', '.join(self._wrapped_classes)}"
+            )
+
         # for compatibility with older versions that took only 1 dimension
         if isinstance(img_resolution, int):
             self.img_shape_x = self.img_shape_y = img_resolution
@@ -164,35 +208,7 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         force_fp32: bool = False,
         **model_kwargs: dict,
     ) -> torch.Tensor:
-        """
-        Forward pass of the UNet wrapper model.
 
-        This method concatenates the input tensor with the low-resolution conditioning tensor
-        and passes the result through the underlying model.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            The input tensor, typically zero-filled, of shape (B, C_hr, H, W).
-        img_lr : torch.Tensor
-            Low-resolution conditioning image of shape (B, C_lr, H, W).
-        force_fp32 : bool, optional
-            Whether to force FP32 precision regardless of the `use_fp16` attribute,
-            by default False.
-        **model_kwargs : dict
-            Additional keyword arguments to pass to the underlying model
-            `self.model` forward method.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor (prediction) of shape (B, C_hr, H, W).
-
-        Raises
-        ------
-        ValueError
-            If the model output dtype doesn't match the expected dtype.
-        """
         # SR: concatenate input channels
         if img_lr is not None:
             x = torch.cat((x, img_lr), dim=1)
@@ -238,28 +254,45 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
     @property
     def amp_mode(self):
         """
-        Return the *amp_mode* flag of the underlying model if present.
+        Property that controls the automatic mixed precision mode of the
+        underlying architecture. ``True`` means that the underlying architecture
+        will automatically cast tensors to the appropriate
+        precision. ``False`` means that the underlying architecture will not
+        automatically cast the input and output tensors to the appropriate
+        precision.
         """
         return getattr(self.model, "amp_mode", None)
 
     @amp_mode.setter
     def amp_mode(self, value: bool):
         """
-        Update *amp_mode* on the wrapped model and its sub-modules.
+        Update ``amp_mode`` on the wrapped architecture and its sub-modules.
         """
         if not isinstance(value, bool):
             raise TypeError("amp_mode must be a boolean value.")
+        self.model.apply(lambda m: _safe_setattr(m, "amp_mode", value))
 
-        if hasattr(self.model, "amp_mode"):
-            self.model.amp_mode = value
+    @property
+    def profile_mode(self):
+        """
+        Property that controls the profiling mode of the underlying architecture.
+        ``True`` means that the underlying architecture will be profiled.
+        ``False`` means that the underlying architecture will not be profiled.
+        """
+        return getattr(self.model, "profile_mode", None)
 
-        # Recursively update sub-modules that define *amp_mode*.
-        for sub_module in self.model.modules():
-            if hasattr(sub_module, "amp_mode"):
-                sub_module.amp_mode = value
+    @profile_mode.setter
+    def profile_mode(self, value: bool):
+        """
+        Update ``profile_mode`` on the wrapped architecture and its sub-modules.
+        """
+        if not isinstance(value, bool):
+            raise TypeError("profile_mode must be a boolean value.")
+        self.model.apply(lambda m: _safe_setattr(m, "profile_mode", value))
 
 
-# TODO: implement amp_mode property for StormCastUNet (same as UNet)
+# TODO: implement amp_mode and profile_mode properties for StormCastUNet (same
+# as UNet)
 class StormCastUNet(Module):
     """
     U-Net wrapper for StormCast; used so the same Song U-Net network can be re-used for this model.

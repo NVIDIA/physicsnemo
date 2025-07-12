@@ -77,9 +77,9 @@ def _bvh_query_distance(
 
 
 def signed_distance_field(
-    mesh_vertices: list[tuple[float, float, float]],
-    mesh_indices: NDArray[float],
-    input_points: list[tuple[float, float, float]],
+    mesh_vertices: NDArray[float] | cp.ndarray | list[tuple[float, float, float]],
+    mesh_indices: NDArray[int] | cp.ndarray | list[tuple[int, int, int]],
+    input_points: NDArray[float] | cp.ndarray | list[tuple[float, float, float]],
     max_dist: float = 1e8,
     include_hit_points: bool = False,
     include_hit_points_id: bool = False,

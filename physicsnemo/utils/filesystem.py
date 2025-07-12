@@ -21,6 +21,7 @@ import os
 import re
 import urllib.request
 import zipfile
+from pathlib import Path
 
 import fsspec
 import fsspec.implementations.cached
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 try:
     LOCAL_CACHE = os.environ["LOCAL_CACHE"]
 except KeyError:
-    LOCAL_CACHE = os.environ["HOME"] + "/.cache/physicsnemo"
+    LOCAL_CACHE = Path.home() / ".cache" / "physicsnemo"
 
 
 def _cache_fs(fs):

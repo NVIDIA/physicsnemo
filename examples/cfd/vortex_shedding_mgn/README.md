@@ -46,7 +46,7 @@ simulation time span and extrapolate in time. However, the accuracy of the predi
 might degrade over time and if possible, extrapolation should be avoided unless
 the underlying data patterns remain stationary and consistent.
 
-The model uses the input mesh to construct a bi-directional DGL graph for each sample.
+The model uses the input mesh to construct a bi-directional graph for each sample.
 The node features include (6 in total):
 
 - Velocity components at time step $t$, i.e., $u_t$, $v_t$
@@ -72,17 +72,21 @@ processor for message aggregation. A learning rate of 0.0001 is used, decaying
 exponentially with a rate of 0.9999991. Training is performed on 8 NVIDIA A100
 GPUs, leveraging data parallelism for 25 epochs.
 
-## Getting Started
+## Prerequisites
 
 This example requires the `tensorflow` library to load the data in the `.tfrecord`
-format. Install with
-
-```bash
-pip install tensorflow
-```
+format.
 
 Note: If installing tensorflow inside the PhysicsNeMo docker container, it's recommended
 to use `pip install "tensorflow<=2.17.1"`
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Getting Started
 
 To download the data from DeepMind's repo, run
 

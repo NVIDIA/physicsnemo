@@ -21,6 +21,7 @@ import os
 
 import numpy as np
 import torch
+import torch_geometric as pyg
 
 try:
     import tensorflow.compat.v1 as tf
@@ -30,15 +31,8 @@ except ImportError:
         + "package at: https://www.tensorflow.org/install"
     )
 
-try:
-    import dgl
-    from dgl.data import DGLDataset
-except ImportError:
-    raise ImportError(
-        "Mesh Graph Net Datapipe requires the DGL library. Install the "
-        + "desired CUDA version at: https://www.dgl.ai/pages/start.html"
-    )
 from torch.nn import functional as F
+from torch.utils.data import Dataset
 
 from .utils import load_json, save_json
 
@@ -46,7 +40,7 @@ from .utils import load_json, save_json
 tf.config.set_visible_devices([], "GPU")
 
 
-class VortexSheddingDataset(DGLDataset):
+class VortexSheddingDataset(Dataset):
     """In-memory MeshGraphNet Dataset for stationary mesh
     Notes:
         - This dataset prepares and processes the data available in MeshGraphNet's repo:
@@ -68,10 +62,6 @@ class VortexSheddingDataset(DGLDataset):
         Number of time steps in each sample, by default 600
     noise_std : float, optional
         The standard deviation of the noise added to the "train" split, by default 0.02
-    force_reload : bool, optional
-        force reload, by default False
-    verbose : bool, optional
-        verbose, by default False
     """
 
     def __init__(
@@ -82,14 +72,8 @@ class VortexSheddingDataset(DGLDataset):
         num_samples=1000,
         num_steps=600,
         noise_std=0.02,
-        force_reload=False,
-        verbose=False,
     ):
-        super().__init__(
-            name=name,
-            force_reload=force_reload,
-            verbose=verbose,
-        )
+        self.name = name
         self.data_dir = data_dir
         self.split = split
         self.num_samples = num_samples
@@ -127,7 +111,7 @@ class VortexSheddingDataset(DGLDataset):
 
         # normalize edge features
         for i in range(num_samples):
-            self.graphs[i].edata["x"] = self.normalize_edge(
+            self.graphs[i].edge_attr = self.normalize_edge(
                 self.graphs[i],
                 self.edge_stats["edge_mean"],
                 self.edge_stats["edge_std"],
@@ -193,13 +177,13 @@ class VortexSheddingDataset(DGLDataset):
             ),
             dim=-1,
         )
-        graph.ndata["x"] = node_features
-        graph.ndata["y"] = node_targets
+        graph.x = node_features
+        graph.y = node_targets
         if self.split == "train":
             return graph
         else:
-            graph.ndata["mesh_pos"] = self.mesh_pos[gidx]
-            cells = self.cells[gidx]
+            graph["mesh_pos"] = self.mesh_pos[gidx]
+            cells = torch.tensor(self.cells[gidx])
             rollout_mask = self.rollout_mask[gidx]
             return graph, cells, rollout_mask
 
@@ -213,10 +197,10 @@ class VortexSheddingDataset(DGLDataset):
         }
         for i in range(self.num_samples):
             stats["edge_mean"] += (
-                torch.mean(self.graphs[i].edata["x"], dim=0) / self.num_samples
+                torch.mean(self.graphs[i].edge_attr, dim=0) / self.num_samples
             )
             stats["edge_meansqr"] += (
-                torch.mean(torch.square(self.graphs[i].edata["x"]), dim=0)
+                torch.mean(torch.square(self.graphs[i].edge_attr), dim=0)
                 / self.num_samples
             )
         stats["edge_std"] = torch.sqrt(
@@ -314,10 +298,11 @@ class VortexSheddingDataset(DGLDataset):
     @staticmethod
     def create_graph(src, dst, dtype=torch.int32):
         """
-        creates a DGL graph from an adj matrix in COO format.
+        creates a PyG graph from an adj matrix in COO format.
         torch.int32 can handle graphs with up to 2**31-1 nodes or edges.
         """
-        graph = dgl.to_bidirected(dgl.graph((src, dst), idtype=dtype))
+        edges = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0).long()
+        graph = pyg.data.Data(edge_index=pyg.utils.to_undirected(edges))
         return graph
 
     @staticmethod
@@ -325,10 +310,10 @@ class VortexSheddingDataset(DGLDataset):
         """
         adds relative displacement & displacement norm as edge features
         """
-        row, col = graph.edges()
-        disp = torch.tensor(pos[row.long()] - pos[col.long()])
+        row, col = graph.edge_index
+        disp = torch.tensor(pos[row] - pos[col])
         disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
-        graph.edata["x"] = torch.cat((disp, disp_norm), dim=1)
+        graph.edge_attr = torch.cat((disp, disp_norm), dim=1)
         return graph
 
     @staticmethod
@@ -342,11 +327,11 @@ class VortexSheddingDataset(DGLDataset):
     def normalize_edge(graph, mu, std):
         """normalizes a tensor"""
         if (
-            graph.edata["x"].size()[-1] != mu.size()[-1]
-            or graph.edata["x"].size()[-1] != std.size()[-1]
+            graph.edge_attr.size()[-1] != mu.size()[-1]
+            or graph.edge_attr.size()[-1] != std.size()[-1]
         ):
             raise AssertionError("Graph edge data must be same size as stats.")
-        return (graph.edata["x"] - mu) / std
+        return (graph.edge_attr - mu) / std
 
     @staticmethod
     def denormalize(invar, mu, std):

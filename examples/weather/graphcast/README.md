@@ -14,17 +14,60 @@ providing approximately 25 x 25 kilometer resolution at the equator.
 ## Dataset
 
 The model is trained on a 73-channel subset of the ERA5 reanalysis data on single levels
-and pressure levels that are pre-processed and stored into HDF5 files.
-Additional static channels such as land-sea mask and geopotential,
-and the cosine zenith
-angle are also used.
-The ERA5 dataset can be downloaded [here](https://cds.climate.copernicus.eu/cdsapp#!/dataset/reanalysis-era5-single-levels?tab=overview).
+and pressure levels. You can obtain the data in two ways:
+
+### Option 1: Download using ERA5 Downloader (Recommended)
+
+You can download the ERA5 data directly using the ERA5 downloader provided in the
+`dataset_download` example. This gives you more control over the variables and time
+period you want to download.
+
+1. First, ensure you have set up your CDS API key as described in the
+`dataset_download` README.
+
+2. Use the provided configuration file or create your own:
+
+```bash
+python dataset_download/start_mirror.py --config-name="config_34var.yaml"
+```
+
+The downloaded data will be organized as follows:
+
+```bash
+├── data_dir
+    ├── train/
+    │   ├── 1980.h5
+    │   ├── 1981.h5
+    │   └── ...
+    ├── test/
+    │   ├── 2017.h5
+    │   └── ...
+    ├── out_of_sample/
+    │   └── 2018.h5
+    └── stats/
+        ├── global_means.npy
+        └── global_stds.npy
+```
+
+Each HDF5 file contains:
+
+- Data shape: (time_steps, channels, latitude, longitude)
+- Latitude: 721 points (-90° to 90°)
+- Longitude: 1440 points (-180° to 180°)
+- Channels: One per variable/pressure level combination
+
+### Option 2: Download from NERSC via Globus
+
 A curated 20-channel subset of the ERA5 training data in HDF5 format is hosted at the
 National Energy Research Scientific Computing Center (NERSC). For convenience
 [it is available to all via Globus](https://app.globus.org/file-manager?origin_id=945b3c9e-0f8c-11ed-8daf-9f359c660fbd&origin_path=%2F~%2Fdata%2F).
 You will need a Globus account and will need to be logged in to your account in order
-to access the data.  You may also need the [Globus Connect](https://www.globus.org/globus-connect)
+to access the data. You may also need the [Globus Connect](https://www.globus.org/globus-connect)
 to transfer data.
+
+Note: While this pre-curated dataset is convenient, it contains fewer channels than
+the full GraphCast model uses. For the complete model implementation, we recommend
+using Option 1 to download the full set of required variables.
 
 ## Model overview and architecture
 
@@ -38,8 +81,8 @@ within the data on a multi-scale mesh representing the Earth. This mesh, typical
 icosahedron, incorporates edges of varying scales,
 enabling the model to effectively learn atmospheric processes across diverse spatial
 extents from large-scale
-pressure systems to localized wind patterns. Finally, the decoder translates the processed
-information into a future weather forecast.
+pressure systems to localized wind patterns. Finally, the decoder translates the
+processed information into a future weather forecast.
 This GNN-based approach deviates from conventional grid-structured models, offering a more
 flexible framework for modeling intricate
 interactions between geographically separated atmospheric variables.
@@ -51,6 +94,23 @@ the model architecture. The above image is taken from the reference paper.
 
 ## Getting Started
 
+### Installation
+
+1. Install PhysicsNeMo with required extras:
+
+    ```bash
+    # If installing from the PhysicsNeMo repository
+    pip install .[launch]
+    ```
+
+2. Install additional dependencies:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+### Training
+
 To train the model on a single GPU, run
 
 ```bash
@@ -60,8 +120,8 @@ python train_graphcast.py
 This will launch a GraphCast training with up to 12 steps of fine-tuning using the base
 configs specified in the `config.yaml` file.
 
-Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU training using
-MPI, run:
+Data parallelism is also supported with multi-GPU runs. To launch a multi-GPU training
+using MPI, run:
 
 ```bash
 mpirun -np <num_GPUs> --allow-run-as-root python train_graphcast.py
@@ -73,7 +133,8 @@ To launch a multi-GPU training using torchrun, run:
 torchrun --standalone --nnodes=<num_nodes> --nproc_per_node=<num_GPUs> python train_graphcast.py
 ```
 
-To try out GraphCast without access to the ERA5 dataset, you can simply use a synthetic dataset:
+To try out GraphCast without access to the ERA5 dataset, you can simply use a
+synthetic dataset:
 
 ```bash
 python train_graphcast.py synthetic_dataset=true
@@ -82,8 +143,8 @@ python train_graphcast.py synthetic_dataset=true
 We suggest setting `num_samples_per_year_train` to a small number when using the
 synthetic dataset for better performance and avoiding OOM errors.
 
-Progress and loss logs can be monitored using Weights & Biases. This requires to have an
-active Weights & Biases account. You also need to provide your API key. There are
+Progress and loss logs can be monitored using Weights & Biases. This requires to have
+an active Weights & Biases account. You also need to provide your API key. There are
 multiple ways for providing the API key but you can simply export it as an environment
 variable
 
@@ -107,8 +168,8 @@ python train_graphcast.py wb_mode=disabled
 
 ## Performance and memory optimizations
 
-This re-implementation of GraphCast offers several optimizations to improve performance and
-reduce the memory overhead, including
+This re-implementation of GraphCast offers several optimizations to improve
+performance and reduce the memory overhead, including
 
 - [Gradient checkpointing](https://pytorch.org/docs/stable/checkpoint.html): Gradient
 checkpointing is a memory-saving technique used in

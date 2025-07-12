@@ -9,8 +9,8 @@ from physicsnemo.models.fno.fno import FNO
 # [imports]
 
 # [code]
-normaliser = {
-    "permeability": (1.25, 0.75),
+normaliser = { # Dictionary with mean and std of the permeability and darcy fields
+    "permeability": (1.25, 0.75), 
     "darcy": (4.52e-2, 2.79e-2),
 }
 dataloader = Darcy2D(
@@ -34,11 +34,12 @@ scheduler = torch.optim.lr_scheduler.LambdaLR(
 )
 
 # run for 20 iterations
+dataloader = iter(dataloader)
 for i in range(20):
-    batch = next(iter(dataloader))
-    true = batch["darcy"]
+    batch = next(dataloader)
+    truth = batch["darcy"]
     pred = model(batch["permeability"])
-    loss = mse(pred, true)
+    loss = mse(pred, truth)
     loss.backward()
     optimizer.step()
     scheduler.step()

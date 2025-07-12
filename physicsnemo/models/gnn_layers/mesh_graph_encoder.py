@@ -14,15 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Tuple, Union
+from typing import Tuple
 
 import torch
 import torch.nn as nn
-from dgl import DGLGraph
 from torch import Tensor
 
 from .mesh_graph_mlp import MeshGraphEdgeMLPConcat, MeshGraphEdgeMLPSum, MeshGraphMLP
-from .utils import CuGraphCSC, aggregate_and_concat
+from .utils import GraphType, aggregate_and_concat
 
 
 class MeshGraphEncoder(nn.Module):
@@ -124,7 +123,7 @@ class MeshGraphEncoder(nn.Module):
         g2m_efeat: Tensor,
         grid_nfeat: Tensor,
         mesh_nfeat: Tensor,
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tuple[Tensor, Tensor]:
         # update edge features by concatenating node features (both mesh and grid) and existing edge featues
         # (or applying the concat trick instead)

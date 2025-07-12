@@ -82,6 +82,15 @@ in the hiddenl layers of each part of the network, and 16 neurons for the output
 layers of encoder and processor. This slight change in architecture does not
 influences the performance of the network dramatically.
 
+## Prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
+```
+
 ## Getting Started
 
 To download the dataset (the vtp simulation files):

@@ -843,7 +843,7 @@ class DoMINODataPipe(Dataset):
                 mesh_indices_flattened,
                 grid_reshaped,
                 use_sign_winding_number=True,
-            ).reshape(nx, ny, nz)
+            ).reshape((nx, ny, nz))
 
             if self.config.sampling:
                 volume_coordinates_sampled, idx_volume = shuffle_array(
@@ -1418,6 +1418,13 @@ def create_domino_dataset(
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
         )
     else:
+        overrides = {}
+        if hasattr(cfg.data, "gpu_preprocessing"):
+            overrides["gpu_preprocessing"] = cfg.data.gpu_preprocessing
+
+        if hasattr(cfg.data, "gpu_output"):
+            overrides["gpu_output"] = cfg.data.gpu_output
+
         return DoMINODataPipe(
             input_path,
             phase=phase,
@@ -1441,6 +1448,7 @@ def create_domino_dataset(
             resample_surfaces=cfg.model.resampling_surface_mesh.resample,
             resampling_points=cfg.model.resampling_surface_mesh.points,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
+            **overrides,
         )
 
 

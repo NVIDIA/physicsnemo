@@ -88,7 +88,7 @@ def test_capture_training(
         if optimizers:
             optim = optimizers.FusedAdam(model.parameters(), lr=0.001)
         else:
-            logger.warn("Apex not installed, skipping fused Adam tests")
+            logger.warning("Apex not installed, skipping fused Adam tests")
             return
 
     # Create training step function with optimization wrapper
@@ -152,7 +152,7 @@ def test_capture_training_meta(
         if optimizers:
             optim = optimizers.FusedAdam(model.parameters(), lr=0.001)
         else:
-            logger.warn("Apex not installed, skipping fused Adam tests")
+            logger.warning("Apex not installed, skipping fused Adam tests")
             return
 
     # Test control via meta data

@@ -182,8 +182,8 @@ def test_voriticity_residual_method():
     assert xt.size() == dx_t.size()
 
 
-def test_EDMPrecondSuperResolution_amp_mode():
-    """Test EDMPrecondSuperResolution amp_mode property"""
+def test_EDMPrecondSuperResolution_properties():
+    """Test EDMPrecondSuperResolution amp_mode and profile_mode properties"""
 
     res, cin, cout = 8, 1, 1
     model = EDMPrecondSuperResolution(
@@ -213,6 +213,25 @@ def test_EDMPrecondSuperResolution_amp_mode():
     for sub in model.model.modules():
         if hasattr(sub, "amp_mode"):
             assert sub.amp_mode is False
+
+    # Do the same for profile_mode
+    # Enable profile_mode and verify propagation
+    model.profile_mode = True
+    assert model.profile_mode is True
+    if hasattr(model.model, "profile_mode"):
+        assert model.model.profile_mode is True
+    for sub in model.model.modules():
+        if hasattr(sub, "profile_mode"):
+            assert sub.profile_mode is True
+
+    # Disable again and verify
+    model.profile_mode = False
+    assert model.profile_mode is False
+    if hasattr(model.model, "profile_mode"):
+        assert model.model.profile_mode is False
+    for sub in model.model.modules():
+        if hasattr(sub, "profile_mode"):
+            assert sub.profile_mode is False
 
 
 def test_EDMPrecondSR_forward():

@@ -14,11 +14,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from types import NoneType
+from typing import Iterable, List, Optional, TypeAlias
 
-from dgl import DGLGraph
 from torch import Tensor
+
+try:
+    import dgl  # noqa: F401 for docs
+    from dgl import DGLGraph
+
+    warnings.warn(
+        "DGL version of MeshGraphNet will soon be deprecated. "
+        "Please use PyG version instead.",
+        DeprecationWarning,
+    )
+except ImportError:
+    warnings.warn(
+        "Note: This only applies if you're using DGL.\n"
+        "MeshGraphNet (DGL version) requires the DGL library.\n"
+        "Install it with your preferred CUDA version from:\n"
+        "https://www.dgl.ai/pages/start.html\n"
+    )
+    DGLGraph: TypeAlias = NoneType
 
 from physicsnemo.models.gnn_layers.bsms import BistrideGraphMessagePassing
 from physicsnemo.models.meshgraphnet import MeshGraphNet
