@@ -14,15 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
-
 import torch
 import torch.nn as nn
-from dgl import DGLGraph
 from torch import Tensor
 
 from .mesh_graph_mlp import MeshGraphEdgeMLPConcat, MeshGraphEdgeMLPSum, MeshGraphMLP
-from .utils import CuGraphCSC, aggregate_and_concat
+from .utils import GraphType, aggregate_and_concat
 
 
 class MeshGraphDecoder(nn.Module):
@@ -110,7 +107,7 @@ class MeshGraphDecoder(nn.Module):
         m2g_efeat: Tensor,
         grid_nfeat: Tensor,
         mesh_nfeat: Tensor,
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         # update edge features
         efeat = self.edge_mlp(m2g_efeat, (mesh_nfeat, grid_nfeat), graph)

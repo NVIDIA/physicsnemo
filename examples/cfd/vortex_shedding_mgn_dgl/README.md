@@ -1,5 +1,12 @@
 # MeshGraphNet for transient vortex shedding
 
+> [!IMPORTANT]
+> Deprecation Notice
+>
+> Over the next 2-3 releases, DGL-based functionality will be phased out and replaced
+> by equivalent or improved implementations using PyTorch Geometric (PyG).
+> PyG will become the default and only supported graph backend.
+
 This example is a re-implementation of the DeepMind's vortex shedding example
 <https://github.com/deepmind/deepmind-research/tree/master/meshgraphnets> in PyTorch.
 It demonstrates how to train a Graph Neural Network (GNN) for evaluation of the
@@ -46,7 +53,7 @@ simulation time span and extrapolate in time. However, the accuracy of the predi
 might degrade over time and if possible, extrapolation should be avoided unless
 the underlying data patterns remain stationary and consistent.
 
-The model uses the input mesh to construct a bi-directional graph for each sample.
+The model uses the input mesh to construct a bi-directional DGL graph for each sample.
 The node features include (6 in total):
 
 - Velocity components at time step $t$, i.e., $u_t$, $v_t$
@@ -84,6 +91,7 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 ```
 
 ## Getting Started
