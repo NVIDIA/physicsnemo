@@ -915,8 +915,13 @@ class SongUNetPosEmbd(SongUNet):
         r"""Select positional embeddings using global indices.
 
         This method uses global indices to select specific subset of the
-        positional embedding grid (called *patches*). If no indices are provided,
-        the entire positional embedding grid is returned.
+        positional embedding grid and/or the lead-time embedding grid (called
+        *patches*). If no indices are provided, the entire embedding grid is returned.
+        The positional embedding grid is returned if `N_grid_channels > 0`, while
+        the lead-time embedding grid is returned if `lead_time_mode == True`. If
+        both positional and lead-time embedding are enabled, both are returned
+        (concatenated). If neither is enabled, this function should not be called;
+        doing so will raise a ValueError.
 
         Parameters
         ----------
@@ -1119,13 +1124,21 @@ class SongUNetPosEmbd(SongUNet):
         if (self.pos_embd is not None) and (x.dtype != self.pos_embd.dtype):
             self.pos_embd = self.pos_embd.to(x.dtype)
 
-        if lead_time_label is not None:
+        if self.pos_embd is not None and lead_time_label is not None:
+            # both positional and lead-time embedding
             # all patches share same lead_time_label
             embeddings = torch.cat(
                 [self.pos_embd, self.lt_embd[lead_time_label[0].int()]]
             )
-        else:
+        elif self.pos_embd is None:  # positional embedding only
             embeddings = self.pos_embd
+        elif lead_time_label is None:  # lead time embedding only
+            embeddings = self.lt_embd[lead_time_label[0].int()]
+        else:
+            raise ValueError(
+                "`positional_embedding_selector` should not be called when neither lead-time nor positional embeddings are used."
+            )
+
         return embedding_selector(embeddings)  # (B, N_pe, H, W)
 
     def _get_positional_embedding(self):
