@@ -482,7 +482,9 @@ def main(cfg: DictConfig) -> None:
     gpu_handle = nvmlDeviceGetHandleByIndex(dist.device.index)
 
     compute_scaling_factors(
-        cfg, cfg.data_processor.output_dir, use_cache=cfg.data_processor.use_cache
+        cfg=cfg,
+        input_path=cfg.data_processor.output_dir,
+        use_cache=cfg.data_processor.use_cache,
     )
     model_type = cfg.model.model_type
 
