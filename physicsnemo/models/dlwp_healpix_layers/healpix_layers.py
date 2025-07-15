@@ -37,17 +37,18 @@ Details on the HEALPix can be found at https://iopscience.iop.org/article/10.108
 
 """
 
-import sys
+import warnings
 
 import torch
 import torch as th
 
-sys.path.append("/home/disk/quicksilver/nacc/dlesm/HealPixPad")
 have_healpixpad = True
 try:
-    from healpixpad import HEALPixPad
+    from earth2grid.healpix._padding import pad as hpx_pad
 except ImportError:
-    print("Warning, cannot find healpixpad module")
+    warnings.warn(
+        "Cannot find earth2grid HEALPix padding op, falling back to slower implementation. Install earth2grid to use faster implementation: https://github.com/NVlabs/earth2grid.git"
+    )
     have_healpixpad = False
 
 
@@ -151,7 +152,7 @@ class HEALPixPaddingv2(th.nn.Module):
         super().__init__()
         self.unfold = HEALPixUnfoldFaces(num_faces=12)
         self.fold = HEALPixFoldFaces()
-        self.padding = HEALPixPad(padding=padding)
+        self.padding = padding
 
     def forward(self, x):  # pragma: no cover
         """
@@ -171,7 +172,7 @@ class HEALPixPaddingv2(th.nn.Module):
         torch.cuda.nvtx.range_push("HEALPixPaddingv2:forward")
 
         x = self.unfold(x)
-        xp = self.padding(x)
+        xp = hpx_pad(x, self.padding)
         xp = self.fold(xp)
 
         torch.cuda.nvtx.range_pop()
