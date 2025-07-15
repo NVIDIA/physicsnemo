@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Existing DGL-based vortex shedding example has been renamed to `vortex_shedding_mgn_dgl`.
   Added new `vortex_shedding_mgn` example that uses PyTorch Geometric instead.
 - HEALPixLayer can now use earth2grid HEALPix padding ops, if desired
+- Migrated Vortex Shedding Reduced Mesh example to PyTorch Geometric.
 
 ### Deprecated
 
