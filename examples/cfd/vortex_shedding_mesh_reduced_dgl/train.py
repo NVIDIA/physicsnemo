@@ -14,22 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import os
 import time
 
 import numpy as np
 import torch
 import wandb as wb
-
-from torch_geometric.loader import DataLoader as PyGDataLoader
-
-from torch.amp import GradScaler, autocast
-from torch.utils.data.distributed import DistributedSampler
+from dgl.dataloading import GraphDataLoader
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from constants import Constants
-from physicsnemo.datapipes.gnn.vortex_shedding_re300_1000_dataset import (
+from physicsnemo.datapipes.gnn.vortex_shedding_re300_1000_dataset_dgl import (
     VortexSheddingRe300To1000Dataset,
 )
 from physicsnemo.distributed.manager import DistributedManager
@@ -43,8 +39,6 @@ from physicsnemo.models.mesh_reduced.mesh_reduced import Mesh_Reduced
 
 C = Constants()
 
-logging.basicConfig(level=logging.INFO)
-
 
 class Mesh_ReducedTrainer:
     def __init__(self, wb, dist, rank_zero_logger):
@@ -57,27 +51,22 @@ class Mesh_ReducedTrainer:
             name="vortex_shedding_train", split="test"
         )
 
-        sampler = DistributedSampler(
-            dataset_train,
-            shuffle=True,
-            drop_last=True,
-            num_replicas=dist.world_size,
-            rank=dist.rank,
-        )
-
-        self.dataloader = PyGDataLoader(
+        self.dataloader = GraphDataLoader(
             dataset_train,
             batch_size=C.batch_size,
-            sampler=sampler,
+            shuffle=True,
+            drop_last=True,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
 
-        self.dataloader_test = PyGDataLoader(
+        self.dataloader_test = GraphDataLoader(
             dataset_test,
             batch_size=C.batch_size,
             shuffle=False,
             drop_last=False,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
 
         self.model = Mesh_Reduced(
@@ -115,18 +104,18 @@ class Mesh_ReducedTrainer:
         )
 
     def forward(self, graph, position_mesh, position_pivotal):
-        with autocast("cuda", enabled=C.amp):
+        with autocast(enabled=C.amp):
             z = self.model.encode(
-                graph.x,
-                graph.edge_attr,
+                graph.ndata["x"],
+                graph.edata["x"],
                 graph,
                 position_mesh,
                 position_pivotal,
             )
             x = self.model.decode(
-                z, graph.edge_attr, graph, position_mesh, position_pivotal
+                z, graph.edata["x"], graph, position_mesh, position_pivotal
             )
-            loss = self.criterion(x, graph.x)
+            loss = self.criterion(x, graph.ndata["x"])
             return loss
 
     def train(self, graph, position_mesh, position_pivotal):
@@ -140,25 +129,30 @@ class Mesh_ReducedTrainer:
     @torch.no_grad()
     def test(self, graph, position_mesh, position_pivotal):
         graph = graph.to(self.dist.device)
-        with autocast("cuda", enabled=C.amp):
+        with autocast(enabled=C.amp):
             z = self.model.encode(
-                graph.x,
-                graph.edge_attr,
+                graph.ndata["x"],
+                graph.edata["x"],
                 graph,
                 position_mesh,
                 position_pivotal,
             )
             x = self.model.decode(
-                z, graph.edge_attr, graph, position_mesh, position_pivotal
+                z, graph.edata["x"], graph, position_mesh, position_pivotal
             )
-            loss = self.criterion(x, graph.x)
+            loss = self.criterion(x, graph.ndata["x"])
 
-            relative_error = loss / self.criterion(graph.x, graph.x * 0.0).detach()
+            relative_error = (
+                loss / self.criterion(graph.ndata["x"], graph.ndata["x"] * 0.0).detach()
+            )
             relative_error_s_record = []
             for i in range(C.num_input_features):
-                loss_s = self.criterion(x[:, i], graph.x[:, i])
+                loss_s = self.criterion(x[:, i], graph.ndata["x"][:, i])
                 relative_error_s = (
-                    loss_s / self.criterion(graph.x[:, i], graph.x[:, i] * 0.0).detach()
+                    loss_s
+                    / self.criterion(
+                        graph.ndata["x"][:, i], graph.ndata["x"][:, i] * 0.0
+                    ).detach()
                 )
                 relative_error_s_record.append(relative_error_s)
 
