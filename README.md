@@ -91,7 +91,8 @@ to their unique exploration needs.
   to enable CFD domain experts to explore, experiment and validate using pretrained
   AI models for CFD use cases.
 - [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator): Inference sub-module
-  of PhysicsNeMo to streamline and accelerate the process of data curation for engineering datasets.
+  of PhysicsNeMo to streamline and accelerate the process of data curation for engineering
+  datasets.
 - [Earth-2 Studio](https://github.com/NVIDIA/earth2studio): Inference sub-module of PhysicsNeMo
   to enable climate researchers and scientists to explore and experiment with pretrained
   AI models for weather and climate.
