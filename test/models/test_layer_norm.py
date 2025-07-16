@@ -14,15 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-import importlib
-import torch
-import tempfile
-import pytest
-import importlib.util
 import builtins
-from pytest_utils import import_or_fail
+import importlib
+import importlib.util
+import sys
+import tempfile
 from dataclasses import dataclass
+
+import pytest
+import torch
+from pytest_utils import import_or_fail
 
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meta import ModelMetaData
@@ -30,11 +31,13 @@ from physicsnemo.models.module import Module
 
 LAYER_NORM_PATH = "physicsnemo.models.layers.layer_norm"
 
+
 def reload_layer_norm():
     """Reload the layer_norm module to re-evaluate TE availability and env vars."""
     if LAYER_NORM_PATH in sys.modules:
         del sys.modules[LAYER_NORM_PATH]
     return importlib.import_module(LAYER_NORM_PATH)
+
 
 def test_torch_fallback(monkeypatch):
     """
@@ -50,7 +53,9 @@ def test_torch_fallback(monkeypatch):
     orig_import = builtins.__import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "transformer_engine.pytorch" or name.startswith("transformer_engine.pytorch"):
+        if name == "transformer_engine.pytorch" or name.startswith(
+            "transformer_engine.pytorch"
+        ):
             raise ImportError("Simulated missing transformer_engine.pytorch")
         return orig_import(name, *args, **kwargs)
 
@@ -62,27 +67,35 @@ def test_torch_fallback(monkeypatch):
 
 
 @import_or_fail(["transformer_engine"])
-@pytest.mark.parametrize("force_val,expected_type", [
-    ("true", "te"),
-    ("1", "te"),
-    ("false", "torch"),
-    ("0", "torch"),
-])
+@pytest.mark.parametrize(
+    "force_val,expected_type",
+    [
+        ("true", "te"),
+        ("1", "te"),
+        ("false", "torch"),
+        ("0", "torch"),
+    ],
+)
 def test_force_env(monkeypatch, force_val, expected_type, pytestconfig):
-
 
     monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", force_val)
     layer_norm = reload_layer_norm()
     ln = layer_norm.LayerNorm(8)
     if expected_type == "te":
-        import transformer_engine.pytorch as te # noqa: F401
+        import transformer_engine.pytorch as te  # noqa: F401
+
         assert ln.use_te
         assert isinstance(ln.norm, te.LayerNorm)
     else:
         assert isinstance(ln.norm, torch.nn.LayerNorm) and not ln.use_te
 
 
-@pytest.mark.parametrize("order", [0,])
+@pytest.mark.parametrize(
+    "order",
+    [
+        0,
+    ],
+)
 def test_serialization(order, monkeypatch, pytestconfig):
     """
     This test checks that the LayerNorm class can be serialized and deserialized
@@ -95,31 +108,29 @@ def test_serialization(order, monkeypatch, pytestconfig):
         name = "FakeModel"
 
     class FakeModel(Module):
-        
         def __init__(self):
             super().__init__(meta=FakeModelMetaData())
             self.ln = layer_norm.LayerNorm(8)
-        
+
         def forward(self, x):
             return self.ln(x)
-    
 
     # Control the order of swapping
     if order == 1:
-        first = "false" # force pytorch
-        second = "true" # force te
+        first = "false"  # force pytorch
+        second = "true"  # force te
     else:
-        first = "true" # force te
-        second = "false" # force pytorch
+        first = "true"  # force te
+        second = "false"  # force pytorch
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        
+
         # Force to use pytorch
         monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", first)
         layer_norm = reload_layer_norm()
         ln = FakeModel()
         print(ln.state_dict().keys())
-        
+
         x = torch.randn(2, 8)
         y = ln(x)
         print(f"Y shape: {y.shape}")
@@ -128,21 +139,20 @@ def test_serialization(order, monkeypatch, pytestconfig):
             "models": ln,
         }
         save_checkpoint(**ckpt_args)
-        
+
         del ln
 
         # Now, reload
         monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", second)
         layer_norm = reload_layer_norm()
-        
+
         ln = FakeModel()
         print(f"new state dict keys: {ln.state_dict().keys()}")
         ckpt_args = {
             "path": tmpdir + "/checkpoints",
             "models": ln,
         }
-        epoch = load_checkpoint(**ckpt_args)
+        load_checkpoint(**ckpt_args)
         y_te = ln(x)
 
         assert torch.allclose(y, y_te)
-
