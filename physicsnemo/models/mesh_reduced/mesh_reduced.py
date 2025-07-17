@@ -14,8 +14,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
+from types import NoneType
+from typing import TypeAlias
+
+try:
+    from dgl import DGLGraph
+except ImportError:
+    warnings.warn(
+        "Note: This only applies if you're using DGL.\n"
+        "MeshGraphNet (DGL version) requires the DGL library.\n"
+        "Install it with your preferred CUDA version from:\n"
+        "https://www.dgl.ai/pages/start.html\n"
+    )
+
+    DGLGraph: TypeAlias = NoneType
+
 import torch
 import torch_cluster
+import torch_geometric as pyg
 import torch_scatter
 
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNet
@@ -32,7 +49,7 @@ class Mesh_Reduced(torch.nn.Module):
     output_decode_dim: int
         Number of decoding outputs (per node)
     output_encode_dim: int, optional
-        Number of encoding outputs (per pivotal postion),  by default 3
+        Number of encoding outputs (per pivotal position),  by default 3
     processor_size : int, optional
         Number of message passing blocks, by default 15
     num_layers_node_processor : int, optional
@@ -54,7 +71,7 @@ class Mesh_Reduced(torch.nn.Module):
     num_layers_node_decoder : int, optional
         Number of MLP layers for the node feature decoder, by default 2
     k: int, optional
-        Number of nodes considered for per pivotal postion, by default 3
+        Number of nodes considered for per pivotal position, by default 3
     aggregation: str, optional
         Message aggregation type, by default "mean"
     Note
@@ -160,7 +177,12 @@ class Mesh_Reduced(torch.nn.Module):
         x = self.encoder_processor(x, edge_features, graph)
         x = self.PivotalNorm(x)
         nodes_index = torch.arange(graph.batch_size).to(x.device)
-        batch_mesh = nodes_index.repeat_interleave(graph.batch_num_nodes())
+        if isinstance(graph, DGLGraph):
+            batch_mesh = nodes_index.repeat_interleave(graph.batch_num_nodes())
+        elif isinstance(graph, pyg.data.Data):
+            batch_mesh = graph.batch
+        else:
+            raise ValueError(f"Unsupported graph type: {type(graph)}")
         position_mesh_batch = position_mesh.repeat(graph.batch_size, 1)
         position_pivotal_batch = position_pivotal.repeat(graph.batch_size, 1)
         batch_pivotal = nodes_index.repeat_interleave(
@@ -180,7 +202,12 @@ class Mesh_Reduced(torch.nn.Module):
     def decode(self, x, edge_features, graph, position_mesh, position_pivotal):
 
         nodes_index = torch.arange(graph.batch_size).to(x.device)
-        batch_mesh = nodes_index.repeat_interleave(graph.batch_num_nodes())
+        if isinstance(graph, DGLGraph):
+            batch_mesh = nodes_index.repeat_interleave(graph.batch_num_nodes())
+        elif isinstance(graph, pyg.data.Data):
+            batch_mesh = graph.batch
+        else:
+            raise ValueError(f"Unsupported graph type: {type(graph)}")
         position_mesh_batch = position_mesh.repeat(graph.batch_size, 1)
         position_pivotal_batch = position_pivotal.repeat(graph.batch_size, 1)
         batch_pivotal = nodes_index.repeat_interleave(

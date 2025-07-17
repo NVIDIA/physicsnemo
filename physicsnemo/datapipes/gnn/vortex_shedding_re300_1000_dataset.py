@@ -16,17 +16,17 @@
 
 import os
 
-import dgl
 import numpy as np
 import torch
-from dgl.data import DGLDataset
-from dgl.dataloading import GraphDataLoader
+import torch_geometric as pyg
+from torch.utils.data import Dataset
+from torch_geometric.loader import DataLoader as PyGDataLoader
 from tqdm import tqdm
 
 from .utils import load_json, save_json
 
 
-class LatentDataset(DGLDataset):
+class LatentDataset(Dataset):
     """In-memory Mesh-Reduced-Transformer Dataset in the latent space.
     Notes:
         - Set produce_latents = True when first use this dataset.
@@ -40,13 +40,13 @@ class LatentDataset(DGLDataset):
     split : str, optional
         Dataset split ["train", "eval", "test"], by default "train"
     produce_latents : bool, optional
-        Specifying whether to use the trained Encoder to compress the graph into latent space and save the restuls, by default True
-    Encoder: torch.nn.Module, optioanl
+        Specifying whether to use the trained Encoder to compress the graph into latent space and save the results, by default True
+    Encoder: torch.nn.Module, optional
         The trained model used for encoding, by default None
-    position_mesh: torch.Tensor, optioanl
-        The postions for all meshes, by default None
-    position_pivotal: torch.Tensor, optioanl
-        The postions for all pivotal positions+
+    position_mesh: torch.Tensor, optional
+        The positions for all meshes, by default None
+    position_pivotal: torch.Tensor, optional
+        The positions for all pivotal positions+
         , by default None
     verbose : bool, optional
         verbose, by default False
@@ -63,12 +63,8 @@ class LatentDataset(DGLDataset):
         position_mesh=None,
         position_pivotal=None,
         dist=None,
-        verbose=False,
     ):
-        super().__init__(
-            name=name,
-            verbose=verbose,
-        )
+        self.name = name
         self.split = split
         self.sequence_len = sequence_len
         self.data_dir = data_dir
@@ -117,15 +113,15 @@ class LatentDataset(DGLDataset):
                 name="vortex_shedding_train", split="test"
             )
 
-        dataloader = GraphDataLoader(
+        dataloader = PyGDataLoader(
             dataset, batch_size=1, shuffle=False, drop_last=False, pin_memory=True
         )
         record_z = []
         for graph in tqdm(dataloader):
             graph = graph.to(dist.device)
             z = Encoder.encode(
-                graph.ndata["x"],
-                graph.edata["x"],
+                graph.x,
+                graph.edge_attr,
                 graph,
                 position_mesh,
                 position_pivotal,
@@ -136,7 +132,7 @@ class LatentDataset(DGLDataset):
         torch.save(record_z, "{}/latent_{}.pt".format(self.data_dir, self.split))
 
 
-class VortexSheddingRe300To1000Dataset(DGLDataset):
+class VortexSheddingRe300To1000Dataset(Dataset):
     """In-memory Mesh-Reduced-Transformer Dataset for stationary mesh.
     Notes:
         - A single adj matrix is used for each transient simulation.
@@ -154,14 +150,8 @@ class VortexSheddingRe300To1000Dataset(DGLDataset):
         verbose, by default False
     """
 
-    def __init__(
-        self, name="dataset", data_dir="dataset", split="train", verbose=False
-    ):
-
-        super().__init__(
-            name=name,
-            verbose=verbose,
-        )
+    def __init__(self, name="dataset", data_dir="dataset", split="train"):
+        self.name = name
         self.data_dir = data_dir
 
         self.split = split
@@ -222,10 +212,9 @@ class VortexSheddingRe300To1000Dataset(DGLDataset):
 
         node_features = self.solution_states[sidx, tidx]
         node_targets = self.solution_states[sidx, tidx]
-        graph = dgl.graph((self.A[0], self.A[1]), num_nodes=self.num_nodes)
-        graph.ndata["x"] = node_features
-        graph.ndata["y"] = node_targets
-        graph.edata["x"] = self.E
+        graph = pyg.data.Data(
+            x=node_features, y=node_targets, edge_attr=self.E, edge_index=self.A
+        )
         return graph
 
     def _get_edge_stats(self):

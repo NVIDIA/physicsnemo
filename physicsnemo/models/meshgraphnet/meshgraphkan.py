@@ -14,7 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from contextlib import nullcontext
+from dataclasses import dataclass
+from itertools import chain
+from types import NoneType
+from typing import Callable, List, Tuple, TypeAlias, Union
 
 import torch
 import torch.nn as nn
@@ -23,14 +28,21 @@ from torch import Tensor
 try:
     import dgl  # noqa: F401 for docs
     from dgl import DGLGraph
-except ImportError:
-    raise ImportError(
-        "Mesh Graph Net requires the DGL library. Install the "
-        + "desired CUDA version at: \n https://www.dgl.ai/pages/start.html"
+
+    warnings.warn(
+        "DGL version of MeshGraphNet will soon be deprecated. "
+        "Please use PyG version instead.",
+        DeprecationWarning,
     )
-from dataclasses import dataclass
-from itertools import chain
-from typing import Callable, List, Tuple, Union
+except ImportError:
+    warnings.warn(
+        "Note: This only applies if you're using DGL.\n"
+        "MeshGraphNet (DGL version) requires the DGL library.\n"
+        "Install it with your preferred CUDA version from:\n"
+        "https://www.dgl.ai/pages/start.html\n"
+    )
+
+    DGLGraph: TypeAlias = NoneType
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock

@@ -347,14 +347,11 @@ def main(cfg: DictConfig) -> None:
             raise FileNotFoundError(
                 f"Expected this regression checkpoint but not found: {regression_checkpoint_path}"
             )
-        reg_model_args = {
-            "use_apex_gn": use_apex_gn,
-            "profile_mode": profile_mode,
-            "amp_mode": enable_amp,
-        }
         regression_net = Module.from_checkpoint(
-            regression_checkpoint_path, reg_model_args
+            regression_checkpoint_path, override_args={"use_apex_gn": use_apex_gn}
         )
+        regression_net.amp_mode = enable_amp
+        regression_net.profile_mode = profile_mode
         regression_net.eval().requires_grad_(False).to(dist.device)
         if use_apex_gn:
             regression_net.to(memory_format=torch.channels_last)

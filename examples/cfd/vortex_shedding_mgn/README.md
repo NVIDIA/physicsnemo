@@ -46,7 +46,7 @@ simulation time span and extrapolate in time. However, the accuracy of the predi
 might degrade over time and if possible, extrapolation should be avoided unless
 the underlying data patterns remain stationary and consistent.
 
-The model uses the input mesh to construct a bi-directional DGL graph for each sample.
+The model uses the input mesh to construct a bi-directional graph for each sample.
 The node features include (6 in total):
 
 - Velocity components at time step $t$, i.e., $u_t$, $v_t$
@@ -84,7 +84,6 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
-pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 ```
 
 ## Getting Started

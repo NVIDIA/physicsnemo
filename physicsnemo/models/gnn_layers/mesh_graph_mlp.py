@@ -19,11 +19,10 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl import DGLGraph
 from torch import Tensor
 from torch.autograd.function import once_differentiable
 
-from .utils import CuGraphCSC, concat_efeat, sum_efeat
+from .utils import GraphType, concat_efeat, sum_efeat
 
 try:
     from transformer_engine import pytorch as te
@@ -268,7 +267,7 @@ class MeshGraphEdgeMLPConcat(MeshGraphMLP):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         efeat = concat_efeat(efeat, nfeat, graph)
         efeat = self.model(efeat)
@@ -388,7 +387,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         """forward pass of the truncated MLP. This uses separate linear layers without
         bias. Bias is added to one MLP, as we sum afterwards. This adds the bias to the
@@ -410,7 +409,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         """Default forward pass of the truncated MLP."""
         mlp_sum = self.forward_truncated_sum(
@@ -425,7 +424,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         """Forward pass of the truncated MLP with custom SiLU function."""
         mlp_sum = self.forward_truncated_sum(
@@ -451,7 +450,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         if self.recompute_activation:
             return self.custom_silu_linear_forward(efeat, nfeat, graph)

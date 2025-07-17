@@ -11,10 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Improved documentation for diffusion models and diffusion utils.
+- Safe API to override `__init__`'s arguments saved in checkpoint file with
+  `Module.from_checkpoint("chkpt.mdlus", models_args)`.
+- PyTorch Geometric MeshGraphNet backend.
 
 ### Changed
 
 - physicsnemo.utils.generative renamed into physicsnemo.utils.diffusion
+- In CorrDiff model wrappers (`EDMPrecondSuperResolution` and `UNet`), the
+  arguments `profile_mode` and `amp_mode` cannot be overriden by
+  `from_checkpoint`. They are now properties that can be dynamically changed
+  *after* the model instantiation.
+- Updated healpix data module to use correct `DistributedSampler` target for
+  test data loader
+- Existing DGL-based vortex shedding example has been renamed to `vortex_shedding_mgn_dgl`.
+  Added new `vortex_shedding_mgn` example that uses PyTorch Geometric instead.
+- HEALPixLayer can now use earth2grid HEALPix padding ops, if desired
+- Migrated Vortex Shedding Reduced Mesh example to PyTorch Geometric.
 
 ### Deprecated
 
@@ -40,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - General purpose patching API for patch-based diffusion
 - New positional embedding selection strategy for CorrDiff SongUNet models
 - Added Multi-Storage Client to allow checkpointing to/from Object Storage
+- Added a new aerodynamics example using DoMINO to compute design sensitivities
+  (e.g., drag adjoint) with respect to underlying input geometry.
 
 ### Changed
 
@@ -64,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   amortizing regression costs
 - Explicit handling of Warp device for ball query and sdf
 - Merged SongUNetPosLtEmb with SongUNetPosEmb, add support for batch>1
-- Add lead time embedding support for `positional_embedding_selector`. Enable  
+- Add lead time embedding support for `positional_embedding_selector`. Enable
 arbitrary positioning of probabilistic variables
 - Enable lead time aware regression without CE loss
 - Bumped minimum PyTorch version from 2.0.0 to 2.4.0, to minimize
