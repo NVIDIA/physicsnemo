@@ -128,10 +128,10 @@ def test_serialization(order, monkeypatch, pytestconfig):
         # Force to use pytorch
         monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", first)
         layer_norm = reload_layer_norm()
-        ln = FakeModel()
+        ln = FakeModel().cuda()
         print(ln.state_dict().keys())
 
-        x = torch.randn(2, 8)
+        x = torch.randn(2, 8).cuda()
         y = ln(x)
         print(f"Y shape: {y.shape}")
         ckpt_args = {
@@ -146,7 +146,8 @@ def test_serialization(order, monkeypatch, pytestconfig):
         monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", second)
         layer_norm = reload_layer_norm()
 
-        ln = FakeModel()
+        ln = FakeModel().cuda()
+
         print(f"new state dict keys: {ln.state_dict().keys()}")
         ckpt_args = {
             "path": tmpdir + "/checkpoints",
