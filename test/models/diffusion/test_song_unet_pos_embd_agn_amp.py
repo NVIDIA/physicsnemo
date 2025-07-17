@@ -59,6 +59,11 @@ def test_song_unet_global_indexing(device):
 
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels, global_index)
+    # Same test but with autocast disabled: should raise an error
+    with pytest.raises(RuntimeError):
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
+            output_image = model(input_image, noise_labels, class_labels, global_index)
+
     pos_embed = model.positional_embedding_indexing(input_image, global_index)
     assert output_image.shape == (1, 2, batch_shape_x, batch_shape_y)
     assert torch.equal(pos_embed, global_index)
@@ -90,6 +95,10 @@ def test_song_unet_constructor(device):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
+    # Same test but with autocast disabled: should raise an error
+    with pytest.raises(RuntimeError):
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
+            output_image = model(input_image, noise_labels, class_labels)
 
     # test rectangular shape
     model = (
@@ -111,6 +120,10 @@ def test_song_unet_constructor(device):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
+    # Same test but with autocast disabled: should raise an error
+    with pytest.raises(RuntimeError):
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
+            output_image = model(input_image, noise_labels, class_labels)
 
 
 @pytest.mark.parametrize("device", ["cuda:0"])
@@ -144,6 +157,10 @@ def test_song_unet_position_embedding(device):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
+    # Same test but with autocast disabled: should raise an error
+    with pytest.raises(RuntimeError):
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
+            output_image = model(input_image, noise_labels, class_labels)
     assert model.pos_embd.shape == (100, img_resolution, img_resolution)
 
     model = (

@@ -44,6 +44,36 @@ if torch.cuda.is_available():
         pass
 
 
+def _validate_amp(amp_mode: bool) -> None:
+    """Raise if `amp_mode` is False but PyTorch autocast (CPU or CUDA) is active.
+
+    Parameters
+    ----------
+    amp_mode : bool
+        Your intended AMP flag. Set False when you require full precision.
+    """
+
+    try:
+        cuda_amp = bool(torch.is_autocast_enabled())
+    except AttributeError:  # very old PyTorch
+        cuda_amp = False
+    try:
+        cpu_amp = bool(torch.is_autocast_cpu_enabled())
+    except AttributeError:
+        cpu_amp = False
+
+    if not amp_mode and (cuda_amp or cpu_amp):
+        active = []
+        if cuda_amp:
+            active.append("cuda")
+        if cpu_amp:
+            active.append("cpu")
+        raise RuntimeError(
+            f"amp_mode=False but torch autocast is enabled on: {', '.join(active)}. "
+            "Disable autocast for this region or set amp_mode=True if mixed precision is intended."
+        )
+
+
 class Linear(torch.nn.Module):
     """
     A fully connected (dense) layer implementation. The layer's weights and biases can
@@ -101,7 +131,7 @@ class Linear(torch.nn.Module):
 
     def forward(self, x):
         weight, bias = self.weight, self.bias
-        # pdb.set_trace()
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if self.weight is not None and self.weight.dtype != x.dtype:
                 weight = self.weight.to(x.dtype)
@@ -216,6 +246,7 @@ class Conv2d(torch.nn.Module):
 
     def forward(self, x):
         weight, bias, resample_filter = self.weight, self.bias, self.resample_filter
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if self.weight is not None and self.weight.dtype != x.dtype:
                 weight = self.weight.to(x.dtype)
@@ -383,6 +414,7 @@ class GroupNorm(torch.nn.Module):
 
     def forward(self, x):
         weight, bias = self.weight, self.bias
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if not self.use_apex_gn:
                 if weight.dtype != x.dtype:
@@ -785,9 +817,10 @@ class UNetBlock(torch.nn.Module):
             orig = x
             x = self.conv0(self.norm0(x))
             params = self.affine(emb).unsqueeze(2).unsqueeze(3)
+            _validate_amp(self.amp_mode)
             if not self.amp_mode:
                 if params.dtype != x.dtype:
-                    params = params.to(x.dtype)
+                    params = params.to(x.dtype)  # type: ignore
 
             if self.adaptive_scale:
                 scale, shift = params.chunk(chunks=2, dim=1)
@@ -926,6 +959,7 @@ class PositionalEmbedding(torch.nn.Module):
         )
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if freqs.dtype != x.dtype:
                 freqs = freqs.to(x.dtype)
@@ -962,6 +996,7 @@ class FourierEmbedding(torch.nn.Module):
 
     def forward(self, x):
         freqs = self.freqs
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if x.dtype != self.freqs.dtype:
                 freqs = self.freqs.to(x.dtype)
