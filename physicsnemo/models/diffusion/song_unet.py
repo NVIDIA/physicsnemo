@@ -324,6 +324,7 @@ class SongUNet(Module):
             profile_mode=profile_mode,
             amp_mode=amp_mode,
         )
+        self.use_apex_gn = use_apex_gn
         self.profile_mode = profile_mode
         self.amp_mode = amp_mode
 
