@@ -59,6 +59,13 @@ variables:
       UMeanTrim: vector
       pMeanTrim: scalar
       nutMeanTrim: scalar
+  global_parameters:
+    inlet_velocity:
+      type: vector
+      reference: [30.0] # vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
+    air_density:
+      type: scalar
+      reference: 1.226
 
 # ┌───────────────────────────────────────────┐
 # │          Training Data Configs            │
@@ -146,7 +153,6 @@ model:
     base_layer: 512
   parameter_model:
     base_layer: 512
-    scaling_params: [30.0, 1.226] # [inlet_velocity, air_density]
     fourier_features: false
     num_modes: 5
 
@@ -163,7 +169,7 @@ train: # Training configurable parameters
     shuffle: true
     drop_last: false
   checkpoint_dir: /user/models/ # Use only for retraining
-  
+
 # ┌───────────────────────────────────────────┐
 # │          Validation Configs               │
 # └───────────────────────────────────────────┘  

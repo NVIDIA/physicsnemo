@@ -14,22 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import os
 import time
 
 import numpy as np
 import torch
 import wandb as wb
-
-from torch_geometric.loader import DataLoader as PyGDataLoader
-
-from torch.amp import GradScaler, autocast
-from torch.utils.data.distributed import DistributedSampler
+from dgl.dataloading import GraphDataLoader
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from constants import Constants
-from physicsnemo.datapipes.gnn.vortex_shedding_re300_1000_dataset import (
+from physicsnemo.datapipes.gnn.vortex_shedding_re300_1000_dataset_dgl import (
     LatentDataset,
     VortexSheddingRe300To1000Dataset,
 )
@@ -44,8 +40,6 @@ from physicsnemo.models.mesh_reduced.mesh_reduced import Mesh_Reduced
 from physicsnemo.models.mesh_reduced.temporal_model import Sequence_Model
 
 C = Constants()
-
-logging.basicConfig(level=logging.INFO)
 
 
 class Sequence_Trainer:
@@ -80,27 +74,22 @@ class Sequence_Trainer:
             dist=dist,
         )
 
-        sampler = DistributedSampler(
-            dataset_train,
-            shuffle=True,
-            drop_last=True,
-            num_replicas=dist.world_size,
-            rank=dist.rank,
-        )
-
-        self.dataloader = PyGDataLoader(
+        self.dataloader = GraphDataLoader(
             dataset_train,
             batch_size=C.batch_size_sequence,
-            sampler=sampler,
+            shuffle=True,
+            drop_last=True,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
 
-        self.dataloader_test = PyGDataLoader(
+        self.dataloader_test = GraphDataLoader(
             dataset_test,
             batch_size=1,
             shuffle=False,
             drop_last=False,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
 
         self.dataset_graph_train = VortexSheddingRe300To1000Dataset(
@@ -111,27 +100,22 @@ class Sequence_Trainer:
             name="vortex_shedding_train", split="test"
         )
 
-        sampler_graph = DistributedSampler(
-            self.dataset_graph_train,
-            shuffle=False,
-            drop_last=False,
-            num_replicas=dist.world_size,
-            rank=dist.rank,
-        )
-
-        self.dataloader_graph = PyGDataLoader(
+        self.dataloader_graph = GraphDataLoader(
             self.dataset_graph_train,
             batch_size=1,
-            sampler=sampler_graph,
+            shuffle=False,
+            drop_last=False,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
 
-        self.dataloader_graph_test = PyGDataLoader(
+        self.dataloader_graph_test = GraphDataLoader(
             self.dataset_graph_test,
             batch_size=1,
             shuffle=False,
             drop_last=False,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
         self.model = Sequence_Model(C.sequence_dim, C.sequence_context_dim, dist)
 
@@ -179,7 +163,7 @@ class Sequence_Trainer:
         self,
         z0,
         context,
-        ground_truth,
+        ground_trueth,
         true_latent,
         encoder,
         graph,
@@ -196,13 +180,13 @@ class Sequence_Trainer:
             z_sample = z_sample.reshape(256, 3)
 
             x_sample = encoder.decode(
-                z_sample, graph.edge_attr, graph, position_mesh, position_pivotal
+                z_sample, graph.edata["x"], graph, position_mesh, position_pivotal
             )
             x_samples.append(x_sample.unsqueeze(0))
         x_samples = torch.cat(x_samples)
         x_samples = self.denormalize(x_samples)
 
-        ground_truth = self.denormalize(ground_truth)
+        ground_trueth = self.denormalize(ground_trueth)
 
         loss_record_u = []
         loss_record_v = []
@@ -210,39 +194,39 @@ class Sequence_Trainer:
 
         for i in range(400):
             loss = self.criterion(
-                ground_truth[i + 1 : i + 2, :, 0], x_samples[i + 1 : i + 2, :, 0]
+                ground_trueth[i + 1 : i + 2, :, 0], x_samples[i + 1 : i + 2, :, 0]
             )
             relative_error = (
                 loss
                 / self.criterion(
-                    ground_truth[i + 1 : i + 2, :, 0],
-                    ground_truth[i + 1 : i + 2, :, 0] * 0.0,
+                    ground_trueth[i + 1 : i + 2, :, 0],
+                    ground_trueth[i + 1 : i + 2, :, 0] * 0.0,
                 ).detach()
             )
             loss_record_u.append(relative_error)
         relative_error_u = torch.mean(torch.tensor(loss_record_u))
         for i in range(400):
             loss = self.criterion(
-                ground_truth[i + 1 : i + 2, :, 1], x_samples[i + 1 : i + 2, :, 1]
+                ground_trueth[i + 1 : i + 2, :, 1], x_samples[i + 1 : i + 2, :, 1]
             )
             relative_error = (
                 loss
                 / self.criterion(
-                    ground_truth[i + 1 : i + 2, :, 1],
-                    ground_truth[i + 1 : i + 2, :, 1] * 0.0,
+                    ground_trueth[i + 1 : i + 2, :, 1],
+                    ground_trueth[i + 1 : i + 2, :, 1] * 0.0,
                 ).detach()
             )
             loss_record_v.append(relative_error)
         relative_error_v = torch.mean(torch.tensor(loss_record_v))
         for i in range(400):
             loss = self.criterion(
-                ground_truth[i + 1 : i + 2, :, 2], x_samples[i + 1 : i + 2, :, 2]
+                ground_trueth[i + 1 : i + 2, :, 2], x_samples[i + 1 : i + 2, :, 2]
             )
             relative_error = (
                 loss
                 / self.criterion(
-                    ground_truth[i + 1 : i + 2, :, 2],
-                    ground_truth[i + 1 : i + 2, :, 2] * 0.0,
+                    ground_trueth[i + 1 : i + 2, :, 2],
+                    ground_trueth[i + 1 : i + 2, :, 2] * 0.0,
                 ).detach()
             )
             loss_record_p.append(relative_error)
@@ -251,7 +235,7 @@ class Sequence_Trainer:
         return x_samples, relative_error_u, relative_error_v, relative_error_p
 
     def forward(self, z, context=None):
-        with autocast("cuda", enabled=C.amp):
+        with autocast(enabled=C.amp):
             prediction = self.model(z, context)
             loss = self.criterion(z[:, 1:], prediction[:, :-1])
             relative_error = torch.sqrt(
