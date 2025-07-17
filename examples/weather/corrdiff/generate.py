@@ -130,19 +130,18 @@ def main(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"Invalid inference mode {cfg.generation.inference_mode}")
 
-    model_args = {
-        "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False),
-        "profile_mode": getattr(cfg.generation.perf, "profile_mode", False),
-        "use_fp16": getattr(cfg.generation.perf, "use_fp16", False),
-    }
-
     # Load diffusion network, move to device, change precision
     if load_net_res:
         res_ckpt_filename = cfg.generation.io.res_ckpt_filename
         logger0.info(f'Loading residual network from "{res_ckpt_filename}"...')
         net_res = Module.from_checkpoint(
-            to_absolute_path(res_ckpt_filename), model_args=model_args
+            to_absolute_path(res_ckpt_filename),
+            override_args={
+                "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False)
+            },
         )
+        net_res.profile_mode = getattr(cfg.generation.perf, "profile_mode", False)
+        net_res.use_fp16 = getattr(cfg.generation.perf, "use_fp16", False)
         net_res = net_res.eval().to(device).to(memory_format=torch.channels_last)
 
         # Disable AMP for inference (even if model is trained with AMP)
@@ -156,8 +155,13 @@ def main(cfg: DictConfig) -> None:
         reg_ckpt_filename = cfg.generation.io.reg_ckpt_filename
         logger0.info(f'Loading network from "{reg_ckpt_filename}"...')
         net_reg = Module.from_checkpoint(
-            to_absolute_path(reg_ckpt_filename), model_args=model_args
+            to_absolute_path(reg_ckpt_filename),
+            override_args={
+                "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False)
+            },
         )
+        net_reg.profile_mode = getattr(cfg.generation.perf, "profile_mode", False)
+        net_reg.use_fp16 = getattr(cfg.generation.perf, "use_fp16", False)
         net_reg = net_reg.eval().to(device).to(memory_format=torch.channels_last)
 
         # Disable AMP for inference (even if model is trained with AMP)
