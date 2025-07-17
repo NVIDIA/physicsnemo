@@ -102,7 +102,7 @@ def test_domino_datapipe(
 
     print(f"sample.keys(): {sample.keys()}")
 
-    keys_to_read_if_available = ["stream_velocity", "air_density"]
+    keys_to_read_if_available = ["global_params_values", "global_params_reference"]
 
     volume_keys = ["volume_mesh_centers", "volume_fields"]
     surface_keys = [
