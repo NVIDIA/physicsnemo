@@ -54,14 +54,21 @@ from physicsnemo.distributed._shard_tensor_spec import (
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.utils.profiling import profile
 
+import threading
+
 
 def get_filenames(data_path: Path, exclude_dirs: bool = True) -> List[str]:
-    """Get list of filenames from data directory."""
+    """Get list of filenames from data directory.
 
+    Args:
+        data_path: Path to the directory containing files.
+        exclude_dirs: If True, exclude directories from the result.
+
+    Returns:
+        Sorted list of filenames with .zarr extension.
+    """
     filenames = []
     for item in data_path.iterdir():
-        # if exclude_dirs and item.is_dir():
-        #     continue
         if item.suffix in [".zarr"]:
             filenames.append(item.name)
     return sorted(filenames)
@@ -72,8 +79,15 @@ def _read_chunk_into_array(
     zarr_array: zarr.Array,
     cpu_slice: slice,
     zarr_slice: slice = None,
-):
-    """Helper function to read a chunk from zarr into numpy array."""
+) -> None:
+    """Helper function to read a chunk from zarr into numpy array.
+
+    Args:
+        cpu_array: The destination numpy array.
+        zarr_array: The source zarr array.
+        cpu_slice: The slice in the cpu_array to write to.
+        zarr_slice: The slice in the zarr_array to read from. If None, uses cpu_slice.
+    """
     if zarr_slice is None:
         zarr_slice = cpu_slice
     cpu_array[cpu_slice] = zarr_array[zarr_slice]
@@ -81,7 +95,14 @@ def _read_chunk_into_array(
 
 @lru_cache
 def to_torch_dtype(dtype: np.dtype) -> torch.dtype:
-    """Convert a numpy dtype to a torch dtype."""
+    """Convert a numpy dtype to a torch dtype.
+
+    Args:
+        dtype: Numpy dtype to convert.
+
+    Returns:
+        Corresponding torch dtype.
+    """
     temp = torch.from_numpy(np.empty((), dtype=dtype))
     return temp.dtype
 
@@ -199,6 +220,7 @@ class DomainParallelZarrDataset(Dataset):
         self.tensor_specs = {}
 
     def __len__(self) -> int:
+        """Return the number of samples in the dataset."""
         return len(self.filenames)
 
     def __del__(self):
@@ -213,6 +235,14 @@ class DomainParallelZarrDataset(Dataset):
         """
         Read a key using chunk-aligned I/O for efficiency.
         Implements domain parallelism if device_mesh is configured.
+
+        Args:
+            zarr_group: The zarr group to read from.
+            key: The key to read.
+            futures: List to append thread futures to.
+
+        Returns:
+            Torch tensor containing the read data.
         """
 
         zarr_array = zarr_group[key]
@@ -325,7 +355,16 @@ class DomainParallelZarrDataset(Dataset):
     def _read_key_standard(
         self, zarr_group: zarr.Group, key: str, futures: list[Future]
     ) -> torch.Tensor:
-        """Read a key with simple I/O (for small arrays)."""
+        """Read a key with simple I/O (for small arrays).
+
+        Args:
+            zarr_group: The zarr group to read from.
+            key: The key to read.
+            futures: List to append thread futures to.
+
+        Returns:
+            Torch tensor containing the read data.
+        """
         zarr_array = zarr_group[key]
 
         # Handle scalar values
@@ -376,7 +415,14 @@ class DomainParallelZarrDataset(Dataset):
 
     @profile
     def _read_zarr_file(self, filepath: Path) -> Dict[str, np.ndarray]:
-        """Read data from a zarr file."""
+        """Read data from a zarr file.
+
+        Args:
+            filepath: Path to the zarr file.
+
+        Returns:
+            Dictionary mapping keys to numpy arrays or torch tensors.
+        """
         with zarr.open_group(filepath, mode="r") as zarr_group:
             data = {}
             futures = []
@@ -402,7 +448,14 @@ class DomainParallelZarrDataset(Dataset):
 
     @profile
     def _move_to_gpu(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Convert numpy arrays to torch tensors and move to GPU if available."""
+        """Convert numpy arrays to torch tensors and move to GPU if available.
+
+        Args:
+            data: Dictionary of key to torch tensor.
+
+        Returns:
+            Dictionary of key to torch tensor on GPU if available.
+        """
         result = {}
 
         for key, array in data.items():
@@ -415,7 +468,14 @@ class DomainParallelZarrDataset(Dataset):
     def _convert_to_shard_tensors(
         self, tensors: Dict[str, torch.Tensor]
     ) -> Dict[str, Union[torch.Tensor, ShardTensor]]:
-        """Convert tensors to ShardTensor objects for distributed training."""
+        """Convert tensors to ShardTensor objects for distributed training.
+
+        Args:
+            tensors: Dictionary of key to torch tensor.
+
+        Returns:
+            Dictionary of key to torch tensor or ShardTensor.
+        """
         if self.device_mesh is None:
             return tensors
 
@@ -446,6 +506,55 @@ class DomainParallelZarrDataset(Dataset):
 
         return result
 
+    def preload(self, idx: int) -> None:
+        """
+        Asynchronously preload the data for the given index (up to CPU, not GPU).
+        Only one preload operation is supported at a time.
+
+        Args:
+            idx: Index of the sample to preload.
+        """
+        if hasattr(self, "_preload_thread") and self._preload_thread is not None:
+            # Optionally, wait for previous preload to finish or raise error
+            self._preload_thread.join()
+
+        self._preload_result = None
+        self._preload_exception = None
+
+        def _preload_worker():
+            try:
+                filename = self.filenames[idx]
+                filepath = self.data_path / filename
+                data = self._read_zarr_file(filepath)
+                self._preload_result = (idx, data)
+            except Exception as e:
+                self._preload_exception = e
+
+        self._preload_thread = threading.Thread(target=_preload_worker)
+        self._preload_thread.start()
+
+    def get_preloaded(self) -> Tuple[int, Dict[str, np.ndarray]]:
+        """
+        Retrieve the preloaded data (blocking if not ready).
+
+        Returns:
+            (idx, data) tuple where data is a dictionary of key to numpy array or torch tensor.
+
+        Raises:
+            RuntimeError: If no preload is in progress.
+            Exception: If preload failed.
+        """
+        if not hasattr(self, "_preload_thread") or self._preload_thread is None:
+            raise RuntimeError("No preload in progress. Call preload(idx) first.")
+
+        self._preload_thread.join()
+        self._preload_thread = None
+
+        if self._preload_exception is not None:
+            raise self._preload_exception
+
+        return self._preload_result
+
     @profile
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor | ShardTensor]:
         """
@@ -462,11 +571,26 @@ class DomainParallelZarrDataset(Dataset):
                 f"Index {idx} out of range for dataset of size {len(self.filenames)}"
             )
 
-        filename = self.filenames[idx]
-        filepath = self.data_path / filename
+        if hasattr(self, "_preload_result") and self._preload_result is not None:
+            preload_idx, preload_data = self._preload_result
+            if preload_idx == idx:
+                data = preload_data
+                self._preload_result = None  # Clear after use
+            else:
+                # Preloaded data is for a different idx, ignore it
+                data = self._read_zarr_file(self.data_path / self.filenames[idx])
+        else:
+            filename = self.filenames[idx]
+            filepath = self.data_path / filename
 
-        # Read data from zarr file
-        data = self._read_zarr_file(filepath)
+            # Read data from zarr file
+            data = self._read_zarr_file(filepath)
+
+        # filename = self.filenames[idx]
+        # filepath = self.data_path / filename
+
+        # # Read data from zarr file
+        # data = self._read_zarr_file(filepath)
 
         # Convert to torch tensors
         tensors = self._move_to_gpu(data)
@@ -485,26 +609,3 @@ class DomainParallelZarrDataset(Dataset):
 # 4. Support for different placement strategies per key
 # 5. Memory-mapped reading for very large datasets
 # 6. Compression/decompression handling
-
-
-def create_transolver_dataset(
-    data_path: Union[str, Path],
-    device_mesh: Optional[DeviceMesh] = None,
-    placements: Optional[Tuple[Placement, ...]] = None,
-    **kwargs,
-) -> DomainParallelZarrDataset:
-    """
-    Factory function to create a Transolver dataset with sensible defaults.
-
-    Args:
-        data_path: Path to zarr data directory
-        device_mesh: Optional device mesh for domain parallelism
-        placements: Optional placement specifications
-        **kwargs: Additional arguments passed to DomainParallelZarrDataset
-
-    Returns:
-        Configured dataset instance
-    """
-    return DomainParallelZarrDataset(
-        data_path=data_path, device_mesh=device_mesh, placements=placements, **kwargs
-    )

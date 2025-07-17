@@ -21,12 +21,12 @@
 # SOFTWARE.
 
 output_dir: ./output/darcy_transolver_fix
-run_id: fp16_dev_fullres_b8_s64-te
+run_id: bf16_dev_r85_b8_s64
 
 data:
   train_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz
   test_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth2.npz
-  resolution: 421 #421, 211, 141, 106, 85 all viable
+  resolution: 85 #421, 211, 141, 106, 85 all viable
   batch_size: 8 # This is the GLOBAL batch size
 
 model:
@@ -34,18 +34,18 @@ model:
   out_dim: 1
   embedding_dim: 2
   n_layers: 4
-  n_hidden: 64
+  n_hidden: 128
   dropout: 0.0
   n_head: 4
   act: gelu
-  mlp_ratio: 2
+  mlp_ratio: 4
   unified_pos: False
   ref: 8
   slice_num: 64
   use_te: True
   Time_Input: False
   
-precision: fp32
+precision: bf16
 
 normaliser:
   permeability:

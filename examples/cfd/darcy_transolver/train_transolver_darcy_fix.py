@@ -53,7 +53,16 @@ import time  # <-- Add this import for timing
 prof = Profiler()
 
 
-def count_parameters(model):
+def count_parameters(model: torch.nn.Module) -> int:
+    """
+    Count the total number of trainable parameters in a PyTorch model.
+
+    Args:
+        model (torch.nn.Module): The model whose parameters are to be counted.
+
+    Returns:
+        int: Total number of trainable parameters.
+    """
     total_params = 0
     for name, parameter in model.named_parameters():
         if not parameter.requires_grad:
@@ -64,14 +73,35 @@ def count_parameters(model):
 
 
 def forward_train_full_loop(
-    model, loss_fun, optimizer, pos, x, y, y_normalizer, context, scaler=None
-):
+    model: torch.nn.Module,
+    loss_fun: callable,
+    optimizer: torch.optim.Optimizer,
+    pos: torch.Tensor,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    y_normalizer,
+    precision_context,
+    scaler: torch.cuda.amp.GradScaler = None,
+) -> torch.Tensor:
     """
     Forward and backward pass for one iteration, with optional mixed precision training.
-    Returns the loss for this minibatch
+
+    Args:
+        model (torch.nn.Module): The model to train.
+        loss_fun (callable): Loss function.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        pos (torch.Tensor): Position tensor (embedding).
+        x (torch.Tensor): Input tensor.
+        y (torch.Tensor): Target tensor.
+        y_normalizer: Normalizer for the target tensor.
+        precision_context: Context manager for precision (e.g., autocast).
+        scaler (torch.cuda.amp.GradScaler, optional): GradScaler for mixed precision.
+
+    Returns:
+        torch.Tensor: The computed loss for this minibatch.
     """
     dm = DistributedManager()
-    with context:
+    with precision_context:
         pred = model(embedding=pos, fx=x.unsqueeze(-1)).squeeze(-1)
         pred = y_normalizer.decode(pred)
         loss = loss_fun(pred, y)
@@ -87,23 +117,43 @@ def forward_train_full_loop(
 
 
 def train_epoch(
-    model,
-    optimizer,
-    scheduler,
-    train_dataloader,
-    loss_fun,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    train_dataloader: DataLoader,
+    loss_fun: callable,
     y_normalizer,
-    context,
-    scaler,
-):
+    precision_context,
+    scaler: torch.cuda.amp.GradScaler,
+) -> torch.Tensor:
     """
-    One epoch of training.  Returns the loss from the last minibatch used, averaged across replicas.
+    One epoch of training. Returns the loss from the last minibatch used, averaged across replicas.
 
+    Args:
+        model (torch.nn.Module): The model to train.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
+        train_dataloader (DataLoader): Training data loader.
+        loss_fun (callable): Loss function.
+        y_normalizer: Normalizer for the target tensor.
+        precision_context: Context manager for precision (e.g., autocast).
+        scaler (torch.cuda.amp.GradScaler): GradScaler for mixed precision.
+
+    Returns:
+        torch.Tensor: The averaged loss from the last minibatch.
     """
     for i, batch in enumerate(train_dataloader):
         pos, x, y = batch
         loss = forward_train_full_loop(
-            model, loss_fun, optimizer, pos, x, y, y_normalizer, context, scaler
+            model,
+            loss_fun,
+            optimizer,
+            pos,
+            x,
+            y,
+            y_normalizer,
+            precision_context,
+            scaler,
         )
         scheduler.step()
 
@@ -116,9 +166,27 @@ def train_epoch(
     return loss
 
 
-def val_epoch(model, test_dataloader, loss_fun, y_normalizer):
+def val_epoch(
+    model: torch.nn.Module,
+    test_dataloader: DataLoader,
+    loss_fun: callable,
+    y_normalizer,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    One epoch of validation.  Returns the loss averaged across the entire validation set.
+    One epoch of validation. Returns the loss averaged across the entire validation set.
+
+    Args:
+        model (torch.nn.Module): The model to validate.
+        test_dataloader (DataLoader): Validation data loader.
+        loss_fun (callable): Loss function.
+        y_normalizer: Normalizer for the target tensor.
+
+    Returns:
+        tuple: (val_loss, pred, y, RL2)
+            val_loss (torch.Tensor): Averaged validation loss.
+            pred (torch.Tensor): Last batch predictions.
+            y (torch.Tensor): Last batch targets.
+            RL2 (torch.Tensor): Averaged relative L2 error.
     """
     val_loss = None
     RL2 = None
@@ -159,7 +227,12 @@ def val_epoch(model, test_dataloader, loss_fun, y_normalizer):
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config_fix.yaml")
 def darcy_trainer(cfg: DictConfig) -> None:
-    """Training for the 2D Darcy flow benchmark problem."""
+    """
+    Training entry point for the 2D Darcy flow benchmark problem.
+
+    Args:
+        cfg (DictConfig): Configuration object loaded by Hydra.
+    """
     ########################################################################
     # Initialize distributed tools
     ########################################################################
@@ -301,13 +374,13 @@ def darcy_trainer(cfg: DictConfig) -> None:
 
     # Initialize GradScaler for mixed precision training
     if cfg.precision == "fp16":
-        context = torch.amp.autocast(device_type="cuda", dtype=torch.float16)
+        precision_context = torch.amp.autocast(device_type="cuda", dtype=torch.float16)
         scaler = torch.amp.GradScaler("cuda")
     elif cfg.precision == "bf16":
-        context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+        precision_context = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
         scaler = None
     else:
-        context = nullcontext()
+        precision_context = nullcontext()
         scaler = None
 
     if loaded_pseudo_epoch == 0:
@@ -331,7 +404,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
                 train_dataloader,
                 loss_fun,
                 y_normalizer,
-                context,
+                precision_context,
                 scaler,
             )
             train_time = time.time() - train_start

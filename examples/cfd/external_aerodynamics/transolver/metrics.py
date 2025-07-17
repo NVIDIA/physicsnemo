@@ -34,11 +34,45 @@ def all_reduce_dict(metrics, dm):
     return metrics
 
 
-def metrics_fn(pred, target, dm):
-    return metrics_fn_surface(pred, target, dm)
+def metrics_fn(pred, target, others, dm, mode):
+    if mode == "surface":
+        return metrics_fn_surface(pred, target, others, dm)
+    elif mode == "volume":
+        return metrics_fn_volume(pred, target, others, dm)
+    else:
+        raise ValueError(f"Unknown data mode: {mode}")
 
 
-def metrics_fn_surface(pred, target, dm):
+def metrics_fn_volume(pred, target, others, dm):
+    target = target * others["norm_std"] + others["norm_mean"]
+    pred = pred * others["norm_std"] + others["norm_mean"]
+
+    l2_num = (pred - target) ** 2
+    l2_num = torch.sum(l2_num, dim=1)
+    l2_num = torch.sqrt(l2_num)
+
+    l2_denom = target**2
+    l2_denom = torch.sum(l2_denom, dim=1)
+    l2_denom = torch.sqrt(l2_denom)
+
+    l2 = l2_num / l2_denom
+
+    metrics = {
+        "l2_volume_1": torch.mean(l2[:, 0]),
+        "l2_volume_2": torch.mean(l2[:, 1]),
+        "l2_volume_3": torch.mean(l2[:, 2]),
+        "l2_volume_4": torch.mean(l2[:, 3]),
+        "l2_volume_5": torch.mean(l2[:, 4]),
+    }
+
+    return metrics
+
+
+def metrics_fn_surface(pred, target, others, dm):
+
+    # Unnormalize the surface values for L2:
+    target = target * others["norm_std"] + others["norm_mean"]
+    pred = pred * others["norm_std"] + others["norm_mean"]
 
     l2_num = (pred - target) ** 2
     l2_num = torch.sum(l2_num, dim=1)
@@ -52,9 +86,9 @@ def metrics_fn_surface(pred, target, dm):
 
     metrics = {
         "l2_pressure": torch.mean(l2[:, 0]),
-        "l2_sheer_x": torch.mean(l2[:, 1]),
-        "l2_sheer_y": torch.mean(l2[:, 2]),
-        "l2_sheer_z": torch.mean(l2[:, 3]),
+        "l2_shear_x": torch.mean(l2[:, 1]),
+        "l2_shear_y": torch.mean(l2[:, 2]),
+        "l2_shear_z": torch.mean(l2[:, 3]),
     }
 
     return metrics

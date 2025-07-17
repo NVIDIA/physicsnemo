@@ -16,22 +16,24 @@
 
 
 
-output_dir: "outputs"
-run_id: "transolver_te-1cycle"
+output_dir: "runs"
+run_id: "volume/OneCycleLR/TE/float32/"
 
 # Training configuration
 training:
-  num_epochs: 400
+  precision: float32 # float32, float16, bfloat16
+  num_epochs: 200
   save_interval: 25  # Save checkpoint every N epochs
   seed: 42
-  output_dir: "outputs"
+  output_dir: "runs"
+  compile: false
 
 # Model configuration
 model:
   _target_: physicsnemo.models.transolver.Transolver
   functional_dim: 2 # Input feature dimension
-  out_dim: 4        # Output feature dimension
-  embedding_dim: 6  # Spatial embedding dimension
+  out_dim: 5        # Output feature dimension
+  embedding_dim: 3  # Spatial embedding dimension
   n_layers: 8       # Number of transformer layers
   n_hidden: 256     # Hidden dimension
   dropout: 0.0      # Dropout rate
@@ -45,6 +47,15 @@ model:
   use_te: true      # Use transformer engine
   Time_Input: false # Whether to use time embeddings
 
+scheduler:
+  name: "OneCycleLR"
+  params:
+    final_div_factor: 1e4
+
+# scheduler:
+#   name: "ReduceLROnPlateau"
+#   params:
+#     min_lr: 1e-6
 
 
 # Optimizer configuration
@@ -58,25 +69,25 @@ optimizer:
 # Data configuration
 data:
   train:
-    data_path: /group_data/datasets/drivaer_aws/domino/train/
+    data_path: /user_data/datasets/domino/train/
   val:
-    data_path: /group_data/datasets/drivaer_aws/domino/val/
-  max_workers: 32
+    data_path: /user_data/datasets/domino/val/
+  max_workers: 64
   pin_memory: true
-  resolution: 262_144
-  surface_keys:
-    - "surface_fields"
-    - "surface_mesh_centers"
-    - "surface_normals"
+  # resolution: 262_144
+  resolution: 200_000
+  mode: volume
+  data_keys:
+    - "volume_mesh_centers"
+    - "volume_fields"
     - "air_density"
     - "stream_velocity"
+  large_keys:
+    - "volume_fields"
+    - "volume_mesh_centers"
 
 # Logging configuration
 logging:
   level: INFO
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
-# Hardware configuration
-hardware:
-  precision: float32
-  compile_model: false  # Whether to use torch.compile
