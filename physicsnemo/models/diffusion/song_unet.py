@@ -32,6 +32,7 @@ from physicsnemo.models.diffusion import (
     PositionalEmbedding,
     UNetBlock,
 )
+from physicsnemo.models.diffusion.utils import _recursive_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -325,8 +326,6 @@ class SongUNet(Module):
             amp_mode=amp_mode,
         )
         self.use_apex_gn = use_apex_gn
-        self.profile_mode = profile_mode
-        self.amp_mode = amp_mode
 
         # for compatibility with older versions that took only 1 dimension
         self.img_resolution = img_resolution
@@ -498,6 +497,19 @@ class SongUNet(Module):
                     amp_mode=amp_mode,
                     **init_zero,
                 )
+
+        # Set properties recursively on submodules
+        self.profile_mode = profile_mode
+        self.amp_mode = amp_mode
+
+    profile_mode = _recursive_property(
+        "profile_mode", bool, "Should be set to ``True`` to enable profiling."
+    )
+    amp_mode = _recursive_property(
+        "amp_mode",
+        bool,
+        "Should be set to ``True`` to enable automatic mixed precision.",
+    )
 
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         with (

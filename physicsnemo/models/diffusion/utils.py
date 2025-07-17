@@ -74,3 +74,24 @@ def _safe_setattr(obj: torch.nn.Module, attr: str, value: Any):
     """
     if hasattr(obj, attr):
         setattr(obj, attr, value)
+
+
+def _recursive_property(prop_name: str, prop_type: type, doc: str):
+    def setter(self, value: Any):
+        if not isinstance(value, prop_type):
+            raise TypeError(
+                f"{prop_name} must be a {prop_type.__name__} value, but got {type(value).__name__}."
+            )
+        # Set for self
+        setattr(self, f"_{prop_name}", value)
+        # Set for submodules
+        submodules = iter(self.modules())
+        next(submodules)  # Skip self
+        for m in submodules:
+            if hasattr(m, prop_name):
+                setattr(m, prop_name, value)
+
+    def getter(self):
+        return getattr(self, f"_{prop_name}")
+
+    return property(getter, setter, doc=doc)

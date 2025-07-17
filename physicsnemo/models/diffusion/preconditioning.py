@@ -27,7 +27,6 @@ from typing import List, Literal, Tuple, Union
 import numpy as np
 import torch
 
-from physicsnemo.models.diffusion.utils import _safe_setattr
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -986,41 +985,42 @@ class EDMPrecondSuperResolution(Module):
     @property
     def amp_mode(self):
         """
-        Property that controls the automatic mixed precision mode of the
-        underlying architecture. ``True`` means that the underlying architecture
-        will automatically cast tensors to the appropriate
-        precision. ``False`` means that the underlying architecture will not
-        automatically cast the input and output tensors to the appropriate
-        precision.
+        Controls the automatic mixed precision mode of the
+        wrapped model. ``True`` means that the model
+        will automatically cast input and intermediate tensors to the appropriate
+        precision. ``False`` means that the model will not automatically cast the
+        input and intermediate tensors to the appropriate precision.
         """
-        return getattr(self.model, "amp_mode", None)
+        return getattr(self.model, "amp_mode")
 
     @amp_mode.setter
     def amp_mode(self, value: bool):
         """
-        Update ``amp_mode`` on the wrapped architecture and its sub-modules.
+        Update ``amp_mode`` on the wrapped model.
         """
-        if not isinstance(value, bool):
-            raise TypeError("amp_mode must be a boolean value.")
-        self.model.apply(lambda m: _safe_setattr(m, "amp_mode", value))
+        if hasattr(self.model, "amp_mode"):
+            self.model.amp_mode = value
+        else:
+            raise AttributeError("amp_mode is not supported by the wrapped model.")
 
     @property
     def profile_mode(self):
         """
-        Property that controls the profiling mode of the underlying architecture.
-        ``True`` means that the underlying architecture will be profiled.
-        ``False`` means that the underlying architecture will not be profiled.
+        Controls the profiling mode of the wrapped model.
+        ``True`` (``False``) means that the model will be profiled
+        (will not be profiled).
         """
-        return getattr(self.model, "profile_mode", None)
+        return getattr(self.model, "profile_mode")
 
     @profile_mode.setter
     def profile_mode(self, value: bool):
         """
-        Update ``profile_mode`` on the wrapped architecture and its sub-modules.
+        Update ``profile_mode`` on the wrapped model.
         """
-        if not isinstance(value, bool):
-            raise TypeError("profile_mode must be a boolean value.")
-        self.model.apply(lambda m: _safe_setattr(m, "profile_mode", value))
+        if hasattr(self.model, "profile_mode"):
+            self.model.profile_mode = value
+        else:
+            raise AttributeError("profile_mode is not supported by the wrapped model.")
 
 
 # NOTE: This is a deprecated version of the EDMPrecondSuperResolution model.
