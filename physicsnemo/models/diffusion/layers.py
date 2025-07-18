@@ -58,7 +58,7 @@ def _validate_amp(amp_mode: bool) -> None:
     except AttributeError:  # very old PyTorch
         cuda_amp = False
     try:
-        cpu_amp = bool(torch.is_autocast_cpu_enabled())
+        cpu_amp = bool(torch.is_autocast_enabled("cpu"))
     except AttributeError:
         cpu_amp = False
 
