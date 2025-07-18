@@ -23,13 +23,25 @@ from torch import Tensor
 from physicsnemo.utils.patching import GridPatching2D
 
 
+# NOTE: use two wrappers for apply, to avoid recompilation when input shape changes
 @torch.compile()
-def apply_wrapper(patching, input, additional_input=None):
+def _apply_wrapper_Cin_channels(patching, input, additional_input=None):
+    """
+    Apply the patching operation to the input tensor with :math:`C_{in}` channels.
+    """
     return patching.apply(input=input, additional_input=additional_input)
 
 
 @torch.compile()
-def fuse_wrapper(patching, input, batch_size):
+def _apply_wrapper_Cout_channels(patching, input, additional_input=None):
+    """
+    Apply the patching operation to the input tensor with :math:`C_{out}` channels.
+    """
+    return patching.apply(input=input, additional_input=additional_input)
+
+
+@torch.compile()
+def _fuse_wrapper(patching, input, batch_size):
     return patching.fuse(input=input, batch_size=batch_size)
 
 
@@ -197,7 +209,9 @@ def stochastic_sampler(
     if patching:
         # Patched conditioning [x_lr, mean_hr]
         # (batch_size * patch_num, C_in + C_out, patch_shape_y, patch_shape_x)
-        x_lr = apply_wrapper(patching=patching, input=x_lr, additional_input=img_lr)
+        x_lr = _apply_wrapper_Cin_channels(
+            patching=patching, input=x_lr, additional_input=img_lr
+        )
 
         # Function to select the correct positional embedding for each patch
         def patch_embedding_selector(emb):
@@ -222,7 +236,9 @@ def stochastic_sampler(
         # generation is used denoised = net(x_hat, t_hat,
         # class_labels,lead_time_label=lead_time_label).to(torch.float64)
         x_hat_batch = (
-            apply_wrapper(patching=patching, input=x_hat) if patching else x_hat
+            _apply_wrapper_Cout_channels(patching=patching, input=x_hat)
+            if patching
+            else x_hat
         ).to(latents.device)
 
         x_lr = x_lr.to(latents.device)
@@ -247,7 +263,7 @@ def stochastic_sampler(
         if patching:
             # Un-patch the denoised image
             # (batch_size, C_out, img_shape_y, img_shape_x)
-            denoised = fuse_wrapper(
+            denoised = _fuse_wrapper(
                 patching=patching, input=denoised, batch_size=batch_size
             )
 
@@ -259,7 +275,9 @@ def stochastic_sampler(
             # Patched input
             # (batch_size * patch_num, C_out, patch_shape_y, patch_shape_x)
             x_next_batch = (
-                apply_wrapper(patching=patching, input=x_next) if patching else x_next
+                _apply_wrapper_Cout_channels(patching=patching, input=x_next)
+                if patching
+                else x_next
             ).to(latents.device)
 
             if lead_time_label is not None:
@@ -282,7 +300,7 @@ def stochastic_sampler(
             if patching:
                 # Un-patch the denoised image
                 # (batch_size, C_out, img_shape_y, img_shape_x)
-                denoised = fuse_wrapper(
+                denoised = _fuse_wrapper(
                     patching=patching, input=denoised, batch_size=batch_size
                 )
 
