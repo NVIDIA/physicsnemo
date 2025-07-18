@@ -72,7 +72,9 @@ ACTIVATION = {
 
 
 class MLP(nn.Module):
-    def __init__(self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True):
+    def __init__(
+        self, n_input, n_hidden, n_output, n_layers=1, act="gelu", res=True, use_te=True
+    ):
         super(MLP, self).__init__()
 
         if act in ACTIVATION.keys():
@@ -84,22 +86,27 @@ class MLP(nn.Module):
         self.n_output = n_output
         self.n_layers = n_layers
         self.res = res
-        self.linear_pre = nn.Sequential(nn.Linear(n_input, n_hidden), act())
-        self.linear_post = nn.Linear(n_hidden, n_output)
-        self.linears = nn.ModuleList(
-            [
-                nn.Sequential(nn.Linear(n_hidden, n_hidden), act())
-                for _ in range(n_layers)
-            ]
-        )
+
+        self.act = act()
+
+        linear_layer = nn.Linear if not use_te else te.Linear
+
+        self.linear_pre = linear_layer(n_input, n_hidden)
+        self.linear_post = linear_layer(n_hidden, n_output)
+        # self.linears = nn.ModuleList(
+        #     [
+        #         nn.Sequential(linear_layer(n_hidden, n_hidden), act())
+        #         for _ in range(n_layers)
+        #     ]
+        # )
 
     def forward(self, x):
-        x = self.linear_pre(x)
-        for i in range(self.n_layers):
-            if self.res:
-                x = self.linears[i](x) + x
-            else:
-                x = self.linears[i](x)
+        x = self.act(self.linear_pre(x))
+        # for i in range(self.n_layers):
+        #     if self.res:
+        #         x = self.linears[i](x) + x
+        #     else:
+        #         x = self.linears[i](x)
         x = self.linear_post(x)
         return x
 
@@ -173,6 +180,18 @@ class Transolver_block(nn.Module):
                 hidden_size=hidden_dim,
                 ffn_hidden_size=hidden_dim * mlp_ratio,
             )
+            # self.ln_mlp1 = nn.Sequential(
+            #     te.LayerNorm(hidden_dim),
+            #     MLP(
+            #         hidden_dim,
+            #         hidden_dim * mlp_ratio,
+            #         hidden_dim,
+            #         n_layers=0,
+            #         res=False,
+            #         act=act,
+            #         use_te=True
+            #     ),
+            # )
         else:
             self.ln_mlp1 = nn.Sequential(
                 nn.LayerNorm(hidden_dim),
@@ -183,6 +202,7 @@ class Transolver_block(nn.Module):
                     n_layers=0,
                     res=False,
                     act=act,
+                    use_te=False,
                 ),
             )
         if self.last_layer:
@@ -377,6 +397,7 @@ class Transolver(Module):
             n_layers=0,
             res=False,
             act=act,
+            use_te=False,
         )
 
         self.Time_Input = Time_Input

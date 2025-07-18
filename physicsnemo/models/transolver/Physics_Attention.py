@@ -63,8 +63,13 @@ class Physics_Attention_Base(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
         self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
+        self.use_te = use_te
 
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
+        if self.use_te:
+            self.in_project_slice = te.Linear(dim_head, slice_num)
+        else:
+            self.in_project_slice = nn.Linear(dim_head, slice_num)
+
         for l_i in [self.in_project_slice]:
             torch.nn.init.orthogonal_(l_i.weight)  # use a principled initialization
         if not use_te:
@@ -73,7 +78,7 @@ class Physics_Attention_Base(nn.Module):
             self.to_v = nn.Linear(dim_head, dim_head, bias=False)
         else:
             # These are used in the transformer engine pass function:
-            self.qkv_project = nn.Linear(dim_head, 3 * dim_head, bias=False)
+            self.qkv_project = te.Linear(dim_head, 3 * dim_head, bias=False)
             self.attn_fn = te.DotProductAttention(
                 num_attention_heads=self.heads,
                 kv_channels=self.dim_head,
@@ -82,9 +87,12 @@ class Physics_Attention_Base(nn.Module):
                 softmax_scale=self.scale,
             )
 
-        self.use_te = use_te
+        if self.use_te:
+            self.out_linear = te.Linear(inner_dim, dim)
+        else:
+            self.out_linear = nn.Linear(inner_dim, dim)
 
-        self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
+        self.out_dropout = nn.Dropout(dropout)
 
     def project_input_onto_slices(self, x) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -216,7 +224,8 @@ class Physics_Attention_Base(nn.Module):
 
         out_x = torch.matmul(slice_weights, out_slice_token)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
-        return self.to_out(out_x)
+        out_x = self.out_linear(out_x)
+        return self.out_dropout(out_x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
