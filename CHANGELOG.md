@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
   `Module.from_checkpoint("chkpt.mdlus", models_args)`.
 - PyTorch Geometric MeshGraphNet backend.
+- Functionality in DoMINO to take arbitrary number of `scalar` or `vector`
+  global parameters and encode them using `class ParameterModel`
 
 ### Changed
 

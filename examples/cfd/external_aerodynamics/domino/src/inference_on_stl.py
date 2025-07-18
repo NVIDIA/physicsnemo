@@ -151,7 +151,6 @@ def _bvh_query_distance(
     sdf_hit_point: wp.array(dtype=wp.vec3f),
     sdf_hit_point_id: wp.array(dtype=wp.int32),
 ):
-
     """
     Computes the signed distance from each point in the given array `points`
     to the mesh represented by `mesh`,within the maximum distance `max_dist`,
@@ -690,7 +689,11 @@ class dominoInference:
         self.air_density = torch.full((1, 1), 1.205, dtype=torch.float32).to(
             self.device
         )
-        self.num_vol_vars, self.num_surf_vars = self.get_num_variables()
+        (
+            self.num_vol_vars,
+            self.num_surf_vars,
+            self.num_global_features,
+        ) = self.get_num_variables()
         self.model = None
         self.grid_resolution = torch.tensor(self.cfg.model.interp_res).to(self.device)
         self.vol_factors = None
@@ -755,28 +758,25 @@ class dominoInference:
             self.bounding_box_surface_min_max = [c_min, c_max]
 
     def load_volume_scaling_factors(self):
-        vol_factors = np.array(
-            [
-                [2.2642279, 2.2397292, 1.8689916, 0.7547227],
-                [-1.2899836, -2.2787743, -1.866153, -2.7116761],
-            ],
-            dtype=np.float32,
+        scaling_param_path = self.cfg.eval.scaling_param_path
+        vol_factors_path = os.path.join(
+            scaling_param_path, "volume_scaling_factors.npy"
         )
 
+        vol_factors = np.load(vol_factors_path, allow_pickle=True)
         vol_factors = torch.from_numpy(vol_factors).to(self.device)
 
         return vol_factors
 
     def load_surface_scaling_factors(self):
-        surf_factors = np.array(
-            [
-                [0.8215038, 0.01063187, 0.01514608, 0.01327803],
-                [-2.1505525, -0.01865184, -0.01514422, -0.0121509],
-            ],
-            dtype=np.float32,
+        scaling_param_path = self.cfg.eval.scaling_param_path
+        surf_factors_path = os.path.join(
+            scaling_param_path, "surface_scaling_factors.npy"
         )
 
+        surf_factors = np.load(surf_factors_path, allow_pickle=True)
         surf_factors = torch.from_numpy(surf_factors).to(self.device)
+
         return surf_factors
 
     def read_stl(self):
@@ -842,7 +842,20 @@ class dominoInference:
                 num_surf_vars += 3
             else:
                 num_surf_vars += 1
-        return num_vol_vars, num_surf_vars
+
+        num_global_features = 0
+        global_params_names = list(cfg.variables.global_parameters.keys())
+        for param in global_params_names:
+            if cfg.variables.global_parameters[param].type == "vector":
+                num_global_features += len(
+                    cfg.variables.global_parameters[param].reference
+                )
+            elif cfg.variables.global_parameters[param].type == "scalar":
+                num_global_features += 1
+            else:
+                raise ValueError(f"Unknown global parameter type")
+
+        return num_vol_vars, num_surf_vars, num_global_features
 
     def initialize_model(self, model_path):
         model = (
@@ -850,6 +863,7 @@ class dominoInference:
                 input_features=3,
                 output_features_vol=self.num_vol_vars,
                 output_features_surf=self.num_surf_vars,
+                global_features=self.num_global_features,
                 model_parameters=self.cfg.model,
             )
             .to(self.device)
@@ -1358,6 +1372,21 @@ class dominoInference:
         inlet_velocity,
         air_density,
     ):
+        """
+        Global parameters: For this particular case, the model was trained on single velocity/density values
+        across all simulations. Hence, global_params_values and global_params_reference are the same.
+        """
+        global_params_values = torch.cat(
+            (inlet_velocity, air_density), axis=1
+        )  # (1, 2)
+        global_params_values = torch.unsqueeze(global_params_values, -1)  # (1, 2, 1)
+
+        global_params_reference = torch.cat(
+            (inlet_velocity, air_density), axis=1
+        )  # (1, 2)
+        global_params_reference = torch.unsqueeze(
+            global_params_reference, -1
+        )  # (1, 2, 1)
 
         if self.dist.world_size == 1:
             geo_encoding_local = model.geo_encoding_local(
@@ -1383,8 +1412,8 @@ class dominoInference:
                 surface_neighbors_normals,
                 surface_areas,
                 surface_neighbors_areas,
-                inlet_velocity,
-                air_density,
+                global_params_values,
+                global_params_reference,
             )
         else:
             pos_encoding = model.module.position_encoder(
@@ -1399,8 +1428,8 @@ class dominoInference:
                 surface_neighbors_normals,
                 surface_areas,
                 surface_neighbors_areas,
-                inlet_velocity,
-                air_density,
+                global_params_values,
+                global_params_reference,
             )
 
         return tpredictions_batch
@@ -1419,6 +1448,19 @@ class dominoInference:
         inlet_velocity,
         air_density,
     ):
+
+        ## Global parameters
+        global_params_values = torch.cat(
+            (inlet_velocity, air_density), axis=1
+        )  # (1, 2)
+        global_params_values = torch.unsqueeze(global_params_values, -1)  # (1, 2, 1)
+
+        global_params_reference = torch.cat(
+            (inlet_velocity, air_density), axis=1
+        )  # (1, 2)
+        global_params_reference = torch.unsqueeze(
+            global_params_reference, -1
+        )  # (1, 2, 1)
 
         if self.dist.world_size == 1:
             geo_encoding_local = model.geo_encoding_local(
@@ -1441,8 +1483,8 @@ class dominoInference:
                 volume_mesh_centers,
                 geo_encoding_local,
                 pos_encoding,
-                inlet_velocity,
-                air_density,
+                global_params_values,
+                global_params_reference,
                 num_sample_points=self.stencil_size,
                 eval_mode="volume",
             )
@@ -1454,8 +1496,8 @@ class dominoInference:
                 volume_mesh_centers,
                 geo_encoding_local,
                 pos_encoding,
-                inlet_velocity,
-                air_density,
+                global_params_values,
+                global_params_reference,
                 num_sample_points=self.stencil_size,
                 eval_mode="volume",
             )
@@ -1481,8 +1523,8 @@ if __name__ == "__main__":
 
     domino = dominoInference(cfg, dist, False)
     domino.initialize_model(
-        model_path="/lustre/rranade/modulus_dev/modulus_forked/modulus/examples/cfd/external_aerodynamics/domino/outputs/AWS_Dataset/19/models/DoMINO.0.201.pt"
-    )
+        model_path="/lustre/models/DoMINO.0.7.pt"
+    )  ## Replace the model path with location of the trained model
 
     for count, dirname in enumerate(dirnames_per_gpu):
         # print(f"Processing file {dirname}")
@@ -1525,9 +1567,8 @@ if __name__ == "__main__":
             "Lift:",
             out_dict["lift_force"],
         )
-        vtp_path = f"/lustre/rranade/modulus_dev/modulus_forked/modulus/examples/cfd/external_aerodynamics/domino/pred_{dirname}_4.vtp"
+        vtp_path = f"/lustre/snidhan/physicsnemo-work/domino-global-param-runs/stl-results/pred_{dirname}_4.vtp"
         domino.mesh_stl.save(vtp_path)
-        # vtp_path = f"/lustre/rranade/modulus_dev/modulus_demo/modulus_rishi/modulus/examples/cfd/external_aerodynamics/domino_gtc_demo/sensitivity_pred_{dirname}.vtp"
         reader = vtk.vtkXMLPolyDataReader()
         reader.SetFileName(f"{vtp_path}")
         reader.Update()
