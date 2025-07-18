@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Literal, Set, Tuple, Union
 
 import torch
 
+from physicsnemo.models.diffusion.utils import _wrapped_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -200,6 +201,18 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         )
         self.use_fp16 = use_fp16
 
+    # Properties delegated to the wrapped model
+    amp_mode = _wrapped_property(
+        "amp_mode",
+        "model",
+        "Set to ``True`` when using automatic mixed precision.",
+    )
+    profile_mode = _wrapped_property(
+        "profile_mode",
+        "model",
+        "Set to ``True`` to enable profiling of the wrapped model.",
+    )
+
     @property
     def use_fp16(self):
         """
@@ -287,46 +300,6 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         """
         return torch.as_tensor(sigma)
 
-    @property
-    def amp_mode(self):
-        """
-        Controls the automatic mixed precision mode of the
-        wrapped model. ``True`` means that the model
-        will automatically cast input and intermediate tensors to the appropriate
-        precision. ``False`` means that the model will not automatically cast the
-        input and intermediate tensors to the appropriate precision.
-        """
-        return getattr(self.model, "amp_mode")
-
-    @amp_mode.setter
-    def amp_mode(self, value: bool):
-        """
-        Update ``amp_mode`` on the wrapped model.
-        """
-        if hasattr(self.model, "amp_mode"):
-            self.model.amp_mode = value
-        else:
-            raise AttributeError("amp_mode is not supported by the wrapped model.")
-
-    @property
-    def profile_mode(self):
-        """
-        Controls the profiling mode of the wrapped model.
-        ``True`` (``False``) means that the model will be profiled
-        (will not be profiled).
-        """
-        return getattr(self.model, "profile_mode")
-
-    @profile_mode.setter
-    def profile_mode(self, value: bool):
-        """
-        Update ``profile_mode`` on the wrapped model.
-        """
-        if hasattr(self.model, "profile_mode"):
-            self.model.profile_mode = value
-        else:
-            raise AttributeError("profile_mode is not supported by the wrapped model.")
-
 
 # TODO: implement amp_mode and profile_mode properties for StormCastUNet (same
 # as UNet)
@@ -393,6 +366,18 @@ class StormCastUNet(Module):
             out_channels=img_out_channels,
             **model_kwargs,
         )
+
+    # Properties delegated to the wrapped model
+    amp_mode = _wrapped_property(
+        "amp_mode",
+        "model",
+        "Set to ``True`` when using automatic mixed precision.",
+    )
+    profile_mode = _wrapped_property(
+        "profile_mode",
+        "model",
+        "Set to ``True`` to enable profiling of the wrapped model.",
+    )
 
     def forward(self, x, force_fp32=False, **model_kwargs):
         """Run a forward pass of the StormCast regression U-Net.
