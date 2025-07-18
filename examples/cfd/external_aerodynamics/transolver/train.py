@@ -37,8 +37,8 @@ from metrics import metrics_fn
 from contextlib import nullcontext
 from torch.amp import autocast, GradScaler
 
-# import transformer_engine.pytorch as te
-# from transformer_engine.common.recipe import Format, DelayedScaling
+import transformer_engine.pytorch as te
+from transformer_engine.common.recipe import Format, DelayedScaling
 
 
 def get_autocast_context(precision: str) -> nullcontext:
@@ -55,11 +55,12 @@ def get_autocast_context(precision: str) -> nullcontext:
         return autocast("cuda", dtype=torch.float16)
     elif precision == "bfloat16":
         return autocast("cuda", dtype=torch.bfloat16)
-    # elif precision == "float8":
-    #     print("Using float8 autocast")
-    #     fp8_format = Format.HYBRID
-    #     fp8_recipe = DelayedScaling(fp8_format=fp8_format, amax_history_len=16, amax_compute_algo="max")
-    #     return te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe)
+    elif precision == "float8":
+        fp8_format = Format.HYBRID
+        fp8_recipe = DelayedScaling(
+            fp8_format=fp8_format, amax_history_len=16, amax_compute_algo="max"
+        )
+        return te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe)
     else:
         return nullcontext()
 
@@ -87,7 +88,17 @@ def cast_precisions(
 
 
 @profile
-def preprocess_surface_data(batch):
+def preprocess_surface_data(
+    batch: dict,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+
+    """
+    Preprocess the surface data.  The functional input
+    is the air density and stream velocity.  The embeddings
+    are the surface mesh centers and normals.  The targets are
+    normalized to mean of 0, std 1.  We cache the mean and std
+    to de-normalize when computing the metrics.
+    """
 
     mesh_centers = batch["surface_mesh_centers"]
     normals = batch["surface_normals"]
@@ -100,6 +111,10 @@ def preprocess_surface_data(batch):
     norm_mean = targets.mean(dim=1)
     norm_std = targets.std(dim=1)
     targets = (targets - norm_mean) / norm_std
+
+    # If you want to use this, be sure to updat the
+    # functional_dim value in your configuration
+
     # fourier_sin_features = [
     #     torch.sin(mesh_centers * (2 ** i) * torch.pi)
     #     for i in range(4)
@@ -143,7 +158,16 @@ def preprocess_surface_data(batch):
     return node_features, embeddings, targets, others
 
 
-def preprocess_volume_data(batch):
+def preprocess_volume_data(
+    batch: dict,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    """
+    Preprocess the volumetric data.  Right now, it's just
+    normalizing the targets and using the mesh centers as embeddings.
+
+    The targets are normalized to mean of 0, std 1.  We cache the
+    mean and std to de-normalize when computing the metrics.
+    """
 
     mesh_centers = batch["volume_mesh_centers"]
     targets = batch["volume_fields"]
@@ -154,11 +178,11 @@ def preprocess_volume_data(batch):
     embeddings = mesh_centers
 
     # Normalize the surface fields:
-    norm_mean = targets.mean(dim=0)
-    norm_std = targets.std(dim=0)
+    norm_mean = targets.mean(dim=1)
+    norm_std = targets.std(dim=1)
     targets = (targets - norm_mean) / norm_std
 
-    node_features = node_features.unsqueeze(0).broadcast_to(embeddings.shape[0], -1)
+    node_features = node_features.unsqueeze(0).broadcast_to(1, embeddings.shape[1], -1)
 
     others = {
         "norm_mean": norm_mean,
@@ -168,7 +192,17 @@ def preprocess_volume_data(batch):
 
 
 @profile
-def downsample_surface(features, embeddings, targets, num_keep=1024):
+def downsample_surface(
+    features: torch.Tensor,
+    embeddings: torch.Tensor,
+    targets: torch.Tensor,
+    num_keep=1024,
+):
+    """
+    Downsample the surface data. We generate one set of indices, and
+    use it to sample the same points from the features, embeddings,
+    and targets.  Using torch.multinomial to sample without replacement.
+    """
     # Determine the number of samples to keep (e.g., 50% of original size)
     num_samples = features.shape[1]
     # Generate random indices to keep (faster for large num_samples)
@@ -181,15 +215,23 @@ def downsample_surface(features, embeddings, targets, num_keep=1024):
     downsampled_embeddings = embeddings[:, indices]
     downsampled_targets = targets[:, indices]
 
-    # downsampled_features = downsampled_features.unsqueeze(0)
-    # downsampled_embeddings = downsampled_embeddings.unsqueeze(0)
-    # downsampled_targets = downsampled_targets.unsqueeze(0)
-
     return downsampled_features, downsampled_embeddings, downsampled_targets
 
 
 @profile
-def downsample_volume(features, embeddings, targets, num_keep=1024):
+def downsample_volume(
+    features: torch.Tensor,
+    embeddings: torch.Tensor,
+    targets: torch.Tensor,
+    num_keep=1024,
+):
+    """
+    Downsample the volume data.  torch.multinomial has a limit of 2^24
+    for num_samples, and the volumetric data typically exceeds that.
+
+    So, this isjust sampling randomly with num_keep.  The hope
+    is that the duplication is small ... but this needs to be refined.
+    """
     # Determine the number of samples to keep (e.g., 50% of original size)
     num_samples = features.shape[1]
     # The volume data is so large, that we'll sample randints
@@ -204,28 +246,81 @@ def downsample_volume(features, embeddings, targets, num_keep=1024):
     return downsampled_features, downsampled_embeddings, downsampled_targets
 
 
+def forward_pass(
+    batch: dict,
+    model: torch.nn.Module,
+    precision: str,
+    output_pad_size: int | None,
+    dist_manager: DistributedManager,
+    cfg: DictConfig,
+):
+    """
+    Run the forward pass of the model for one batch, including metrics and loss calculation.
+    """
+
+    if cfg.data.mode == "surface":
+        features, embeddings, targets, others = preprocess_surface_data(batch)
+        features, embeddings, targets = downsample_surface(
+            features, embeddings, targets, cfg.data.resolution
+        )
+
+    elif cfg.data.mode == "volume":
+        features, embeddings, targets, others = preprocess_volume_data(batch)
+        features, embeddings, targets = downsample_volume(
+            features, embeddings, targets, cfg.data.resolution
+        )
+    else:
+        raise ValueError(f"Unknown data mode: {cfg.data.mode}")
+
+    # Cast precisions:
+    features, embeddings = cast_precisions(features, embeddings, precision)
+
+    with get_autocast_context(precision):
+        outputs = model(features, embeddings)
+        if output_pad_size is not None:
+            # Remove the padded outputs:
+            outputs = outputs[:, :, :-output_pad_size]
+        loss = loss_fn(outputs, targets, others, cfg.data.mode)
+
+    metrics = metrics_fn(outputs, targets, others, dist_manager, cfg.data.mode)
+
+    return loss, metrics
+
+
 @profile
 def train_epoch(
     dataloader,
-    sampler,
-    model,
-    optimizer,
-    scheduler,
-    logger,
-    writer,
-    epoch,
-    cfg,
-    dist_manager,
-    scaler=None,  # <-- Added scaler argument
-):
-    """Train for one epoch
+    sampler: torch.utils.data.Sampler | None,
+    model: torch.nn.Module,
+    output_pad_size: int | None,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    logger: PythonLogger,
+    writer: SummaryWriter,
+    epoch: int,
+    cfg: DictConfig,
+    dist_manager: DistributedManager,
+    scaler: GradScaler | None = None,
+) -> float:
+    """
+    Train the model for one epoch.
 
     Args:
-        dataloader: Training data loader
-        model: The model to train
-        logger: Python logger instance
-        writer: Tensorboard writer
-        cfg: Configuration object
+        dataloader (list[dict]): Training data loader
+        sampler (torch.utils.data.Sampler | None): Sampler for distributed or sequential sampling.
+        model (torch.nn.Module): The neural network model to train.
+        output_pad_size (int | None): Optional output padding size for lowest precisions (FP8).
+        optimizer (torch.optim.Optimizer): Optimizer for model parameters.
+        scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
+        logger (PythonLogger): Logger for training progress.
+        writer (SummaryWriter): TensorBoard writer for logging metrics.
+        epoch (int): Current epoch number.
+        cfg (DictConfig): Hydra configuration object.
+        dist_manager (DistributedManager): Distributed manager from physicsnemo.
+        scaler (GradScaler | None, optional): Gradient scaler for mixed precision training.
+
+    Returns:
+        float: The average training loss for the epoch.
     """
     model.train()
     total_loss = 0
@@ -234,38 +329,17 @@ def train_epoch(
     epoch_indices = list(sampler) if sampler is not None else range(len(dataloader))
     epoch_len = len(epoch_indices)
     precision = getattr(cfg.training, "precision", "float32")
-    context = get_autocast_context(precision)
     start_time = time.time()
     with Profiler():
         for i, batch_idx in enumerate(epoch_indices):
-
             batch = dataloader[batch_idx]
-            # Get data from batch
-            if cfg.data.mode == "surface":
-                features, embeddings, targets, others = preprocess_surface_data(batch)
-                features, embeddings, targets = downsample_surface(
-                    features, embeddings, targets, cfg.data.resolution
-                )
-            elif cfg.data.mode == "volume":
-                features, embeddings, targets, others = preprocess_volume_data(batch)
-                features, embeddings, targets = downsample_volume(
-                    features, embeddings, targets, cfg.data.resolution
-                )
-            else:
-                raise ValueError(f"Unknown data mode: {cfg.data.mode}")
-
             # preload the next batch, if we're not on the last batch
             if i < epoch_len - 1 and sampler is not None:
                 dataloader.preload(epoch_indices[i + 1])
 
-            # Cast precisions:
-            features, embeddings = cast_precisions(features, embeddings, precision)
-
-            with context:
-                outputs = model(features, embeddings)
-                loss = loss_fn(outputs, targets, others, cfg.data.mode)
-
-            metrics = metrics_fn(outputs, targets, others, dist_manager, cfg.data.mode)
+            loss, metrics = forward_pass(
+                batch, model, precision, output_pad_size, dist_manager, cfg
+            )
 
             optimizer.zero_grad()
             if precision == "float16" and scaler is not None:
@@ -282,7 +356,8 @@ def train_epoch(
             end_time = time.time()
 
             # Logging
-            total_loss += loss.item()
+            this_loss = loss.detach().item()
+            total_loss += this_loss
 
             if i == 0:
                 total_metrics = metrics
@@ -296,7 +371,7 @@ def train_epoch(
             images_per_second = 1 / duration
 
             logger.info(
-                f"Epoch {epoch} [{i}/{epoch_len}] Loss: {loss.item():.6f} Duration: {duration:.2f}s"
+                f"Epoch {epoch} [{i}/{epoch_len}] Loss: {this_loss:.6f} Duration: {duration:.2f}s"
             )
             if dist_manager.rank == 0:
                 writer.add_scalar(
@@ -304,7 +379,7 @@ def train_epoch(
                     optimizer.param_groups[0]["lr"],
                     i + epoch_len * epoch,
                 )
-                writer.add_scalar("batch/loss", loss.item(), i + epoch_len * epoch)
+                writer.add_scalar("batch/loss", this_loss, i + epoch_len * epoch)
                 writer.add_scalar(
                     "batch/throughpu_per_gpu", images_per_second, i + epoch_len * epoch
                 )
@@ -332,25 +407,31 @@ def train_epoch(
 @profile
 def val_epoch(
     dataloader,
-    sampler,
-    model,
-    logger,
-    val_writer,
-    epoch,
-    cfg,
-    dist_manager,
-):
-    """Validation for one epoch
+    sampler: torch.utils.data.Sampler | None,
+    model: torch.nn.Module,
+    output_pad_size: int | None,
+    logger: PythonLogger,
+    val_writer: SummaryWriter,
+    epoch: int,
+    cfg: DictConfig,
+    dist_manager: DistributedManager,
+) -> float:
+    """
+    Run validation for one epoch.
 
     Args:
-        dataloader: Validation data loader
-        sampler: Validation data sampler
-        model: The model to evaluate
-        logger: Python logger instance
-        writer: Tensorboard writer
-        epoch: Current epoch number
-        cfg: Configuration object
-        dist_manager: Distributed manager instance
+        dataloader (list[dict]): Validation data loader.
+        sampler (torch.utils.data.Sampler | None): Sampler for distributed or sequential sampling.
+        model (torch.nn.Module): The model to evaluate.
+        output_pad_size (int | None): Optional output padding size for lowest precisions (FP8).
+        logger (PythonLogger): Logger for validation progress.
+        val_writer (SummaryWriter): TensorBoard writer for logging validation metrics.
+        epoch (int): Current epoch number.
+        cfg (DictConfig): Hydra configuration object.
+        dist_manager (DistributedManager): Distributed manager instance.
+
+    Returns:
+        float: The average validation loss for the epoch.
     """
 
     model.eval()  # Set model to evaluation mode
@@ -360,31 +441,20 @@ def val_epoch(
     epoch_indices = list(sampler) if sampler is not None else range(len(dataloader))
     epoch_len = len(epoch_indices)
     precision = getattr(cfg.training, "precision", "float32")
-    context = get_autocast_context(precision)
 
     start_time = time.time()
     with torch.no_grad():  # Disable gradient computation
         for i, batch_idx in enumerate(epoch_indices):
-            batch = dataloader[batch_idx]
             # Get data from batch
-            if cfg.data.mode == "surface":
-                features, embeddings, targets, others = preprocess_surface_data(batch)
-                features, embeddings, targets = downsample_surface(
-                    features, embeddings, targets, cfg.data.resolution
-                )
-            elif cfg.data.mode == "volume":
-                features, embeddings, targets, others = preprocess_volume_data(batch)
-                features, embeddings, targets = downsample_volume(
-                    features, embeddings, targets, cfg.data.resolution
-                )
-            else:
-                raise ValueError(f"Unknown data mode: {cfg.data.mode}")
+            batch = dataloader[batch_idx]
 
-            with context:
-                outputs = model(features, embeddings)
-                loss = loss_fn(outputs, targets, others, cfg.data.mode)
+            # preload the next batch, if we're not on the last batch
+            if i < epoch_len - 1 and sampler is not None:
+                dataloader.preload(epoch_indices[i + 1])
 
-            metrics = metrics_fn(outputs, targets, others, dist_manager, cfg.data.mode)
+            loss, metrics = forward_pass(
+                batch, model, precision, output_pad_size, dist_manager, cfg
+            )
 
             if i == 0:
                 total_metrics = metrics
@@ -394,16 +464,17 @@ def val_epoch(
                 }
 
             # Logging
-            total_loss += loss.item()
+            this_loss = loss.detach().item()
+            total_loss += this_loss
 
             end_time = time.time()
             duration = end_time - start_time
             start_time = end_time
 
             logger.info(
-                f"Val [{i}/{epoch_len}] Loss: {loss.item():.6f} Duration: {duration:.2f}s"
+                f"Val [{i}/{epoch_len}] Loss: {this_loss:.6f} Duration: {duration:.2f}s"
             )
-            # We don't add individual loss measurements in the validation loop.
+            # We don't add individual loss measurements to tensorboard in the validation loop.
 
     avg_loss = total_loss / epoch_len
     avg_metrics = {k: v / epoch_len for k, v in total_metrics.items()}
@@ -453,6 +524,25 @@ def main(cfg: DictConfig):
         val_writer = None
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+
+    if cfg.training.precision == "float8":
+        # we have to manipulate the output shape
+        # to enable fp8 computations with transformer_engine.
+        # need the output to be divisible by 16.
+        # if (cfg.model.embedding_dim + cfg.model.functional_dim) % 16 != 0:
+
+        if cfg.model.out_dim % 16 != 0:
+            # pad the output:
+            output_pad_size = 16 - (cfg.model.out_dim % 16)
+            cfg.model.out_dim += output_pad_size
+            logger.info(
+                f"Padding output dimension to {cfg.model.out_dim} for fp8 autocast"
+            )
+        else:
+            output_pad_size = None
+    else:
+        input_pad_size = None
+        output_pad_size = None
 
     # Set up model
     model = hydra.utils.instantiate(cfg.model)
@@ -564,6 +654,7 @@ def main(cfg: DictConfig):
             train_dataset,
             train_sampler,
             model,
+            output_pad_size,
             optimizer,
             scheduler,
             logger,
@@ -582,6 +673,7 @@ def main(cfg: DictConfig):
             val_dataset,
             val_sampler,
             model,
+            output_pad_size,
             logger,
             val_writer,
             epoch,

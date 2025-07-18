@@ -17,16 +17,16 @@
 
 
 output_dir: "runs"
-run_id: "volume/OneCycleLR/noTE/float32/"
+run_id: "volume/OneCycleLR/noTE/bfloat16/"
 
 # Training configuration
 training:
-  precision: float32 # float32, float16, bfloat16
-  num_epochs: 1
+  precision: bfloat16 # float32, float16, bfloat16
+  num_epochs: 250
   save_interval: 25  # Save checkpoint every N epochs
   seed: 42
   output_dir: "runs"
-  compile: false
+  compile: true
 
 # Model configuration
 model:
@@ -69,12 +69,11 @@ optimizer:
 # Data configuration
 data:
   train:
-    data_path: /group_data/datasets/drivaer_aws/domino/train/
+    data_path: /user_data/datasets/domino/train/
   val:
-    data_path: /group_data/datasets/drivaer_aws/domino/val/
-  max_workers: 8
+    data_path: /user_data/datasets/domino/val/
+  max_workers: 32
   pin_memory: true
-  # resolution: 262_144
   resolution: 200_000
   mode: volume
   data_keys:

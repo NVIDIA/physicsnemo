@@ -111,6 +111,9 @@ hyperparameters are also included. Data-related settings cover paths to the trai
 validation datasets, worker and thread counts, memory pinning, and which data keys to
 load. Finally, logging preferences are set, controlling the level and format of output.
 
+Note that, to use TransformerEngine, you must enable it directly in the model settings.
+TransformerEngine is incompatible with `torch.compile`.  
+
 ---
 
 ## 3. `loss.py`
@@ -118,11 +121,7 @@ load. Finally, logging preferences are set, controlling the level and format of 
 This file defines the loss functions used during Transolver training, primarily
 focusing on a relative L2 loss. For surface data, it computes mean squared error (MSE)
 or root mean squared error (RMSE) for both pressure (a scalar) and wall shear (a
-vector), handling each component separately before combining the results. The file also
-implements physics-based losses for lift and drag, using surface integrals of predicted
-and true values, weighted appropriately by area, normals, and stream velocity. The loss
-functions are designed to be modular, allowing for easy combination or extension to
-support different training objectives.
+vector), handling each component separately before combining the results.
 
 ---
 
@@ -140,23 +139,16 @@ application domains as needed.
 ## 5. `datapipe.py`
 
 Efficient loading of large CFD datasets stored in Zarr format is handled by this file,
-which implements a PyTorch dataset. The datapipe reads large arrays in a chunk-aligned
+which implements like a PyTorch dataset. The datapipe reads large arrays in a chunk-aligned
 manner for optimal performance, leveraging threads for parallel I/O. It offers
 flexibility in specifying which data keys to load and which are considered “large” (and
-thus read in chunks). For faster GPU transfers, it can allocate pinned memory, and it
-supports asynchronous prefetching of samples to overlap I/O with computation, further
-improving throughput.
+thus read in chunks, vs. small arrays which are directly read in their entirety).
+For faster GPU transfers, it can allocate directly to pinned memory, then share buffers
+with numpy for streaming from disk directly to pinned memory.  The dataload has a
+prefetch utility, as well, enabling the dataloader to queue the next batch to GPU.
 
----
-
-## Summary
-
-In summary, the configuration files (`train.yaml`) centralize all settings for the
-model, data, optimizer, and logging. The main training script (`train.py`) orchestrates
-distributed training, validation, checkpointing, and logging. Loss functions in
-`loss.py` combine physics-informed and standard approaches, while `metrics.py` provides
-robust evaluation metrics with distributed support. Finally, `datapipe.py` ensures
-high-performance, domain-parallel data loading from Zarr files, enabling large-scale
-CFD training.
-
-For further details, consult the docstrings and comments within each file.
+CPU to GPU transfers are performed in a separate CUDA stream from the main computation,
+enabling async transfers overlapping with model training.  The main parameter to tune
+is the number of workers for the threading: too many, and you will introduce
+CPU overhead limiting the model performance.  Too few, and the dataload won't acheive
+peak throughput of dataloading.

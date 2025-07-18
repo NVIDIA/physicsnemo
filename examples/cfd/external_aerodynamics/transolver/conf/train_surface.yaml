@@ -17,7 +17,7 @@
 
 
 output_dir: "runs"
-run_id: "surface/ReduceLR/TE/float16/"
+run_id: "surface/ReduceLR/TE/float16-3/"
 
 # Training configuration
 training:
@@ -44,7 +44,7 @@ model:
   unified_pos: false # Whether to use unified positional embeddings
   ref: 8            # Reference dimension for unified pos
   structured_shape: null
-  use_te: true      # Use transformer engine
+  use_te: True      # Use transformer engine
   Time_Input: false # Whether to use time embeddings
 
 # scheduler:
@@ -56,14 +56,14 @@ model:
 scheduler:
   name: "StepLR"
   params:
-    step_size: 100    # Decay every 100 epochs (set X as desired)
+    step_size: 50     # Decay every 100 epochs (set X as desired)
     gamma: 0.5        # Decay factor
 
 
 # Optimizer configuration
 optimizer:
   _target_: torch.optim.AdamW
-  lr: 1.0e-3
+  lr: 3.0e-4
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   eps: 1.0e-8
@@ -71,9 +71,9 @@ optimizer:
 # Data configuration
 data:
   train:
-    data_path: /group_data/datasets/drivaer_aws/domino/train/
+    data_path: /user_data/datasets/domino/train/
   val:
-    data_path: /group_data/datasets/drivaer_aws/domino/val/
+    data_path: /user_data/datasets/domino/val/
   max_workers: 64
   pin_memory: true
   # resolution: 10000

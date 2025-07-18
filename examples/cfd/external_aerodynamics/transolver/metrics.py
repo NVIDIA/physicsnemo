@@ -20,7 +20,19 @@ import torch.distributed as dist
 from physicsnemo.distributed import DistributedManager
 
 
-def all_reduce_dict(metrics, dm):
+def all_reduce_dict(
+    metrics: dict[str, torch.Tensor], dm: DistributedManager
+) -> dict[str, torch.Tensor]:
+    """
+    Reduces a dictionary of metrics across all distributed processes.
+
+    Args:
+        metrics: Dictionary of metric names to torch.Tensor values.
+        dm: DistributedManager instance for distributed context.
+
+    Returns:
+        Dictionary of reduced metrics.
+    """
     # TODO - update this to use domains and not the full world
 
     if dm.world_size == 1:
@@ -34,16 +46,56 @@ def all_reduce_dict(metrics, dm):
     return metrics
 
 
-def metrics_fn(pred, target, others, dm, mode):
-    if mode == "surface":
-        return metrics_fn_surface(pred, target, others, dm)
-    elif mode == "volume":
-        return metrics_fn_volume(pred, target, others, dm)
-    else:
-        raise ValueError(f"Unknown data mode: {mode}")
+def metrics_fn(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    others: dict[str, torch.Tensor],
+    dm: DistributedManager,
+    mode: str,
+) -> dict[str, torch.Tensor]:
+    """
+    Computes metrics for either surface or volume data.
+
+    Args:
+        pred: Predicted values (unnormalized).
+        target: Target values (unnormalized).
+        others: Dictionary containing normalization statistics.
+        dm: DistributedManager instance for distributed context.
+        mode: Either "surface" or "volume".
+
+    Returns:
+        Dictionary of computed metrics.
+    """
+    with torch.no_grad():
+        if mode == "surface":
+            metrics = metrics_fn_surface(pred, target, others, dm)
+        elif mode == "volume":
+            metrics = metrics_fn_volume(pred, target, others, dm)
+        else:
+            raise ValueError(f"Unknown data mode: {mode}")
+
+        metrics = all_reduce_dict(metrics, dm)
+        return metrics
 
 
-def metrics_fn_volume(pred, target, others, dm):
+def metrics_fn_volume(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    others: dict[str, torch.Tensor],
+    dm: DistributedManager,
+) -> dict[str, torch.Tensor]:
+    """
+    Computes L2 volume metrics between prediction and target.
+
+    Args:
+        pred: Predicted values (normalized).
+        target: Target values (normalized).
+        others: Dictionary containing normalization statistics.
+        dm: DistributedManager instance for distributed context.
+
+    Returns:
+        Dictionary of L2 volume metrics.
+    """
     target = target * others["norm_std"] + others["norm_mean"]
     pred = pred * others["norm_std"] + others["norm_mean"]
 
@@ -58,18 +110,34 @@ def metrics_fn_volume(pred, target, others, dm):
     l2 = l2_num / l2_denom
 
     metrics = {
-        "l2_volume_1": torch.mean(l2[:, 0]),
-        "l2_volume_2": torch.mean(l2[:, 1]),
-        "l2_volume_3": torch.mean(l2[:, 2]),
-        "l2_volume_4": torch.mean(l2[:, 3]),
-        "l2_volume_5": torch.mean(l2[:, 4]),
+        "lr_volume_pressure": torch.mean(l2[:, 0]),
+        "l2_velocity_x": torch.mean(l2[:, 1]),
+        "l2_velocity_y": torch.mean(l2[:, 2]),
+        "l2_velocity_z": torch.mean(l2[:, 3]),
+        "l2_turb_visc": torch.mean(l2[:, 4]),
     }
 
     return metrics
 
 
-def metrics_fn_surface(pred, target, others, dm):
+def metrics_fn_surface(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    others: dict[str, torch.Tensor],
+    dm: DistributedManager,
+) -> dict[str, torch.Tensor]:
+    """
+    Computes L2 surface metrics between prediction and target.
 
+    Args:
+        pred: Predicted values (normalized).
+        target: Target values (normalized).
+        others: Dictionary containing normalization statistics.
+        dm: DistributedManager instance for distributed context.
+
+    Returns:
+        Dictionary of L2 surface metrics.
+    """
     # Unnormalize the surface values for L2:
     target = target * others["norm_std"] + others["norm_mean"]
     pred = pred * others["norm_std"] + others["norm_mean"]
@@ -94,5 +162,17 @@ def metrics_fn_surface(pred, target, others, dm):
     return metrics
 
 
-def metrics_fn_surface_pressure(pred, target):
+def metrics_fn_surface_pressure(
+    pred: torch.Tensor, target: torch.Tensor
+) -> torch.Tensor:
+    """
+    Computes mean squared error between predicted and target surface pressure.
+
+    Args:
+        pred: Predicted surface pressure.
+        target: Target surface pressure.
+
+    Returns:
+        Mean squared error as a torch.Tensor.
+    """
     return torch.mean((pred - target) ** 2.0)

@@ -1,0 +1,6 @@
+hydra-core
+tabulate
+tensorboard
+termcolor
+einops
+transformer_engine[pytorch]
