@@ -325,6 +325,7 @@ def main(cfg: DictConfig) -> None:
             find_unused_parameters=True,  # dist.find_unused_parameters,
             bucket_cap_mb=35,
             gradient_as_bucket_view=True,
+            static_graph=True,
         )
     if cfg.wandb.watch_model and dist.rank == 0:
         wandb.watch(model)
@@ -681,7 +682,6 @@ def main(cfg: DictConfig) -> None:
                                         "img_clean": img_clean_valid,
                                         "img_lr": img_lr_valid,
                                         "augment_pipe": None,
-                                        "use_patch_grad_acc": use_patch_grad_acc,
                                     }
                                     if use_patch_grad_acc is not None:
                                         loss_valid_kwargs[

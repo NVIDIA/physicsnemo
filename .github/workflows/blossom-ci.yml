@@ -57,7 +57,7 @@ jobs:
            github.actor == 'yairchn' ||
            github.actor == 'pzharrington' ||
            github.actor == 'hasethinvd' ||
-           github.actor == 'rishikeshranade' ||
+           github.actor == 'RishikeshRanade' ||
            github.actor == 'hakhondzadeh' ||
            github.actor == 'peterdsharpe' ||
            github.actor == 'coreyjadams' ||

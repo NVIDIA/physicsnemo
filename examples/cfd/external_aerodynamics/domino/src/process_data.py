@@ -71,11 +71,24 @@ def main(cfg: DictConfig):
         else:
             num_surf_vars += 1
 
+    # Extract global parameters names and reference values
+    global_params_names = list(cfg.variables.global_parameters.keys())
+    global_params_reference = {
+        name: cfg.variables.global_parameters[name]["reference"]
+        for name in global_params_names
+    }
+    global_params_types = {
+        name: cfg.variables.global_parameters[name]["type"]
+        for name in global_params_names
+    }
+
     fm_data = OpenFoamDataset(
         cfg.data_processor.input_dir,
         kind=cfg.data_processor.kind,
         volume_variables=volume_variable_names,
         surface_variables=surface_variable_names,
+        global_params_types=global_params_types,
+        global_params_reference=global_params_reference,
         model_type=cfg.model.model_type,
     )
     output_dir = cfg.data_processor.output_dir
