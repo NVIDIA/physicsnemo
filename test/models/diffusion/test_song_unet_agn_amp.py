@@ -230,7 +230,7 @@ def test_song_unet_optims(device):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
-    # Construct FNO models
+
     model_1 = UNet(
         img_resolution=16,
         in_channels=2,

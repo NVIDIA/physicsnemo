@@ -104,7 +104,6 @@ def test_unet_optims(device):
     res, inc, outc = 64, 2, 3
 
     def setup_model():
-
         model = UNet(
             img_resolution=res,
             img_in_channels=inc,
@@ -113,32 +112,40 @@ def test_unet_optims(device):
         ).to(device)
         input_image = torch.ones([1, inc, res, res]).to(device)
         lr_image = torch.randn([1, outc, res, res]).to(device)
-
         return model, [input_image, lr_image]
 
-    # Check AMP: should fail because amp_mode is False for the layers
+    #  Check AMP: with amp_mode=True for the layers, should pass
     model, invar = setup_model()
-    with pytest.raises(RuntimeError):
-        assert common.validate_amp(model, (*invar,))
-    # With amp_mode=True for the layers: should pass
     model.amp_mode = True
     assert common.validate_amp(model, (*invar,))
+
+    # Check failures (only on GPU, because validate_amp doesn't activate amp on
+    # CPU)
+    if device == "cuda:0":
+        # Check AMP: should fail because amp_mode=False for the layers
+        model, invar = setup_model()
+        with pytest.raises(RuntimeError):
+            assert common.validate_amp(model, (*invar,))
 
     def setup_model():
         model = StormCastUNet(
             img_resolution=res, img_in_channels=inc, img_out_channels=outc
         ).to(device)
         input_image = torch.ones([1, inc, res, res]).to(device)
-
         return model, [input_image]
 
-    # Check AMP: should fail because amp_mode is False for the layers
+    # Check AMP: with amp_mode=True for the layers, should pass
     model, invar = setup_model()
-    with pytest.raises(RuntimeError):
-        assert common.validate_amp(model, (*invar,))
-    # With amp_mode=True for the layers: should pass
     model.amp_mode = True
     assert common.validate_amp(model, (*invar,))
+
+    # Check failures (only on GPU, because validate_amp doesn't activate amp on
+    # CPU)
+    if device == "cuda:0":
+        # Check AMP: should fail because amp_mode is False for the layers
+        model, invar = setup_model()
+        with pytest.raises(RuntimeError):
+            assert common.validate_amp(model, (*invar,))
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
