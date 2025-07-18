@@ -175,6 +175,9 @@ class DomainParallelZarrDataset(Dataset):
         self.keys_to_read = keys_to_read or set()
         self.large_keys = large_keys or set()
 
+        self.data_loader_stream = torch.cuda.Stream()
+        self.gpu_transfer_compete = None
+
         # Validate distributed configuration
         if self.device_mesh is not None:
             if self.device_mesh.ndim != 1:
@@ -458,10 +461,25 @@ class DomainParallelZarrDataset(Dataset):
         """
         result = {}
 
-        for key, array in data.items():
-            # Move to GPU if available
-            if self.dm.cuda:
-                result[key] = data[key].to(self.dm.device, non_blocking=True)
+        # This is old code.
+        # Thinking about ways to reduce CPU overhead.
+        # If we could avoid the data reading step, it would be easier.
+        # total_size = 0
+        # for key, array in data.items():
+        #     size = array.numel() * array.element_size()
+        #     total_size += size
+        #     print(f"Size in memory of {key}: {size / 1024 / 1024 / 1024} GB")
+        # print(f"Total size in memory: {total_size / 1024 / 1024 / 1024} GB")
+
+        with torch.cuda.stream(self.data_loader_stream):
+
+            for key, array in data.items():
+                # Move to GPU if available
+                if self.dm.cuda:
+                    result[key] = data[key].to(self.dm.device, non_blocking=True)
+
+            self.gpu_transfer_compete = torch.cuda.Event()
+            self.gpu_transfer_compete.record(self.data_loader_stream)
 
         return result
 
@@ -526,6 +544,8 @@ class DomainParallelZarrDataset(Dataset):
                 filename = self.filenames[idx]
                 filepath = self.data_path / filename
                 data = self._read_zarr_file(filepath)
+                # Convert to torch tensors
+                data = self._move_to_gpu(data)
                 self._preload_result = (idx, data)
             except Exception as e:
                 self._preload_exception = e
@@ -555,6 +575,25 @@ class DomainParallelZarrDataset(Dataset):
 
         return self._preload_result
 
+    def __iter__(self):
+        self.i = 0
+        return self
+
+    def __next__(self):
+        """
+        This supports the DALI iterator.
+        """
+        if self.i >= len(self.filenames):
+            self.i = 0
+            raise StopIteration
+        data = self._read_zarr_file(self.data_path / self.filenames[self.i])
+
+        self.i += 1
+        return tuple(data[key].unsqueeze(0) for key in self.keys_to_read)
+
+    def __len__(self):
+        return len(self.filenames)
+
     @profile
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor | ShardTensor]:
         """
@@ -579,27 +618,27 @@ class DomainParallelZarrDataset(Dataset):
             else:
                 # Preloaded data is for a different idx, ignore it
                 data = self._read_zarr_file(self.data_path / self.filenames[idx])
+                data = self._move_to_gpu(data)
         else:
             filename = self.filenames[idx]
             filepath = self.data_path / filename
 
             # Read data from zarr file
             data = self._read_zarr_file(filepath)
+            data = self._move_to_gpu(data)
 
-        # filename = self.filenames[idx]
-        # filepath = self.data_path / filename
+        # This blocks until the preprocessing has transferred to GPU
+        if self.gpu_transfer_compete is not None:
+            torch.cuda.current_stream().wait_event(self.gpu_transfer_compete)
 
-        # # Read data from zarr file
-        # data = self._read_zarr_file(filepath)
-
-        # Convert to torch tensors
-        tensors = self._move_to_gpu(data)
+        # Add a batch index:
+        data = {key: value.unsqueeze(0) for key, value in data.items()}
 
         # Convert to ShardTensors if using domain parallelism
         if self.device_mesh is not None:
-            tensors = self._convert_to_shard_tensors(tensors)
+            data = self._convert_to_shard_tensors(data)
 
-        return tensors
+        return data
 
 
 # TODO: Additional features to consider implementing:

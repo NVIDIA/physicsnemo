@@ -97,8 +97,8 @@ def preprocess_surface_data(batch):
     ).to(torch.float32)
 
     # Normalize the surface fields:
-    norm_mean = targets.mean(dim=0)
-    norm_std = targets.std(dim=0)
+    norm_mean = targets.mean(dim=1)
+    norm_std = targets.std(dim=1)
     targets = (targets - norm_mean) / norm_std
     # fourier_sin_features = [
     #     torch.sin(mesh_centers * (2 ** i) * torch.pi)
@@ -113,7 +113,7 @@ def preprocess_surface_data(batch):
     sizes = batch["stl_areas"]
     centers = batch["stl_centers"]
 
-    total_weighted_position = torch.einsum("i,ij->j", sizes, centers)
+    total_weighted_position = torch.einsum("ki,kij->kj", sizes, centers)
     total_size = torch.sum(sizes)
     center_of_mass = total_weighted_position[None, ...] / total_size
 
@@ -129,8 +129,7 @@ def preprocess_surface_data(batch):
         ],
         dim=-1,
     )
-
-    node_features = node_features.unsqueeze(0).broadcast_to(embeddings.shape[0], -1)
+    node_features = node_features.unsqueeze(1).broadcast_to(1, embeddings.shape[1], -1)
 
     others = {
         "surface_areas": sizes,
@@ -171,20 +170,20 @@ def preprocess_volume_data(batch):
 @profile
 def downsample_surface(features, embeddings, targets, num_keep=1024):
     # Determine the number of samples to keep (e.g., 50% of original size)
-    num_samples = features.shape[0]
+    num_samples = features.shape[1]
     # Generate random indices to keep (faster for large num_samples)
     indices = torch.multinomial(
         torch.ones(num_samples, device=features.device), num_keep, replacement=False
     )
 
     # Use the same indices to downsample all tensors
-    downsampled_features = features[indices]
-    downsampled_embeddings = embeddings[indices]
-    downsampled_targets = targets[indices]
+    downsampled_features = features[:, indices]
+    downsampled_embeddings = embeddings[:, indices]
+    downsampled_targets = targets[:, indices]
 
-    downsampled_features = downsampled_features.unsqueeze(0)
-    downsampled_embeddings = downsampled_embeddings.unsqueeze(0)
-    downsampled_targets = downsampled_targets.unsqueeze(0)
+    # downsampled_features = downsampled_features.unsqueeze(0)
+    # downsampled_embeddings = downsampled_embeddings.unsqueeze(0)
+    # downsampled_targets = downsampled_targets.unsqueeze(0)
 
     return downsampled_features, downsampled_embeddings, downsampled_targets
 
@@ -192,19 +191,15 @@ def downsample_surface(features, embeddings, targets, num_keep=1024):
 @profile
 def downsample_volume(features, embeddings, targets, num_keep=1024):
     # Determine the number of samples to keep (e.g., 50% of original size)
-    num_samples = features.shape[0]
+    num_samples = features.shape[1]
     # The volume data is so large, that we'll sample randints
     # which will very rarely duplicate
     indices = torch.randint(0, num_samples, (num_keep,), device=features.device)
 
     # Use the same indices to downsample all tensors
-    downsampled_features = features[indices]
-    downsampled_embeddings = embeddings[indices]
-    downsampled_targets = targets[indices]
-
-    downsampled_features = downsampled_features.unsqueeze(0)
-    downsampled_embeddings = downsampled_embeddings.unsqueeze(0)
-    downsampled_targets = downsampled_targets.unsqueeze(0)
+    downsampled_features = features[:, indices]
+    downsampled_embeddings = embeddings[:, indices]
+    downsampled_targets = targets[:, indices]
 
     return downsampled_features, downsampled_embeddings, downsampled_targets
 
@@ -236,13 +231,14 @@ def train_epoch(
     total_loss = 0
     total_metrics = {}
 
-    epoch_indices = list(sampler)
+    epoch_indices = list(sampler) if sampler is not None else range(len(dataloader))
     epoch_len = len(epoch_indices)
     precision = getattr(cfg.training, "precision", "float32")
     context = get_autocast_context(precision)
     start_time = time.time()
     with Profiler():
         for i, batch_idx in enumerate(epoch_indices):
+
             batch = dataloader[batch_idx]
             # Get data from batch
             if cfg.data.mode == "surface":
@@ -259,7 +255,7 @@ def train_epoch(
                 raise ValueError(f"Unknown data mode: {cfg.data.mode}")
 
             # preload the next batch, if we're not on the last batch
-            if i < epoch_len - 1:
+            if i < epoch_len - 1 and sampler is not None:
                 dataloader.preload(epoch_indices[i + 1])
 
             # Cast precisions:
@@ -280,7 +276,7 @@ def train_epoch(
                 loss.backward()
                 optimizer.step()
 
-            if not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            if not isinstance(scheduler, torch.optim.lr_scheduler.StepLR):
                 scheduler.step()
 
             end_time = time.time()
@@ -361,7 +357,7 @@ def val_epoch(
     total_loss = 0
     total_metrics = {}
 
-    epoch_indices = list(sampler)
+    epoch_indices = list(sampler) if sampler is not None else range(len(dataloader))
     epoch_len = len(epoch_indices)
     precision = getattr(cfg.training, "precision", "float32")
     context = get_autocast_context(precision)
@@ -478,6 +474,7 @@ def main(cfg: DictConfig):
     placements = None
 
     # Training dataset
+
     train_dataset = DomainParallelZarrDataset(
         data_path=cfg.data.train.data_path,
         device_mesh=device_mesh,
@@ -489,6 +486,7 @@ def main(cfg: DictConfig):
     )
 
     # Validation dataset
+
     val_dataset = DomainParallelZarrDataset(
         data_path=cfg.data.val.data_path,  # Assuming validation data path is configured
         device_mesh=device_mesh,
@@ -543,7 +541,7 @@ def main(cfg: DictConfig):
     scaler = GradScaler() if precision == "float16" else None
 
     ckpt_args = {
-        "path": f"{cfg.output_dir}/runs/{cfg.run_id}/checkpoints",
+        "path": f"{cfg.output_dir}/{cfg.run_id}/checkpoints",
         "optimizer": optimizer,
         "scheduler": scheduler,
         "models": model,
@@ -602,9 +600,7 @@ def main(cfg: DictConfig):
         if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
             save_checkpoint(**ckpt_args, epoch=epoch)
 
-        if scheduler_name == "ReduceLROnPlateau":
-            scheduler.step(val_loss)
-        else:
+        if scheduler_name == "StepLR":
             scheduler.step()
 
     logger.info("Training completed!")

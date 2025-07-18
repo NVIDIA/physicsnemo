@@ -1,130 +1,162 @@
 # Transolver CFD Example: Code Overview
 
-This directory contains the core components for training and evaluating a Transolver
-model for external aerodynamics CFD problems.  The Transolver model is an adaptation
-of the Attention mechanism to encourage models to learn meaningful representations.
-In each PhysicsAttention layer, the input points are projected onto state vectors via
-learnable transformations and weights.  These learnable transformations are in turn
-used to calculate self-attention between all state vectors, and the weights are reused
-to project states back to each input point.
+This directory contains the essential components for training and evaluating a
+Transolver model tailored to external aerodynamics CFD problems. The Transolver model
+adapts the Attention mechanism, encouraging the learning of meaningful representations.
+In each PhysicsAttention layer, input points are projected onto state vectors through
+learnable transformations and weights. These transformations are then used to compute
+self-attention among all state vectors, and the same weights are reused to project
+states back to each input point.
 
-Through a series of PhysicsAttention layers, the Transolver model learns high quality
-projections from functional input space to output space.  The PhysicsNeMo implementation
-of Transolver is an equivalent implementation of the original model architecture
-([https://github.com/thuml/Transolver](https://github.com/thuml/Transolver)), with
-modifications to improve numerical stability and support NVIDIA TransformerEngine.
+By stacking multiple PhysicsAttention layers, the Transolver model learns to map from
+the functional input space to the output space with high fidelity. The PhysicsNeMo
+implementation closely follows the original Transolver architecture
+([https://github.com/thuml/Transolver](https://github.com/thuml/Transolver)), but
+introduces modifications for improved numerical stability and compatibility with NVIDIA
+TransformerEngine.
 
-The Transolver training recipe reuses the same input datasets as DoMINO - please see
-the external_aerodynamics example for DoMINO for more information, as well as
-[PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator) for information
-on producing the data if needed.  The Transolver model does not require the neighbor
-points as input to the model, nor does it require any structure to the input points
-(graph connections, edges, etc.).  Consequently, the datapipe is significantly simpler
-than for DoMINO - the entire datapipe is encapulated here in the examples.
+The training workflow for Transolver leverages the same input datasets as DoMINO. For
+more information on the datasets, refer to the external_aerodynamics example for DoMINO
+and the [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator) for data
+preparation guidance. Unlike DoMINO, Transolver does not require neighbor points or any
+explicit structure (such as graph connections or edges) in the input data, resulting in
+a much simpler datapipe that is fully encapsulated within these examples.
 
-Below is a high-level overview of the main files and their roles in the workflow.
-
----
-
-## 1. `conf/train.yaml`
-
-**Purpose:**  
-Configuration file for training runs.  
-**Contents:**  
-
-- **Output and run settings:** Output directory, run ID, random seed, and precision.
-- **Training parameters:** Number of epochs, checkpoint intervals, and whether to use
-  compilation.
-- **Model configuration:** Architecture details (input/output dimensions, number of
-  layers, embedding size, attention heads, activation, etc.).
-- **Optimizer settings:** Type (AdamW), learning rate, weight decay, and optimizer
-  hyperparameters.
-- **Data settings:** Paths to training/validation datasets, worker/thread settings,
-  memory pinning, and which data keys to load.
-- **Logging:** Logging level and format.
+Below, we provide a high-level overview of the main files and their roles in the
+workflow.
 
 ---
 
-## 2. `src/train.py`
+## 1. `src/train.py`
 
-**Purpose:**  
-Main training script for the DoMINO/Transolver model using distributed data parallelism.
+This script serves as the main entry point for training the DoMINO/Transolver model,
+utilizing distributed data parallelism. The training loop processes the entire dataset,
+computing a simple point-wise relative L2 loss for either surface or volume data, and
+includes downsampling to handle the high native mesh resolutions.
 
-**Key Features:**
+The script is designed for multi-GPU training using PyTorch’s DistributedDataParallel,
+and it loads datasets through a custom datapipe that supports distributed sampling.
+Model instantiation is flexible, supporting either surface or volume predictions
+as specified in the configuration.
 
-- **Distributed Training:** Uses PyTorch DistributedDataParallel for multi-GPU training.
-- **Data Loading:** Loads datasets using custom datapipe, supports distributed sampling.
-- **Model Instantiation:** Builds the model based on config, supports both surface and
-  volume predictions.
-- **Loss Calculation:** Computes losses for volume, surface, and integral quantities
-  (lift/drag).
-- **Mixed Precision:** Supports mixed-precision training with gradient scaling.
-- **Checkpointing:** Automatically loads/saves checkpoints and tracks best validation
-  loss.
-- **Logging:** Logs metrics to TensorBoard and console, including GPU memory usage.
-- **Validation:** Evaluates model on validation set after each epoch.
+The script supports mixed-precision training with gradient
+scaling, and it manages checkpointing with the physicsnemo checkpointing utils.
+Throughout training, metrics are logged to both TensorBoard and the console and
+validation is performed after each epoch.
+
+The script can be launched on a single GPU with
+
+```bash
+python train.py --config-name train_surface
+```
+
+or, for multi-GPU training, use `torchrun` or other distributed job launch tools.
+
+Example output for one epoch of the script, in an 8 GPU run, looks like:
+
+```default
+[2025-07-17 14:27:36,040][training][INFO] - Epoch 47 [0/54] Loss: 0.117565 Duration: 0.78s
+[2025-07-17 14:27:36,548][training][INFO] - Epoch 47 [1/54] Loss: 0.109625 Duration: 0.51s
+[2025-07-17 14:27:37,048][training][INFO] - Epoch 47 [2/54] Loss: 0.122574 Duration: 0.50s
+[2025-07-17 14:27:37,556][training][INFO] - Epoch 47 [3/54] Loss: 0.125667 Duration: 0.51s
+[2025-07-17 14:27:38,063][training][INFO] - Epoch 47 [4/54] Loss: 0.101863 Duration: 0.51s
+[2025-07-17 14:27:38,547][training][INFO] - Epoch 47 [5/54] Loss: 0.113324 Duration: 0.48s
+[2025-07-17 14:27:39,054][training][INFO] - Epoch 47 [6/54] Loss: 0.115478 Duration: 0.51s
+...[remove for brevity]...
+[2025-07-17 14:28:00,662][training][INFO] - Epoch 47 [49/54] Loss: 0.107935 Duration: 0.49s
+[2025-07-17 14:28:01,178][training][INFO] - Epoch 47 [50/54] Loss: 0.100087 Duration: 0.52s
+[2025-07-17 14:28:01,723][training][INFO] - Epoch 47 [51/54] Loss: 0.097733 Duration: 0.55s
+[2025-07-17 14:28:02,194][training][INFO] - Epoch 47 [52/54] Loss: 0.116489 Duration: 0.47s
+[2025-07-17 14:28:02,605][training][INFO] - Epoch 47 [53/54] Loss: 0.104865 Duration: 0.41s
+
+Epoch 47 Average Metrics:
++-------------+---------------------+
+|   Metric    |    Average Value    |
++-------------+---------------------+
+| l2_pressure | 0.20262257754802704 |
+| l2_shear_x  | 0.2623567283153534  |
+| l2_shear_y  | 0.35603201389312744 |
+| l2_shear_z  | 0.38965049386024475 |
++-------------+---------------------+
+
+[2025-07-17 14:28:02,834][training][INFO] - Val [0/6] Loss: 0.114801 Duration: 0.22s
+[2025-07-17 14:28:03,074][training][INFO] - Val [1/6] Loss: 0.111632 Duration: 0.24s
+[2025-07-17 14:28:03,309][training][INFO] - Val [2/6] Loss: 0.105342 Duration: 0.23s
+[2025-07-17 14:28:03,537][training][INFO] - Val [3/6] Loss: 0.111033 Duration: 0.23s
+[2025-07-17 14:28:03,735][training][INFO] - Val [4/6] Loss: 0.099963 Duration: 0.20s
+[2025-07-17 14:28:03,903][training][INFO] - Val [5/6] Loss: 0.092340 Duration: 0.17s
+
+Epoch 47 Validation Average Metrics:
++-------------+---------------------+
+|   Metric    |    Average Value    |
++-------------+---------------------+
+| l2_pressure | 0.19346082210540771 |
+| l2_shear_x  | 0.26041051745414734 |
+| l2_shear_y  | 0.3589216470718384  |
+| l2_shear_z  |  0.370105117559433  |
++-------------+---------------------+
+```
+
+---
+
+## 2. `conf/train_volume.yaml` and `conf/train_surface.yaml`
+
+These configuration files define all the settings required for a training run. They
+specify output directories, run identifiers, random seeds, and precision settings, as
+well as the number of epochs, checkpoint intervals, and whether to use compilation. The
+model architecture is described here, including input and output dimensions, the number
+of layers, embedding size, attention heads, and activation functions. Optimizer
+settings such as the type (AdamW), learning rate, weight decay, and other
+hyperparameters are also included. Data-related settings cover paths to the training and
+validation datasets, worker and thread counts, memory pinning, and which data keys to
+load. Finally, logging preferences are set, controlling the level and format of output.
 
 ---
 
 ## 3. `loss.py`
 
-**Purpose:**  
-Defines loss functions for training the Transolver model.
-
-**Key Features:**
-
-- **Surface Loss:** Computes MSE or RMSE for both pressure (scalar) and wall shear
-  (vector) components, handling them separately and combining the results.
-- **Integral Losses:** Implements physics-based losses for lift and drag, using surface
-  integrals of predicted and true values, weighted by area, normals, and stream
-  velocity.
-- **Modularity:** Loss functions are modular and can be combined or extended for
-  different training objectives.
+This file defines the loss functions used during Transolver training, primarily
+focusing on a relative L2 loss. For surface data, it computes mean squared error (MSE)
+or root mean squared error (RMSE) for both pressure (a scalar) and wall shear (a
+vector), handling each component separately before combining the results. The file also
+implements physics-based losses for lift and drag, using surface integrals of predicted
+and true values, weighted appropriately by area, normals, and stream velocity. The loss
+functions are designed to be modular, allowing for easy combination or extension to
+support different training objectives.
 
 ---
 
 ## 4. `metrics.py`
 
-**Purpose:**  
-Defines evaluation metrics for model predictions.
-
-**Key Features:**
-
-- **Distributed Reduction:** Aggregates metrics across distributed processes.
-- **Surface Metrics:** Computes normalized L2 errors for pressure and shear components,
-  after unnormalizing predictions and targets.
-- **Extensibility:** Can be extended for additional metrics or domains.
+Evaluation metrics for model predictions are defined here. The metrics are designed to
+aggregate results across distributed processes, ensuring consistency in multi-GPU
+setups. For surface predictions, the script computes normalized L2 errors for both
+pressure and shear components, after unnormalizing the predictions and targets. The
+structure of the code allows for straightforward extension to additional metrics or
+application domains as needed.
 
 ---
 
 ## 5. `datapipe.py`
 
-**Purpose:**  
-Implements a PyTorch dataset for efficient loading of large CFD datasets stored in Zarr
-format.
-
-**Key Features:**
-
-- **Chunk-Aligned I/O:** Reads large arrays in chunk-aligned fashion for efficiency,
-  using threads for parallel I/O.
-- **Flexible Key Loading:** Allows specifying which data keys to load and which are
-  considered "large" (for chunked reading).
-- **Pinned Memory:** Optionally allocates pinned memory for faster GPU transfers.
-- **Prefetching:** Supports asynchronous preloading of samples to overlap I/O and
-  computation.
+Efficient loading of large CFD datasets stored in Zarr format is handled by this file,
+which implements a PyTorch dataset. The datapipe reads large arrays in a chunk-aligned
+manner for optimal performance, leveraging threads for parallel I/O. It offers
+flexibility in specifying which data keys to load and which are considered “large” (and
+thus read in chunks). For faster GPU transfers, it can allocate pinned memory, and it
+supports asynchronous prefetching of samples to overlap I/O with computation, further
+improving throughput.
 
 ---
 
 ## Summary
 
-- **`train.yaml`**: All configuration for model, data, optimizer, and logging.
-- **`train.py`**: Orchestrates distributed training, validation, checkpointing, and
-  logging.
-- **`loss.py`**: Physics-informed and standard loss functions for model training.
-- **`metrics.py`**: Evaluation metrics for model performance, with distributed support.
-- **`datapipe.py`**: High-performance, domain-parallel data loading from Zarr files for
-  large-scale CFD datasets.
+In summary, the configuration files (`train.yaml`) centralize all settings for the
+model, data, optimizer, and logging. The main training script (`train.py`) orchestrates
+distributed training, validation, checkpointing, and logging. Loss functions in
+`loss.py` combine physics-informed and standard approaches, while `metrics.py` provides
+robust evaluation metrics with distributed support. Finally, `datapipe.py` ensures
+high-performance, domain-parallel data loading from Zarr files, enabling large-scale
+CFD training.
 
----
-
-For more details, refer to the docstrings and comments within each file.
+For further details, consult the docstrings and comments within each file.

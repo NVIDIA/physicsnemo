@@ -17,12 +17,12 @@
 
 
 output_dir: "runs"
-run_id: "volume/OneCycleLR/TE/float32/"
+run_id: "volume/OneCycleLR/noTE/float32/"
 
 # Training configuration
 training:
   precision: float32 # float32, float16, bfloat16
-  num_epochs: 200
+  num_epochs: 1
   save_interval: 25  # Save checkpoint every N epochs
   seed: 42
   output_dir: "runs"
@@ -44,7 +44,7 @@ model:
   unified_pos: false # Whether to use unified positional embeddings
   ref: 8            # Reference dimension for unified pos
   structured_shape: null
-  use_te: true      # Use transformer engine
+  use_te: false      # Use transformer engine
   Time_Input: false # Whether to use time embeddings
 
 scheduler:
@@ -69,10 +69,10 @@ optimizer:
 # Data configuration
 data:
   train:
-    data_path: /user_data/datasets/domino/train/
+    data_path: /group_data/datasets/drivaer_aws/domino/train/
   val:
-    data_path: /user_data/datasets/domino/val/
-  max_workers: 64
+    data_path: /group_data/datasets/drivaer_aws/domino/val/
+  max_workers: 8
   pin_memory: true
   # resolution: 262_144
   resolution: 200_000
@@ -82,7 +82,7 @@ data:
     - "volume_fields"
     - "air_density"
     - "stream_velocity"
-  large_keys:
+  large_keys: 
     - "volume_fields"
     - "volume_mesh_centers"
 
