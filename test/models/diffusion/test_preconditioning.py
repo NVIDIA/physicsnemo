@@ -241,7 +241,7 @@ def test_EDMPrecondSuperResolution_properties():
     )
 
     # Default value should be False
-    assert model.amp_mode in {None, False}
+    assert model.amp_mode is False
 
     # Enable amp_mode and verify propagation
     model.amp_mode = True

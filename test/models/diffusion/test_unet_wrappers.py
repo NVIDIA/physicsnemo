@@ -116,8 +116,12 @@ def test_unet_optims(device):
 
         return model, [input_image, lr_image]
 
-    # Check AMP
+    # Check AMP: should fail because amp_mode is False for the layers
     model, invar = setup_model()
+    with pytest.raises(RuntimeError):
+        assert common.validate_amp(model, (*invar,))
+    # With amp_mode=True for the layers: should pass
+    model.amp_mode = True
     assert common.validate_amp(model, (*invar,))
 
     def setup_model():
@@ -128,8 +132,12 @@ def test_unet_optims(device):
 
         return model, [input_image]
 
-    # Check AMP
+    # Check AMP: should fail because amp_mode is False for the layers
     model, invar = setup_model()
+    with pytest.raises(RuntimeError):
+        assert common.validate_amp(model, (*invar,))
+    # With amp_mode=True for the layers: should pass
+    model.amp_mode = True
     assert common.validate_amp(model, (*invar,))
 
 

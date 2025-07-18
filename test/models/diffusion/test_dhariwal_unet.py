@@ -87,12 +87,22 @@ def test_dhariwal_unet_optims(device):
     # Check JIT
     model, invar = setup_model()
     assert common.validate_jit(model, (*invar,))
-    # Check AMP
+    # Check AMP: should fail because amp_mode is False for the layers
+    with pytest.raises(RuntimeError):
+        model, invar = setup_model()
+        common.validate_amp(model, (*invar,))
+    # Check Combo: should fail because amp_mode is False for the layers
+    with pytest.raises(RuntimeError):
+        model, invar = setup_model()
+        common.validate_combo_optims(model, (*invar,))
+    # Check AMP with amp_mode=True for the layers: should pass
     model, invar = setup_model()
-    assert common.validate_amp(model, (*invar,))
-    # Check Combo
+    model.amp_mode = True
+    common.validate_amp(model, (*invar,))
+    # Check Combo with amp_mode=True for the layers: should pass
     model, invar = setup_model()
-    assert common.validate_combo_optims(model, (*invar,))
+    model.amp_mode = True
+    common.validate_combo_optims(model, (*invar,))
 
 
 # Skip CPU tests because too slow

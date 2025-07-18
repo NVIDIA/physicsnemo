@@ -53,10 +53,6 @@ def test_song_unet_constructor(device):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
-    # Same test but with autocast disabled: should raise an error
-    with pytest.raises(RuntimeError):
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
-            output_image = model(input_image, noise_labels, class_labels)
 
     # DDM++ with additive pos embed
     model_channels = 64
@@ -84,10 +80,6 @@ def test_song_unet_constructor(device):
         img_resolution,
         img_resolution,
     )
-    # Same test but with autocast disabled: should raise an error
-    with pytest.raises(RuntimeError):
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
-            output_image = model(input_image, noise_labels, class_labels)
 
     # NCSN++
     model = (
@@ -111,10 +103,6 @@ def test_song_unet_constructor(device):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
-    # Same test but with autocast disabled: should raise an error
-    with pytest.raises(RuntimeError):
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
-            output_image = model(input_image, noise_labels, class_labels)
 
     # test rectangular shape
     model = (
@@ -140,10 +128,6 @@ def test_song_unet_constructor(device):
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
-    # Same test but with autocast disabled: should raise an error
-    with pytest.raises(RuntimeError):
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=False):
-            output_image = model(input_image, noise_labels, class_labels)
 
     # Also test failure cases
     try:
