@@ -517,7 +517,11 @@ class SongUNet(Module):
             if self.profile_mode
             else contextlib.nullcontext()
         ):
-            if self.use_apex_gn and x.dim() == 4:
+            if (
+                self.use_apex_gn
+                and (not x.is_contiguous(memory_format=torch.channels_last))
+                and x.dim() == 4
+            ):
                 x = x.to(memory_format=torch.channels_last)
             if self.embedding_type != "zero":
                 # Mapping.
