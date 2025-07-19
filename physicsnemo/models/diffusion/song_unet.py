@@ -502,6 +502,7 @@ class SongUNet(Module):
         self.profile_mode = profile_mode
         self.amp_mode = amp_mode
 
+    # Properties that are recursively set on submodules
     profile_mode = _recursive_property(
         "profile_mode", bool, "Should be set to ``True`` to enable profiling."
     )

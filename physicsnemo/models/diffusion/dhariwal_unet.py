@@ -270,6 +270,7 @@ class DhariwalUNet(Module):
             in_channels=cout, out_channels=out_channels, kernel=3, **init_zero
         )
 
+    # Properties that are recursively set on submodules
     profile_mode = _recursive_property(
         "profile_mode", bool, "Should be set to ``True`` to enable profiling."
     )
