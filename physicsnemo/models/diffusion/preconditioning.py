@@ -27,7 +27,7 @@ from typing import List, Literal, Tuple, Union
 import numpy as np
 import torch
 
-from physicsnemo.models.diffusion.utils import _safe_setattr
+from physicsnemo.models.diffusion.utils import _wrapped_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -811,7 +811,6 @@ class EDMPrecondSuperResolution(Module):
         self.img_resolution = img_resolution
         self.img_in_channels = img_in_channels
         self.img_out_channels = img_out_channels
-        self.use_fp16 = use_fp16
         self.sigma_data = sigma_data
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
@@ -824,6 +823,44 @@ class EDMPrecondSuperResolution(Module):
             **model_kwargs,
         )  # TODO needs better handling
         self.scaling_fn = self._scaling_fn
+        self.use_fp16 = use_fp16
+
+    @property
+    def use_fp16(self):
+        """
+        bool: Whether the model uses float16 precision.
+
+        Returns
+        -------
+        bool
+            True if the model is in float16 mode, False otherwise.
+        """
+        return self._use_fp16
+
+    @use_fp16.setter
+    def use_fp16(self, value: bool):
+        """
+        Set whether the model should use float16 precision.
+
+        Parameters
+        ----------
+        value : bool
+            If True, moves the model to torch.float16. If False, moves to torch.float32.
+
+        Raises
+        ------
+        ValueError
+            If `value` is not a boolean.
+        """
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"`use_fp16` must be a boolean, but got {type(value).__name__}."
+            )
+        self._use_fp16 = value
+        if value:
+            self.to(torch.float16)
+        else:
+            self.to(torch.float32)
 
     @staticmethod
     def _scaling_fn(
@@ -848,6 +885,18 @@ class EDMPrecondSuperResolution(Module):
             Scaled and concatenated tensor of shape (B, C_in+C_out, H, W).
         """
         return torch.cat([c_in * x, img_lr.to(x.dtype)], dim=1)
+
+    # Properties delegated to the wrapped model
+    amp_mode = _wrapped_property(
+        "amp_mode",
+        "model",
+        "Set to ``True`` when using automatic mixed precision.",
+    )
+    profile_mode = _wrapped_property(
+        "profile_mode",
+        "model",
+        "Set to ``True`` to enable profiling of the wrapped model.",
+    )
 
     def forward(
         self,
@@ -945,45 +994,6 @@ class EDMPrecondSuperResolution(Module):
         EDMPrecond.round_sigma
         """
         return EDMPrecond.round_sigma(sigma)
-
-    @property
-    def amp_mode(self):
-        """
-        Property that controls the automatic mixed precision mode of the
-        underlying architecture. ``True`` means that the underlying architecture
-        will automatically cast tensors to the appropriate
-        precision. ``False`` means that the underlying architecture will not
-        automatically cast the input and output tensors to the appropriate
-        precision.
-        """
-        return getattr(self.model, "amp_mode", None)
-
-    @amp_mode.setter
-    def amp_mode(self, value: bool):
-        """
-        Update ``amp_mode`` on the wrapped architecture and its sub-modules.
-        """
-        if not isinstance(value, bool):
-            raise TypeError("amp_mode must be a boolean value.")
-        self.model.apply(lambda m: _safe_setattr(m, "amp_mode", value))
-
-    @property
-    def profile_mode(self):
-        """
-        Property that controls the profiling mode of the underlying architecture.
-        ``True`` means that the underlying architecture will be profiled.
-        ``False`` means that the underlying architecture will not be profiled.
-        """
-        return getattr(self.model, "profile_mode", None)
-
-    @profile_mode.setter
-    def profile_mode(self, value: bool):
-        """
-        Update ``profile_mode`` on the wrapped architecture and its sub-modules.
-        """
-        if not isinstance(value, bool):
-            raise TypeError("profile_mode must be a boolean value.")
-        self.model.apply(lambda m: _safe_setattr(m, "profile_mode", value))
 
 
 # NOTE: This is a deprecated version of the EDMPrecondSuperResolution model.

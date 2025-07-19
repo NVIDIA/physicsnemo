@@ -849,23 +849,25 @@ class to implement a regression model.
 
 .. autoclass:: physicsnemo.models.diffusion.song_unet.SongUNet
     :show-inheritance:
+    :members: amp_mode, profile_mode
 
 .. autoclass:: physicsnemo.models.diffusion.dhariwal_unet.DhariwalUNet
     :show-inheritance:
+    :members: amp_mode, profile_mode
 
 
 .. autoclass:: physicsnemo.models.diffusion.song_unet.SongUNetPosEmbd
     :show-inheritance:
-    :members: positional_embedding_indexing, positional_embedding_selector
+    :members: amp_mode, profile_mode, positional_embedding_indexing, positional_embedding_selector
 
 .. autoclass:: physicsnemo.models.diffusion.song_unet.SongUNetPosLtEmbd
     :show-inheritance:
-    :members: positional_embedding_indexing, positional_embedding_selector
+    :members: amp_mode, profile_mode, positional_embedding_indexing, positional_embedding_selector
 
 
 .. autoclass:: physicsnemo.models.diffusion.unet.UNet
     :show-inheritance:
-    :members: amp_mode
+    :members: amp_mode, profile_mode, use_fp16
 
 .. _diffusion_preconditioners:
 
