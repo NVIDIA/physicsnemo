@@ -21,14 +21,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
-from transformer_engine import pytorch as te
+
+try:
+    from transformer_engine import pytorch as te
+except ImportError:
+    te = None
 
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
 
-class ReshapedLayerNorm(te.LayerNorm):
-
+class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
     """
     A modified LayerNorm that reshapes and transposes the input tensor before
     applying layer normalization, then restores the original shape after normalization.
