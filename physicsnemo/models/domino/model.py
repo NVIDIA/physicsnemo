@@ -571,7 +571,7 @@ class GeometryRep(nn.Module):
                 mapping, k_short = self.bq_warp[j](x, p_grid)
                 x_encoding_inter = self.geo_conv_out[j](k_short, p_grid)
                 # Propagate information in the geometry enclosed BBox
-                for i in range(self.hops):
+                for _ in range(self.hops):
                     dx = self.geo_processors[j](x_encoding_inter) / self.hops
                     x_encoding_inter = x_encoding_inter + dx
                 x_encoding_inter = self.geo_processor_out(x_encoding_inter)
