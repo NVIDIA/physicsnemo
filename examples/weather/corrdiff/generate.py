@@ -15,7 +15,7 @@
 # limitations under the License.
 
 import contextlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import partial
 
 import hydra
@@ -27,7 +27,6 @@ from torch.distributed import gather
 import numpy as np
 import nvtx
 import netCDF4 as nc
-
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.utils.patching import GridPatching2D
@@ -135,10 +134,16 @@ def main(cfg: DictConfig) -> None:
     if load_net_res:
         res_ckpt_filename = cfg.generation.io.res_ckpt_filename
         logger0.info(f'Loading residual network from "{res_ckpt_filename}"...')
-        net_res = Module.from_checkpoint(to_absolute_path(res_ckpt_filename))
+        net_res = Module.from_checkpoint(
+            to_absolute_path(res_ckpt_filename),
+            override_args={
+                "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False)
+            },
+        )
+        net_res.profile_mode = getattr(cfg.generation.perf, "profile_mode", False)
+        net_res.use_fp16 = getattr(cfg.generation.perf, "use_fp16", False)
         net_res = net_res.eval().to(device).to(memory_format=torch.channels_last)
-        if cfg.generation.perf.force_fp16:
-            net_res.use_fp16 = True
+
         # Disable AMP for inference (even if model is trained with AMP)
         if hasattr(net_res, "amp_mode"):
             net_res.amp_mode = False
@@ -149,10 +154,16 @@ def main(cfg: DictConfig) -> None:
     if load_net_reg:
         reg_ckpt_filename = cfg.generation.io.reg_ckpt_filename
         logger0.info(f'Loading network from "{reg_ckpt_filename}"...')
-        net_reg = Module.from_checkpoint(to_absolute_path(reg_ckpt_filename))
+        net_reg = Module.from_checkpoint(
+            to_absolute_path(reg_ckpt_filename),
+            override_args={
+                "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False)
+            },
+        )
+        net_reg.profile_mode = getattr(cfg.generation.perf, "profile_mode", False)
+        net_reg.use_fp16 = getattr(cfg.generation.perf, "use_fp16", False)
         net_reg = net_reg.eval().to(device).to(memory_format=torch.channels_last)
-        if cfg.generation.perf.force_fp16:
-            net_reg.use_fp16 = True
+
         # Disable AMP for inference (even if model is trained with AMP)
         if hasattr(net_reg, "amp_mode"):
             net_reg.amp_mode = False
@@ -161,11 +172,12 @@ def main(cfg: DictConfig) -> None:
 
     # Reset since we are using a different mode.
     if cfg.generation.perf.use_torch_compile:
+        torch._dynamo.config.cache_size_limit = 264
         torch._dynamo.reset()
-        # Only compile residual network
-        # Overhead of compiling regression network outweights any benefits
         if net_res:
-            net_res = torch.compile(net_res, mode="reduce-overhead")
+            net_res = torch.compile(net_res)
+        if net_reg:
+            net_reg = torch.compile(net_reg)
 
     # Partially instantiate the sampler based on the configs
     if cfg.sampler.type == "deterministic":
@@ -297,11 +309,11 @@ def main(cfg: DictConfig) -> None:
                     has_lead_time=has_lead_time,
                 )
 
-                # Initialize threadpool for writers
-                writer_executor = ThreadPoolExecutor(
-                    max_workers=cfg.generation.perf.num_writer_workers
-                )
-                writer_threads = []
+                if cfg.generation.perf.io_syncronous:
+                    writer_executor = ThreadPoolExecutor(
+                        max_workers=cfg.generation.perf.num_writer_workers
+                    )
+                    writer_threads = []
 
             # Create timer objects only if CUDA is available
             use_cuda_timing = torch.cuda.is_available()
@@ -347,10 +359,24 @@ def main(cfg: DictConfig) -> None:
                 image_out = generate_fn()
                 if dist.rank == 0:
                     batch_size = image_out.shape[0]
-                    # write out data in a seperate thread so we don't hold up inferencing
-                    writer_threads.append(
-                        writer_executor.submit(
-                            save_images,
+                    if cfg.generation.perf.io_syncronous:
+                        # write out data in a seperate thread so we don't hold up inferencing
+                        writer_threads.append(
+                            writer_executor.submit(
+                                save_images,
+                                writer,
+                                dataset,
+                                list(times),
+                                image_out.cpu(),
+                                image_tar.cpu(),
+                                image_lr.cpu(),
+                                time_index,
+                                index,
+                                has_lead_time,
+                            )
+                        )
+                    else:
+                        save_images(
                             writer,
                             dataset,
                             list(times),
@@ -361,7 +387,6 @@ def main(cfg: DictConfig) -> None:
                             index,
                             has_lead_time,
                         )
-                    )
             end.record()
             end.synchronize()
             elapsed_time = (
@@ -378,7 +403,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
             # make sure all the workers are done writing
-            if dist.rank == 0:
+            if dist.rank == 0 and cfg.generation.perf.io_syncronous:
                 for thread in list(writer_threads):
                     thread.result()
                     writer_threads.remove(thread)

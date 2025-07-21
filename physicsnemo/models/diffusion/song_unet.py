@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import contextlib
+import math
 from dataclasses import dataclass
 from typing import Callable, List, Literal, Optional, Set, Union
 
@@ -32,6 +33,7 @@ from physicsnemo.models.diffusion import (
     PositionalEmbedding,
     UNetBlock,
 )
+from physicsnemo.models.diffusion.utils import _recursive_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -324,8 +326,7 @@ class SongUNet(Module):
             profile_mode=profile_mode,
             amp_mode=amp_mode,
         )
-        self.profile_mode = profile_mode
-        self.amp_mode = amp_mode
+        self.use_apex_gn = use_apex_gn
 
         # for compatibility with older versions that took only 1 dimension
         self.img_resolution = img_resolution
@@ -336,7 +337,10 @@ class SongUNet(Module):
             self.img_shape_x = img_resolution[1]
 
         # set the threshold for checkpointing based on image resolution
-        self.checkpoint_threshold = (self.img_shape_y >> checkpoint_level) + 1
+        self.checkpoint_threshold = (
+            math.floor(math.sqrt(self.img_shape_x * self.img_shape_y))
+            >> checkpoint_level
+        ) + 1
 
         # Optional additive learned positition embed after the first conv
         self.additive_pos_embed = additive_pos_embed
@@ -498,12 +502,32 @@ class SongUNet(Module):
                     **init_zero,
                 )
 
+        # Set properties recursively on submodules
+        self.profile_mode = profile_mode
+        self.amp_mode = amp_mode
+
+    # Properties that are recursively set on submodules
+    profile_mode = _recursive_property(
+        "profile_mode", bool, "Should be set to ``True`` to enable profiling."
+    )
+    amp_mode = _recursive_property(
+        "amp_mode",
+        bool,
+        "Should be set to ``True`` to enable automatic mixed precision.",
+    )
+
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         with (
             nvtx.annotate(message="SongUNet", color="blue")
             if self.profile_mode
             else contextlib.nullcontext()
         ):
+            if (
+                self.use_apex_gn
+                and (not x.is_contiguous(memory_format=torch.channels_last))
+                and x.dim() == 4
+            ):
+                x = x.to(memory_format=torch.channels_last)
             if self.embedding_type != "zero":
                 # Mapping.
                 emb = self.map_noise(noise_labels)
@@ -526,7 +550,9 @@ class SongUNet(Module):
                 emb = silu(self.map_layer1(emb))
             else:
                 emb = torch.zeros(
-                    (noise_labels.shape[0], self.emb_channels), device=x.device
+                    (noise_labels.shape[0], self.emb_channels),
+                    device=x.device,
+                    dtype=x.dtype,
                 )
 
             # Encoder.
@@ -552,10 +578,13 @@ class SongUNet(Module):
                     else:
                         # For UNetBlocks check if we should use gradient checkpointing
                         if isinstance(block, UNetBlock):
-                            if x.shape[-1] > self.checkpoint_threshold:
+                            if (
+                                math.floor(math.sqrt(x.shape[-2] * x.shape[-1]))
+                                > self.checkpoint_threshold
+                            ):
                                 # self.checkpoint = checkpoint?
                                 # else: self.checkpoint  = lambda(block,x,emb:block(x,emb))
-                                x = checkpoint(block, x, emb)
+                                x = checkpoint(block, x, emb, use_reentrant=False)
                             else:
                                 # AssertionError: Only support NHWC layout.
                                 x = block(x, emb)
@@ -584,12 +613,15 @@ class SongUNet(Module):
                             x = torch.cat([x, skips.pop()], dim=1)
                         # check for checkpointing on decoder blocks and up sampling blocks
                         if (
-                            x.shape[-1] > self.checkpoint_threshold and "_block" in name
+                            math.floor(math.sqrt(x.shape[-2] * x.shape[-1]))
+                            > self.checkpoint_threshold
+                            and "_block" in name
                         ) or (
-                            x.shape[-1] > (self.checkpoint_threshold / 2)
+                            math.floor(math.sqrt(x.shape[-2] * x.shape[-1]))
+                            > (self.checkpoint_threshold / 2)
                             and "_up" in name
                         ):
-                            x = checkpoint(block, x, emb)
+                            x = checkpoint(block, x, emb, use_reentrant=False)
                         else:
                             x = block(x, emb)
             return aux
@@ -1111,28 +1143,24 @@ class SongUNetPosEmbd(SongUNet):
         elif self.gridtype == "linear":
             if self.N_grid_channels != 2:
                 raise ValueError("N_grid_channels must be set to 2 for gridtype linear")
-            x = np.meshgrid(np.linspace(-1, 1, self.img_shape_y))
-            y = np.meshgrid(np.linspace(-1, 1, self.img_shape_x))
-            grid_x, grid_y = np.meshgrid(y, x)
+            y = np.meshgrid(np.linspace(-1, 1, self.img_shape_y))
+            x = np.meshgrid(np.linspace(-1, 1, self.img_shape_x))
+            grid_y, grid_x = np.meshgrid(x, y)
             grid = torch.from_numpy(
-                np.stack((grid_x, grid_y), axis=0)
+                np.stack((grid_y, grid_x), axis=0)
             )  # (2, img_shape_y, img_shape_x)
             grid.requires_grad = False
         elif self.gridtype == "sinusoidal" and self.N_grid_channels == 4:
             # print('sinusuidal grid added ......')
-            x1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_y)))
-            x2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_y)))
-            y1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_x)))
-            y2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_x)))
-            grid_x1, grid_y1 = np.meshgrid(y1, x1)
-            grid_x2, grid_y2 = np.meshgrid(y2, x2)
-            grid = torch.squeeze(
-                torch.from_numpy(
-                    np.expand_dims(
-                        np.stack((grid_x1, grid_y1, grid_x2, grid_y2), axis=0), axis=0
-                    )
-                )
-            )  # (4, img_shape_y, img_shape_x)
+            x1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_x)))
+            x2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_x)))
+            y1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_y)))
+            y2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_y)))
+            grid_y1, grid_x1 = np.meshgrid(x1, y1)
+            grid_y2, grid_x2 = np.meshgrid(x2, y2)
+            grid = torch.from_numpy(
+                np.stack((grid_x1, grid_y1, grid_x2, grid_y2), axis=0)
+            )
             grid.requires_grad = False
         elif self.gridtype == "sinusoidal" and self.N_grid_channels != 4:
             if self.N_grid_channels % 4 != 0:
@@ -1153,10 +1181,10 @@ class SongUNetPosEmbd(SongUNet):
             )  # (N_grid_channels, img_shape_y, img_shape_x)
             grid.requires_grad = False
         elif self.gridtype == "test" and self.N_grid_channels == 2:
-            idx_x = torch.arange(self.img_shape_y)
-            idx_y = torch.arange(self.img_shape_x)
-            mesh_x, mesh_y = torch.meshgrid(idx_x, idx_y)
-            grid = torch.stack((mesh_x, mesh_y), dim=0)  # (2, img_shape_y, img_shape_x)
+            idx_x = torch.arange(self.img_shape_x)
+            idx_y = torch.arange(self.img_shape_y)
+            mesh_y, mesh_x = torch.meshgrid(idx_y, idx_x)
+            grid = torch.stack((mesh_y, mesh_x), dim=0)  # (2, img_shape_y, img_shape_x)
         else:
             raise ValueError("Gridtype not supported.")
         return grid

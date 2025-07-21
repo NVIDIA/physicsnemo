@@ -153,6 +153,7 @@ cython_debug/
 
 # VsCode
 .vscode/
+.cursor/
 
 # VIM
 *.swp

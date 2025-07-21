@@ -55,8 +55,8 @@ from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.sdf import signed_distance_field
 
-AIR_DENSITY = 1.205
-STREAM_VELOCITY = 30.00
+# AIR_DENSITY = 1.205
+# STREAM_VELOCITY = 30.00
 
 
 def loss_fn(output, target):
@@ -86,9 +86,12 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
         data_dict = dict_to_device(data_dict, device)
 
         # Non-dimensionalization factors
-        air_density = data_dict["air_density"]
-        stream_velocity = data_dict["stream_velocity"]
         length_scale = data_dict["length_scale"]
+
+        global_params_values = data_dict["global_params_values"]
+        global_params_reference = data_dict["global_params_reference"]
+        stream_velocity = global_params_reference[:, 0, :]
+        air_density = global_params_reference[:, 1, :]
 
         # STL nodes
         geo_centers = data_dict["geometry_coordinates"]
@@ -177,8 +180,8 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         volume_mesh_centers_batch,
                         geo_encoding_local,
                         pos_encoding,
-                        stream_velocity,
-                        air_density,
+                        global_params_values,
+                        global_params_reference,
                         num_sample_points=cfg.eval.stencil_size,
                         eval_mode="volume",
                     )
@@ -270,16 +273,16 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                             surface_neighbors_normals_batch,
                             surface_areas_batch,
                             surface_neighbors_areas_batch,
-                            stream_velocity,
-                            air_density,
+                            global_params_values,
+                            global_params_reference,
                         )
                     else:
                         tpredictions_batch = model.calculate_solution(
                             surface_mesh_centers_batch,
                             geo_encoding_local,
                             pos_encoding,
-                            stream_velocity,
-                            air_density,
+                            global_params_values,
+                            global_params_reference,
                             num_sample_points=1,
                             eval_mode="surface",
                         )
@@ -334,6 +337,14 @@ def main(cfg: DictConfig):
     else:
         num_surf_vars = None
 
+    global_features = 0
+    global_params_names = list(cfg.variables.global_parameters.keys())
+    for param in global_params_names:
+        if cfg.variables.global_parameters[param].type == "vector":
+            global_features += len(cfg.variables.global_parameters[param].reference)
+        else:
+            global_features += 1
+
     vol_save_path = os.path.join(
         cfg.eval.scaling_param_path, "volume_scaling_factors.npy"
     )
@@ -357,6 +368,7 @@ def main(cfg: DictConfig):
         input_features=3,
         output_features_vol=num_vol_vars,
         output_features_surf=num_surf_vars,
+        global_features=global_features,
         model_parameters=cfg.model,
     ).to(dist.device)
 
@@ -446,6 +458,50 @@ def main(cfg: DictConfig):
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
+
+        # Get global parameters and global parameters scaling from config.yaml
+        global_params_names = list(cfg.variables.global_parameters.keys())
+        global_params_reference = {
+            name: cfg.variables.global_parameters[name]["reference"]
+            for name in global_params_names
+        }
+        global_params_types = {
+            name: cfg.variables.global_parameters[name]["type"]
+            for name in global_params_names
+        }
+        stream_velocity = global_params_reference["inlet_velocity"][0]
+        air_density = global_params_reference["air_density"]
+
+        # Arrange global parameters reference in a list, ensuring it is flat
+        global_params_reference_list = []
+        for name, type in global_params_types.items():
+            if type == "vector":
+                global_params_reference_list.extend(global_params_reference[name])
+            elif type == "scalar":
+                global_params_reference_list.append(global_params_reference[name])
+            else:
+                raise ValueError(
+                    f"Global parameter {name} not supported for  this dataset"
+                )
+        global_params_reference = np.array(
+            global_params_reference_list, dtype=np.float32
+        )
+
+        # Define the list of global parameter values for each simulation.
+        # Note: The user must ensure that the values provided here correspond to the
+        # `global_parameters` specified in `config.yaml` and that these parameters
+        # exist within each simulation file.
+        global_params_values_list = []
+        for key in global_params_types.keys():
+            if key == "inlet_velocity":
+                global_params_values_list.append(stream_velocity)
+            elif key == "air_density":
+                global_params_values_list.append(air_density)
+            else:
+                raise ValueError(
+                    f"Global parameter {key} not supported for  this dataset"
+                )
+        global_params_values = np.array(global_params_values_list, dtype=np.float32)
 
         # Read VTP
         if model_type == "surface" or model_type == "combined":
@@ -614,11 +670,11 @@ def main(cfg: DictConfig):
                 "volume_min_max": vol_grid_max_min,
                 "surface_min_max": surf_grid_max_min,
                 "length_scale": np.array(length_scale, dtype=np.float32),
-                "stream_velocity": np.expand_dims(
-                    np.array(STREAM_VELOCITY, dtype=np.float32), axis=-1
+                "global_params_values": np.expand_dims(
+                    np.array(global_params_values, dtype=np.float32), -1
                 ),
-                "air_density": np.expand_dims(
-                    np.array(AIR_DENSITY, dtype=np.float32), axis=-1
+                "global_params_reference": np.expand_dims(
+                    np.array(global_params_reference, dtype=np.float32), -1
                 ),
             }
         elif model_type == "surface":
@@ -636,11 +692,11 @@ def main(cfg: DictConfig):
                 "surface_fields": np.float32(surface_fields),
                 "surface_min_max": np.float32(surf_grid_max_min),
                 "length_scale": np.array(length_scale, dtype=np.float32),
-                "stream_velocity": np.expand_dims(
-                    np.array(STREAM_VELOCITY, dtype=np.float32), axis=-1
+                "global_params_values": np.expand_dims(
+                    np.array(global_params_values, dtype=np.float32), -1
                 ),
-                "air_density": np.expand_dims(
-                    np.array(AIR_DENSITY, dtype=np.float32), axis=-1
+                "global_params_reference": np.expand_dims(
+                    np.array(global_params_reference, dtype=np.float32), -1
                 ),
             }
         elif model_type == "volume":
@@ -658,11 +714,11 @@ def main(cfg: DictConfig):
                 "volume_min_max": vol_grid_max_min,
                 "surface_min_max": surf_grid_max_min,
                 "length_scale": np.array(length_scale, dtype=np.float32),
-                "stream_velocity": np.expand_dims(
-                    np.array(STREAM_VELOCITY, dtype=np.float32), axis=-1
+                "global_params_values": np.expand_dims(
+                    np.array(global_params_values, dtype=np.float32), -1
                 ),
-                "air_density": np.expand_dims(
-                    np.array(AIR_DENSITY, dtype=np.float32), axis=-1
+                "global_params_reference": np.expand_dims(
+                    np.array(global_params_reference, dtype=np.float32), -1
                 ),
             }
 
