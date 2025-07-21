@@ -156,7 +156,7 @@ model:
     activation: ${model.activation}
   position_encoder: # Hyperparameters for position encoding network
     base_neurons: 512
-    activation_fn: "relu" # relu or "gelu"
+    activation: ${model.activation} # relu or "gelu"
     fourier_features: true
     num_modes: 5
   geometry_local: # Hyperparameters for local geometry extraction
@@ -167,12 +167,11 @@ model:
     surface_radii: [0.01, 0.05, 0.1] # [0.05]
     base_layer: 512
     attention: false
-    activation_fn: "relu" # relu or "gelu"
   parameter_model:
     base_layer: 512
     fourier_features: false
     num_modes: 5
-    activation_fn: "relu" # relu or "gelu"
+    activation: ${model.activation} # relu or "gelu"
 
 # ┌───────────────────────────────────────────┐
 # │          Training Configs                 │

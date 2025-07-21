@@ -372,6 +372,8 @@ class GeometryRep(nn.Module):
         self.geo_encoding_type = model_parameters.geometry_encoding_type
         self.cross_attention = geometry_rep.geo_processor.cross_attention
         self.self_attention = geometry_rep.geo_processor.self_attention
+        self.activation_conv = get_activation(geometry_rep.geo_conv.activation)
+        self.activation_processor = get_activation(geometry_rep.geo_processor.activation)
 
         self.bq_warp = nn.ModuleList()
         self.geo_processors = nn.ModuleList()
@@ -394,7 +396,7 @@ class GeometryRep(nn.Module):
                         num_conv_blocks=2,
                         kernel_size=3,
                         stride=1,
-                        conv_activation=geometry_rep.geo_processor.activation_fn,
+                        conv_activation=self.activation_processor,
                         padding=1,
                         padding_mode="replicate",
                         pooling_type="MaxPool3d",
@@ -443,7 +445,7 @@ class GeometryRep(nn.Module):
                     num_conv_blocks=2,
                     kernel_size=3,
                     stride=1,
-                    conv_activation=geometry_rep.geo_processor.activation_fn,
+                    conv_activation=self.activation_processor,
                     padding=1,
                     padding_mode="replicate",
                     pooling_type="MaxPool3d",
@@ -468,7 +470,6 @@ class GeometryRep(nn.Module):
                     model_parameters=geometry_rep.geo_processor,
                 )
             )
-        self.activation = get_activation(model_parameters.activation)
         self.radii = radii
         self.hops = hops
 
@@ -494,7 +495,7 @@ class GeometryRep(nn.Module):
                 num_conv_blocks=2,
                 kernel_size=3,
                 stride=1,
-                conv_activation=geometry_rep.geo_processor.activation_fn,
+                conv_activation=self.activation_processor,
                 padding=1,
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
@@ -793,11 +794,7 @@ class PositionEncoder(nn.Module):
         self.bn2 = nn.BatchNorm1d(int(base_layer))
         self.bn3 = nn.BatchNorm1d(int(base_layer))
 
-        activation_fn = model_parameters.activation_fn
-        if activation_fn == "gelu":
-            self.activation = F.gelu
-        else:
-            self.activation = F.relu
+        self.activation = model_parameters.activation
 
         if self.fourier_features:
             self.register_buffer(
@@ -966,6 +963,7 @@ class DoMINO(nn.Module):
         self.num_sample_points_surface = model_parameters.num_neighbors_surface
         self.num_sample_points_volume = model_parameters.num_neighbors_volume
         self.combined_vol_surf = model_parameters.combine_volume_surface
+        self.activation_processor = get_activation(model_parameters.geometry_rep.geo_processor.activation)
 
         if self.combined_vol_surf:
             h = 8
@@ -980,7 +978,7 @@ class DoMINO(nn.Module):
                 num_conv_blocks=2,
                 kernel_size=3,
                 stride=1,
-                conv_activation=model_parameters.geometry_rep.geo_processor.activation_fn,
+                conv_activation=self.activation_processor,
                 padding=1,
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
@@ -1000,7 +998,7 @@ class DoMINO(nn.Module):
                 num_conv_blocks=2,
                 kernel_size=3,
                 stride=1,
-                conv_activation=model_parameters.geometry_rep.geo_processor.activation_fn,
+                conv_activation=self.activation_processor,
                 padding=1,
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
