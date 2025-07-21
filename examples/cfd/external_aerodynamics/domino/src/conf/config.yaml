@@ -124,8 +124,9 @@ model:
   geometry_rep: # Hyperparameters for geometry representation network
     geo_conv:
       base_neurons: 32 # 256 or 64
-      base_neurons_in: 8
-      base_neurons_out: 8
+      base_neurons_in: 4
+      base_neurons_out: 4
+      # volume_radii: [0.1, 0.5, 1.0, 2.5, 5.0]
       volume_radii: [0.01, 0.05, 0.1, 0.5, 1.0]
       surface_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # 0.05
       surface_hops: 5 # Number of surface iterations
