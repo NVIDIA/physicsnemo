@@ -18,7 +18,7 @@
 # │            Project Details                │
 # └───────────────────────────────────────────┘  
 project: # Project name
-  name: AWS_Dataset
+  name: AWS_Dataset_1
   
 exp_tag: 1 # Experiment tag
 # Main output directory.

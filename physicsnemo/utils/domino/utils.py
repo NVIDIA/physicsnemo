@@ -1140,9 +1140,10 @@ def area_weighted_shuffle_array(
     # Create index array for all available points
     point_indices = xp.arange(arr.shape[0])
 
-    selected_indices = xp.random.choice(
-        xp.asarray(point_indices), size=n_points, p=xp.asarray(sampling_probabilities)
-    )
+    point_indices = point_indices.get()
+    sampling_probabilities = sampling_probabilities.get()
+
+    selected_indices = np.random.choice(point_indices, n_points, p=sampling_probabilities)
     selected_indices = xp.asarray(selected_indices)
 
     return arr[selected_indices], selected_indices
