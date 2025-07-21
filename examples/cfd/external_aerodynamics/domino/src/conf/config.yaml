@@ -104,7 +104,7 @@ model:
   positional_encoding: false # calculate positional encoding?
   volume_points_sample: 8192 # Number of points to sample in volume per epoch
   surface_points_sample: 8192 # Number of points to sample on surface per epoch
-  surface_sampling_algorithm: area_weighted # random or area_weighted
+  surface_sampling_algorithm: random # random or area_weighted
   geom_points_sample: 300_000 # Number of points to sample on STL per epoch
   num_neighbors_surface: 1 # How many neighbors on surface?
   num_neighbors_volume: 1 # How many neighbors on volume?
@@ -137,7 +137,7 @@ model:
       num_modes: 5
       activation: ${model.activation}
     geo_processor:
-      base_filters: 8 # Could have different filters for surface/volume
+      base_filters: 4
       activation: ${model.activation}
       processor_type: unet # conv or unet
       self_attention: true
