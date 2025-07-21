@@ -18,7 +18,7 @@
 # │            Project Details                │
 # └───────────────────────────────────────────┘  
 project: # Project name
-  name: AWS_Dataset_1
+  name: AWS_Dataset
   
 exp_tag: 1 # Experiment tag
 # Main output directory.
@@ -106,7 +106,6 @@ model:
   surface_points_sample: 8192 # Number of points to sample on surface per epoch
   surface_sampling_algorithm: area_weighted # random or area_weighted
   geom_points_sample: 300_000 # Number of points to sample on STL per epoch
-  surface_neighbors: true # Pre-compute surface neighborhood from input data
   num_neighbors_surface: 1 # How many neighbors on surface?
   num_neighbors_volume: 1 # How many neighbors on volume?
   combine_volume_surface: false # combine volume and surface encodings
@@ -127,16 +126,14 @@ model:
       base_neurons: 32 # 256 or 64
       base_neurons_in: 8
       base_neurons_out: 8
-      # volume_radii: [0.1, 0.5, 1.0, 2.5, 5.0]
       volume_radii: [0.01, 0.05, 0.1, 0.5, 1.0]
       surface_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # 0.05
-      surface_hops: 5
-      volume_hops: 1
+      surface_hops: 5 # Number of surface iterations
+      volume_hops: 1 # Number of volume iterations
       volume_neighbors_in_radius: [8, 16, 24, 30, 36]
       surface_neighbors_in_radius: [8, 16, 24, 30, 36]
       fourier_features: false
       num_modes: 5
-      attention: false # Remove this
       activation: ${model.activation}
     geo_processor:
       base_filters: 8 # Could have different filters for surface/volume
@@ -156,7 +153,7 @@ model:
     activation: ${model.activation}
   position_encoder: # Hyperparameters for position encoding network
     base_neurons: 512
-    activation: ${model.activation} # relu or "gelu"
+    activation: ${model.activation}
     fourier_features: true
     num_modes: 5
   geometry_local: # Hyperparameters for local geometry extraction
@@ -166,12 +163,11 @@ model:
     volume_radii: [0.05, 0.1, 0.5]
     surface_radii: [0.01, 0.05, 0.1] # [0.05]
     base_layer: 512
-    attention: false
   parameter_model:
     base_layer: 512
     fourier_features: false
     num_modes: 5
-    activation: ${model.activation} # relu or "gelu"
+    activation: ${model.activation}
 
 # ┌───────────────────────────────────────────┐
 # │          Training Configs                 │

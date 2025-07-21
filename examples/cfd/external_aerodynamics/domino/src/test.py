@@ -125,7 +125,11 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
 
-        if output_features_vol is not None and output_features_surf is not None and cfg.model.combine_volume_surface:
+        if (
+            output_features_vol is not None
+            and output_features_surf is not None
+            and cfg.model.combine_volume_surface
+        ):
             encoding_g = torch.cat((encoding_g_vol, encoding_g_surf), axis=1)
             encoding_g_surf = model.combined_unet_surf(encoding_g)
             encoding_g_vol = model.combined_unet_vol(encoding_g)
@@ -541,7 +545,9 @@ def main(cfg: DictConfig):
 
             if cfg.model.num_neighbors_surface > 1:
                 interp_func = KDTree(surface_coordinates)
-                dd, ii = interp_func.query(surface_coordinates, k=cfg.model.num_neighbors_surface)
+                dd, ii = interp_func.query(
+                    surface_coordinates, k=cfg.model.num_neighbors_surface
+                )
 
                 surface_neighbors = surface_coordinates[ii]
                 surface_neighbors = surface_neighbors[:, 1:]
@@ -788,7 +794,17 @@ def main(cfg: DictConfig):
             print("Drag=", dirname, force_x_pred, force_x_true)
             print("Lift=", dirname, force_z_pred, force_z_true)
             print("Side=", dirname, force_y_pred, force_y_true)
-            aero_forces_all.append([dirname, force_x_pred, force_x_true, force_z_pred, force_z_true, force_y_pred, force_y_true])
+            aero_forces_all.append(
+                [
+                    dirname,
+                    force_x_pred,
+                    force_x_true,
+                    force_z_pred,
+                    force_z_true,
+                    force_y_pred,
+                    force_y_true,
+                ]
+            )
 
             l2_gt = np.mean(np.square(surface_fields), (0))
             l2_error = np.mean(np.square(prediction_surf[0] - surface_fields), (0))
@@ -852,11 +868,14 @@ def main(cfg: DictConfig):
 
             write_to_vtu(polydata_vol, vtu_pred_save_path)
 
-    l2_surface_all = np.asarray(l2_surface_all) # num_files, 4
-    l2_volume_all = np.asarray(l2_volume_all) # num_files, 4
+    l2_surface_all = np.asarray(l2_surface_all)  # num_files, 4
+    l2_volume_all = np.asarray(l2_volume_all)  # num_files, 4
     l2_surface_mean = np.mean(l2_surface_all, 0)
     l2_volume_mean = np.mean(l2_volume_all, 0)
-    print(f"Mean over all samples, surface={l2_surface_mean} and volume={l2_volume_mean}")
+    print(
+        f"Mean over all samples, surface={l2_surface_mean} and volume={l2_volume_mean}"
+    )
+
 
 if __name__ == "__main__":
     main()

@@ -29,9 +29,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from physicsnemo.models.layers.ball_query import BallQueryLayer
+from physicsnemo.models.unet import UNet
 from physicsnemo.utils.profiling import profile
 
-from physicsnemo.models.unet import UNet
 
 def get_activation(activation: Literal["relu", "gelu"]) -> Callable:
     """
@@ -217,7 +217,11 @@ class GeoConvOut(nn.Module):
             )
 
     def forward(
-        self, x: torch.Tensor, grid: torch.Tensor, radius: float = 0.025, neighbors_in_radius: int = 10
+        self,
+        x: torch.Tensor,
+        grid: torch.Tensor,
+        radius: float = 0.025,
+        neighbors_in_radius: int = 10,
     ) -> torch.Tensor:
         """
         Process and project geometric features onto a 3D grid.
@@ -228,14 +232,13 @@ class GeoConvOut(nn.Module):
             self.grid_resolution[1],
             self.grid_resolution[2],
         )
-        grid = grid.reshape(1, nx*ny*nz, 3, 1)
+        grid = grid.reshape(1, nx * ny * nz, 3, 1)
         x_transposed = torch.transpose(x, 2, 3)
-        dist_weights = 1.0 / (1e-6+(x_transposed - grid)**2.0)
+        dist_weights = 1.0 / (1e-6 + (x_transposed - grid) ** 2.0)
         dist_weights = torch.transpose(dist_weights, 2, 3)
-        mask = abs(x - 0) > 1e-6
 
         x = torch.sum(x * dist_weights, 2) / torch.sum(dist_weights, 2)
-        
+
         if self.fourier_features:
             facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
         else:
@@ -246,6 +249,7 @@ class GeoConvOut(nn.Module):
 
         x = torch.reshape(x, (batch_size, x.shape[-1], nx, ny, nz))
         return x
+
 
 class GeoProcessor(nn.Module):
     """Geometry processing layer using CNNs"""
@@ -284,7 +288,9 @@ class GeoProcessor(nn.Module):
         self.conv7 = nn.Conv3d(
             2 * input_filters, input_filters, kernel_size=3, padding="same"
         )
-        self.conv8 = nn.Conv3d(input_filters, output_filters, kernel_size=3, padding="same")
+        self.conv8 = nn.Conv3d(
+            input_filters, output_filters, kernel_size=3, padding="same"
+        )
         self.avg_pool = torch.nn.AvgPool3d((2, 2, 2))
         self.max_pool = nn.MaxPool3d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
@@ -359,7 +365,14 @@ class GeometryRep(nn.Module):
     geometric properties.
     """
 
-    def __init__(self, input_features: int, radii, neighbors_in_radius, hops=1, model_parameters=None):
+    def __init__(
+        self,
+        input_features: int,
+        radii,
+        neighbors_in_radius,
+        hops=1,
+        model_parameters=None,
+    ):
         """
         Initialize the GeometryRep module.
 
@@ -373,7 +386,7 @@ class GeometryRep(nn.Module):
         self.cross_attention = geometry_rep.geo_processor.cross_attention
         self.self_attention = geometry_rep.geo_processor.self_attention
         self.activation_conv = get_activation(geometry_rep.geo_conv.activation)
-        self.activation_processor = get_activation(geometry_rep.geo_processor.activation)
+        self.activation_processor = geometry_rep.geo_processor.activation
 
         self.bq_warp = nn.ModuleList()
         self.geo_processors = nn.ModuleList()
@@ -392,7 +405,16 @@ class GeometryRep(nn.Module):
                         in_channels=geometry_rep.geo_conv.base_neurons_in,
                         out_channels=geometry_rep.geo_conv.base_neurons_out,
                         model_depth=4,
-                        feature_map_channels=[h, h, 2 * h, 2 * h, 4 * h, 4 * h, 8 * h, 8 * h],
+                        feature_map_channels=[
+                            h,
+                            h,
+                            2 * h,
+                            2 * h,
+                            4 * h,
+                            4 * h,
+                            8 * h,
+                            8 * h,
+                        ],
                         num_conv_blocks=2,
                         kernel_size=3,
                         stride=1,
@@ -421,7 +443,7 @@ class GeometryRep(nn.Module):
                             input_filters=geometry_rep.geo_conv.base_neurons_in,
                             output_filters=geometry_rep.geo_conv.base_neurons_out,
                             model_parameters=geometry_rep.geo_processor,
-                        )
+                        ),
                     )
                 )
 
@@ -438,25 +460,36 @@ class GeometryRep(nn.Module):
         if geometry_rep.geo_processor.processor_type == "unet":
             h = geometry_rep.geo_processor.base_filters
             self.geo_processor_sdf = UNet(
-                    in_channels=6,
-                    out_channels=geometry_rep.geo_conv.base_neurons_out,
-                    model_depth=5,
-                    feature_map_channels=[h, h, 2 * h, 2 * h, 4 * h, 4 * h, 8 * h, 8 * h, 16 * h, 16 * h],
-                    num_conv_blocks=2,
-                    kernel_size=3,
-                    stride=1,
-                    conv_activation=self.activation_processor,
-                    padding=1,
-                    padding_mode="replicate",
-                    pooling_type="MaxPool3d",
-                    pool_size=2,
-                    normalization="layernorm",
-                    use_attn_gate=self.self_attention,
-                    attn_decoder_feature_maps=[16 * h, 8 * h, 4 * h, 2 * h],
-                    attn_feature_map_channels=[8 * h, 4 * h, 2 * h, h],
-                    attn_intermediate_channels=4 * h,
-                    gradient_checkpointing=True,
-                )
+                in_channels=6,
+                out_channels=geometry_rep.geo_conv.base_neurons_out,
+                model_depth=5,
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                    8 * h,
+                    8 * h,
+                    16 * h,
+                    16 * h,
+                ],
+                num_conv_blocks=2,
+                kernel_size=3,
+                stride=1,
+                conv_activation=self.activation_processor,
+                padding=1,
+                padding_mode="replicate",
+                pooling_type="MaxPool3d",
+                pool_size=2,
+                normalization="layernorm",
+                use_attn_gate=self.self_attention,
+                attn_decoder_feature_maps=[16 * h, 8 * h, 4 * h, 2 * h],
+                attn_feature_map_channels=[8 * h, 4 * h, 2 * h, h],
+                attn_intermediate_channels=4 * h,
+                gradient_checkpointing=True,
+            )
         else:
             self.geo_processor_sdf = nn.Sequential(
                 GeoProcessor(
@@ -468,30 +501,35 @@ class GeometryRep(nn.Module):
                     input_filters=geometry_rep.geo_conv.base_neurons_out,
                     output_filters=geometry_rep.geo_conv.base_neurons_out,
                     model_parameters=geometry_rep.geo_processor,
-                )
+                ),
             )
         self.radii = radii
         self.hops = hops
 
         self.geo_processor_out = nn.Conv3d(
-            geometry_rep.geo_conv.base_neurons_out,
-            1,
-            kernel_size=3,
-            padding="same"
+            geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
         )
         self.geo_processor_sdf_out = nn.Conv3d(
-            geometry_rep.geo_conv.base_neurons_out,
-            1,
-            kernel_size=3,
-            padding="same"
+            geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
         )
-        
+
         if self.cross_attention:
             self.combined_unet = UNet(
-                in_channels=1+len(radii),
-                out_channels=1+len(radii),
+                in_channels=1 + len(radii),
+                out_channels=1 + len(radii),
                 model_depth=5,
-                feature_map_channels=[h, h, 2 * h, 2 * h, 4 * h, 4 * h, 8 * h, 8 * h, 16 * h, 16 * h],
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                    8 * h,
+                    8 * h,
+                    16 * h,
+                    16 * h,
+                ],
                 num_conv_blocks=2,
                 kernel_size=3,
                 stride=1,
@@ -565,7 +603,7 @@ class GeometryRep(nn.Module):
 
         if self.cross_attention:
             encoding_g = self.combined_unet(encoding_g)
-        
+
         return encoding_g
 
 
@@ -771,6 +809,7 @@ class LocalPointConv(nn.Module):
 
         return out
 
+
 class PositionEncoder(nn.Module):
     """Positional encoding of point clouds"""
 
@@ -794,7 +833,7 @@ class PositionEncoder(nn.Module):
         self.bn2 = nn.BatchNorm1d(int(base_layer))
         self.bn3 = nn.BatchNorm1d(int(base_layer))
 
-        self.activation = model_parameters.activation
+        self.activation = get_activation(model_parameters.activation)
 
         if self.fourier_features:
             self.register_buffer(
@@ -821,6 +860,7 @@ class PositionEncoder(nn.Module):
 
         return facets
 
+
 # @dataclass
 # class MetaData(ModelMetaData):
 #     name: str = "DoMINO"
@@ -836,6 +876,7 @@ class PositionEncoder(nn.Module):
 #     var_dim: int = 1
 #     func_torch: bool = False
 #     auto_grad: bool = False
+
 
 class DoMINO(nn.Module):
     """
@@ -963,18 +1004,39 @@ class DoMINO(nn.Module):
         self.num_sample_points_surface = model_parameters.num_neighbors_surface
         self.num_sample_points_volume = model_parameters.num_neighbors_volume
         self.combined_vol_surf = model_parameters.combine_volume_surface
-        self.activation_processor = get_activation(model_parameters.geometry_rep.geo_processor.activation)
+        self.activation_processor = (
+            model_parameters.geometry_rep.geo_processor.activation
+        )
 
         if self.combined_vol_surf:
             h = 8
-            in_channels = 2+len(model_parameters.geometry_rep.geo_conv.volume_radii)+len(model_parameters.geometry_rep.geo_conv.surface_radii)
-            out_channels_surf = 1+len(model_parameters.geometry_rep.geo_conv.surface_radii)
-            out_channels_vol = 1+len(model_parameters.geometry_rep.geo_conv.volume_radii)
+            in_channels = (
+                2
+                + len(model_parameters.geometry_rep.geo_conv.volume_radii)
+                + len(model_parameters.geometry_rep.geo_conv.surface_radii)
+            )
+            out_channels_surf = 1 + len(
+                model_parameters.geometry_rep.geo_conv.surface_radii
+            )
+            out_channels_vol = 1 + len(
+                model_parameters.geometry_rep.geo_conv.volume_radii
+            )
             self.combined_unet_surf = UNet(
                 in_channels=in_channels,
                 out_channels=out_channels_surf,
                 model_depth=5,
-                feature_map_channels=[h, h, 2 * h, 2 * h, 4 * h, 4 * h, 8 * h, 8 * h, 16 * h, 16 * h],
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                    8 * h,
+                    8 * h,
+                    16 * h,
+                    16 * h,
+                ],
                 num_conv_blocks=2,
                 kernel_size=3,
                 stride=1,
@@ -994,7 +1056,18 @@ class DoMINO(nn.Module):
                 in_channels=in_channels,
                 out_channels=out_channels_vol,
                 model_depth=5,
-                feature_map_channels=[h, h, 2 * h, 2 * h, 4 * h, 4 * h, 8 * h, 8 * h, 16 * h, 16 * h],
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                    8 * h,
+                    8 * h,
+                    16 * h,
+                    16 * h,
+                ],
                 num_conv_blocks=2,
                 kernel_size=3,
                 stride=1,
@@ -1080,7 +1153,7 @@ class DoMINO(nn.Module):
         base_layer_nn = model_parameters.nn_basis_functions.base_layer
         if self.output_features_surf is not None:
             self.nn_basis_surf = nn.ModuleList()
-            for _ in range(1): # Have the same basis function for each variable
+            for _ in range(1):  # Have the same basis function for each variable
                 self.nn_basis_surf.append(
                     NNBasisFunctions(
                         input_features=input_features_surface,
@@ -1090,7 +1163,7 @@ class DoMINO(nn.Module):
 
         if self.output_features_vol is not None:
             self.nn_basis_vol = nn.ModuleList()
-            for _ in range(1): # Have the same basis function for each variable
+            for _ in range(1):  # Have the same basis function for each variable
                 self.nn_basis_vol.append(
                     NNBasisFunctions(
                         input_features=input_features,
@@ -1109,7 +1182,9 @@ class DoMINO(nn.Module):
                 inp_pos_vol = 7 if model_parameters.use_sdf_in_basis_func else 3
 
             # self.fc_p_vol = nn.Linear(inp_pos_vol, position_encoder_base_neurons)
-            self.fc_p_vol = PositionEncoder(inp_pos_vol, model_parameters.position_encoder)
+            self.fc_p_vol = PositionEncoder(
+                inp_pos_vol, model_parameters.position_encoder
+            )
 
         if self.output_features_surf is not None:
             if model_parameters.positional_encoding:
@@ -1117,7 +1192,9 @@ class DoMINO(nn.Module):
             else:
                 inp_pos_surf = 3
 
-            self.fc_p_surf = PositionEncoder(inp_pos_surf, model_parameters.position_encoder)
+            self.fc_p_surf = PositionEncoder(
+                inp_pos_surf, model_parameters.position_encoder
+            )
 
         # BQ for surface
         self.surface_neighbors_in_radius = (
@@ -1717,7 +1794,11 @@ class DoMINO(nn.Module):
                 encoding_node_surf, eval_mode="surface"
             )
 
-        if self.output_features_surf is not None and self.output_features_vol is not None and self.combined_vol_surf:
+        if (
+            self.output_features_surf is not None
+            and self.output_features_vol is not None
+            and self.combined_vol_surf
+        ):
             encoding_g = torch.cat((encoding_g_vol, encoding_g_surf), axis=1)
             encoding_g_surf = self.combined_unet_surf(encoding_g)
             encoding_g_vol = self.combined_unet_vol(encoding_g)

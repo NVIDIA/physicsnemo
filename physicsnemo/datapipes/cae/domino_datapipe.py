@@ -715,7 +715,8 @@ class DoMINODataPipe(Dataset):
                         )
                     else:
                         _, ii = interp_func.query(
-                            surface_coordinates_sampled, k=self.config.num_surface_neighbors_surface
+                            surface_coordinates_sampled,
+                            k=self.config.num_surface_neighbors_surface,
                         )
 
                     # Pull out the neighbor elements.  Note that ii is the index into the original
