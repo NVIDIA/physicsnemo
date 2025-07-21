@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PyTorch Geometric MeshGraphNet backend.
 - Functionality in DoMINO to take arbitrary number of `scalar` or `vector`
   global parameters and encode them using `class ParameterModel`
+- Domino improvements with Unet attention module and user configs
 
 ### Changed
 
