@@ -814,7 +814,7 @@ class PositionEncoder(nn.Module):
     """Positional encoding of point clouds"""
 
     def __init__(self, input_features: int, model_parameters=None):
-        super(PositionEncoder, self).__init__()
+        super().__init__()
         base_layer = model_parameters.base_neurons
         self.fourier_features = model_parameters.fourier_features
         self.num_modes = model_parameters.num_modes
