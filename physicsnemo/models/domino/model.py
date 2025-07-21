@@ -198,7 +198,7 @@ class GeoConvOut(nn.Module):
 
         if self.fourier_features:
             input_features_calculated = (
-                input_features + input_features * self.num_modes * 2
+                input_features * (1 + 2 * self.num_modes)
             )
         else:
             input_features_calculated = input_features
