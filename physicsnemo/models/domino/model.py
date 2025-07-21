@@ -205,7 +205,7 @@ class GeoConvOut(nn.Module):
 
         self.fc1 = nn.Linear(input_features_calculated, base_neurons)
         self.fc2 = nn.Linear(base_neurons, base_neurons // 2)
-        self.fc3 = nn.Linear(int(base_neurons / 2), model_parameters.base_neurons_in)
+        self.fc3 = nn.Linear(base_neurons // 2, model_parameters.base_neurons_in)
 
         self.grid_resolution = grid_resolution
 
