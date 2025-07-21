@@ -107,7 +107,7 @@ class DoMINODataConfig:
         phase: Which phase of data to load ("train", "val", or "test").
         surface_variables: (Surface specific) Names of surface variables.
         surface_points_sample: (Surface specific) Number of surface points to sample per batch.
-        num__surface_neighbors: (Surface specific) Number of surface neighbors to consider for nearest neighbors approach.
+        num_surface_neighbors: (Surface specific) Number of surface neighbors to consider for nearest neighbors approach.
         resample_surfaces: (Surface specific) Whether to resample the surface before kdtree/knn. Not available if caching.
         resampling_points: (Surface specific) Number of points to resample the surface to.
         surface_sampling_algorithm: (Surface specific) Algorithm to use for surface sampling ("area_weighted" or "random").
@@ -166,7 +166,7 @@ class DoMINODataConfig:
     # Surface-specific variables:
     surface_variables: Optional[Sequence] = ("pMean", "wallShearStress")
     surface_points_sample: int = 1024
-    num_surface_neighbors_surface: int = 11
+    num_surface_neighbors: int = 11
     resample_surfaces: bool = False
     resampling_points: int = 1_000_000
     surface_sampling_algorithm: str = Literal["area_weighted", "random"]
@@ -665,10 +665,10 @@ class DoMINODataPipe(Dataset):
                 )
 
             # Fit the kNN (or KDTree, if CPU) on ALL points:
-            if self.config.num_surface_neighbors_surface > 1:
+            if self.config.num_surface_neighbors > 1:
                 if self.array_provider == cp:
                     knn = cuml.neighbors.NearestNeighbors(
-                        n_neighbors=self.config.num_surface_neighbors_surface,
+                        n_neighbors=self.config.num_surface_neighbors,
                         algorithm="rbc",
                     )
                     knn.fit(surface_coordinates)
@@ -708,7 +708,7 @@ class DoMINODataPipe(Dataset):
                 pos_normals_com_surface = pos_normals_com_surface[idx_surface]
 
                 # Now, perform the kNN on the sampled points:
-                if self.config.num_surface_neighbors_surface > 1:
+                if self.config.num_surface_neighbors > 1:
                     if self.array_provider == cp:
                         ii = knn.kneighbors(
                             surface_coordinates_sampled, return_distance=False
@@ -716,7 +716,7 @@ class DoMINODataPipe(Dataset):
                     else:
                         _, ii = interp_func.query(
                             surface_coordinates_sampled,
-                            k=self.config.num_surface_neighbors_surface,
+                            k=self.config.num_surface_neighbors,
                         )
 
                     # Pull out the neighbor elements.  Note that ii is the index into the original
@@ -751,7 +751,7 @@ class DoMINODataPipe(Dataset):
             if self.config.normalize_coordinates:
                 core_dict["surf_grid"] = normalize(core_dict["surf_grid"], s_max, s_min)
                 surface_coordinates = normalize(surface_coordinates, s_max, s_min)
-                if self.config.num_surface_neighbors_surface > 1:
+                if self.config.num_surface_neighbors > 1:
                     surface_neighbors = normalize(surface_neighbors, s_max, s_min)
 
             if self.config.scaling_type is not None:
@@ -1456,7 +1456,7 @@ def create_domino_dataset(
             model_type=cfg.model.model_type,
             bounding_box_dims=cfg.data.bounding_box,
             bounding_box_dims_surf=cfg.data.bounding_box_surface,
-            num_surface_neighbors_surface=cfg.model.num_neighbors_surface,
+            num_surface_neighbors=cfg.model.num_neighbors_surface,
             resample_surfaces=cfg.model.resampling_surface_mesh.resample,
             resampling_points=cfg.model.resampling_surface_mesh.points,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
