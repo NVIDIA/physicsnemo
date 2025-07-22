@@ -32,8 +32,8 @@ import vtk
 from physicsnemo.utils.domino.utils import *
 from torch.utils.data import Dataset
 
-AIR_DENSITY = 1.205
-STREAM_VELOCITY = 30.00
+# AIR_DENSITY = 1.205
+# STREAM_VELOCITY = 30.00
 
 
 class DriveSimPaths:
@@ -83,6 +83,14 @@ class OpenFoamDataset(Dataset):
             "wallShearStress",
         ],
         volume_variables: Optional[list] = ["UMean", "pMean"],
+        global_params_types: Optional[dict] = {
+            "inlet_velocity": "vector",
+            "air_density": "scalar",
+        },
+        global_params_reference: Optional[dict] = {
+            "inlet_velocity": [30.0],
+            "air_density": 1.226,
+        },
         device: int = 0,
         model_type=None,
     ):
@@ -108,6 +116,16 @@ class OpenFoamDataset(Dataset):
 
         self.surface_variables = surface_variables
         self.volume_variables = volume_variables
+
+        self.global_params_types = global_params_types
+        self.global_params_reference = global_params_reference
+
+        self.stream_velocity = 0.0
+        for vel_component in self.global_params_reference["inlet_velocity"]:
+            self.stream_velocity += vel_component**2
+        self.stream_velocity = np.sqrt(self.stream_velocity)
+        self.air_density = self.global_params_reference["air_density"]
+
         self.device = device
         self.model_type = model_type
 
@@ -146,13 +164,13 @@ class OpenFoamDataset(Dataset):
             volume_fields = np.concatenate(volume_fields, axis=-1)
 
             # Non-dimensionalize volume fields
-            volume_fields[:, :3] = volume_fields[:, :3] / STREAM_VELOCITY
+            volume_fields[:, :3] = volume_fields[:, :3] / self.stream_velocity
             volume_fields[:, 3:4] = volume_fields[:, 3:4] / (
-                AIR_DENSITY * STREAM_VELOCITY**2.0
+                self.air_density * self.stream_velocity**2.0
             )
 
             volume_fields[:, 4:] = volume_fields[:, 4:] / (
-                STREAM_VELOCITY * length_scale
+                self.stream_velocity * length_scale
             )
         else:
             volume_fields = None
@@ -185,12 +203,49 @@ class OpenFoamDataset(Dataset):
             )
 
             # Non-dimensionalize surface fields
-            surface_fields = surface_fields / (AIR_DENSITY * STREAM_VELOCITY**2.0)
+            surface_fields = surface_fields / (
+                self.air_density * self.stream_velocity**2.0
+            )
         else:
             surface_fields = None
             surface_coordinates = None
             surface_normals = None
             surface_sizes = None
+
+        # Arrange global parameters reference in a list based on the type of the parameter
+        global_params_reference_list = []
+        for name, type in self.global_params_types.items():
+            if type == "vector":
+                global_params_reference_list.extend(self.global_params_reference[name])
+            elif type == "scalar":
+                global_params_reference_list.append(self.global_params_reference[name])
+            else:
+                raise ValueError(
+                    f"Global parameter {name} not supported for  this dataset"
+                )
+        global_params_reference = np.array(
+            global_params_reference_list, dtype=np.float32
+        )
+
+        # Prepare the list of global parameter values for each simulation file
+        # Note: The user must ensure that the values provided here correspond to the
+        # `global_parameters` specified in `config.yaml` and that these parameters
+        # exist within each simulation file.
+        global_params_values_list = []
+        for key in self.global_params_types.keys():
+            if key == "inlet_velocity":
+                global_params_values_list.extend(
+                    self.global_params_reference["inlet_velocity"]
+                )
+            elif key == "air_density":
+                global_params_values_list.append(
+                    self.global_params_reference["air_density"]
+                )
+            else:
+                raise ValueError(
+                    f"Global parameter {key} not supported for  this dataset"
+                )
+        global_params_values = np.array(global_params_values_list, dtype=np.float32)
 
         # Add the parameters to the dictionary
         return {
@@ -205,8 +260,8 @@ class OpenFoamDataset(Dataset):
             "volume_mesh_centers": np.float32(volume_coordinates),
             "surface_fields": np.float32(surface_fields),
             "filename": cfd_filename,
-            "stream_velocity": STREAM_VELOCITY,
-            "air_density": AIR_DENSITY,
+            "global_params_values": global_params_values,
+            "global_params_reference": global_params_reference,
         }
 
 
@@ -216,6 +271,8 @@ if __name__ == "__main__":
         phase="train",
         volume_variables=["UMean", "pMean", "nutMean"],
         surface_variables=["pMean", "wallShearStress", "nutMean"],
+        global_params_types={"inlet_velocity": "vector", "air_density": "scalar"},
+        global_params_reference={"inlet_velocity": [30.0], "air_density": 1.226},
         sampling=False,
         sample_in_bbox=False,
     )

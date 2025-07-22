@@ -127,7 +127,6 @@ def test_domino_forward(device, pytestconfig):
         @dataclass
         class parameter_model:
             base_layer: int = 512
-            scaling_params: Sequence = (30.0, 1.226)
             fourier_features: bool = True
             num_modes: int = 5
 
@@ -153,6 +152,7 @@ def test_domino_forward(device, pytestconfig):
         input_features=3,
         output_features_vol=4,
         output_features_surf=5,
+        global_features=2,
         model_parameters=model_params,
     ).to(device)
 
@@ -178,8 +178,8 @@ def test_domino_forward(device, pytestconfig):
     volume_coordinates = torch.randn(bsize, 100, 3).to(device)
     vol_grid_max_min = torch.randn(bsize, 2, 3).to(device)
     surf_grid_max_min = torch.randn(bsize, 2, 3).to(device)
-    stream_velocity = torch.randn(bsize, 1).to(device)
-    air_density = torch.randn(bsize, 1).to(device)
+    global_params_values = torch.randn(bsize, 2, 1).to(device)
+    global_params_reference = torch.randn(bsize, 2, 1).to(device)
     input_dict = {
         "pos_volume_closest": pos_normals_closest_vol,
         "pos_volume_center_of_mass": pos_normals_com_vol,
@@ -199,8 +199,8 @@ def test_domino_forward(device, pytestconfig):
         "volume_mesh_centers": volume_coordinates,
         "volume_min_max": vol_grid_max_min,
         "surface_min_max": surf_grid_max_min,
-        "stream_velocity": stream_velocity,
-        "air_density": air_density,
+        "global_params_values": global_params_values,
+        "global_params_reference": global_params_reference,
     }
 
     # assert common.validate_forward_accuracy(

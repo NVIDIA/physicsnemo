@@ -404,9 +404,17 @@ class Module(torch.nn.Module):
 
             # Open the tar file and extract its contents to the temporary directory
             with tarfile.open(cached_file_name, "r") as tar:
-                tar.extractall(
-                    path=local_path, members=list(Module._safe_members(tar, local_path))
+                # Safely extract while supporting Python versions < 3.12 that lack the
+                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
+                # recommended way to avoid unsafe members
+                extract_kwargs = dict(
+                    path=local_path,
+                    members=list(Module._safe_members(tar, local_path)),
                 )
+                if "filter" in tar.extractall.__code__.co_varnames:
+                    extract_kwargs["filter"] = "data"
+
+                tar.extractall(**extract_kwargs)
 
             # Check if the checkpoint is valid
             Module._check_checkpoint(local_path)
@@ -466,9 +474,16 @@ class Module(torch.nn.Module):
 
             # Open the tar file and extract its contents to the temporary directory
             with tarfile.open(cached_file_name, "r") as tar:
-                tar.extractall(
-                    path=local_path, members=list(Module._safe_members(tar, local_path))
+                # Safely extract while supporting Python versions < 3.12 that lack the
+                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
+                # recommended way to avoid unsafe members;
+                extract_kwargs = dict(
+                    path=local_path,
+                    members=list(Module._safe_members(tar, local_path)),
                 )
+                if "filter" in tar.extractall.__code__.co_varnames:
+                    extract_kwargs["filter"] = "data"
+                tar.extractall(**extract_kwargs)
 
             # Check if the checkpoint is valid
             Module._check_checkpoint(local_path)

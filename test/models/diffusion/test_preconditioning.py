@@ -56,6 +56,53 @@ def test_EDMPrecondSuperResolution_forward():
     assert output.shape == (b, c_target, x, y)
 
 
+def test_EDMPrecondSuperResolution_fp16_forward():
+    b, c_target, x, y = 1, 3, 8, 8
+    c_cond = 4
+
+    # Create an instance of the preconditioner
+    model_fp16 = EDMPrecondSuperResolution(
+        img_resolution=x,
+        img_in_channels=c_cond,
+        img_out_channels=c_target,
+        model_type="SongUNet",
+        use_fp16=True,
+    )
+
+    model_fp32 = EDMPrecondSuperResolution(
+        img_resolution=x,
+        img_in_channels=c_cond,
+        img_out_channels=c_target,
+        model_type="SongUNet",
+        use_fp16=False,
+    )
+
+    latents = torch.ones((b, c_target, x, y))
+    img_lr = torch.arange(b * c_cond * x * y).reshape((b, c_cond, x, y))
+    sigma = torch.tensor([10.0])
+
+    # Forward pass
+    output_fp16 = model_fp16(
+        x=latents,
+        img_lr=img_lr,
+        sigma=sigma,
+    )
+
+    output_fp32 = model_fp32(
+        x=latents,
+        img_lr=img_lr,
+        sigma=sigma,
+    )
+
+    # Assert the output shape is correct
+    assert output_fp16.shape == (b, c_target, x, y)
+
+    # Assert the fp16 output and fp32 output are close
+    assert torch.allclose(
+        output_fp16, output_fp32, rtol=1e-3, atol=1e-3
+    ), "FP16 and FP32 outputs differ more than allowed"
+
+
 @import_or_fail("termcolor")
 def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig):
 
@@ -194,7 +241,7 @@ def test_EDMPrecondSuperResolution_properties():
     )
 
     # Default value should be False
-    assert model.amp_mode in {None, False}
+    assert model.amp_mode is False
 
     # Enable amp_mode and verify propagation
     model.amp_mode = True

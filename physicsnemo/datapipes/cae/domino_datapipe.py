@@ -323,8 +323,8 @@ class DoMINODataPipe(Dataset):
         with self.device_context:
             xp = self.array_provider
             self.keys_to_read_if_available = {
-                "stream_velocity": xp.asarray(30.00),
-                "air_density": xp.asarray(1.205),
+                "global_params_values": xp.asarray([30.0, 1.226]),
+                "global_params_reference": xp.asarray([30.0, 1.226]),
             }
         self.volume_keys = ["volume_mesh_centers", "volume_fields"]
         self.surface_keys = [
@@ -503,10 +503,12 @@ class DoMINODataPipe(Dataset):
 
         # Pull these out and force to fp32:
         with self.device_context:
-            STREAM_VELOCITY = data_dict["stream_velocity"].astype(
+            global_params_values = data_dict["global_params_values"].astype(
                 self.array_provider.float32
             )
-            AIR_DENSITY = data_dict["air_density"].astype(self.array_provider.float32)
+            global_params_reference = data_dict["global_params_reference"].astype(
+                self.array_provider.float32
+            )
 
         # Pull these pieces out of the data_dict for manipulation
         stl_vertices = data_dict["stl_coordinates"]
@@ -576,10 +578,12 @@ class DoMINODataPipe(Dataset):
             "surf_grid": surf_grid,
             "sdf_surf_grid": sdf_surf_grid,
             "surface_min_max": surf_grid_max_min,
-            "stream_velocity": xp.expand_dims(
-                xp.array(STREAM_VELOCITY, dtype=xp.float32), -1
+            "global_params_values": xp.expand_dims(
+                xp.array(global_params_values, dtype=xp.float32), -1
             ),
-            "air_density": xp.expand_dims(xp.array(AIR_DENSITY, dtype=xp.float32), -1),
+            "global_params_reference": xp.expand_dims(
+                xp.array(global_params_reference, dtype=xp.float32), -1
+            ),
             "geometry_coordinates": geom_centers,
         }
 

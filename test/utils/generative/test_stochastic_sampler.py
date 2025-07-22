@@ -50,6 +50,8 @@ def test_stochastic_sampler(pytestconfig):
 
     from physicsnemo.utils.diffusion import stochastic_sampler
 
+    torch._dynamo.reset()
+
     net = MockNet()
     latents = torch.randn(2, 3, 448, 448)  # Mock latents
     img_lr = torch.randn(2, 3, 112, 112)  # Mock low-res image
@@ -124,6 +126,8 @@ def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
     from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
 
+    torch._dynamo.reset()
+
     net = MockNet()
 
     img_shape_y, img_shape_x = 256, 64
@@ -172,6 +176,8 @@ def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
 def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
     from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
+
+    torch._dynamo.reset()
 
     # Mock network class
     class MockNet:
