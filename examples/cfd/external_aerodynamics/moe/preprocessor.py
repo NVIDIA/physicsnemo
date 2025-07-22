@@ -256,8 +256,8 @@ def main(cfg: DictConfig) -> None:
 
     with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
         for pMeanTrim, wallShear, area in tqdm(
-            executor.map(process_and_save_vtp, train_args_list),
-            total=len(train_args_list),
+            executor.map(process_and_save_vtp, args_list),
+            total=len(args_list),
         ):
             pMeanTrim_all.append(pMeanTrim)
             wallShearStressMeanTrim_all.append(wallShear)
