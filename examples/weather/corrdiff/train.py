@@ -248,19 +248,12 @@ def main(cfg: DictConfig) -> None:
     if hasattr(cfg.model, "model_args"):  # override defaults from config file
         model_args.update(OmegaConf.to_container(cfg.model.model_args))
 
-    use_torch_compile = False
-    use_apex_gn = False
-    profile_mode = False
+    use_torch_compile = getattr(cfg.training.perf, "torch_compile", False)
+    use_apex_gn = getattr(cfg.training.perf, "use_apex_gn", False)
+    profile_mode = getattr(cfg.training.perf, "profile_mode", False)
 
-    if hasattr(cfg.training.perf, "torch_compile"):
-        use_torch_compile = cfg.training.perf.torch_compile
-    if hasattr(cfg.training.perf, "use_apex_gn"):
-        use_apex_gn = cfg.training.perf.use_apex_gn
-        model_args["use_apex_gn"] = use_apex_gn
-
-    if hasattr(cfg.training.perf, "profile_mode"):
-        profile_mode = cfg.training.perf.profile_mode
-        model_args["profile_mode"] = profile_mode
+    model_args["use_apex_gn"] = use_apex_gn
+    model_args["profile_mode"] = profile_mode
 
     if enable_amp:
         model_args["amp_mode"] = enable_amp
@@ -702,7 +695,7 @@ def main(cfg: DictConfig) -> None:
                                     for patch_num_per_iter in patch_nums_iter:
                                         if patching is not None:
                                             patching.set_patch_num(patch_num_per_iter)
-                                            loss_fn_kwargs.update(
+                                            loss_valid_kwargs.update(
                                                 {"patching": patching}
                                             )
                                         with torch.autocast(
@@ -718,6 +711,7 @@ def main(cfg: DictConfig) -> None:
                                         valid_loss_accum += (
                                             loss_valid
                                             / cfg.training.io.validation_steps
+                                            / len(patch_nums_iter)
                                         )
                                 valid_loss_sum = torch.tensor(
                                     [valid_loss_accum], device=dist.device

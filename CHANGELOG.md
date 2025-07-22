@@ -12,24 +12,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Improved documentation for diffusion models and diffusion utils.
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
-  `Module.from_checkpoint("chkpt.mdlus", models_args)`.
+  `Module.from_checkpoint("chkpt.mdlus", override_args=set(...))`.
 - PyTorch Geometric MeshGraphNet backend.
 - Functionality in DoMINO to take arbitrary number of `scalar` or `vector`
   global parameters and encode them using `class ParameterModel`
 
 ### Changed
 
-- physicsnemo.utils.generative renamed into physicsnemo.utils.diffusion
-- In CorrDiff model wrappers (`EDMPrecondSuperResolution` and `UNet`), the
-  arguments `profile_mode` and `amp_mode` cannot be overriden by
+- Diffusion utils: `physicsnemo.utils.generative` renamed into `physicsnemo.utils.diffusion`
+- Diffusion models: in CorrDiff model wrappers (`EDMPrecondSuperResolution` and
+  `UNet`), the arguments `profile_mode` and `amp_mode` cannot be overriden by
   `from_checkpoint`. They are now properties that can be dynamically changed
-  *after* the model instantiation.
+  *after* the model instantiation with, for example, `model.amp_mode = True`
+  and `model.profile_mode = False`.
 - Updated healpix data module to use correct `DistributedSampler` target for
   test data loader
 - Existing DGL-based vortex shedding example has been renamed to `vortex_shedding_mgn_dgl`.
   Added new `vortex_shedding_mgn` example that uses PyTorch Geometric instead.
 - HEALPixLayer can now use earth2grid HEALPix padding ops, if desired
 - Migrated Vortex Shedding Reduced Mesh example to PyTorch Geometric.
+- CorrDiff example: fixed bugs when training regression `UNet`.
+- Diffusion models: fixed bugs related to gradient checkpointing on non-square
+  images.
+- Diffusion models: created a separate class `Attention` for clarity and
+  modularity. Updated `UNetBlock` accordingly to use the `Attention` class
+  instead of custom attention logic. This will update the model architecture
+  for `SongUNet`-based diffusion models. Changes are not BC-breaking and are
+  transparent to the user.
+- :warning: **BC-breaking:** refactored the automatic mixed precision (AMP) API in layers
+  and models defined in `physicsnemo/models/diffusion/` for improved usability.
+  Note: it is now, not only possible, but *required* to explicitly set
+  `model.amp_mode = True` in order to use the model in a `torch.autocast`
+  clause. This applies to all `SongUNet`-based models.
+- Diffusion models: fixed and improved API to enable fp16 forward pass in
+  `UNet` and `EDMPrecondSuperResolution` model wrappers; fp16 forward pass can
+  now be toggled/untoggled by setting `model.use_fp16 = True`.
+- Diffusion models: improved API for Apex group norm. `SongUNet`-based models
+  will automatically perform conversion of the input tensors to
+  `torch.channels_last` memory format when `model.use_apex_gn` is `True`. New
+  warnings are raised when attempting to use Apex group norm on CPU.
+- Diffusion utils: systematic compilation of patching operations in `stochastic_sampler`
+  for improved performance.
 
 ### Deprecated
 

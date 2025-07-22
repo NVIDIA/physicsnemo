@@ -33,6 +33,7 @@ from physicsnemo.models.diffusion import (
     PositionalEmbedding,
     UNetBlock,
 )
+from physicsnemo.models.diffusion.utils import _recursive_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -325,8 +326,7 @@ class SongUNet(Module):
             profile_mode=profile_mode,
             amp_mode=amp_mode,
         )
-        self.profile_mode = profile_mode
-        self.amp_mode = amp_mode
+        self.use_apex_gn = use_apex_gn
 
         # for compatibility with older versions that took only 1 dimension
         self.img_resolution = img_resolution
@@ -502,12 +502,32 @@ class SongUNet(Module):
                     **init_zero,
                 )
 
+        # Set properties recursively on submodules
+        self.profile_mode = profile_mode
+        self.amp_mode = amp_mode
+
+    # Properties that are recursively set on submodules
+    profile_mode = _recursive_property(
+        "profile_mode", bool, "Should be set to ``True`` to enable profiling."
+    )
+    amp_mode = _recursive_property(
+        "amp_mode",
+        bool,
+        "Should be set to ``True`` to enable automatic mixed precision.",
+    )
+
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         with (
             nvtx.annotate(message="SongUNet", color="blue")
             if self.profile_mode
             else contextlib.nullcontext()
         ):
+            if (
+                self.use_apex_gn
+                and (not x.is_contiguous(memory_format=torch.channels_last))
+                and x.dim() == 4
+            ):
+                x = x.to(memory_format=torch.channels_last)
             if self.embedding_type != "zero":
                 # Mapping.
                 emb = self.map_noise(noise_labels)
@@ -530,7 +550,9 @@ class SongUNet(Module):
                 emb = silu(self.map_layer1(emb))
             else:
                 emb = torch.zeros(
-                    (noise_labels.shape[0], self.emb_channels), device=x.device
+                    (noise_labels.shape[0], self.emb_channels),
+                    device=x.device,
+                    dtype=x.dtype,
                 )
 
             # Encoder.

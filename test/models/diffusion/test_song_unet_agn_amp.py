@@ -227,25 +227,33 @@ def test_song_unet_optims(device):
         assert common.validate_combo_optims(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
-    # Construct FNO models
-    model_1 = UNet(
-        img_resolution=16,
-        in_channels=2,
-        out_channels=2,
-        use_apex_gn=True,
-        amp_mode=True,
-    ).to(device)
 
-    model_2 = UNet(
-        img_resolution=16,
-        in_channels=2,
-        out_channels=2,
-        use_apex_gn=True,
-        amp_mode=True,
-    ).to(device)
+    model_1 = (
+        UNet(
+            img_resolution=16,
+            in_channels=2,
+            out_channels=2,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
+
+    model_2 = (
+        UNet(
+            img_resolution=16,
+            in_channels=2,
+            out_channels=2,
+            use_apex_gn=True,
+            amp_mode=True,
+        )
+        .to(device)
+        .to(memory_format=torch.channels_last)
+    )
 
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
