@@ -209,6 +209,28 @@ def main(cfg: DictConfig) -> None:
 
     logging.info(f"File discovery complete. Found {len(common_ids)} common files.")
 
+    # Step 1: Read validation IDs first
+    val_ids = set()
+    if os.path.exists(cfg.validation_ids_csv):
+        with open(cfg.validation_ids_csv, "r") as f:
+            reader = csv.reader(f)
+            next(reader)  # Skip header
+            for row in reader:
+                if row:  # Check if row is not empty
+                    val_ids.add(row[0])
+        logging.info(f"Found {len(val_ids)} validation IDs")
+    else:
+        logging.warning(
+            f"Validation IDs CSV file {cfg.validation_ids_csv} not found. All data will be used for training."
+        )
+
+    # Step 2: Separate train and validation IDs
+    train_ids = [id_ for id_ in common_ids if id_ not in val_ids]
+    validation_ids = [id_ for id_ in common_ids if id_ in val_ids]
+
+    logging.info(f"Training samples: {len(train_ids)}")
+    logging.info(f"Validation samples: {len(validation_ids)}")
+
     args_list = []
     for id_ in common_ids:
         xmgn_path = os.path.join(
@@ -227,14 +249,15 @@ def main(cfg: DictConfig) -> None:
 
     logging.info(f"Starting parallel processing with {os.cpu_count()} workers...")
 
-    # Use the same efficient approach as the original
+    # Step 3: Process training data first (for stats computation)
     pMeanTrim_all = []
     wallShearStressMeanTrim_all = []
     area_all = []
 
     with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
         for pMeanTrim, wallShear, area in tqdm(
-            executor.map(process_and_save_vtp, args_list), total=len(args_list)
+            executor.map(process_and_save_vtp, train_args_list),
+            total=len(train_args_list),
         ):
             pMeanTrim_all.append(pMeanTrim)
             wallShearStressMeanTrim_all.append(wallShear)
@@ -288,6 +311,31 @@ def main(cfg: DictConfig) -> None:
 
     logging.info("Statistics saved to files.")
     logging.info("Starting data splitting...")
+
+    # Step 4: Process validation data (no stats collection)
+    if validation_ids:
+        val_args_list = []
+        for id_ in validation_ids:
+            xmgn_path = os.path.join(
+                cfg.xmgn_data_dir,
+                f"{cfg.xmgn_filename_prefix}{id_}{cfg.xmgn_filename_suffix}",
+            )
+            fignet_path = os.path.join(
+                cfg.fignet_data_dir,
+                f"{cfg.fignet_filename_prefix}{id_}{cfg.fignet_filename_suffix}",
+            )
+            domino_path = os.path.join(
+                cfg.domino_data_dir,
+                f"{cfg.domino_filename_prefix}{id_}{cfg.domino_filename_suffix}",
+            )
+            val_args_list.append((id_, xmgn_path, fignet_path, domino_path, output_dir))
+
+        with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+            for _ in tqdm(
+                executor.map(process_and_save_vtp, val_args_list),
+                total=len(val_args_list),
+            ):
+                pass  # No stats collection for validation data
 
     # Split data into train/val directories
     split_data(output_dir, cfg.validation_ids_csv)

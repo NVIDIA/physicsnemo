@@ -178,9 +178,27 @@ def run_inference(dataset, cfg):
 
         # Save gating scores as fields (order: xmgn, fignet, domino)
         # gate_p: (N, 3) -- columns: [xmgn, fignet, domino]
-        mesh.point_data["xmgn_score"] = gate_p[:, 0].cpu().numpy().reshape(-1, 1)
-        mesh.point_data["fignet_score"] = gate_p[:, 1].cpu().numpy().reshape(-1, 1)
-        mesh.point_data["domino_score"] = gate_p[:, 2].cpu().numpy().reshape(-1, 1)
+        mesh.point_data["xmgn_pressure_score"] = (
+            gate_p[:, 0].cpu().numpy().reshape(-1, 1)
+        )
+        mesh.point_data["fignet_pressure_score"] = (
+            gate_p[:, 1].cpu().numpy().reshape(-1, 1)
+        )
+        mesh.point_data["domino_pressure_score"] = (
+            gate_p[:, 2].cpu().numpy().reshape(-1, 1)
+        )
+
+        # Save shear gating scores as fields (order: xmgn, fignet, domino)
+        # gate_shear: (N, 3) -- columns: [xmgn, fignet, domino]
+        mesh.point_data["xmgn_shear_score"] = (
+            gate_shear[:, 0].cpu().numpy().reshape(-1, 1)
+        )
+        mesh.point_data["fignet_shear_score"] = (
+            gate_shear[:, 1].cpu().numpy().reshape(-1, 1)
+        )
+        mesh.point_data["domino_shear_score"] = (
+            gate_shear[:, 2].cpu().numpy().reshape(-1, 1)
+        )
 
         # Append predictions to mesh
         mesh.point_data["pMeanTrimPred_MoE"] = pred_p_denorm.reshape(-1)

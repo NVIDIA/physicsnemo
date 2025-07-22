@@ -11,17 +11,30 @@ fields.
 
 ### MoE Gating Network
 
-The MoE network consists of a gating network that combines predictions from the expert
-models.
-The initial MoE model formulation is:
-`P_MoE = W_1 * P_DoMINO + W_2 * P_FigConvNet + W_3 * P_XMGN`.
-The weights `W_1, W_2, W_3` are determined by a Neural Network that takes
-`P_DoMINO, P_FigConvNet, P_XMGN` as inputs.
+The Mixture-of-Experts (MoE) model combines predictions from multiple
+expert models using a gating network. The gating network takes the
+outputs of the expert models—`P_DoMINO`, `P_FigConvNet`, and `P_XMGN`—as
+input and produces a weighted combination:
 
-A bias term `C_MoE` can be included to allow the MoE to correct predictions,
-especially if all three models overpredict or underpredict. In this formulation,
-`P_MoE = W_1 * P_DoMINO + W_2 * P_FigConvNet + W_3 * P_XMGN + C_MoE` The terms
-`W_1, W_2, W_3, C_MoE` are all determined by the Neural Network.
+$$
+P_{\text{MoE}} = W_1 \cdot P_{\text{DoMINO}} + \\
+W_2 \cdot P_{\text{FigConvNet}} + W_3 \cdot P_{\text{XMGN}}
+$$
+
+The weights \( W_1, W_2, W_3 \) are determined dynamically by a neural
+network based on the expert predictions.
+
+To allow the MoE model to correct for systematic biases—such as all experts
+consistently overpredicting or underpredicting—a bias term \( C_{\text{MoE}} \)
+can be added:
+
+$$
+P_{\text{MoE}} = W_1 \cdot P_{\text{DoMINO}} + W_2 \cdot P_{\text{FigConvNet}} + \\
+W_3 \cdot P_{\text{XMGN}} + C_{\text{MoE}}
+$$
+
+Both the weights \( W_1, W_2, W_3 \) and the bias term \( C_{\text{MoE}} \) are
+outputs of the gating network.
 
 #### Architecture Details
 
@@ -71,12 +84,12 @@ num_layers: 3                      # Number of MLP layers
 num_experts: 3                     # Number of expert models
 num_feature_per_expert_pressure: 1 # Features per expert for pressure
 num_feature_per_expert_shear: 3    # Features per expert for shear stress
-use_moe_bias: true                 # Include bias term in MoE
+use_moe_bias: false                # Include bias term in MoE
 include_normals: true              # Include surface normals as features
 
 # Training Configuration
-batch_size: 32
-num_epochs: 100
+batch_size: 1
+num_epochs: 10
 start_lr: 1e-3
 end_lr: 5e-6
 lambda_entropy: 0.01               # Entropy regularization weight
@@ -132,6 +145,23 @@ Parallel inference is also supported. To launch a multi-GPU inference, run:
 ```bash
 torchrun --nproc_per_node=<num_GPUs> inference.py
 ```
+
+The table below compares the L-2 errors of the MoE predictions with those
+of the individual experts, demonstrating the MoE model's significant
+reduction in error across all variables.
+
+| Model | P L-2 Error | WSS (x) L-2 Error | WSS (y) L-2 Error | WSS (z) L-2 Error |
+|---|---|---|---|---|
+| MoE | 0.08 | 0.14 | 0.19 | 0.21 |
+| DoMINO | 0.10 | 0.18 | 0.26 | 0.28 |
+| X-MeshGraphNet | 0.14 | 0.17 | 0.22 | 0.29 |
+| FigConvNet | 0.21 | 0.32 | 0.62 | 0.53 |
+
+For sample ID 129 from the DrivAerML dataset, the figure below illustrates
+the pointwise MoE scores of the individual expert for pressure prediction.
+Entropy regularization with a weighting factor of 0.01 was applied.
+
+![MoE scores of the individual expert for pressure prediction for the sample #129.](../../../../docs/img/moe_scores.png)
 
 To evaluate the mixture of experts results and compared with
 the individual experts, use the benchmarking in [PhysicsNeMo-CFD](https://github.com/NVIDIA/physicsnemo-cfd).
