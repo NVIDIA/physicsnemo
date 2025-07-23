@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ┌───────────────────────────────────────────┐
+# │            Hydra Configuration            │
+# └───────────────────────────────────────────┘
+
+hydra:
+  job:
+    chdir: True
+  run:
+    dir: ./outputs/
+
+# ┌───────────────────────────────────────────┐
+# │      Dataset Configuration & Paths        │
+# └───────────────────────────────────────────┘
+
+prefix_topology_file: gt_topo_
+prefix_pf_file: cons_pf_array_
+prefix_load_file: cons_load_array_
+
+path_training_data_diffusion: ???        # <PATH_TO_DATASET>/dataset_1_diff/training_data/
+path_data_regressor_training: ???        # <PATH_TO_DATASET>/dataset_2_reg/training_data/ 
+path_data_classifier_training: ???       # <PATH_TO_DATASET>/dataset_3_class/training_data/ 
+
+path_data_regressor_validation:  ???     # <PATH_TO_DATASET>/dataset_2_reg/validation_data/
+path_data_classifier_validation:  ???    # <PATH_TO_DATASET>/dataset_3_class/validation_data/
+
+path_test_data_diffusion: ???            # <PATH_TO_DATASET>/dataset_1_diff/test_data_level_1/
+
+# ┌───────────────────────────────────────────┐
+# │          Training Configuration           │
+# └───────────────────────────────────────────┘
+
+batch_size: 64
+lr: 1e-4 
+epochs: 100000
+classifier_iterations: 30000
+regressor_iterations: 100
+
+model_path: ./
+
+# ┌───────────────────────────────────────────┐
+# │          Inference Configuration          │
+# └───────────────────────────────────────────┘
+
+model_path_diffusion: topodiff_model.pt
+model_path_classifier: classifier.pt
+
+diffusion_steps: 1000
+generation_path: ./
