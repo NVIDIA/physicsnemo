@@ -131,3 +131,61 @@ def validate_forward_accuracy(
         )
 
         return compare_output(output, output_target, rtol, atol)
+
+
+@torch.no_grad()
+def validate_tensor_accuracy(
+    output: Tensor,
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
+    file_name: Union[str, None] = None,
+) -> bool:
+    """Validates the accuracy of a tensor with a reference output
+
+    Parameters
+    ----------
+    output : Tensor
+        Output tensor
+    rtol : float, optional
+        Relative tolerance of error allowed, by default 1e-3
+    atol : float, optional
+        Absolute tolerance of error allowed, by default 1e-3
+    file_name : Union[str, None], optional
+        Override the default file name of the stored target output, by default None
+
+    Returns
+    -------
+    bool
+        Test passed
+
+    Raises
+    ------
+    IOError
+        Target output tensor file for this model was not found
+    """
+    # File name / path
+    # Output files should live in test/utils/data
+
+    # Always use tuples for this comparison / saving
+    if isinstance(output, Tensor):
+        device = output.device
+        output = (output,)
+    else:
+        device = output[0].device
+
+    file_name = (
+        Path(__file__).parents[1].resolve() / Path("data") / Path(file_name.lower())
+    )
+    # If file does not exist, we will create it then error
+    # Model should then reproduce it on next pytest run
+    if not file_name.exists():
+        save_output(output, file_name)
+        raise IOError(
+            f"Output check file {str(file_name)} wasn't found so one was created. Please re-run the test."
+        )
+    # Load tensor dictionary and check
+    else:
+        tensor_dict = torch.load(str(file_name))
+        output_target = tuple([value.to(device) for value in tensor_dict.values()])
+
+        return compare_output(output, output_target, rtol, atol)
