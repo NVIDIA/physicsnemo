@@ -4,8 +4,8 @@
 This recipe contains a **Mixture of Experts (MoE) gating network** implementation
 for combining predictions from multiple aerodynamic models. The system learns to
 optimally weight predictions from different neural network models (DoMINO, FigConvNet,
-and X-MeshGraphNet) to improve overall prediction accuracy for pressure and shear stress
-fields.
+and X-MeshGraphNet) to improve overall prediction accuracy for pressure and
+wall shear stress fields.
 
 ## Model Architecture
 
@@ -33,23 +33,27 @@ P_{\text{MoE}} = W_1 \cdot P_{\text{DoMINO}} + W_2 \cdot P_{\text{FigConvNet}} +
 W_3 \cdot P_{\text{XMGN}} + C_{\text{MoE}}
 $$
 
-Both the weights \( W_1, W_2, W_3 \) and the bias term \( C_{\text{MoE}} \) are
-outputs of the gating network.
+Both the weights $W_1, W_2, W_3$ and the bias term $C_{\text{MoE}}$
+are outputs of the gating network.
 
 #### Architecture Details
 
-```python
-class MoEGatingNet(nn.Module):
-    def __init__(self, hidden_dim=128, num_layers=3, num_experts=3,
-                 num_feature_per_expert=3, use_moe_bias=True, include_normals=True):
-````
+The MoE Gating Network architecture comprises two Multi-Layer Perceptrons (MLPs)
+with softmax outputs. One MLP is used for scoring models based on pressure,
+and the other for wall shear stress. These MLPs are designed to predict
+weights and a correction term for a MoE model.
 
 **Key Components:**
 
-- **Input Features**: Expert predictions + surface normals (optional)
-- **Hidden Layers**: Fully connected MLP with configurable depth and width
-- **Output**: Softmax weights for each expert + optional bias term
-- **Activation**: ReLU (configurable)
+- **Input Features**: The network takes expert predictions as input,
+  with the option to also include surface normals.
+- **Hidden Layers**s: Each MLP consists of fully connected hidden layers,
+  whose depth and width can be configured.
+- **Output**: The primary output of each MLP is a set of softmax weights,
+  one for each expert. Additionally, the network can optionally output a
+  bias term, which acts as a correction term.
+- **Activation**: The activation function used within the hidden layers
+  is ReLU, though this can be configured.
 
 ## Dataset
 
@@ -71,7 +75,7 @@ combines predictions from all three expert models,
 extracts surface geometry and field data,
 computes normalization statistics,
 splits data into training and validation sets,
-and saves processed VTP files with all required fields.
+and saves processed .vtp files with all required fields.
 
 ### 2\. Training Configuration
 
@@ -83,7 +87,7 @@ hidden_dim: 128                    # Hidden layer dimension
 num_layers: 3                      # Number of MLP layers
 num_experts: 3                     # Number of expert models
 num_feature_per_expert_pressure: 1 # Features per expert for pressure
-num_feature_per_expert_shear: 3    # Features per expert for shear stress
+num_feature_per_expert_shear: 3    # Features per expert for wall shear stress
 use_moe_bias: false                # Include bias term in MoE
 include_normals: true              # Include surface normals as features
 
@@ -107,7 +111,7 @@ python train.py
 The training process:
 
 - Loads preprocessed data with normalization
-- Trains both pressure and shear stress gating networks simultaneously
+- Trains both pressure and wall shear stress gating networks simultaneously
 - Uses distributed training for multi-GPU setups
 - Implements mixed precision training for efficiency
 - Applies **entropy regularization** to encourage expert diversity and more reliable scoring.
@@ -125,7 +129,7 @@ torchrun --nproc_per_node=<num_GPUs> train.py
 The training tracks several key metrics:
 
 - **Pressure Loss**: MSE between predicted and true pressure
-- **Shear Loss**: MSE between predicted and true shear stress (WSS-x, WSS-y, WSS-z)
+- **Shear Loss**: MSE between predicted and true wall shear stress (WSS-x, WSS-y, WSS-z)
 - **Entropy**: Diversity measure of expert usage
 
 ### Inference Results
@@ -195,10 +199,10 @@ it is **subtracted** from the total loss (i.e., we maximize it),
 weighted by a coefficient `lambda_entropy`:
 
 $$
-\begin{align}
+\begin{aligned}
 \mathcal{L}_\text{total} &= \mathcal{L}_\text{pressure} + \mathcal{L}_\text{shear} \\
 &\quad - \lambda_\text{entropy} \cdot \left(H(w_\text{pressure}) + H(w_\text{shear})\right)
-\end{align}
+\end{aligned}
 $$
 
 You can control the strength of this effect using the `lambda_entropy` parameter in the config.
@@ -236,6 +240,44 @@ Docker container on a remote server from your local desktop, follow these steps:
 
 **Note:** Ensure the remote server’s firewall allows connections on port `6006`
 and that your local machine’s firewall allows outgoing connections.
+
+### Adding New Experts
+
+To add a new expert model to the MoE system:
+
+1. **Update Configuration**: Modify `conf/config.yaml` to increase `num_experts`:
+
+   ```yaml
+   num_experts: 4  # Increase from 3 to 4
+   ```
+
+2. **Modify Data Preprocessing**: Update `preprocessor.py` to include predictions
+   from your new expert model:
+
+   ```python
+   # Add new expert predictions to the mesh
+   mesh.point_data["pMeanTrimPred_new_expert"] = new_expert_mesh.point_data["pMeanTrimPred"]
+   mesh.point_data["wallShearStressMeanTrimPred_new_expert"] = new_expert_mesh.point_data["wallShearStressMeanTrimPred"]
+   ```
+
+3. **Update Dataset**: Modify `dataset.py` to load the new expert predictions:
+
+   ```python
+   # Add to __getitem__ method
+   p_pred_new_expert = mesh.point_data["pMeanTrimPred_new_expert"]
+   shear_pred_new_expert = mesh.point_data["wallShearStressMeanTrimPred_new_expert"]
+   ```
+
+4. **Update Training/Inference**: Modify the input concatenation in `train.py` and `inference.py`:
+
+   ```python
+   # Concatenate new expert predictions
+   p_preds = torch.cat([p_pred_xmgn, p_pred_fignet, p_pred_domino, p_pred_new_expert], dim=1)
+   ```
+
+The gating network will automatically adapt to the new number of experts and learn optimal
+weights for the expanded ensemble. The entropy regularization will help ensure balanced
+usage of all experts, including the newly added one.
 
 ## References
 
