@@ -89,7 +89,7 @@ def convert_ckp_apex(
                     )
                     filtered_state_dict[new_key] = value
                     is_duplicate = True
-                elif f"{norm_layer}.bias" in key:
+                elif f"{norm_layer}.gn.bias" in key:
                     new_key = key.replace(f"{norm_layer}.gn.bias", f"{norm_layer}.bias")
                     filtered_state_dict[new_key] = value
                     is_duplicate = True

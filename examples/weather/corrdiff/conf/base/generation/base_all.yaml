@@ -32,7 +32,7 @@ has_lead_time: False
 # Whether the model has lead time.
 
 perf:
-  force_fp16: false
+  use_fp16: false
     # Whether to force fp16 precision for the model. If false, it'll use the precision
     # specified upon training.
   use_torch_compile: false
@@ -42,3 +42,10 @@ perf:
   num_writer_workers: 1
     # number of workers to use for writing file
     # To support multiple workers a threadsafe version of the netCDF library must be used
+  use_apex_gn: false
+    # Use Apex GroupNorm (optimized normalization for performance with channelslast layout)
+  profile_mode: false
+    # Enable NVTX annotations for performance profiling
+  io_syncronous: true
+    # Synchronize I/O operations for writing inference results
+

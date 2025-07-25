@@ -28,6 +28,7 @@ from physicsnemo.models.diffusion import (
     PositionalEmbedding,
     UNetBlock,
 )
+from physicsnemo.models.diffusion.utils import _recursive_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -268,6 +269,16 @@ class DhariwalUNet(Module):
         self.out_conv = Conv2d(
             in_channels=cout, out_channels=out_channels, kernel=3, **init_zero
         )
+
+    # Properties that are recursively set on submodules
+    profile_mode = _recursive_property(
+        "profile_mode", bool, "Should be set to ``True`` to enable profiling."
+    )
+    amp_mode = _recursive_property(
+        "amp_mode",
+        bool,
+        "Should be set to ``True`` to enable automatic mixed precision.",
+    )
 
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         # Mapping.

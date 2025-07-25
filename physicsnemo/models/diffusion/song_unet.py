@@ -33,6 +33,7 @@ from physicsnemo.models.diffusion import (
     PositionalEmbedding,
     UNetBlock,
 )
+from physicsnemo.models.diffusion.utils import _recursive_property
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
@@ -325,8 +326,7 @@ class SongUNet(Module):
             profile_mode=profile_mode,
             amp_mode=amp_mode,
         )
-        self.profile_mode = profile_mode
-        self.amp_mode = amp_mode
+        self.use_apex_gn = use_apex_gn
 
         # for compatibility with older versions that took only 1 dimension
         self.img_resolution = img_resolution
@@ -502,12 +502,32 @@ class SongUNet(Module):
                     **init_zero,
                 )
 
+        # Set properties recursively on submodules
+        self.profile_mode = profile_mode
+        self.amp_mode = amp_mode
+
+    # Properties that are recursively set on submodules
+    profile_mode = _recursive_property(
+        "profile_mode", bool, "Should be set to ``True`` to enable profiling."
+    )
+    amp_mode = _recursive_property(
+        "amp_mode",
+        bool,
+        "Should be set to ``True`` to enable automatic mixed precision.",
+    )
+
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
         with (
             nvtx.annotate(message="SongUNet", color="blue")
             if self.profile_mode
             else contextlib.nullcontext()
         ):
+            if (
+                self.use_apex_gn
+                and (not x.is_contiguous(memory_format=torch.channels_last))
+                and x.dim() == 4
+            ):
+                x = x.to(memory_format=torch.channels_last)
             if self.embedding_type != "zero":
                 # Mapping.
                 emb = self.map_noise(noise_labels)
@@ -530,7 +550,9 @@ class SongUNet(Module):
                 emb = silu(self.map_layer1(emb))
             else:
                 emb = torch.zeros(
-                    (noise_labels.shape[0], self.emb_channels), device=x.device
+                    (noise_labels.shape[0], self.emb_channels),
+                    device=x.device,
+                    dtype=x.dtype,
                 )
 
             # Encoder.
@@ -871,9 +893,6 @@ class SongUNetPosEmbd(SongUNet):
                     "Cannot provide both embedding_selector and global_index."
                 )
 
-            if x.dtype != self.pos_embd.dtype:
-                self.pos_embd = self.pos_embd.to(x.dtype)
-
             # Append positional embedding to input conditioning
             if self.pos_embd is not None:
                 # Select positional embeddings with a selector function
@@ -887,22 +906,23 @@ class SongUNetPosEmbd(SongUNet):
                     selected_pos_embd = self.positional_embedding_indexing(
                         x, global_index=global_index, lead_time_label=lead_time_label
                     )
-                x = torch.cat((x, selected_pos_embd), dim=1)
+                x = torch.cat((x, selected_pos_embd.to(x.dtype)), dim=1)
 
             out = super().forward(x, noise_labels, class_labels, augment_labels)
 
-            if self.lead_time_mode:
+            if self.lead_time_mode and self.prob_channels:
                 # if training mode, let crossEntropyLoss do softmax. The model outputs logits.
                 # if eval mode, the model outputs probability
-                if self.prob_channels and out.dtype != self.scalar.dtype:
-                    self.scalar.data = self.scalar.data.to(out.dtype)
-                if self.prob_channels and (not self.training):
+                scalar = self.scalar
+                if out.dtype != scalar.dtype:
+                    scalar = scalar.to(out.dtype)
+                if self.training:
+                    out[:, self.prob_channels] = out[:, self.prob_channels] * scalar
+                else:
                     out[:, self.prob_channels] = (
-                        out[:, self.prob_channels] * self.scalar
-                    ).softmax(dim=1)
-                elif self.prob_channels and self.training:
-                    out[:, self.prob_channels] = (
-                        out[:, self.prob_channels] * self.scalar
+                        (out[:, self.prob_channels] * scalar)
+                        .softmax(dim=1)
+                        .to(out.dtype)
                     )
             return out
 
@@ -961,15 +981,16 @@ class SongUNetPosEmbd(SongUNet):
         """
         # If no global indices are provided, select all embeddings and expand
         # to match the batch size of the input
-        if x.dtype != self.pos_embd.dtype:
-            self.pos_embd = self.pos_embd.to(x.dtype)
+        pos_embd = self.pos_embd
+        if x.dtype != pos_embd.dtype:
+            pos_embd = pos_embd.to(x.dtype)
 
         if global_index is None:
             if self.lead_time_mode:
                 selected_pos_embd = []
-                if self.pos_embd is not None:
+                if pos_embd is not None:
                     selected_pos_embd.append(
-                        self.pos_embd[None].expand((x.shape[0], -1, -1, -1))
+                        pos_embd[None].expand((x.shape[0], -1, -1, -1))
                     )
                 if self.lt_embd is not None:
                     selected_pos_embd.append(
@@ -986,7 +1007,7 @@ class SongUNetPosEmbd(SongUNet):
                 if len(selected_pos_embd) > 0:
                     selected_pos_embd = torch.cat(selected_pos_embd, dim=1)
             else:
-                selected_pos_embd = self.pos_embd[None].expand(
+                selected_pos_embd = pos_embd[None].expand(
                     (x.shape[0], -1, -1, -1)
                 )  # (B, C_{PE}, H, W)
 
@@ -999,11 +1020,11 @@ class SongUNetPosEmbd(SongUNet):
             global_index = torch.reshape(
                 torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
             )  # (P, 2, X, Y) to (2, P*X*Y)
-            selected_pos_embd = self.pos_embd[
+            selected_pos_embd = pos_embd[
                 :, global_index[0], global_index[1]
             ]  # (C_pe, P*X*Y)
             selected_pos_embd = torch.permute(
-                torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], P, H, W)),
+                torch.reshape(selected_pos_embd, (pos_embd.shape[0], P, H, W)),
                 (1, 0, 2, 3),
             )  # (P, C_pe, X, Y)
 
@@ -1014,7 +1035,7 @@ class SongUNetPosEmbd(SongUNet):
             # Append positional and lead time embeddings to input conditioning
             if self.lead_time_mode:
                 embeds = []
-                if self.pos_embd is not None:
+                if pos_embd is not None:
                     embeds.append(selected_pos_embd)  # reuse code below
                 if self.lt_embd is not None:
                     lt_embds = self.lt_embd[
@@ -1100,15 +1121,15 @@ class SongUNetPosEmbd(SongUNet):
         ...     return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
         >>>
         """
-        if x.dtype != self.pos_embd.dtype:
-            self.pos_embd = self.pos_embd.to(x.dtype)
+        pos_embd = self.pos_embd
+        if x.dtype != pos_embd.dtype:
+            pos_embd = pos_embd.to(x.dtype)
         if lead_time_label is not None:
-            # all patches share same lead_time_label
-            embeddings = torch.cat(
-                [self.pos_embd, self.lt_embd[lead_time_label[0].int()]]
-            )
+            # TODO: here we assume all patches share same lead_time_label -->
+            # need be changed
+            embeddings = torch.cat([pos_embd, self.lt_embd[lead_time_label[0].int()]])
         else:
-            embeddings = self.pos_embd
+            embeddings = pos_embd
         return embedding_selector(embeddings)  # (B, N_pe, H, W)
 
     def _get_positional_embedding(self):
