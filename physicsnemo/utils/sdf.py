@@ -152,7 +152,9 @@ def signed_distance_field(
         indices=wp.array(mesh_indices, dtype=wp.int32, device=device),
     )
 
-    N = len(input_points)
+    warp_input_points = wp.array(input_points, dtype=wp.vec3f, device=device)
+
+    N = len(warp_input_points)
 
     sdf = wp.empty(shape=(N,), dtype=wp.float32, device=device)
     sdf_hit_point = wp.empty(shape=(N,), dtype=wp.vec3f, device=device)
@@ -163,7 +165,7 @@ def signed_distance_field(
         dim=N,
         inputs=[
             mesh.id,
-            wp.array(input_points, dtype=wp.vec3f, device=device),
+            warp_input_points,
             max_dist,
             sdf,
             sdf_hit_point,
