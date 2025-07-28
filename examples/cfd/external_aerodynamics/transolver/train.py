@@ -23,6 +23,14 @@ from tabulate import tabulate
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
+
+from torch.distributed.fsdp import (
+    FullyShardedDataParallel as FSDP,
+    ShardingStrategy,
+)
+from torch.distributed.tensor.placement_types import Shard
+from torch.distributed.tensor import distribute_module
+
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.distributed import DistributedManager
@@ -33,6 +41,12 @@ from physicsnemo.utils.profiling import profile, Profiler
 from datapipe import DomainParallelZarrDataset
 from loss import loss_fn
 from metrics import metrics_fn
+from preprocess import (
+    preprocess_volume_data,
+    preprocess_surface_data,
+    downsample_volume,
+    downsample_surface,
+)
 
 from contextlib import nullcontext
 from torch.amp import autocast, GradScaler
@@ -87,165 +101,6 @@ def cast_precisions(
         return features, embeddings
 
 
-@profile
-def preprocess_surface_data(
-    batch: dict,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
-
-    """
-    Preprocess the surface data.  The functional input
-    is the air density and stream velocity.  The embeddings
-    are the surface mesh centers and normals.  The targets are
-    normalized to mean of 0, std 1.  We cache the mean and std
-    to de-normalize when computing the metrics.
-    """
-
-    mesh_centers = batch["surface_mesh_centers"]
-    normals = batch["surface_normals"]
-    targets = batch["surface_fields"]
-    node_features = torch.stack(
-        [batch["air_density"], batch["stream_velocity"]], dim=-1
-    ).to(torch.float32)
-
-    # Normalize the surface fields:
-    norm_mean = targets.mean(dim=1)
-    norm_std = targets.std(dim=1)
-    targets = (targets - norm_mean) / norm_std
-
-    # If you want to use this, be sure to updat the
-    # functional_dim value in your configuration
-
-    # fourier_sin_features = [
-    #     torch.sin(mesh_centers * (2 ** i) * torch.pi)
-    #     for i in range(4)
-    # ]
-    # fourier_cos_features = [
-    #     torch.cos(mesh_centers * (2 ** i) * torch.pi)
-    #     for i in range(4)
-    # ]
-
-    # Calculate center of mass
-    sizes = batch["stl_areas"]
-    centers = batch["stl_centers"]
-
-    total_weighted_position = torch.einsum("ki,kij->kj", sizes, centers)
-    total_size = torch.sum(sizes)
-    center_of_mass = total_weighted_position[None, ...] / total_size
-
-    # Subtract the COM from the centers:
-    mesh_centers = mesh_centers - center_of_mass
-
-    embeddings = torch.cat(
-        [
-            mesh_centers,
-            normals,
-            # *fourier_sin_features,
-            # *fourier_cos_features
-        ],
-        dim=-1,
-    )
-    node_features = node_features.unsqueeze(1).broadcast_to(1, embeddings.shape[1], -1)
-
-    others = {
-        "surface_areas": sizes,
-        "surface_normals": normals,
-        "stream_velocity": batch["stream_velocity"],
-        "air_density": batch["air_density"],
-        "norm_mean": norm_mean,
-        "norm_std": norm_std,
-    }
-
-    return node_features, embeddings, targets, others
-
-
-def preprocess_volume_data(
-    batch: dict,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
-    """
-    Preprocess the volumetric data.  Right now, it's just
-    normalizing the targets and using the mesh centers as embeddings.
-
-    The targets are normalized to mean of 0, std 1.  We cache the
-    mean and std to de-normalize when computing the metrics.
-    """
-
-    mesh_centers = batch["volume_mesh_centers"]
-    targets = batch["volume_fields"]
-    node_features = torch.stack(
-        [batch["air_density"], batch["stream_velocity"]], dim=-1
-    ).to(torch.float32)
-
-    embeddings = mesh_centers
-
-    # Normalize the surface fields:
-    norm_mean = targets.mean(dim=1)
-    norm_std = targets.std(dim=1)
-    targets = (targets - norm_mean) / norm_std
-
-    node_features = node_features.unsqueeze(0).broadcast_to(1, embeddings.shape[1], -1)
-
-    others = {
-        "norm_mean": norm_mean,
-        "norm_std": norm_std,
-    }
-    return node_features, embeddings, targets, others
-
-
-@profile
-def downsample_surface(
-    features: torch.Tensor,
-    embeddings: torch.Tensor,
-    targets: torch.Tensor,
-    num_keep=1024,
-):
-    """
-    Downsample the surface data. We generate one set of indices, and
-    use it to sample the same points from the features, embeddings,
-    and targets.  Using torch.multinomial to sample without replacement.
-    """
-    # Determine the number of samples to keep (e.g., 50% of original size)
-    num_samples = features.shape[1]
-    # Generate random indices to keep (faster for large num_samples)
-    indices = torch.multinomial(
-        torch.ones(num_samples, device=features.device), num_keep, replacement=False
-    )
-
-    # Use the same indices to downsample all tensors
-    downsampled_features = features[:, indices]
-    downsampled_embeddings = embeddings[:, indices]
-    downsampled_targets = targets[:, indices]
-
-    return downsampled_features, downsampled_embeddings, downsampled_targets
-
-
-@profile
-def downsample_volume(
-    features: torch.Tensor,
-    embeddings: torch.Tensor,
-    targets: torch.Tensor,
-    num_keep=1024,
-):
-    """
-    Downsample the volume data.  torch.multinomial has a limit of 2^24
-    for num_samples, and the volumetric data typically exceeds that.
-
-    So, this isjust sampling randomly with num_keep.  The hope
-    is that the duplication is small ... but this needs to be refined.
-    """
-    # Determine the number of samples to keep (e.g., 50% of original size)
-    num_samples = features.shape[1]
-    # The volume data is so large, that we'll sample randints
-    # which will very rarely duplicate
-    indices = torch.randint(0, num_samples, (num_keep,), device=features.device)
-
-    # Use the same indices to downsample all tensors
-    downsampled_features = features[:, indices]
-    downsampled_embeddings = embeddings[:, indices]
-    downsampled_targets = targets[:, indices]
-
-    return downsampled_features, downsampled_embeddings, downsampled_targets
-
-
 def forward_pass(
     batch: dict,
     model: torch.nn.Module,
@@ -274,8 +129,17 @@ def forward_pass(
 
     # Cast precisions:
     features, embeddings = cast_precisions(features, embeddings, precision)
-
     with get_autocast_context(precision):
+        print(
+            f"features shape: {features.shape} nd placements: {features._spec.placements}"
+        )
+        print(
+            f"embeddings shape: {embeddings.shape} nd placements: {embeddings._spec.placements}"
+        )
+        print(
+            f"targets shape: {targets.shape} nd placements: {targets._spec.placements}"
+        )
+        print(f"cat shape: {torch.cat((features, embeddings), dim=-1).shape}")
         outputs = model(features, embeddings)
         if output_pad_size is not None:
             # Remove the padded outputs:
@@ -332,6 +196,9 @@ def train_epoch(
     start_time = time.time()
     with Profiler():
         for i, batch_idx in enumerate(epoch_indices):
+
+            if i > 10:
+                break
             batch = dataloader[batch_idx]
             # preload the next batch, if we're not on the last batch
             if i < epoch_len - 1 and sampler is not None:
@@ -445,6 +312,8 @@ def val_epoch(
     start_time = time.time()
     with torch.no_grad():  # Disable gradient computation
         for i, batch_idx in enumerate(epoch_indices):
+            if i > 10:
+                break
             # Get data from batch
             batch = dataloader[batch_idx]
 
@@ -549,7 +418,39 @@ def main(cfg: DictConfig):
 
     model.to(dist_manager.device)
 
-    if dist_manager.world_size > 1:
+    # Configure domain parallelism, if enabled:
+    domain_size = int(cfg.training.domain_parallelism)
+
+    if domain_size > 1:
+        # You can use -1 to one axis to indicate that you want to use all the GPUs in that dimension.
+        mesh = dist_manager.initialize_mesh(
+            mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
+        )
+        # This is a subset of all the GPUs, and will vary depending on the process.
+        # Think of this as slicing the global mesh along the domain axis.
+        # It will contain only the GPUs that this process is sharing data with.
+        domain_mesh = mesh["domain"]
+        ddp_mesh = mesh["ddp"]
+        placements = (Shard(1),)
+    else:
+        domain_mesh = None
+        ddp_mesh = None
+        placements = None
+
+    if domain_size > 1:
+        # Instead of DDP, for sharding we use FSDP.  It's possible to use FSDP in the DDP
+        # mode, but since it's not pure data parallel we have to me more careful.
+
+        # First, distribute the model so that each GPU has the copy with DTensor weights:
+        model = distribute_module(model, domain_mesh)
+
+        model = FSDP(
+            model,
+            device_mesh=mesh["ddp"],
+            sharding_strategy=ShardingStrategy.NO_SHARD,
+        )
+
+    elif dist_manager.world_size > 1:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
             device_ids=[dist_manager.local_rank],
@@ -559,15 +460,11 @@ def main(cfg: DictConfig):
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Number of parameters: {num_params}")
 
-    # Set up data
-    device_mesh = None
-    placements = None
-
     # Training dataset
 
     train_dataset = DomainParallelZarrDataset(
         data_path=cfg.data.train.data_path,
-        device_mesh=device_mesh,
+        device_mesh=domain_mesh,
         placements=placements,
         max_workers=cfg.data.max_workers,
         pin_memory=cfg.data.pin_memory,
@@ -579,7 +476,7 @@ def main(cfg: DictConfig):
 
     val_dataset = DomainParallelZarrDataset(
         data_path=cfg.data.val.data_path,  # Assuming validation data path is configured
-        device_mesh=device_mesh,
+        device_mesh=domain_mesh,
         placements=placements,
         max_workers=cfg.data.max_workers,
         pin_memory=cfg.data.pin_memory,
@@ -587,21 +484,32 @@ def main(cfg: DictConfig):
         large_keys=cfg.data.large_keys,
     )
 
+    if ddp_mesh is not None:
+        num_replicas = ddp_mesh.size()
+        data_rank = ddp_mesh.get_local_rank()
+    else:
+        num_replicas = dist_manager.world_size
+        data_rank = dist_manager.rank
+
     # Set up distributed samplers
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train_dataset,
-        num_replicas=dist_manager.world_size,
-        rank=dist_manager.rank,
+        num_replicas=num_replicas,
+        rank=data_rank,
         shuffle=True,
         drop_last=True,
     )
 
     val_sampler = torch.utils.data.distributed.DistributedSampler(
         val_dataset,
-        num_replicas=dist_manager.world_size,
-        rank=dist_manager.rank,
+        num_replicas=num_replicas,
+        rank=data_rank,
         shuffle=False,  # No shuffling for validation
         drop_last=True,
+    )
+
+    print(
+        f"num_replicas: {num_replicas}, data_rank: {data_rank}, val targets: {list(val_sampler)}"
     )
 
     # Set up optimizer and scheduler
@@ -707,7 +615,7 @@ def launch(cfg: DictConfig):
     """
     profiler = Profiler()
     # profiler.enable("torch")
-    # profiler.enable("line_profiler")
+    profiler.enable("line_profiler")
     profiler.initialize()
     main(cfg)
     profiler.finalize()

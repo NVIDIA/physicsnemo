@@ -16,7 +16,7 @@
 
 import torch
 import torch.distributed as dist
-
+from physicsnemo.distributed import ShardTensor
 from physicsnemo.distributed import DistributedManager
 
 
@@ -39,8 +39,16 @@ def all_reduce_dict(
         return metrics
 
     for key, value in metrics.items():
-        dist.all_reduce(value)
-        value = value / dm.world_size
+        if isinstance(value, ShardTensor):
+            # Perform the reduction over the ddp axis, not the domain:
+            value = value.full_tensor()
+            mesh = dm.global_mesh["ddp"]
+            dist.all_reduce(value, group=mesh.get_group())
+            value = value / mesh.size()
+        else:
+            dist.all_reduce(value)
+            value = value / dm.world_size
+
         metrics[key] = value
 
     return metrics

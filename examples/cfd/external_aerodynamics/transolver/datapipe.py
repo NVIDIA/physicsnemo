@@ -37,6 +37,10 @@ from functools import lru_cache
 
 import numpy as np
 import zarr
+import zarrs
+
+zarr.config.set({"codec_pipeline.path": "zarrs.ZarrsCodecPipeline"})
+
 
 import torch
 import torch.distributed as dist
@@ -231,6 +235,56 @@ class DomainParallelZarrDataset(Dataset):
         if hasattr(self, "executor"):
             self.executor.shutdown(wait=True)
 
+    def _get_slice_boundaries(
+        self, zarr_array: zarr.Array
+    ) -> Tuple[int, int, tuple | None]:
+        # Determine what slice this rank should read
+        if self.device_mesh is not None:
+            # How many splits to make?
+            n_splits = dist.get_world_size(group=self.device_mesh.get_group())
+            # What rank is this one?
+            this_rank = self.device_mesh.get_local_rank()
+
+            sections = compute_split_shapes(zarr_array.shape[0], n_splits)
+
+            global_chunk_start = sum(sections[:this_rank])
+            global_chunk_stop = global_chunk_start + sections[this_rank]
+
+            chunk_sizes = tuple(
+                (section,) + zarr_array.shape[1:] for section in sections
+            )
+
+        else:
+            global_chunk_start, global_chunk_stop = 0, zarr_array.shape[0]
+            chunk_sizes = None
+
+        return global_chunk_start, global_chunk_stop, chunk_sizes
+
+    def create_tensor_spec(
+        self,
+        zarr_array: zarr.Array,
+        key: str,
+        placements: tuple[Placement],
+        sharding_shapes: dict[int, tuple[int]] | None = None,
+    ) -> ShardTensorSpec:
+
+        # Unpack the batch index:
+        shape = (1,) + zarr_array.shape
+        # Don't forget to unpack it in the sharding shapes too:
+        if sharding_shapes is not None:
+            for k in sharding_shapes.keys():
+                sharding_shapes[k] = tuple((1,) + s for s in sharding_shapes[k])
+
+        stride = _stride_from_contiguous_shape_C_style(shape)
+
+        meta = TensorMeta(shape, stride, to_torch_dtype(zarr_array.dtype))
+        return ShardTensorSpec(
+            mesh=self.device_mesh,
+            placements=placements,
+            tensor_meta=meta,
+            _sharding_shapes=sharding_shapes,
+        )
+
     @profile
     def _read_key_chunk_aligned(
         self, zarr_group: zarr.Group, key: str, futures: list[Future]
@@ -250,33 +304,13 @@ class DomainParallelZarrDataset(Dataset):
 
         zarr_array = zarr_group[key]
 
-        # Determine what slice this rank should read
-        if self.device_mesh is not None:
-            # How many splits to make?
-            n_splits = dist.get_world_size(group=self.device_mesh.get_group())
-            # What rank is this one?
-            this_rank = self.device_mesh.get_local_rank()
-
-            sections = compute_split_shapes(zarr_array.shape[0], n_splits)
-
-            global_chunk_start = sum(sections[:this_rank])
-            global_chunk_stop = global_chunk_start + sections[this_rank]
-
-            chunk_sizes = tuple(
-                (section,) + zarr_array.shape[1:] for section in sections
+        global_chunk_start, global_chunk_stop, chunk_sizes = self._get_slice_boundaries(
+            zarr_array
+        )
+        if chunk_sizes is not None:
+            self.tensor_specs[key] = self.create_tensor_spec(
+                zarr_array, key, (Shard(1),), {0: chunk_sizes}
             )
-            stride = _stride_from_contiguous_shape_C_style(zarr_array.shape)
-
-            meta = TensorMeta(zarr_array.shape, stride, zarr_array.dtype)
-            self.tensor_specs[key] = ShardTensorSpec(
-                mesh=self.device_mesh,
-                placements=(Shard(0),),
-                tensor_meta=meta,
-                _sharding_shapes={0: chunk_sizes},
-            )
-
-        else:
-            global_chunk_start, global_chunk_stop = 0, zarr_array.shape[0]
 
         # Calculate the shape of data this rank will read
         local_shape = [global_chunk_stop - global_chunk_start] + list(
@@ -374,11 +408,10 @@ class DomainParallelZarrDataset(Dataset):
         if zarr_array.shape == ():
 
             if self.device_mesh is not None:
-                self.tensor_specs[key] = ShardTensorSpec(
-                    mesh=self.device_mesh,
-                    placements=(Replicate(),),
-                    tensor_meta=TensorMeta(zarr_array.shape, (), zarr_array.dtype),
-                    _sharding_shapes={},
+                self.tensor_specs[key] = self.create_tensor_spec(
+                    zarr_array,
+                    key,
+                    (Replicate(),),
                 )
 
             output = torch.from_numpy(np.array(zarr_array))
@@ -386,33 +419,43 @@ class DomainParallelZarrDataset(Dataset):
                 output = output.pin_memory()
             return output
 
+        global_chunk_start, global_chunk_stop, chunk_sizes = self._get_slice_boundaries(
+            zarr_array
+        )
+        if chunk_sizes is not None:
+            self.tensor_specs[key] = self.create_tensor_spec(
+                zarr_array, key, (Shard(1),), {0: chunk_sizes}
+            )
+
+        # Calculate the shape of data this rank will read
+        local_shape = [global_chunk_stop - global_chunk_start] + list(
+            zarr_array.shape[1:]
+        )
+
         # data = np.empty(zarr_array.shape, dtype=zarr_array.dtype)
         output = torch.empty(
-            zarr_array.shape,
+            local_shape,
             dtype=to_torch_dtype(zarr_array.dtype),
             pin_memory=self.pin_memory,
         )
         data = output.numpy()
         slice = np.s_[:]
+
+        # The zarr slice is not the numpy slice if we're sharding
+        if chunk_sizes is not None:
+            zarr_slice = np.s_[global_chunk_start:global_chunk_stop]
+        else:
+            zarr_slice = np.s_[:]
+
         futures.append(
             self.executor.submit(
                 _read_chunk_into_array,
                 data,
                 zarr_array,
                 slice,
+                zarr_slice,
             )
         )
-
-        if self.device_mesh is not None:
-            # We need to track the tensor meta for this key
-            stride = _stride_from_contiguous_shape_C_style(zarr_array.shape)
-
-            self.tensor_specs[key] = ShardTensorSpec(
-                mesh=self.device_mesh,
-                placements=(Replicate(),),
-                tensor_meta=TensorMeta(zarr_array.shape, stride, zarr_array.dtype),
-                _sharding_shapes={},
-            )
 
         return output
 
@@ -426,28 +469,30 @@ class DomainParallelZarrDataset(Dataset):
         Returns:
             Dictionary mapping keys to numpy arrays or torch tensors.
         """
-        with zarr.open_group(filepath, mode="r") as zarr_group:
-            data = {}
-            futures = []
+        zarr_group = zarr.open_group(str(filepath), mode="r")
+        # group_keys = list(zarr_group.keys())
 
-            # Process each key
-            for key in self.keys_to_read:
+        data = {}
+        futures = []
 
-                if key not in zarr_group:
-                    continue
+        # Process each key
+        for key in self.keys_to_read:
 
-                if key in self.large_keys:
-                    # Use chunk-aligned reading for large data
-                    data[key] = self._read_key_chunk_aligned(zarr_group, key, futures)
-                else:
-                    # Use simple reading for other data
-                    data[key] = self._read_key_standard(zarr_group, key, futures)
+            # if key not in group_keys:
+            #     continue
 
-            # Wait for all futures to complete
-            for future in futures:
-                future.result()
+            if key in self.large_keys:
+                # Use chunk-aligned reading for large data
+                data[key] = self._read_key_chunk_aligned(zarr_group, key, futures)
+            else:
+                # Use simple reading for other data
+                data[key] = self._read_key_standard(zarr_group, key, futures)
 
-            return data
+        # Wait for all futures to complete
+        for future in futures:
+            future.result()
+
+        return data
 
     @profile
     def _move_to_gpu(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -460,16 +505,6 @@ class DomainParallelZarrDataset(Dataset):
             Dictionary of key to torch tensor on GPU if available.
         """
         result = {}
-
-        # This is old code.
-        # Thinking about ways to reduce CPU overhead.
-        # If we could avoid the data reading step, it would be easier.
-        # total_size = 0
-        # for key, array in data.items():
-        #     size = array.numel() * array.element_size()
-        #     total_size += size
-        #     print(f"Size in memory of {key}: {size / 1024 / 1024 / 1024} GB")
-        # print(f"Total size in memory: {total_size / 1024 / 1024 / 1024} GB")
 
         with torch.cuda.stream(self.data_loader_stream):
 
@@ -510,10 +545,13 @@ class DomainParallelZarrDataset(Dataset):
             )
 
             # Find out the desired placement:
-            if isinstance(self.placements, dict):
-                target_placement = self.placements[key]
+            if tensor.numel() > 1:
+                if isinstance(self.placements, dict):
+                    target_placement = self.placements[key]
+                else:
+                    target_placement = self.placements
             else:
-                target_placement = self.placements
+                target_placement = (Replicate(),)
 
             # Redistribute if necessary:
             # (Recall that this is one dimensional mesh only)
