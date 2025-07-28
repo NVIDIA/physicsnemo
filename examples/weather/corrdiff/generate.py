@@ -208,7 +208,7 @@ def main(cfg: DictConfig) -> None:
                         net=net_reg,
                         img_lr=img_lr,
                         latents_shape=(
-                            cfg.generation.seed_batch_size,
+                            sum(map(len, rank_batches)),
                             img_out_channels,
                             img_shape[0],
                             img_shape[1],
