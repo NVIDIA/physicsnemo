@@ -93,20 +93,20 @@ class MLP(nn.Module):
 
         self.linear_pre = linear_layer(n_input, n_hidden)
         self.linear_post = linear_layer(n_hidden, n_output)
-        # self.linears = nn.ModuleList(
-        #     [
-        #         nn.Sequential(linear_layer(n_hidden, n_hidden), act())
-        #         for _ in range(n_layers)
-        #     ]
-        # )
+        self.linears = nn.ModuleList(
+            [
+                nn.Sequential(linear_layer(n_hidden, n_hidden), act())
+                for _ in range(n_layers)
+            ]
+        )
 
     def forward(self, x):
         x = self.act(self.linear_pre(x))
-        # for i in range(self.n_layers):
-        #     if self.res:
-        #         x = self.linears[i](x) + x
-        #     else:
-        #         x = self.linears[i](x)
+        for i in range(self.n_layers):
+            if self.res:
+                x = self.linears[i](x) + x
+            else:
+                x = self.linears[i](x)
         x = self.linear_post(x)
         return x
 
@@ -180,18 +180,6 @@ class Transolver_block(nn.Module):
                 hidden_size=hidden_dim,
                 ffn_hidden_size=hidden_dim * mlp_ratio,
             )
-            # self.ln_mlp1 = nn.Sequential(
-            #     te.LayerNorm(hidden_dim),
-            #     MLP(
-            #         hidden_dim,
-            #         hidden_dim * mlp_ratio,
-            #         hidden_dim,
-            #         n_layers=0,
-            #         res=False,
-            #         act=act,
-            #         use_te=True
-            #     ),
-            # )
         else:
             self.ln_mlp1 = nn.Sequential(
                 nn.LayerNorm(hidden_dim),
@@ -490,7 +478,7 @@ class Transolver(Module):
 
     def forward(
         self,
-        fx: torch.Tensor,
+        fx: torch.Tensor | None,
         embedding: torch.Tensor | None = None,
         T: torch.Tensor = None,
     ) -> torch.Tensor:
