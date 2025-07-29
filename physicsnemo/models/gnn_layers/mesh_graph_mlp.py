@@ -22,16 +22,15 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.autograd.function import once_differentiable
 
-from .utils import GraphType, concat_efeat, sum_efeat
-
-try:
-    from transformer_engine import pytorch as te
-
-    te_imported = True
-except ImportError:
-    te_imported = False
-
+# try:
+#     from transformer_engine import pytorch as te
+#     te_imported = True
+# except ImportError:
+#     te_imported = False
+from physicsnemo.models.layers.layer_norm import LayerNorm
 from physicsnemo.utils.profiling import profile
+
+from .utils import GraphType, concat_efeat, sum_efeat
 
 
 class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
@@ -146,23 +145,24 @@ class MeshGraphMLP(nn.Module):
             layers.append(nn.Linear(hidden_dim, output_dim))
 
             self.norm_type = norm_type
-            if norm_type is not None:
-                if norm_type not in [
-                    "LayerNorm",
-                    "TELayerNorm",
-                ]:
-                    raise ValueError(
-                        f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
-                    )
-                if norm_type == "TELayerNorm" and te_imported:
-                    norm_layer = te.LayerNorm
-                elif norm_type == "TELayerNorm" and not te_imported:
-                    raise ValueError(
-                        "TELayerNorm requires transformer-engine to be installed."
-                    )
-                else:
-                    norm_layer = getattr(nn, norm_type)
-                layers.append(norm_layer(output_dim))
+            # if norm_type is not None:
+            #     if norm_type not in [
+            #         "LayerNorm",
+            #         "TELayerNorm",
+            #     ]:
+            #         raise ValueError(
+            #             f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
+            #         )
+            #     if norm_type == "TELayerNorm" and te_imported:
+            #         norm_layer = te.LayerNorm
+            #     elif norm_type == "TELayerNorm" and not te_imported:
+            #         raise ValueError(
+            #             "TELayerNorm requires transformer-engine to be installed."
+            #         )
+            #     else:
+            #         norm_layer = getattr(nn, norm_type)
+            norm_layer = LayerNorm
+            layers.append(norm_layer(output_dim))
 
             self.model = nn.Sequential(*layers)
         else:
@@ -355,23 +355,25 @@ class MeshGraphEdgeMLPSum(nn.Module):
         layers.append(nn.Linear(hidden_dim, output_dim))
 
         self.norm_type = norm_type
-        if norm_type is not None:
-            if norm_type not in [
-                "LayerNorm",
-                "TELayerNorm",
-            ]:
-                raise ValueError(
-                    f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
-                )
-            if norm_type == "TELayerNorm" and te_imported:
-                norm_layer = te.LayerNorm
-            elif norm_type == "TELayerNorm" and not te_imported:
-                raise ValueError(
-                    "TELayerNorm requires transformer-engine to be installed."
-                )
-            else:
-                norm_layer = getattr(nn, norm_type)
-            layers.append(norm_layer(output_dim))
+        # if norm_type is not None:
+        #     if norm_type not in [
+        #         "LayerNorm",
+        #         "TELayerNorm",
+        #     ]:
+        #         raise ValueError(
+        #             f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
+        #         )
+        #     if norm_type == "TELayerNorm" and te_imported:
+        #         norm_layer = te.LayerNorm
+        #     elif norm_type == "TELayerNorm" and not te_imported:
+        #         raise ValueError(
+        #             "TELayerNorm requires transformer-engine to be installed."
+        #         )
+        #     else:
+        #         norm_layer = getattr(nn, norm_type)
+        #     layers.append(norm_layer(output_dim))
+        norm_layer = LayerNorm
+        layers.append(norm_layer(output_dim))
 
         self.model = nn.Sequential(*layers)
 

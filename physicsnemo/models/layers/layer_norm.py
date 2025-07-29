@@ -26,14 +26,6 @@ try:
 except ImportError:
     TE_AVAILABLE = False
 
-# This is to allow users to force the use of TE or pytorch layer norm
-force_te_setting = os.environ.get("PHYSICSNEMO_FORCE_TE")
-if force_te_setting is not None:
-    if force_te_setting.lower() == "true" or force_te_setting.lower() == "1":
-        TE_AVAILABLE = True
-    elif force_te_setting.lower() == "false" or force_te_setting.lower() == "0":
-        TE_AVAILABLE = False
-
 
 def remove_extra_state_hook_for_torch(
     module: nn.Module,
@@ -117,7 +109,19 @@ class LayerNorm(nn.Module):
 
     def __init__(self, *args, **kwargs):
         super().__init__()
-        self.use_te = TE_AVAILABLE
+
+        # This is to allow users to force the use of TE or pytorch layer norm
+        force_te_setting = os.environ.get("PHYSICSNEMO_FORCE_TE")
+        te_available = (
+            TE_AVAILABLE  # make a local copy to avoid changing the global variable
+        )
+        if force_te_setting is not None:
+            if force_te_setting.lower() == "true" or force_te_setting.lower() == "1":
+                te_available = True
+            elif force_te_setting.lower() == "false" or force_te_setting.lower() == "0":
+                te_available = False
+
+        self.use_te = te_available
 
         # TE uses an extra state to manage fp8 scaling
         # It shows up in the state dict, making the two
