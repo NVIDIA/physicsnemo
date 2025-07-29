@@ -104,9 +104,11 @@ def loss_fn(
     if loss_type == "rmse":
         denom = torch.sum(mask * target**2.0, dims)
         loss = torch.mean(torch.sqrt(num / denom))
-    else:
+    elif loss_type == "mse":
         denom = torch.sum(mask)
         loss = torch.mean(num / denom)
+    else:
+        raise ValueError(f"Invalid loss type: {loss_type}")
 
     return loss
 
@@ -488,7 +490,7 @@ def main(cfg: DictConfig) -> None:
 
     compute_scaling_factors(
         cfg=cfg,
-        input_path=cfg.data_processor.output_dir,
+        input_path=cfg.data.input_dir,
         use_cache=cfg.data_processor.use_cache,
     )
     model_type = cfg.model.model_type

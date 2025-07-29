@@ -272,30 +272,20 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         pos_encoding, eval_mode="surface"
                     )
 
-                    if cfg.model.surface_neighbors:
-                        tpredictions_batch = model.calculate_solution_with_neighbors(
-                            surface_mesh_centers_batch,
-                            geo_encoding_local,
-                            pos_encoding,
-                            surface_mesh_neighbors_batch,
-                            surface_normals_batch,
-                            surface_neighbors_normals_batch,
-                            surface_areas_batch,
-                            surface_neighbors_areas_batch,
-                            global_params_values,
-                            global_params_reference,
-                            num_sample_points=cfg.model.num_neighbors_surface,
-                        )
-                    else:
-                        tpredictions_batch = model.calculate_solution(
-                            surface_mesh_centers_batch,
-                            geo_encoding_local,
-                            pos_encoding,
-                            global_params_values,
-                            global_params_reference,
-                            num_sample_points=1,
-                            eval_mode="surface",
-                        )
+                    tpredictions_batch = model.calculate_solution_with_neighbors(
+                        surface_mesh_centers_batch,
+                        geo_encoding_local,
+                        pos_encoding,
+                        surface_mesh_neighbors_batch,
+                        surface_normals_batch,
+                        surface_neighbors_normals_batch,
+                        surface_areas_batch,
+                        surface_neighbors_areas_batch,
+                        global_params_values,
+                        global_params_reference,
+                        num_sample_points=cfg.model.num_neighbors_surface,
+                    )
+                    
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
                     prediction_surf[
                         :, start_idx:end_idx
@@ -407,7 +397,7 @@ def main(cfg: DictConfig):
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
-    num_files = int(len(dirnames) / dist.world_size)
+    num_files = int(len(dirnames) / dist.world_size) + 1
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path
@@ -808,7 +798,7 @@ def main(cfg: DictConfig):
 
             l2_gt = np.mean(np.square(surface_fields), (0))
             l2_error = np.mean(np.square(prediction_surf[0] - surface_fields), (0))
-            l2_surface_all.append(np.sqrt(l2_error) / np.sqrt(l2_gt))
+            l2_surface_all.append(np.sqrt(l2_error / l2_gt))
 
             print(
                 "Surface L-2 norm:",

@@ -18,7 +18,7 @@
 # │            Project Details                │
 # └───────────────────────────────────────────┘  
 project: # Project name
-  name: AWS_Dataset_1
+  name: AWS_Dataset
   
 exp_tag: 1 # Experiment tag
 # Main output directory.
@@ -126,13 +126,12 @@ model:
       base_neurons: 32 # 256 or 64
       base_neurons_in: 4
       base_neurons_out: 4
-      # volume_radii: [0.1, 0.5, 1.0, 2.5, 5.0]
-      volume_radii: [0.01, 0.05, 0.1, 0.5, 1.0]
-      surface_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # 0.05
+      volume_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # radii for volume
+      surface_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # radii for surface
       surface_hops: 5 # Number of surface iterations
       volume_hops: 1 # Number of volume iterations
-      volume_neighbors_in_radius: [8, 16, 24, 30, 36]
-      surface_neighbors_in_radius: [8, 16, 24, 30, 36]
+      volume_neighbors_in_radius: [8, 16, 24, 30, 36] # Number of neighbors in radius for volume
+      surface_neighbors_in_radius: [8, 16, 24, 30, 36] # Number of neighbors in radius for surface
       fourier_features: false
       num_modes: 5
       activation: ${model.activation}
@@ -140,7 +139,7 @@ model:
       base_filters: 4
       activation: ${model.activation}
       processor_type: unet # conv or unet
-      self_attention: true
+      self_attention: false
       cross_attention: false
   nn_basis_functions: # Hyperparameters for basis function network
     base_layer: 512
@@ -158,10 +157,10 @@ model:
     fourier_features: true
     num_modes: 5
   geometry_local: # Hyperparameters for local geometry extraction
-    volume_neighbors_in_radius: [32, 64, 128] # [64, 128]
-    surface_neighbors_in_radius: [16, 32, 64] # [64]
-    volume_radii: [0.05, 0.1, 0.5]
-    surface_radii: [0.01, 0.05, 0.1] # [0.05]
+    volume_neighbors_in_radius: [32, 64, 128, 256] # Number of radius points
+    surface_neighbors_in_radius: [32, 64, 128, 256] # Number of radius points
+    volume_radii: [0.05,0.1,0.5,1.0] # Volume radii
+    surface_radii: [0.05,0.1,0.5,1.0] # Surface radii
     base_layer: 512
   parameter_model:
     base_layer: 512
@@ -188,7 +187,7 @@ train: # Training configurable parameters
 # └───────────────────────────────────────────┘  
 val: # Validation configurable parameters
   dataloader:
-    batch_size: 1 # Set to 1
+    batch_size: 1
     pin_memory: false # if the preprocessing is outputing GPU data, set this to false
   sampler:
     shuffle: true

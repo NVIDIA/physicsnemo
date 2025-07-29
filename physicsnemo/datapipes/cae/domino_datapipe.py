@@ -751,8 +751,7 @@ class DoMINODataPipe(Dataset):
             if self.config.normalize_coordinates:
                 core_dict["surf_grid"] = normalize(core_dict["surf_grid"], s_max, s_min)
                 surface_coordinates = normalize(surface_coordinates, s_max, s_min)
-                if self.config.num_surface_neighbors > 1:
-                    surface_neighbors = normalize(surface_neighbors, s_max, s_min)
+                surface_neighbors = normalize(surface_neighbors, s_max, s_min)
 
             if self.config.scaling_type is not None:
                 if self.config.surface_factors is not None:
