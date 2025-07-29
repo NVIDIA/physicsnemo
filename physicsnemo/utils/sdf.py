@@ -14,21 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ruff: noqa: F401
-
-import time
-
 import cupy as cp
 import numpy as np
 import warp as wp
-from numpy.typing import NDArray
 
 wp.config.quiet = True
 
 
 @wp.kernel
 def _bvh_query_distance(
-    mesh: wp.uint64,
+    mesh_id: wp.uint64,
     points: wp.array(dtype=wp.vec3f),
     max_dist: wp.float32,
     sdf: wp.array(dtype=wp.float32),
@@ -36,7 +31,6 @@ def _bvh_query_distance(
     sdf_hit_point_id: wp.array(dtype=wp.int32),
     use_sign_winding_number: bool = False,
 ):
-
     """
     Computes the signed distance from each point in the given array `points`
     to the mesh represented by `mesh`,within the maximum distance `max_dist`,
@@ -59,15 +53,15 @@ def _bvh_query_distance(
     tid = wp.tid()
 
     if use_sign_winding_number:
-        res = wp.mesh_query_point_sign_winding_number(mesh, points[tid], max_dist)
+        res = wp.mesh_query_point_sign_winding_number(mesh_id, points[tid], max_dist)
     else:
-        res = wp.mesh_query_point_sign_normal(mesh, points[tid], max_dist)
+        res = wp.mesh_query_point_sign_normal(mesh_id, points[tid], max_dist)
 
-    mesh_ = wp.mesh_get(mesh)
+    mesh = wp.mesh_get(mesh_id)
 
-    p0 = mesh_.points[mesh_.indices[3 * res.face + 0]]
-    p1 = mesh_.points[mesh_.indices[3 * res.face + 1]]
-    p2 = mesh_.points[mesh_.indices[3 * res.face + 2]]
+    p0 = mesh.points[mesh.indices[3 * res.face + 0]]
+    p1 = mesh.points[mesh.indices[3 * res.face + 1]]
+    p2 = mesh.points[mesh.indices[3 * res.face + 2]]
 
     p_closest = res.u * p0 + res.v * p1 + (1.0 - res.u - res.v) * p2
 
@@ -76,33 +70,65 @@ def _bvh_query_distance(
     sdf_hit_point_id[tid] = res.face
 
 
+Array = np.ndarray | cp.ndarray
+
+
 def signed_distance_field(
-    mesh_vertices: NDArray[float] | cp.ndarray | list[tuple[float, float, float]],
-    mesh_indices: NDArray[int] | cp.ndarray | list[tuple[int, int, int]],
-    input_points: NDArray[float] | cp.ndarray | list[tuple[float, float, float]],
+    mesh_vertices: Array,
+    mesh_indices: Array,
+    input_points: Array,
     max_dist: float = 1e8,
     include_hit_points: bool = False,
     include_hit_points_id: bool = False,
     use_sign_winding_number: bool = False,
-) -> wp.array:
+    return_cupy: bool | None = None,
+) -> Array | tuple[Array, ...]:
     """
     Computes the signed distance field (SDF) for a given mesh and input points.
 
+    The mesh must be a surface mesh consisting of all triangles. Uses NVIDIA
+    Warp for GPU acceleration.
+
     Parameters:
     ----------
-        mesh_vertices (list[tuple[float, float, float]]): List of vertices defining the mesh.
-        mesh_indices (list[tuple[int, int, int]]): List of indices defining the triangles of the mesh.
-        input_points (list[tuple[float, float, float]]): List of input points for which to compute the SDF.
-        max_dist (float, optional): Maximum distance within which to search for
-            the closest point on the mesh. Default is 1e8.
+        mesh_vertices (np.ndarray): Coordinates of the vertices of the mesh;
+            shape: (n_vertices, 3)
+        mesh_indices (np.ndarray): Indices corresponding to the faces of the
+            mesh; shape: (n_faces, 3)
+        input_points (np.ndarray): Coordinates of the points for which to
+            compute the SDF; shape: (n_points, 3)
+        max_dist (float, optional): Maximum distance within which
+            to search for the closest point on the mesh. Default is 1e8.
         include_hit_points (bool, optional): Whether to include hit points in
-            the output. Default is False.
+            the output. Here, "hit points" are the points on the mesh that are
+            closest to the input points, and hence, are defining the SDF.
+            Default is False.
         include_hit_points_id (bool, optional): Whether to include hit point
             IDs in the output. Default is False.
+        use_sign_winding_number (bool, optional): Whether to use sign winding
+            number method for SDF. Default is False. If False, your mesh should
+            be watertight to obtain correct results.
+        return_cupy (bool, optional): Whether to return a CuPy array. Default is
+            None, which means the function will automatically determine the
+            appropriate return type based on the input types.
 
     Returns:
     -------
-        wp.array: An array containing the computed signed distance field.
+    Returns:
+        np.ndarray | cp.ndarray or tuple:
+            - If both `include_hit_points` and `include_hit_points_id` are False
+              (default), returns a 1D array of signed distances for each input
+              point.
+            - If `include_hit_points` is True, returns a tuple: (sdf,
+              hit_points), where `hit_points` contains the closest mesh point
+              for each input point.
+            - If `include_hit_points_id` is True, returns a tuple: (sdf,
+              hit_point_ids), where `hit_point_ids` contains the face index of
+              the closest mesh face for each input point.
+            - If both `include_hit_points` and `include_hit_points_id` are True,
+              returns a tuple: (sdf, hit_points, hit_point_ids).
+            - The returned array type (NumPy or CuPy) is determined by the
+            `return_cupy` argument, or inferred from the input arrays.
 
     Example:
     -------
@@ -112,41 +138,34 @@ def signed_distance_field(
     >>> signed_distance_field(mesh_vertices, mesh_indices, input_points)
     array([0.5], dtype=float32)
     """
+    if return_cupy is None:
+        return_cupy = any(
+            isinstance(arr, cp.ndarray)
+            for arr in (mesh_vertices, mesh_indices, input_points)
+        )
+
     wp.init()
+    device = wp.get_device()
 
-    # Get the current warp device string (e.g., "cuda:2")
-    try:
-        device = str(wp.get_device())
-    except Exception:
-        device = "cuda"
+    mesh = wp.Mesh(
+        points=wp.array(mesh_vertices, dtype=wp.vec3f, device=device),
+        indices=wp.array(mesh_indices, dtype=wp.int32, device=device),
+    )
 
-    # If cupy arrays come in, we have to convert them to numpy arrays:
-    return_cupy = False
-    if isinstance(mesh_vertices, cp.ndarray):
-        return_cupy = True
-    if isinstance(mesh_indices, cp.ndarray):
-        return_cupy = True
-    if isinstance(input_points, cp.ndarray):
-        return_cupy = True
+    warp_input_points = wp.array(input_points, dtype=wp.vec3f, device=device)
 
-    # Convert numpy to warp arrays:
-    mesh_vertices = wp.array(mesh_vertices, dtype=wp.vec3, device=device)
-    mesh_indices = wp.array(mesh_indices, dtype=wp.int32, device=device)
+    N = len(warp_input_points)
 
-    sdf_points = wp.array(input_points, dtype=wp.vec3, device=device)
-
-    mesh = wp.Mesh(mesh_vertices, mesh_indices)
-
-    sdf = wp.zeros(shape=sdf_points.shape, dtype=wp.float32, device=device)
-    sdf_hit_point = wp.zeros(shape=sdf_points.shape, dtype=wp.vec3f, device=device)
-    sdf_hit_point_id = wp.zeros(shape=sdf_points.shape, dtype=wp.int32, device=device)
+    sdf = wp.empty(shape=(N,), dtype=wp.float32, device=device)
+    sdf_hit_point = wp.empty(shape=(N,), dtype=wp.vec3f, device=device)
+    sdf_hit_point_id = wp.empty(shape=(N,), dtype=wp.int32, device=device)
 
     wp.launch(
         kernel=_bvh_query_distance,
-        dim=len(sdf_points),
+        dim=N,
         inputs=[
             mesh.id,
-            sdf_points,
+            warp_input_points,
             max_dist,
             sdf,
             sdf_hit_point,
@@ -156,25 +175,20 @@ def signed_distance_field(
         device=device,
     )
 
-    if return_cupy:
-        if include_hit_points and include_hit_points_id:
-            return (
-                cp.asarray(sdf),
-                cp.asarray(sdf_hit_point),
-                cp.asarray(sdf_hit_point_id),
-            )
-        elif include_hit_points:
-            return (cp.asarray(sdf), cp.asarray(sdf_hit_point))
-        elif include_hit_points_id:
-            return (cp.asarray(sdf), cp.asarray(sdf_hit_point_id))
+    def convert(array: wp.array) -> np.ndarray | cp.ndarray:
+        """Converts a Warp array to CuPy/NumPy based on the `return_cupy` flag."""
+        if return_cupy:
+            return cp.asarray(array)
         else:
-            return cp.asarray(sdf)
-    else:
-        if include_hit_points and include_hit_points_id:
-            return (sdf.numpy(), sdf_hit_point.numpy(), sdf_hit_point_id.numpy())
-        elif include_hit_points:
-            return (sdf.numpy(), sdf_hit_point.numpy())
-        elif include_hit_points_id:
-            return (sdf.numpy(), sdf_hit_point_id.numpy())
-        else:
-            return sdf.numpy()
+            return array.numpy()
+
+    arrays_to_return: list[np.ndarray | cp.ndarray] = [convert(sdf)]
+
+    if include_hit_points:
+        arrays_to_return.append(convert(sdf_hit_point))
+    if include_hit_points_id:
+        arrays_to_return.append(convert(sdf_hit_point_id))
+
+    return (
+        arrays_to_return[0] if len(arrays_to_return) == 1 else tuple(arrays_to_return)
+    )

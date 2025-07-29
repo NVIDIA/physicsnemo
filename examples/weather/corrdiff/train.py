@@ -16,9 +16,9 @@
 
 import os
 import time
-import psutil
 from contextlib import nullcontext
 
+import psutil
 import hydra
 from hydra.utils import to_absolute_path
 from hydra.core.hydra_config import HydraConfig
@@ -40,6 +40,10 @@ from physicsnemo.launch.utils import (
     load_checkpoint,
     save_checkpoint,
     get_checkpoint_dir,
+)
+from physicsnemo.experimental.metrics.diffusion import tEDMResidualLoss
+from physicsnemo.experimental.models.diffusion.preconditioning import (
+    tEDMPrecondSuperRes,
 )
 
 from datasets.dataset import init_train_valid_datasets_from_config, register_dataset
@@ -194,6 +198,39 @@ def main(cfg: DictConfig) -> None:
     if cfg.model.hr_mean_conditioning:
         img_in_channels += img_out_channels
 
+    # Handle distribution type
+    distribution = getattr(cfg.training.hp, "distribution", None)
+    student_t_nu = getattr(cfg.training.hp, "student_t_nu", None)
+    residual_loss, edm_precond_super_res = ResidualLoss, EDMPrecondSuperResolution
+    if distribution is not None and cfg.model.name not in [
+        "diffusion",
+        "patched_diffusion",
+        "lt_aware_patched_diffusion",
+    ]:
+        raise ValueError(
+            f"cfg.training.distribution should only be specified for diffusion models."
+        )
+    if distribution not in ["normal", "student_t", None]:
+        raise ValueError(f"Invalid distribution {distribution}")
+    if distribution == "student_t":
+        if student_t_nu is None:
+            raise ValueError(
+                "student_t_nu must be provided in cfg.training.hp.student_t_nu for student_t distribution"
+            )
+        elif student_t_nu <= 2:
+            raise ValueError(f"Expected nu > 2, but got {student_t_nu}.")
+        # Reassign models and class for student-t distribution
+        else:
+            residual_loss, edm_precond_super_res = tEDMResidualLoss, tEDMPrecondSuperRes
+            logger0.info(
+                f"Using student-t distribution with nu={student_t_nu}. "
+                f"This is an experimental feature and APIs may change without notice."
+            )
+
+    # Parse P_mean and P_std
+    P_mean = getattr(cfg.training.hp, "P_mean", None)
+    P_std = getattr(cfg.training.hp, "P_std", None)
+
     # Handle patch shape
     if cfg.model.name == "lt_aware_ce_regression":
         prob_channels = dataset.get_prob_channel_index()
@@ -243,6 +280,8 @@ def main(cfg: DictConfig) -> None:
         "use_fp16": fp16,
         "checkpoint_level": songunet_checkpoint_level,
     }
+    if student_t_nu is not None:
+        model_args["nu"] = student_t_nu
     if cfg.model.name == "lt_aware_ce_regression":
         model_args["prob_channels"] = prob_channels
     if hasattr(cfg.model, "model_args"):  # override defaults from config file
@@ -274,19 +313,19 @@ def main(cfg: DictConfig) -> None:
             **model_args,
         )
     elif cfg.model.name == "lt_aware_patched_diffusion":
-        model = EDMPrecondSuperResolution(
+        model = edm_precond_super_res(
             img_in_channels=img_in_channels
             + model_args["N_grid_channels"]
             + model_args["lead_time_channels"],
             **model_args,
         )
     elif cfg.model.name == "diffusion":
-        model = EDMPrecondSuperResolution(
+        model = edm_precond_super_res(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
     elif cfg.model.name == "patched_diffusion":
-        model = EDMPrecondSuperResolution(
+        model = edm_precond_super_res(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
@@ -421,9 +460,17 @@ def main(cfg: DictConfig) -> None:
         "patched_diffusion",
         "lt_aware_patched_diffusion",
     ):
-        loss_fn = ResidualLoss(
+        loss_init_kwargs = {}
+        if student_t_nu is not None:
+            loss_init_kwargs["nu"] = student_t_nu
+        if P_mean is not None:
+            loss_init_kwargs["P_mean"] = P_mean
+        if P_std is not None:
+            loss_init_kwargs["P_std"] = P_std
+        loss_fn = residual_loss(
             regression_net=regression_net,
             hr_mean_conditioning=cfg.model.hr_mean_conditioning,
+            **loss_init_kwargs,
         )
     elif cfg.model.name == "regression" or cfg.model.name == "lt_aware_regression":
         loss_fn = RegressionLoss()

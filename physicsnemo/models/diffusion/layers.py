@@ -393,7 +393,7 @@ class GroupNorm(torch.nn.Module):
         self.act_fn = None
         self.amp_mode = amp_mode
         if self.use_apex_gn:
-            if self.act:
+            if self.fused_act:
                 self.gn = ApexGroupNorm(
                     num_groups=self.num_groups,
                     num_channels=num_channels,
