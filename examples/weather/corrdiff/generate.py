@@ -15,7 +15,7 @@
 # limitations under the License.
 
 import contextlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from functools import partial
 
 import hydra
@@ -27,9 +27,11 @@ from torch.distributed import gather
 import numpy as np
 import nvtx
 import netCDF4 as nc
-
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.experimental.models.diffusion.preconditioning import (
+    tEDMPrecondSuperRes,
+)
 from physicsnemo.utils.patching import GridPatching2D
 from physicsnemo import Module
 from physicsnemo.utils.diffusion import deterministic_sampler, stochastic_sampler
@@ -135,10 +137,16 @@ def main(cfg: DictConfig) -> None:
     if load_net_res:
         res_ckpt_filename = cfg.generation.io.res_ckpt_filename
         logger0.info(f'Loading residual network from "{res_ckpt_filename}"...')
-        net_res = Module.from_checkpoint(to_absolute_path(res_ckpt_filename))
+        net_res = Module.from_checkpoint(
+            to_absolute_path(res_ckpt_filename),
+            override_args={
+                "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False)
+            },
+        )
+        net_res.profile_mode = getattr(cfg.generation.perf, "profile_mode", False)
+        net_res.use_fp16 = getattr(cfg.generation.perf, "use_fp16", False)
         net_res = net_res.eval().to(device).to(memory_format=torch.channels_last)
-        if cfg.generation.perf.force_fp16:
-            net_res.use_fp16 = True
+
         # Disable AMP for inference (even if model is trained with AMP)
         if hasattr(net_res, "amp_mode"):
             net_res.amp_mode = False
@@ -149,10 +157,16 @@ def main(cfg: DictConfig) -> None:
     if load_net_reg:
         reg_ckpt_filename = cfg.generation.io.reg_ckpt_filename
         logger0.info(f'Loading network from "{reg_ckpt_filename}"...')
-        net_reg = Module.from_checkpoint(to_absolute_path(reg_ckpt_filename))
+        net_reg = Module.from_checkpoint(
+            to_absolute_path(reg_ckpt_filename),
+            override_args={
+                "use_apex_gn": getattr(cfg.generation.perf, "use_apex_gn", False)
+            },
+        )
+        net_reg.profile_mode = getattr(cfg.generation.perf, "profile_mode", False)
+        net_reg.use_fp16 = getattr(cfg.generation.perf, "use_fp16", False)
         net_reg = net_reg.eval().to(device).to(memory_format=torch.channels_last)
-        if cfg.generation.perf.force_fp16:
-            net_reg.use_fp16 = True
+
         # Disable AMP for inference (even if model is trained with AMP)
         if hasattr(net_reg, "amp_mode"):
             net_reg.amp_mode = False
@@ -161,11 +175,12 @@ def main(cfg: DictConfig) -> None:
 
     # Reset since we are using a different mode.
     if cfg.generation.perf.use_torch_compile:
+        torch._dynamo.config.cache_size_limit = 264
         torch._dynamo.reset()
-        # Only compile residual network
-        # Overhead of compiling regression network outweights any benefits
         if net_res:
-            net_res = torch.compile(net_res, mode="reduce-overhead")
+            net_res = torch.compile(net_res)
+        if net_reg:
+            net_reg = torch.compile(net_reg)
 
     # Partially instantiate the sampler based on the configs
     if cfg.sampler.type == "deterministic":
@@ -184,9 +199,55 @@ def main(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"Unknown sampling method {cfg.sampling.type}")
 
+    # Parse the distribution type
+    distribution = getattr(cfg.generation, "distribution", None)
+    student_t_nu = getattr(cfg.generation, "student_t_nu", None)
+    if distribution is not None and not cfg.generation.inference_mode in [
+        "diffusion",
+        "all",
+    ]:
+        raise ValueError(
+            f"cfg.generation.distribution should only be specified for "
+            f"inference mode 'diffusion' or 'all', but got {cfg.generation.inference_mode}."
+        )
+    if distribution not in ["normal", "student_t", None]:
+        raise ValueError(f"Invalid distribution: {distribution}.")
+    if distribution == "student_t":
+        if student_t_nu is None:
+            raise ValueError(
+                "student_t_nu must be provided in cfg.generation.student_t_nu for student_t distribution"
+            )
+        elif student_t_nu <= 2:
+            raise ValueError(f"Expected nu > 2, but got {student_t_nu}.")
+        if net_res and not isinstance(net_res, tEDMPrecondSuperRes):
+            logger0.warning(
+                f"Student-t distribution sampling is supposed to be used with "
+                f"tEDMPrecondSuperRes model, but got {type(net_res)}."
+            )
+    elif isinstance(net_res, tEDMPrecondSuperRes):
+        logger0.warning(
+            f"tEDMPrecondSuperRes model is supposed to be used with student-t "
+            f"distribution, but got {distribution}."
+        )
+
+    # Parse P_mean and P_std
+    P_mean = getattr(cfg.generation, "P_mean", None)
+    P_std = getattr(cfg.generation, "P_std", None)
+
     # Main generation definition
     def generate_fn():
         with nvtx.annotate("generate_fn", color="green"):
+
+            diffusion_step_kwargs = {}
+            if distribution is not None:
+                diffusion_step_kwargs["distribution"] = distribution
+            if student_t_nu is not None:
+                diffusion_step_kwargs["nu"] = student_t_nu
+            if P_mean is not None:
+                diffusion_step_kwargs["P_mean"] = P_mean
+            if P_std is not None:
+                diffusion_step_kwargs["P_std"] = P_std
+
             # (1, C, H, W)
             img_lr = image_lr.to(memory_format=torch.channels_last)
 
@@ -196,7 +257,7 @@ def main(cfg: DictConfig) -> None:
                         net=net_reg,
                         img_lr=img_lr,
                         latents_shape=(
-                            cfg.generation.seed_batch_size,
+                            sum(map(len, rank_batches)),
                             img_out_channels,
                             img_shape[0],
                             img_shape[1],
@@ -222,6 +283,7 @@ def main(cfg: DictConfig) -> None:
                         device=device,
                         mean_hr=mean_hr,
                         lead_time_label=lead_time_label,
+                        **diffusion_step_kwargs,
                     )
             if cfg.generation.inference_mode == "regression":
                 image_out = image_reg
@@ -255,6 +317,7 @@ def main(cfg: DictConfig) -> None:
                     return None
             else:
                 return image_out
+        return
 
     # generate images
     output_path = getattr(cfg.generation.io, "output_filename", "corrdiff_output.nc")
@@ -297,11 +360,11 @@ def main(cfg: DictConfig) -> None:
                     has_lead_time=has_lead_time,
                 )
 
-                # Initialize threadpool for writers
-                writer_executor = ThreadPoolExecutor(
-                    max_workers=cfg.generation.perf.num_writer_workers
-                )
-                writer_threads = []
+                if cfg.generation.perf.io_syncronous:
+                    writer_executor = ThreadPoolExecutor(
+                        max_workers=cfg.generation.perf.num_writer_workers
+                    )
+                    writer_threads = []
 
             # Create timer objects only if CUDA is available
             use_cuda_timing = torch.cuda.is_available()
@@ -347,10 +410,24 @@ def main(cfg: DictConfig) -> None:
                 image_out = generate_fn()
                 if dist.rank == 0:
                     batch_size = image_out.shape[0]
-                    # write out data in a seperate thread so we don't hold up inferencing
-                    writer_threads.append(
-                        writer_executor.submit(
-                            save_images,
+                    if cfg.generation.perf.io_syncronous:
+                        # write out data in a seperate thread so we don't hold up inferencing
+                        writer_threads.append(
+                            writer_executor.submit(
+                                save_images,
+                                writer,
+                                dataset,
+                                list(times),
+                                image_out.cpu(),
+                                image_tar.cpu(),
+                                image_lr.cpu(),
+                                time_index,
+                                index,
+                                has_lead_time,
+                            )
+                        )
+                    else:
+                        save_images(
                             writer,
                             dataset,
                             list(times),
@@ -361,7 +438,6 @@ def main(cfg: DictConfig) -> None:
                             index,
                             has_lead_time,
                         )
-                    )
             end.record()
             end.synchronize()
             elapsed_time = (
@@ -378,7 +454,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
             # make sure all the workers are done writing
-            if dist.rank == 0:
+            if dist.rank == 0 and cfg.generation.perf.io_syncronous:
                 for thread in list(writer_threads):
                     thread.result()
                     writer_threads.remove(thread)

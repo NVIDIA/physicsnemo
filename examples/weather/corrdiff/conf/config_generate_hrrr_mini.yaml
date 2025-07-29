@@ -45,9 +45,9 @@ defaults:
 # Modify or add below parameters that should be passed as argument to the
 # user-defined dataset class.
 dataset:
-    data_path: ./data/corrdiff-mini/hrrr_mini_train.nc
+    data_path: ./data/hrrr_mini/hrrr_mini_train.nc
     # Path to .nc data file
-    stats_path: ./data/corrdiff-mini/stats.json
+    stats_path: ./data/hrrr_mini/stats.json
     # Path to json stats file
 
 # Generation parameters to specialize
