@@ -43,11 +43,10 @@ def test_warp(
         with timer:
             _ = radius_search(
                 points=points,
-                points,
-                radius,
+                queries=points,
+                radius=radius,
             )
             torch.cuda.synchronize()
-    # average_num_neighbors = len(indexes[0]) / len(points)
     return timer.min_time, timer.max_allocated_memory
 
 
@@ -73,8 +72,6 @@ if __name__ == "__main__":
             min_time, max_mem = test_warp(points, radius, min_tries)
             warp_times.append(min_time)
             warp_max_mems.append(max_mem)
-        # except Exception as e:
-        #     continue
 
         print(f"\n\nResults for {N} points")
         # Print table

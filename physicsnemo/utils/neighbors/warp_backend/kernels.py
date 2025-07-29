@@ -28,7 +28,7 @@ def check_distance(
     point: wp.vec3,
     neighbor: wp.vec3,
     radius_squared: wp.float32,
-):
+) -> wp.bool:
     """
     Check if a point is within a specified radius of a neighbor point.
     """

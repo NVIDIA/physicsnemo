@@ -30,10 +30,10 @@ def radius_search(
     return_dists: bool = False,
     return_points: bool = False,
     backend: Literal["warp", "torch"] = "warp",
-):
+) -> tuple[torch.Tensor]:
     """Performs radius-based neighbor search to find points within a specified radius of query points.
 
-    Can use brute-force methods with pytorch, or an accelerated spatial decomposition method with warp.
+    Can use brute-force methods with PyTorch, or an accelerated spatial decomposition method with Warp.
 
     This function does not currently accept a batch index.
 
@@ -90,7 +90,7 @@ def radius_search(
 
     if backend not in ["warp", "torch"]:
         raise ValueError(
-            f"radius_search backend must be either 'warp' or 'torch', got {backend}"
+            f"`radius_search` backend must be either 'warp' or 'torch', got {backend=}"
         )
 
     # Num neighbors is returned, because in the warp version

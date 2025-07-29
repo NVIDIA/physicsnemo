@@ -16,5 +16,3 @@
 
 
 from .radius_search import radius_search
-
-__all__ = ["radius_search"]

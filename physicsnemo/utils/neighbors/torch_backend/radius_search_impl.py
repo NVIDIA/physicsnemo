@@ -25,9 +25,9 @@ def radius_search_impl(
     max_points: int | None = None,
     return_dists: bool = False,
     return_points: bool = False,
-):
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Pure pytorch implementation of the radius search.
+    Pure PyTorch implementation of the radius search.
 
     This is a brute force implementation that is not memory efficient.
     """

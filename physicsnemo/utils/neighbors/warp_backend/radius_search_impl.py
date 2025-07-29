@@ -15,15 +15,13 @@
 # limitations under the License.
 
 """
-This file contains the interface between pytorch and warp kernels.
+This file contains the interface between PyTorch and Warp kernels.
 
-It uses a mix of utilities, such that it needs to be opaque to pure pytorch.
-At the same time, we want to rely on pytorch's memory allocation as much as possible 
+It uses a mix of utilities, such that it needs to be opaque to pure PyTorch.
+At the same time, we want to rely on PyTorch's memory allocation as much as possible 
 and not warp.  So, tensor creation and allocation is driven by torch, and 
 passed to warp for computation.
 """
-
-from typing import List
 
 import torch
 
@@ -31,17 +29,11 @@ from physicsnemo.utils.version_check import check_min_version
 
 WARP_AVAILABLE = check_min_version("warp", "0.6.0")
 
-# WHERE WAS I
-# Add num_neighbors in the return, pass to the contexts for backwards.
-# make sure to use 0 and not -1 for the index.
-# Make sure tests account for this
-
 if WARP_AVAILABLE:
 
     import warp as wp
 
     wp.config.quiet = True
-    # wp.config.lineinfo = True
 
     wp.init()
 
@@ -263,7 +255,7 @@ if WARP_AVAILABLE:
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ) -> List[torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Find and return the nearest neighbors in `points` using locations from `queries`.
 
@@ -407,7 +399,7 @@ if WARP_AVAILABLE:
         max_points: int | None = None,
         return_dists: bool = False,
         return_points: bool = False,
-    ) -> List[torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Fake implementation for torch.compile/fake tensor support.
 
@@ -491,19 +483,25 @@ if WARP_AVAILABLE:
             ctx.save_for_backward(indexes, num_neighbors)
 
     def backward_radius_search(
-        ctx: torch.autograd.function.FunctionCtx, grads: tuple
+        ctx: torch.autograd.function.FunctionCtx,
+        grad_idx: torch.Tensor,
+        grad_points: torch.Tensor | None,
+        grad_dists: torch.Tensor | None,
+        grad_num_neighbors: torch.Tensor | None,
     ) -> tuple:
         """
         Backward function for the radius search operation.
 
         Args:
             ctx (torch.autograd.function.FunctionCtx): The autograd context.
-            grads (tuple): The gradients of the outputs.
+            grad_idx (torch.Tensor): The gradient of the indices.
+            grad_points (torch.Tensor | None): The gradient of the points - usually None
+            grad_dists (torch.Tensor | None): The gradient of the distances - usually None
+            grad_num_neighbors (torch.Tensor | None): The gradient of the number of neighbors - usually None
 
         Returns:
             tuple: Gradients of the inputs.
         """
-        grad_idx, grad_points, grad_dists, _ = grads
 
         if ctx.return_points:
             (indexes, num_neighbors) = ctx.saved_tensors
