@@ -357,18 +357,12 @@ class Module(torch.nn.Module):
             fs.put(str(local_path / "model.tar"), file_name)
 
     @staticmethod
-    def _check_checkpoint(local_path: str) -> bool:
-        if not local_path.joinpath("args.json").exists():
-            raise IOError("File 'args.json' not found in checkpoint")
-
-        if not local_path.joinpath("metadata.json").exists():
-            raise IOError("File 'metadata.json' not found in checkpoint")
-
-        if not local_path.joinpath("model.pt").exists():
-            raise IOError("Model weights 'model.pt' not found in checkpoint")
-
-        if not local_path.joinpath("metadata.json").exists():
-            raise IOError("Metadata 'metadata.json' not found in checkpoint")
+    def _check_checkpoint(local_path: Path | str) -> None:
+        local_path = Path(local_path)
+        expected_files = ["args.json", "metadata.json", "model.pt"]
+        for file in expected_files:
+            if not (local_path / file).exists():
+                raise IOError(f"File '{file}' not found in checkpoint")
 
     def load(
         self,
