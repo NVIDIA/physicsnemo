@@ -86,47 +86,6 @@ def ignore_missing_extra_state_key(
         incompatible_keys.missing_keys.remove(problem_key)
 
 
-# class LayerNorm(nn.Module):
-
-
-#     def __init__(self, *args, **kwargs):
-#         super().__init__()
-
-#         # This is to allow users to force the use of TE or pytorch layer norm
-#         force_te_setting = os.environ.get("PHYSICSNEMO_FORCE_TE")
-#         te_available = (
-#             TE_AVAILABLE  # make a local copy to avoid changing the global variable
-#         )
-#         if force_te_setting is not None:
-#             if force_te_setting.lower() == "true" or force_te_setting.lower() == "1":
-#                 te_available = True
-#             elif force_te_setting.lower() == "false" or force_te_setting.lower() == "0":
-#                 te_available = False
-
-#         self.use_te = te_available
-
-#         # TE uses an extra state to manage fp8 scaling
-#         # It shows up in the state dict, making the two
-#         # layers incompatiple with each other
-#         # https://github.com/NVIDIA/TransformerEngine/issues/458
-
-#         # As a workaround, we we're loading a te-trained layer norm
-#         # into torch layer norm, remove that state:
-
-#         if self.use_te:
-#             self.norm = te.LayerNorm(*args, **kwargs)
-#             self.register_load_state_dict_post_hook(ignore_missing_extra_state_key)
-#         else:
-#             self.norm = nn.LayerNorm(*args, **kwargs)
-#             self.register_load_state_dict_pre_hook(remove_extra_state_hook_for_torch)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         """
-#         Pass the layer norm computation onto the sub layer.
-#         """
-#         return self.norm(x)
-
-
 def get_layer_norm_class() -> nn.Module:
     """
     Dynamically pick the layer norm provider based on availability of transformer engine.
