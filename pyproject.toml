@@ -52,10 +52,9 @@ launch = [
 dev = [
     "pytest>=6.0.0",
     "pyyaml>=6.0",
-    "black==22.10.0",
     "interrogate==1.5.0",
     "coverage==6.5.0",
-    "ruff==0.0.290",
+    "ruff==0.12.5",
     "moto[s3]>=5.0.28",
 ]
 
