@@ -476,7 +476,7 @@ class ResidualLoss:
     regression with denoising score matching. It uses a pre-trained regression
     network to compute residuals before applying the diffusion process.
 
-    Attributes
+    Parameters
     ----------
     regression_net : torch.nn.Module
         The regression network used for computing residuals.
@@ -540,6 +540,32 @@ class ResidualLoss:
         self.sigma_data = sigma_data
         self.hr_mean_conditioning = hr_mean_conditioning
         self.y_mean = None
+
+    def get_noise_params(self, y: Tensor) -> Tensor:
+        """
+        Compute the noise parameters to apply denoising score matching.
+
+        Parameters
+        ----------
+        y : torch.Tensor
+            Latent state of shape :math:`(B, *)`. Only used to determine the shape of
+            the noise and create tensors on the same device.
+
+        Returns
+        -------
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+            - Noise ``n`` of shape :math:`(B, *)` to be added to the latent state.
+            - Noise level ``sigma`` of shape :math:`(B, 1, 1, 1)`.
+            - Weight ``weight`` of shape :math:`(B, 1, 1, 1)` to multiply the loss.
+        """
+        # Sample noise level
+        rnd_normal = torch.randn([y.shape[0], 1, 1, 1], device=y.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        # Loss weight
+        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
+        # Sample noise
+        n = torch.randn_like(y) * sigma
+        return n, sigma, weight
 
     def __call__(
         self,
@@ -735,17 +761,12 @@ class ResidualLoss:
             y = y_patched
             y_lr = y_lr_patched
 
-        # Noise
-        rnd_normal = torch.randn([y.shape[0], 1, 1, 1], device=img_clean.device)
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
-
-        # Input + noise
-        latent = y + torch.randn_like(y) * sigma
+        # Add noise to the latent state
+        n, sigma, weight = self.get_noise_params(y)
 
         if lead_time_label is not None:
             D_yn = net(
-                latent,
+                y + n,
                 y_lr,
                 sigma,
                 embedding_selector=None,
@@ -759,7 +780,7 @@ class ResidualLoss:
             )
         else:
             D_yn = net(
-                latent,
+                y + n,
                 y_lr,
                 sigma,
                 embedding_selector=None,

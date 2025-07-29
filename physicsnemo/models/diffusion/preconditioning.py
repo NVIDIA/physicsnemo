@@ -722,7 +722,7 @@ class EDMPrecondSuperResolution(Module):
     Parameters
     ----------
     img_resolution : Union[int, Tuple[int, int]]
-        Spatial resolution `(H, W)` of the image. If a single int is provided,
+        Spatial resolution :math:`(H, W)` of the image. If a single int is provided,
         the image is assumed to be square.
     img_in_channels : int
         Number of input channels in the low-resolution input image.

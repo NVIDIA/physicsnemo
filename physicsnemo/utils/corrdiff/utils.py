@@ -15,13 +15,15 @@
 # limitations under the License.
 
 import datetime
-from typing import Optional
+import warnings
+from typing import Literal, Optional
 
 import cftime
 import nvtx
 import torch
 import tqdm
 
+from physicsnemo.experimental import ExperimentalFeatureWarning
 from physicsnemo.utils.diffusion import StackedRandomGenerator, time_range
 
 ############################################################################
@@ -101,6 +103,8 @@ def diffusion_step(
     device: torch.device,
     mean_hr: torch.Tensor = None,
     lead_time_label: torch.Tensor = None,
+    distribution: Literal["normal", "student_t"] = "normal",
+    nu: Optional[int] = None,
 ) -> torch.Tensor:
 
     """
@@ -138,6 +142,12 @@ def diffusion_step(
     lead_time_label : torch.Tensor, optional
         Lead time label tensor for temporal conditioning,
         with shape (batch_size, lead_time_dims). Default is None.
+    distribution : Literal["normal", "student_t"], optional, default="normal"
+        Distribution to use for the latent state.
+    nu : int, optional, default=None
+        Degrees of freedom for the Student-t distribution. Only used if
+        ``distribution`` is "student_t". Must be provided and greater than 2 in
+        this case.
 
     Returns
     -------
@@ -161,6 +171,22 @@ def diffusion_step(
         if mean_hr.shape[0] != 1:
             raise ValueError(f"mean_hr must have batch size 1, got {mean_hr.shape[0]}")
 
+    # Validation of distribution
+    if distribution not in ["normal", "student_t"]:
+        raise ValueError(f"Invalid distribution: {distribution}")
+    if distribution == "student_t":
+        if nu is None:
+            raise ValueError("nu must be provided for student_t distribution")
+        elif nu <= 2:
+            raise ValueError(
+                f"Expected nu > 2 for student_t distribution, but got {nu}."
+            )
+        else:
+            warnings.warn(
+                "Student-t distribution is an experimental feature under active development and APIs may change without notice. Use with caution.",
+                ExperimentalFeatureWarning,
+            )
+
     img_lr = img_lr.to(memory_format=torch.channels_last)
 
     # Handling of the high-res mean
@@ -180,15 +206,23 @@ def diffusion_step(
 
             # Initialize random generator, and generate latents
             rnd = StackedRandomGenerator(device, batch_seeds)
-            latents = rnd.randn(
-                [
-                    img_lr.shape[0],
-                    img_out_channels,
-                    img_shape[0],
-                    img_shape[1],
-                ],
-                device=device,
-            ).to(memory_format=torch.channels_last)
+            latents_shape = [
+                img_lr.shape[0],
+                img_out_channels,
+                img_shape[0],
+                img_shape[1],
+            ]
+            if distribution == "normal":
+                latents = rnd.randn(
+                    latents_shape,
+                    device=device,
+                ).to(memory_format=torch.channels_last)
+            elif distribution == "student_t":
+                latents = rnd.randt(
+                    nu,
+                    latents_shape,
+                    device=device,
+                ).to(memory_format=torch.channels_last)
 
             with torch.inference_mode():
                 images = sampler_fn(
