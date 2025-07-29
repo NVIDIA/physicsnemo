@@ -17,7 +17,7 @@
 import pytest
 import torch
 import torch.distributed as dist
-from distributed_utils_for_testing import modify_environment
+from pytest_utils import modify_environment
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.distributed.fft import DistributedRFFT2

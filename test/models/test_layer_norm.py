@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
+from pytest_utils import import_or_fail, modify_environment
 
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meta import ModelMetaData
@@ -63,7 +63,7 @@ def test_torch_fallback(monkeypatch):
 
     layer_norm = reload_layer_norm()
     ln = layer_norm.LayerNorm(8)
-    assert isinstance(ln.norm, torch.nn.LayerNorm)
+    assert isinstance(ln, torch.nn.LayerNorm)
 
 
 @import_or_fail(["transformer_engine"])
@@ -76,18 +76,25 @@ def test_torch_fallback(monkeypatch):
         ("0", "torch"),
     ],
 )
-def test_force_env(monkeypatch, force_val, expected_type, pytestconfig):
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_force_env(force_val, expected_type, device, pytestconfig):
 
-    monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", force_val)
-    layer_norm = reload_layer_norm()
-    ln = layer_norm.LayerNorm(8)
-    if expected_type == "te":
-        import transformer_engine.pytorch as te  # noqa: F401
+    if device == "cpu":
+        force_val = False
+    # FORCE to no TE for CPU
+    with modify_environment(PHYSICSNEMO_FORCE_TE=force_val):
 
-        assert ln.use_te
-        assert isinstance(ln.norm, te.LayerNorm)
-    else:
-        assert isinstance(ln.norm, torch.nn.LayerNorm) and not ln.use_te
+        layer_norm = reload_layer_norm()
+        ln = layer_norm.LayerNorm(8).to(device)
+        if expected_type == "te":
+            if device == "cuda:0":
+                import transformer_engine.pytorch as te  # noqa: F401
+
+                assert isinstance(ln, te.LayerNorm)
+            else:
+                assert isinstance(ln, torch.nn.LayerNorm)
+        else:
+            assert isinstance(ln, torch.nn.LayerNorm)
 
 
 @pytest.mark.parametrize(
@@ -157,3 +164,7 @@ def test_serialization(order, monkeypatch, pytestconfig):
         y_te = ln(x)
 
         assert torch.allclose(y, y_te)
+
+
+if __name__ == "__main__":
+    test_force_env("true", "te", "cuda:0", None)

@@ -171,11 +171,11 @@ def validate_amp(
     if str(model.device) == "cpu":
         amp_device = "cpu"
         amp_dtype = torch.bfloat16
-        scaler = torch.cuda.amp.GradScaler(enabled=False)
+        scaler = torch.amp.GradScaler("cpu", enabled=False)
     else:
         amp_device = "cuda"
         amp_dtype = torch.float16
-        scaler = torch.cuda.amp.GradScaler(enabled=True)
+        scaler = torch.amp.GradScaler("cuda", enabled=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 

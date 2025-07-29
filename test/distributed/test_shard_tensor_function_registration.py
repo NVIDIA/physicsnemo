@@ -28,7 +28,7 @@ except ImportError:
         allow_module_level=True,
     )
 
-from distributed_utils_for_testing import modify_environment
+from pytest_utils import modify_environment
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor.placement_types import Replicate
 

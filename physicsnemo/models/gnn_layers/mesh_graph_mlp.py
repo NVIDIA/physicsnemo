@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from typing import Optional, Tuple, Union
 
 import torch
@@ -22,12 +23,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.autograd.function import once_differentiable
 
-# try:
-#     from transformer_engine import pytorch as te
-#     te_imported = True
-# except ImportError:
-#     te_imported = False
-from physicsnemo.models.layers.layer_norm import LayerNorm
+from physicsnemo.models.layers.layer_norm import get_layer_norm_class
 from physicsnemo.utils.profiling import profile
 
 from .utils import GraphType, concat_efeat, sum_efeat
@@ -145,24 +141,16 @@ class MeshGraphMLP(nn.Module):
             layers.append(nn.Linear(hidden_dim, output_dim))
 
             self.norm_type = norm_type
-            # if norm_type is not None:
-            #     if norm_type not in [
-            #         "LayerNorm",
-            #         "TELayerNorm",
-            #     ]:
-            #         raise ValueError(
-            #             f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
-            #         )
-            #     if norm_type == "TELayerNorm" and te_imported:
-            #         norm_layer = te.LayerNorm
-            #     elif norm_type == "TELayerNorm" and not te_imported:
-            #         raise ValueError(
-            #             "TELayerNorm requires transformer-engine to be installed."
-            #         )
-            #     else:
-            #         norm_layer = getattr(nn, norm_type)
-            norm_layer = LayerNorm
-            layers.append(norm_layer(output_dim))
+            if norm_type is not None:
+                warnings.warn(
+                    "The MeshGraphNet 'norm_type' argument is deprecated and will be removed in a future release."
+                    "In the future, transformer engine will be used automatically for layer norm, if it is installed."
+                    "Override this behavior by setting the PHYSICSNEMO_FORCE_TE environment variable to 'False'.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                norm_layer = get_layer_norm_class()
+                layers.append(norm_layer(output_dim))
 
             self.model = nn.Sequential(*layers)
         else:
@@ -355,25 +343,16 @@ class MeshGraphEdgeMLPSum(nn.Module):
         layers.append(nn.Linear(hidden_dim, output_dim))
 
         self.norm_type = norm_type
-        # if norm_type is not None:
-        #     if norm_type not in [
-        #         "LayerNorm",
-        #         "TELayerNorm",
-        #     ]:
-        #         raise ValueError(
-        #             f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
-        #         )
-        #     if norm_type == "TELayerNorm" and te_imported:
-        #         norm_layer = te.LayerNorm
-        #     elif norm_type == "TELayerNorm" and not te_imported:
-        #         raise ValueError(
-        #             "TELayerNorm requires transformer-engine to be installed."
-        #         )
-        #     else:
-        #         norm_layer = getattr(nn, norm_type)
-        #     layers.append(norm_layer(output_dim))
-        norm_layer = LayerNorm
-        layers.append(norm_layer(output_dim))
+        if norm_type is not None:
+            warnings.warn(
+                "The MeshGraphNet 'norm_type' argument is deprecated and will be removed in a future release."
+                "In the future, transformer engine will be used automatically for layer norm, if it is installed."
+                "Override this behavior by setting the PHYSICSNEMO_FORCE_TE environment variable to 'False'.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            norm_layer = get_layer_norm_class()
+            layers.append(norm_layer(output_dim))
 
         self.model = nn.Sequential(*layers)
 

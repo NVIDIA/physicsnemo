@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import importlib
+import os
 from functools import wraps
 
 import pytest
@@ -86,3 +88,41 @@ def _import_or_fail(module_names, config, min_versions=None):
                             )
             except ModuleNotFoundError:
                 pytest.importorskip(module_name, min_version)
+
+
+@contextlib.contextmanager
+def modify_environment(*remove, **update):
+    """
+    Context manager to allow modification of the environment variables.
+
+    Based on the implementation here:
+    https://stackoverflow.com/questions/2059482/temporarily-modify-the-current-processs-environment
+
+    """
+
+    env = os.environ
+
+    update = update or {}
+    remove = remove or []
+
+    # Make sure all update values are strings:
+    update = {k: str(v) for k, v in update.items()}
+
+    # Find out which environment variables are updated OR removed
+    # This compares the keys in both the remove list and update list
+    # and returns the overlap with current env.
+    stomped = (set(update.keys()) | set(remove)) & set(env.keys())
+
+    # Cache everything getting changed from the default env:
+    restore_after = {k: env[k] for k in stomped}
+
+    # Keep a list of things that need to be purged after:
+    purge_after = tuple(k for k in update if k not in env)
+
+    try:
+        env.update(update)
+        [env.pop(k, None) for k in remove]
+        yield
+    finally:
+        env.update(restore_after)
+        [env.pop(k, None) for k in purge_after]
