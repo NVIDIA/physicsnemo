@@ -23,6 +23,8 @@ and not warp.  So, tensor creation and allocation is driven by torch, and
 passed to warp for computation.
 """
 
+from typing import List
+
 import torch
 
 from physicsnemo.utils.version_check import check_min_version
@@ -524,7 +526,7 @@ if WARP_AVAILABLE:
         indexes: torch.Tensor,
         num_neighbors: torch.Tensor,
         grad_points_out: torch.Tensor,
-        points_shape: list[int],
+        points_shape: List[int],
         max_points: int | None = None,
     ) -> torch.Tensor:
         """
@@ -602,7 +604,7 @@ if WARP_AVAILABLE:
     def apply_grad_to_points_fake(
         indexes: torch.Tensor,
         grad_points_out: torch.Tensor,
-        points_shape: list[int],
+        points_shape: List[int],
         max_points: int | None = None,
     ) -> torch.Tensor:
         """
