@@ -16,14 +16,14 @@
 
 """
 This code provides the datapipe for reading the processed npy files,
-generating multi-res grids, calculating signed distance fields, 
-positional encodings, sampling random points in the volume and on surface, 
+generating multi-res grids, calculating signed distance fields,
+positional encodings, sampling random points in the volume and on surface,
 normalizing fields and returning the output tensors as a dictionary.
 
-This datapipe also non-dimensionalizes the fields, so the order in which the variables should 
-be fixed: velocity, pressure, turbulent viscosity for volume variables and 
-pressure, wall-shear-stress for surface variables. The different parameters such as 
-variable names, domain resolution, sampling size etc. are configurable in config.yaml. 
+This datapipe also non-dimensionalizes the fields, so the order in which the variables should
+be fixed: velocity, pressure, turbulent viscosity for volume variables and
+pressure, wall-shear-stress for surface variables. The different parameters such as
+variable names, domain resolution, sampling size etc. are configurable in config.yaml.
 """
 
 import os
@@ -346,7 +346,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def read_data_zarr(self, filepath):
-
         # def create_pinned_streaming_space(shape, dtype):
         #     # TODO - this function could boost performance a little, but
         #     # the pinned memory pool seems too small.
@@ -386,7 +385,6 @@ class DoMINODataPipe(Dataset):
             return result
 
         with zarr.open_group(filepath, mode="r") as z:
-
             data = {}
             futures = []
             if "volume_fields" in z.keys():
@@ -458,7 +456,6 @@ class DoMINODataPipe(Dataset):
         filepath,
         max_workers=None,
     ):
-
         if max_workers is not None:
             self.max_workers = max_workers
 
@@ -500,7 +497,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_combined(self, data_dict):
-
         # Pull these out and force to fp32:
         with self.device_context:
             global_params_values = data_dict["global_params_values"].astype(
@@ -538,7 +534,6 @@ class DoMINODataPipe(Dataset):
 
         # SDF calculation on the grid using WARP
         if not self.config.compute_scaling_factors:
-
             nx, ny, nz = self.config.grid_resolution
             surf_grid = create_grid(s_max, s_min, [nx, ny, nz])
             surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
@@ -598,7 +593,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_surface(self, data_dict, core_dict, center_of_mass, s_min, s_max):
-
         nx, ny, nz = self.config.grid_resolution
 
         return_dict = {}
@@ -629,7 +623,6 @@ class DoMINODataPipe(Dataset):
             surface_fields = surface_fields[idx_s]
 
         if not self.config.compute_scaling_factors:
-
             c_max = self.config.bounding_box_dims[0]
             c_min = self.config.bounding_box_dims[1]
 
@@ -797,7 +790,6 @@ class DoMINODataPipe(Dataset):
         stl_vertices,
         center_of_mass,
     ):
-
         return_dict = {}
 
         nx, ny, nz = self.config.grid_resolution
@@ -892,7 +884,6 @@ class DoMINODataPipe(Dataset):
                 pos_normals_com_vol = volume_coordinates - center_of_mass
 
             if self.config.normalize_coordinates:
-
                 volume_coordinates = normalize(volume_coordinates, c_max, c_min)
                 grid = normalize(grid, c_max, c_min)
 
@@ -934,7 +925,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_data(self, data_dict):
-
         (
             return_dict,
             s_min,
@@ -1022,7 +1012,6 @@ class DoMINODataPipe(Dataset):
 
 @profile
 def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -> None:
-
     model_type = cfg.model.model_type
     max_scaling_factor_files = 20
 

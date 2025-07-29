@@ -47,7 +47,6 @@ class MockNet:
 # The test function for edm_sampler
 @import_or_fail("cftime")
 def test_stochastic_sampler(pytestconfig):
-
     from physicsnemo.utils.diffusion import stochastic_sampler
 
     torch._dynamo.reset()
@@ -93,9 +92,9 @@ def test_stochastic_sampler(pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_mean_hr.shape == latents.shape
-    ), "Mean HR conditioned output shape does not match expected shape"
+    assert result_mean_hr.shape == latents.shape, (
+        "Mean HR conditioned output shape does not match expected shape"
+    )
 
     # Test with different S_churn value
     result_churn = stochastic_sampler(
@@ -114,9 +113,9 @@ def test_stochastic_sampler(pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_churn.shape == latents.shape
-    ), "Churn output shape does not match expected shape"
+    assert result_churn.shape == latents.shape, (
+        "Churn output shape does not match expected shape"
+    )
 
 
 # The test function for edm_sampler with rectangular domain and patching
@@ -164,9 +163,9 @@ def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_mean_hr.shape == latents.shape
-    ), "Mean HR conditioned output shape does not match expected shape"
+    assert result_mean_hr.shape == latents.shape, (
+        "Mean HR conditioned output shape does not match expected shape"
+    )
 
 
 # Test that the stochastic sampler is differentiable with rectangular patching
@@ -244,9 +243,9 @@ def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_mean_hr.shape == latents.shape
-    ), "Mean HR conditioned output shape does not match expected shape"
+    assert result_mean_hr.shape == latents.shape, (
+        "Mean HR conditioned output shape does not match expected shape"
+    )
 
     loss = result_mean_hr.sum()
     loss.backward()

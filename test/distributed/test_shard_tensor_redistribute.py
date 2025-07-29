@@ -94,7 +94,6 @@ def shard_tensor_factory(mesh_names, mesh_sizes, requires_grad=False, uneven=Tru
 
 
 def run_shard_tensor_reduction(rank, num_gpus, mesh_names, mesh_sizes, op, verbose):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{num_gpus}",

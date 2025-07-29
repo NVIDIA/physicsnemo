@@ -58,7 +58,7 @@ class ProcessGroupNode:
         str
             String representation of the process group node
         """
-        return "ProcessGroupNode(" f"name={self.name}, " f"size={self.size}, "
+        return f"ProcessGroupNode(name={self.name}, size={self.size}, "
 
     def __repr__(self):
         """

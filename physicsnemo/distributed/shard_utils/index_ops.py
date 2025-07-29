@@ -291,7 +291,6 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
         )
 
     else:
-
         # We are reducing tensor rank:
         original_shape.pop(dim)
         output_stride = _stride_from_contiguous_shape_C_style(original_shape)
@@ -426,7 +425,6 @@ def sharded_select_backward_helper(
 
 
 def select_wrapper(tensor, dim, index):
-
     if not isinstance(dim, int):
         raise TypeError(f"Dim must be an int, got {type(dim)}")
     if not isinstance(index, int):

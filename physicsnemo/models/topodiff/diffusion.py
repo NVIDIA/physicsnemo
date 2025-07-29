@@ -25,7 +25,6 @@ class Diffusion:
     """
 
     def __init__(self, n_steps=1000, min_beta=10**-4, max_beta=0.02, device="cpu"):
-
         self.n_steps = n_steps
         self.device = device
 
@@ -44,7 +43,6 @@ class Diffusion:
         self.loss = nn.MSELoss()
 
     def q_sample(self, x0, t, noise=None):
-
         """
         Diffuse the input data.
         """
@@ -62,7 +60,6 @@ class Diffusion:
         return x
 
     def p_sample(self, model, xt, t, cons):
-
         """
         Sample from the posterior distribution.
         """
@@ -70,7 +67,6 @@ class Diffusion:
         return model(xt, cons, t)
 
     def train_loss(self, model, x0, cons):
-
         """
         Compute the training loss.
         """

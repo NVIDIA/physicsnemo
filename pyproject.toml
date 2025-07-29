@@ -52,10 +52,9 @@ launch = [
 dev = [
     "pytest>=6.0.0",
     "pyyaml>=6.0",
-    "black==22.10.0",
     "interrogate==1.5.0",
     "coverage==6.5.0",
-    "ruff==0.0.290",
+    "ruff==0.12.5",
     "moto[s3]>=5.0.28",
 ]
 
@@ -116,17 +115,17 @@ include = ["physicsnemo", "physicsnemo.*"]
 [tool.ruff]
 # Enable flake8/pycodestyle (`E`), Pyflakes (`F`), flake8-bandit (`S`),
 # isort (`I`), and performance 'PERF' rules.
-select = ["E", "F", "S", "I", "PERF"]
-fixable = ["I"]
+lint.select = ["E", "F", "S", "I", "PERF"]
+lint.fixable = ["I"]
 
 # Never enforce `E402`, `E501` (line length violations),
 # and `S311` (random number generators)
-ignore = ["E501", "S311"]
+lint.ignore = ["E501", "S311"]
 
 # Exclude the examples and experimental folders
-exclude = ["examples", "physicsnemo/experimental"]
+exclude = ["docs", "examples", "physicsnemo/experimental"]
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 # Ignore `F401` (import violations) in all `__init__.py` files, and in `docs/*.py`.
 "__init__.py" = ["F401"]
 "docs/*.py" = ["F401"]

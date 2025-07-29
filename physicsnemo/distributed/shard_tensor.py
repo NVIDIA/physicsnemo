@@ -597,7 +597,6 @@ class ShardTensor(DTensor):
         return _ToTorchTensor.apply(redist_res, grad_placements)
 
     def backward(self, *args, **kwargs):
-
         # Before calling backward, we need to resolve any partial placements.
         new_placements = []
         # grad_placements = []

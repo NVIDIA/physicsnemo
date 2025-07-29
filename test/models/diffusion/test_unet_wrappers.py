@@ -84,9 +84,9 @@ def test_unet_fp16_forwards(device):
     output_fp32 = model_fp32(x=input_image, img_lr=lr_image)
 
     assert output_fp16.shape == (1, outc, res, res)
-    assert torch.allclose(
-        output_fp16, output_fp32, rtol=1e-3, atol=1e-3
-    ), "FP16 and FP32 outputs differ more than allowed"
+    assert torch.allclose(output_fp16, output_fp32, rtol=1e-3, atol=1e-3), (
+        "FP16 and FP32 outputs differ more than allowed"
+    )
 
     # Construct the StormCastUNet model
     model = StormCastUNet(

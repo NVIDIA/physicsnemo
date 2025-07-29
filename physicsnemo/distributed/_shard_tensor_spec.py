@@ -215,11 +215,7 @@ class ShardTensorSpec(DTensorSpec):
         return tuple(offsets)  # Fixed: Return tuple instead of list
 
 
-def _stride_from_contiguous_shape_C_style(
-    shape: Tuple[
-        int,
-    ]
-) -> Tuple[int]:
+def _stride_from_contiguous_shape_C_style(shape: Tuple[int,]) -> Tuple[int]:
     """
     Compute and return the stride from a tensor shape, assuming it is
     both contiguous and laid out in C-style
@@ -324,9 +320,7 @@ def _all_gather_shard_shapes(
     global_shape = [s for s in local_shape]
     # We start by assuming the global shape is the local shape and fix it on sharded axes
     for mesh_axis, placement in enumerate(placements):
-
         if isinstance(placement, Shard):
-
             tensor_dim = placement.dim
             local_group = target_mesh.get_group(mesh_axis)
 
@@ -405,7 +399,6 @@ def compute_sharding_shapes_from_chunking_global_shape(
     # Finally, update the sharded shape with the right chunk size:
     for shape_list in sharding_shapes.values():
         for inner_mesh_dim, chunk_size in temp_sharding_shapes.items():
-
             tensor_dim = placements[inner_mesh_dim].dim
             for shape in shape_list:
                 shape[tensor_dim] = chunk_size

@@ -295,7 +295,6 @@ def test_fair_crps_dim_arg_works(device):
 @pytest.mark.parametrize("num", [10, 23, 59])
 @pytest.mark.parametrize("biased", [True, False])
 def test_crps_finite(device, num, biased):
-
     # Test biased and unbiased on uniform data with analytic result
     pred = torch.linspace(0, 1, num + 1).unsqueeze(-1).to(device)
     obs = torch.zeros([1], device=device)
@@ -716,7 +715,6 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
-
     x = torch.randn((10_000, 30, 30), device=device, dtype=torch.float32)
     y = torch.randn((30, 30), device=device, dtype=torch.float32)
 

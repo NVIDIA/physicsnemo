@@ -321,18 +321,20 @@ def validate_combo_optims(
         """Mini-forward function to capture in cuda graph if needed"""
         # Test AMP
         # This is a conditional context statement: https://stackoverflow.com/a/34798330
-        with torch.autocast(
-            amp_device, enabled=True, dtype=amp_dtype
-        ) if model.meta.amp else nullcontext():
+        with (
+            torch.autocast(amp_device, enabled=True, dtype=amp_dtype)
+            if model.meta.amp
+            else nullcontext()
+        ):
             optimizer.zero_grad()
             output = fwd_model(*in_args)
             loss = dummy_loss_fn(output)
             scaler.scale(loss).backward()
 
     # Warmup stream (if cuda graphs)
-    with torch.cuda.stream(
-        torch.cuda.Stream()
-    ) if cuda_graphs_enabled else nullcontext():
+    with (
+        torch.cuda.stream(torch.cuda.Stream()) if cuda_graphs_enabled else nullcontext()
+    ):
         for i in range(warmup_length):
             foward(in_args)
             scaler.step(optimizer)

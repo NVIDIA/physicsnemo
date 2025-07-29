@@ -216,7 +216,7 @@ class AhmedBodyDataset(DGLDataset, Datapipe):
             max_workers=num_workers,
             mp_context=torch.multiprocessing.get_context("spawn"),
         ) as executor:
-            for (i, graph, coeff, normal, area) in executor.map(
+            for i, graph, coeff, normal, area in executor.map(
                 self.create_graph,
                 range(self.length),
                 case_files[: self.length],
