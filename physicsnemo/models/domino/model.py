@@ -458,7 +458,7 @@ class GeometryRep(nn.Module):
                 raise ValueError("Invalid prompt. Specify unet or conv ...")
 
         self.geo_conv_out = nn.ModuleList()
-        for j, p in enumerate(radii):
+        for _ in range(len(radii)):
             self.geo_conv_out.append(
                 GeoConvOut(
                     input_features=input_features,

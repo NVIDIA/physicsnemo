@@ -306,7 +306,7 @@ def compute_loss_dict(
         # Needs to be taken from the dataset
         stream_velocity = batch_inputs["global_params_values"][:, 0, :]
 
-        loss_surf = loss_fn(
+        loss_surf = loss_fn_surface(
             prediction_surf,
             target_surf,
             loss_fn_type.loss_type,
