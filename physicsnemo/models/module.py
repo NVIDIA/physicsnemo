@@ -405,8 +405,7 @@ class Module(torch.nn.Module):
                 )
                 if "filter" in tar.extractall.__code__.co_varnames:
                     extract_kwargs["filter"] = "data"
-
-                tar.extractall(**extract_kwargs)
+                tar.extractall(**extract_kwargs)  # noqa: S202
 
             # Check if the checkpoint is valid
             Module._check_checkpoint(local_path)
@@ -475,7 +474,7 @@ class Module(torch.nn.Module):
                 )
                 if "filter" in tar.extractall.__code__.co_varnames:
                     extract_kwargs["filter"] = "data"
-                tar.extractall(**extract_kwargs)
+                tar.extractall(**extract_kwargs)  # noqa: S202
 
             # Check if the checkpoint is valid
             Module._check_checkpoint(local_path)
