@@ -104,11 +104,11 @@ def ring_ball_query(
 
     # For the output shapes, we can compute the output sharding if needed.  If the placement
     # is Replicate, just infer since there aren't shardings.
-    if type(points1._spec.placements[0]) == Replicate:
+    if isinstance(points1._spec.placements[0], Replicate):
         map_shard_shapes = "infer"
         neighbors_shard_shapes = "infer"
         outputs_shard_shapes = "infer"
-    elif type(points1._spec.placements[0]) == Shard:
+    elif isinstance(points1._spec.placements[0], Shard):
         p1_shard_sizes = points1._spec.sharding_shapes()[0]
 
         # This conversion to shard tensor can be done explicitly computing the output shapes.

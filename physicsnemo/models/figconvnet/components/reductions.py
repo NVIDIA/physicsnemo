@@ -28,7 +28,7 @@ REDUCTION_TYPES = Literal["min", "max", "mean", "sum", "var", "std"]
 
 def _var(
     features: Float[Tensor, "N F"],  # noqa: F722
-    neighbors_row_splits: Int[Tensor, "M"],  # noqa: F722
+    neighbors_row_splits: Int[Tensor, "M"],  # noqa: F821
 ) -> Tuple[Float[Tensor, "M F"], Float[Tensor, "M F"]]:  # noqa: F722
     out_mean = segment_csr(features, neighbors_row_splits, reduce="mean")
     out_var = (
