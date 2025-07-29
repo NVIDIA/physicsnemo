@@ -21,12 +21,13 @@ Diffusion-Based Generative Models".
 
 import contextlib
 import importlib
-from typing import Any, Dict, List
+import math
+import warnings
+from typing import Any, Dict, List, Set
 
 import numpy as np
 import nvtx
 import torch
-import torch.cuda.amp as amp
 from einops import rearrange
 from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
@@ -41,6 +42,36 @@ if torch.cuda.is_available():
         _is_apex_available = True
     except ImportError:
         pass
+
+
+def _validate_amp(amp_mode: bool) -> None:
+    """Raise if `amp_mode` is False but PyTorch autocast (CPU or CUDA) is active.
+
+    Parameters
+    ----------
+    amp_mode : bool
+        Your intended AMP flag. Set False when you require full precision.
+    """
+
+    try:
+        cuda_amp = bool(torch.is_autocast_enabled())
+    except AttributeError:  # very old PyTorch
+        cuda_amp = False
+    try:
+        cpu_amp = bool(torch.is_autocast_enabled("cpu"))
+    except AttributeError:
+        cpu_amp = False
+
+    if not amp_mode and (cuda_amp or cpu_amp):
+        active = []
+        if cuda_amp:
+            active.append("cuda")
+        if cpu_amp:
+            active.append("cpu")
+        raise RuntimeError(
+            f"amp_mode=False but torch autocast is enabled on: {', '.join(active)}. "
+            "Disable autocast for this region or set amp_mode=True if mixed precision is intended."
+        )
 
 
 class Linear(torch.nn.Module):
@@ -100,7 +131,7 @@ class Linear(torch.nn.Module):
 
     def forward(self, x):
         weight, bias = self.weight, self.bias
-        # pdb.set_trace()
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if self.weight is not None and self.weight.dtype != x.dtype:
                 weight = self.weight.to(x.dtype)
@@ -215,6 +246,7 @@ class Conv2d(torch.nn.Module):
 
     def forward(self, x):
         weight, bias, resample_filter = self.weight, self.bias, self.resample_filter
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if self.weight is not None and self.weight.dtype != x.dtype:
                 weight = self.weight.to(x.dtype)
@@ -361,7 +393,7 @@ class GroupNorm(torch.nn.Module):
         self.act_fn = None
         self.amp_mode = amp_mode
         if self.use_apex_gn:
-            if self.act:
+            if self.fused_act:
                 self.gn = ApexGroupNorm(
                     num_groups=self.num_groups,
                     num_channels=num_channels,
@@ -381,7 +413,12 @@ class GroupNorm(torch.nn.Module):
             self.act_fn = self.get_activation_function()
 
     def forward(self, x):
+        if (not x.is_cuda) and self.use_apex_gn:
+            warnings.warn(
+                "Apex GroupNorm is not supported on CPU. Please move your tensor to GPU or disable use_apex_gn."
+            )
         weight, bias = self.weight, self.bias
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if not self.use_apex_gn:
                 if weight.dtype != x.dtype:
@@ -405,7 +442,6 @@ class GroupNorm(torch.nn.Module):
         else:
             # Use custom GroupNorm implementation that supports channels last
             # memory layout for inference
-            x = x.float()
             x = rearrange(x, "b (g c) h w -> b g c h w", g=self.num_groups)
 
             mean = x.mean(dim=[2, 3, 4], keepdim=True)
@@ -483,6 +519,113 @@ class AttentionOp(torch.autograd.Function):
         return dq, dk
 
 
+class Attention(torch.nn.Module):
+    """
+    Self-attention block used in U-Net-style architectures, such as DDPM++, NCSN++, and ADM.
+    Applies GroupNorm followed by multi-head self-attention and a projection layer.
+
+    Parameters
+    ----------
+    out_channels : int
+        Number of channels :math:`C` in the input and output feature maps.
+    num_heads : int
+        Number of attention heads. Must be a positive integer.
+    eps : float, optional, default=1e-5
+        Epsilon value for numerical stability in GroupNorm.
+    init_zero : dict, optional, default={'init_weight': 0}
+        Initialization parameters with zero weights for certain layers.
+    init_attn : dict, optional, default=None
+        Initialization parameters specific to attention mechanism layers.
+        Defaults to 'init' if not provided.
+    init : dict, optional, default={}
+        Initialization parameters for convolutional and linear layers.
+    use_apex_gn : bool, optional, default=False
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
+        Need to set this as False on cpu.
+    amp_mode : bool, optional, default=False
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled.
+    fused_conv_bias: bool, optional, default=False
+        A boolean flag indicating whether bias will be passed as a parameter of conv2d.
+
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C, H, W)`, where :math:`B` is batch
+        size, :math:`C` is `out_channels`, and :math:`H, W` are spatial
+        dimensions.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of the same shape as input: :math:`(B, C, H, W)`.
+    """
+
+    def __init__(
+        self,
+        *,
+        out_channels: int,
+        num_heads: int,
+        eps: float = 1e-5,
+        init_zero: Dict[str, Any] = dict(init_weight=0),
+        init_attn: Any = None,
+        init: Dict[str, Any] = dict(),
+        use_apex_gn: bool = False,
+        amp_mode: bool = False,
+        fused_conv_bias: bool = False,
+    ) -> None:
+        super().__init__()
+        self.norm = GroupNorm(
+            num_channels=out_channels,
+            eps=eps,
+            use_apex_gn=use_apex_gn,
+            amp_mode=amp_mode,
+        )
+        self.qkv = Conv2d(
+            in_channels=out_channels,
+            out_channels=out_channels * 3,
+            kernel=1,
+            fused_conv_bias=fused_conv_bias,
+            amp_mode=amp_mode,
+            **(init_attn if init_attn is not None else init),
+        )
+        self.proj = Conv2d(
+            in_channels=out_channels,
+            out_channels=out_channels,
+            kernel=1,
+            fused_conv_bias=fused_conv_bias,
+            amp_mode=amp_mode,
+            **init_zero,
+        )
+        if not isinstance(num_heads, int) or num_heads <= 0:
+            raise ValueError(
+                f"`num_heads` must be a positive integer, but got {num_heads}"
+            )
+        self.num_heads = num_heads
+
+    def forward(self, x):
+        q, k, v = (
+            torch.permute(
+                self.qkv(self.norm(x)), (0, 2, 3, 1)
+            )  # [B,H,W,C*3] in memory layout, shape [B,C*3,H,W] -> [B,H,W,C*3]
+            .reshape(  # -> [X.shape[0], heads, (H*W), C//heads, 3]
+                x.shape[0],
+                self.num_heads,
+                x.shape[2] * x.shape[3],
+                x.shape[1] // self.num_heads,
+                3,
+            )
+            .unbind(-1)
+        )  # [B, heads, H*W, C//heads]
+
+        attn = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, scale=1 / math.sqrt(k.shape[-1])
+        )
+        attn = attn.transpose(-1, -2)  # [B, 1, C, H*W]
+        x = self.proj(attn.reshape(*x.shape)).add_(x)
+        return x
+
+
 class UNetBlock(torch.nn.Module):
     """
     Unified U-Net block with optional up/downsampling and self-attention. Represents
@@ -539,6 +682,10 @@ class UNetBlock(torch.nn.Module):
         A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     """
 
+    # NOTE: these attributes have specific usage in old checkpoints, do not
+    # reuse them!
+    _reserved_attributes: Set[str] = set(["norm2", "qkv", "proj"])
+
     def __init__(
         self,
         in_channels: int,
@@ -578,6 +725,7 @@ class UNetBlock(torch.nn.Module):
                 else out_channels // channels_per_head
             )
         )
+        self.attention = attention
         self.dropout = dropout
         self.skip_scale = skip_scale
         self.adaptive_scale = adaptive_scale
@@ -649,29 +797,20 @@ class UNetBlock(torch.nn.Module):
                 **init,
             )
 
-        if self.num_heads:
-            self.norm2 = GroupNorm(
-                num_channels=out_channels,
+        if self.attention:
+            self.attn = Attention(
+                out_channels=out_channels,
+                num_heads=self.num_heads,
                 eps=eps,
+                init_zero=init_zero,
+                init_attn=init_attn,
+                init=init,
                 use_apex_gn=use_apex_gn,
                 amp_mode=amp_mode,
-            )
-            self.qkv = Conv2d(
-                in_channels=out_channels,
-                out_channels=out_channels * 3,
-                kernel=1,
                 fused_conv_bias=fused_conv_bias,
-                amp_mode=amp_mode,
-                **(init_attn if init_attn is not None else init),
             )
-            self.proj = Conv2d(
-                in_channels=out_channels,
-                out_channels=out_channels,
-                kernel=1,
-                fused_conv_bias=fused_conv_bias,
-                amp_mode=amp_mode,
-                **init_zero,
-            )
+        else:
+            self.attn = None
 
     def forward(self, x, emb):
         with (
@@ -682,9 +821,10 @@ class UNetBlock(torch.nn.Module):
             orig = x
             x = self.conv0(self.norm0(x))
             params = self.affine(emb).unsqueeze(2).unsqueeze(3)
+            _validate_amp(self.amp_mode)
             if not self.amp_mode:
                 if params.dtype != x.dtype:
-                    params = params.to(x.dtype)
+                    params = params.to(x.dtype)  # type: ignore
 
             if self.adaptive_scale:
                 scale, shift = params.chunk(chunks=2, dim=1)
@@ -698,23 +838,92 @@ class UNetBlock(torch.nn.Module):
             x = x.add_(self.skip(orig) if self.skip is not None else orig)
             x = x * self.skip_scale
 
-            if self.num_heads:
-                q, k, v = (
-                    self.qkv(self.norm2(x))
-                    .reshape(
-                        x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1
-                    )
-                    .unbind(3)
-                )
-                # w = AttentionOp.apply(q, k)
-                # a = torch.einsum("nqk,nck->ncq", w, v)
-                # Compute attention in one step
-                with amp.autocast(enabled=self.amp_mode):
-                    attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-                x = self.proj(attn.reshape(*x.shape)).add_(x)
+            if self.attn:
+                x = self.attn(x)
                 x = x * self.skip_scale
-
             return x
+
+    def __setattr__(self, name, value):
+        """Prevent setting attributes with reserved names.
+
+        Parameters
+        ----------
+        name : str
+            Attribute name.
+        value : Any
+            Attribute value.
+        """
+        if name in getattr(self.__class__, "_reserved_attributes", set()):
+            raise AttributeError(f"Attribute '{name}' is reserved and cannot be set.")
+        super().__setattr__(name, value)
+
+    def load_state_dict(self, state_dict, strict: bool = True):
+        """Custom ``load_state_dict`` that migrates legacy keys to their
+        new locations before loading the state dict.
+
+        Parameters
+        ----------
+        state_dict : dict
+            A state-dict containing parameters and persistent buffers.
+        strict : bool, optional
+            Passed through to ``torch.nn.Module.load_state_dict``.
+        """
+        # Migrate legacy keys for the attention module
+        self._migrate_attention_module(state_dict)
+        return super().load_state_dict(state_dict, strict=strict)
+
+    def _migrate_attention_module(self, state_dict):
+        """Handle legacy checkpoints that stored attention layers at root.
+
+        The earliest versions of ``UNetBlock`` stored the attention-layer
+        parameters directly on the block using attribute names contained in
+        ``_reserved_attributes``.  These have since been moved under the
+        dedicated ``attn`` sub-module.  This helper migrates the parameter
+        names so that older checkpoints can still be loaded.
+        """
+
+        _mapping = {
+            "norm2.weight": "attn.norm.weight",
+            "norm2.bias": "attn.norm.bias",
+            "qkv.weight": "attn.qkv.weight",
+            "qkv.bias": "attn.qkv.bias",
+            "proj.weight": "attn.proj.weight",
+            "proj.bias": "attn.proj.bias",
+        }
+
+        # Track which legacy keys were found.
+        legacy_found = set()
+
+        for old_key, new_key in _mapping.items():
+            if old_key in state_dict:
+                legacy_found.add(old_key)
+                # NOTE: Only migrate if destination key not already present to
+                # avoid accidental overwriting when both are present.
+                if new_key not in state_dict:
+                    state_dict[new_key] = state_dict.pop(old_key)
+                else:
+                    raise ValueError(
+                        f"Checkpoint contains both legacy and new keys for {old_key}"
+                    )
+
+        # Validation and warnings
+        src_keys = set(state_dict.keys()) & set(_mapping.keys())
+        target_keys = set(self.state_dict().keys()) & set(_mapping.values())
+        missing_keys, unexpected_keys = src_keys - target_keys, target_keys - src_keys
+        if missing_keys:
+            warnings.warn(
+                "The following keys from the checkpoint were not found in the current "
+                "model and were ignored: "
+                f"{', '.join(sorted(missing_keys))}",
+                UserWarning,
+            )
+        if unexpected_keys:
+            warnings.warn(
+                "The following keys of the current model are not present in the loaded "
+                "checkpoint: "
+                f"{', '.join(sorted(unexpected_keys))}",
+                UserWarning,
+            )
 
 
 class PositionalEmbedding(torch.nn.Module):
@@ -754,6 +963,7 @@ class PositionalEmbedding(torch.nn.Module):
         )
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if freqs.dtype != x.dtype:
                 freqs = freqs.to(x.dtype)
@@ -790,6 +1000,7 @@ class FourierEmbedding(torch.nn.Module):
 
     def forward(self, x):
         freqs = self.freqs
+        _validate_amp(self.amp_mode)
         if not self.amp_mode:
             if x.dtype != self.freqs.dtype:
                 freqs = self.freqs.to(x.dtype)

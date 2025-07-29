@@ -17,8 +17,66 @@
 
 import pytest
 import torch
+import validate_utils
 from einops import rearrange, repeat
 from pytest_utils import import_or_fail
+
+
+@import_or_fail("cftime")
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_grid_patching_2d(pytestconfig, device):
+    from physicsnemo.utils.patching import GridPatching2D
+
+    torch.manual_seed(0)
+    # Test cases: (H, W, H_p, W_p, overlap_pix, boundary_pix, N_patches)
+    B = 2
+    test_cases = [
+        (8, 8, 4, 4, 0, 0, 4),  # Square image, no overlap/boundary
+        (16, 8, 4, 4, 0, 0, 8),  # Rectangular image, no overlap/boundary
+        (16, 16, 10, 10, 4, 2, 16),  # Square image, minimal overlap/boundary
+        (32, 16, 16, 12, 6, 2, 16),  # Rectangular, larger overlap/boundary
+    ]
+
+    for i, (H, W, H_p, W_p, overlap_pix, boundary_pix, P) in enumerate(test_cases):
+
+        error_msg = f"Failed on {device} with test case {i}"
+
+        patching = GridPatching2D(
+            img_shape=(H, W),
+            patch_shape=(H_p, W_p),
+            overlap_pix=overlap_pix,
+            boundary_pix=boundary_pix,
+        )
+
+        overlap_count = GridPatching2D.get_overlap_count(
+            patch_shape=(H_p, W_p),
+            img_shape=(H, W),
+            overlap_pix=overlap_pix,
+            boundary_pix=boundary_pix,
+        )
+        assert validate_utils.validate_accuracy(
+            overlap_count,
+            file_name=f"grid_patching_2d_overlap_count_test{i}.pth",
+            atol=1e-5,
+        ), error_msg
+
+        input_tensor = torch.randn(B, 3, H, W).to(device).float().requires_grad_(True)
+        patched_input = patching.apply(input_tensor)
+        assert patched_input.shape == (P * B, 3, H_p, W_p), error_msg
+        assert validate_utils.validate_accuracy(
+            patched_input,
+            file_name=f"grid_patching_2d_apply_test{i}.pth",
+            atol=1e-5,
+        ), error_msg
+
+        fused_input = patching.fuse(patched_input, batch_size=B)
+        assert fused_input.shape == (B, 3, H, W)
+        assert torch.allclose(fused_input, input_tensor, atol=1e-5), error_msg
+
+        # Make sure that image_batching is differentiable
+        loss = fused_input.sum()
+        loss.backward()
+        assert input_tensor.grad is not None, error_msg
 
 
 @import_or_fail("cftime")
