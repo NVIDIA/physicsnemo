@@ -153,7 +153,7 @@ It is mandatory for your MRs to pass these pipelines to ensure a successful merg
 Please keep checking this document for the latest guidelines on pushing code. Currently,
 The pipeline has following stages:
 
-1. `format` 
+1. `format`
     *Pre-commit will check this for you!* Checks for formatting of your
     Python code, using `ruff format` via [Ruff](https://docs.astral.sh/ruff/).
     If your MR fails this test, run `ruff format <script-name>.py` on
@@ -193,7 +193,7 @@ The pipeline has following stages:
     ```
 
 3. `lint`
-    *Pre-commit will check this for you!* 
+    *Pre-commit will check this for you!*
     Linters will perform static analysis to check the style, complexity, errors
     and more. For markdown files `markdownlint` is used, its suggested to use
     the vscode, neovim or sublime
