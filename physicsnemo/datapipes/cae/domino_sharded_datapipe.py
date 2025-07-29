@@ -66,7 +66,6 @@ class ShardedDoMINODataPipe(DoMINODataPipe):
         shard_grid,
         **config_overrides,
     ):
-
         # if 'gpu_output' not in config_overrides:
         config_overrides["gpu_output"] = True
 
@@ -118,7 +117,6 @@ class ShardedDoMINODataPipe(DoMINODataPipe):
         ]
 
     def __getitem__(self, idx):
-
         single_dict = super().__getitem__(idx)
 
         # Here, we're assuming that the data is already replicated.
@@ -159,7 +157,6 @@ def create_sharded_domino_dataset(
     shard_point_cloud,
     shard_grid,
 ):
-
     # Pull off the data path, model type, and config_dict:
     data_path = base_dataset.config.data_path
     model_type = base_dataset.model_type

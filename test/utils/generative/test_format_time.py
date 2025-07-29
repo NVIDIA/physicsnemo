@@ -21,7 +21,6 @@ from pytest_utils import import_or_fail
 # Test format_time function
 @import_or_fail("cftime")
 def test_format_time(pytestconfig):
-
     from physicsnemo.utils.diffusion import format_time
 
     assert format_time(59) == "59s"
@@ -37,7 +36,6 @@ def test_format_time(pytestconfig):
 # Test format_time_brief function
 @import_or_fail("cftime")
 def test_format_time_brief(pytestconfig):
-
     from physicsnemo.utils.diffusion import format_time_brief
 
     assert format_time_brief(59) == "59s"

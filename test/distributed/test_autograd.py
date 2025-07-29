@@ -28,7 +28,6 @@ from physicsnemo.distributed.autograd import (
 
 
 def run_test_scatter_v(rank, world_size):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{world_size}",
@@ -36,7 +35,6 @@ def run_test_scatter_v(rank, world_size):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager.initialize()
 
         manager = DistributedManager()
@@ -71,7 +69,6 @@ def run_test_scatter_v(rank, world_size):
 
 
 def run_test_gather_v(rank, world_size):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{world_size}",
@@ -79,7 +76,6 @@ def run_test_gather_v(rank, world_size):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager.initialize()
 
         manager = DistributedManager()
@@ -117,7 +113,6 @@ def run_test_gather_v(rank, world_size):
 
 
 def run_test_all_gather_v(rank, world_size):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{world_size}",
@@ -125,7 +120,6 @@ def run_test_all_gather_v(rank, world_size):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager.initialize()
 
         manager = DistributedManager()
@@ -162,7 +156,6 @@ def run_test_all_gather_v(rank, world_size):
 
 
 def run_test_indexed_all_to_all_v(rank, world_size):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{world_size}",
@@ -170,7 +163,6 @@ def run_test_indexed_all_to_all_v(rank, world_size):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager.initialize()
 
         manager = DistributedManager()

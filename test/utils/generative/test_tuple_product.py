@@ -20,7 +20,6 @@ from pytest_utils import import_or_fail
 # Test tuple_product function
 @import_or_fail("cftime")
 def test_tuple_product(pytestconfig):
-
     from physicsnemo.utils.diffusion import tuple_product
 
     # Test with an empty tuple

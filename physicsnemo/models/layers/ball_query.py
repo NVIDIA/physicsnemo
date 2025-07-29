@@ -115,7 +115,6 @@ def _ball_query_forward_primitive_(
     radius: float,
     hash_grid: wp.HashGrid,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-
     # Create output tensors:
     mapping = torch.zeros(
         (1, points1.shape[0], k),
@@ -195,7 +194,6 @@ def _ball_query_backward_primitive_(
     grad_num_neighbors,
     grad_outputs,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-
     p2_grad = torch.zeros_like(points2)
 
     # Run the kernel in adjoint mode
@@ -280,7 +278,6 @@ class BallQuery(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_mapping, grad_num_neighbors, grad_outputs):
-
         points1, points2, mapping, num_neighbors, outputs = ctx.saved_tensors
         # Apply the primitive
         p2_grad = _ball_query_backward_primitive_(

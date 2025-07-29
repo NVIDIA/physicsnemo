@@ -76,7 +76,6 @@ class BaseMSE(th.nn.MSELoss):
 
 
 class WeightedMSE(th.nn.MSELoss):
-
     """
     Loss object that allows for user defined weighting of variables when calculating MSE
     """
@@ -175,7 +174,6 @@ class OceanMSE(th.nn.MSELoss):
         ).to(trainer.device)
 
     def forward(self, prediction, target, average_channels=True):
-
         if not self.lsm_sum_calculated:
             self.lsm_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum()
             self.lsm_var_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum(
@@ -240,7 +238,6 @@ class WeightedOceanMSE(th.nn.MSELoss):
         self.loss_weights = self.loss_weights.to(device=trainer.device)
 
     def forward(self, prediction, target, average_channels=True):
-
         if not self.lsm_sum_calculated:
             self.lsm_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum()
             self.lsm_var_sum = th.broadcast_to(self.lsm_tensor, target.shape).sum(

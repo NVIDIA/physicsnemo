@@ -116,7 +116,6 @@ def perform_ring_iteration(
         tensor_recv = torch.empty(recv_shape, dtype=dtype, device=device)
 
     if ring_config.communication_method == "p2p":
-
         p2p_op_list = []
         torch.cuda.set_device(tensor.device)
 

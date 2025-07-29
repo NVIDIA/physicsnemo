@@ -47,7 +47,6 @@ class MockNet:
 @import_or_fail("cftime")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_regression_step(device, pytestconfig):
-
     from physicsnemo.models.diffusion import UNet
     from physicsnemo.utils.corrdiff import regression_step
 

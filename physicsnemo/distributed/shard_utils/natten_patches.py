@@ -229,10 +229,9 @@ if natten_spec is not None:
         dilation = kwargs.get("dilation", 1)
         kernel_size = kwargs["kernel_size"]
 
-        if all([type(_t) == torch.Tensor for _t in (q, k, v)]):
+        if all([isinstance(_t, torch.Tensor) for _t in (q, k, v)]):
             return wrapped(*args, **kwargs)
-        elif all([type(_t) == ShardTensor for _t in (q, k, v)]):
-
+        elif all([isinstance(_t, ShardTensor) for _t in (q, k, v)]):
             return partial_na2d(q, k, v, kernel_size, dilation, base_func=wrapped)
 
         else:

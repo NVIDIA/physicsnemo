@@ -345,7 +345,6 @@ class MeshDaliExternalSource:
 
         # Shuffle before the next epoch starts.
         if self.shuffle and sample_info.epoch_idx != self.last_epoch:
-
             # All workers use the same rng seed so the resulting
             # indices are the same across workers.
             np.random.default_rng(seed=sample_info.epoch_idx).shuffle(self.indices)

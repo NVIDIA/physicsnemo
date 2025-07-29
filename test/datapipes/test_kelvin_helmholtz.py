@@ -28,7 +28,6 @@ Tensor = torch.Tensor
 @import_or_fail("warp")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kelvin_helmholtz_2d_constructor(device, pytestconfig):
-
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 
     # construct data pipe
@@ -52,7 +51,6 @@ def test_kelvin_helmholtz_2d_constructor(device, pytestconfig):
 @import_or_fail("warp")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kelvin_helmholtz_2d_device(device, pytestconfig):
-
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 
     # construct data pipe
@@ -85,7 +83,6 @@ def test_kelvin_helmholtz_2d_device(device, pytestconfig):
 def test_kelvin_helmholtz_2d_shape(
     resolution, batch_size, seq_length, device, pytestconfig
 ):
-
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 
     # construct data pipe
@@ -126,7 +123,6 @@ def test_kelvin_helmholtz_2d_shape(
 @import_or_fail("warp")
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_kelvin_helmholtz_cudagraphs(device, pytestconfig):
-
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 
     # Preprocess function to convert dataloader output into Tuple of tensors

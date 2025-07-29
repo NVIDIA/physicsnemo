@@ -1175,7 +1175,6 @@ class DoMINO(nn.Module):
             ]
 
             for f in range(num_variables):
-
                 one_loop_centers_expanded = surface_mesh_centers.unsqueeze(2)
 
                 one_loop_noise = one_loop_centers_expanded - (
@@ -1301,7 +1300,6 @@ class DoMINO(nn.Module):
             param_encoding = self.parameter_model(processed_parameters)
 
         if self.solution_calculation_mode == "one-loop":
-
             # Stretch these out to num_sample_points
             one_loop_encoding_node = encoding_node.unsqueeze(0).expand(
                 num_sample_points, -1, -1, -1
@@ -1320,7 +1318,6 @@ class DoMINO(nn.Module):
                 one_loop_other_terms = (one_loop_encoding_node, one_loop_encoding_g)
 
             for f in range(num_variables):
-
                 one_loop_volume_mesh_centers_expanded = volume_mesh_centers.unsqueeze(
                     0
                 ).expand(num_sample_points, -1, -1, -1)
@@ -1391,7 +1388,6 @@ class DoMINO(nn.Module):
             return one_loop_output_all
 
         if self.solution_calculation_mode == "two-loop":
-
             for f in range(num_variables):
                 for p in range(num_sample_points):
                     if p == 0:

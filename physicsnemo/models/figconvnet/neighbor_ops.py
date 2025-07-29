@@ -104,9 +104,9 @@ def batched_neighbor_radius_search(
     radius: float
     search_method: Literal["warp", "open3d"]
     """
-    assert (
-        inp_positions.shape[0] == out_positions.shape[0]
-    ), f"Batch size mismatch, {inp_positions.shape[0]} != {out_positions.shape[0]}"
+    assert inp_positions.shape[0] == out_positions.shape[0], (
+        f"Batch size mismatch, {inp_positions.shape[0]} != {out_positions.shape[0]}"
+    )
 
     if search_method == "warp":
         neighbor_index, neighbor_dist, neighbor_offset = batched_radius_search_warp(
@@ -200,9 +200,9 @@ def batched_neighbor_knn_search(
     query_positions: [B,M,3]
     k: int
     """
-    assert (
-        ref_positions.shape[0] == query_positions.shape[0]
-    ), f"Batch size mismatch, {ref_positions.shape[0]} != {query_positions.shape[0]}"
+    assert ref_positions.shape[0] == query_positions.shape[0], (
+        f"Batch size mismatch, {ref_positions.shape[0]} != {query_positions.shape[0]}"
+    )
     neighbors = []
     index_offset = 0
     for i in range(ref_positions.shape[0]):

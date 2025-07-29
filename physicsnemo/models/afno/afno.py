@@ -173,44 +173,52 @@ class AFNO2DLayer(nn.Module):
         total_modes = H // 2 + 1
         kept_modes = int(total_modes * self.hard_thresholding_fraction)
 
-        o1_real[
-            :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-        ] = F.relu(
-            torch.einsum(
-                "nyxbi,bio->nyxbo",
-                x_real[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w1[0],
+        o1_real[:, total_modes - kept_modes : total_modes + kept_modes, :kept_modes] = (
+            F.relu(
+                torch.einsum(
+                    "nyxbi,bio->nyxbo",
+                    x_real[
+                        :,
+                        total_modes - kept_modes : total_modes + kept_modes,
+                        :kept_modes,
+                    ],
+                    self.w1[0],
+                )
+                - torch.einsum(
+                    "nyxbi,bio->nyxbo",
+                    x_imag[
+                        :,
+                        total_modes - kept_modes : total_modes + kept_modes,
+                        :kept_modes,
+                    ],
+                    self.w1[1],
+                )
+                + self.b1[0]
             )
-            - torch.einsum(
-                "nyxbi,bio->nyxbo",
-                x_imag[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w1[1],
-            )
-            + self.b1[0]
         )
 
-        o1_imag[
-            :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-        ] = F.relu(
-            torch.einsum(
-                "nyxbi,bio->nyxbo",
-                x_imag[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w1[0],
+        o1_imag[:, total_modes - kept_modes : total_modes + kept_modes, :kept_modes] = (
+            F.relu(
+                torch.einsum(
+                    "nyxbi,bio->nyxbo",
+                    x_imag[
+                        :,
+                        total_modes - kept_modes : total_modes + kept_modes,
+                        :kept_modes,
+                    ],
+                    self.w1[0],
+                )
+                + torch.einsum(
+                    "nyxbi,bio->nyxbo",
+                    x_real[
+                        :,
+                        total_modes - kept_modes : total_modes + kept_modes,
+                        :kept_modes,
+                    ],
+                    self.w1[1],
+                )
+                + self.b1[1]
             )
-            + torch.einsum(
-                "nyxbi,bio->nyxbo",
-                x_real[
-                    :, total_modes - kept_modes : total_modes + kept_modes, :kept_modes
-                ],
-                self.w1[1],
-            )
-            + self.b1[1]
         )
 
         o2[

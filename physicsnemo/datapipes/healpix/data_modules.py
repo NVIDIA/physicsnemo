@@ -950,7 +950,6 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         )
 
     def _get_coupled_vars(self):
-
         coupled_variables = []
         for d in self.couplings:
             coupled_variables = coupled_variables + d["params"]["variables"]

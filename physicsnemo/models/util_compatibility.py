@@ -21,7 +21,6 @@ def convert_ckp_apex(
     model_args: Dict[str, Any],
     model_dict: Dict[str, Any],
 ) -> Dict[str, Any]:
-
     """Utility for converting Apex GroupNorm-related keys in a checkpoint.
 
     This function modifies the checkpoint arguments and model dictionary
