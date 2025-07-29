@@ -134,6 +134,11 @@ exclude = ["examples", "physicsnemo/experimental"]
 # Ignore `S101` (assertions) in all `test` files.
 "test/*.py" = ["S101"]
 
+# ==== UV configuration ====
+[tool.uv]
+no-build-isolation-package = ["torch_scatter"]
+managed = false
+
 [project.entry-points."physicsnemo.models"]
 AFNO = "physicsnemo.models.afno:AFNO"
 DLWP = "physicsnemo.models.dlwp:DLWP"

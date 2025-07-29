@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ┌───────────────────────────────────────────┐
+# │            Hydra Configuration            │
+# └───────────────────────────────────────────┘
+
+hydra:
+  job:
+    chdir: true                                            # Change to output directory before running
+    name: moe                                              # Job name for output directory
+  run:
+    dir: ./outputs/${hydra:job.name}                       # Output directory for Hydra runs
+
+# ┌───────────────────────────────────────────┐
+# │            Data Preprocessing             │
+# └───────────────────────────────────────────┘  
+
+xmgn_data_dir: /code/mnabian/experts/data/xmeshgraphnet    # Directory containing XMeshGraphNet prediction files
+fignet_data_dir: /code/mnabian/experts/data/fignet         # Directory containing FigNet prediction files
+domino_data_dir: /code/mnabian/experts/data/domino         # Directory containing Domino prediction files
+validation_ids_csv: validation_ids.csv                     # CSV file containing validation set IDs
+preprocessed_data_dir: processed_vtps                      # Output directory for preprocessed VTP files
+
+# File naming patterns for each model's output files
+xmgn_filename_prefix: inference_mesh_                      # Prefix for XMeshGraphNet files
+fignet_filename_prefix: inference_mesh_                    # Prefix for FigNet files
+domino_filename_prefix: boundary_                          # Prefix for Domino files
+
+xmgn_filename_suffix: .vtp                                 # Suffix for XMeshGraphNet files
+fignet_filename_suffix: .vtp                               # Suffix for FigNet files
+domino_filename_suffix: _predicted.vtp                     # Suffix for Domino files
+
+# ┌───────────────────────────────────────────┐
+# │           Model Configuration             │
+# └───────────────────────────────────────────┘
+
+hidden_dim: 128                                            # Hidden dimension of the gating networks
+num_layers: 3                                              # Number of layers in the gating networks
+activation: relu                                           # Activation function (relu, tanh, sigmoid, etc.)
+num_experts: 3                                             # Number of expert models (XMeshGraphNet, FigNet, Domino)
+num_feature_per_expert_pressure: 1                         # Number of features per expert for pressure prediction
+num_feature_per_expert_shear: 3                            # Number of features per expert for shear stress prediction
+use_moe_bias: false                                        # Whether to use bias in the MoE output layer
+include_normals: true                                      # Whether to include surface normals as additional input features
+checkpoint_dir: checkpoints                                # Directory to save/load model checkpoints
+
+# ┌───────────────────────────────────────────┐
+# │          Training Configuration           │
+# └───────────────────────────────────────────┘
+
+lambda_entropy: 0.01                                       # Weight for entropy regularization (encourages expert diversity)
+batch_size: 1                                              # Batch size for training (code is only tested with batch size 1)
+num_epochs: 10                                             # Total number of training epochs
+start_lr: 0.001                                            # Initial learning rate
+end_lr: 0.000005                                           # Final learning rate (for cosine annealing)
+num_workers: 4                                             # Number of data loading workers
+prefetch_factor: 2                                         # Number of batches to prefetch in data loader
+use_amp: true                                              # Enable automatic mixed precision training
+
+# ┌───────────────────────────────────────────┐
+# │          Inference Configuration          │
+# └───────────────────────────────────────────┘
+
+output_dir: ./moe_inference_results                        # Output directory for inference results

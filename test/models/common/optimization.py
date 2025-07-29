@@ -204,6 +204,18 @@ def nop_backend(gm, inputs):
     return forward
 
 
+def torch_compile_model(
+    model: physicsnemo.Module, fullgraph: bool = True, error_on_recompile: bool = False
+) -> physicsnemo.Module:
+    backend = (
+        nop_backend  # for fast compilation for fx graph capture, use a nop backend
+    )
+    torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = error_on_recompile
+    model = torch.compile(model, backend=backend, fullgraph=fullgraph)
+    return model
+
+
 def validate_torch_compile(
     model: physicsnemo.Module,
     in_args: Tuple[Tensor] = (),
