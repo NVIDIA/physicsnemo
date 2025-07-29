@@ -19,7 +19,6 @@ from pytest_utils import import_or_fail
 
 @import_or_fail("cftime")
 def test_parse_int_list(pytestconfig):
-
     from physicsnemo.utils.diffusion import parse_int_list
 
     # Test parsing a simple comma-separated list

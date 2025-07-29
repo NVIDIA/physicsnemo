@@ -152,13 +152,16 @@ def download_from_url(
         with requests.get(url, stream=True, timeout=120) as r:
             r.raise_for_status()
             total_size = int(r.headers.get("content-length", 0))
-            with open(fpath, "wb") as f, tqdm(
-                desc=str(fpath),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar:
+            with (
+                open(fpath, "wb") as f,
+                tqdm(
+                    desc=str(fpath),
+                    total=total_size,
+                    unit="iB",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                ) as bar,
+            ):
                 for chunk in r.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
@@ -291,7 +294,6 @@ class HydroGraphDataset(DGLDataset):
         verbose: bool = False,
         return_physics: bool = False,
     ):
-
         if split not in {"train", "test"}:
             raise ValueError(f"Invalid split '{split}'. Expected 'train' or 'test'.")
 

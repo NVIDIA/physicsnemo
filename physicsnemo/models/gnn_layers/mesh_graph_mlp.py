@@ -56,7 +56,11 @@ class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
     @once_differentiable
     def backward(
         ctx, grad_output: torch.Tensor
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor],]:
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
         """backward pass of the SiLU + Linear function"""
 
         from nvfuser import FusionDefinition

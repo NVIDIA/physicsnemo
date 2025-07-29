@@ -437,7 +437,6 @@ class StaticCaptureTraining(_StaticCapture):
 
 
 class StaticCaptureEvaluateNoGrad(_StaticCapture):
-
     """An performance optimization decorator for PyTorch no grad evaluation.
 
     This class should be initialized as a decorator on a function that computes run the

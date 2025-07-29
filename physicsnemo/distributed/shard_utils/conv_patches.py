@@ -222,7 +222,6 @@ def compute_halo_configs_from_conv_args(
         )
 
         if halo_size > 0:
-
             # Create a halo config for this dimension
 
             halo_configs.append(

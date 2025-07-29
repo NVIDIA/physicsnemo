@@ -53,9 +53,9 @@ def test_config():
     group_sizes = {"channel_parallel": 3, "spatial_parallel": 2, "data_parallel": 4}
     config.set_leaf_group_sizes(group_sizes)  # Update all parent group sizes too
 
-    assert (
-        config.get_node("model_parallel").size == 6
-    ), "Incorrect size for 'model_parallel' parent node"
+    assert config.get_node("model_parallel").size == 6, (
+        "Incorrect size for 'model_parallel' parent node"
+    )
 
     assert config.get_node("world").size == 24, "Incorrect size for 'world' parent node"
 
@@ -91,7 +91,6 @@ def run_distributed_model_config(rank, model_parallel_size, verbose):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager._shared_state = {}
 
         DistributedManager.initialize()
@@ -104,13 +103,13 @@ def run_distributed_model_config(rank, model_parallel_size, verbose):
         group_sizes = {"model_parallel": 2, "data_parallel": 1}
         config.set_leaf_group_sizes(group_sizes)  # Updates all parent group sizes too
 
-        assert (
-            config.get_node("model_parallel").size == 2
-        ), "Incorrect size for 'model_parallel' parent node"
+        assert config.get_node("model_parallel").size == 2, (
+            "Incorrect size for 'model_parallel' parent node"
+        )
 
-        assert (
-            config.get_node("world").size == 2
-        ), "Incorrect size for 'world' parent node"
+        assert config.get_node("world").size == 2, (
+            "Incorrect size for 'world' parent node"
+        )
 
         # Create model parallel process group
         DistributedManager.create_groups_from_config(config, verbose=verbose)

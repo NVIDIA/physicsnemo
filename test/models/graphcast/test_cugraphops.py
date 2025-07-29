@@ -99,10 +99,10 @@ def test_cugraphops(
     x_grad_dgl = x_dgl.grad
 
     # Check that the results are the same
-    assert torch.allclose(
-        y_pred_dgl, y_pred, atol=1.0e-6
-    ), "testing DGL against cugraph-ops: outputs do not match!"
+    assert torch.allclose(y_pred_dgl, y_pred, atol=1.0e-6), (
+        "testing DGL against cugraph-ops: outputs do not match!"
+    )
 
-    assert torch.allclose(
-        x_grad_dgl, x_grad, atol=1.0e-4, rtol=1.0e-3
-    ), "testing DGL against cugraph-ops: gradients do not match!"
+    assert torch.allclose(x_grad_dgl, x_grad, atol=1.0e-4, rtol=1.0e-3), (
+        "testing DGL against cugraph-ops: gradients do not match!"
+    )

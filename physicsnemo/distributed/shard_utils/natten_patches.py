@@ -232,7 +232,6 @@ if natten_spec is not None:
         if all([type(_t) == torch.Tensor for _t in (q, k, v)]):
             return wrapped(*args, **kwargs)
         elif all([type(_t) == ShardTensor for _t in (q, k, v)]):
-
             return partial_na2d(q, k, v, kernel_size, dilation, base_func=wrapped)
 
         else:

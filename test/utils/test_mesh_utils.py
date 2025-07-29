@@ -179,7 +179,6 @@ def test_mesh_utils(tmp_path, pytestconfig):
 @import_or_fail(["warp", "skimage", "stl"])
 @pytest.mark.parametrize("backend", ["warp", "skimage"])
 def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
-
     from stl import mesh
 
     from physicsnemo.utils.mesh import (

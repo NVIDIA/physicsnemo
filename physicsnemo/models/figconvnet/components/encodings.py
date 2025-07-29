@@ -25,9 +25,9 @@ class SinusoidalEncoding(nn.Module):
 
     def __init__(self, num_channels: int, data_range: float = 2.0):
         super().__init__()
-        assert (
-            num_channels % 2 == 0
-        ), f"num_channels must be even for sin/cos, got {num_channels}"
+        assert num_channels % 2 == 0, (
+            f"num_channels must be even for sin/cos, got {num_channels}"
+        )
         self.num_channels = num_channels
         self.data_range = data_range
 

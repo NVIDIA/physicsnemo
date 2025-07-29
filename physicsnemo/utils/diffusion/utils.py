@@ -512,7 +512,7 @@ def list_dir_recursively_with_ignore(
 
 
 def copy_files_and_create_dirs(
-    files: List[Tuple[str, str]]
+    files: List[Tuple[str, str]],
 ) -> None:  # pragma: no cover
     """
     Takes in a list of tuples of (src, dst) paths and copies files.
@@ -575,9 +575,7 @@ try:
     nan_to_num = torch.nan_to_num  # 1.8.0a0
 except AttributeError:
 
-    def nan_to_num(
-        input, nan=0.0, posinf=None, neginf=None, *, out=None
-    ):  # pylint: disable=redefined-builtin  # pragma: no cover
+    def nan_to_num(input, nan=0.0, posinf=None, neginf=None, *, out=None):  # pylint: disable=redefined-builtin  # pragma: no cover
         """Replace NaN/Inf with specified numerical values"""
         if not isinstance(input, torch.Tensor):
             raise TypeError("input should be a Tensor")
@@ -637,13 +635,17 @@ def assert_shape(tensor, ref_shape):  # pragma: no cover
         if ref_size is None:
             pass
         elif isinstance(ref_size, torch.Tensor):
-            with suppress_tracer_warnings():  # as_tensor results are registered as constants
+            with (
+                suppress_tracer_warnings()
+            ):  # as_tensor results are registered as constants
                 symbolic_assert(
                     torch.equal(torch.as_tensor(size), ref_size),
                     f"Wrong size for dimension {idx}",
                 )
         elif isinstance(size, torch.Tensor):
-            with suppress_tracer_warnings():  # as_tensor results are registered as constants
+            with (
+                suppress_tracer_warnings()
+            ):  # as_tensor results are registered as constants
                 symbolic_assert(
                     torch.equal(size, torch.as_tensor(ref_size)),
                     f"Wrong size for dimension {idx}: expected {ref_size}",

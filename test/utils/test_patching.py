@@ -38,7 +38,6 @@ def test_grid_patching_2d(pytestconfig, device):
     ]
 
     for i, (H, W, H_p, W_p, overlap_pix, boundary_pix, P) in enumerate(test_cases):
-
         error_msg = f"Failed on {device} with test case {i}"
 
         patching = GridPatching2D(
@@ -106,9 +105,9 @@ def test_image_fuse_basic(pytestconfig, device):
         )
         assert fused_image.shape == (batch_size, 1, img_shape_y, img_shape_x)
         expected_output = input_tensor
-        assert torch.allclose(
-            fused_image, expected_output, atol=1e-5
-        ), "Output does not match expected output."
+        assert torch.allclose(fused_image, expected_output, atol=1e-5), (
+            "Output does not match expected output."
+        )
 
         # Make sure that image_fuse is differentiable
         loss = fused_image.sum()
@@ -138,9 +137,9 @@ def test_image_fuse_with_boundary(pytestconfig, device):
     expected_output = input_tensor[
         :, :, boundary_pix:-boundary_pix, boundary_pix:-boundary_pix
     ]
-    assert torch.allclose(
-        fused_image, expected_output, atol=1e-5
-    ), "Output with boundary does not match expected output."
+    assert torch.allclose(fused_image, expected_output, atol=1e-5), (
+        "Output with boundary does not match expected output."
+    )
 
     # Make sure that image_fuse is differentiable
     loss = fused_image.sum()
@@ -229,9 +228,9 @@ def test_image_batching_basic(pytestconfig, device):
     )
     assert batched_images.shape == (batch_size, 1, patch_shape_y, patch_shape_x)
     expected_output = input_tensor
-    assert torch.allclose(
-        batched_images, expected_output, atol=1e-5
-    ), "Batched images do not match expected output."
+    assert torch.allclose(batched_images, expected_output, atol=1e-5), (
+        "Batched images do not match expected output."
+    )
 
     # Make sure that image_batching is differentiable
     loss = batched_images.sum()
@@ -266,9 +265,9 @@ def test_image_batching_with_boundary(pytestconfig, device):
     )
 
     assert batched_images.shape == (1, 1, patch_shape_y, patch_shape_x)
-    assert torch.allclose(
-        batched_images, expected_output, atol=1e-5
-    ), "Batched images with boundary do not match expected output."
+    assert torch.allclose(batched_images, expected_output, atol=1e-5), (
+        "Batched images with boundary do not match expected output."
+    )
 
     # Make sure that image_batching is differentiable
     loss = batched_images.sum()
@@ -330,9 +329,9 @@ def test_image_batching_with_input_interp(device, pytestconfig):
             dim=1,
         )
 
-        assert torch.allclose(
-            batched_images, expected_output, atol=1e-5
-        ), "Batched images with input_interp do not match expected output."
+        assert torch.allclose(batched_images, expected_output, atol=1e-5), (
+            "Batched images with input_interp do not match expected output."
+        )
 
         # Make sure that image_batching is differentiable
         loss = batched_images.sum()

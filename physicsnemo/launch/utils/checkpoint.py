@@ -128,7 +128,7 @@ def _get_checkpoint_filename(
             file_idx.sort()
             # If we are saving index by 1 to get the next free file name
             if saving:
-                checkpoint_filename = checkpoint_filename + f".{file_idx[-1]+1}"
+                checkpoint_filename = checkpoint_filename + f".{file_idx[-1] + 1}"
             else:
                 checkpoint_filename = checkpoint_filename + f".{file_idx[-1]}"
             checkpoint_filename += file_extension
@@ -236,7 +236,7 @@ def save_checkpoint(
     # Only applicable to Posix filesystems ("file" protocol), not object stores.
     if protocol == "file" and not Path(path).is_dir():
         checkpoint_logging.warning(
-            f"Output directory {path} does not exist, will " "attempt to create"
+            f"Output directory {path} does not exist, will attempt to create"
         )
         Path(path).mkdir(parents=True, exist_ok=True)
 

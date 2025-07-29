@@ -163,7 +163,6 @@ def _to_new_shard_dim(
     current_dim: int,  # currently sharded on this tensor dimension
     target_dim: int,  # Want to be sharded on this tensor dimension
 ) -> torch.Tensor:
-
     # We're essentially transposing the tensor here.
     # We could implement this as an all_gather_v / scatter_v, but
     # it's more efficient to do an all_to_all.
@@ -484,7 +483,6 @@ class ShardRedistribute(torch.autograd.Function):
         ctx.async_op = async_op
 
         if current_spec.placements != placements:
-
             # We have to assume, here, that the current spec has correct sharding_shapes.
             # Therefore, we can use the target placement + current sharding_shapes
             # to get the target sharding sizes correctly.

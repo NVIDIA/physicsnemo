@@ -106,7 +106,6 @@ def scaling_double_dict():
 @import_or_fail("pandas")
 @import_or_fail("xarray")
 def test_ConstantCoupler(data_dir, dataset_name, scaling_dict, pytestconfig):
-
     from physicsnemo.datapipes.healpix.couplers import (
         ConstantCoupler,
     )
@@ -420,7 +419,6 @@ def test_TrailingAverageCoupler(data_dir, dataset_name, scaling_dict, pytestconf
 def test_CoupledTimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
@@ -531,7 +529,6 @@ def test_CoupledTimeSeriesDataset_initialization(
 def test_CoupledTimeSeriesDataset_get_constants(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.coupledtimeseries_dataset import (
         CoupledTimeSeriesDataset,
     )
@@ -843,7 +840,6 @@ def test_CoupledTimeSeriesDataset_get(
 def test_CoupledTimeSeriesDataModule_initialization(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )
@@ -952,7 +948,6 @@ def test_CoupledTimeSeriesDataModule_initialization(
 def test_CoupledTimeSeriesDataModule_get_constants(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )
@@ -1048,7 +1043,6 @@ def test_CoupledTimeSeriesDataModule_get_constants(
 def test_CoupledTimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules import (
         CoupledTimeSeriesDataModule,
     )

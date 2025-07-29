@@ -88,9 +88,9 @@ def get_pad3d(input_resolution, window_size):
     Pl, Lat, Lon = input_resolution
     win_pl, win_lat, win_lon = window_size
 
-    padding_left = (
-        padding_right
-    ) = padding_top = padding_bottom = padding_front = padding_back = 0
+    padding_left = padding_right = padding_top = padding_bottom = padding_front = (
+        padding_back
+    ) = 0
     pl_remainder = Pl % win_pl
     lat_remainder = Lat % win_lat
     lon_remainder = Lon % win_lon

@@ -57,9 +57,7 @@ class Module(torch.nn.Module):
     __model_checkpoint_version__ = (
         "0.1.0"  # Used for file versioning and is not the same as physicsnemo version
     )
-    __supported_model_checkpoint_version__ = (
-        {}
-    )  # Dict of supported model checkpoints and corresponding warnings messages
+    __supported_model_checkpoint_version__ = {}  # Dict of supported model checkpoints and corresponding warnings messages
 
     # __init__ arguments that can be overridden. By default all arguments are
     # protected. Subclasses can override this to allow for overriding of specific
@@ -175,7 +173,7 @@ class Module(torch.nn.Module):
         for key, value in override_args.items():
             if key not in cls._overridable_args:
                 raise ValueError(
-                    f"Argument '{key}' cannot be overridden for " f"{cls.__name__}."
+                    f"Argument '{key}' cannot be overridden for {cls.__name__}."
                 )
             # In this case we are not overriding, but we are adding a new arg
             if key not in args:

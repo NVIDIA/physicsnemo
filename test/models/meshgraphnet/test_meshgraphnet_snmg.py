@@ -219,9 +219,9 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
     diff = out_single_gpu_dist - out_multi_gpu
     diff = torch.abs(diff)
     mask = diff > atol
-    assert torch.allclose(
-        out_single_gpu_dist, out_multi_gpu, atol=atol, rtol=rtol
-    ), f"{mask.sum()} elements have diff > {atol} \n {out_single_gpu_dist[mask]} \n {out_multi_gpu[mask]}"
+    assert torch.allclose(out_single_gpu_dist, out_multi_gpu, atol=atol, rtol=rtol), (
+        f"{mask.sum()} elements have diff > {atol} \n {out_single_gpu_dist[mask]} \n {out_multi_gpu[mask]}"
+    )
 
     # compare data gradient
     nfeat_grad_single_gpu_dist = graph_multi_gpu.get_src_node_features_in_partition(
@@ -232,7 +232,9 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
     mask = diff > atol
     assert torch.allclose(
         nfeat_multi_gpu.grad, nfeat_grad_single_gpu_dist, atol=atol_w, rtol=rtol_w
-    ), f"{mask.sum()} elements have diff > {atol} \n {nfeat_grad_single_gpu_dist[mask]} \n {nfeat_multi_gpu.grad[mask]}"
+    ), (
+        f"{mask.sum()} elements have diff > {atol} \n {nfeat_grad_single_gpu_dist[mask]} \n {nfeat_multi_gpu.grad[mask]}"
+    )
 
     # compare model gradients (ensure correctness of backward)
     model_multi_gpu_parameters = list(model_multi_gpu.parameters())
@@ -245,7 +247,9 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
             model_multi_gpu_parameters[param_idx].grad,
             atol=atol_w,
             rtol=rtol_w,
-        ), f"{mask.sum()} for param[{param_idx}].grad elements have diff > {atol_w} with a avg. diff of {diff[mask].mean().item()} ({diff.mean().item()} overall)"
+        ), (
+            f"{mask.sum()} for param[{param_idx}].grad elements have diff > {atol_w} with a avg. diff of {diff[mask].mean().item()} ({diff.mean().item()} overall)"
+        )
 
     # cleanup distributed
     del os.environ["RANK"]
