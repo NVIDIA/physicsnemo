@@ -103,7 +103,7 @@ def loss_fn(
     num = torch.sum(mask * (output - target) ** 2.0, dims)
     if loss_type == "rmse":
         denom = torch.sum(mask * target**2.0, dims)
-        loss = torch.mean(torch.sqrt(num) / torch.sqrt(denom))
+        loss = torch.mean(torch.sqrt(num / denom))
     else:
         denom = torch.sum(mask)
         loss = torch.mean(num / denom)
