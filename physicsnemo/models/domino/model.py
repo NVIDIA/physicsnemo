@@ -368,7 +368,7 @@ class GeometryRep(nn.Module):
     def __init__(
         self,
         input_features: int,
-        radii,
+        radii: Sequence[float],
         neighbors_in_radius,
         hops=1,
         model_parameters=None,
