@@ -146,7 +146,7 @@ pre-commit install
 Once the above commands are executed, the pre-commit hooks will be activated and all
 the commits will be checked for appropriate formatting.
 
-### CI
+### Continuous Integration (CI)
 
 To ensure quality of the code, your merge request (MR) will pass through several CI checks.
 It is mandatory for your MRs to pass these pipelines to ensure a successful merge.
