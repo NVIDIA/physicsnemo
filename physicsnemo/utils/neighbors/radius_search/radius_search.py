@@ -18,8 +18,8 @@ from typing import Literal
 
 import torch
 
-from .torch_backend import radius_search_impl as radius_search_torch
-from .warp_backend import radius_search_impl as radius_search_warp
+from ._torch_impl import radius_search_impl as radius_search_torch
+from ._warp_impl import radius_search_impl as radius_search_warp
 
 
 def radius_search(
