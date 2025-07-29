@@ -149,7 +149,6 @@ def save_untrained_dlwp(path):
 @pytest.mark.parametrize("batch_size", [1, 4])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_dlwp(tmp_path, batch_size, device, dlwp_data_dir, pytestconfig):
-
     from physicsnemo.models.fcn_mip_plugin import dlwp
 
     package = save_untrained_dlwp(tmp_path)

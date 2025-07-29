@@ -105,11 +105,12 @@ def test_grad_checkpointing(device, pytestconfig, num_channels=2, res_h=15, res_
 
     # Compare the gradients
     for name in computed_grads:
-        torch.allclose(
-            computed_grads_checkpointed[name], computed_grads[name]
-        ), "Gradient do not match. Checkpointing failed!"
+        (
+            torch.allclose(computed_grads_checkpointed[name], computed_grads[name]),
+            "Gradient do not match. Checkpointing failed!",
+        )
 
     # Check that the results are the same
-    assert torch.allclose(
-        y_pred_checkpointed, y_pred
-    ), "Outputs do not match. Checkpointing failed!"
+    assert torch.allclose(y_pred_checkpointed, y_pred), (
+        "Outputs do not match. Checkpointing failed!"
+    )

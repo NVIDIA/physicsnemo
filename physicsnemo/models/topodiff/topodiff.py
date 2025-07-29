@@ -18,7 +18,6 @@
 Model architectures used in the paper Diffusion models beat gans on image synthesis".
 """
 
-
 from dataclasses import dataclass
 from typing import List
 
@@ -260,7 +259,6 @@ class UNetEncoder(Module):
         dropout=0,
         output_prob=False,
     ):
-
         super().__init__()
 
         self.in_channels = in_channels
@@ -284,7 +282,6 @@ class UNetEncoder(Module):
         for level, mult in enumerate(channel_mult):
             attention = ds in attention_resolutions
             for i in range(num_res_blocks):
-
                 down = i == num_res_blocks - 1 and level != len(channel_mult) - 1
 
                 layer = UNetBlock(

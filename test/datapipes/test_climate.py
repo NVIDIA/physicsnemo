@@ -70,6 +70,7 @@ datapipe_kwargs = dict(
     shuffle=False,
 )
 
+
 # Skip CPU tests because too slow
 @import_or_fail("netCDF4")
 @pytest.mark.parametrize("device", ["cuda:0"])
@@ -82,7 +83,6 @@ def test_climate_hdf5_constructor(
     device,
     pytestconfig,
 ):
-
     from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
     from physicsnemo.datapipes.climate.utils import invariant
 
@@ -91,7 +91,7 @@ def test_climate_hdf5_constructor(
         data_dir=data_dir,
         stats_files=stats_files,
         metadata_path=metadata_path,
-        **spec_kwargs
+        **spec_kwargs,
     )
     invariants = {
         "land_sea_mask": invariant.FileInvariant(lsm_filename, "lsm"),
@@ -113,13 +113,13 @@ def test_climate_hdf5_constructor(
             data_dir="/null_path",
             stats_files=stats_files,
             metadata_path=metadata_path,
-            **spec_kwargs
+            **spec_kwargs,
         )
         datapipe = ClimateDatapipe(
             [spec],
             invariants=invariants,
             device=torch.device(device),
-            **datapipe_kwargs
+            **datapipe_kwargs,
         )
         raise IOError("Failed to raise error given null data path")
     except IOError:
@@ -133,13 +133,13 @@ def test_climate_hdf5_constructor(
             data_dir=data_dir,
             stats_files={"mean": "/null_path", "std": "/null_path"},
             metadata_path=metadata_path,
-            **spec_kwargs
+            **spec_kwargs,
         )
         datapipe = ClimateDatapipe(
             [spec],
             invariants=invariants,
             device=torch.device(device),
-            **datapipe_kwargs
+            **datapipe_kwargs,
         )
         raise IOError("Failed to raise error given null stats path")
     except IOError:
@@ -151,13 +151,13 @@ def test_climate_hdf5_constructor(
             data_dir=data_dir,
             stats_files=stats_files,
             metadata_path=metadata_path,
-            **spec_kwargs
+            **spec_kwargs,
         )
         datapipe = ClimateDatapipe(
             [spec],
             invariants=invariants,
             device=torch.device(device),
-            **{**datapipe_kwargs, **{"num_samples_per_year": 5}}
+            **{**datapipe_kwargs, **{"num_samples_per_year": 5}},
         )
         raise ValueError("Failed to raise error given invalid num_samples_per_year")
     except ValueError:
@@ -169,13 +169,13 @@ def test_climate_hdf5_constructor(
             data_dir=data_dir,
             stats_files=stats_files,
             metadata_path=metadata_path,
-            **{**spec_kwargs, **{"channels": [1]}}
+            **{**spec_kwargs, **{"channels": [1]}},
         )
         datapipe = ClimateDatapipe(
             [spec],
             invariants=invariants,
             device=torch.device(device),
-            **{**datapipe_kwargs, **{"num_samples_per_year": 5}}
+            **{**datapipe_kwargs, **{"num_samples_per_year": 5}},
         )
         raise ValueError("Failed to raise error given invalid channel id")
     except ValueError:
@@ -193,7 +193,6 @@ def test_climate_hdf5_device(
     device,
     pytestconfig,
 ):
-
     from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
     from physicsnemo.datapipes.climate.utils import invariant
 
@@ -202,7 +201,7 @@ def test_climate_hdf5_device(
         data_dir=data_dir,
         stats_files=stats_files,
         metadata_path=metadata_path,
-        **spec_kwargs
+        **spec_kwargs,
     )
     invariants = {
         "land_sea_mask": invariant.FileInvariant(lsm_filename, "lsm"),
@@ -242,7 +241,6 @@ def test_climate_hdf5_shape(
     device,
     pytestconfig,
 ):
-
     from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
     from physicsnemo.datapipes.climate.utils import invariant
 
@@ -332,7 +330,6 @@ def test_era5_hdf5_sequence(
     device,
     pytestconfig,
 ):
-
     from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
     from physicsnemo.datapipes.climate.utils import invariant
 
@@ -385,7 +382,6 @@ def test_era5_hdf5_shuffle(
     device,
     pytestconfig,
 ):
-
     from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
     from physicsnemo.datapipes.climate.utils import invariant
 
@@ -437,7 +433,6 @@ def test_era5_hdf5_cudagraphs(
     metadata_path,
     pytestconfig,
 ):
-
     from physicsnemo.datapipes.climate import ClimateDatapipe, ClimateDataSourceSpec
     from physicsnemo.datapipes.climate.utils import invariant
 
@@ -450,7 +445,7 @@ def test_era5_hdf5_cudagraphs(
         data_dir=data_dir,
         stats_files=stats_files,
         metadata_path=metadata_path,
-        **spec_kwargs
+        **spec_kwargs,
     )
     invariants = {
         "land_sea_mask": invariant.FileInvariant(lsm_filename, "lsm"),

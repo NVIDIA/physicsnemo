@@ -31,7 +31,6 @@ def data_dir(nfs_data_dir):
 @import_or_fail(["vtk", "pyvista", "dgl"])
 @pytest.mark.parametrize("cache_graph", [True, False])
 def test_drivaernet_init(data_dir, cache_graph, tmp_path, pytestconfig):
-
     from physicsnemo.datapipes.gnn.drivaernet_dataset import DrivAerNetDataset
 
     cache_dir = tmp_path / "cache" if cache_graph else None

@@ -30,6 +30,6 @@ def test_coordinate_transform(latlon, pytestconfig):
     latlon = torch.tensor([latlon], dtype=torch.float)
     xyz = latlon2xyz(latlon)
     latlon_recovered = xyz2latlon(xyz)
-    assert torch.allclose(
-        latlon, latlon_recovered
-    ), f"coordinate transformation failed, {latlon} != {latlon_recovered}"
+    assert torch.allclose(latlon, latlon_recovered), (
+        f"coordinate transformation failed, {latlon} != {latlon_recovered}"
+    )

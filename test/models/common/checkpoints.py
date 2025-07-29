@@ -80,9 +80,9 @@ def validate_checkpoint(
         output_2 = model_2.forward(*in_args)
 
     # Model outputs should initially be different
-    assert not compare_output(
-        output_1, output_2, rtol, atol
-    ), "Model outputs should initially be different"
+    assert not compare_output(output_1, output_2, rtol, atol), (
+        "Model outputs should initially be different"
+    )
 
     # Save checkpoint from model 1 and load it into model 2
     model_1.save("checkpoint.mdlus")

@@ -165,7 +165,6 @@ def test_call_method_edm():
 
 
 def test_call_method_regressionloss():
-
     # With a fake network
 
     def fake_net(input, y_lr, augment_labels=None, force_fp32=False):
@@ -193,7 +192,6 @@ def test_call_method_regressionloss():
 # More realistic test with a UNet model
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionloss_with_unet(device):
-
     res, inc, outc = 64, 2, 3
     model = UNet(
         img_resolution=res,
@@ -422,7 +420,6 @@ def test_residualloss_call_method():
 # More realistic test with a UNet model
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_unet(device):
-
     res, inc, outc = 64, 2, 3
     N_pos = 2
     regression_model = UNet(

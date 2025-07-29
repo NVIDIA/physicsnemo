@@ -495,15 +495,15 @@ def partition_graph_with_matrix_decomposition(
             global_src_node_at_partition[src_node_indices] - node_offset
         )
         # fill the numbers of indices (edges), dst nodes and src nodes for each partition
-        graph_partition.num_indices_in_each_partition[
-            to_partition
-        ] = local_indices.size(0)
+        graph_partition.num_indices_in_each_partition[to_partition] = (
+            local_indices.size(0)
+        )
         graph_partition.num_dst_nodes_in_each_partition[to_partition] = (
             partition_book[to_partition + 1] - partition_book[to_partition]
         )
-        graph_partition.num_src_nodes_in_each_partition[
-            to_partition
-        ] = global_src_node_at_partition.size(0)
+        graph_partition.num_src_nodes_in_each_partition[to_partition] = (
+            global_src_node_at_partition.size(0)
+        )
 
         if to_partition == partition_rank:
             graph_partition.local_indices = inverse_indices

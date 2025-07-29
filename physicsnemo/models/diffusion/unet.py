@@ -257,7 +257,6 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
         force_fp32: bool = False,
         **model_kwargs: dict,
     ) -> torch.Tensor:
-
         # SR: concatenate input channels
         if img_lr is not None:
             x = torch.cat((x, img_lr), dim=1)
@@ -277,7 +276,7 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
 
         if (F_x.dtype != dtype) and not torch.is_autocast_enabled():
             raise ValueError(
-                f"Expected the dtype to be {dtype}, " f"but got {F_x.dtype} instead."
+                f"Expected the dtype to be {dtype}, but got {F_x.dtype} instead."
             )
 
         # skip connection

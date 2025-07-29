@@ -200,7 +200,6 @@ class Mesh_Reduced(torch.nn.Module):
         return x
 
     def decode(self, x, edge_features, graph, position_mesh, position_pivotal):
-
         nodes_index = torch.arange(graph.batch_size).to(x.device)
         if isinstance(graph, DGLGraph):
             batch_mesh = nodes_index.repeat_interleave(graph.batch_num_nodes())
