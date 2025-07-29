@@ -201,7 +201,8 @@ The pipeline has following stages:
     PhysicsNeMo uses `ruff check` via[Ruff](https://docs.astral.sh/ruff/) for
     linting of various types. Currently we use flake8/pycodestyle (`E`),
     Pyflakes (`F`), flake8-bandit (`S`), isort (`I`), and performance 'PERF'
-    rules with the isort rules being fixable.
+    rules. Many rule violations will be automatically fixed by Ruff; others may
+    require manual changes.
 
 4. `license`
     *Pre-commit will check this for you!*
