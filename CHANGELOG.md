@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   :warning: This is an experimental feature that can be accessed through the
   `physicsnemo.experimental` module; it might also be subjected to API changes
   without notice.
+- Bumped Ruff version from 0.0.290 to 0.12.5. Replaced Black with `ruff-format`.
 
 ### Changed
 
