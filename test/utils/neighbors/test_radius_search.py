@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.utils.neighbors import radius_search
-from physicsnemo.utils.neighbors.warp_backend import (
+from physicsnemo.utils.neighbors.radius_search._warp_impl import (
     radius_search_impl as radius_search_warp,
 )
 
