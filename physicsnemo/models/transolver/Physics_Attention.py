@@ -138,15 +138,16 @@ class Physics_Attention_Base(nn.Module):
 
         # Cast to the computation type (since the parameter is probably fp32)
         slice_weights = slice_weights.to(slice_projections.dtype)
-        # Average the slices over the token dimension
-        slice_norm = slice_weights.sum(2)  # [Batch, N_heads, Slice_num]
+
         # This does the projection of the latent space fx by the weights:
 
         # Computing the slice tokens is a matmul followed by a normalization.
         # It can, unfortunately, overflow in reduced precision, so normalize first:
-        slice_weights = slice_weights / (slice_norm[:, :, None, :] + 1e-2)
-        slice_token = torch.matmul(slice_weights.transpose(2, 3), fx)
+        slice_norm = slice_weights.sum(2)  # [Batch, N_heads, Slice_num]
+        normed_weights = slice_weights / (slice_norm[:, :, None, :] + 1e-2)
+        slice_token = torch.matmul(normed_weights.transpose(2, 3), fx)
 
+        # Return the original weights, not the normed weights:
         return slice_weights, slice_token
 
     def compute_slice_attention(self, slice_tokens: torch.Tensor) -> torch.Tensor:
@@ -260,6 +261,8 @@ class Physics_Attention_Base(nn.Module):
 
         # Deslice:
         outputs = self.project_attention_outputs(out_slice_token, slice_weights)
+
+        # print(f"outputs mean and shape: {outputs.mean()} and {outputs.shape}")
 
         # Outputs now has the same shape as the original input x
 
