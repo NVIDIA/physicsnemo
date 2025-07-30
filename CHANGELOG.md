@@ -63,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warnings are raised when attempting to use Apex group norm on CPU.
 - Diffusion utils: systematic compilation of patching operations in `stochastic_sampler`
   for improved performance.
+- Diffusion utils: patch-based inference and lead time support with deterministic sampler
 - CorrDiff example: added option for Student-t EDM (t-EDM) in `train.py` and
   `generate.py`. When training a CorrDiff diffusion model, this feature can be
   enabled with the hydra overrides `++training.hp.distribution=student_t` and
@@ -74,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrides `++training.hp.P_mean=<P_mean_value>` and
   `++training.hp.P_std=<P_std_value>` for training (and similar ones with
   `training.hp` replaced by `generation` for generation).
+- Diffusion utils: patch-based inference and lead time support with
+  deterministic sampler.
 
 ### Deprecated
 
