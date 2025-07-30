@@ -114,7 +114,6 @@ def test_mehsgraphnet_constructor(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
-
         from physicsnemo.models.meshgraphnet import MeshGraphNet
 
         for kw_args in arg_list:
@@ -147,7 +146,6 @@ def test_meshgraphnet_optims(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
-
         from physicsnemo.models.meshgraphnet import MeshGraphNet
 
         def setup_model():
@@ -193,7 +191,6 @@ def test_meshgraphnet_checkpoint(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
-
         from physicsnemo.models.meshgraphnet import MeshGraphNet
 
         # Construct MGN model
@@ -241,7 +238,6 @@ def test_meshgraphnet_deploy(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
-
         # Construct MGN model
         model = MeshGraphNet(
             input_dim_nodes=4,

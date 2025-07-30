@@ -40,9 +40,7 @@ dgl = pytest.importorskip("dgl")
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphkan_forward(device, pytestconfig):
-
     with modify_environment(PHYSICSNEMO_FORCE_TE="False"):
-
         from physicsnemo.models.meshgraphnet import MeshGraphKAN
 
         torch.manual_seed(0)
@@ -68,7 +66,6 @@ def test_meshgraphkan_forward(device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphkan_constructor(device, pytestconfig):
-
     arg_sets = [
         dict(
             input_dim_nodes=random.randint(2, 8),
@@ -97,7 +94,6 @@ def test_meshgraphkan_constructor(device, pytestconfig):
     ]
 
     with modify_environment(PHYSICSNEMO_FORCE_TE="False"):
-
         from physicsnemo.models.meshgraphnet import MeshGraphKAN
 
         for kw in arg_sets:
@@ -117,9 +113,7 @@ def test_meshgraphkan_constructor(device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphkan_optims(device, pytestconfig):
-
     with modify_environment(PHYSICSNEMO_FORCE_TE="False"):
-
         from physicsnemo.models.meshgraphnet import MeshGraphKAN
 
         def make_inputs():
@@ -146,7 +140,6 @@ def test_meshgraphkan_optims(device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphkan_checkpoint(device, pytestconfig):
-
     with modify_environment(PHYSICSNEMO_FORCE_TE="False"):
         from physicsnemo.models.meshgraphnet import MeshGraphKAN
 
@@ -164,7 +157,6 @@ def test_meshgraphkan_checkpoint(device, pytestconfig):
 @common.check_ort_version()
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphkan_deploy(device, pytestconfig):
-
     with modify_environment(PHYSICSNEMO_FORCE_TE="False"):
         from physicsnemo.models.meshgraphnet import MeshGraphKAN
 

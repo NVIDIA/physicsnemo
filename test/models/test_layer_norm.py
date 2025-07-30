@@ -78,12 +78,10 @@ def test_torch_fallback(monkeypatch):
 )
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_force_env(force_val, expected_type, device, pytestconfig):
-
     if device == "cpu":
         force_val = False
     # FORCE to no TE for CPU
     with modify_environment(PHYSICSNEMO_FORCE_TE=force_val):
-
         layer_norm = reload_layer_norm()
         ln = layer_norm.LayerNorm(8).to(device)
         if expected_type == "te":
@@ -131,7 +129,6 @@ def test_serialization(order, monkeypatch, pytestconfig):
         second = "false"  # force pytorch
 
     with tempfile.TemporaryDirectory() as tmpdir:
-
         # Force to use pytorch
         monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", first)
         layer_norm = reload_layer_norm()

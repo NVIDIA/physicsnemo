@@ -32,7 +32,6 @@ def ahmed_data_dir(nfs_data_dir):
 @import_or_fail(["sparse_dot_mkl", "dgl"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_bsms_mgn_forward(pytestconfig, device):
-
     torch.manual_seed(1)
 
     if device == "cpu":
@@ -41,7 +40,6 @@ def test_bsms_mgn_forward(pytestconfig, device):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
-
         from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
         from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
 
@@ -100,11 +98,9 @@ def test_bsms_mgn_forward(pytestconfig, device):
 
 @import_or_fail(["sparse_dot_mkl", "dgl"])
 def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
-
     TE_FORCE_VAL = False
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
-
         from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
         from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
         from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
