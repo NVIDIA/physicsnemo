@@ -22,7 +22,7 @@ the config.yaml file)
 """
 
 import math
-from typing import Callable, Literal
+from typing import Callable, Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -197,9 +197,7 @@ class GeoConvOut(nn.Module):
         self.num_modes = model_parameters.num_modes
 
         if self.fourier_features:
-            input_features_calculated = (
-                input_features * (1 + 2 * self.num_modes)
-            )
+            input_features_calculated = input_features * (1 + 2 * self.num_modes)
         else:
             input_features_calculated = input_features
 
@@ -235,7 +233,7 @@ class GeoConvOut(nn.Module):
         Returns:
             Processed geometry features of shape (batch_size, base_neurons_in, nx, ny, nz)
         """
-        
+
         batch_size = x.shape[0]
         nx, ny, nz = (
             self.grid_resolution[0],
@@ -1049,7 +1047,7 @@ class DoMINO(nn.Module):
                     2 * h,
                     2 * h,
                     4 * h,
-                    4 * h, 
+                    4 * h,
                 ],
                 num_conv_blocks=2,
                 kernel_size=3,
@@ -1136,7 +1134,9 @@ class DoMINO(nn.Module):
         base_layer_nn = model_parameters.nn_basis_functions.base_layer
         if self.output_features_surf is not None:
             self.nn_basis_surf = nn.ModuleList()
-            for _ in range(self.num_variables_surf):  # Have the same basis function for each variable
+            for _ in range(
+                self.num_variables_surf
+            ):  # Have the same basis function for each variable
                 self.nn_basis_surf.append(
                     NNBasisFunctions(
                         input_features=input_features_surface,
@@ -1146,7 +1146,9 @@ class DoMINO(nn.Module):
 
         if self.output_features_vol is not None:
             self.nn_basis_vol = nn.ModuleList()
-            for _ in range(self.num_variables_vol):  # Have the same basis function for each variable
+            for _ in range(
+                self.num_variables_vol
+            ):  # Have the same basis function for each variable
                 self.nn_basis_vol.append(
                     NNBasisFunctions(
                         input_features=input_features,
