@@ -24,28 +24,12 @@ from pytest_utils import import_or_fail, modify_environment
 from torch.testing import assert_close
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("aggregation", ["sum", "mean"])
 def test_mesh_node_block_dgl_pyg_equivalence(device, aggregation, pytestconfig):
     """Test that MeshNodeBlock produces equivalent outputs for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
-
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    # Set seeds for reproducibility.
-    torch.manual_seed(42)
-    dgl.seed(42)
-    np.random.seed(42)
-
-    # Test parameters.
-    num_nodes = 10
-    num_edges = 20
-    input_dim_nodes = 8
-    input_dim_edges = 8
-    output_dim = 8
-    hidden_dim = 10
 
     if device == "cpu":
         TE_FORCE_VAL = False
@@ -53,8 +37,23 @@ def test_mesh_node_block_dgl_pyg_equivalence(device, aggregation, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
 
         from physicsnemo.models.gnn_layers.mesh_node_block import MeshNodeBlock
+
+        # Set seeds for reproducibility.
+        torch.manual_seed(42)
+        dgl.seed(42)
+        np.random.seed(42)
+
+        # Test parameters.
+        num_nodes = 10
+        num_edges = 20
+        input_dim_nodes = 8
+        input_dim_edges = 8
+        output_dim = 8
+        hidden_dim = 10
 
         # Create MeshNodeBlock.
         node_block = MeshNodeBlock(
@@ -109,28 +108,11 @@ def test_mesh_node_block_dgl_pyg_equivalence(device, aggregation, pytestconfig):
         assert nfeat_pyg.shape == (num_nodes, output_dim)
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_mesh_node_block_gradient_equivalence(device, pytestconfig):
     """Test that MeshNodeBlock produces equivalent gradients for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
-
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.gnn_layers.mesh_node_block import MeshNodeBlock
-
-    # Set seeds for reproducibility.
-    torch.manual_seed(123)
-    dgl.seed(123)
-    np.random.seed(123)
-
-    # Test parameters.
-    num_nodes = 8
-    num_edges = 10
-    input_dim_nodes = 4
-    input_dim_edges = 4
-    output_dim = 4
 
     if device == "cpu":
         TE_FORCE_VAL = False
@@ -138,6 +120,22 @@ def test_mesh_node_block_gradient_equivalence(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.gnn_layers.mesh_node_block import MeshNodeBlock
+
+        # Set seeds for reproducibility.
+        torch.manual_seed(123)
+        dgl.seed(123)
+        np.random.seed(123)
+
+        # Test parameters.
+        num_nodes = 8
+        num_edges = 10
+        input_dim_nodes = 4
+        input_dim_edges = 4
+        output_dim = 4
 
         # Create identical MeshNodeBlocks.
         node_block_dgl = MeshNodeBlock(
@@ -219,26 +217,20 @@ def test_mesh_node_block_gradient_equivalence(device, pytestconfig):
         for (name_dgl, param_dgl), (name_pyg, param_pyg) in zip(
             node_block_dgl.named_parameters(), node_block_pyg.named_parameters()
         ):
-            assert (
-                name_dgl == name_pyg
-            ), f"Parameter names should match: {name_dgl} vs {name_pyg}"
+            assert name_dgl == name_pyg, (
+                f"Parameter names should match: {name_dgl} vs {name_pyg}"
+            )
             assert_close(
                 param_dgl.grad,
                 param_pyg.grad,
             )
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_mesh_node_block_batched_equivalence(device, pytestconfig):
     """Test that MeshNodeBlock produces equivalent outputs for batched DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
-
-    import dgl
-    from torch_geometric.data import Batch
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.gnn_layers.mesh_node_block import MeshNodeBlock
 
     if device == "cpu":
         TE_FORCE_VAL = False
@@ -246,6 +238,11 @@ def test_mesh_node_block_batched_equivalence(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Batch
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.gnn_layers.mesh_node_block import MeshNodeBlock
 
         # Set seeds for reproducibility.
         torch.manual_seed(456)
@@ -324,24 +321,11 @@ def test_mesh_node_block_batched_equivalence(device, pytestconfig):
         assert nfeat_pyg.shape == (total_nodes, output_dim)
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_mesh_edge_block_dgl_pyg_equivalence(device, pytestconfig):
     """Test that MeshEdgeBlock produces equivalent outputs for DGL and PyG inputs."""
     # (DGL2PYG): remove this once DGL is removed.
-
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
-
-    # Test parameters.
-    num_nodes = 10
-    num_edges = 20
-    input_dim_nodes = 8
-    input_dim_edges = 8
-    output_dim = 8
-    hidden_dim = 10
 
     if device == "cpu":
         TE_FORCE_VAL = False
@@ -349,6 +333,18 @@ def test_mesh_edge_block_dgl_pyg_equivalence(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
+
+        # Test parameters.
+        num_nodes = 10
+        num_edges = 20
+        input_dim_nodes = 8
+        input_dim_edges = 8
+        output_dim = 8
+        hidden_dim = 10
 
         # Create MeshEdgeBlock.
         edge_block = MeshEdgeBlock(
@@ -388,23 +384,11 @@ def test_mesh_edge_block_dgl_pyg_equivalence(device, pytestconfig):
         assert nfeat_dgl.shape == (num_nodes, input_dim_nodes)
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_mesh_edge_block_gradient_equivalence(device, pytestconfig):
     """Test that gradients are equivalent between DGL and PyG versions of MeshEdgeBlock."""
     # (DGL2PYG): remove this once DGL is removed.
-
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
-
-    # Test parameters.
-    num_nodes = 8
-    num_edges = 12
-    input_dim_nodes = 6
-    input_dim_edges = 6
-    output_dim = 6
 
     if device == "cpu":
         TE_FORCE_VAL = False
@@ -412,6 +396,17 @@ def test_mesh_edge_block_gradient_equivalence(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
+
+        # Test parameters.
+        num_nodes = 8
+        num_edges = 12
+        input_dim_nodes = 6
+        input_dim_edges = 6
+        output_dim = 6
 
         # Create identical MeshEdgeBlocks.
         torch.manual_seed(42)
@@ -478,16 +473,16 @@ def test_mesh_edge_block_gradient_equivalence(device, pytestconfig):
         for (name_dgl, param_dgl), (name_pyg, param_pyg) in zip(
             edge_block_dgl.named_parameters(), edge_block_pyg.named_parameters()
         ):
-            assert (
-                name_dgl == name_pyg
-            ), f"Parameter names should match: {name_dgl} vs {name_pyg}"
+            assert name_dgl == name_pyg, (
+                f"Parameter names should match: {name_dgl} vs {name_pyg}"
+            )
             assert_close(
                 param_dgl.grad,
                 param_pyg.grad,
             )
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("do_concat_trick", [False, True])
 def test_mesh_edge_block_concat_trick_equivalence(
@@ -496,24 +491,23 @@ def test_mesh_edge_block_concat_trick_equivalence(
     """Test that MeshEdgeBlock produces equivalent outputs with and without concat trick."""
     # (DGL2PYG): remove this once DGL is removed.
 
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
-
-    # Test parameters.
-    num_nodes = 8
-    num_edges = 15
-    input_dim_nodes = 6
-    input_dim_edges = 6
-    output_dim = 6
-
     if device == "cpu":
         TE_FORCE_VAL = False
     else:
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
+
+        # Test parameters.
+        num_nodes = 8
+        num_edges = 15
+        input_dim_nodes = 6
+        input_dim_edges = 6
+        output_dim = 6
 
         # Create MeshEdgeBlock with concat trick setting.
         edge_block = MeshEdgeBlock(
@@ -559,18 +553,17 @@ def test_mesh_edge_block_batched_equivalence(device, pytestconfig):
     """Test that MeshEdgeBlock produces equivalent outputs for batched DGL and PyG inputs."""
     # (DGL2PYG): remove this once DGL is removed.
 
-    import dgl
-    from torch_geometric.data import Batch
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
-
     if device == "cpu":
         TE_FORCE_VAL = False
     else:
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Batch
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
 
         # Test parameters.
         batch_size = 2
@@ -649,16 +642,11 @@ def test_mesh_edge_block_batched_equivalence(device, pytestconfig):
         assert nfeat_dgl.shape == (expected_num_nodes, input_dim_nodes)
 
 
-@import_or_fail(["dgl", "torch_geometric", "torch_scatter"])
+@import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_meshgraphnet_dgl_pyg_equivalence(device, pytestconfig):
     """Test that MeshGraphNet produces equivalent outputs for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
-
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     if device == "cpu":
         TE_FORCE_VAL = False
@@ -666,6 +654,10 @@ def test_meshgraphnet_dgl_pyg_equivalence(device, pytestconfig):
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.meshgraphnet import MeshGraphNet
 
         # Set seeds for reproducibility.
         torch.manual_seed(42)
@@ -731,29 +723,28 @@ def test_meshgraphnet_gradient_equivalence(device, pytestconfig):
     """Test that MeshGraphNet produces equivalent gradients for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
-    import dgl
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.meshgraphnet import MeshGraphNet
-
-    # Set seeds for reproducibility.
-    torch.manual_seed(123)
-    dgl.seed(123)
-    np.random.seed(123)
-
-    # Test parameters.
-    num_nodes = 8
-    num_edges = 15
-    input_dim_nodes = 4
-    input_dim_edges = 3
-    output_dim = 2
-
     if device == "cpu":
         TE_FORCE_VAL = False
     else:
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.meshgraphnet import MeshGraphNet
+
+        # Set seeds for reproducibility.
+        torch.manual_seed(123)
+        dgl.seed(123)
+        np.random.seed(123)
+
+        # Test parameters.
+        num_nodes = 8
+        num_edges = 15
+        input_dim_nodes = 4
+        input_dim_edges = 3
+        output_dim = 2
 
         # Create identical MeshGraphNets.
         model_dgl = MeshGraphNet(
@@ -835,9 +826,9 @@ def test_meshgraphnet_gradient_equivalence(device, pytestconfig):
         for (name_dgl, param_dgl), (name_pyg, param_pyg) in zip(
             model_dgl.named_parameters(), model_pyg.named_parameters()
         ):
-            assert (
-                name_dgl == name_pyg
-            ), f"Parameter names should match: {name_dgl} vs {name_pyg}"
+            assert name_dgl == name_pyg, (
+                f"Parameter names should match: {name_dgl} vs {name_pyg}"
+            )
             assert_close(param_dgl.grad, param_pyg.grad)
 
 
@@ -847,18 +838,17 @@ def test_meshgraphnet_batched_equivalence(device, pytestconfig):
     """Test that MeshGraphNet produces equivalent outputs for batched DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
-    import dgl
-    from torch_geometric.data import Batch
-    from torch_geometric.data import Data as PyGData
-
-    from physicsnemo.models.meshgraphnet import MeshGraphNet
-
     if device == "cpu":
         TE_FORCE_VAL = False
     else:
         TE_FORCE_VAL = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
 
     with modify_environment(PHYSICSNEMO_FORCE_TE=TE_FORCE_VAL):
+        import dgl
+        from torch_geometric.data import Batch
+        from torch_geometric.data import Data as PyGData
+
+        from physicsnemo.models.meshgraphnet import MeshGraphNet
 
         # Set seeds for reproducibility.
         torch.manual_seed(42)

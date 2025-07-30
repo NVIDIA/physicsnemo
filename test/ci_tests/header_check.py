@@ -108,8 +108,8 @@ def get_committed_files():
     git_executable = shutil.which("git")
     if not git_executable:
         raise RuntimeError("git executable not found in PATH")
-    result = subprocess.run(
-        [git_executable, "diff", "--name-only", "--cached"],  # noqa: S603
+    result = subprocess.run(  # noqa: S603
+        [git_executable, "diff", "--name-only", "--cached"],
         capture_output=True,
         text=True,
     )

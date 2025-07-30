@@ -278,7 +278,6 @@ class Profiler(metaclass=_Profiler_Singleton):
         return self._deferred_or_immediate_decoration(fn)
 
     def _deferred_or_immediate_decoration(self, func):
-
         if self.initialized:
             return self._decorate_function(func)
         else:
@@ -307,7 +306,6 @@ class Profiler(metaclass=_Profiler_Singleton):
         # )
 
         if "." in func.__qualname__:
-
             qualname_parts = func.__qualname__.split(".")
             # If the object is local, it's annoying.
             # Best we can do is update references in the module

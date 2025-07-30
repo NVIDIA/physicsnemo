@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Preconditioning schemes used in the paper"Elucidating the Design Space of 
+Preconditioning schemes used in the paper"Elucidating the Design Space of
 Diffusion-Based Generative Models".
 """
 

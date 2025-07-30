@@ -103,10 +103,14 @@ def loss_fn(
     num = torch.sum(mask * (output - target) ** 2.0, dims)
     if loss_type == "rmse":
         denom = torch.sum(mask * target**2.0, dims)
-    else:
+        loss = torch.mean(torch.sqrt(num / denom))
+    elif loss_type == "mse":
         denom = torch.sum(mask)
+        loss = torch.mean(num / denom)
+    else:
+        raise ValueError(f"Invalid loss type: {loss_type}")
 
-    return torch.mean(num / denom)
+    return loss
 
 
 def loss_fn_surface(
@@ -321,10 +325,10 @@ def compute_loss_dict(
             loss_surf = loss_surf * surf_loss_scaling
             loss_surf_area = loss_surf_area * surf_loss_scaling
 
-        total_loss_terms.append(0.5 * loss_surf)
-        loss_dict["loss_surf"] = 0.5 * loss_surf
-        total_loss_terms.append(0.5 * loss_surf_area)
-        loss_dict["loss_surf_area"] = 0.5 * loss_surf_area
+        total_loss_terms.append(loss_surf)
+        loss_dict["loss_surf"] = loss_surf
+        total_loss_terms.append(loss_surf_area)
+        loss_dict["loss_surf_area"] = loss_surf_area
         loss_integral = (
             integral_loss_fn(
                 prediction_surf,
@@ -486,7 +490,7 @@ def main(cfg: DictConfig) -> None:
 
     compute_scaling_factors(
         cfg=cfg,
-        input_path=cfg.data_processor.output_dir,
+        input_path=cfg.data.input_dir,
         use_cache=cfg.data_processor.use_cache,
     )
     model_type = cfg.model.model_type
@@ -615,7 +619,7 @@ def main(cfg: DictConfig) -> None:
     # optimizer = apex.optimizers.FusedAdam(model.parameters(), lr=0.001)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=[100, 200, 300, 400, 500, 600, 700, 800], gamma=0.5
+        optimizer, milestones=[50, 100, 200, 250, 300, 350, 400, 450], gamma=0.5
     )
 
     # Initialize the scaler for mixed precision

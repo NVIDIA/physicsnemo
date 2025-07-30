@@ -58,7 +58,6 @@ def run_consecutive_reductions(
     ):
 
         def two_reduction_operation(output, target):
-
             mask = target > 0.0
 
             num = torch.sum(mask * (output - target) ** 2.0, (1,))
@@ -107,7 +106,6 @@ def run_consecutive_reductions(
 def run_shard_tensor_reduction(
     rank, num_gpus, mesh_names, mesh_sizes, op, backward, dim, in_place, verbose
 ):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{num_gpus}",
@@ -256,7 +254,6 @@ def test_shard_tensor_reduction(op, backward, dim, in_place):
 
 @pytest.mark.multigpu
 def test_consecutive_reductions():
-
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
 

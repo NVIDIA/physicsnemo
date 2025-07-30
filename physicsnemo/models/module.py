@@ -57,9 +57,7 @@ class Module(torch.nn.Module):
     __model_checkpoint_version__ = (
         "0.1.0"  # Used for file versioning and is not the same as physicsnemo version
     )
-    __supported_model_checkpoint_version__ = (
-        {}
-    )  # Dict of supported model checkpoints and corresponding warnings messages
+    __supported_model_checkpoint_version__ = {}  # Dict of supported model checkpoints and corresponding warnings messages
 
     # __init__ arguments that can be overridden. By default all arguments are
     # protected. Subclasses can override this to allow for overriding of specific
@@ -175,7 +173,7 @@ class Module(torch.nn.Module):
         for key, value in override_args.items():
             if key not in cls._overridable_args:
                 raise ValueError(
-                    f"Argument '{key}' cannot be overridden for " f"{cls.__name__}."
+                    f"Argument '{key}' cannot be overridden for {cls.__name__}."
                 )
             # In this case we are not overriding, but we are adding a new arg
             if key not in args:
@@ -359,18 +357,12 @@ class Module(torch.nn.Module):
             fs.put(str(local_path / "model.tar"), file_name)
 
     @staticmethod
-    def _check_checkpoint(local_path: str) -> bool:
-        if not local_path.joinpath("args.json").exists():
-            raise IOError("File 'args.json' not found in checkpoint")
-
-        if not local_path.joinpath("metadata.json").exists():
-            raise IOError("File 'metadata.json' not found in checkpoint")
-
-        if not local_path.joinpath("model.pt").exists():
-            raise IOError("Model weights 'model.pt' not found in checkpoint")
-
-        if not local_path.joinpath("metadata.json").exists():
-            raise IOError("Metadata 'metadata.json' not found in checkpoint")
+    def _check_checkpoint(local_path: Path | str) -> None:
+        local_path = Path(local_path)
+        expected_files = ["args.json", "metadata.json", "model.pt"]
+        for file in expected_files:
+            if not (local_path / file).exists():
+                raise IOError(f"File '{file}' not found in checkpoint")
 
     def load(
         self,
@@ -413,8 +405,7 @@ class Module(torch.nn.Module):
                 )
                 if "filter" in tar.extractall.__code__.co_varnames:
                     extract_kwargs["filter"] = "data"
-
-                tar.extractall(**extract_kwargs)
+                tar.extractall(**extract_kwargs)  # noqa: S202
 
             # Check if the checkpoint is valid
             Module._check_checkpoint(local_path)
@@ -483,7 +474,7 @@ class Module(torch.nn.Module):
                 )
                 if "filter" in tar.extractall.__code__.co_varnames:
                     extract_kwargs["filter"] = "data"
-                tar.extractall(**extract_kwargs)
+                tar.extractall(**extract_kwargs)  # noqa: S202
 
             # Check if the checkpoint is valid
             Module._check_checkpoint(local_path)

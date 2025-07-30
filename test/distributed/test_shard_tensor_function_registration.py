@@ -102,7 +102,6 @@ def setup_registry():
 
 @pytest.fixture(scope="module")
 def device_mesh():
-
     with modify_environment(
         RANK="0",
         WORLD_SIZE="1",
@@ -131,12 +130,12 @@ def test_function_registration_with_tensors(setup_registry):
 
     # Verify result and execution path
     assert torch.all(result == 2)
-    assert (
-        len(torch_function_paths) == 0
-    ), "Regular tensors should not trigger our wrapper"
-    assert (
-        len(torch_dispatch_paths) == 0
-    ), "Regular tensors should not trigger our wrapper"
+    assert len(torch_function_paths) == 0, (
+        "Regular tensors should not trigger our wrapper"
+    )
+    assert len(torch_dispatch_paths) == 0, (
+        "Regular tensors should not trigger our wrapper"
+    )
 
 
 def test_function_registration_with_shard_tensors(setup_registry, device_mesh):
@@ -150,12 +149,12 @@ def test_function_registration_with_shard_tensors(setup_registry, device_mesh):
     # Verify result and execution path
     assert isinstance(result, ShardTensor)
     assert torch.all(result.to_local() == 2)
-    assert torch_function_paths == [
-        "mul_wrapper"
-    ], "ShardTensors should trigger our wrapper"
-    assert (
-        len(torch_dispatch_paths) == 0
-    ), "torch_function intercepts should not trigger dispatch intercepts"
+    assert torch_function_paths == ["mul_wrapper"], (
+        "ShardTensors should trigger our wrapper"
+    )
+    assert len(torch_dispatch_paths) == 0, (
+        "torch_function intercepts should not trigger dispatch intercepts"
+    )
 
 
 def test_dispatch_registration_with_tensors(setup_registry):
@@ -168,12 +167,12 @@ def test_dispatch_registration_with_tensors(setup_registry):
 
     # Verify result
     assert torch.all(result == 3)
-    assert (
-        len(torch_dispatch_paths) == 0
-    ), "Regular tensors should not trigger our wrapper"
-    assert (
-        len(torch_function_paths) == 0
-    ), "Regular tensors should not trigger our wrapper"
+    assert len(torch_dispatch_paths) == 0, (
+        "Regular tensors should not trigger our wrapper"
+    )
+    assert len(torch_function_paths) == 0, (
+        "Regular tensors should not trigger our wrapper"
+    )
 
 
 def test_dispatch_registration_with_shard_tensors(setup_registry, device_mesh):
@@ -187,9 +186,9 @@ def test_dispatch_registration_with_shard_tensors(setup_registry, device_mesh):
     # Verify result and execution path
     assert isinstance(result, ShardTensor)
     assert torch.all(result.to_local() == 3)
-    assert torch_dispatch_paths == [
-        "add_wrapper"
-    ], "ShardTensors should trigger our wrapper"
-    assert (
-        len(torch_function_paths) == 0
-    ), "torch_dispatch intercepts should not trigger torch_function intercepts"
+    assert torch_dispatch_paths == ["add_wrapper"], (
+        "ShardTensors should trigger our wrapper"
+    )
+    assert len(torch_function_paths) == 0, (
+        "torch_dispatch intercepts should not trigger torch_function intercepts"
+    )

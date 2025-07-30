@@ -104,12 +104,11 @@ def ring_ball_query(
 
     # For the output shapes, we can compute the output sharding if needed.  If the placement
     # is Replicate, just infer since there aren't shardings.
-    if type(points1._spec.placements[0]) == Replicate:
+    if isinstance(points1._spec.placements[0], Replicate):
         map_shard_shapes = "infer"
         neighbors_shard_shapes = "infer"
         outputs_shard_shapes = "infer"
-    elif type(points1._spec.placements[0]) == Shard:
-
+    elif isinstance(points1._spec.placements[0], Shard):
         p1_shard_sizes = points1._spec.sharding_shapes()[0]
 
         # This conversion to shard tensor can be done explicitly computing the output shapes.
@@ -273,7 +272,6 @@ def merge_outputs(
 
         # Now, copy the incoming neighbors to offset locations in the current tensor:
         for i in range(neighbors_to_add):
-
             # incoming has no offset
             # current has offset of num_neighbors
             current_m[0, tid, num_neighbors + i] = incoming_m[0, tid, i]
@@ -385,7 +383,6 @@ class RingBallQuery(torch.autograd.Function):
         ctx.hash_grid = bq_kwargs["hash_grid"]
 
         for i in range(world_size):
-
             source_rank = (mesh_rank - i) % world_size
 
             (
@@ -516,7 +513,6 @@ class GradReducer(torch.autograd.Function):
         ctx: torch.autograd.function.FunctionCtx,
         grad_output: torch.Tensor,
     ) -> torch.Tensor:
-
         spec = ctx.spec
         placement = spec.placements[0]
         # Perform an allreduce on the gradient

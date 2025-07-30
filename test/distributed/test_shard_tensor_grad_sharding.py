@@ -114,7 +114,6 @@ def test_shard_tensor_detach(data_parallel_size, domain_H, domain_W, uneven):
 def run_shard_tensor_input_gradient_full_loss(
     rank, num_gpus, mesh_names, mesh_sizes, uneven, verbose
 ):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{num_gpus}",
@@ -220,7 +219,6 @@ def test_shard_tensor_input_gradient_full_loss(
 def run_shard_tensor_input_gradient_local_loss(
     rank, num_gpus, mesh_names, mesh_sizes, uneven, verbose
 ):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{num_gpus}",
@@ -228,7 +226,6 @@ def run_shard_tensor_input_gradient_local_loss(
         MASTER_PORT=str(13245),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         init_dist(rank, num_gpus)
         shard_tensor = shard_tensor_factory(
             mesh_names, mesh_sizes, requires_grad=True, uneven=uneven

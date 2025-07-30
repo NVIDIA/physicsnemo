@@ -207,9 +207,7 @@ def test_WeightedMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
     )
 
     # test for individual channel loss
-    error = weighted_mse_func(
-        pred_tensor**2, targ_tensor**2, average_channels=False
-    )
+    error = weighted_mse_func(pred_tensor**2, targ_tensor**2, average_channels=False)
     assert torch.allclose(
         error,
         channel_weighted_mse,

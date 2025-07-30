@@ -41,14 +41,12 @@ from physicsnemo.distributed import DistributedManager
 
 
 def init_dist(rank, num_gpus):
-
     DistributedManager.initialize()
     dm = DistributedManager()
     assert dm.is_initialized()
 
 
 def init_global_shape_and_placements(mesh_names):
-
     dm = DistributedManager()
 
     global_mesh = dm.global_mesh
@@ -179,7 +177,6 @@ def run_shard_tensor_initialization_from_all_dtensor(
 def run_shard_tensor_initialization_from_local_chunks(
     rank, num_gpus, mesh_names, mesh_sizes, verbose
 ):
-
     # Here, we create local shards and combine into a shard tensor.
     # This test is allowed to go a little wild: the shapes for the local tensors
     # are allowed to be randomly generated along the first shard axis.

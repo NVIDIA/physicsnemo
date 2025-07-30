@@ -184,15 +184,12 @@ def main(cfg: DictConfig) -> None:
 
     # Partially instantiate the sampler based on the configs
     if cfg.sampler.type == "deterministic":
-        if cfg.generation.hr_mean_conditioning:
-            raise NotImplementedError(
-                "High-res mean conditioning is not yet implemented for the deterministic sampler"
-            )
         sampler_fn = partial(
             deterministic_sampler,
             num_steps=cfg.sampler.num_steps,
             # num_ensembles=cfg.generation.num_ensembles,
             solver=cfg.sampler.solver,
+            patching=patching,
         )
     elif cfg.sampler.type == "stochastic":
         sampler_fn = partial(stochastic_sampler, patching=patching)

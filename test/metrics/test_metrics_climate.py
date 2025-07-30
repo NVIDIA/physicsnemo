@@ -250,7 +250,6 @@ def test_climate_reductions(test_data, device, rtol: float = 1e-3, atol: float =
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_climate_efi(test_data, device, rtol: float = 1e-1, atol: float = 1e-1):
-
     one = torch.ones((1, 1), dtype=torch.float32, device=device)
     bin_edges = hist.linspace(-10 * one, 10 * one, 30)
     bin_mids = 0.5 * bin_edges[1:] + 0.5 * bin_edges[:-1]

@@ -39,16 +39,15 @@ def test_manager():
         MASTER_PORT=str(12355),
         LOCAL_RANK="0",
     ):
-
         DistributedManager.initialize()
         print(DistributedManager())
 
         manager = DistributedManager()
 
         assert manager.is_initialized()
-        assert (
-            manager.distributed == torch.distributed.is_available()
-        ), "Manager should be in serial mode"
+        assert manager.distributed == torch.distributed.is_available(), (
+            "Manager should be in serial mode"
+        )
         assert manager.rank == 0
         assert manager.world_size == 1
         assert manager.local_rank == 0
@@ -57,7 +56,6 @@ def test_manager():
 
 
 def test_manager_slurm():
-
     # Test distributed manager with Slurm variables
     with modify_environment(
         MASTER_ADDR="localhost",
@@ -79,7 +77,6 @@ def test_manager_slurm():
 
 
 def test_manager_ompi():
-
     with modify_environment(
         MASTER_ADDR="localhost",
         MASTER_PORT="12345",
@@ -108,7 +105,6 @@ def test_manager_specified_initialization():
         WORLD_SIZE="1",
         LOCAL_RANK="0",
     ):
-
         with modify_environment(
             SLURM_PROCID="0",
             SLURM_NPROCS="1",
@@ -124,9 +120,9 @@ def test_manager_specified_initialization():
             manager = DistributedManager()
             assert manager.is_initialized()
             assert manager._initialization_method == "slurm"
-            assert (
-                manager.distributed == torch.distributed.is_available()
-            ), "Manager should be in serial mode"
+            assert manager.distributed == torch.distributed.is_available(), (
+                "Manager should be in serial mode"
+            )
             assert manager.rank == 0
             assert manager.world_size == 1
             assert manager.local_rank == 0
@@ -144,9 +140,9 @@ def test_manager_specified_initialization():
             manager = DistributedManager()
             assert manager.is_initialized()
             assert manager._initialization_method == "openmpi"
-            assert (
-                manager.distributed == torch.distributed.is_available()
-            ), "Manager should be in serial mode"
+            assert manager.distributed == torch.distributed.is_available(), (
+                "Manager should be in serial mode"
+            )
             assert manager.rank == 0
             assert manager.world_size == 1
             assert manager.local_rank == 0
@@ -162,7 +158,6 @@ def test_manager_singleton():
         WORLD_SIZE="1",
         LOCAL_RANK="0",
     ):
-
         DistributedManager.initialize()
 
         manager_1 = DistributedManager()
@@ -195,7 +190,6 @@ def test_manager_uninitialized_instantiation():
         WORLD_SIZE="1",
         LOCAL_RANK="0",
     ):
-
         assert not DistributedManager.is_initialized()
 
         with pytest.raises(PhysicsNeMoUninitializedDistributedManagerWarning):
@@ -212,7 +206,6 @@ def test_manager_undefined_group_query():
         WORLD_SIZE="1",
         LOCAL_RANK="0",
     ):
-
         DistributedManager.initialize()
 
         manager = DistributedManager()
@@ -238,7 +231,6 @@ def test_manager_single_process_subgroups():
         MASTER_PORT=str(12375),
         LOCAL_RANK="0",
     ):
-
         DistributedManager.initialize()
 
         verbose = False
@@ -269,7 +261,6 @@ def run_process_groups(rank, model_parallel_size, verbose):
         MASTER_PORT=str(12365),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager.initialize()
 
         # Create model parallel process group
@@ -315,7 +306,6 @@ def run_process_groups_from_config(rank, model_parallel_size, verbose):
         MASTER_ADDR="localhost",
         MASTER_PORT="13246",
     ):
-
         DistributedManager.initialize()
         dm = DistributedManager()
         assert dm.is_initialized()
@@ -342,13 +332,13 @@ def run_process_groups_from_config(rank, model_parallel_size, verbose):
         }
         config.set_leaf_group_sizes(group_sizes)  # Updates all parent group sizes too
 
-        assert (
-            config.get_node("model_parallel").size == model_parallel_size
-        ), "Incorrect size for 'model_parallel' parent node"
+        assert config.get_node("model_parallel").size == model_parallel_size, (
+            "Incorrect size for 'model_parallel' parent node"
+        )
 
-        assert (
-            config.get_node("world").size == model_parallel_size
-        ), "Incorrect size for 'world' parent node"
+        assert config.get_node("world").size == model_parallel_size, (
+            "Incorrect size for 'world' parent node"
+        )
 
         # Create model parallel process group
         DistributedManager.create_groups_from_config(config, verbose=verbose)

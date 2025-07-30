@@ -24,7 +24,6 @@ from physicsnemo.distributed.fft import DistributedRFFT2
 
 
 def distributed_setup(rank, model_parallel_size, verbose):
-
     DistributedManager._shared_state = {}
 
     # Setup distributed process config

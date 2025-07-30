@@ -31,7 +31,6 @@ from physicsnemo.distributed.utils import _reduce
 
 
 def test_modify_environment():
-
     keys = ["RANK", "WORLD_SIZE", "MASTER_ADDR", "MASTER_PORT", "LOCAL_RANK"]
     # Set the values to nonsense for testing:
     values = [f"{i}" for i in range(len(keys))]
@@ -56,7 +55,6 @@ def test_modify_environment():
 
 
 def run_test_reduce_loss(rank, world_size):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{world_size}",
@@ -97,7 +95,6 @@ def run_test_mark_shared(rank, world_size):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager._shared_state = {}
         DistributedManager.initialize()
         DistributedManager.create_process_subgroup(

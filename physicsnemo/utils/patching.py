@@ -183,7 +183,6 @@ class RandomPatching2D(BasePatching2D):
     def __init__(
         self, img_shape: Tuple[int, int], patch_shape: Tuple[int, int], patch_num: int
     ) -> None:
-
         super().__init__(img_shape, patch_shape)
         self._patch_num = patch_num
         # Generate the indices of the patches to extract

@@ -74,8 +74,7 @@ def regression_step(
     # Safety check: avoid silently ignoring batch elements in img_lr
     if img_lr.shape[0] > 1:
         raise ValueError(
-            f"Expected img_lr to have a batch size of 1, "
-            f"but found {img_lr.shape[0]}."
+            f"Expected img_lr to have a batch size of 1, but found {img_lr.shape[0]}."
         )
 
     # Perform regression on a single batch element
@@ -106,7 +105,6 @@ def diffusion_step(
     distribution: Literal["normal", "student_t"] = "normal",
     nu: Optional[int] = None,
 ) -> torch.Tensor:
-
     """
     Generate images using diffusion techniques as described in the relevant paper.
 
