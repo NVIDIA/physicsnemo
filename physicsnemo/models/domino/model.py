@@ -22,13 +22,14 @@ the config.yaml file)
 """
 
 import math
-from typing import Callable, Literal
+from typing import Callable, Literal, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from physicsnemo.models.layers.ball_query import BallQueryLayer
+from physicsnemo.models.unet import UNet
 from physicsnemo.utils.profiling import profile
 
 
@@ -192,37 +193,67 @@ class GeoConvOut(nn.Module):
         if grid_resolution is None:
             grid_resolution = [256, 96, 64]
         base_neurons = model_parameters.base_neurons
+        self.fourier_features = model_parameters.fourier_features
+        self.num_modes = model_parameters.num_modes
 
-        self.fc1 = nn.Linear(input_features, base_neurons)
-        self.fc2 = nn.Linear(base_neurons, int(base_neurons / 2))
-        self.fc3 = nn.Linear(int(base_neurons / 2), model_parameters.base_neurons_out)
+        if self.fourier_features:
+            input_features_calculated = input_features * (1 + 2 * self.num_modes)
+        else:
+            input_features_calculated = input_features
+
+        self.fc1 = nn.Linear(input_features_calculated, base_neurons)
+        self.fc2 = nn.Linear(base_neurons, base_neurons // 2)
+        self.fc3 = nn.Linear(base_neurons // 2, model_parameters.base_neurons_in)
 
         self.grid_resolution = grid_resolution
 
         self.activation = get_activation(model_parameters.activation)
 
+        if self.fourier_features:
+            self.register_buffer(
+                "freqs", torch.exp(torch.linspace(0, math.pi, self.num_modes))
+            )
+
     def forward(
-        self, x: torch.Tensor, radius: float = 0.025, neighbors_in_radius: int = 10
+        self,
+        x: torch.Tensor,
+        grid: torch.Tensor,
+        radius: float = 0.025,
+        neighbors_in_radius: int = 10,
     ) -> torch.Tensor:
         """
         Process and project geometric features onto a 3D grid.
+
+        Args:
+            x: Input tensor containing coordinates of the neighboring points
+               (batch_size, nx*ny*nz, 3, n_points)
+            grid: Input tensor represented as a grid of shape
+                (batch_size, nx, ny, nz, 3)
+
+        Returns:
+            Processed geometry features of shape (batch_size, base_neurons_in, nx, ny, nz)
         """
+
         batch_size = x.shape[0]
         nx, ny, nz = (
             self.grid_resolution[0],
             self.grid_resolution[1],
             self.grid_resolution[2],
         )
+        grid = grid.reshape(batch_size, nx * ny * nz, 3, 1)
+        x_transposed = torch.transpose(x, 2, 3)
+        dist_weights = 1.0 / (1e-6 + (x_transposed - grid) ** 2.0)
+        dist_weights = torch.transpose(dist_weights, 2, 3)
 
-        mask = abs(x - 0) > 1e-6
-        x = self.activation(self.fc1(x))
+        x = torch.sum(x * dist_weights, 2) / torch.sum(dist_weights, 2)
+
+        if self.fourier_features:
+            facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
+        else:
+            facets = x
+        x = self.activation(self.fc1(facets))
         x = self.activation(self.fc2(x))
         x = F.tanh(self.fc3(x))
-        mask = mask[:, :, :, 0:1].expand(
-            mask.shape[0], mask.shape[1], mask.shape[2], x.shape[-1]
-        )
-
-        x = torch.sum(x * mask, 2)
 
         x = torch.reshape(x, (batch_size, x.shape[-1], nx, ny, nz))
         return x
@@ -231,7 +262,7 @@ class GeoConvOut(nn.Module):
 class GeoProcessor(nn.Module):
     """Geometry processing layer using CNNs"""
 
-    def __init__(self, input_filters: int, model_parameters):
+    def __init__(self, input_filters: int, output_filters: int, model_parameters):
         """
         Initialize the GeoProcessor network.
 
@@ -265,7 +296,9 @@ class GeoProcessor(nn.Module):
         self.conv7 = nn.Conv3d(
             2 * input_filters, input_filters, kernel_size=3, padding="same"
         )
-        self.conv8 = nn.Conv3d(input_filters, 1, kernel_size=3, padding="same")
+        self.conv8 = nn.Conv3d(
+            input_filters, output_filters, kernel_size=3, padding="same"
+        )
         self.avg_pool = torch.nn.AvgPool3d((2, 2, 2))
         self.max_pool = nn.MaxPool3d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
@@ -333,15 +366,21 @@ class GeometryRep(nn.Module):
     Geometry representation module that processes STL geometry data.
 
     This module constructs a multiscale representation of geometry by:
-    1. Computing short-range geometry encoding for local features
-    2. Computing long-range geometry encoding for global context
-    3. Processing signed distance field (SDF) data for surface information
+    1. Computing multi-scale geometry encoding for local and global context
+    2. Processing signed distance field (SDF) data for surface information
 
     The combined encoding enables the model to reason about both local and global
     geometric properties.
     """
 
-    def __init__(self, input_features: int, radii, model_parameters=None):
+    def __init__(
+        self,
+        input_features: int,
+        radii: Sequence[float],
+        neighbors_in_radius,
+        hops=1,
+        model_parameters=None,
+    ):
         """
         Initialize the GeometryRep module.
 
@@ -352,25 +391,72 @@ class GeometryRep(nn.Module):
         super().__init__()
         geometry_rep = model_parameters.geometry_rep
         self.geo_encoding_type = model_parameters.geometry_encoding_type
+        self.cross_attention = geometry_rep.geo_processor.cross_attention
+        self.self_attention = geometry_rep.geo_processor.self_attention
+        self.activation_conv = get_activation(geometry_rep.geo_conv.activation)
+        self.activation_processor = geometry_rep.geo_processor.activation
 
         self.bq_warp = nn.ModuleList()
         self.geo_processors = nn.ModuleList()
-        for j, p in enumerate(radii):
+        for j in range(len(radii)):
             self.bq_warp.append(
                 BQWarp(
                     grid_resolution=model_parameters.interp_res,
                     radius=radii[j],
+                    neighbors_in_radius=neighbors_in_radius[j],
                 )
             )
-            self.geo_processors.append(
-                GeoProcessor(
-                    input_filters=geometry_rep.geo_conv.base_neurons_out,
-                    model_parameters=geometry_rep.geo_processor,
+            if geometry_rep.geo_processor.processor_type == "unet":
+                h = geometry_rep.geo_processor.base_filters
+                self.geo_processors.append(
+                    UNet(
+                        in_channels=geometry_rep.geo_conv.base_neurons_in,
+                        out_channels=geometry_rep.geo_conv.base_neurons_out,
+                        model_depth=3,
+                        feature_map_channels=[
+                            h,
+                            h,
+                            2 * h,
+                            2 * h,
+                            4 * h,
+                            4 * h,
+                        ],
+                        num_conv_blocks=2,
+                        kernel_size=3,
+                        stride=1,
+                        conv_activation=self.activation_processor,
+                        padding=1,
+                        padding_mode="replicate",
+                        pooling_type="MaxPool3d",
+                        pool_size=2,
+                        # normalization="layernorm",
+                        use_attn_gate=self.self_attention,
+                        attn_decoder_feature_maps=[4 * h, 2 * h],
+                        attn_feature_map_channels=[2 * h, h],
+                        attn_intermediate_channels=4 * h,
+                        gradient_checkpointing=True,
+                    )
                 )
-            )
+            elif geometry_rep.geo_processor.processor_type == "conv":
+                self.geo_processors.append(
+                    nn.Sequential(
+                        GeoProcessor(
+                            input_filters=geometry_rep.geo_conv.base_neurons_in,
+                            output_filters=geometry_rep.geo_conv.base_neurons_out,
+                            model_parameters=geometry_rep.geo_processor,
+                        ),
+                        GeoProcessor(
+                            input_filters=geometry_rep.geo_conv.base_neurons_in,
+                            output_filters=geometry_rep.geo_conv.base_neurons_out,
+                            model_parameters=geometry_rep.geo_processor,
+                        ),
+                    )
+                )
+            else:
+                raise ValueError("Invalid prompt. Specify unet or conv ...")
 
         self.geo_conv_out = nn.ModuleList()
-        for j, p in enumerate(radii):
+        for _ in range(len(radii)):
             self.geo_conv_out.append(
                 GeoConvOut(
                     input_features=input_features,
@@ -379,12 +465,88 @@ class GeometryRep(nn.Module):
                 )
             )
 
-        self.geo_processor_sdf = GeoProcessor(
-            input_filters=6, model_parameters=geometry_rep.geo_processor
-        )
-        self.activation = get_activation(model_parameters.activation)
+        if geometry_rep.geo_processor.processor_type == "unet":
+            h = geometry_rep.geo_processor.base_filters
+            self.geo_processor_sdf = UNet(
+                in_channels=6,
+                out_channels=geometry_rep.geo_conv.base_neurons_out,
+                model_depth=3,
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                ],
+                num_conv_blocks=2,
+                kernel_size=3,
+                stride=1,
+                conv_activation=self.activation_processor,
+                padding=1,
+                padding_mode="replicate",
+                pooling_type="MaxPool3d",
+                pool_size=2,
+                # normalization="layernorm",
+                use_attn_gate=self.self_attention,
+                attn_decoder_feature_maps=[4 * h, 2 * h],
+                attn_feature_map_channels=[2 * h, h],
+                attn_intermediate_channels=4 * h,
+                gradient_checkpointing=True,
+            )
+        elif geometry_rep.geo_processor.processor_type == "conv":
+            self.geo_processor_sdf = nn.Sequential(
+                GeoProcessor(
+                    input_filters=6,
+                    output_filters=geometry_rep.geo_conv.base_neurons_out,
+                    model_parameters=geometry_rep.geo_processor,
+                ),
+                GeoProcessor(
+                    input_filters=geometry_rep.geo_conv.base_neurons_out,
+                    output_filters=geometry_rep.geo_conv.base_neurons_out,
+                    model_parameters=geometry_rep.geo_processor,
+                ),
+            )
+        else:
+            raise ValueError("Invalid prompt. Specify unet or conv ...")
         self.radii = radii
-        self.hops = geometry_rep.geo_conv.hops
+        self.hops = hops
+
+        self.geo_processor_out = nn.Conv3d(
+            geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
+        )
+        self.geo_processor_sdf_out = nn.Conv3d(
+            geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
+        )
+
+        if self.cross_attention:
+            self.combined_unet = UNet(
+                in_channels=1 + len(radii),
+                out_channels=1 + len(radii),
+                model_depth=3,
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                ],
+                num_conv_blocks=2,
+                kernel_size=3,
+                stride=1,
+                conv_activation=self.activation_processor,
+                padding=1,
+                padding_mode="replicate",
+                pooling_type="MaxPool3d",
+                pool_size=2,
+                # normalization="layernorm",
+                use_attn_gate=True,
+                attn_decoder_feature_maps=[4 * h, 2 * h],
+                attn_feature_map_channels=[2 * h, h],
+                attn_intermediate_channels=4 * h,
+                gradient_checkpointing=True,
+            )
 
     def forward(
         self, x: torch.Tensor, p_grid: torch.Tensor, sdf: torch.Tensor
@@ -407,13 +569,14 @@ class GeometryRep(nn.Module):
         if self.geo_encoding_type == "both" or self.geo_encoding_type == "stl":
             # Calculate multi-scale geoemtry dependency
             x_encoding = []
-            for j, p in enumerate(self.radii):
+            for j in range(len(self.radii)):
                 mapping, k_short = self.bq_warp[j](x, p_grid)
-                x_encoding_inter = self.geo_conv_out[j](k_short)
+                x_encoding_inter = self.geo_conv_out[j](k_short, p_grid)
                 # Propagate information in the geometry enclosed BBox
                 for _ in range(self.hops):
                     dx = self.geo_processors[j](x_encoding_inter) / self.hops
                     x_encoding_inter = x_encoding_inter + dx
+                x_encoding_inter = self.geo_processor_out(x_encoding_inter)
                 x_encoding.append(x_encoding_inter)
             x_encoding = torch.cat(x_encoding, dim=1)
 
@@ -430,6 +593,7 @@ class GeometryRep(nn.Module):
             # Process SDF and its computed features
             sdf = torch.cat((sdf, scaled_sdf, binary_sdf, sdf_x, sdf_y, sdf_z), 1)
             sdf_encoding = self.geo_processor_sdf(sdf)
+            sdf_encoding = self.geo_processor_sdf_out(sdf_encoding)
 
         if self.geo_encoding_type == "both":
             # Geometry encoding comprised of short-range, long-range and SDF features
@@ -438,6 +602,9 @@ class GeometryRep(nn.Module):
             encoding_g = sdf_encoding
         elif self.geo_encoding_type == "stl":
             encoding_g = x_encoding
+
+        if self.cross_attention:
+            encoding_g = self.combined_unet(encoding_g)
 
         return encoding_g
 
@@ -461,9 +628,6 @@ class NNBasisFunctions(nn.Module):
         self.fc1 = nn.Linear(input_features_calculated, base_layer)
         self.fc2 = nn.Linear(base_layer, int(base_layer))
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
-        self.bn1 = nn.BatchNorm1d(base_layer)
-        self.bn2 = nn.BatchNorm1d(int(base_layer))
-        self.bn3 = nn.BatchNorm1d(int(base_layer))
 
         self.activation = get_activation(model_parameters.activation)
 
@@ -528,9 +692,6 @@ class ParameterModel(nn.Module):
         self.fc1 = nn.Linear(input_features_calculated, base_layer)
         self.fc2 = nn.Linear(base_layer, int(base_layer))
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
-        self.bn1 = nn.BatchNorm1d(base_layer)
-        self.bn2 = nn.BatchNorm1d(int(base_layer))
-        self.bn3 = nn.BatchNorm1d(int(base_layer))
 
         self.activation = get_activation(model_parameters.activation)
 
@@ -590,10 +751,6 @@ class AggregationModel(nn.Module):
         self.fc3 = nn.Linear(int(base_layer), int(base_layer))
         self.fc4 = nn.Linear(int(base_layer), int(base_layer))
         self.fc5 = nn.Linear(int(base_layer), self.output_features)
-        self.bn1 = nn.BatchNorm1d(base_layer)
-        self.bn2 = nn.BatchNorm1d(int(base_layer))
-        self.bn3 = nn.BatchNorm1d(int(base_layer))
-        self.bn4 = nn.BatchNorm1d(int(base_layer))
 
         self.activation = get_activation(model_parameters.activation)
 
@@ -629,8 +786,7 @@ class LocalPointConv(nn.Module):
         input_features,
         base_layer,
         output_features,
-        model_parameters,
-        new_change=True,
+        model_parameters=None,
     ):
         super(LocalPointConv, self).__init__()
         self.input_features = input_features
@@ -644,6 +800,54 @@ class LocalPointConv(nn.Module):
         out = self.fc2(out)
 
         return out
+
+
+class PositionEncoder(nn.Module):
+    """Positional encoding of point clouds"""
+
+    def __init__(self, input_features: int, model_parameters=None):
+        super().__init__()
+        base_layer = model_parameters.base_neurons
+        self.fourier_features = model_parameters.fourier_features
+        self.num_modes = model_parameters.num_modes
+
+        if self.fourier_features:
+            input_features_calculated = (
+                input_features + input_features * self.num_modes * 2
+            )
+        else:
+            input_features_calculated = input_features
+
+        self.fc1 = nn.Linear(input_features_calculated, base_layer)
+        self.fc2 = nn.Linear(base_layer, int(base_layer))
+        self.fc3 = nn.Linear(int(base_layer), int(base_layer))
+
+        self.activation = get_activation(model_parameters.activation)
+
+        if self.fourier_features:
+            self.register_buffer(
+                "freqs", torch.exp(torch.linspace(0, math.pi, self.num_modes))
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Transform point features into a basis function representation.
+
+        Args:
+            x: Input tensor containing point features
+
+        Returns:
+            Tensor containing position encoder
+        """
+        if self.fourier_features:
+            facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
+        else:
+            facets = x
+        facets = self.activation(self.fc1(facets))
+        facets = self.activation(self.fc2(facets))
+        facets = self.fc3(facets)
+
+        return facets
 
 
 # @dataclass
@@ -786,6 +990,80 @@ class DoMINO(nn.Module):
         self.input_features = input_features
         self.output_features_vol = output_features_vol
         self.output_features_surf = output_features_surf
+        self.num_sample_points_surface = model_parameters.num_neighbors_surface
+        self.num_sample_points_volume = model_parameters.num_neighbors_volume
+        self.combined_vol_surf = model_parameters.combine_volume_surface
+        self.activation_processor = (
+            model_parameters.geometry_rep.geo_processor.activation
+        )
+
+        if self.combined_vol_surf:
+            h = 8
+            in_channels = (
+                2
+                + len(model_parameters.geometry_rep.geo_conv.volume_radii)
+                + len(model_parameters.geometry_rep.geo_conv.surface_radii)
+            )
+            out_channels_surf = 1 + len(
+                model_parameters.geometry_rep.geo_conv.surface_radii
+            )
+            out_channels_vol = 1 + len(
+                model_parameters.geometry_rep.geo_conv.volume_radii
+            )
+            self.combined_unet_surf = UNet(
+                in_channels=in_channels,
+                out_channels=out_channels_surf,
+                model_depth=3,
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                ],
+                num_conv_blocks=2,
+                kernel_size=3,
+                stride=1,
+                conv_activation=self.activation_processor,
+                padding=1,
+                padding_mode="replicate",
+                pooling_type="MaxPool3d",
+                pool_size=2,
+                # normalization="layernorm",
+                use_attn_gate=True,
+                attn_decoder_feature_maps=[4 * h, 2 * h],
+                attn_feature_map_channels=[2 * h, h],
+                attn_intermediate_channels=4 * h,
+                gradient_checkpointing=True,
+            )
+            self.combined_unet_vol = UNet(
+                in_channels=in_channels,
+                out_channels=out_channels_vol,
+                model_depth=3,
+                feature_map_channels=[
+                    h,
+                    h,
+                    2 * h,
+                    2 * h,
+                    4 * h,
+                    4 * h,
+                ],
+                num_conv_blocks=2,
+                kernel_size=3,
+                stride=1,
+                conv_activation=self.activation_processor,
+                padding=1,
+                padding_mode="replicate",
+                pooling_type="MaxPool3d",
+                pool_size=2,
+                # normalization="layernorm",
+                use_attn_gate=True,
+                attn_decoder_feature_maps=[4 * h, 2 * h],
+                attn_feature_map_channels=[2 * h, h],
+                attn_intermediate_channels=4 * h,
+                gradient_checkpointing=True,
+            )
         self.global_features = global_features
 
         if self.output_features_vol is None and self.output_features_surf is None:
@@ -806,7 +1084,6 @@ class DoMINO(nn.Module):
         self.num_variables_vol = output_features_vol
         self.num_variables_surf = output_features_surf
         self.grid_resolution = model_parameters.interp_res
-        self.surface_neighbors = model_parameters.surface_neighbors
         self.use_surface_normals = model_parameters.use_surface_normals
         self.use_surface_area = model_parameters.use_surface_area
         self.encode_parameters = model_parameters.encode_parameters
@@ -833,18 +1110,23 @@ class DoMINO(nn.Module):
         self.geo_rep_volume = GeometryRep(
             input_features=input_features,
             radii=model_parameters.geometry_rep.geo_conv.volume_radii,
+            neighbors_in_radius=model_parameters.geometry_rep.geo_conv.volume_neighbors_in_radius,
+            hops=model_parameters.geometry_rep.geo_conv.volume_hops,
             model_parameters=model_parameters,
         )
 
         self.geo_rep_surface = GeometryRep(
             input_features=input_features,
             radii=model_parameters.geometry_rep.geo_conv.surface_radii,
+            neighbors_in_radius=model_parameters.geometry_rep.geo_conv.surface_neighbors_in_radius,
+            hops=model_parameters.geometry_rep.geo_conv.surface_hops,
             model_parameters=model_parameters,
         )
 
         self.geo_rep_surface1 = GeometryRep(
             input_features=input_features,
             radii=model_parameters.geometry_rep.geo_conv.volume_radii,
+            neighbors_in_radius=model_parameters.geometry_rep.geo_conv.volume_neighbors_in_radius,
             model_parameters=model_parameters,
         )
 
@@ -852,7 +1134,9 @@ class DoMINO(nn.Module):
         base_layer_nn = model_parameters.nn_basis_functions.base_layer
         if self.output_features_surf is not None:
             self.nn_basis_surf = nn.ModuleList()
-            for _ in range(self.num_variables_surf):
+            for _ in range(
+                self.num_variables_surf
+            ):  # Have the same basis function for each variable
                 self.nn_basis_surf.append(
                     NNBasisFunctions(
                         input_features=input_features_surface,
@@ -862,7 +1146,9 @@ class DoMINO(nn.Module):
 
         if self.output_features_vol is not None:
             self.nn_basis_vol = nn.ModuleList()
-            for _ in range(self.num_variables_vol):
+            for _ in range(
+                self.num_variables_vol
+            ):  # Have the same basis function for each variable
                 self.nn_basis_vol.append(
                     NNBasisFunctions(
                         input_features=input_features,
@@ -880,7 +1166,9 @@ class DoMINO(nn.Module):
             else:
                 inp_pos_vol = 7 if model_parameters.use_sdf_in_basis_func else 3
 
-            self.fc_p_vol = nn.Linear(inp_pos_vol, position_encoder_base_neurons)
+            self.fc_p_vol = PositionEncoder(
+                inp_pos_vol, model_parameters.position_encoder
+            )
 
         if self.output_features_surf is not None:
             if model_parameters.positional_encoding:
@@ -888,17 +1176,9 @@ class DoMINO(nn.Module):
             else:
                 inp_pos_surf = 3
 
-            self.fc_p_surf = nn.Linear(inp_pos_surf, position_encoder_base_neurons)
-
-        # Positional encoding hidden layers
-        self.fc_p1 = nn.Linear(
-            position_encoder_base_neurons, position_encoder_base_neurons
-        )
-        self.fc_p2 = nn.Linear(
-            position_encoder_base_neurons, position_encoder_base_neurons
-        )
-
-        # base_layer_geo = model_parameters.geometry_local.base_layer
+            self.fc_p_surf = PositionEncoder(
+                inp_pos_surf, model_parameters.position_encoder
+            )
 
         # BQ for surface
         self.surface_neighbors_in_radius = (
@@ -908,7 +1188,7 @@ class DoMINO(nn.Module):
         self.surface_bq_warp = nn.ModuleList()
         self.surface_local_point_conv = nn.ModuleList()
 
-        for ct, j in enumerate(self.surface_radius):
+        for ct in range(len(self.surface_radius)):
             if self.geo_encoding_type == "both":
                 total_neighbors_in_radius = self.surface_neighbors_in_radius[ct] * (
                     len(model_parameters.geometry_rep.geo_conv.surface_radii) + 1
@@ -944,7 +1224,7 @@ class DoMINO(nn.Module):
         self.volume_bq_warp = nn.ModuleList()
         self.volume_local_point_conv = nn.ModuleList()
 
-        for ct, j in enumerate(self.volume_radius):
+        for ct in range(len(self.volume_radius)):
             if self.geo_encoding_type == "both":
                 total_neighbors_in_radius = self.volume_neighbors_in_radius[ct] * (
                     len(model_parameters.geometry_rep.geo_conv.volume_radii) + 1
@@ -1041,15 +1321,13 @@ class DoMINO(nn.Module):
             Tensor containing positional encoding features
         """
         if eval_mode == "volume":
-            x = self.activation(self.fc_p_vol(encoding_node))
+            x = self.fc_p_vol(encoding_node)
         elif eval_mode == "surface":
-            x = self.activation(self.fc_p_surf(encoding_node))
+            x = self.fc_p_surf(encoding_node)
         else:
             raise ValueError(
                 f"`eval_mode` must be 'surface' or 'volume', got {eval_mode=}"
             )
-        x = self.activation(self.fc_p1(x))
-        x = self.fc_p2(x)
         return x
 
     def geo_encoding_local(
@@ -1074,7 +1352,7 @@ class DoMINO(nn.Module):
         )
 
         encoding_outer = []
-        for p, q in enumerate(radius):
+        for p in range(len(radius)):
             p_grid = torch.reshape(p_grid, (batch_size, nx * ny * nz, 3))
             mapping, outputs = bq_warp[p](
                 volume_mesh_centers, p_grid, reverse_mapping=False
@@ -1096,6 +1374,7 @@ class DoMINO(nn.Module):
                 encoding_g_inner.append(geo_encoding_sampled)
             encoding_g_inner = torch.cat(encoding_g_inner, dim=2)
             encoding_g_inner = point_conv[p](encoding_g_inner)
+
             encoding_outer.append(encoding_g_inner)
 
         encoding_g = torch.cat(encoding_outer, dim=-1)
@@ -1114,12 +1393,12 @@ class DoMINO(nn.Module):
         surface_neighbors_areas,
         global_params_values,
         global_params_reference,
+        num_sample_points=7,
     ):
         """Function to approximate solution given the neighborhood information"""
         num_variables = self.num_variables_surf
         nn_basis = self.nn_basis_surf
         agg_model = self.agg_model_surf
-        num_sample_points = surface_mesh_neighbors.shape[2] + 1
 
         if self.encode_parameters:
             processed_parameters = []
@@ -1142,13 +1421,14 @@ class DoMINO(nn.Module):
                     (surface_mesh_centers, surface_normals),
                     dim=-1,
                 )
-                surface_mesh_neighbors = torch.cat(
-                    (
-                        surface_mesh_neighbors,
-                        surface_neighbors_normals,
-                    ),
-                    dim=-1,
-                )
+                if num_sample_points > 1:
+                    surface_mesh_neighbors = torch.cat(
+                        (
+                            surface_mesh_neighbors,
+                            surface_neighbors_normals,
+                        ),
+                        dim=-1,
+                    )
 
             else:
                 surface_mesh_centers = torch.cat(
@@ -1159,14 +1439,15 @@ class DoMINO(nn.Module):
                     ),
                     dim=-1,
                 )
-                surface_mesh_neighbors = torch.cat(
-                    (
-                        surface_mesh_neighbors,
-                        surface_neighbors_normals,
-                        torch.log(surface_neighbors_areas) / 10,
-                    ),
-                    dim=-1,
-                )
+                if num_sample_points > 1:
+                    surface_mesh_neighbors = torch.cat(
+                        (
+                            surface_mesh_neighbors,
+                            surface_neighbors_normals,
+                            torch.log(surface_neighbors_areas) / 10,
+                        ),
+                        dim=-1,
+                    )
 
         if self.solution_calculation_mode == "one-loop":
             encoding_list = [
@@ -1457,17 +1738,6 @@ class DoMINO(nn.Module):
             geo_centers_vol = 2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
             encoding_g_vol = self.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
-            # Normalize based on BBox around surface (car)
-            # geo_centers_surf = (
-            #     2.0 * (geo_centers - surf_min) / (surf_max - surf_min) - 1
-            # )
-
-            # encoding_g_surf = self.geo_rep_surface1(
-            #     geo_centers_surf, s_grid, sdf_surf_grid
-            # )
-
-            # encoding_g_vol += encoding_g_surf
-
             # SDF on volume mesh nodes
             sdf_nodes = data_dict["sdf_nodes"]
             # Positional encoding based on closest point on surface to a volume node
@@ -1504,6 +1774,15 @@ class DoMINO(nn.Module):
                 encoding_node_surf, eval_mode="surface"
             )
 
+        if (
+            self.output_features_surf is not None
+            and self.output_features_vol is not None
+            and self.combined_vol_surf
+        ):
+            encoding_g = torch.cat((encoding_g_vol, encoding_g_surf), axis=1)
+            encoding_g_surf = self.combined_unet_surf(encoding_g)
+            encoding_g_vol = self.combined_unet_vol(encoding_g)
+
         if self.output_features_vol is not None:
             # Calculate local geometry encoding for volume
             # Sampled points on volume
@@ -1520,6 +1799,7 @@ class DoMINO(nn.Module):
                 global_params_values,
                 global_params_reference,
                 eval_mode="volume",
+                num_sample_points=self.num_sample_points_volume,
             )
         else:
             output_vol = None
@@ -1542,30 +1822,19 @@ class DoMINO(nn.Module):
             )
 
             # Approximate solution on surface cell center
-            if not self.surface_neighbors:
-                output_surf = self.calculate_solution(
-                    surface_mesh_centers,
-                    encoding_g_surf,
-                    encoding_node_surf,
-                    global_params_values,
-                    global_params_reference,
-                    eval_mode="surface",
-                    num_sample_points=1,
-                    noise_intensity=500,
-                )
-            else:
-                output_surf = self.calculate_solution_with_neighbors(
-                    surface_mesh_centers,
-                    encoding_g_surf,
-                    encoding_node_surf,
-                    surface_mesh_neighbors,
-                    surface_normals,
-                    surface_neighbors_normals,
-                    surface_areas,
-                    surface_neighbors_areas,
-                    global_params_values,
-                    global_params_reference,
-                )
+            output_surf = self.calculate_solution_with_neighbors(
+                surface_mesh_centers,
+                encoding_g_surf,
+                encoding_node_surf,
+                surface_mesh_neighbors,
+                surface_normals,
+                surface_neighbors_normals,
+                surface_areas,
+                surface_neighbors_areas,
+                global_params_values,
+                global_params_reference,
+                num_sample_points=self.num_sample_points_surface,
+            )
         else:
             output_surf = None
 
