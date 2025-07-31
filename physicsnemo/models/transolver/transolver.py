@@ -507,6 +507,9 @@ class Transolver(Module):
                     embedding = embedding.reshape(
                         embedding.shape[0], *self.structured_shape, -1
                     )
+            else:
+                if embedding is None:
+                    raise ValueError("Embedding is required for unstructured data")
 
             if self.unified_pos:
                 # Extend the embedding to the batch size:
@@ -514,13 +517,10 @@ class Transolver(Module):
                     self.embedding.repeat(embedding.shape[0], 1, 1)
                     # .reshape(x.shape[0], -1, self.embedding_dim)
                 )
+
             # Combine the embedding and functional input:
-            fx = torch.cat((embedding, fx), -1)
-            # Dead code?  Not sure when this is used.
-            # if fx is not None:
-            # else:
-            #     fx = self.preprocess(x)
-            #     fx = fx + self.placeholder[None, None, :]
+            if embedding is not None:
+                fx = torch.cat((embedding, fx), -1)
 
             # Apply preprocessing
             fx = self.preprocess(fx)
