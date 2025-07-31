@@ -28,8 +28,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from physicsnemo.models.layers.ball_query import BallQueryLayer
 from physicsnemo.models.unet import UNet
+from physicsnemo.utils.neighbors import radius_search
 from physicsnemo.utils.profiling import profile
 
 
@@ -123,7 +123,9 @@ class BQWarp(nn.Module):
         super().__init__()
         if grid_resolution is None:
             grid_resolution = [256, 96, 64]
-        self.ball_query_layer = BallQueryLayer(neighbors_in_radius, radius)
+
+        self.radius = radius
+        self.neighbors_in_radius = neighbors_in_radius
         self.grid_resolution = grid_resolution
 
     def forward(
@@ -157,15 +159,25 @@ class BQWarp(nn.Module):
         p_grid = torch.reshape(p_grid, (batch_size, nx * ny * nz, 3))
 
         if reverse_mapping:
-            mapping, num_neighbors, outputs = self.ball_query_layer(
-                p_grid,
-                x,
+            mapping, outputs = radius_search(
+                x[0],
+                p_grid[0],
+                self.radius,
+                self.neighbors_in_radius,
+                return_points=True,
             )
+            mapping = mapping.unsqueeze(0)
+            outputs = outputs.unsqueeze(0)
         else:
-            mapping, num_neighbors, outputs = self.ball_query_layer(
-                x,
-                p_grid,
+            mapping, outputs = radius_search(
+                p_grid[0],
+                x[0],
+                self.radius,
+                self.neighbors_in_radius,
+                return_points=True,
             )
+            mapping = mapping.unsqueeze(0)
+            outputs = outputs.unsqueeze(0)
 
         return mapping, outputs
 
