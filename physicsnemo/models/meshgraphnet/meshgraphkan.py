@@ -129,7 +129,7 @@ class MeshGraphKAN(Module):
     >>> # (You don't have to set this varialbe, it's faster to use TE!)
     >>> # Example of how to disable:
     >>> import os
-    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = False
+    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = 'False'
     >>>
     >>> model = MeshGraphKAN(
     ...     input_dim_nodes=4,
