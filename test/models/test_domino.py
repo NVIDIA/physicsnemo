@@ -76,25 +76,29 @@ def test_domino_forward(device, pytestconfig):
             @dataclass
             class geo_conv:
                 base_neurons: int = 32
-                base_neurons_out: int = 1
-                hops: int = 1
+                base_neurons_in: int = 8
+                base_neurons_out: int = 8
+                surface_hops: int = 1
+                volume_hops: int = 1
                 volume_radii: Sequence = (0.1, 0.5)
+                volume_neighbors_in_radius: Sequence = (10, 10)
                 surface_radii: Sequence = (0.05,)
+                surface_neighbors_in_radius: Sequence = (10,)
                 activation: str = "relu"
+                fourier_features: bool = False
+                num_modes: int = 5
 
             @dataclass
             class geo_processor:
                 base_filters: int = 8
                 activation: str = "relu"
-
-            @dataclass
-            class geo_processor_sdf:
-                base_filters: int = 8
+                processor_type: str = "unet"
+                self_attention: bool = True
+                cross_attention: bool = False
 
             base_filters: int = 8
             geo_conv = geo_conv
             geo_processor = geo_processor
-            geo_processor_sdf = geo_processor_sdf
 
         @dataclass
         class geometry_local:
@@ -123,12 +127,16 @@ def test_domino_forward(device, pytestconfig):
         @dataclass
         class position_encoder:
             base_neurons: int = 512
+            activation: str = "relu"
+            fourier_features: bool = False
+            num_modes: int = 5
 
         @dataclass
         class parameter_model:
             base_layer: int = 512
             fourier_features: bool = True
             num_modes: int = 5
+            activation: str = "relu"
 
         model_type: str = "combined"
         activation: str = "relu"
@@ -136,10 +144,12 @@ def test_domino_forward(device, pytestconfig):
         use_sdf_in_basis_func: bool = True
         positional_encoding: bool = False
         surface_neighbors: bool = True
-        num_surface_neighbors: int = 7
+        num_neighbors_surface: int = 7
+        num_neighbors_volume: int = 7
         use_surface_normals: bool = True
         use_surface_area: bool = True
         encode_parameters: bool = False
+        combine_volume_surface: bool = False
         geometry_encoding_type: str = "both"
         solution_calculation_mode: str = "two-loop"
         geometry_rep = geometry_rep
@@ -158,7 +168,7 @@ def test_domino_forward(device, pytestconfig):
 
     bsize = 1
     nx, ny, nz = model_params.interp_res
-    num_neigh = model_params.num_surface_neighbors
+    num_neigh = model_params.num_neighbors_surface
 
     pos_normals_closest_vol = torch.randn(bsize, 100, 3).to(device)
     pos_normals_com_vol = torch.randn(bsize, 100, 3).to(device)
@@ -203,9 +213,6 @@ def test_domino_forward(device, pytestconfig):
         "global_params_reference": global_params_reference,
     }
 
-    # assert common.validate_forward_accuracy(
-    #     model, input_dict, file_name=f"domino_output.pth"
-    # )
     assert validate_domino(
         model, input_dict, file_name="domino_output.pth", device=device
     )
