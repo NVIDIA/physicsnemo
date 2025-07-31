@@ -286,7 +286,7 @@ class Transolver(Module):
         that the number of heads must evenly divide the `n_hidden` parameter to yield an
         integer head dimension.
     act : str
-        The activation function, default is Gelu.
+        The activation function, default is gelu.
     mlp_ratio : int
         The ratio of hidden dimension in the MLP, default is 4.  Used in the MLPs in the
         PhysicsAttention Layers.
@@ -481,7 +481,7 @@ class Transolver(Module):
         self,
         fx: torch.Tensor | None,
         embedding: torch.Tensor | None = None,
-        T: torch.Tensor = None,
+        T: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass of the transolver model.
