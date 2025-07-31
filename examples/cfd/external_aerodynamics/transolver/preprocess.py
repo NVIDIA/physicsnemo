@@ -23,6 +23,7 @@ from physicsnemo.utils.profiling import profile
 @profile
 def preprocess_surface_data(
     batch: dict,
+    norm_factors: dict[str, torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
 
     """
@@ -41,9 +42,7 @@ def preprocess_surface_data(
     ).to(torch.float32)
 
     # Normalize the surface fields:
-    norm_mean = targets.mean(dim=1)
-    norm_std = torch.sqrt(torch.mean((targets - norm_mean.unsqueeze(1)) ** 2, dim=1))
-    targets = (targets - norm_mean) / norm_std
+    targets = (targets - norm_factors["mean"]) / norm_factors["std"]
 
     # If you want to use this, be sure to updat the
     # functional_dim value in your configuration
@@ -84,21 +83,14 @@ def preprocess_surface_data(
         "surface_normals": normals,
         "stream_velocity": batch["stream_velocity"],
         "air_density": batch["air_density"],
-        "norm_mean": norm_mean,
-        "norm_std": norm_std,
     }
-    print(
-        f"node_features shape: {node_features.shape} nd placements: {node_features._spec.placements}"
-    )
-    print(
-        f"embeddings shape: {embeddings.shape} nd placements: {embeddings._spec.placements}"
-    )
-    print(f"targets shape: {targets.shape} nd placements: {targets._spec.placements}")
+
     return node_features, embeddings, targets, others
 
 
 def preprocess_volume_data(
     batch: dict,
+    norm_factors: dict[str, torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
     """
     Preprocess the volumetric data.  Right now, it's just
@@ -120,16 +112,10 @@ def preprocess_volume_data(
 
     embeddings = torch.cat([mesh_centers, sdf], dim=-1)
 
-    # Normalize the surface fields:
-    norm_mean = targets.mean(dim=1)
-    # norm_std = targets.std(dim=1)
-    norm_std = torch.sqrt(torch.mean((targets - norm_mean.unsqueeze(1)) ** 2, dim=1))
-
-    targets = (targets - norm_mean) / norm_std
+    # Normalize the volume fields:
+    targets = (targets - norm_factors["mean"]) / norm_factors["std"]
 
     others = {
-        "norm_mean": norm_mean,
-        "norm_std": norm_std,
         "stream_velocity": batch["stream_velocity"],
         "air_density": batch["air_density"],
     }
@@ -143,6 +129,11 @@ def downsample_surface(
     targets: torch.Tensor,
     num_keep=1024,
 ):
+
+    if num_keep == -1:
+        features = features.unsqueeze(1).expand(1, embeddings.shape[1], -1)
+        return features, embeddings, targets
+
     """
     Downsample the surface data. We generate one set of indices, and
     use it to sample the same points from the features, embeddings,

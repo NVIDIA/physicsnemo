@@ -660,7 +660,6 @@ class DomainParallelZarrDataset(Dataset):
         else:
             filename = self.filenames[idx]
             filepath = self.data_path / filename
-
             # Read data from zarr file
             data = self._read_zarr_file(filepath)
             data = self._move_to_gpu(data)

@@ -60,6 +60,7 @@ def metrics_fn(
     others: dict[str, torch.Tensor],
     dm: DistributedManager,
     mode: str,
+    norm_factors: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     """
     Computes metrics for either surface or volume data.
@@ -76,9 +77,9 @@ def metrics_fn(
     """
     with torch.no_grad():
         if mode == "surface":
-            metrics = metrics_fn_surface(pred, target, others, dm)
+            metrics = metrics_fn_surface(pred, target, others, dm, norm_factors)
         elif mode == "volume":
-            metrics = metrics_fn_volume(pred, target, others, dm)
+            metrics = metrics_fn_volume(pred, target, others, dm, norm_factors)
         else:
             raise ValueError(f"Unknown data mode: {mode}")
 
@@ -91,6 +92,7 @@ def metrics_fn_volume(
     target: torch.Tensor,
     others: dict[str, torch.Tensor],
     dm: DistributedManager,
+    norm_factors: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     """
     Computes L2 volume metrics between prediction and target.
@@ -104,8 +106,8 @@ def metrics_fn_volume(
     Returns:
         Dictionary of L2 volume metrics.
     """
-    target = target * others["norm_std"] + others["norm_mean"]
-    pred = pred * others["norm_std"] + others["norm_mean"]
+    target = target * norm_factors["std"] + norm_factors["mean"]
+    pred = pred * norm_factors["std"] + norm_factors["mean"]
 
     l2_num = (pred - target) ** 2
     l2_num = torch.sum(l2_num, dim=1)
@@ -133,6 +135,7 @@ def metrics_fn_surface(
     target: torch.Tensor,
     others: dict[str, torch.Tensor],
     dm: DistributedManager,
+    norm_factors: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     """
     Computes L2 surface metrics between prediction and target.
@@ -147,8 +150,8 @@ def metrics_fn_surface(
         Dictionary of L2 surface metrics.
     """
     # Unnormalize the surface values for L2:
-    target = target * others["norm_std"] + others["norm_mean"]
-    pred = pred * others["norm_std"] + others["norm_mean"]
+    target = target * norm_factors["std"] + norm_factors["mean"]
+    pred = pred * norm_factors["std"] + norm_factors["mean"]
 
     l2_num = (pred - target) ** 2
     l2_num = torch.sum(l2_num, dim=1)

@@ -1,4 +1,6 @@
-# Transolver CFD Example: Code Overview
+# Transolver for External Aerodynamics on Irregular Meshes
+
+## Transolver CFD Example: Overview
 
 This directory contains the essential components for training and evaluating a
 Transolver model tailored to external aerodynamics CFD problems. The Transolver model
@@ -18,31 +20,115 @@ TransformerEngine.
 The training workflow for Transolver leverages the same input datasets as DoMINO. For
 more information on the datasets, refer to the external_aerodynamics example for DoMINO
 and the [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator) for data
-preparation guidance. Unlike DoMINO, Transolver does not require neighbor points or any
-explicit structure (such as graph connections or edges) in the input data, resulting in
-a much simpler datapipe that is fully encapsulated within these examples.
+preparation guidance.
 
-Below, we provide a high-level overview of the main files and their roles in the
-workflow.
+> **Note:** Currently, training transolver in this example supports **surface** data only.
+> Volumetric data is still in development.
 
----
+## Requirements
 
-## 1. `src/train.py`
+Transolver requires TransformerEngine from NVIDIA, as well as Zarr >= 3.0 and `zarrs`
+for the data pipeline.  Install them with `pip install -r requirements.txt`
 
-This script serves as the main entry point for training the DoMINO/Transolver model,
-utilizing distributed data parallelism. The training loop processes the entire dataset,
-computing a simple point-wise relative L2 loss for either surface or volume data, and
-includes downsampling to handle the high native mesh resolutions.
+> For the Transolver datapipe, zarr > 3.0 is required.  If you are using an older
+> container, you may need to `unset PIP_CONSTRAINTS` to allow zarr 3.0 or higher.
 
-The script is designed for multi-GPU training using PyTorch’s DistributedDataParallel,
-and it loads datasets through a custom datapipe that supports distributed sampling.
-Model instantiation is flexible, supporting either surface or volume predictions
-as specified in the configuration.
+## Using Transolver for External Aerodynamics
 
-The script supports mixed-precision training with gradient
-scaling, and it manages checkpointing with the physicsnemo checkpointing utils.
-Throughout training, metrics are logged to both TensorBoard and the console and
-validation is performed after each epoch.
+1. Prepare the Dataset.  Follow the guidance from DoMINO and PhysicsNemo-Curator
+to prepare your dataset into a Zarr format.  We also use the dataset to compute
+normalization factors for the dataset, which help stabilize training.
+
+2. Train your model.  The model and training configuration is set in
+`conf/train_surface.yaml`, where you can control both network properties
+and training properties. See below for an overview and explanation of key
+parameters that may be of special interest.
+
+3. Use the trained model to perform inference.  This example contains two
+inference examples: one for inference on the validation set, already in
+Zarr format, and a second example for inference directly on .vtp files.
+
+The following sections contain further details on the training and inference
+recipe.
+
+## Model Training
+
+To train the model, first we compute normalization factors on the dataset to
+make the predictive quantities output in a well defined range.  The includec
+script, `compute_normalizations.py`, will compute either the normalization
+factors.  Once run, it should save to an output file similar to
+"surface_fields_normalization.npz".  This will get loaded during training.
+Check the training script to ensure the right path is used for your normalization
+factors - it's not a configuration parameter but directly encoded in the script.
+
+> By default, the normalization sets the mean to 0.0 and std to 1.0 of all labels
+> in the dataset, computing the mean across the train dataset.  You could adapt
+> this to a different normalization, however take care to update both the
+> preprocessing as well as inference scripts.  Min/Max is another popular strategy.
+
+To configure your training run, use `hydra` and `conf/train_surface.yaml`.  The
+config contains sections for the model, data, optimizer, and training settings.
+For details on the model parameters, see the API for `physicsnemo.models.transolver`.
+The data is processed with a custom Zarr dataloader, designed to use zarr 3.0 and
+`zarrs` rust implementation for an optimized Codec.  It also uses python's `threading`
+module to open parallel reads of multiple zarr keys.  You can control the number
+of parallel python threads via `data.max_workers`.
+
+Additionally, the Zarr dataloader optimizes CPU->GPU transfers by directly
+allocating pinned memory on the CPU, reading the Zarr data into that
+memory buffer via a 0-copy to numpy, and moving the data to GPU via a separate
+stream with non-blocking transfers.  In short: you can completely overlap IO
+and GPU processing as long as the IO file system can provide the next data example
+fast enough.  In reality, the IO latency has some variance but is not a bottleneck.
+
+You can disable memory pinning with `data.pin_memory=False`.  Further, to fit
+the training into memory, you can apply on-the-fly downsampling to the data
+with `data.resolution=N`, where `N` is how many points per GPU to use.  This dataloader
+will yield the full data examples in shapes of `[1, K, f]` where `K` is the resolution
+of the mesh, and `f` is the feature space (3 for points, normals, etc.  4 for surface
+fields).  Downsampling happens in the preprocessing pipeline.
+
+> The pipeline has the ability to optimally load data from disk into `physicsnemo.ShardTensor`
+> for domain parallelism - however the model support is still in development.
+
+During training, the configuration uses the OneCyle learning rate (similar to the
+original Transolver publication), and float32 format.  The scheduler and learning rate
+may be configured - note that the scheduler is updated every training step.  For
+schedulers that update every epoch, modification of the training script may be required.
+
+### Training Precision
+
+Transolver, as a transformer-like architecture, has support for NVIDIA's
+[TransformerEngine](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/index.html)
+built in.  You can enable/disable the transformer engine path in the model with
+`model.use_te=[True | False]`.  Available precisions for training with `transformer_engine`
+are `training.precision=["float32" | "float16" | "bfloat16" | "float8" ]`.  In `float8`
+precision, the TransformerEngine Hybrid recipe is used for casting weights and inputs
+in the forward and backwards passes.  For more details on `float8` precision, see
+the fp8 guide from
+[TransformerEngine](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/examples/fp8_primer.html).
+When using fp8, the training script will automatically pad and unpad the input and output,
+respectively, to use the fp8 hardware correctly.
+
+> **Float8** precisions are only available on GPUs with fp8 tensorcore support, such
+> as Hopper, Blackwell, Ada Lovelace, and others.
+
+### Other Configuration Settings
+
+Several other important configuration settings are available:
+
+- `training.compile` will use `torch.compile` for optimized performance.  It is not
+compatible with `transformer_engine` (`model.use_te=True`).  If TransformerEngine is
+not used, and half precision is, `torch.compile` is recommended for improved performance.
+- `training.num_epochs` controls the total number of epochs used during training.
+- `training.save_interval` will dictate how often the model weights and training
+tools are checkpointed.
+
+> **Note** Like other parameters of the model, changing the value of `model.use_te`
+> will make checkpoints incompatible.
+
+The training script supports data-parallel training via PyTorch DDP.  In a future
+update, we may enable domain parallelism via FSDP and ShardTensor.
 
 The script can be launched on a single GPU with
 
@@ -97,58 +183,28 @@ Epoch 47 Validation Average Metrics:
 +-------------+---------------------+
 ```
 
----
+## Dataset Inference
 
-## 2. `conf/train_volume.yaml` and `conf/train_surface.yaml`
+There are two scripts provided as inference examples - it's expected that every user's
+inference workloads are different, so these aim to cover common scenarios as examples.
 
-These configuration files define all the settings required for a training run. They
-specify output directories, run identifiers, random seeds, and precision settings, as
-well as the number of epochs, checkpoint intervals, and whether to use compilation. The
-model architecture is described here, including input and output dimensions, the number
-of layers, embedding size, attention heads, and activation functions. Optimizer
-settings such as the type (AdamW), learning rate, weight decay, and other
-hyperparameters are also included. Data-related settings cover paths to the training and
-validation datasets, worker and thread counts, memory pinning, and which data keys to
-load. Finally, logging preferences are set, controlling the level and format of output.
+First, the validation dataset in Zarr format can be loaded, processed, and the L2
+metrics summarized in `inference_on_zarr.py`.  Alternatively, the model can be used
+directly on `.vtp` or `.stl` files as shown in `inference_on_vtp.py`.  Note that the
+script contains several parameters from the DrivaerML dataset as hardcoded variable
+names: `CpMeanTrim`, `pMeanTrim`, `wallShearStressMeanTrim`, which are used to
+compute the L2 metrics on the inference outputs.
 
-Note that, to use TransformerEngine, you must enable it directly in the model settings.
-TransformerEngine is incompatible with `torch.compile`.  
+In `inference_on_zarr.py`, the dataset examples are downsampled and preprocessed
+exactly as in the training script.  In `inference_on_stl.py`, however, the entire
+mesh is processed.  To enable the mesh to fit into GPU memory, the mesh is chunked
+into pieces that are then processed, and recombined to form the prediction on the
+entire mesh.  The outputs are then saved to .vtp files for downstream analysis.
 
----
+## Future work
 
-## 3. `loss.py`
-
-This file defines the loss functions used during Transolver training, primarily
-focusing on a relative L2 loss. For surface data, it computes mean squared error (MSE)
-or root mean squared error (RMSE) for both pressure (a scalar) and wall shear (a
-vector), handling each component separately before combining the results.
-
----
-
-## 4. `metrics.py`
-
-Evaluation metrics for model predictions are defined here. The metrics are designed to
-aggregate results across distributed processes, ensuring consistency in multi-GPU
-setups. For surface predictions, the script computes normalized L2 errors for both
-pressure and shear components, after unnormalizing the predictions and targets. The
-structure of the code allows for straightforward extension to additional metrics or
-application domains as needed.
-
----
-
-## 5. `datapipe.py`
-
-Efficient loading of large CFD datasets stored in Zarr format is handled by this file,
-which implements like a PyTorch dataset. The datapipe reads large arrays in a chunk-aligned
-manner for optimal performance, leveraging threads for parallel I/O. It offers
-flexibility in specifying which data keys to load and which are considered “large” (and
-thus read in chunks, vs. small arrays which are directly read in their entirety).
-For faster GPU transfers, it can allocate directly to pinned memory, then share buffers
-with numpy for streaming from disk directly to pinned memory.  The dataload has a
-prefetch utility, as well, enabling the dataloader to queue the next batch to GPU.
-
-CPU to GPU transfers are performed in a separate CUDA stream from the main computation,
-enabling async transfers overlapping with model training.  The main parameter to tune
-is the number of workers for the threading: too many, and you will introduce
-CPU overhead limiting the model performance.  Too few, and the dataload won't acheive
-peak throughput of dataloading.
+The Transolver model is a promising, transformer-based model that produces high
+quality predictions for CFD surrogate simulations.  In the future, we may update
+the example to include domain parallelism and Transolver++ enhancements,
+as well as volumetric data examples.  If you
+have issues, requests, or other items please feel free to open an issue and discuss!

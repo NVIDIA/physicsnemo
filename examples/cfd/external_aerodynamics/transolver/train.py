@@ -23,6 +23,7 @@ from tabulate import tabulate
 from omegaconf import DictConfig
 from torch.utils.tensorboard import SummaryWriter
 
+import numpy as np
 
 from torch.distributed.fsdp import (
     FullyShardedDataParallel as FSDP,
@@ -34,7 +35,6 @@ from torch.distributed.tensor import distribute_module
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.distributed import DistributedManager
-from typing import Literal
 
 from physicsnemo.utils.profiling import profile, Profiler
 
@@ -108,45 +108,54 @@ def forward_pass(
     output_pad_size: int | None,
     dist_manager: DistributedManager,
     cfg: DictConfig,
+    norm_factors: dict[str, torch.Tensor],
 ):
     """
     Run the forward pass of the model for one batch, including metrics and loss calculation.
     """
 
     if cfg.data.mode == "surface":
-        features, embeddings, targets, others = preprocess_surface_data(batch)
+        features, embeddings, targets, others = preprocess_surface_data(
+            batch, norm_factors
+        )
         features, embeddings, targets = downsample_surface(
             features, embeddings, targets, cfg.data.resolution
         )
 
     elif cfg.data.mode == "volume":
-        features, embeddings, targets, others = preprocess_volume_data(batch)
+        features, embeddings, targets, others = preprocess_volume_data(
+            batch, norm_factors
+        )
         features, embeddings, targets = downsample_volume(
             features, embeddings, targets, cfg.data.resolution
         )
     else:
         raise ValueError(f"Unknown data mode: {cfg.data.mode}")
 
+    # del batch
+
     # Cast precisions:
     features, embeddings = cast_precisions(features, embeddings, precision)
     with get_autocast_context(precision):
-        print(
-            f"features shape: {features.shape} nd placements: {features._spec.placements}"
-        )
-        print(
-            f"embeddings shape: {embeddings.shape} nd placements: {embeddings._spec.placements}"
-        )
-        print(
-            f"targets shape: {targets.shape} nd placements: {targets._spec.placements}"
-        )
-        print(f"cat shape: {torch.cat((features, embeddings), dim=-1).shape}")
+
+        # For fp8, we may have to pad the inputs:
+        if precision == "float8":
+            fx_dim = features.shape[-1] + embeddings.shape[-1]
+            if fx_dim % 16 != 0:
+                pad_size = 16 - (fx_dim % 16)
+                features = torch.nn.functional.pad(features, (0, pad_size))
+                fx_dim = features.shape[-1] + embeddings.shape[-1]
+
         outputs = model(features, embeddings)
+
         if output_pad_size is not None:
             # Remove the padded outputs:
             outputs = outputs[:, :, :-output_pad_size]
         loss = loss_fn(outputs, targets, others, cfg.data.mode)
 
-    metrics = metrics_fn(outputs, targets, others, dist_manager, cfg.data.mode)
+    metrics = metrics_fn(
+        outputs, targets, others, dist_manager, cfg.data.mode, norm_factors
+    )
 
     return loss, metrics
 
@@ -154,7 +163,7 @@ def forward_pass(
 @profile
 def train_epoch(
     dataloader,
-    sampler: torch.utils.data.Sampler | None,
+    sampler: torch.utils.data.Sampler,
     model: torch.nn.Module,
     output_pad_size: int | None,
     optimizer: torch.optim.Optimizer,
@@ -164,6 +173,7 @@ def train_epoch(
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
+    norm_factors: dict[str, torch.Tensor],
     scaler: GradScaler | None = None,
 ) -> float:
     """
@@ -171,7 +181,7 @@ def train_epoch(
 
     Args:
         dataloader (list[dict]): Training data loader
-        sampler (torch.utils.data.Sampler | None): Sampler for distributed or sequential sampling.
+        sampler (torch.utils.data.Sampler): Sampler for distributed or sequential sampling.
         model (torch.nn.Module): The neural network model to train.
         output_pad_size (int | None): Optional output padding size for lowest precisions (FP8).
         optimizer (torch.optim.Optimizer): Optimizer for model parameters.
@@ -181,8 +191,8 @@ def train_epoch(
         epoch (int): Current epoch number.
         cfg (DictConfig): Hydra configuration object.
         dist_manager (DistributedManager): Distributed manager from physicsnemo.
+        norm_factors (dict[str, torch.Tensor]): Normalization factors for the data.
         scaler (GradScaler | None, optional): Gradient scaler for mixed precision training.
-
     Returns:
         float: The average training loss for the epoch.
     """
@@ -196,16 +206,20 @@ def train_epoch(
     start_time = time.time()
     with Profiler():
         for i, batch_idx in enumerate(epoch_indices):
-
-            if i > 10:
-                break
             batch = dataloader[batch_idx]
+
             # preload the next batch, if we're not on the last batch
             if i < epoch_len - 1 and sampler is not None:
                 dataloader.preload(epoch_indices[i + 1])
 
             loss, metrics = forward_pass(
-                batch, model, precision, output_pad_size, dist_manager, cfg
+                batch,
+                model,
+                precision,
+                output_pad_size,
+                dist_manager,
+                cfg,
+                norm_factors,
             )
 
             optimizer.zero_grad()
@@ -237,8 +251,10 @@ def train_epoch(
             start_time = end_time
             images_per_second = 1 / duration
 
+            mem_usage = torch.cuda.memory_reserved() / 1024**3
+
             logger.info(
-                f"Epoch {epoch} [{i}/{epoch_len}] Loss: {this_loss:.6f} Duration: {duration:.2f}s"
+                f"Epoch {epoch} [{i}/{epoch_len}] Loss: {this_loss:.6f} Duration: {duration:.2f}s Mem: {mem_usage:.2f}GB"
             )
             if dist_manager.rank == 0:
                 writer.add_scalar(
@@ -282,6 +298,7 @@ def val_epoch(
     epoch: int,
     cfg: DictConfig,
     dist_manager: DistributedManager,
+    norm_factors: dict[str, torch.Tensor],
 ) -> float:
     """
     Run validation for one epoch.
@@ -296,7 +313,7 @@ def val_epoch(
         epoch (int): Current epoch number.
         cfg (DictConfig): Hydra configuration object.
         dist_manager (DistributedManager): Distributed manager instance.
-
+        norm_factors (dict[str, torch.Tensor]): Normalization factors for the data.
     Returns:
         float: The average validation loss for the epoch.
     """
@@ -312,8 +329,6 @@ def val_epoch(
     start_time = time.time()
     with torch.no_grad():  # Disable gradient computation
         for i, batch_idx in enumerate(epoch_indices):
-            if i > 10:
-                break
             # Get data from batch
             batch = dataloader[batch_idx]
 
@@ -322,7 +337,13 @@ def val_epoch(
                 dataloader.preload(epoch_indices[i + 1])
 
             loss, metrics = forward_pass(
-                batch, model, precision, output_pad_size, dist_manager, cfg
+                batch,
+                model,
+                precision,
+                output_pad_size,
+                dist_manager,
+                cfg,
+                norm_factors,
             )
 
             if i == 0:
@@ -397,7 +418,7 @@ def main(cfg: DictConfig):
     if cfg.training.precision == "float8":
         # we have to manipulate the output shape
         # to enable fp8 computations with transformer_engine.
-        # need the output to be divisible by 16.
+        # need the input and output to be divisible by 16.
         # if (cfg.model.embedding_dim + cfg.model.functional_dim) % 16 != 0:
 
         if cfg.model.out_dim % 16 != 0:
@@ -409,6 +430,14 @@ def main(cfg: DictConfig):
             )
         else:
             output_pad_size = None
+        if (cfg.model.functional_dim + cfg.model.embedding_dim) % 16 != 0:
+            input_pad_size = 16 - (
+                (cfg.model.functional_dim + cfg.model.embedding_dim) % 16
+            )
+            cfg.model.functional_dim += input_pad_size
+            logger.info(
+                f"Padding input dimension to {cfg.model.functional_dim} and {cfg.model.embedding_dim} for fp8 autocast"
+            )
     else:
         input_pad_size = None
         output_pad_size = None
@@ -418,44 +447,11 @@ def main(cfg: DictConfig):
 
     model.to(dist_manager.device)
 
-    # Configure domain parallelism, if enabled:
-    domain_size = int(cfg.training.domain_parallelism)
-
-    if domain_size > 1:
-        # You can use -1 to one axis to indicate that you want to use all the GPUs in that dimension.
-        mesh = dist_manager.initialize_mesh(
-            mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
-        )
-        # This is a subset of all the GPUs, and will vary depending on the process.
-        # Think of this as slicing the global mesh along the domain axis.
-        # It will contain only the GPUs that this process is sharing data with.
-        domain_mesh = mesh["domain"]
-        ddp_mesh = mesh["ddp"]
-        placements = (Shard(1),)
-    else:
-        domain_mesh = None
-        ddp_mesh = None
-        placements = None
-
-    if domain_size > 1:
-        # Instead of DDP, for sharding we use FSDP.  It's possible to use FSDP in the DDP
-        # mode, but since it's not pure data parallel we have to me more careful.
-
-        # First, distribute the model so that each GPU has the copy with DTensor weights:
-        model = distribute_module(model, domain_mesh)
-
-        model = FSDP(
-            model,
-            device_mesh=mesh["ddp"],
-            sharding_strategy=ShardingStrategy.NO_SHARD,
-        )
-
-    elif dist_manager.world_size > 1:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[dist_manager.local_rank],
-            output_device=dist_manager.device,
-        )
+    model = torch.nn.parallel.DistributedDataParallel(
+        model,
+        device_ids=[dist_manager.local_rank],
+        output_device=dist_manager.device,
+    )
 
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Number of parameters: {num_params}")
@@ -464,8 +460,6 @@ def main(cfg: DictConfig):
 
     train_dataset = DomainParallelZarrDataset(
         data_path=cfg.data.train.data_path,
-        device_mesh=domain_mesh,
-        placements=placements,
         max_workers=cfg.data.max_workers,
         pin_memory=cfg.data.pin_memory,
         keys_to_read=cfg.data.data_keys,
@@ -476,20 +470,14 @@ def main(cfg: DictConfig):
 
     val_dataset = DomainParallelZarrDataset(
         data_path=cfg.data.val.data_path,  # Assuming validation data path is configured
-        device_mesh=domain_mesh,
-        placements=placements,
         max_workers=cfg.data.max_workers,
         pin_memory=cfg.data.pin_memory,
         keys_to_read=cfg.data.data_keys,
         large_keys=cfg.data.large_keys,
     )
 
-    if ddp_mesh is not None:
-        num_replicas = ddp_mesh.size()
-        data_rank = ddp_mesh.get_local_rank()
-    else:
-        num_replicas = dist_manager.world_size
-        data_rank = dist_manager.rank
+    num_replicas = dist_manager.world_size
+    data_rank = dist_manager.rank
 
     # Set up distributed samplers
     train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -508,9 +496,16 @@ def main(cfg: DictConfig):
         drop_last=True,
     )
 
-    print(
-        f"num_replicas: {num_replicas}, data_rank: {data_rank}, val targets: {list(val_sampler)}"
-    )
+    # Load the normalization file:
+    if cfg.data.mode == "surface":
+        norm_file = "surface_fields_normalization.npz"
+    elif cfg.data.mode == "volume":
+        norm_file = "volume_fields_normalization.npz"
+    norm_data = np.load(norm_file)
+    norm_factors = {
+        "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+        "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+    }
 
     # Set up optimizer and scheduler
     optimizer = hydra.utils.instantiate(cfg.optimizer, params=model.parameters())
@@ -544,6 +539,7 @@ def main(cfg: DictConfig):
         "scheduler": scheduler,
         "models": model,
     }
+
     loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
 
     if cfg.training.compile:
@@ -570,6 +566,7 @@ def main(cfg: DictConfig):
             epoch,
             cfg,
             dist_manager,
+            norm_factors,
             scaler,
         )
         end_time = time.time()
@@ -587,6 +584,7 @@ def main(cfg: DictConfig):
             epoch,
             cfg,
             dist_manager,
+            norm_factors,
         )
         end_time = time.time()
         val_duration = end_time - start_time
@@ -613,9 +611,12 @@ def launch(cfg: DictConfig):
     Args:
         cfg: Hydra configuration object
     """
+
+    # If you want to use `line_profiler` or PyTorch's profiler, enable them here.
+
     profiler = Profiler()
     # profiler.enable("torch")
-    profiler.enable("line_profiler")
+    # profiler.enable("line_profiler")
     profiler.initialize()
     main(cfg)
     profiler.finalize()

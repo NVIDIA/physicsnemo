@@ -17,16 +17,14 @@
 
 
 output_dir: "runs"
-run_id: "surface/ReduceLR/TE/float16-3/"
+run_id: "surface/precision-convergence/float32"
 
 # Training configuration
 training:
-  precision: float16 # float32, float16, bfloat16
-  num_epochs: 500
+  precision: float32 # float32, float16, bfloat16
+  num_epochs: 251 # Add one to save at 250 :)
   save_interval: 25  # Save checkpoint every N epochs
-  seed: 42
-  output_dir: "runs"
-  compile: false
+  compile: True
 
 # Model configuration
 model:
@@ -44,26 +42,26 @@ model:
   unified_pos: false # Whether to use unified positional embeddings
   ref: 8            # Reference dimension for unified pos
   structured_shape: null
-  use_te: True      # Use transformer engine
+  use_te: false      # Use transformer engine
   Time_Input: false # Whether to use time embeddings
 
-# scheduler:
-#   name: "OneCycleLR"
-#   params:
-#     final_div_factor: 1e4
-
-# StepLR scheduler: Decays the learning rate by gamma every step_size epochs
 scheduler:
-  name: "StepLR"
+  name: "OneCycleLR"
   params:
-    step_size: 50     # Decay every 100 epochs (set X as desired)
-    gamma: 0.5        # Decay factor
+    final_div_factor: 1e4
+
+# # StepLR scheduler: Decays the learning rate by gamma every step_size epochs
+# scheduler:
+#   name: "StepLR"
+#   params:
+#     step_size: 50     # Decay every 100 epochs (set X as desired)
+#     gamma: 0.5        # Decay factor
 
 
 # Optimizer configuration
 optimizer:
   _target_: torch.optim.AdamW
-  lr: 3.0e-4
+  lr: 5.0e-4
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   eps: 1.0e-8
@@ -74,10 +72,9 @@ data:
     data_path: /user_data/datasets/domino/train/
   val:
     data_path: /user_data/datasets/domino/val/
-  max_workers: 64
+  max_workers: 8
   pin_memory: true
-  # resolution: 10000
-  resolution: 325_000
+  resolution: 400_000
   mode: surface
   data_keys:
     - "surface_fields"

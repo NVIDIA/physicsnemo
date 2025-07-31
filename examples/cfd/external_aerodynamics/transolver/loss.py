@@ -38,7 +38,7 @@ def loss_fn(
     if mode == "surface":
         loss = loss_fn_surface(pred, target, "mse")
     elif mode == "volume":
-        loss = loss_fn_volume(pred, target, "rmse")
+        loss = loss_fn_volume(pred, target, "mse")
     # 100 * integral_loss_fn(pred, target, others["surface_areas"], others["surface_normals"], others["stream_velocity"])
     return loss
 

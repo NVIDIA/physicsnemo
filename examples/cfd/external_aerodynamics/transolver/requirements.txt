@@ -4,3 +4,5 @@ tensorboard
 termcolor
 einops
 transformer_engine[pytorch]
+zarr>=3.0
+zarrs

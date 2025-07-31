@@ -385,7 +385,7 @@ class Transolver(Module):
             n_layers=0,
             res=False,
             act=act,
-            use_te=False,
+            use_te=use_te,
         )
 
         self.Time_Input = Time_Input
