@@ -149,7 +149,6 @@ def test_radius_search(
             assert (dists[mask][1:] == 0).all()
 
     if return_points:
-
         print(points.shape)
         if max_points is not None:
             assert points.shape[0] == query_space_points.shape[0]
@@ -199,7 +198,6 @@ def test_radius_search(
         assert (matches_per_query[1:] == expected_matches).all()
 
     else:
-
         # We should have exactly expected_matches match for each query point.
         assert indexes.shape[1] == expected_matches * query_space_points.shape[0]
 
@@ -242,7 +240,6 @@ def test_radius_search_torch_compile_no_graph_break(device):
 
 
 def test_opcheck(device="cuda"):
-
     points = torch.randn(100, 3, device=device)
     queries = torch.randn(10, 3, device=device)
     radius = 0.5
@@ -261,7 +258,6 @@ if __name__ == "__main__":
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("max_points", [22, None])
 def test_radius_search_comparison(device, max_points):
-
     torch.manual_seed(42)
     if device == "cuda":
         torch.cuda.manual_seed(42)
@@ -288,7 +284,6 @@ def test_radius_search_comparison(device, max_points):
 
     # The points may not come out in the same order in each.  So, we check only against the sums:
     if max_points is not None:
-
         assert torch.allclose(
             index_warp.sum(dim=1), index_torch.to(torch.int32).sum(dim=1)
         )
@@ -319,7 +314,6 @@ def test_radius_search_comparison(device, max_points):
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("max_points", [8, None])
 def test_radius_search_gradients(device, max_points):
-
     # Gradients are only supported to flow through the output points.
     # Therefore there are NO gradients if return_points=False
 
@@ -367,9 +361,9 @@ def test_radius_search_gradients(device, max_points):
     print(f"Warp points grad: {pts_grad_warp}")
     print(f"Torch points grad: {pts_grad_torch}")
 
-    assert torch.allclose(
-        pts_grad_warp, pts_grad_torch, atol=1e-5
-    ), "Point gradients do not match"
+    assert torch.allclose(pts_grad_warp, pts_grad_torch, atol=1e-5), (
+        "Point gradients do not match"
+    )
 
     # assert torch.allclose(qrs_grad_warp, qrs_grad_torch, atol=1e-5), "Query gradients do not match"
 

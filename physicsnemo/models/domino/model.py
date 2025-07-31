@@ -28,9 +28,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from physicsnemo.utils.neighbors import radius_search
 from physicsnemo.models.unet import UNet
-
+from physicsnemo.utils.neighbors import radius_search
 from physicsnemo.utils.profiling import profile
 
 
@@ -160,7 +159,6 @@ class BQWarp(nn.Module):
         p_grid = torch.reshape(p_grid, (batch_size, nx * ny * nz, 3))
 
         if reverse_mapping:
-
             mapping, outputs = radius_search(
                 x[0],
                 p_grid[0],
@@ -171,7 +169,6 @@ class BQWarp(nn.Module):
             mapping = mapping.unsqueeze(0)
             outputs = outputs.unsqueeze(0)
         else:
-
             mapping, outputs = radius_search(
                 p_grid[0],
                 x[0],

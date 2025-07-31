@@ -18,8 +18,8 @@
 This file contains the interface between PyTorch and Warp kernels.
 
 It uses a mix of utilities, such that it needs to be opaque to pure PyTorch.
-At the same time, we want to rely on PyTorch's memory allocation as much as possible 
-and not warp.  So, tensor creation and allocation is driven by torch, and 
+At the same time, we want to rely on PyTorch's memory allocation as much as possible
+and not warp.  So, tensor creation and allocation is driven by torch, and
 passed to warp for computation.
 """
 
@@ -32,7 +32,6 @@ from physicsnemo.utils.version_check import check_min_version
 WARP_AVAILABLE = check_min_version("warp", "0.6.0")
 
 if WARP_AVAILABLE:
-
     import warp as wp
 
     wp.config.quiet = True
@@ -205,7 +204,6 @@ if WARP_AVAILABLE:
             )
 
         elif not return_dists and return_points:
-
             wp.launch(
                 kernel=radius_search_unlimited_select_with_points,
                 dim=N_queries,
@@ -224,7 +222,6 @@ if WARP_AVAILABLE:
             )
 
         else:
-
             wp.launch(
                 kernel=radius_search_unlimited_select_with_dists_and_points,
                 dim=N_queries,
@@ -308,7 +305,6 @@ if WARP_AVAILABLE:
         # Now, the situations diverge based on max_points.
 
         if max_points is None:
-
             total_count, wp_offset = count_neighbors(
                 grid,
                 wp_points,
@@ -340,7 +336,6 @@ if WARP_AVAILABLE:
             )
 
         else:
-
             # With a fixed number of output points, we have no need for a second kernel.
             indices = torch.full(
                 (N_queries, max_points), 0, dtype=torch.int32, device=points.device

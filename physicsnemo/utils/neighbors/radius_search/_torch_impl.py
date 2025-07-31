@@ -56,7 +56,6 @@ def radius_search_impl(
             dists = torch.empty((0,), device=dists.device, dtype=dists.dtype)
 
     else:
-
         print(f"dists shape: {dists.shape}")
 
         # Take the max_points lowest distances for each query
