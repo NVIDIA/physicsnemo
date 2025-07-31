@@ -127,9 +127,12 @@ class MeshGraphNet(Module):
 
     Example
     -------
+    >>> # `norm_layer` is in MGN is deprecated, 
+    >>> # TE will be automatically used if possible unless told otherwise.
+    >>> # (You don't have to set this varialbe, it's faster to use TE!)
+    >>> # Example of how to disable:
     >>> import os
-    >>> # `norm_layer` is deprecated, TE will be automatically used if possible unless disabled:
-    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = True
+    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = False
     >>>
     >>> model = physicsnemo.models.meshgraphnet.MeshGraphNet(
     ...         input_dim_nodes=4,
