@@ -157,7 +157,6 @@ class VortexSheddingRe300To1000Dataset(DGLDataset):
     def __init__(
         self, name="dataset", data_dir="dataset", split="train", verbose=False
     ):
-
         super().__init__(
             name=name,
             verbose=verbose,

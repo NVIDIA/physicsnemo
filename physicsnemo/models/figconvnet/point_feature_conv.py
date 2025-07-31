@@ -128,30 +128,30 @@ class PointFeatureConv(nn.Module):
         ellipsoidal neighborhood.
         """
         super().__init__()
-        assert (
-            isinstance(reductions, (tuple, list)) and len(reductions) > 0
-        ), f"reductions must be a list or tuple of length > 0, got {reductions}"
+        assert isinstance(reductions, (tuple, list)) and len(reductions) > 0, (
+            f"reductions must be a list or tuple of length > 0, got {reductions}"
+        )
         if out_point_feature_type == "provided":
-            assert (
-                downsample_voxel_size is None
-            ), "downsample_voxel_size is only used for downsample"
-            assert (
-                provided_in_channels is not None
-            ), "provided_in_channels must be provided for provided type"
+            assert downsample_voxel_size is None, (
+                "downsample_voxel_size is only used for downsample"
+            )
+            assert provided_in_channels is not None, (
+                "provided_in_channels must be provided for provided type"
+            )
         elif out_point_feature_type == "downsample":
-            assert (
-                downsample_voxel_size is not None
-            ), "downsample_voxel_size must be provided for downsample"
-            assert (
-                provided_in_channels is None
-            ), "provided_in_channels must be None for downsample type"
+            assert downsample_voxel_size is not None, (
+                "downsample_voxel_size must be provided for downsample"
+            )
+            assert provided_in_channels is None, (
+                "provided_in_channels must be None for downsample type"
+            )
         elif out_point_feature_type == "same":
-            assert (
-                downsample_voxel_size is None
-            ), "downsample_voxel_size is only used for downsample"
-            assert (
-                provided_in_channels is None
-            ), "provided_in_channels must be None for same type"
+            assert downsample_voxel_size is None, (
+                "downsample_voxel_size is only used for downsample"
+            )
+            assert provided_in_channels is None, (
+                "provided_in_channels must be None for same type"
+            )
         if downsample_voxel_size is not None and downsample_voxel_size > radius:
             raise ValueError(
                 f"downsample_voxel_size {downsample_voxel_size} must be <= radius {radius}"
@@ -222,9 +222,9 @@ class PointFeatureConv(nn.Module):
         """When out_point_features is None, the output will be generated on the
         in_point_features.vertices."""
         if self.out_point_feature_type == "provided":
-            assert (
-                out_point_features is not None
-            ), "out_point_features must be provided for the provided type"
+            assert out_point_features is not None, (
+                "out_point_features must be provided for the provided type"
+            )
         elif self.out_point_feature_type == "downsample":
             assert out_point_features is None
             out_point_features = in_point_features.voxel_down_sample(
@@ -242,7 +242,9 @@ class PointFeatureConv(nn.Module):
             + self.use_rel_pos_encode * self.positional_encoding.num_channels * 3
             + (not self.use_rel_pos_encode) * self.use_rel_pos * 3
             == self.edge_transform_mlp.in_channels
-        ), f"input features shape {in_point_features.features.shape} and {out_point_features.features.shape} does not match the edge_transform_mlp input features {self.edge_transform_mlp.in_channels}"
+        ), (
+            f"input features shape {in_point_features.features.shape} and {out_point_features.features.shape} does not match the edge_transform_mlp input features {self.edge_transform_mlp.in_channels}"
+        )
         # Get the neighbors
         in_vertices = in_point_features.vertices
         out_vertices = out_point_features.vertices
@@ -398,9 +400,9 @@ class PointFeatureConvBlock(nn.Module):
         out_point_features: Optional[PointFeatures["B M C2"]] = None,
     ) -> PointFeatures["B N C2"]:
         if self.out_point_feature_type == "provided":
-            assert (
-                out_point_features is not None
-            ), "out_point_features must be provided for the provided type"
+            assert out_point_features is not None, (
+                "out_point_features must be provided for the provided type"
+            )
             out = self.conv1(in_point_features, out_point_features)
         elif self.out_point_feature_type == "downsample":
             assert out_point_features is None

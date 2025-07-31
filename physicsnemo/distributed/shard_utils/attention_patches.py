@@ -187,10 +187,8 @@ class RingSDPA(torch.autograd.Function):
             # Launch communication for the next iteration early
             with record_function(f"sdpa_send_data_{i}_{dist.get_rank()}"):
                 if i < ring_config.mesh_size - 1:
-
                     # Use a dedicated stream for communication
                     with torch.cuda.stream(comm_stream):
-
                         send_tensors = [
                             torch.empty((), device=q.device, dtype=q.dtype)
                             for _ in range(local_size)
@@ -339,7 +337,6 @@ class RingSDPA(torch.autograd.Function):
         # 4. If iteration != 0, send grad_k, grad_v to the next GPU after combining them into one tensor.
 
         for i in range(ctx.ring_config.mesh_size):
-
             (
                 block_grad_q,
                 block_grad_k,
@@ -422,7 +419,6 @@ class RingSDPABlocking(torch.autograd.Function):
         current_k, current_v = k, v
 
         for i in range(ring_config.mesh_size):
-
             # Perform computation on current k,v while communication happens
             (
                 output,
@@ -533,7 +529,6 @@ class RingSDPABlocking(torch.autograd.Function):
         # 4. If iteration != 0, send grad_k, grad_v to the next GPU after combining them into one tensor.
 
         for i in range(ctx.ring_config.mesh_size):
-
             (
                 block_grad_q,
                 block_grad_k,

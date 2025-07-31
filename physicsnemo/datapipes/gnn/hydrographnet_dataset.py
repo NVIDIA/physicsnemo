@@ -152,13 +152,16 @@ def download_from_url(
         with requests.get(url, stream=True, timeout=120) as r:
             r.raise_for_status()
             total_size = int(r.headers.get("content-length", 0))
-            with open(fpath, "wb") as f, tqdm(
-                desc=str(fpath),
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar:
+            with (
+                open(fpath, "wb") as f,
+                tqdm(
+                    desc=str(fpath),
+                    total=total_size,
+                    unit="iB",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                ) as bar,
+            ):
                 for chunk in r.iter_content(chunk_size=chunk_size):
                     if chunk:
                         f.write(chunk)
@@ -175,13 +178,29 @@ def download_from_url(
         if fpath.suffix in [".tar", ".gz", ".tgz"]:
             logger.info(f"Extracting tar archive {fpath}...")
             with tarfile.open(fpath, "r:*") as archive:
-                archive.extractall(path=root)
+                # Safely extract while supporting Python versions < 3.12 that lack the
+                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
+                # recommended way to avoid unsafe members;
+                extract_kwargs = dict(
+                    path=root,
+                )
+                if "filter" in archive.extractall.__code__.co_varnames:
+                    extract_kwargs["filter"] = "data"
+                archive.extractall(**extract_kwargs)  # noqa: S202
                 names = ", ".join(archive.getnames())
             logger.info(f"Extracted files: {names}")
         elif fpath.suffix == ".zip":
             logger.info(f"Extracting zip archive {fpath}...")
             with zipfile.ZipFile(fpath, "r") as z:
-                z.extractall(path=root)
+                # Safely extract while supporting Python versions < 3.12 that lack the
+                # ``filter`` keyword.  Starting with 3.12, ``filter="data"`` is the
+                # recommended way to avoid unsafe members;
+                extract_kwargs = dict(
+                    path=root,
+                )
+                if "filter" in z.extractall.__code__.co_varnames:
+                    extract_kwargs["filter"] = "data"
+                z.extractall(**extract_kwargs)  # noqa: S202
                 names = ", ".join(z.namelist())
             logger.info(f"Extracted files: {names}")
 
@@ -291,7 +310,6 @@ class HydroGraphDataset(DGLDataset):
         verbose: bool = False,
         return_physics: bool = False,
     ):
-
         if split not in {"train", "test"}:
             raise ValueError(f"Invalid split '{split}'. Expected 'train' or 'test'.")
 

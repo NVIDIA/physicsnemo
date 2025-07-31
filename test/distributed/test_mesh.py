@@ -39,7 +39,6 @@ distributed_test = pytest.mark.skipif(
 
 
 def run_mesh_creation(rank, num_gpus, mesh_names, mesh_sizes, verbose):
-
     with modify_environment(
         RANK=f"{rank}",
         WORLD_SIZE=f"{num_gpus}",
@@ -47,7 +46,6 @@ def run_mesh_creation(rank, num_gpus, mesh_names, mesh_sizes, verbose):
         MASTER_PORT=str(12355),
         LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
     ):
-
         DistributedManager.initialize()
         dm = DistributedManager()
         assert dm.is_initialized()
@@ -68,7 +66,6 @@ def run_mesh_creation(rank, num_gpus, mesh_names, mesh_sizes, verbose):
         if len(mesh_names) > 1:
             for i, i_name in enumerate(mesh_names):
                 for j, j_name in enumerate(mesh_names[i + 1 :]):
-
                     mesh_i = global_mesh[i_name].mesh.tolist()
                     mesh_j = global_mesh[j_name].mesh.tolist()
                     intersection = list(set(mesh_i) & set(mesh_j))

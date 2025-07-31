@@ -16,14 +16,14 @@
 
 """
 This code provides the datapipe for reading the processed npy files,
-generating multi-res grids, calculating signed distance fields, 
-positional encodings, sampling random points in the volume and on surface, 
+generating multi-res grids, calculating signed distance fields,
+positional encodings, sampling random points in the volume and on surface,
 normalizing fields and returning the output tensors as a dictionary.
 
-This datapipe also non-dimensionalizes the fields, so the order in which the variables should 
-be fixed: velocity, pressure, turbulent viscosity for volume variables and 
-pressure, wall-shear-stress for surface variables. The different parameters such as 
-variable names, domain resolution, sampling size etc. are configurable in config.yaml. 
+This datapipe also non-dimensionalizes the fields, so the order in which the variables should
+be fixed: velocity, pressure, turbulent viscosity for volume variables and
+pressure, wall-shear-stress for surface variables. The different parameters such as
+variable names, domain resolution, sampling size etc. are configurable in config.yaml.
 """
 
 import os
@@ -107,7 +107,7 @@ class DoMINODataConfig:
         phase: Which phase of data to load ("train", "val", or "test").
         surface_variables: (Surface specific) Names of surface variables.
         surface_points_sample: (Surface specific) Number of surface points to sample per batch.
-        num__surface_neighbors: (Surface specific) Number of surface neighbors to consider for nearest neighbors approach.
+        num_surface_neighbors: (Surface specific) Number of surface neighbors to consider for nearest neighbors approach.
         resample_surfaces: (Surface specific) Whether to resample the surface before kdtree/knn. Not available if caching.
         resampling_points: (Surface specific) Number of points to resample the surface to.
         surface_sampling_algorithm: (Surface specific) Algorithm to use for surface sampling ("area_weighted" or "random").
@@ -346,7 +346,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def read_data_zarr(self, filepath):
-
         # def create_pinned_streaming_space(shape, dtype):
         #     # TODO - this function could boost performance a little, but
         #     # the pinned memory pool seems too small.
@@ -386,7 +385,6 @@ class DoMINODataPipe(Dataset):
             return result
 
         with zarr.open_group(filepath, mode="r") as z:
-
             data = {}
             futures = []
             if "volume_fields" in z.keys():
@@ -458,7 +456,6 @@ class DoMINODataPipe(Dataset):
         filepath,
         max_workers=None,
     ):
-
         if max_workers is not None:
             self.max_workers = max_workers
 
@@ -500,7 +497,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_combined(self, data_dict):
-
         # Pull these out and force to fp32:
         with self.device_context:
             global_params_values = data_dict["global_params_values"].astype(
@@ -538,7 +534,6 @@ class DoMINODataPipe(Dataset):
 
         # SDF calculation on the grid using WARP
         if not self.config.compute_scaling_factors:
-
             nx, ny, nz = self.config.grid_resolution
             surf_grid = create_grid(s_max, s_min, [nx, ny, nz])
             surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
@@ -598,7 +593,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_surface(self, data_dict, core_dict, center_of_mass, s_min, s_max):
-
         nx, ny, nz = self.config.grid_resolution
 
         return_dict = {}
@@ -629,7 +623,6 @@ class DoMINODataPipe(Dataset):
             surface_fields = surface_fields[idx_s]
 
         if not self.config.compute_scaling_factors:
-
             c_max = self.config.bounding_box_dims[0]
             c_min = self.config.bounding_box_dims[1]
 
@@ -665,16 +658,17 @@ class DoMINODataPipe(Dataset):
                 )
 
             # Fit the kNN (or KDTree, if CPU) on ALL points:
-            if self.array_provider == cp:
-                knn = cuml.neighbors.NearestNeighbors(
-                    n_neighbors=self.config.num_surface_neighbors,
-                    algorithm="rbc",
-                )
-                knn.fit(surface_coordinates)
-            else:
-                # Under the hood this is instantiating a KDTree.
-                # aka here knn is a type, not a class, technically.
-                interp_func = KDTree(surface_coordinates)
+            if self.config.num_surface_neighbors > 1:
+                if self.array_provider == cp:
+                    knn = cuml.neighbors.NearestNeighbors(
+                        n_neighbors=self.config.num_surface_neighbors,
+                        algorithm="rbc",
+                    )
+                    knn.fit(surface_coordinates)
+                else:
+                    # Under the hood this is instantiating a KDTree.
+                    # aka here knn is a type, not a class, technically.
+                    interp_func = KDTree(surface_coordinates)
 
             if self.config.sampling:
                 # Perform the down sampling:
@@ -707,22 +701,28 @@ class DoMINODataPipe(Dataset):
                 pos_normals_com_surface = pos_normals_com_surface[idx_surface]
 
                 # Now, perform the kNN on the sampled points:
-                if self.array_provider == cp:
-                    ii = knn.kneighbors(
-                        surface_coordinates_sampled, return_distance=False
-                    )
-                else:
-                    _, ii = interp_func.query(
-                        surface_coordinates_sampled, k=self.config.num_surface_neighbors
-                    )
+                if self.config.num_surface_neighbors > 1:
+                    if self.array_provider == cp:
+                        ii = knn.kneighbors(
+                            surface_coordinates_sampled, return_distance=False
+                        )
+                    else:
+                        _, ii = interp_func.query(
+                            surface_coordinates_sampled,
+                            k=self.config.num_surface_neighbors,
+                        )
 
-                # Pull out the neighbor elements.  Note that ii is the index into the original
-                # points - but only exists for the sampled points
-                # In other words, a point from `surface_coordinates_sampled` has neighbors
-                # from the full `surface_coordinates` array.
-                surface_neighbors = surface_coordinates[ii][:, 1:]
-                surface_neighbors_normals = surface_normals[ii][:, 1:]
-                surface_neighbors_sizes = surface_sizes[ii][:, 1:]
+                    # Pull out the neighbor elements.  Note that ii is the index into the original
+                    # points - but only exists for the sampled points
+                    # In other words, a point from `surface_coordinates_sampled` has neighbors
+                    # from the full `surface_coordinates` array.
+                    surface_neighbors = surface_coordinates[ii][:, 1:]
+                    surface_neighbors_normals = surface_normals[ii][:, 1:]
+                    surface_neighbors_sizes = surface_sizes[ii][:, 1:]
+                else:
+                    surface_neighbors = surface_coordinates
+                    surface_neighbors_normals = surface_normals
+                    surface_neighbors_sizes = surface_sizes
 
                 # We could index into these above the knn step too; they aren't dependent on that.
                 surface_normals = surface_normals[idx_surface]
@@ -797,7 +797,6 @@ class DoMINODataPipe(Dataset):
         stl_vertices,
         center_of_mass,
     ):
-
         return_dict = {}
 
         nx, ny, nz = self.config.grid_resolution
@@ -892,7 +891,6 @@ class DoMINODataPipe(Dataset):
                 pos_normals_com_vol = volume_coordinates - center_of_mass
 
             if self.config.normalize_coordinates:
-
                 volume_coordinates = normalize(volume_coordinates, c_max, c_min)
                 grid = normalize(grid, c_max, c_min)
 
@@ -934,7 +932,6 @@ class DoMINODataPipe(Dataset):
 
     @profile
     def preprocess_data(self, data_dict):
-
         (
             return_dict,
             s_min,
@@ -1022,7 +1019,6 @@ class DoMINODataPipe(Dataset):
 
 @profile
 def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -> None:
-
     model_type = cfg.model.model_type
     max_scaling_factor_files = 20
 
@@ -1448,7 +1444,7 @@ def create_domino_dataset(
             model_type=cfg.model.model_type,
             bounding_box_dims=cfg.data.bounding_box,
             bounding_box_dims_surf=cfg.data.bounding_box_surface,
-            num_surface_neighbors=cfg.model.num_surface_neighbors,
+            num_surface_neighbors=cfg.model.num_neighbors_surface,
             resample_surfaces=cfg.model.resampling_surface_mesh.resample,
             resampling_points=cfg.model.resampling_surface_mesh.points,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,

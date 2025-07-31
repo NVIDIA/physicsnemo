@@ -29,7 +29,7 @@ from physicsnemo.utils.capture import _StaticCapture
 optimizers = pytest.importorskip("apex.optimizers")
 
 Tensor = torch.Tensor
-logger = logging.getLogger("__name__")
+module_logger = logging.getLogger("__name__")
 
 
 @pytest.fixture

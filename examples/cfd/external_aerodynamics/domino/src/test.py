@@ -125,6 +125,15 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                 geo_centers_surf, s_grid, sdf_surf_grid
             )
 
+        if (
+            output_features_vol is not None
+            and output_features_surf is not None
+            and cfg.model.combine_volume_surface
+        ):
+            encoding_g = torch.cat((encoding_g_vol, encoding_g_surf), axis=1)
+            encoding_g_surf = model.combined_unet_surf(encoding_g)
+            encoding_g_vol = model.combined_unet_vol(encoding_g)
+
         if output_features_vol is not None:
             # First calculate volume predictions if required
             volume_mesh_centers = data_dict["volume_mesh_centers"]
@@ -182,7 +191,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         pos_encoding,
                         global_params_values,
                         global_params_reference,
-                        num_sample_points=cfg.eval.stencil_size,
+                        num_sample_points=cfg.model.num_neighbors_volume,
                         eval_mode="volume",
                     )
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
@@ -263,29 +272,20 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         pos_encoding, eval_mode="surface"
                     )
 
-                    if cfg.model.surface_neighbors:
-                        tpredictions_batch = model.calculate_solution_with_neighbors(
-                            surface_mesh_centers_batch,
-                            geo_encoding_local,
-                            pos_encoding,
-                            surface_mesh_neighbors_batch,
-                            surface_normals_batch,
-                            surface_neighbors_normals_batch,
-                            surface_areas_batch,
-                            surface_neighbors_areas_batch,
-                            global_params_values,
-                            global_params_reference,
-                        )
-                    else:
-                        tpredictions_batch = model.calculate_solution(
-                            surface_mesh_centers_batch,
-                            geo_encoding_local,
-                            pos_encoding,
-                            global_params_values,
-                            global_params_reference,
-                            num_sample_points=1,
-                            eval_mode="surface",
-                        )
+                    tpredictions_batch = model.calculate_solution_with_neighbors(
+                        surface_mesh_centers_batch,
+                        geo_encoding_local,
+                        pos_encoding,
+                        surface_mesh_neighbors_batch,
+                        surface_normals_batch,
+                        surface_neighbors_normals_batch,
+                        surface_areas_batch,
+                        surface_neighbors_areas_batch,
+                        global_params_values,
+                        global_params_reference,
+                        num_sample_points=cfg.model.num_neighbors_surface,
+                    )
+                    
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
                     prediction_surf[
                         :, start_idx:end_idx
@@ -397,13 +397,16 @@ def main(cfg: DictConfig):
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
-    num_files = int(len(dirnames) / dist.world_size)
+    num_files = int(len(dirnames) / dist.world_size) + 1
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path
     if dist.rank == 0:
         create_directory(pred_save_path)
 
+    l2_surface_all = []
+    l2_volume_all = []
+    aero_forces_all = []
     for count, dirname in enumerate(dirnames_per_gpu):
         # print(f"Processing file {dirname}")
         filepath = os.path.join(input_path, dirname)
@@ -519,12 +522,6 @@ def main(cfg: DictConfig):
             mesh = pv.PolyData(polydata_surf)
             surface_coordinates = np.array(mesh.cell_centers().points, dtype=np.float32)
 
-            interp_func = KDTree(surface_coordinates)
-            dd, ii = interp_func.query(surface_coordinates, k=cfg.eval.stencil_size + 1)
-
-            surface_neighbors = surface_coordinates[ii]
-            surface_neighbors = surface_neighbors[:, 1:]
-
             surface_normals = np.array(mesh.cell_normals, dtype=np.float32)
             surface_sizes = mesh.compute_cell_sizes(
                 length=False, area=True, volume=False
@@ -535,10 +532,24 @@ def main(cfg: DictConfig):
             surface_normals = (
                 surface_normals / np.linalg.norm(surface_normals, axis=1)[:, np.newaxis]
             )
-            surface_neighbors_normals = surface_normals[ii]
-            surface_neighbors_normals = surface_neighbors_normals[:, 1:]
-            surface_neighbors_sizes = surface_sizes[ii]
-            surface_neighbors_sizes = surface_neighbors_sizes[:, 1:]
+
+            if cfg.model.num_neighbors_surface > 1:
+                interp_func = KDTree(surface_coordinates)
+                dd, ii = interp_func.query(
+                    surface_coordinates, k=cfg.model.num_neighbors_surface
+                )
+
+                surface_neighbors = surface_coordinates[ii]
+                surface_neighbors = surface_neighbors[:, 1:]
+
+                surface_neighbors_normals = surface_normals[ii]
+                surface_neighbors_normals = surface_neighbors_normals[:, 1:]
+                surface_neighbors_sizes = surface_sizes[ii]
+                surface_neighbors_sizes = surface_neighbors_sizes[:, 1:]
+            else:
+                surface_neighbors = surface_coordinates
+                surface_neighbors_normals = surface_normals
+                surface_neighbors_sizes = surface_sizes
 
             dx, dy, dz = (
                 (s_max[0] - s_min[0]) / nx,
@@ -773,9 +784,21 @@ def main(cfg: DictConfig):
             print("Drag=", dirname, force_x_pred, force_x_true)
             print("Lift=", dirname, force_z_pred, force_z_true)
             print("Side=", dirname, force_y_pred, force_y_true)
+            aero_forces_all.append(
+                [
+                    dirname,
+                    force_x_pred,
+                    force_x_true,
+                    force_z_pred,
+                    force_z_true,
+                    force_y_pred,
+                    force_y_true,
+                ]
+            )
 
-            l2_gt = np.sum(np.square(surface_fields), (0))
-            l2_error = np.sum(np.square(prediction_surf[0] - surface_fields), (0))
+            l2_gt = np.mean(np.square(surface_fields), (0))
+            l2_error = np.mean(np.square(prediction_surf[0] - surface_fields), (0))
+            l2_surface_all.append(np.sqrt(l2_error / l2_gt))
 
             print(
                 "Surface L-2 norm:",
@@ -799,13 +822,14 @@ def main(cfg: DictConfig):
             )
             target_vol[ids_in_bbox] = 0.0
             prediction_vol[ids_in_bbox] = 0.0
-            l2_gt = np.sum(np.square(target_vol), (0))
-            l2_error = np.sum(np.square(prediction_vol - target_vol), (0))
+            l2_gt = np.mean(np.square(target_vol), (0))
+            l2_error = np.mean(np.square(prediction_vol - target_vol), (0))
             print(
                 "Volume L-2 norm:",
                 dirname,
                 np.sqrt(l2_error) / np.sqrt(l2_gt),
             )
+            l2_volume_all.append(np.sqrt(l2_error) / np.sqrt(l2_gt))
 
         if prediction_surf is not None:
             surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 0:1])
@@ -833,6 +857,14 @@ def main(cfg: DictConfig):
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
             write_to_vtu(polydata_vol, vtu_pred_save_path)
+
+    l2_surface_all = np.asarray(l2_surface_all)  # num_files, 4
+    l2_volume_all = np.asarray(l2_volume_all)  # num_files, 4
+    l2_surface_mean = np.mean(l2_surface_all, 0)
+    l2_volume_mean = np.mean(l2_volume_all, 0)
+    print(
+        f"Mean over all samples, surface={l2_surface_mean} and volume={l2_volume_mean}"
+    )
 
 
 if __name__ == "__main__":

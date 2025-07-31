@@ -115,7 +115,6 @@ def _ball_query_forward_primitive_(
     radius: float,
     hash_grid: wp.HashGrid,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-
     # Create output tensors:
     mapping = torch.zeros(
         (1, points1.shape[0], k),
@@ -195,7 +194,6 @@ def _ball_query_backward_primitive_(
     grad_num_neighbors,
     grad_outputs,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-
     p2_grad = torch.zeros_like(points2)
 
     # Run the kernel in adjoint mode
@@ -280,7 +278,6 @@ class BallQuery(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_mapping, grad_num_neighbors, grad_outputs):
-
         points1, points2, mapping, num_neighbors, outputs = ctx.saved_tensors
         # Apply the primitive
         p2_grad = _ball_query_backward_primitive_(
@@ -371,6 +368,13 @@ if __name__ == "__main__":
     # Make function for saving point clouds
     import pyvista as pv
 
+    from physicsnemo.utils.neighbors import radius_search
+
+    radius_search = torch.compile(radius_search)
+
+    torch.random.manual_seed(0)
+    torch.cuda.manual_seed(0)
+
     def save_point_cloud(points, name):
         cloud = pv.PolyData(points.detach().cpu().numpy())
         cloud.save(name)
@@ -378,10 +382,10 @@ if __name__ == "__main__":
     # Check forward pass
     # Initialize tensors
     n = 1  # number of point clouds
-    p1 = 128000  # 100000  # number of points in point cloud 1
+    p1 = 1600_000  # 100000  # number of points in point cloud 1
     d = 3  # dimension of the points
-    p2 = 39321  # 100000  # number of points in point cloud 2
-    points1 = torch.rand(n, p1, d, device="cuda", requires_grad=True)
+    p2 = 1600_000  # 100000  # number of points in point cloud 2
+    points1 = torch.rand(n, p1, d, device="cuda", requires_grad=False)
 
     points2 = torch.rand(n, p2, d, device="cuda", requires_grad=True)
     k = 256  # maximum number of neighbors
@@ -391,45 +395,123 @@ if __name__ == "__main__":
     layer = BallQueryLayer(k, radius)
 
     # Make ball query
-    with wp.ScopedTimer("ball query", active=True):
+
+    for i in range(5):
         mapping, num_neighbors, outputs = layer(
             points1,
             points2,
         )
+        indices, points = radius_search(
+            points=points2[0],
+            queries=points1[0],
+            radius=radius,
+            max_points=k,
+            return_dists=False,
+            return_points=True,
+        )
 
-    for i in range(20):
-        p1 += 100
-        p2 += 100
-        points1 = torch.rand(n, p1, d, device="cuda", requires_grad=False)
-        points2 = torch.rand(n, p2, d, device="cuda", requires_grad=False)
+    # sorted_bq_indices = torch.sort(mapping[0][0]).values
+    # sorted_rs_indices = torch.sort(indices[0]).values
 
+    # print(sorted_bq_indices - sorted_rs_indices)
+    # print(sorted_bq_indices)
+    # print(sorted_rs_indices)
+
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    torch.cuda.synchronize()
+    for i in range(25):
+        if i == 5:
+            start_event.record()
         mapping, num_neighbors, outputs = layer(
             points1,
             points2,
         )
+    end_event.record()
+    torch.cuda.synchronize()
+    print(
+        f"Ball Query Time taken: {start_event.elapsed_time(end_event) / 20} ms per iteration"
+    )
 
-    # Perform matrix multiplication as comparison for timing
-    with wp.ScopedTimer("matrix multiplication 256", active=True):
-        outputs2 = torch.matmul(points1[0], torch.ones(3, k, device="cuda"))
-
-    # Save the point clouds
-    save_point_cloud(points1[0], "point1.vtk")
-    save_point_cloud(points2[0], "point2.vtk")
-    save_point_cloud(outputs[0].reshape(-1, 3), "outputs.vtk")
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    for i in range(25):
+        if i == 5:
+            torch.cuda.synchronize()
+            start_event.record()
+        indices, points = radius_search(
+            points=points2[0],
+            queries=points1[0],
+            radius=radius,
+            max_points=k,
+            return_dists=False,
+            return_points=True,
+        )
+    end_event.record()
+    torch.cuda.synchronize()
+    print(
+        f"Radius Search Time taken: {start_event.elapsed_time(end_event) / 20} ms per iteration"
+    )
 
     # Optimize the background points to move to the query points
-    optimizer = torch.optim.SGD([points2], 0.01)
+    optimizer = torch.optim.SGD([points2], 0.00)
 
     # Test optimization
-    for i in range(100):
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    torch.cuda.synchronize()
+    target = points1.unsqueeze(2).clone().detach()
+    for i in range(25):
+        if i == 5:
+            start_event.record()
         optimizer.zero_grad()
         # mapping, num_neighbors, outputs = layer(points1, points2, lengths1, lengths2)
         mapping, num_neighbors, outputs = layer(points1, points2)
-
+        # print(mapping[0][3])
+        # print(torch.where(mapping == 1))
         loss = (points1.unsqueeze(2) - outputs).pow(2).sum()
         loss.backward()
+        # print(f"ball query Points1 grad: {points1.grad}")
         optimizer.step()
+        optimizer.zero_grad()
 
-        # Save the point clouds
-        save_point_cloud(points1[0], "point1_{}.vtk".format(i))
-        save_point_cloud(outputs[0].reshape(-1, 3), "outputs_{}.vtk".format(i))
+    end_event.record()
+    torch.cuda.synchronize()
+    print(
+        f"Ball Query + backwards Time taken: {start_event.elapsed_time(end_event) / 20} ms per iteration"
+    )
+
+    # Optimize the background points to move to the query points
+    optimizer = torch.optim.SGD(
+        [points2], 0.00
+    )  # Setting the LR to 0.0 ensures the same gradients each time
+
+    # Test optimization
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    torch.cuda.synchronize()
+    start_event.record()
+    for i in range(25):
+        if i == 5:
+            start_event.record()
+        optimizer.zero_grad()
+        # mapping, num_neighbors, outputs = layer(points1, points2, lengths1, lengths2)
+        indexes, points = radius_search(
+            points=points2[0],
+            queries=points1[0],
+            radius=radius,
+            max_points=k,
+            return_dists=False,
+            return_points=True,
+        )
+        loss = (target - points).pow(2).sum()
+        loss.backward()
+        optimizer.step()
+        # print(f"radius search Points1 grad: {points1.grad}")
+        optimizer.zero_grad()
+
+    end_event.record()
+    torch.cuda.synchronize()
+    print(
+        f"radius search + backwards Time taken: {start_event.elapsed_time(end_event) / 20} ms per iteration"
+    )

@@ -474,53 +474,61 @@ class SpectralConv4d(nn.Module):
         # print(f'mod: size x: {x_ft.size()}, out: {out_ft.size()}')
         # print(f'mod: x_ft[weight4]: {x_ft[:, :, self.modes1 :, self.modes2 :, : -self.modes3, :self.modes4].size()} weight4: {self.weights4.size()}')
 
-        out_ft[
-            :, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
-            self.weights1,
+        out_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
+                self.weights1,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
-            self.weights2,
+        out_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
+                self.weights2,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
-            self.weights3,
+        out_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
+                self.weights3,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
-            self.weights4,
+        out_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
+                self.weights4,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4],
-            self.weights5,
+        out_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
+                ],
+                self.weights5,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4],
-            self.weights6,
+        out_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
+                ],
+                self.weights6,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4],
-            self.weights7,
+        out_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
+                ],
+                self.weights7,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4],
-            self.weights8,
+        out_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
+                ],
+                self.weights8,
+            )
         )
 
         # Return to physical space

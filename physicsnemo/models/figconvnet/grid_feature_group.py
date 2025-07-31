@@ -129,9 +129,9 @@ class GridFeaturesGroupIntraCommunication(nn.Module):
         # Assert the channel size of all grid_features are the same
         channel_size = grid_features_group[0].features.shape[0]
         for grid_features in grid_features_group:
-            assert (
-                grid_features.features.shape[0] == channel_size
-            ), f"Channel size of grid_features are not the same: {grid_features.features.shape[1]} != {channel_size}"
+            assert grid_features.features.shape[0] == channel_size, (
+                f"Channel size of grid_features are not the same: {grid_features.features.shape[1]} != {channel_size}"
+            )
 
         # broadcast the features between all pairs of grid_features
         # Copy the features of format B_C_H_W_D to avoid in-place operation
