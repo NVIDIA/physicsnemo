@@ -124,6 +124,13 @@ class MeshGraphKAN(Module):
 
     Example
     -------
+    >>> # `norm_layer` is in MGM Layers is deprecated, 
+    >>> # TE will be automatically used if possible unless told otherwise.
+    >>> # (You don't have to set this varialbe, it's faster to use TE!)
+    >>> # Example of how to disable:
+    >>> import os
+    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = False
+    >>>
     >>> model = MeshGraphKAN(
     ...     input_dim_nodes=4,
     ...     input_dim_edges=3,
