@@ -127,6 +127,10 @@ class MeshGraphNet(Module):
 
     Example
     -------
+    >>> import os
+    >>> # `norm_layer` is deprecated, TE will be automatically used if possible unless disabled:
+    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = True
+    >>>
     >>> model = physicsnemo.models.meshgraphnet.MeshGraphNet(
     ...         input_dim_nodes=4,
     ...         input_dim_edges=3,
