@@ -80,6 +80,8 @@ models at scale.
    examples/cfd/swe_distributed_gnn/README.rst
    examples/cfd/vortex_shedding_mesh_reduced/README.rst
    examples/cfd/darcy_transolver/README.rst
+   examples/cfd/flow_reconstruction_diffusion/README.rst
+   examples/cfd/datacenter/README.rst
 
 .. toctree::
    :maxdepth: 1
@@ -95,13 +97,6 @@ models at scale.
    examples/weather/unified_recipe/README.rst
    examples/weather/corrdiff/README.rst
    examples/weather/stormcast/README.rst
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Examples: Generative
-   :name: Examples: Generative
-
-   examples/cfd/flow_reconstruction_diffusion/README.rst
 
 .. toctree::
    :maxdepth: 1

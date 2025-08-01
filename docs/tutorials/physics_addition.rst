@@ -99,24 +99,24 @@ Some general comments for the ``PhysicsInformer``:
 
 The various spatial derivative methods and their applicability based on the model output type can be summarized below
 
-- `**Automatic Differentiation** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsAutoDiff>`_: Suitable for outputs from models which are differentiable w.r.t model inputs.
+- `Automatic Differentiation <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsAutoDiff>`_: Suitable for outputs from models which are differentiable w.r.t model inputs.
   Model inputs must include coordinates as inputs. Ideal for MLP type of architectures, and can operate on point clouds,
   structured grids, or unstructured meshes as long as the differentiability and input constraints are satisfied.
   Computationally expensive but more accurate than other numerical gradient methods.
 
-- `**Meshless Finite Difference** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsMeshlessFiniteDifference>`_: Numerical gradient method suitable for models that can
+- `Meshless Finite Difference <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsMeshlessFiniteDifference>`_: Numerical gradient method suitable for models that can
   predict field values on stencil points in addition to the original points. The points can come from either a point cloud or 
   grid (structured or unstructured); point clouds are most suitable applications. 
   Fast, but can present numerical instability if ``fd_dx`` is too small.
 
-- `**Finite Difference** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsFiniteDifference>`_: Numerical gradient method suitable for models that output predictions on
+- `Finite Difference <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsFiniteDifference>`_: Numerical gradient method suitable for models that output predictions on
   structured grids with uniform spacing (each dimension can have a different spacing of its own).
 
-- `**Spectral Derivatives** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsSpectral>`_: Numerical gradient method suitable for models that output predictions
+- `Spectral Derivatives <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsSpectral>`_: Numerical gradient method suitable for models that output predictions
   on structured grids with uniform spacing (each dimension can have a different spacing of its own) and have
   periodic boundaries.
 
-- `**Least Squares Method** <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsLeastSquares>`_: Numerical gradient method most suitable for models predict output on unstructured
+- `Least Squares Method <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#physicsnemo.sym.eq.spatial_grads.spatial_grads.GradientsLeastSquares>`_: Numerical gradient method most suitable for models predict output on unstructured
   grids or structured grids with non-uniform spacing. 
 
 
@@ -577,7 +577,7 @@ Using the gradients directly
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 If you only need access to spatial gradients without the need to compute the residuals, 
-you can use the `GradientCalculator <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#module-physicsnemo.sym.eq.spatial_grads.spatial_grads>`__init__
+you can use the `GradientCalculator <https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.eq.html#module-physicsnemo.sym.eq.spatial_grads.spatial_grads>`_
 directly. Refer to the API docs for more details.
 
 Using geometry information
