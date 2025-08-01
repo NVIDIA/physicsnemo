@@ -62,7 +62,7 @@ variables:
   global_parameters:
     inlet_velocity:
       type: vector
-      reference: [30.0] # vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
+      reference: [38.89] # vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
     air_density:
       type: scalar
       reference: 1.226
@@ -111,7 +111,7 @@ model:
   combine_volume_surface: false # combine volume and surface encodings
   use_surface_normals: true # Use surface normals and surface areas for surface computation?
   use_surface_area: true # Use only surface normals and not surface area
-  integral_loss_scaling_factor: 1000 # Scale integral loss by this factor
+  integral_loss_scaling_factor: 1 # Scale integral loss by this factor
   normalization: min_max_scaling # or mean_std_scaling
   encode_parameters: false # encode inlet velocity and air density in the model
   surf_loss_scaling: 1.0 # scale surface loss with this factor in combined mode
@@ -124,8 +124,8 @@ model:
   geometry_rep: # Hyperparameters for geometry representation network
     geo_conv:
       base_neurons: 32 # 256 or 64
-      base_neurons_in: 4
-      base_neurons_out: 4
+      base_neurons_in: 8
+      base_neurons_out: 8
       volume_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # radii for volume
       surface_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # radii for surface
       surface_hops: 5 # Number of surface iterations
@@ -136,7 +136,7 @@ model:
       num_modes: 5
       activation: ${model.activation}
     geo_processor:
-      base_filters: 4
+      base_filters: 8
       activation: ${model.activation}
       processor_type: unet # conv or unet
       self_attention: false
@@ -159,8 +159,8 @@ model:
   geometry_local: # Hyperparameters for local geometry extraction
     volume_neighbors_in_radius: [32, 64, 128, 256] # Number of radius points
     surface_neighbors_in_radius: [32, 64, 128, 256] # Number of radius points
-    volume_radii: [0.05,0.1,0.5,1.0] # Volume radii
-    surface_radii: [0.05,0.1,0.5,1.0] # Surface radii
+    volume_radii: [0.05, 0.1, 0.5, 1.0] # Volume radii
+    surface_radii: [0.05, 0.1, 0.5, 1.0] # Surface radii
     base_layer: 512
   parameter_model:
     base_layer: 512
