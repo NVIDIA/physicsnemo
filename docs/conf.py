@@ -84,7 +84,7 @@ html_js_files = ["js/pk_scripts.js"]
 # html_last_updated_fmt = ''
 
 # Additional sphinx switches
-math_number_all = True
+math_number_all = False
 todo_include_todos = True
 numfig = True
 
