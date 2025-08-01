@@ -1,10 +1,10 @@
 Implementing new layers for ShardTensor
-=========================================
+=======================================
 
 This tutorial is a walkthrough of how to extend domain parallel functionality via ``ShardTensor``.  We'll first discuss at a high level some parallelism techniques, and then look at exactly how to implement a domain parallel layer with a few examples.  For some background on what `ShardTensor` is and when to use it, check out the tutorial :ref:`domain_parallelism.rst`.
 
 When is extending ``ShardTensor`` needed?
----------------------------------------
+-----------------------------------------
 
 ``ShardTensor`` is designed to support domain-parallel operations, or operations that can be performed on a tensor that resides across multiple devices. Many operations are supported already - out of the box - by the upstream ``DTensor`` class that ``ShardTensor`` inherits from.  Some operations - many convolutions, interpolations, poolings, normalizations, and attention - are supported through ``PhysicsNeMo``.  In this tutorial, we'll look at a few increasingly-complicated situations and see how ``ShardTensor`` handles them - or doesn't - and how to fix cases that aren't supported or aren't performant.
 

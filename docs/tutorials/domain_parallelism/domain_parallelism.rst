@@ -5,7 +5,7 @@ In scientific AI, one of most challenging aspects in training a model is dealing
 tutorial, we'll explore what makes high resolution data so challenging to handle, for both training and inference, and why that's different from the scaling challenges in other domains (like NLP, image processing, etc.).  We'll also take a technical look at how we're working to streamline high-resolution model training in ``PhysicsNeMo``, and how you can leverage our tools for your own scientific workloads as well.
 
 What makes scientific AI challenging?
-------------------------------------
+-------------------------------------
 
 To understand why scientific AI hits unique challenges in training and inference on high resolution data, let's take a look at the computational and memory cost of training models and subsequently running inference.  "Cost" here refers to two fundamental, high level concepts: computational cost is how much computing power is needed to complete an operation (and is, in general, a complicated interplay of GPU FLOPs, memory bandwidth, cache sizes, algorithm efficiencies, and more); memory costs refer to the amount of GPU memory required to perform the computations.
 
@@ -30,7 +30,7 @@ To address this challenge, in PhysicsNeMo we have developed a domain-parallelism
 The remainder of this tutorial will focus on the high level concepts of ``ShardTensor`` and domain parallelism, and :ref:`Implementing new layers for ShardTensor`  will be covered in a separate tutorial.
 
 Starting with an Example
-----------------------
+------------------------
 
 As a high level example, let's consider a simple 2D convolution operation.  There have been many tutorials on the mathematics and efficient computation of convolutions; let's not focus on that here.  Instead, consider if the input data to the convolution is spread across two GPUs, and we want to correctly compute the ouput of the convolution but without ever coalescing the input data on a single GPU.
 
@@ -109,7 +109,7 @@ We see in particular that along the height dimension (dim=2), the output is inco
 In the example above, for a simple convolution, we saw that just splitting the data and applying the base operation didn't give the results we needed. In general, this is true of many operations we see in AI models: splitting the data across GPUs requires extra operations or communication, depending on the operation, to get everything right.  We also haven't even mentioned the gradients yet - to call ``backward()`` through this split operation across devices also requires extra operations and communication.  But, in order to get the memory and potential computational benefits of domain parallelism, it's necessary.
 
 How does ``ShardTensor`` help?
------------------------------
+------------------------------
 
 PyTorch's ``DTensor`` interface already has an interface for a distributed tensor mechanism, and it's great - great enough, in fact, that ``ShardTensor`` is built upon it.  However, ``DTensor`` is built with a different paradigm of parallelism in mind, including model parallelisms from `DeepSpeed <https://www.deepspeed.ai/getting-started/>`_ and `MegaTron <https://developer.nvidia.com/megatron-core>`_ - which is supported in pytorch via `Fully Sharded Data Parallelism <https://pytorch.org/docs/stable/fsdp.html>`_.  It has several shortcomings: notably, it can not accommodate data that isn't distributed uniformly or according to ``torch.chunk`` syntax.  For scientific data, such as mesh data, point clouds, or anything else irregular, this is a nearly-immediate dead end for deploying domain parallelism.  Further, ``DTensor``'s mechanism for implementing parallelism is largely restricted to lower level ``torch`` operations - great for broad support in PyTorch, but not as accesible for most developers.
 
@@ -129,7 +129,7 @@ If you run this (``torchrun --nproc-per-node 4 conv_example.py``), you'll see th
 Note that when running this, there was no need to perform manual communication or padding, in either the forward or backward pass.  And, though we used a convolution, the details of the operation didn't need to be explicitly specified.  In this case, it just worked.
 
 How does ``ShardTensor`` work?
------------------------------
+------------------------------
 
 At a high level, ``DTensor`` from pytorch is a concept of a local chunk of a tensor (stored as a ``torch.Tensor``), and a ``DTensorSpec`` object which combines a ``DeviceMesh`` object representing the group of GPUs the tensor is on, and a description of how that global tensor is distributed (or replicated).  ``ShardTensor`` extends this API with an addition to the specification to track the shape of each local tensor along sharding axes.  This becomes important when the input data is something like a point cloud, rather than an evenly-distributed tensor.
 
@@ -140,7 +140,7 @@ ShardTensor also has dedicated implementations of common reduction operations ``
 There is a substantial amount of care needed to implement layers in ``ShardTensor`` (or ``DTensor``!).  If you're interested in doing so for your custom model, please check out a full tutorial on this subject: :ref:`Implementing new layers for ShardTensor`
 
 When Should You Use ``ShardTensor``?
-==================================
+====================================
 
 ``ShardTensor`` and domain parallelism solve a very specific problem in Scientific AI: input data is such high resolution that models can't train, even at Batch Size of 1, due to memory limitations.  And while that challenge can be partially surmounted with reduced precision and input spatial downsampling, not all models can tolerate those techniques without sacrificing accuracy.  In this case, you should view ``ShardTensor`` as a solution to that problem: it will enable you to run training and inference on higher resolution data than a single GPU can accommodate.  It is not the only technique for this, and in some cases it isn't the best choice.  In this section we'll compare and contrast ``ShardTensor`` to some other techniques for high resolution data, which can highlight some strengths and weaknesses of ``ShardTensor.``
 

@@ -984,6 +984,4 @@ Without these techniques, for many scientific AI workloads users are faced with 
 
 
 .. toctree::
-    :local:
-    :depth: 1
     :hidden:

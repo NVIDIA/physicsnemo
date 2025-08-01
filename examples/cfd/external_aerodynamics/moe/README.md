@@ -25,7 +25,7 @@ The weights \( W_1, W_2, W_3 \) are determined dynamically by a neural
 network based on the expert predictions.
 
 To allow the MoE model to correct for systematic biases—such as all experts
-consistently overpredicting or underpredicting—a bias term \( C_{\text{MoE}} \)
+consistently overpredicting or underpredicting—a bias term $\( C_{\text{MoE}} \)$
 can be added:
 
 $$

@@ -44,8 +44,8 @@ Below is a summary of general purpose statistical methods and metrics that are a
      - Computes the relative statistical entropy, or KL Divergence of two random variables using their histograms.
    * - `physicsnemo.metrics.general.crps.crps <#physicsnemo.metrics.general.crps.crps>`_
      - Local Continuous Ranked Probability Score (CRPS) by computing a histogram and CDF of the predictions
-   * - `physicsnemo.metrics.general.wasserstein.wasserstein <#physicsnemo.metrics.general.wasserstein.wasserstein>`_
-     - 1-Wasserstein distance between two discrete CDF functions
+   * - `physicsnemo.metrics.general.wasserstein.wasserstein_from_cdf <#physicsnemo.metrics.general.wasserstein.wasserstein_from_cdf>`_
+     - Wasserstein distance between two discrete CDF functions
    * - `physicsnemo.metrics.general.reduction.WeightedMean <#physicsnemo.metrics.general.reduction.WeightedMean>`_
      - Weighted Mean
    * - `physicsnemo.metrics.general.reduction.WeightedStatistic <#physicsnemo.metrics.general.reduction.WeightedStatistic>`_
