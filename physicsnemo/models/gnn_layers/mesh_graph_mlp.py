@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from typing import Optional, Tuple, Union
 
 import torch
@@ -146,13 +145,6 @@ class MeshGraphMLP(nn.Module):
 
             self.norm_type = norm_type
             if norm_type is not None:
-                warnings.warn(
-                    "The MeshGraphNet 'norm_type' argument is deprecated and will be removed in a future release."
-                    "In the future, transformer engine will be used automatically for layer norm, if it is installed."
-                    "Override this behavior by setting the PHYSICSNEMO_FORCE_TE environment variable to 'False'.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
                 norm_layer = get_layer_norm_class()
                 layers.append(norm_layer(output_dim))
 
@@ -348,13 +340,6 @@ class MeshGraphEdgeMLPSum(nn.Module):
 
         self.norm_type = norm_type
         if norm_type is not None:
-            warnings.warn(
-                "The MeshGraphNet 'norm_type' argument is deprecated and will be removed in a future release."
-                "In the future, transformer engine will be used automatically for layer norm, if it is installed."
-                "Override this behavior by setting the PHYSICSNEMO_FORCE_TE environment variable to 'False'.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
             norm_layer = get_layer_norm_class()
             layers.append(norm_layer(output_dim))
 

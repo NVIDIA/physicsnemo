@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+import warnings
 
 import torch
 from torch import nn
@@ -111,6 +112,16 @@ def get_layer_norm_class() -> nn.Module:
             te_available = True
         elif force_te_setting.lower() == "false" or force_te_setting.lower() == "0":
             te_available = False
+        else:
+            # In this scenario, the variable PHYSICSNEMO_FORCE_TE was set, but not
+            # to a value we expect.  Emit a warning:
+            warnings.warn(
+                f"The PHYSICSNEMO_FORCE_TE environment variable was set to an invalid value. "
+                f"Expected 'True' or 'False', but got '{force_te_setting}'. "
+                "Ignoring the variable and using the default behavior.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     if te_available:
         base = te.LayerNorm

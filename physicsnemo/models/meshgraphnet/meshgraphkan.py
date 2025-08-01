@@ -124,7 +124,7 @@ class MeshGraphKAN(Module):
 
     Example
     -------
-    >>> # `norm_layer` is in MGM Layers is deprecated,
+    >>> # `norm_type` in MeshGraphNet layers is deprecated,
     >>> # TE will be automatically used if possible unless told otherwise.
     >>> # (You don't have to set this varialbe, it's faster to use TE!)
     >>> # Example of how to disable:
