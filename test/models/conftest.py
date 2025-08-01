@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import os
 import sys
 
 import pytest
@@ -41,3 +41,12 @@ def cleanup_layer_norm_module():
     yield
     if LAYER_NORM_PATH in sys.modules:
         del sys.modules[LAYER_NORM_PATH]
+
+
+@pytest.fixture
+def set_physicsnemo_force_te(monkeypatch, device):
+    if device == "cpu":
+        te_force_val = False
+    else:
+        te_force_val = os.environ.get("PHYSICSNEMO_FORCE_TE", "")
+    monkeypatch.setenv("PHYSICSNEMO_FORCE_TE", str(te_force_val))
