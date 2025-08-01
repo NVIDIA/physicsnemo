@@ -17,6 +17,7 @@
 
 """A script to check that copyright headers exists"""
 
+import os
 import argparse
 import fnmatch
 import itertools
