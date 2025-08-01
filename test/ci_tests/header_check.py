@@ -106,18 +106,25 @@ def get_committed_files():
     Get a list of files that are part of the current commit, excluding deleted files
     """
     git_executable = shutil.which("git")
-    if not git_executable:
-        raise RuntimeError("git executable not found in PATH")
-    result = subprocess.run(
+
+    # Basic check: ensure it's an absolute path and executable
+    if (
+        not git_executable
+        or not os.path.isabs(git_executable)
+        or not os.access(git_executable, os.X_OK)
+    ):
+        raise RuntimeError("Invalid git executable")
+
+    result = subprocess.run(  # noqa S603
         [git_executable, "diff", "--name-status", "--cached"],
         capture_output=True,
         text=True,
     )
     files = []
     for line in result.stdout.splitlines():
-        status, *file_path = line.split('\t')
-        if status != 'D':
-            files.append('\t'.join(file_path))
+        status, *file_path = line.split("\t")
+        if status != "D":
+            files.append("\t".join(file_path))
     return files
 
 
