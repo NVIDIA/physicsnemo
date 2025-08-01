@@ -54,22 +54,24 @@ def darcy_trainer(cfg: DictConfig) -> None:
 
     # define model, loss, optimiser, scheduler, data loader
     model = Transolver(
-        space_dim=cfg.model.space_dim,
+        functional_dim=cfg.model.functional_dim,
+        out_dim=cfg.model.out_dim,
+        embedding_dim=cfg.model.embedding_dim,
         n_layers=cfg.model.n_layers,
         n_hidden=cfg.model.n_hidden,
         dropout=cfg.model.dropout,
         n_head=cfg.model.n_head,
-        Time_Input=cfg.model.Time_Input,
         act=cfg.model.act,
         mlp_ratio=cfg.model.mlp_ratio,
         fun_dim=cfg.model.fun_dim,
-        out_dim=cfg.model.out_dim,
         slice_num=cfg.model.slice_num,
-        ref=cfg.model.ref,
         unified_pos=cfg.model.unified_pos,
-        H=cfg.training.resolution,
-        W=cfg.training.resolution,
+        ref=cfg.model.ref,
+        structured_shape=[cfg.data.resolution, cfg.data.resolution],
+        use_te=cfg.model.use_te,
+        Time_Input=cfg.model.Time_Input,
     ).to(dist.device)
+
     loss_fun = TestLoss(size_average=False)
     optimizer = Adam(model.parameters(), lr=cfg.scheduler.initial_lr)
     scheduler = lr_scheduler.LambdaLR(

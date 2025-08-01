@@ -20,52 +20,28 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-output_dir: ./output/darcy_transolver_fix
-run_id: bf16_dev_r85_b8_s64
+import sys
+import numpy as np
+from scipy.io import loadmat
 
-data:
-  train_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz
-  test_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth2.npz
-  resolution: 85 #421, 211, 141, 106, 85 all viable
-  batch_size: 8 # This is the GLOBAL batch size
 
-model:
-  functional_dim: 1
-  out_dim: 1
-  embedding_dim: 2
-  n_layers: 4
-  n_hidden: 128
-  dropout: 0.0
-  n_head: 4
-  act: gelu
-  mlp_ratio: 4
-  unified_pos: False
-  ref: 8
-  slice_num: 64
-  use_te: True
-  Time_Input: False
-  
-precision: bf16
+def main(mat_file, npz_file):
+    # Load the .mat file
+    data = loadmat(mat_file)
 
-normaliser:
-  permeability:
-    mean: 1.25
-    std_dev: .75
-  darcy:
-    mean: 4.52E-2
-    std_dev: 2.79E-2
+    # Extract 'coeff' and 'sol'
+    coeff = data["coeff"]
+    sol = data["sol"]
 
-scheduler:
-  initial_lr: 1.E-3
-  decay_rate: 5.E-5
-  weight_decay: 1.E-5
-  decay_pseudo_epochs: 8
+    # Save to .npz file
+    np.savez(npz_file, coeff=coeff, sol=sol)
+    print(f"Saved 'coeff' and 'sol' to {npz_file}")
 
-training:
-  rec_results_freq : 100
-  max_pseudo_epochs: 1000
-  pseudo_epoch_sample_size: 1024
 
-validation:
-  sample_size: 200
-  validation_pseudo_epochs: 1
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python convert_mat_to_npz.py input.mat")
+        sys.exit(1)
+    mat_file = sys.argv[1]
+    npz_file = mat_file.replace(".mat", ".npz")
+    main(mat_file, npz_file)
