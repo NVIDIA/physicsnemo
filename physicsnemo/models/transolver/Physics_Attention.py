@@ -74,9 +74,7 @@ class Physics_Attention_Base(nn.Module):
         for l_i in [self.in_project_slice]:
             torch.nn.init.orthogonal_(l_i.weight)  # use a principled initialization
         if not use_te:
-            self.to_q = nn.Linear(dim_head, dim_head, bias=False)
-            self.to_k = nn.Linear(dim_head, dim_head, bias=False)
-            self.to_v = nn.Linear(dim_head, dim_head, bias=False)
+            self.qkv_project = nn.Linear(dim_head, 3 * dim_head, bias=False)
         else:
             # These are used in the transformer engine pass function:
             self.qkv_project = te.Linear(dim_head, 3 * dim_head, bias=False)
@@ -187,12 +185,10 @@ class Physics_Attention_Base(nn.Module):
         Torch SDPA implementation of slice attention
         """
 
-        # qkv = self.qkv_project(slice_tokens)
-        # qkv = rearrange(qkv, " b h s (t d) -> t b h s d", t=3, d=self.dim_head)
-        q_slice_token = self.to_q(slice_tokens)
-        k_slice_token = self.to_k(slice_tokens)
-        v_slice_token = self.to_v(slice_tokens)
-        # q_slice_token, k_slice_token, v_slice_token = qkv.unbind(0)
+        qkv = self.qkv_project(slice_tokens)
+        qkv = rearrange(qkv, " b h s (t d) -> t b h s d", t=3, d=self.dim_head)
+
+        q_slice_token, k_slice_token, v_slice_token = qkv.unbind(0)
 
         out_slice_token3 = torch.nn.functional.scaled_dot_product_attention(
             q_slice_token, k_slice_token, v_slice_token, is_causal=True
@@ -255,15 +251,12 @@ class Physics_Attention_Base(nn.Module):
         if self.use_te:
             out_slice_token = self.compute_slice_attention_te(slice_tokens)
         else:
-            # out_slice_token = self.compute_slice_attention(slice_tokens)
             out_slice_token = self.compute_slice_attention_sdpa(slice_tokens)
 
         # Shape unchanged
 
         # Deslice:
         outputs = self.project_attention_outputs(out_slice_token, slice_weights)
-
-        # print(f"outputs mean and shape: {outputs.mean()} and {outputs.shape}")
 
         # Outputs now has the same shape as the original input x
 
@@ -280,8 +273,12 @@ class Physics_Attention_Irregular_Mesh_2(Physics_Attention_Base):
     ):
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
         inner_dim = dim_head * heads
-        self.in_project_x = nn.Linear(dim, inner_dim)
-        self.in_project_fx = nn.Linear(dim, inner_dim)
+        if use_te:
+            self.in_project_x = te.Linear(dim, inner_dim)
+            self.in_project_fx = te.Linear(dim, inner_dim)
+        else:
+            self.in_project_x = nn.Linear(dim, inner_dim)
+            self.in_project_fx = nn.Linear(dim, inner_dim)
 
     def project_input_onto_slices(self, x) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -323,7 +320,6 @@ class Physics_Attention_Structured_Mesh_2D_2(Physics_Attention_Base):
         self.in_project_fx = nn.Conv2d(dim, inner_dim, kernel, 1, kernel // 2)
 
     def project_input_onto_slices(self, x) -> tuple[torch.Tensor, torch.Tensor]:
-
         # Rearrange the input tokens back to an image shape:
         x = rearrange(x, "b (h w) c -> b c h w", h=self.H, w=self.W)
 

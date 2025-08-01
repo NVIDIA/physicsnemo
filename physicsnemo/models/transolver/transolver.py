@@ -220,7 +220,7 @@ class MetaData(ModelMetaData):
     # Optimization
     jit: bool = False
     cuda_graphs: bool = False
-    amp: bool = False
+    amp: bool = True
     # Inference
     onnx_cpu: bool = False  # No FFT op on CPU
     onnx_gpu: bool = True
@@ -423,9 +423,13 @@ class Transolver(Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
+        linear_layers = (nn.Linear,)
+        if self.use_te:
+            linear_layers = linear_layers + (te.Linear,)
+
+        if isinstance(m, linear_layers):
             nn.init.trunc_normal_(m.weight, std=0.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
+            if isinstance(m, linear_layers) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         norm_layers = (nn.LayerNorm, nn.BatchNorm1d)
         if self.use_te:
@@ -496,7 +500,6 @@ class Transolver(Module):
 
         """
         with torch.autograd.profiler.record_function("preprocess"):
-
             # Reshape automatically, if necessary:
             if self.structured_shape is not None:
                 unflatten_output = False
