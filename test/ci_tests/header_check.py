@@ -103,17 +103,21 @@ def get_top_comments(_data):
 
 def get_committed_files():
     """
-    Get a list of files that are part of the current commit
+    Get a list of files that are part of the current commit, excluding deleted files
     """
     git_executable = shutil.which("git")
     if not git_executable:
         raise RuntimeError("git executable not found in PATH")
-    result = subprocess.run(  # noqa: S603
-        [git_executable, "diff", "--name-only", "--cached"],
+    result = subprocess.run(
+        [git_executable, "diff", "--name-status", "--cached"],
         capture_output=True,
         text=True,
     )
-    files = result.stdout.splitlines()
+    files = []
+    for line in result.stdout.splitlines():
+        status, *file_path = line.split('\t')
+        if status != 'D':
+            files.append('\t'.join(file_path))
     return files
 
 
