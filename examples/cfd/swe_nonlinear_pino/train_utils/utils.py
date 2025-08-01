@@ -18,7 +18,7 @@ import yaml
 import torch
 import os
 import numpy as np
-from physicsnemo.sym.hydra import to_absolute_path
+from hydra.utils import to_absolute_path
 
 
 def load_config(file):

@@ -21,7 +21,7 @@ import numpy as np
 import os
 
 import matplotlib.pyplot as plt
-from physicsnemo.sym.hydra import to_absolute_path
+from hydra.utils import to_absolute_path
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 
