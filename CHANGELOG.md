@@ -94,6 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed an inadvertent change to the deterministic sampler 2nd order correction
+- Bug Fix in Domino model ball query layer
 
 ## [1.1.0] - 2025-06-05
 
