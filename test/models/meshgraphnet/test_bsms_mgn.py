@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import pytest
 import torch
 from models.common import validate_forward_accuracy
@@ -89,7 +90,7 @@ def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
 
 
 @import_or_fail(["sparse_dot_mkl", "dgl"])
-def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir, set_physicsnemo_force_te):
+def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
     from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
