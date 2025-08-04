@@ -252,13 +252,14 @@ class GeoConvOut(nn.Module):
             self.grid_resolution[1],
             self.grid_resolution[2],
         )
-        grid = grid.reshape(batch_size, nx * ny * nz, 3, 1)
+        grid = grid.reshape(1, nx * ny * nz, 3, 1)
         x_transposed = torch.transpose(x, 2, 3)
         dist_weights = 1.0 / (1e-6 + (x_transposed - grid) ** 2.0)
         dist_weights = torch.transpose(dist_weights, 2, 3)
 
-        x = torch.sum(x * dist_weights, 2) / torch.sum(dist_weights, 2)
-
+        # x = torch.sum(x * dist_weights, 2) / torch.sum(dist_weights, 2)
+        # x = torch.sum(x, 2)
+        mask = abs(x - 0) > 1e-6
         if self.fourier_features:
             facets = torch.cat((x, fourier_encode_vectorized(x, self.freqs)), axis=-1)
         else:
@@ -267,6 +268,11 @@ class GeoConvOut(nn.Module):
         x = self.activation(self.fc2(x))
         x = F.tanh(self.fc3(x))
 
+        mask = mask[:, :, :, 0:1].expand(
+            mask.shape[0], mask.shape[1], mask.shape[2], x.shape[-1]
+        )
+
+        x = torch.sum(x * mask, 2)
         x = torch.reshape(x, (batch_size, x.shape[-1], nx, ny, nz))
         return x
 
