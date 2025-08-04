@@ -31,6 +31,7 @@ experiment tracking.
 import os
 import sys
 import json
+import dgl
 import pyvista as pv
 import torch
 import hydra
@@ -38,7 +39,7 @@ import numpy as np
 from hydra.utils import to_absolute_path
 from torch.nn.parallel import DistributedDataParallel
 import torch.optim as optim
-from torch.amp import GradScaler
+from torch.cuda.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from omegaconf import DictConfig
 
@@ -105,8 +106,10 @@ def main(cfg: DictConfig) -> None:
         batch_size=1,
         prefetch_factor=None,
         use_ddp=True,
-        num_workers=0,
+        num_workers=4,
     )
+    # graphs is a list of graphs, each graph is a list of partitions
+    graphs = [graph_partitions for graph_partitions, _ in train_dataloader]
 
     if dist.rank == 0:
         validation_dataloader = create_dataloader(
@@ -116,10 +119,13 @@ def main(cfg: DictConfig) -> None:
             batch_size=1,
             prefetch_factor=None,
             use_ddp=False,
-            num_workers=0,
+            num_workers=4,
         )
-
-        print(f"Training dataset size: {len(train_dataloader) * dist.world_size}")
+        validation_graphs = [
+            graph_partitions for graph_partitions, _ in validation_dataloader
+        ]
+        validation_ids = [id[0] for _, id in validation_dataloader]
+        print(f"Training dataset size: {len(graphs)*dist.world_size}")
         print(f"Validation dataset size: {len(validation_dataloader)}")
 
     ######################################
@@ -172,33 +178,35 @@ def main(cfg: DictConfig) -> None:
     for epoch in range(start_epoch, cfg.num_epochs):
         model.train()
         total_loss = 0
-        for graph_partitions, _ in train_dataloader:
+        for i in range(len(graphs)):
             optimizer.zero_grad()
-            # Iterate over the partitions of the graph
-            # TODO(akamenev): only batch size 1 is supported for now
-            graph_partitions = graph_partitions[0]
-
-            for part in graph_partitions:
+            subgraphs = graphs[i]  # Get the partitions of the graph
+            for j in range(cfg.num_partitions):
                 with torch.autocast(amp_device, enabled=True, dtype=amp_dtype):
-                    part = part.to(device)
+                    part = subgraphs[j].to(device)
                     ndata = torch.cat(
                         (
-                            part.coordinates,
-                            part.normals,
-                            torch.sin(2 * np.pi * part.coordinates),
-                            torch.cos(2 * np.pi * part.coordinates),
-                            torch.sin(4 * np.pi * part.coordinates),
-                            torch.cos(4 * np.pi * part.coordinates),
-                            torch.sin(8 * np.pi * part.coordinates),
-                            torch.cos(8 * np.pi * part.coordinates),
+                            part.ndata["coordinates"],
+                            part.ndata["normals"],
+                            torch.sin(2 * np.pi * part.ndata["coordinates"]),
+                            torch.cos(2 * np.pi * part.ndata["coordinates"]),
+                            torch.sin(4 * np.pi * part.ndata["coordinates"]),
+                            torch.cos(4 * np.pi * part.ndata["coordinates"]),
+                            torch.sin(8 * np.pi * part.ndata["coordinates"]),
+                            torch.cos(8 * np.pi * part.ndata["coordinates"]),
                         ),
                         dim=1,
                     )
-                    pred = model(ndata, part.edge_attr, part)[part.inner_node]
-                    target = torch.cat((part.pressure, part.shear_stress), dim=1)[
-                        part.inner_node
-                    ]
-                    loss = torch.mean((pred - target) ** 2) / cfg.num_partitions
+                    pred = model(ndata, part.edata["x"], part)
+                    pred_filtered = pred[part.ndata["inner_node"].bool(), :]
+                    target = torch.cat(
+                        (part.ndata["pressure"], part.ndata["shear_stress"]), dim=1
+                    )
+                    target_filtered = target[part.ndata["inner_node"].bool()]
+                    loss = (
+                        torch.mean((pred_filtered - target_filtered) ** 2)
+                        / cfg.num_partitions
+                    )
                     total_loss += loss.item()
                 scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -210,13 +218,10 @@ def main(cfg: DictConfig) -> None:
         # Log the training loss
         if dist.rank == 0:
             current_lr = optimizer.param_groups[0]["lr"]
-            num_mini_batches = len(train_dataloader)
             print(
-                f"Epoch {epoch + 1}, "
-                f"Learning Rate: {current_lr}, "
-                f"Total Loss: {total_loss / num_mini_batches}"
+                f"Epoch {epoch+1}, Learning Rate: {current_lr}, Total Loss: {total_loss / len(graphs)}"
             )
-            writer.add_scalar("training_loss", total_loss / num_mini_batches, epoch)
+            writer.add_scalar("training_loss", total_loss / len(graphs), epoch)
             writer.add_scalar("learning_rate", current_lr, epoch)
 
         # Save checkpoint periodically
@@ -241,13 +246,11 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0 and epoch % cfg.validation_freq == 0:
             valid_loss = 0
 
-            for valid_graph_partitions, valid_id in validation_dataloader:
-                # TODO(akamenev): only batch size 1 is supported for now
-                valid_graph_partitions = valid_graph_partitions[0]
-                valid_id = valid_id[0]
-
+            for i in range(len(validation_graphs)):
                 # Placeholder to accumulate predictions and node features for the full graph's nodes
-                num_nodes = valid_graph_partitions.num_nodes
+                num_nodes = sum(
+                    [subgraph.num_nodes() for subgraph in validation_graphs[i]]
+                )
 
                 # Initialize accumulators for predictions and node features
                 pressure_pred = torch.zeros(
@@ -271,60 +274,70 @@ def main(cfg: DictConfig) -> None:
                 area = torch.zeros((num_nodes, 1), dtype=torch.float32, device=device)
 
                 # Accumulate predictions and node features from all partitions
-                for part in valid_graph_partitions:
-                    part = part.to(device)
+                for j in range(cfg.num_partitions):
+                    part = validation_graphs[i][j].to(device)
 
                     # Get node features (coordinates and normals)
                     ndata = torch.cat(
                         (
-                            part.coordinates,
-                            part.normals,
-                            torch.sin(2 * np.pi * part.coordinates),
-                            torch.cos(2 * np.pi * part.coordinates),
-                            torch.sin(4 * np.pi * part.coordinates),
-                            torch.cos(4 * np.pi * part.coordinates),
-                            torch.sin(8 * np.pi * part.coordinates),
-                            torch.cos(8 * np.pi * part.coordinates),
+                            part.ndata["coordinates"],
+                            part.ndata["normals"],
+                            torch.sin(2 * np.pi * part.ndata["coordinates"]),
+                            torch.cos(2 * np.pi * part.ndata["coordinates"]),
+                            torch.sin(4 * np.pi * part.ndata["coordinates"]),
+                            torch.cos(4 * np.pi * part.ndata["coordinates"]),
+                            torch.sin(8 * np.pi * part.ndata["coordinates"]),
+                            torch.cos(8 * np.pi * part.ndata["coordinates"]),
                         ),
                         dim=1,
                     )
 
                     with torch.no_grad():
                         with torch.autocast(amp_device, enabled=True, dtype=amp_dtype):
-                            pred = model(ndata, part.edge_attr, part)[part.inner_node]
+                            pred = model(ndata, part.edata["x"], part)
+                            pred_filtered = pred[part.ndata["inner_node"].bool()]
                             target = torch.cat(
-                                (part.pressure, part.shear_stress),
+                                (part.ndata["pressure"], part.ndata["shear_stress"]),
                                 dim=1,
-                            )[part.inner_node]
-                            loss = torch.mean((pred - target) ** 2) / cfg.num_partitions
+                            )
+                            target_filtered = target[part.ndata["inner_node"].bool()]
+                            loss = (
+                                torch.mean((pred_filtered - target_filtered) ** 2)
+                                / cfg.num_partitions
+                            )
                             valid_loss += loss.item()
 
-                            # Store the predictions based on the original node IDs
-                            original_nodes = part.part_node[part.inner_node]
+                            # Store the predictions based on the original node IDs (using `dgl.NID`)
+                            original_nodes = part.ndata[dgl.NID]
+                            inner_original_nodes = original_nodes[
+                                part.ndata["inner_node"].bool()
+                            ]
 
                             # Accumulate the predictions
-                            pressure_pred[original_nodes] = pred[:, :1].clone().float()
-                            shear_stress_pred[original_nodes] = (
-                                pred[:, 1:].clone().float()
+                            pressure_pred[inner_original_nodes] = (
+                                pred_filtered[:, 0:1].clone().to(torch.float32)
+                            )
+                            shear_stress_pred[inner_original_nodes] = (
+                                pred_filtered[:, 1:].clone().to(torch.float32)
                             )
 
                             # Accumulate the ground truth
-                            pressure_true[original_nodes] = (
-                                target[:, :1].clone().float()
+                            pressure_true[inner_original_nodes] = (
+                                target_filtered[:, 0:1].clone().to(torch.float32)
                             )
-                            shear_stress_true[original_nodes] = (
-                                target[:, 1:].clone().float()
+                            shear_stress_true[inner_original_nodes] = (
+                                target_filtered[:, 1:].clone().to(torch.float32)
                             )
 
                             # Accumulate the node features
                             coordinates[original_nodes] = (
-                                part.coordinates[part.inner_node].clone().float()
+                                part.ndata["coordinates"].clone().to(torch.float32)
                             )
                             normals[original_nodes] = (
-                                part.normals[part.inner_node].clone().float()
+                                part.ndata["normals"].clone().to(torch.float32)
                             )
                             area[original_nodes] = (
-                                part.area[part.inner_node].clone().float()
+                                part.ndata["area"].clone().to(torch.float32)
                             )
 
                 # Denormalize predictions and node features using the global stats
@@ -362,14 +375,13 @@ def main(cfg: DictConfig) -> None:
                 point_cloud["shear_stress_true"] = shear_stress_true_denorm.numpy()
 
                 # Save the point cloud
-                point_cloud.save(f"point_cloud_{valid_id}.vtp")
+                point_cloud.save(f"point_cloud_{validation_ids[i]}.vtp")
 
-            num_valid_mini_batches = len(validation_dataloader)
             print(
-                f"Epoch {epoch+1}, Validation Error: {valid_loss / num_valid_mini_batches}"
+                f"Epoch {epoch+1}, Validation Error: {valid_loss / len(validation_graphs)}"
             )
             writer.add_scalar(
-                "validation_loss", valid_loss / num_valid_mini_batches, epoch
+                "validation_loss", valid_loss / len(validation_graphs), epoch
             )
 
     # Save final checkpoint
