@@ -89,11 +89,12 @@ Each of the raw simulations files are downloaded in `vtp`, `vtu` and `stl` forma
 For instructions on running data processing to produce a DoMINO training ready dataset,
 please refer to [How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md).
 
-Additionally, run `cache_data.py` to save outputs
+Caching is implemented in [`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1250).
+Optionally, users can run `cache_data.py` to save outputs
 of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate
 Signed Distance Field and Nearest Neighbor interpolations on-the-fly during
-training. Caching will save these as a preprocessing step and should be used in
-cases where the STL surface meshes are upwards of 30 million cells.
+training. Caching will save these as a preprocessing step and can be used in
+cases where the **STL surface meshes are upwards of 30 million cells**.
 Data processing is parallelized and takes a couple of hours to write all the
 processed files.
 
