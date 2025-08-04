@@ -35,7 +35,7 @@ pip install -r requirements.txt
 
 ### Configuration basics
 
-DoMINO data processing, training and testing is managed through YAML configuration files
+DoMINO training and testing is managed through YAML configuration files
 powered by Hydra. The base configuration file, `config.yaml` is located in `src/conf`
 directory.
 
@@ -60,28 +60,9 @@ maintaining reproducibility.
 Save and track project logs, experiments, tensorboard files etc. by specifying a
 project directory with `project.name`. Tag experiments with `expt`.
 
-#### Data processing
+### Data
 
-The first step for running the DoMINO pipeline requires processing the raw data
-(vtp, vtu and stl). The related configs can be set in the `data_processor` tab.
-Also, specify the variable names used in the raw dataset and their types
-in `variables.surface` and `variables.volume`.
-For example, you can set the input directory for raw data using
-`data_processor.input_dir` and output directory for processed files using
-`data_processor.output_dir`.
-
-#### Training
-
-Specify the training and validation data paths, bounding box sizes etc. in the
-`data` tab and the training configs such as epochs, batch size etc.
-in the `train` tab.
-
-#### Testing
-
-The testing is directly carried out on raw files.
-Specify the testing configs in the `test` tab.
-
-### Dataset details
+#### Dataset details
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
 [CAE ML Dataset collection](https://caemldatasets.org/drivaerml/).
@@ -94,25 +75,42 @@ the industrial state-of-the-art. Geometries and comprehensive aerodynamic data
 are published in open-source formats. For more technical details about this dataset,
 please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
-Download the DrivAer ML dataset using the provided `download_aws_dataset.sh`
-script or using the [Hugging Face repo](https://huggingface.co/datasets/neashton/drivaerml).
+#### Data Preprocessing
 
-### Data processing for DoMINO model
+`PhysicsNeMo` has a related project to help with data processing, called [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
+Using `PhysicsNeMo-Curator`, the data needed to train a DoMINO model can be setup easily.
+Please refer to [these instructions on getting started](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#what-is-physicsnemo-curator)
+with `PhysicsNeMo-Curator`.
 
-Each of the raw simulations files in the `vtp`, `vtu` and `stl` format need to be
-processed and saved into `npy` files. The data processing script extracts minmal
-information from these raw files such as STL mesh, surface mesh and fields,
-volume point cloud and fields. Run `process_data.py` with the correct configurations
-for kicking off data processing. Additionally, run `cache_data.py` to save outputs
+Download the DrivAer ML dataset using the [provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md#download-drivaerml-dataset).
+The first step for running the DoMINO pipeline requires processing the raw data
+(vtp, vtu and stl) into either Zarr or NumPy format for training.
+Each of the raw simulations files are downloaded in `vtp`, `vtu` and `stl` formats.
+For instructions on running data processing to produce a DoMINO training ready dataset,
+please refer to [How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md).
+
+Caching is implemented in [`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1250).
+Optionally, users can run `cache_data.py` to save outputs
 of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate
 Signed Distance Field and Nearest Neighbor interpolations on-the-fly during
-training. Caching will save these as a preprocessing step and should be used in
-cases where the STL surface meshes are upwards of 30 million cells.
+training. Caching will save these as a preprocessing step and can be used in
+cases where the **STL surface meshes are upwards of 30 million cells**.
 Data processing is parallelized and takes a couple of hours to write all the
 processed files.
 
 The final processed dataset should be divided and saved into 2 directories,
 for training and validation.
+
+#### Training
+
+Specify the training and validation data paths, bounding box sizes etc. in the
+`data` tab and the training configs such as epochs, batch size etc.
+in the `train` tab.
+
+#### Testing
+
+The testing is directly carried out on raw files.
+Specify the testing configs in the `test` tab.
 
 ### Training the DoMINO model
 
