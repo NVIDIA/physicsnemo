@@ -31,7 +31,7 @@ except ImportError:
     )
 
 
-from distributed_utils_for_testing import modify_environment  # noqa: E402
+from pytest_utils import modify_environment  # noqa: E402
 from test_shard_tensor_initialization import init_dist
 from torch.distributed.tensor import distribute_module  # noqa: E402
 from torch.distributed.tensor.placement_types import (  # noqa: E402
