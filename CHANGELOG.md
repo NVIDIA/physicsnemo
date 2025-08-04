@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed an inadvertent change to the deterministic sampler 2nd order correction
 - Bug Fix in Domino model ball query layer
+- Fixed bug in Unet: setting num_conv_layers=1 gives errors
 
 ## [1.1.0] - 2025-06-05
 
