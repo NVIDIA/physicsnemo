@@ -25,7 +25,9 @@ from torch.testing import assert_close
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("aggregation", ["sum", "mean"])
-def test_mesh_node_block_dgl_pyg_equivalence(device, aggregation, pytestconfig):
+def test_mesh_node_block_dgl_pyg_equivalence(
+    device, aggregation, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshNodeBlock produces equivalent outputs for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -102,7 +104,9 @@ def test_mesh_node_block_dgl_pyg_equivalence(device, aggregation, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_mesh_node_block_gradient_equivalence(device, pytestconfig):
+def test_mesh_node_block_gradient_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshNodeBlock produces equivalent gradients for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -214,7 +218,9 @@ def test_mesh_node_block_gradient_equivalence(device, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_mesh_node_block_batched_equivalence(device, pytestconfig):
+def test_mesh_node_block_batched_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshNodeBlock produces equivalent outputs for batched DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -303,7 +309,9 @@ def test_mesh_node_block_batched_equivalence(device, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_mesh_edge_block_dgl_pyg_equivalence(device, pytestconfig):
+def test_mesh_edge_block_dgl_pyg_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshEdgeBlock produces equivalent outputs for DGL and PyG inputs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -360,7 +368,9 @@ def test_mesh_edge_block_dgl_pyg_equivalence(device, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_mesh_edge_block_gradient_equivalence(device, pytestconfig):
+def test_mesh_edge_block_gradient_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that gradients are equivalent between DGL and PyG versions of MeshEdgeBlock."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -454,7 +464,7 @@ def test_mesh_edge_block_gradient_equivalence(device, pytestconfig):
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("do_concat_trick", [False, True])
 def test_mesh_edge_block_concat_trick_equivalence(
-    device, do_concat_trick, pytestconfig
+    device, do_concat_trick, pytestconfig, set_physicsnemo_force_te
 ):
     """Test that MeshEdgeBlock produces equivalent outputs with and without concat trick."""
     # (DGL2PYG): remove this once DGL is removed.
@@ -511,7 +521,9 @@ def test_mesh_edge_block_concat_trick_equivalence(
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_mesh_edge_block_batched_equivalence(device, pytestconfig):
+def test_mesh_edge_block_batched_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshEdgeBlock produces equivalent outputs for batched DGL and PyG inputs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -596,7 +608,9 @@ def test_mesh_edge_block_batched_equivalence(device, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_dgl_pyg_equivalence(device, pytestconfig):
+def test_meshgraphnet_dgl_pyg_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshGraphNet produces equivalent outputs for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -665,7 +679,9 @@ def test_meshgraphnet_dgl_pyg_equivalence(device, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_gradient_equivalence(device, pytestconfig):
+def test_meshgraphnet_gradient_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshGraphNet produces equivalent gradients for DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 
@@ -774,7 +790,9 @@ def test_meshgraphnet_gradient_equivalence(device, pytestconfig):
 
 @import_or_fail(["dgl", "torch_geometric"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_batched_equivalence(device, pytestconfig):
+def test_meshgraphnet_batched_equivalence(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test that MeshGraphNet produces equivalent outputs for batched DGL and PyG graphs."""
     # (DGL2PYG): remove this once DGL is removed.
 

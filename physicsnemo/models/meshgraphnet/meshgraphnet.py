@@ -127,6 +127,13 @@ class MeshGraphNet(Module):
 
     Example
     -------
+    >>> # `norm_type` in MeshGraphNet is deprecated,
+    >>> # TE will be automatically used if possible unless told otherwise.
+    >>> # (You don't have to set this varialbe, it's faster to use TE!)
+    >>> # Example of how to disable:
+    >>> import os
+    >>> os.environ['PHYSICSNEMO_FORCE_TE'] = 'False'
+    >>>
     >>> model = physicsnemo.models.meshgraphnet.MeshGraphNet(
     ...         input_dim_nodes=4,
     ...         input_dim_edges=3,
