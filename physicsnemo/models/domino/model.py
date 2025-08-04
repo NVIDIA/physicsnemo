@@ -426,6 +426,10 @@ class GeometryRep(nn.Module):
             )
             if geometry_rep.geo_processor.processor_type == "unet":
                 h = geometry_rep.geo_processor.base_filters
+                if self.self_attention:
+                    normalization_in_unet = "layernorm"
+                else:
+                    normalization_in_unet = None
                 self.geo_processors.append(
                     UNet(
                         in_channels=geometry_rep.geo_conv.base_neurons_in,
@@ -433,13 +437,10 @@ class GeometryRep(nn.Module):
                         model_depth=3,
                         feature_map_channels=[
                             h,
-                            h,
                             2 * h,
-                            2 * h,
-                            4 * h,
                             4 * h,
                         ],
-                        num_conv_blocks=2,
+                        num_conv_blocks=1,
                         kernel_size=3,
                         stride=1,
                         conv_activation=self.activation_processor,
@@ -447,7 +448,7 @@ class GeometryRep(nn.Module):
                         padding_mode="replicate",
                         pooling_type="MaxPool3d",
                         pool_size=2,
-                        # normalization="layernorm",
+                        normalization=normalization_in_unet,
                         use_attn_gate=self.self_attention,
                         attn_decoder_feature_maps=[4 * h, 2 * h],
                         attn_feature_map_channels=[2 * h, h],
@@ -474,6 +475,7 @@ class GeometryRep(nn.Module):
                 raise ValueError("Invalid prompt. Specify unet or conv ...")
 
         self.geo_conv_out = nn.ModuleList()
+        self.geo_processor_out = nn.ModuleList()
         for _ in range(len(radii)):
             self.geo_conv_out.append(
                 GeoConvOut(
@@ -482,22 +484,31 @@ class GeometryRep(nn.Module):
                     grid_resolution=model_parameters.interp_res,
                 )
             )
+            self.geo_processor_out.append(
+                nn.Conv3d(
+                    geometry_rep.geo_conv.base_neurons_out,
+                    1,
+                    kernel_size=3,
+                    padding="same",
+                )
+            )
 
         if geometry_rep.geo_processor.processor_type == "unet":
             h = geometry_rep.geo_processor.base_filters
+            if self.self_attention:
+                normalization_in_unet = "layernorm"
+            else:
+                normalization_in_unet = None
             self.geo_processor_sdf = UNet(
                 in_channels=6,
                 out_channels=geometry_rep.geo_conv.base_neurons_out,
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -505,7 +516,7 @@ class GeometryRep(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization=normalization_in_unet,
                 use_attn_gate=self.self_attention,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -530,9 +541,6 @@ class GeometryRep(nn.Module):
         self.radii = radii
         self.hops = hops
 
-        self.geo_processor_out = nn.Conv3d(
-            geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
-        )
         self.geo_processor_sdf_out = nn.Conv3d(
             geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
         )
@@ -544,13 +552,10 @@ class GeometryRep(nn.Module):
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -558,7 +563,7 @@ class GeometryRep(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization="layernorm",
                 use_attn_gate=True,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -594,7 +599,7 @@ class GeometryRep(nn.Module):
                 for _ in range(self.hops):
                     dx = self.geo_processors[j](x_encoding_inter) / self.hops
                     x_encoding_inter = x_encoding_inter + dx
-                x_encoding_inter = self.geo_processor_out(x_encoding_inter)
+                x_encoding_inter = self.geo_processor_out[j](x_encoding_inter)
                 x_encoding.append(x_encoding_inter)
             x_encoding = torch.cat(x_encoding, dim=1)
 
@@ -1034,13 +1039,10 @@ class DoMINO(nn.Module):
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -1048,7 +1050,7 @@ class DoMINO(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization="layernorm",
                 use_attn_gate=True,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -1061,13 +1063,10 @@ class DoMINO(nn.Module):
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -1075,7 +1074,7 @@ class DoMINO(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization="layernorm",
                 use_attn_gate=True,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
