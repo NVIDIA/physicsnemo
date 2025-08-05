@@ -441,7 +441,7 @@ class ClimateDatapipe(Datapipe):
 
         # Determine outputs of pipeline
         self.pipe_outputs = []
-        for (i, spec) in enumerate(self.sources):
+        for i, spec in enumerate(self.sources):
             name = spec.name if spec.name is not None else i
             self.pipe_outputs += [f"state_seq-{name}", f"timestamps-{name}"]
             self.pipe_outputs.extend(
@@ -463,7 +463,7 @@ class ClimateDatapipe(Datapipe):
         # Load all data files and statistics
         for spec in sources:
             spec.parse_dataset_files(num_samples_per_year=num_samples_per_year)
-        for (i, spec_i) in enumerate(sources):
+        for i, spec_i in enumerate(sources):
             for spec_j in sources[i + 1 :]:
                 if not spec_i.dimensions_compatible(spec_j):
                     raise ValueError("Incompatible data sources")
@@ -801,7 +801,7 @@ class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
         shape = (self.num_steps, len(self.variables)) + shape[1:]
         # TODO: this can be optimized to do the NetCDF scale/offset on GPU
         output = np.empty(shape, dtype=np.float32)
-        for (i, var) in enumerate(self.variables):
+        for i, var in enumerate(self.variables):
             v = data_file.variables[var]
             output[:, i] = v[
                 idx : idx + self.num_steps * self.stride : self.stride

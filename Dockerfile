@@ -127,7 +127,7 @@ ENV ONNXRUNTIME_ARM64_WHEEL=${ONNXRUNTIME_ARM64_WHEEL:-unknown}
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         pip install "onnxruntime-gpu>1.19.0"; \
     elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$ONNXRUNTIME_ARM64_WHEEL" != "unknown" ]; then \
-	pip install --no-cache-dir --no-deps /physicsnemo/deps/${ONNXRUNTIME_ARM64_WHEEL}; \
+        pip install --no-cache-dir --no-deps /physicsnemo/deps/${ONNXRUNTIME_ARM64_WHEEL}; \
     else \
         echo "Skipping onnxruntime_gpu install."; \
     fi
@@ -140,9 +140,9 @@ FROM builder as ci
 
 ARG TARGETPLATFORM
 
-# TODO: Remove hacky downgrade of netCDF4 package. netCDF4 v1.7.1 has following 
+# TODO: Remove hacky downgrade of netCDF4 package. netCDF4 v1.7.1 has following
 # issue: https://github.com/Unidata/netcdf4-python/issues/1343
-# This workaround is only added for the CI systems which run pytest only once. 
+# This workaround is only added for the CI systems which run pytest only once.
 # For more details, refer: https://github.com/NVIDIA/physicsnemo/issues/608
 RUN pip install --no-cache-dir "netcdf4>=1.6.3,<1.7.1"
 
@@ -162,7 +162,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_sc
         git clone https://github.com/rusty1s/pytorch_scatter.git; \
         cd pytorch_scatter; \
         git checkout tags/2.1.2; \
-	FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
+        FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
         pip install dist/*.whl --force-reinstall --no-cache-dir && \
         cd ../ && rm -r pytorch_scatter; \
     fi
@@ -177,7 +177,7 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cl
         git clone https://github.com/rusty1s/pytorch_cluster.git; \
         cd pytorch_cluster; \
         git checkout tags/1.6.3; \
-	FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
+        FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
         pip install dist/*.whl --force-reinstall --no-cache-dir && \
         cd ../ && rm -r pytorch_cluster; \
     fi
@@ -196,8 +196,6 @@ RUN pip install --no-cache-dir "torch-harmonics>=0.6.5,<0.7.1" "tensorly>=0.8.1"
 RUN pip install --no-cache-dir --no-deps -e git+https://github.com/NVIDIA/modulus-makani.git@v0.1.0#egg=makani
 
 RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==6.5.0" "protobuf==3.20.3" "moto[s3]>=5.0.28"
-
-RUN pip install --no-cache-dir "torch_geometric==2.5.3"
 
 # Install scikit-image and stl
 RUN pip install --no-cache-dir "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely" "numpy<2.0"

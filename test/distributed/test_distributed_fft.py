@@ -17,14 +17,13 @@
 import pytest
 import torch
 import torch.distributed as dist
-from distributed_utils_for_testing import modify_environment
+from pytest_utils import modify_environment
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.distributed.fft import DistributedRFFT2
 
 
 def distributed_setup(rank, model_parallel_size, verbose):
-
     DistributedManager._shared_state = {}
 
     # Setup distributed process config

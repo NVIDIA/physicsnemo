@@ -226,7 +226,6 @@ class _ChildVerticesBuilder(object):
     """Bookkeeping of new child vertices added to an existing set of vertices."""
 
     def __init__(self, parent_vertices):
-
         # Because the same new vertex will be required when splitting adjacent
         # triangles (which share an edge) we keep them in a hash table indexed by
         # sorted indices of the vertices adjacent to the edge, to avoid creating

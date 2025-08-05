@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 import pytest
 import torch
 from models.common import validate_forward_accuracy
@@ -29,11 +30,11 @@ def ahmed_data_dir(nfs_data_dir):
 
 @import_or_fail(["sparse_dot_mkl", "dgl"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_bsms_mgn_forward(pytestconfig, device):
+def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
+    torch.manual_seed(1)
+
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
     from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
-
-    torch.manual_seed(1)
 
     # Create a simple graph.
     num_nodes = 8

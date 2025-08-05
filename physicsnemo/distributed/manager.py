@@ -540,7 +540,6 @@ class DistributedManager(object):
         if key in self._mesh_groups.keys():
             return self._mesh_groups[key]
         else:
-
             if mesh.ndim != 1:
                 # We need to get all ranks in this mesh and spawn a group.
                 # The mesh.mesh object is a GPU tensor and using it will block.
@@ -763,7 +762,6 @@ class DistributedManager(object):
     def create_groups_from_config(
         config: ProcessGroupConfig, verbose: bool = False
     ):  # pragma: no cover
-
         if torch.__version__ > "2.4":
             warnings.warn(
                 "DistributedManager.create_groups_from_config is no longer the most simple "

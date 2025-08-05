@@ -85,9 +85,9 @@ class VerticesToPointFeatures(nn.Module):
             self.mlp = MLP(3 * embed_dim, out_features, [])
 
     def forward(self, vertices: Float[Tensor, "B N 3"]) -> PointFeatures:
-        assert (
-            vertices.ndim == 3
-        ), f"Expected 3D vertices of shape BxNx3, got {vertices.shape}"
+        assert vertices.ndim == 3, (
+            f"Expected 3D vertices of shape BxNx3, got {vertices.shape}"
+        )
         vert_embed = self.pos_embed(vertices)
         if self.use_mlp:
             vert_embed = self.mlp(vert_embed)
@@ -256,13 +256,13 @@ class FIGConvUNet(BaseModel):
         if pooling_layers is None:
             pooling_layers = [num_levels]
         else:
-            assert isinstance(
-                pooling_layers, list
-            ), f"pooling_layers must be a list, got {type(pooling_layers)}."
+            assert isinstance(pooling_layers, list), (
+                f"pooling_layers must be a list, got {type(pooling_layers)}."
+            )
             for layer in pooling_layers:
-                assert (
-                    layer <= num_levels
-                ), f"pooling_layer {layer} is greater than num_levels {num_levels}."
+                assert layer <= num_levels, (
+                    f"pooling_layer {layer} is greater than num_levels {num_levels}."
+                )
         self.pooling_layers = pooling_layers
         grid_pools = [
             GridFeatureGroupPool(

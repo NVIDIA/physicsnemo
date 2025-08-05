@@ -136,9 +136,9 @@ def run_test_distributed_graphcast(
     diff = out_single_gpu - out_multi_gpu
     diff = torch.abs(diff)
     mask = diff > atol
-    assert torch.allclose(
-        out_single_gpu, out_multi_gpu, atol=atol, rtol=rtol
-    ), f"{mask.sum()} elements have diff > {atol} \n {out_single_gpu[mask]} \n {out_multi_gpu[mask]}"
+    assert torch.allclose(out_single_gpu, out_multi_gpu, atol=atol, rtol=rtol), (
+        f"{mask.sum()} elements have diff > {atol} \n {out_single_gpu[mask]} \n {out_multi_gpu[mask]}"
+    )
 
     # compare model gradients (ensure correctness of backward)
     model_multi_gpu_parameters = list(model_multi_gpu.parameters())
@@ -151,7 +151,9 @@ def run_test_distributed_graphcast(
             model_multi_gpu_parameters[param_idx].grad,
             atol=atol_w,
             rtol=rtol_w,
-        ), f"{mask.sum()} elements have diff > {atol_w} \n {param.grad[mask]} \n {model_multi_gpu_parameters[param_idx].grad[mask]}"
+        ), (
+            f"{mask.sum()} elements have diff > {atol_w} \n {param.grad[mask]} \n {model_multi_gpu_parameters[param_idx].grad[mask]}"
+        )
 
     # cleanup distributed
     DistributedManager.cleanup()

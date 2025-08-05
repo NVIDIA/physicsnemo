@@ -194,9 +194,7 @@ class _DLWPWrapper(torch.nn.Module):
                     self.latgrid,
                 ),
                 0,
-            ) - (
-                1 / np.pi
-            )  # subtract mean value
+            ) - (1 / np.pi)  # subtract mean value
             tisr = (
                 torch.tensor(tisr, dtype=dtype)
                 .to(device)

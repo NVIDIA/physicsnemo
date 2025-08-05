@@ -222,7 +222,6 @@ def compute_halo_configs_from_conv_args(
         )
 
         if halo_size > 0:
-
             # Create a halo config for this dimension
 
             halo_configs.append(
@@ -529,14 +528,14 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
 
     # Handle regular torch tensor inputs
     if (
-        type(input) == torch.Tensor
-        and type(weight) == torch.nn.parameter.Parameter
-        and (bias is None or type(bias) == torch.nn.parameter.Parameter)
+        isinstance(input, torch.Tensor)
+        and isinstance(weight, torch.nn.parameter.Parameter)
+        and (bias is None or isinstance(bias, torch.nn.parameter.Parameter))
     ):
         return func(*args, **kwargs)
 
     # Handle distributed ShardTensor inputs
-    elif type(input) == ShardTensor:
+    elif isinstance(input, ShardTensor):
         # Gather any distributed weights/bias
         if isinstance(weight, (ShardTensor, DTensor)):
             weight = weight.full_tensor()

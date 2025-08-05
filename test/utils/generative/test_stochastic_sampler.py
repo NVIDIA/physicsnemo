@@ -23,15 +23,17 @@ from torch import Tensor
 
 
 # Mock network class
-class MockNet:
+class MockNet(torch.nn.Module):
     def __init__(self, sigma_min=0.1, sigma_max=1000):
+        super().__init__()
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
+        self.a = torch.nn.Parameter(0.9 * torch.ones(1))
 
     def round_sigma(self, t: Tensor) -> Tensor:
         return t
 
-    def __call__(
+    def forward(
         self,
         x: Tensor,
         x_lr: Tensor,
@@ -41,18 +43,20 @@ class MockNet:
         embedding_selector: Optional[Callable] = None,
     ) -> Tensor:
         # Mock behavior: return input tensor for testing purposes
-        return x * 0.9
+        return x * self.a
 
 
 # The test function for edm_sampler
 @import_or_fail("cftime")
-def test_stochastic_sampler(pytestconfig):
-
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+def test_stochastic_sampler(device, pytestconfig):
     from physicsnemo.utils.diffusion import stochastic_sampler
 
-    net = MockNet()
-    latents = torch.randn(2, 3, 448, 448)  # Mock latents
-    img_lr = torch.randn(2, 3, 112, 112)  # Mock low-res image
+    torch._dynamo.reset()
+
+    net = MockNet().to(device)
+    latents = torch.randn(2, 3, 448, 448, device=device)  # Mock latents
+    img_lr = torch.randn(2, 3, 112, 112, device=device)  # Mock low-res image
 
     # Basic sampler functionality test
     result = stochastic_sampler(
@@ -74,7 +78,7 @@ def test_stochastic_sampler(pytestconfig):
     assert result.shape == latents.shape, "Output shape does not match expected shape"
 
     # Test with mean_hr conditioning
-    mean_hr = torch.randn(2, 3, 112, 112)
+    mean_hr = torch.randn(2, 3, 112, 112, device=device)
     result_mean_hr = stochastic_sampler(
         net=net,
         latents=latents,
@@ -91,9 +95,9 @@ def test_stochastic_sampler(pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_mean_hr.shape == latents.shape
-    ), "Mean HR conditioned output shape does not match expected shape"
+    assert result_mean_hr.shape == latents.shape, (
+        "Mean HR conditioned output shape does not match expected shape"
+    )
 
     # Test with different S_churn value
     result_churn = stochastic_sampler(
@@ -112,9 +116,9 @@ def test_stochastic_sampler(pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_churn.shape == latents.shape
-    ), "Churn output shape does not match expected shape"
+    assert result_churn.shape == latents.shape, (
+        "Churn output shape does not match expected shape"
+    )
 
 
 # The test function for edm_sampler with rectangular domain and patching
@@ -124,7 +128,9 @@ def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
     from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
 
-    net = MockNet()
+    torch._dynamo.reset()
+
+    net = MockNet().to(device)
 
     img_shape_y, img_shape_x = 256, 64
     patch_shape_y, patch_shape_x = 16, 10
@@ -160,9 +166,9 @@ def test_stochastic_sampler_rectangle_patching(device, pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_mean_hr.shape == latents.shape
-    ), "Mean HR conditioned output shape does not match expected shape"
+    assert result_mean_hr.shape == latents.shape, (
+        "Mean HR conditioned output shape does not match expected shape"
+    )
 
 
 # Test that the stochastic sampler is differentiable with rectangular patching
@@ -173,16 +179,20 @@ def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
     from physicsnemo.utils.diffusion import stochastic_sampler
     from physicsnemo.utils.patching import GridPatching2D
 
+    torch._dynamo.reset()
+
     # Mock network class
-    class MockNet:
+    class MockNet(torch.nn.Module):
         def __init__(self, sigma_min=0.1, sigma_max=1000):
+            super().__init__()
             self.sigma_min = sigma_min
             self.sigma_max = sigma_max
+            self.a = torch.nn.Parameter(0.9 * torch.ones(1))
 
         def round_sigma(self, t: Tensor) -> Tensor:
             return t
 
-        def __call__(
+        def forward(
             self,
             x: Tensor,
             x_lr: Tensor,
@@ -192,9 +202,9 @@ def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
             embedding_selector: Optional[Callable] = None,
         ) -> Tensor:
             # Mock behavior: return input tensor for testing purposes
-            return x * 0.9 + x_lr[:, : x.shape[1], :, :] * 0.1
+            return x * self.a + x_lr[:, : x.shape[1], :, :] * (1 - self.a)
 
-    net = MockNet()
+    net = MockNet().to(device)
 
     img_shape_y, img_shape_x = 256, 64
     patch_shape_y, patch_shape_x = 16, 10
@@ -238,9 +248,9 @@ def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
         S_noise=1,
     )
 
-    assert (
-        result_mean_hr.shape == latents.shape
-    ), "Mean HR conditioned output shape does not match expected shape"
+    assert result_mean_hr.shape == latents.shape, (
+        "Mean HR conditioned output shape does not match expected shape"
+    )
 
     loss = result_mean_hr.sum()
     loss.backward()
@@ -251,3 +261,48 @@ def test_stochastic_sampler_patching_differentiable(device, pytestconfig):
     assert d.grad is not None
     assert e.grad is not None
     assert f.grad is not None
+
+
+# Mock network class with lead_time_embedding
+class MockNet_lead_time_embedding:
+    def __init__(self, sigma_min=0.1, sigma_max=1000):
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
+    def round_sigma(self, t):
+        return t
+
+    def __call__(
+        self,
+        x,
+        x_lr,
+        t,
+        class_labels,
+        lead_time_label=None,
+        global_index=None,
+        embedding_selector=None,
+    ) -> torch.Tensor:
+        # Mock behavior: return input tensor for testing purposes
+        return x
+
+
+# The test function for patch-based stochastic sampler with lead_time_embedding
+@import_or_fail("cftime")
+def test_stochastic_sampler_with_lead_time_args(pytestconfig):
+    from physicsnemo.utils.diffusion import stochastic_sampler
+
+    net = MockNet_lead_time_embedding()
+    latents = torch.randn(2, 3, 32, 32)  # Mock latents
+    img_lr = torch.randn(2, 3, 32, 32)  # Mock low-res image
+
+    # Basic sampler functionality test
+    result = stochastic_sampler(
+        net=net,
+        latents=latents,
+        img_lr=img_lr,
+        patching=None,
+        mean_hr=torch.ones_like(img_lr),
+        lead_time_label=[0],
+    )
+
+    assert result.shape == latents.shape, "Output shape does not match expected shape"

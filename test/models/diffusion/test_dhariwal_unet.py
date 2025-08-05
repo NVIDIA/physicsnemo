@@ -87,19 +87,35 @@ def test_dhariwal_unet_optims(device):
     # Check JIT
     model, invar = setup_model()
     assert common.validate_jit(model, (*invar,))
-    # Check AMP
+    # Check AMP with amp_mode=True for the layers: should pass
     model, invar = setup_model()
+    model.amp_mode = True
     assert common.validate_amp(model, (*invar,))
-    # Check Combo
+    # Check Combo with amp_mode=True for the layers: should pass
     model, invar = setup_model()
+    model.amp_mode = True
     assert common.validate_combo_optims(model, (*invar,))
+
+    # Check failures (only on GPU, because validate_amp and validate_combo_optims
+    # don't activate amp for DhariwalUNet on CPU)
+    if device == "cuda:0":
+        # Check AMP: should fail because amp_mode is False for the layers
+        with pytest.raises(RuntimeError):
+            model, invar = setup_model()
+            assert common.validate_amp(model, (*invar,))
+        # Check Combo: should fail because amp_mode is False for the layers
+        # NOTE: this test doesn't fail because validate_combo_optims doesn't
+        # activate amp for DhariwalUNet, even on GPU
+        # with pytest.raises(RuntimeError):
+        #     model, invar = setup_model()
+        #     assert common.validate_combo_optims(model, (*invar,))
 
 
 # Skip CPU tests because too slow
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_dhariwal_unet_checkpoint(device):
     """Test Dhariwal UNet checkpoint save/load"""
-    # Construct FNO models
+
     model_1 = UNet(
         img_resolution=16,
         in_channels=2,

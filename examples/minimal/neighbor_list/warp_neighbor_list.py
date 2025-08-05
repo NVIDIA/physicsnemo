@@ -16,7 +16,8 @@
 
 import torch
 
-from physicsnemo.utils.neighbor_list import radius_search
+from physicsnemo.utils.neighbors import radius_search
+
 from utils import Meter
 
 try:
@@ -38,13 +39,12 @@ def test_warp(
     min_tries: int,
 ):
     timer = Meter("Warp")
-    points_wp = wp.from_torch(points, dtype=wp.vec3)
     for i in range(min_tries):
         with timer:
             _ = radius_search(
-                points_wp,
-                points_wp,
-                radius,
+                points=points,
+                queries=points,
+                radius=radius,
             )
             torch.cuda.synchronize()
     return timer.min_time, timer.max_allocated_memory
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     torch.manual_seed(42)
 
     min_tries = 5
-    Ns = [100_000, 1_000_000, 2_000_000]
+    Ns = [100_000, 1_000_000, 2_000_000, 3_000_000]
     radii = [0.02, 0.01, 0.001, 0.0001]
     device = "cuda"
 
@@ -68,12 +68,10 @@ if __name__ == "__main__":
         points = torch.rand([N, 3]).to(device)
 
         for radius in radii:
-            try:
-                min_time, max_mem = test_warp(points, radius, min_tries)
-                warp_times.append(min_time)
-                warp_max_mems.append(max_mem)
-            except Exception as e:
-                continue
+            # try:
+            min_time, max_mem = test_warp(points, radius, min_tries)
+            warp_times.append(min_time)
+            warp_max_mems.append(max_mem)
 
         print(f"\n\nResults for {N} points")
         # Print table

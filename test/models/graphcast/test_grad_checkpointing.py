@@ -22,7 +22,9 @@ from utils import create_random_input, fix_random_seeds
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_grad_checkpointing(device, pytestconfig, num_channels=2, res_h=15, res_w=15):
+def test_grad_checkpointing(
+    device, pytestconfig, set_physicsnemo_force_te, num_channels=2, res_h=15, res_w=15
+):
     """Test gradient checkpointing"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
@@ -105,11 +107,12 @@ def test_grad_checkpointing(device, pytestconfig, num_channels=2, res_h=15, res_
 
     # Compare the gradients
     for name in computed_grads:
-        torch.allclose(
-            computed_grads_checkpointed[name], computed_grads[name]
-        ), "Gradient do not match. Checkpointing failed!"
+        (
+            torch.allclose(computed_grads_checkpointed[name], computed_grads[name]),
+            "Gradient do not match. Checkpointing failed!",
+        )
 
     # Check that the results are the same
-    assert torch.allclose(
-        y_pred_checkpointed, y_pred
-    ), "Outputs do not match. Checkpointing failed!"
+    assert torch.allclose(y_pred_checkpointed, y_pred), (
+        "Outputs do not match. Checkpointing failed!"
+    )

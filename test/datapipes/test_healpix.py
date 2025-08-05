@@ -136,7 +136,6 @@ def test_open_time_series(data_dir, dataset_name, pytestconfig):
 @import_or_fail("netCDF4")
 @import_or_fail("numpy")
 def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
-
     from physicsnemo.datapipes.healpix.data_modules import (
         create_time_series_dataset_classic,
     )
@@ -202,7 +201,6 @@ def test_create_time_series(data_dir, dataset_name, create_path, pytestconfig):
 def test_TimeSeriesDataset_initialization(
     data_dir, dataset_name, scaling_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.timeseries_dataset import TimeSeriesDataset
 
     # open our test dataset
@@ -643,7 +641,6 @@ def test_TimeSeriesDataModule_get_constants(
 def test_TimeSeriesDataModule_get_dataloaders(
     data_dir, create_path, dataset_name, scaling_double_dict, pytestconfig
 ):
-
     from physicsnemo.datapipes.healpix.data_modules import (
         TimeSeriesDataModule,
     )
