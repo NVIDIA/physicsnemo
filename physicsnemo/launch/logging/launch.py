@@ -196,7 +196,7 @@ class LaunchLogger(object):
 
         # Trigger profiling
         if self.profile and self.profiler:
-            self.logger.warning(f"Starting profile for epoch {self.epoch}")
+            self.pyLogger.warning(f"Starting profile for epoch {self.epoch}")
             self.profiler.__enter__()
             profiler.start()
 
@@ -243,8 +243,8 @@ class LaunchLogger(object):
 
         # Exit profiling
         if self.profile and self.profiler:
-            self.logger.warning("Ending profile")
-            self.profiler.__exit__()
+            self.pyLogger.warning("Ending profile")
+            self.profiler.__exit__(exc_type, exc_value, exc_tb)
             profiler.end()
 
         # Timing stuff, TODO: histograms not line plots

@@ -145,50 +145,58 @@ def signed_distance_field(
         )
 
     wp.init()
-    device = wp.get_device()
 
-    mesh = wp.Mesh(
-        points=wp.array(mesh_vertices, dtype=wp.vec3f, device=device),
-        indices=wp.array(mesh_indices, dtype=wp.int32, device=device),
-    )
+    if isinstance(mesh_vertices, cp.ndarray):
+        device = mesh_vertices.device
+        wp_device = f"cuda:{device.id}"
+    else:
+        wp_device = wp.get_device()
 
-    warp_input_points = wp.array(input_points, dtype=wp.vec3f, device=device)
+    with wp.ScopedDevice(wp_device):
+        mesh = wp.Mesh(
+            points=wp.array(mesh_vertices, dtype=wp.vec3f, device=wp_device),
+            indices=wp.array(mesh_indices, dtype=wp.int32, device=wp_device),
+        )
 
-    N = len(warp_input_points)
+        warp_input_points = wp.array(input_points, dtype=wp.vec3f, device=wp_device)
 
-    sdf = wp.empty(shape=(N,), dtype=wp.float32, device=device)
-    sdf_hit_point = wp.empty(shape=(N,), dtype=wp.vec3f, device=device)
-    sdf_hit_point_id = wp.empty(shape=(N,), dtype=wp.int32, device=device)
+        N = len(warp_input_points)
 
-    wp.launch(
-        kernel=_bvh_query_distance,
-        dim=N,
-        inputs=[
-            mesh.id,
-            warp_input_points,
-            max_dist,
-            sdf,
-            sdf_hit_point,
-            sdf_hit_point_id,
-            use_sign_winding_number,
-        ],
-        device=device,
-    )
+        sdf = wp.empty(shape=(N,), dtype=wp.float32, device=wp_device)
+        sdf_hit_point = wp.empty(shape=(N,), dtype=wp.vec3f, device=wp_device)
+        sdf_hit_point_id = wp.empty(shape=(N,), dtype=wp.int32, device=wp_device)
 
-    def convert(array: wp.array) -> np.ndarray | cp.ndarray:
-        """Converts a Warp array to CuPy/NumPy based on the `return_cupy` flag."""
-        if return_cupy:
-            return cp.asarray(array)
-        else:
-            return array.numpy()
+        wp.launch(
+            kernel=_bvh_query_distance,
+            dim=N,
+            inputs=[
+                mesh.id,
+                warp_input_points,
+                max_dist,
+                sdf,
+                sdf_hit_point,
+                sdf_hit_point_id,
+                use_sign_winding_number,
+            ],
+            device=wp_device,
+        )
 
-    arrays_to_return: list[np.ndarray | cp.ndarray] = [convert(sdf)]
+        def convert(array: wp.array) -> np.ndarray | cp.ndarray:
+            """Converts a Warp array to CuPy/NumPy based on the `return_cupy` flag."""
+            if return_cupy:
+                return cp.asarray(array)
+            else:
+                return array.numpy()
 
-    if include_hit_points:
-        arrays_to_return.append(convert(sdf_hit_point))
-    if include_hit_points_id:
-        arrays_to_return.append(convert(sdf_hit_point_id))
+        arrays_to_return: list[np.ndarray | cp.ndarray] = [convert(sdf)]
 
-    return (
-        arrays_to_return[0] if len(arrays_to_return) == 1 else tuple(arrays_to_return)
-    )
+        if include_hit_points:
+            arrays_to_return.append(convert(sdf_hit_point))
+        if include_hit_points_id:
+            arrays_to_return.append(convert(sdf_hit_point_id))
+
+        return (
+            arrays_to_return[0]
+            if len(arrays_to_return) == 1
+            else tuple(arrays_to_return)
+        )

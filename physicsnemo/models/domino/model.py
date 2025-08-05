@@ -22,6 +22,7 @@ the config.yaml file)
 """
 
 import math
+from collections import defaultdict
 from typing import Callable, Literal, Sequence
 
 import torch
@@ -426,6 +427,10 @@ class GeometryRep(nn.Module):
             )
             if geometry_rep.geo_processor.processor_type == "unet":
                 h = geometry_rep.geo_processor.base_filters
+                if self.self_attention:
+                    normalization_in_unet = "layernorm"
+                else:
+                    normalization_in_unet = None
                 self.geo_processors.append(
                     UNet(
                         in_channels=geometry_rep.geo_conv.base_neurons_in,
@@ -433,13 +438,10 @@ class GeometryRep(nn.Module):
                         model_depth=3,
                         feature_map_channels=[
                             h,
-                            h,
                             2 * h,
-                            2 * h,
-                            4 * h,
                             4 * h,
                         ],
-                        num_conv_blocks=2,
+                        num_conv_blocks=1,
                         kernel_size=3,
                         stride=1,
                         conv_activation=self.activation_processor,
@@ -447,7 +449,7 @@ class GeometryRep(nn.Module):
                         padding_mode="replicate",
                         pooling_type="MaxPool3d",
                         pool_size=2,
-                        # normalization="layernorm",
+                        normalization=normalization_in_unet,
                         use_attn_gate=self.self_attention,
                         attn_decoder_feature_maps=[4 * h, 2 * h],
                         attn_feature_map_channels=[2 * h, h],
@@ -474,6 +476,7 @@ class GeometryRep(nn.Module):
                 raise ValueError("Invalid prompt. Specify unet or conv ...")
 
         self.geo_conv_out = nn.ModuleList()
+        self.geo_processor_out = nn.ModuleList()
         for _ in range(len(radii)):
             self.geo_conv_out.append(
                 GeoConvOut(
@@ -482,22 +485,31 @@ class GeometryRep(nn.Module):
                     grid_resolution=model_parameters.interp_res,
                 )
             )
+            self.geo_processor_out.append(
+                nn.Conv3d(
+                    geometry_rep.geo_conv.base_neurons_out,
+                    1,
+                    kernel_size=3,
+                    padding="same",
+                )
+            )
 
         if geometry_rep.geo_processor.processor_type == "unet":
             h = geometry_rep.geo_processor.base_filters
+            if self.self_attention:
+                normalization_in_unet = "layernorm"
+            else:
+                normalization_in_unet = None
             self.geo_processor_sdf = UNet(
                 in_channels=6,
                 out_channels=geometry_rep.geo_conv.base_neurons_out,
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -505,7 +517,7 @@ class GeometryRep(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization=normalization_in_unet,
                 use_attn_gate=self.self_attention,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -530,9 +542,6 @@ class GeometryRep(nn.Module):
         self.radii = radii
         self.hops = hops
 
-        self.geo_processor_out = nn.Conv3d(
-            geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
-        )
         self.geo_processor_sdf_out = nn.Conv3d(
             geometry_rep.geo_conv.base_neurons_out, 1, kernel_size=3, padding="same"
         )
@@ -544,13 +553,10 @@ class GeometryRep(nn.Module):
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -558,7 +564,7 @@ class GeometryRep(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization="layernorm",
                 use_attn_gate=True,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -594,7 +600,7 @@ class GeometryRep(nn.Module):
                 for _ in range(self.hops):
                     dx = self.geo_processors[j](x_encoding_inter) / self.hops
                     x_encoding_inter = x_encoding_inter + dx
-                x_encoding_inter = self.geo_processor_out(x_encoding_inter)
+                x_encoding_inter = self.geo_processor_out[j](x_encoding_inter)
                 x_encoding.append(x_encoding_inter)
             x_encoding = torch.cat(x_encoding, dim=1)
 
@@ -1034,13 +1040,10 @@ class DoMINO(nn.Module):
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -1048,7 +1051,7 @@ class DoMINO(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization="layernorm",
                 use_attn_gate=True,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -1061,13 +1064,10 @@ class DoMINO(nn.Module):
                 model_depth=3,
                 feature_map_channels=[
                     h,
-                    h,
                     2 * h,
-                    2 * h,
-                    4 * h,
                     4 * h,
                 ],
-                num_conv_blocks=2,
+                num_conv_blocks=1,
                 kernel_size=3,
                 stride=1,
                 conv_activation=self.activation_processor,
@@ -1075,7 +1075,7 @@ class DoMINO(nn.Module):
                 padding_mode="replicate",
                 pooling_type="MaxPool3d",
                 pool_size=2,
-                # normalization="layernorm",
+                normalization="layernorm",
                 use_attn_gate=True,
                 attn_decoder_feature_maps=[4 * h, 2 * h],
                 attn_feature_map_channels=[2 * h, h],
@@ -1106,6 +1106,23 @@ class DoMINO(nn.Module):
         self.use_surface_area = model_parameters.use_surface_area
         self.encode_parameters = model_parameters.encode_parameters
         self.geo_encoding_type = model_parameters.geometry_encoding_type
+
+        if hasattr(model_parameters, "num_volume_neighbors"):
+            self.num_volume_neighbors = model_parameters.num_volume_neighbors
+        else:
+            self.num_volume_neighbors = 50
+
+        if hasattr(model_parameters, "return_volume_neighbors"):
+            self.return_volume_neighbors = model_parameters.return_volume_neighbors
+            if (
+                self.return_volume_neighbors
+                and self.solution_calculation_mode == "one-loop"
+            ):
+                print(
+                    "'one-loop' solution_calculation mode not supported when return_volume_neighbors is set to true"
+                )
+                print("Overwriting the solution_calculation mode to 'two-loop'")
+                self.solution_calculation_mode = "two-loop"
 
         if self.use_surface_normals:
             if not self.use_surface_area:
@@ -1562,6 +1579,70 @@ class DoMINO(nn.Module):
 
             return output_all
 
+    def sample_sphere(self, center, r, num_points):
+        """Uniformly sample points in a 3D sphere around the center.
+
+        This method generates random points within a sphere of radius r centered
+        at each point in the input tensor. The sampling is uniform in volume,
+        meaning points are more likely to be sampled in the outer regions of the sphere.
+
+        Args:
+            center: Tensor of shape (batch_size, num_points, 3) containing center coordinates
+            r: Radius of the sphere for sampling
+            num_points: Number of points to sample per center
+
+        Returns:
+            Tensor of shape (batch_size, num_points, num_samples, 3) containing
+            the sampled points around each center
+        """
+        directions = torch.randn(
+            size=(center.shape[0], center.shape[1], num_points, center.shape[2]),
+            device=center.device,
+        )
+        directions = directions / torch.norm(directions, dim=-1, keepdim=True)
+
+        radii = r * torch.pow(
+            torch.rand(size=(num_points, 1), device=center.device), 1 / 3
+        )
+        return center.unsqueeze(2) + directions * radii[None, None, :, :].expand(
+            -1, center.shape[1], num_points, -1
+        )
+
+    def sample_shpere_shell(self, center, r_inner, r_outer, num_points):
+        """Uniformly sample points in a 3D spherical shell around a center.
+
+        This method generates random points within a spherical shell (annulus)
+        between inner radius r_inner and outer radius r_outer centered at each
+        point in the input tensor. The sampling is uniform in volume within the shell.
+
+        Args:
+            center: Tensor of shape (batch_size, num_points, 3) containing center coordinates
+            r_inner: Inner radius of the spherical shell
+            r_outer: Outer radius of the spherical shell
+            num_points: Number of points to sample per center
+
+        Returns:
+            Tensor of shape (batch_size, num_points, num_samples, 3) containing
+            the sampled points within the spherical shell around each center
+        """
+        directions = torch.randn(
+            size=(center.shape[0], center.shape[1], num_points, center.shape[2]),
+            device=center.device,
+        )
+        directions = directions / torch.norm(directions, dim=-1, keepdim=True)
+
+        radii = torch.pow(
+            torch.rand(size=(num_points, 1), device=center.device)
+            * (r_outer**3 - r_inner**3)
+            + r_inner**3,
+            1 / 3,
+        )
+        return (
+            center.unsqueeze(2)
+            + directions
+            + radii[None, None, :, :].expand(-1, center.shape[1], num_points, -1)
+        )
+
     def calculate_solution(
         self,
         volume_mesh_centers,
@@ -1572,6 +1653,7 @@ class DoMINO(nn.Module):
         eval_mode,
         num_sample_points=20,
         noise_intensity=50,
+        return_volume_neighbors=False,
     ):
         """Function to approximate solution sampling the neighborhood information"""
         if eval_mode == "volume":
@@ -1687,17 +1769,62 @@ class DoMINO(nn.Module):
             return one_loop_output_all
 
         if self.solution_calculation_mode == "two-loop":
-            for f in range(num_variables):
-                for p in range(num_sample_points):
-                    if p == 0:
-                        volume_m_c = volume_mesh_centers
-                    else:
-                        noise = torch.rand_like(volume_mesh_centers)
-                        noise = 2 * (noise - 0.5)
-                        noise = noise / noise_intensity
-                        dist = torch.norm(noise, dim=-1, keepdim=True)
+            volume_m_c_perturbed = [volume_mesh_centers.unsqueeze(2)]
 
-                        volume_m_c = volume_mesh_centers + noise
+            if return_volume_neighbors:
+                num_hop1 = num_sample_points
+                num_hop2 = (
+                    num_sample_points // 2 if num_sample_points != 1 else 1
+                )  # This is per 1 hop node
+                neighbors = defaultdict(list)
+
+                volume_m_c_hop1 = self.sample_sphere(
+                    volume_mesh_centers, 1 / noise_intensity, num_hop1
+                )
+                # 1 hop neighbors
+                for i in range(num_hop1):
+                    idx = len(volume_m_c_perturbed)
+                    volume_m_c_perturbed.append(volume_m_c_hop1[:, :, i : i + 1, :])
+                    neighbors[0].append(idx)
+
+                # 2 hop neighbors
+                for i in range(num_hop1):
+                    parent_idx = (
+                        i + 1
+                    )  # Skipping the first point, which is the original
+                    parent_point = volume_m_c_perturbed[parent_idx]
+
+                    children = self.sample_shpere_shell(
+                        parent_point.squeeze(2),
+                        1 / noise_intensity,
+                        2 / noise_intensity,
+                        num_hop2,
+                    )
+
+                    for c in range(num_hop2):
+                        idx = len(volume_m_c_perturbed)
+                        volume_m_c_perturbed.append(children[:, :, c : c + 1, :])
+                        neighbors[parent_idx].append(idx)
+
+                volume_m_c_perturbed = torch.cat(volume_m_c_perturbed, dim=2)
+                neighbors = dict(neighbors)
+                field_neighbors = {i: [] for i in range(num_variables)}
+            else:
+                volume_m_c_sample = self.sample_sphere(
+                    volume_mesh_centers, 1 / noise_intensity, num_sample_points
+                )
+                for i in range(num_sample_points):
+                    volume_m_c_perturbed.append(volume_m_c_sample[:, :, i : i + 1, :])
+
+                volume_m_c_perturbed = torch.cat(volume_m_c_perturbed, dim=2)
+
+            for f in range(num_variables):
+                for p in range(volume_m_c_perturbed.shape[2]):
+                    volume_m_c = volume_m_c_perturbed[:, :, p, :]
+                    if p != 0:
+                        dist = torch.norm(
+                            volume_m_c - volume_mesh_centers, dim=-1, keepdim=True
+                        )
                     basis_f = nn_basis[f](volume_m_c)
                     output = torch.cat((basis_f, encoding_node, encoding_g), dim=-1)
                     if self.encode_parameters:
@@ -1711,22 +1838,33 @@ class DoMINO(nn.Module):
                         else:
                             output_neighbor += agg_model[f](output) * (1.0 / dist)
                             dist_sum += 1.0 / dist
+                    if return_volume_neighbors:
+                        field_neighbors[f].append(agg_model[f](output))
+
+                if return_volume_neighbors:
+                    field_neighbors[f] = torch.stack(field_neighbors[f], dim=2)
+
                 if num_sample_points > 1:
-                    output_res = 0.5 * output_center + 0.5 * output_neighbor / dist_sum
+                    output_res = (
+                        0.5 * output_center + 0.5 * output_neighbor / dist_sum
+                    )  # This only applies to the main point, and not the preturbed points
                 else:
                     output_res = output_center
                 if f == 0:
                     output_all = output_res
                 else:
-                    output_all = torch.cat((output_all, output_res), dim=-1)
+                    output_all = torch.cat((output_all, output_res), axis=-1)
 
-            return output_all
+            if return_volume_neighbors:
+                field_neighbors = torch.cat(
+                    [field_neighbors[i] for i in range(num_variables)], dim=3
+                )
+                return output_all, volume_m_c_perturbed, field_neighbors, neighbors
+            else:
+                return output_all
 
     @profile
-    def forward(
-        self,
-        data_dict,
-    ):
+    def forward(self, data_dict, return_volume_neighbors=False):
         # Loading STL inputs, bounding box grids, precomputed SDF and scaling factors
 
         # STL nodes
@@ -1818,7 +1956,9 @@ class DoMINO(nn.Module):
                 global_params_reference,
                 eval_mode="volume",
                 num_sample_points=self.num_sample_points_volume,
+                return_volume_neighbors=return_volume_neighbors,
             )
+
         else:
             output_vol = None
 

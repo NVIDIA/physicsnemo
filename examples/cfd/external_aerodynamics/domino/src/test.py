@@ -401,6 +401,7 @@ def main(cfg: DictConfig):
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path
+
     if dist.rank == 0:
         create_directory(pred_save_path)
 
@@ -408,7 +409,6 @@ def main(cfg: DictConfig):
     l2_volume_all = []
     aero_forces_all = []
     for count, dirname in enumerate(dirnames_per_gpu):
-        # print(f"Processing file {dirname}")
         filepath = os.path.join(input_path, dirname)
         tag = int(re.findall(r"(\w+?)(\d+)", dirname)[0][1])
         stl_path = os.path.join(filepath, f"drivaer_{tag}.stl")
