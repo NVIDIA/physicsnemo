@@ -109,6 +109,7 @@ model:
   num_neighbors_surface: 1 # How many neighbors on surface?
   num_neighbors_volume: 1 # How many neighbors on volume?
   combine_volume_surface: false # combine volume and surface encodings
+  return_volume_neighbors: True # Whether to return volume neighbors or not
   use_surface_normals: true # Use surface normals and surface areas for surface computation?
   use_surface_area: true # Use only surface normals and not surface area
   integral_loss_scaling_factor: 1 # Scale integral loss by this factor
@@ -117,7 +118,7 @@ model:
   surf_loss_scaling: 1.0 # scale surface loss with this factor in combined mode
   vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
   geometry_encoding_type: both # geometry encoder type, sdf, stl, both
-  solution_calculation_mode: two-loop # one-loop is better for sharded, two-loop is lower memory but more overhead
+  solution_calculation_mode: two-loop # one-loop is better for sharded, two-loop is lower memory but more overhead. Physics losses are not supported via one-loop presently.
   resampling_surface_mesh: # resampling of surface mesh before constructing kd tree
     resample: false #false or true
     points: 1_000_000 # number of points
@@ -181,6 +182,8 @@ train: # Training configurable parameters
     shuffle: true
     drop_last: false
   checkpoint_dir: /user/models/ # Use only for retraining
+  add_physics_loss: false
+
 
 # ┌───────────────────────────────────────────┐
 # │          Validation Configs               │
