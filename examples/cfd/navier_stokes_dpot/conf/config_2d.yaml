@@ -32,3 +32,7 @@ checkpoint_save_freq: 5
 
 model_type: seq2seq
 noise_scale: 0.0005
+grad_clip: 10.0
+
+device: cuda # or cpu
+train: True

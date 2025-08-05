@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from einops import rearrange
+from ..module import Module
 
 Tensor = torch.Tensor
 _logger = logging.getLogger(__name__)
@@ -381,7 +382,7 @@ class DPOTMeta:
 # ---------------------------------------------------------------------------
 # Main Model
 # ---------------------------------------------------------------------------
-class DPOTNet(nn.Module):
+class DPOTNet(Module):
     """DPOTNet with AFNO spectral mixing.
 
     Parameters
@@ -440,10 +441,9 @@ class DPOTNet(nn.Module):
         activation: str = "gelu",
         time_agg: str = "exp_mlp",
     ) -> None:
-        super().__init__()
+        super().__init__(meta=DPOTMeta())
 
 
-        self.meta = DPOTMeta()
         self.inp_shape = (inp_shape, inp_shape) if isinstance(inp_shape, int) else inp_shape
         self.patch_size = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
         self.in_channels = in_channels

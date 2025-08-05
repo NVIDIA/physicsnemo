@@ -190,17 +190,17 @@ def main(cfg: DictConfig) -> None:
     prepare_data(raw_data_path,train_save_path, 0, nr_tsteps_to_predict, 0, num_samples,)
     prepare_data(raw_data_path,test_save_path, 0, nr_tsteps_to_predict, 0, test_samples,)
 
-    train_dataset = HDF5MapStyleDataset(train_save_path, device="cuda")
+    train_dataset = HDF5MapStyleDataset(train_save_path, device=cfg.device)
     train_dataloader = DataLoader(
         train_dataset, batch_size=cfg.batch_size, shuffle=True
     )
-    test_dataset = HDF5MapStyleDataset(test_save_path, device="cuda")
+    test_dataset = HDF5MapStyleDataset(test_save_path, device=cfg.device)
     test_dataloader = DataLoader(
         test_dataset, batch_size=cfg.batch_size_test, shuffle=False
     )
 
     # set device as GPU
-    device = "cuda"
+    device = cfg.device
 
     # instantiate model
     arch = DPOTNet(
@@ -233,48 +233,49 @@ def main(cfg: DictConfig) -> None:
         models=arch,
         optimizer=optimizer,
         scheduler=scheduler,
-        device="cuda",
+        device=cfg.device,
     )
 
     # Training loop
     for epoch in range(max(1, loaded_epoch + 1), cfg.max_epochs + 1):
         # wrap epoch in launch logger for console logs
-        arch.train()
-        with LaunchLogger(
-            "train",
-            epoch=epoch,
-            num_mini_batch=len(train_dataloader),
-            epoch_alert_freq=10,
-        ) as log:
-            # go through the full dataset
-            for i, seq in enumerate(train_dataloader):
-                # seq: (B,1,T,H,W)
-                x = torch.cat(seq, dim=-2) # B, X, Y, T_total, C
-                T = x.shape[-2]
+        if cfg.train:
+            arch.train()
+            with LaunchLogger(
+                "train",
+                epoch=epoch,
+                num_mini_batch=len(train_dataloader),
+                epoch_alert_freq=10,
+            ) as log:
+                # go through the full dataset
+                for i, seq in enumerate(train_dataloader):
+                    # seq: (B,1,T,H,W)
+                    x = torch.cat(seq, dim=-2) # B, X, Y, T_total, C
+                    T = x.shape[-2]
 
-                # --- 随机一个时间步 ---
-                t = torch.randint(nr_tsteps_to_predict, T-1, (1,), device=x.device).item()
-                x_t   = x[..., t-nr_tsteps_to_predict:t, :]          # (B,1,H,W)
-                y_tp1 = x[..., t:t+1, :]        # (B,1,H,W)
+                    # --- Randomly sample a timestep  ---
+                    t = torch.randint(nr_tsteps_to_predict, T-1, (1,), device=x.device).item()
+                    x_t   = x[..., t-nr_tsteps_to_predict:t, :]          # (B,1,H,W)
+                    y_tp1 = x[..., t:t+1, :]        # (B,1,H,W)
 
-                # 可选噪声
-                if cfg.noise_scale > 0:
-                    norm_factor = torch.sqrt(torch.sum(x_t**2, dim=(1,2,3), keepdim=True) + 1e-12)
-                    x_t = x_t + cfg.noise_scale * norm_factor * torch.randn_like(x_t)
+                    # 可选噪声
+                    if cfg.noise_scale > 0:
+                        norm_factor = torch.sqrt(torch.sum(x_t**2, dim=(1,2,3), keepdim=True) + 1e-12)
+                        x_t = x_t + cfg.noise_scale * norm_factor * torch.randn_like(x_t)
 
 
-                pred = arch(x_t)
-                loss = rel_l2_loss(pred, y_tp1)
+                    pred = arch(x_t)
+                    loss = rel_l2_loss(pred, y_tp1)
 
-                optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(arch.parameters(), 10.0)
-                optimizer.step()
-                scheduler.step()
+                    optimizer.zero_grad()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(arch.parameters(), cfg.grad_clip)
+                    optimizer.step()
+                    scheduler.step()
 
-                # log.log_minibatch({"loss": loss.detach()})
+                    # log.log_minibatch({"loss": loss.detach()})
 
-            log.log_epoch({"Learning Rate": optimizer.param_groups[0]["lr"]})
+                log.log_epoch({"Learning Rate": optimizer.param_groups[0]["lr"]})
 
         with LaunchLogger("valid", epoch=epoch) as log:
             error = validation_step(arch, test_dataloader, epoch)
