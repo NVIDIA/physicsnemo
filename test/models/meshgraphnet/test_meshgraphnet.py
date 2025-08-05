@@ -33,7 +33,7 @@ dgl = pytest.importorskip("dgl")
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_forward(device, pytestconfig):
+def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet forward pass"""
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
@@ -67,10 +67,8 @@ def test_meshgraphnet_forward(device, pytestconfig):
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_mehsgraphnet_constructor(device, pytestconfig):
+def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet constructor options"""
-
-    from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     # Define dictionary of constructor args
     arg_list = [
@@ -103,6 +101,9 @@ def test_mehsgraphnet_constructor(device, pytestconfig):
             "num_layers_node_decoder": 1,
         },
     ]
+
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
+
     for kw_args in arg_list:
         # Construct mehsgraphnet model
         model = MeshGraphNet(**kw_args).to(device)
@@ -124,7 +125,7 @@ def test_mehsgraphnet_constructor(device, pytestconfig):
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_optims(device, pytestconfig):
+def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     """Test meshgraphnet optimizations"""
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
@@ -163,7 +164,7 @@ def test_meshgraphnet_optims(device, pytestconfig):
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_checkpoint(device, pytestconfig):
+def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te):
     """Test meshgraphnet checkpoint save/load"""
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
@@ -202,7 +203,7 @@ def test_meshgraphnet_checkpoint(device, pytestconfig):
 @import_or_fail("dgl")
 @common.check_ort_version()
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_meshgraphnet_deploy(device, pytestconfig):
+def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     """Test mesh-graph net deployment support"""
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet

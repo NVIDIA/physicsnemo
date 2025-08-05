@@ -27,9 +27,9 @@ saved to a JSON file.
 import os
 import json
 import numpy as np
+import dgl
 import hydra
 
-import torch
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from hydra.utils import to_absolute_path
@@ -49,7 +49,7 @@ def process_file(bin_file):
     """
     Processes a single .bin file containing graph partitions to compute the mean, mean of squares, and count for each variable.
     """
-    graphs = torch.load(bin_file, weights_only=False)
+    graphs, _ = dgl.load_graphs(bin_file)
 
     # Initialize dictionaries to accumulate stats
     node_fields = ["coordinates", "normals", "area", "pressure", "shear_stress"]
@@ -69,8 +69,8 @@ def process_file(bin_file):
     for graph in graphs:
         # Process node data
         for field in node_fields:
-            if graph.is_node_attr(field):
-                data = graph[field].numpy()
+            if field in graph.ndata:
+                data = graph.ndata[field].numpy()
 
                 if data.ndim == 1:
                     data = np.expand_dims(data, axis=-1)
@@ -89,21 +89,18 @@ def process_file(bin_file):
 
         # Process edge data
         for field in edge_fields:
-            # Special case for edge_attr to maintain compatibility with DGL code.
-            if field == "x":
-                data = graph.edge_attr.numpy()
-            elif graph.is_edge_attr(field):
-                data = graph[field].numpy()
+            if field in graph.edata:
+                data = graph.edata[field].numpy()
+
+                field_mean = np.mean(data, axis=0)
+                field_square_mean = np.mean(data**2, axis=0)
+                count = data.shape[0]
+
+                field_means[field] += field_mean * count
+                field_square_means[field] += field_square_mean * count
+                counts[field] += count
             else:
                 print(f"Warning: Edge field '{field}' not found in {bin_file}")
-
-            field_mean = np.mean(data, axis=0)
-            field_square_mean = np.mean(data**2, axis=0)
-            count = data.shape[0]
-
-            field_means[field] += field_mean * count
-            field_square_means[field] += field_square_mean * count
-            counts[field] += count
 
     return field_means, field_square_means, counts
 
