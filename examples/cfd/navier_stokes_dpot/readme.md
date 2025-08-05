@@ -23,6 +23,8 @@ training data will be generated on the fly.
 
 ## Additional Information
 
+Set train to False in config file to inference the model.
+
 ## References
 
 - [DPOT: Auto-Regressive Denoising Operator Transformer for Large-Scale PDE Pre-Training](https://arxiv.org/abs/2403.03542)
