@@ -25,7 +25,7 @@ from torch.autograd.function import once_differentiable
 from physicsnemo.models.layers.layer_norm import get_layer_norm_class
 from physicsnemo.utils.profiling import profile
 
-from .utils import GraphType, concat_efeat, sum_efeat, concat_efeat_hetero_dgl
+from .utils import GraphType, concat_efeat, concat_efeat_hetero_dgl, sum_efeat
 
 
 class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
@@ -257,6 +257,7 @@ class MeshGraphEdgeMLPConcat(MeshGraphMLP):
         efeat = self.model(efeat)
         return efeat
 
+
 class MeshGraphHeteroEdgeMLPConcat(nn.Module):
     """MLP layer which is commonly used in building blocks
     of models operating on the union of grids and meshes. It
@@ -308,7 +309,7 @@ class MeshGraphHeteroEdgeMLPConcat(nn.Module):
     ):
         super().__init__()
         cat_dim = efeat_dim + src_dim + dst_dim
-        
+
         self.mesh_mlp = MeshGraphMLP(
             input_dim=cat_dim,
             output_dim=output_dim,
@@ -327,7 +328,6 @@ class MeshGraphHeteroEdgeMLPConcat(nn.Module):
             norm_type=norm_type,
             recompute_activation=recompute_activation,
         )
-        
 
     @profile
     def forward(
@@ -338,8 +338,8 @@ class MeshGraphHeteroEdgeMLPConcat(nn.Module):
         graph: GraphType,
     ) -> Tensor:
         efeat = concat_efeat_hetero_dgl(mesh_efeat, world_efeat, nfeat, graph)
-        mesh_efeat_new = self.mesh_mlp(efeat[0:len(mesh_efeat)])
-        world_efeat_new = self.world_mlp(efeat[len(mesh_efeat):])
+        mesh_efeat_new = self.mesh_mlp(efeat[0 : len(mesh_efeat)])
+        world_efeat_new = self.world_mlp(efeat[len(mesh_efeat) :])
         return mesh_efeat_new, world_efeat_new
 
 

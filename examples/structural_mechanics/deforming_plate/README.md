@@ -114,15 +114,18 @@ Docker container on a remote server from your local desktop, follow these steps:
 
 2. **Launch TensorBoard:**
    Start TensorBoard within the Docker container:
+
      ```bash
      tensorboard --logdir=/path/to/logdir --port=6006
      ```
 
 3. **Set Up SSH Tunneling:**
    Create an SSH tunnel to forward port 6006 from the remote server to your local machine:
+
      ```bash
      ssh -L 6006:localhost:6006 <user>@<remote-server-ip>
      ```
+
     Replace `<user>` with your SSH username and `<remote-server-ip>` with the IP address
     of your remote server. You can use a different port if necessary.
 

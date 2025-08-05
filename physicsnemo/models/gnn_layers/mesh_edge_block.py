@@ -20,7 +20,11 @@ from torch import Tensor
 
 from physicsnemo.utils.profiling import profile
 
-from .mesh_graph_mlp import MeshGraphEdgeMLPConcat, MeshGraphEdgeMLPSum, MeshGraphHeteroEdgeMLPConcat
+from .mesh_graph_mlp import (
+    MeshGraphEdgeMLPConcat,
+    MeshGraphEdgeMLPSum,
+    MeshGraphHeteroEdgeMLPConcat,
+)
 from .utils import GraphType
 
 
@@ -92,12 +96,13 @@ class MeshEdgeBlock(nn.Module):
         efeat_new = efeat_new + efeat
         return efeat_new, nfeat
 
+
 class HybridMeshEdgeBlock(nn.Module):
     """Hybrid Edge block that extends MeshEdgeBlock to support both mesh and world edge features
-    
+
     This class extends the MeshEdgeBlock to support hybrid functionality
     with separate processing for mesh edges and world edges.
-    
+
     Parameters
     ----------
     input_dim_nodes : int, optional
@@ -158,7 +163,7 @@ class HybridMeshEdgeBlock(nn.Module):
         graph: GraphType,
     ) -> Tensor:
         """Forward pass for hybrid edge processing
-        
+
         Parameters
         ----------
         mesh_efeat : Tensor
@@ -169,7 +174,7 @@ class HybridMeshEdgeBlock(nn.Module):
             Node features
         graph : GraphType
             Graph structure
-            
+
         Returns
         -------
         Tensor
@@ -178,9 +183,9 @@ class HybridMeshEdgeBlock(nn.Module):
         # Process mesh edges
         mesh_efeat_new = self.mesh_edge_mlp(mesh_efeat, nfeat, graph)
         mesh_efeat_new = mesh_efeat_new + mesh_efeat
-        
+
         # Process world edges
         world_efeat_new = self.world_edge_mlp(world_efeat, nfeat, graph)
         world_efeat_new = world_efeat_new + world_efeat
-        
+
         return mesh_efeat_new, world_efeat_new, nfeat

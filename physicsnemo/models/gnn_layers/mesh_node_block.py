@@ -21,7 +21,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from .mesh_graph_mlp import MeshGraphMLP
-from .utils import GraphType, aggregate_and_concat, agg_concat_hetero_dgl
+from .utils import GraphType, agg_concat_hetero_dgl, aggregate_and_concat
 
 
 class MeshNodeBlock(nn.Module):
@@ -154,7 +154,9 @@ class HybridMeshNodeBlock(nn.Module):
         graph: GraphType,
     ) -> Tuple[Tensor, Tensor]:
         # update edge features
-        cat_feat = agg_concat_hetero_dgl(mesh_efeat, world_efeat, nfeat, graph, self.aggregation)
+        cat_feat = agg_concat_hetero_dgl(
+            mesh_efeat, world_efeat, nfeat, graph, self.aggregation
+        )
         # update node features + residual connection
         nfeat_new = self.node_mlp(cat_feat) + nfeat
         return mesh_efeat, world_efeat, nfeat_new

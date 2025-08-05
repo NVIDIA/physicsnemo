@@ -18,7 +18,6 @@ import warnings
 from dataclasses import dataclass
 from typing import Callable, List, Tuple, Union
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 
@@ -47,8 +46,12 @@ except ImportError:
         "https://github.com/rusty1s/pytorch_scatter\n"
     )
 
+from itertools import chain
+
 import physicsnemo  # noqa: F401 for docs
+from physicsnemo.models.gnn_layers.mesh_edge_block import HybridMeshEdgeBlock
 from physicsnemo.models.gnn_layers.mesh_graph_mlp import MeshGraphMLP
+from physicsnemo.models.gnn_layers.mesh_node_block import HybridMeshNodeBlock
 from physicsnemo.models.gnn_layers.utils import GraphType
 from physicsnemo.models.layers import get_activation
 from physicsnemo.models.meta import ModelMetaData
@@ -57,13 +60,10 @@ from physicsnemo.utils.profiling import profile
 # Import the MeshGraphNet
 from .meshgraphnet import MeshGraphNet, MeshGraphNetProcessor
 
-from itertools import chain
-from physicsnemo.models.gnn_layers.mesh_edge_block import HybridMeshEdgeBlock
-from physicsnemo.models.gnn_layers.mesh_node_block import HybridMeshNodeBlock
-
 
 @dataclass
 class HybridMetaData(ModelMetaData):
+    """Metadata for HybridMeshGraphNet"""
     name: str = "HybridMeshGraphNet"
     # Optimization, no JIT as DGLGraph causes trouble
     jit: bool = False
@@ -80,10 +80,10 @@ class HybridMetaData(ModelMetaData):
 
 class HybridMeshGraphNet(MeshGraphNet):
     """Hybrid MeshGraphNet with separate mesh and world edge encoders
-    
+
     This class extends the vanilla MeshGraphNet to support hybrid functionality
     with separate encoders for mesh edges and world edges.
-    
+
     Example
     -------
     >>> model = HybridMeshGraphNet(
@@ -99,7 +99,7 @@ class HybridMeshGraphNet(MeshGraphNet):
     >>> # output.size()
     >>> # torch.Size([10, 2])
     """
-    
+
     def __init__(
         self,
         input_dim_nodes: int,
@@ -148,21 +148,25 @@ class HybridMeshGraphNet(MeshGraphNet):
         )
 
         if do_concat_trick:
-            raise NotImplementedError("Concat trick is not supported for HybridMeshGraphNet yet.")
-        
+            raise NotImplementedError(
+                "Concat trick is not supported for HybridMeshGraphNet yet."
+            )
+
         if recompute_activation:
-            raise NotImplementedError("Recompute activation is not supported for HybridMeshGraphNet yet.")        
-        
+            raise NotImplementedError(
+                "Recompute activation is not supported for HybridMeshGraphNet yet."
+            )
+
         # Override metadata
         self.meta = HybridMetaData()
-        
+
         # Get activation function for the new encoder
         activation_fn = get_activation(mlp_activation_fn)
-        
+
         # Convert single edge_encoder to mesh_edge_encoder
         self.mesh_edge_encoder = self.edge_encoder
         del self.edge_encoder
-        
+
         # Add world_edge_encoder
         self.world_edge_encoder = MeshGraphMLP(
             input_dim_edges,
@@ -173,7 +177,7 @@ class HybridMeshGraphNet(MeshGraphNet):
             norm_type=norm_type,
             recompute_activation=recompute_activation,
         )
-        
+
         # Replace processor with hybrid version
         self.processor = HybridMeshGraphNetProcessor(
             processor_size=processor_size,
@@ -202,7 +206,9 @@ class HybridMeshGraphNet(MeshGraphNet):
         mesh_edge_features = self.mesh_edge_encoder(mesh_edge_features)
         world_edge_features = self.world_edge_encoder(world_edge_features)
         node_features = self.node_encoder(node_features)
-        x = self.processor(node_features, mesh_edge_features, world_edge_features, graph)
+        x = self.processor(
+            node_features, mesh_edge_features, world_edge_features, graph
+        )
         x = self.node_decoder(x)
         return x
 
@@ -224,7 +230,6 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
         num_processor_checkpoint_segments: int = 0,
         checkpoint_offloading: bool = False,
     ):
-
         super().__init__(
             processor_size=processor_size,
             input_dim_node=input_dim_node,
@@ -276,9 +281,7 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
     @profile
     def run_function(
         self, segment_start: int, segment_end: int
-    ) -> Callable[
-        [Tensor, Tensor, Tensor, GraphType], Tuple[Tensor, Tensor, Tensor]
-    ]:
+    ) -> Callable[[Tensor, Tensor, Tensor, GraphType], Tuple[Tensor, Tensor, Tensor]]:
         """Custom forward for gradient checkpointing - overridden for hybrid functionality"""
         segment = self.processor_layers[segment_start:segment_end]
 
@@ -308,14 +311,16 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
         """Forward pass overridden for hybrid functionality"""
         with self.checkpoint_offload_ctx:
             for segment_start, segment_end in self.checkpoint_segments:
-                mesh_edge_features, world_edge_features, node_features = self.checkpoint_fn(
-                    self.run_function(segment_start, segment_end),
-                    node_features,
-                    mesh_edge_features,
-                    world_edge_features,
-                    graph,
-                    use_reentrant=False,
-                    preserve_rng_state=False,
+                mesh_edge_features, world_edge_features, node_features = (
+                    self.checkpoint_fn(
+                        self.run_function(segment_start, segment_end),
+                        node_features,
+                        mesh_edge_features,
+                        world_edge_features,
+                        graph,
+                        use_reentrant=False,
+                        preserve_rng_state=False,
+                    )
                 )
 
         return node_features
