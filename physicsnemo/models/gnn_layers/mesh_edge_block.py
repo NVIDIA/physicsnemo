@@ -92,7 +92,7 @@ class MeshEdgeBlock(nn.Module):
         efeat_new = efeat_new + efeat
         return efeat_new, nfeat
 
-class HybridMeshEdgeBlock(MeshEdgeBlock):
+class HybridMeshEdgeBlock(nn.Module):
     """Hybrid Edge block that extends MeshEdgeBlock to support both mesh and world edge features
     
     This class extends the MeshEdgeBlock to support hybrid functionality
@@ -134,28 +134,9 @@ class HybridMeshEdgeBlock(MeshEdgeBlock):
         do_concat_trick: bool = False,
         recompute_activation: bool = False,
     ):
-        # Initialize the parent class
-        super().__init__(
-            input_dim_nodes=input_dim_nodes,
-            input_dim_edges=input_dim_edges,
-            output_dim=output_dim,
-            hidden_dim=hidden_dim,
-            hidden_layers=hidden_layers,
-            activation_fn=activation_fn,
-            norm_type=norm_type,
-            do_concat_trick=do_concat_trick,
-            recompute_activation=recompute_activation,
-        )
+        super().__init__()
 
-        # Create separate MLPs for mesh and world edges
-        MLP = MeshGraphEdgeMLPSum if do_concat_trick else MeshGraphEdgeMLPConcat
-
-        # Rename the existing edge_mlp to mesh_edge_mlp
-        self.mesh_edge_mlp = self.edge_mlp
-        del self.edge_mlp
-
-        # Add world_edge_mlp
-        self.world_edge_mlp = MLP(
+        self.world_edge_mlp = MeshGraphHeteroEdgeMLPConcat(
             efeat_dim=input_dim_edges,
             src_dim=input_dim_nodes,
             dst_dim=input_dim_nodes,

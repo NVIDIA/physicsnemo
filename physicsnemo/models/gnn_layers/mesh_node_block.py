@@ -91,7 +91,7 @@ class MeshNodeBlock(nn.Module):
         return efeat, nfeat_new
 
 
-class MeshNodeBlockHetero(nn.Module):
+class HybridMeshNodeBlock(nn.Module):
     """Node block used e.g. in GraphCast or MeshGraphNet
     operating on a latent space represented by a mesh.
     Use for heterogeneous graphs.

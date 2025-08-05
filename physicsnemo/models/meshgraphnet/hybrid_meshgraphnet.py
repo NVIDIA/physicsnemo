@@ -57,6 +57,10 @@ from physicsnemo.utils.profiling import profile
 # Import the MeshGraphNet
 from .meshgraphnet import MeshGraphNet, MeshGraphNetProcessor
 
+from itertools import chain
+from physicsnemo.models.gnn_layers.mesh_edge_block import HybridMeshEdgeBlock
+from physicsnemo.models.gnn_layers.mesh_node_block import HybridMeshNodeBlock
+
 
 @dataclass
 class HybridMetaData(ModelMetaData):
@@ -205,6 +209,69 @@ class HybridMeshGraphNet(MeshGraphNet):
 
 class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
     """Hybrid MeshGraphNet processor that extends the original to handle both mesh and world edges"""
+
+    def __init__(
+        self,
+        processor_size: int = 15,
+        input_dim_node: int = 128,
+        input_dim_edge: int = 128,
+        num_layers_node: int = 2,
+        num_layers_edge: int = 2,
+        aggregation: str = "sum",
+        norm_type: str = "LayerNorm",
+        activation_fn: nn.Module = nn.ReLU(),
+        do_concat_trick: bool = False,
+        num_processor_checkpoint_segments: int = 0,
+        checkpoint_offloading: bool = False,
+    ):
+
+        super().__init__(
+            processor_size=processor_size,
+            input_dim_node=input_dim_node,
+            input_dim_edge=input_dim_edge,
+            num_layers_node=num_layers_node,
+            num_layers_edge=num_layers_edge,
+            aggregation=aggregation,
+            norm_type=norm_type,
+            activation_fn=activation_fn,
+            do_concat_trick=do_concat_trick,
+            num_processor_checkpoint_segments=num_processor_checkpoint_segments,
+            checkpoint_offloading=checkpoint_offloading,
+        )
+
+        edge_block_invars = (
+            input_dim_node,
+            input_dim_edge,
+            input_dim_edge,
+            input_dim_edge,
+            num_layers_edge,
+            activation_fn,
+            norm_type,
+            do_concat_trick,
+            False,
+        )
+        node_block_invars = (
+            aggregation,
+            input_dim_node,
+            input_dim_edge,
+            input_dim_edge,
+            input_dim_edge,
+            num_layers_node,
+            activation_fn,
+            norm_type,
+            False,
+        )
+
+        edge_blocks = [
+            HybridMeshEdgeBlock(*edge_block_invars) for _ in range(self.processor_size)
+        ]
+        node_blocks = [
+            HybridMeshNodeBlock(*node_block_invars) for _ in range(self.processor_size)
+        ]
+        layers = list(chain(*zip(edge_blocks, node_blocks)))
+
+        self.processor_layers = nn.ModuleList(layers)
+        self.num_processor_layers = len(self.processor_layers)
 
     @profile
     def run_function(
