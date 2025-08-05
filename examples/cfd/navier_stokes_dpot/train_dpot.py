@@ -258,7 +258,7 @@ def main(cfg: DictConfig) -> None:
                     x_t   = x[..., t-nr_tsteps_to_predict:t, :]          # (B,1,H,W)
                     y_tp1 = x[..., t:t+1, :]        # (B,1,H,W)
 
-                    # 可选噪声
+                    # noise scale 
                     if cfg.noise_scale > 0:
                         norm_factor = torch.sqrt(torch.sum(x_t**2, dim=(1,2,3), keepdim=True) + 1e-12)
                         x_t = x_t + cfg.noise_scale * norm_factor * torch.randn_like(x_t)
