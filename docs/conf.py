@@ -58,7 +58,7 @@ napoleon_custom_sections = [("Variable Shape", "notes"), ("Forward", "params_sty
 # -- Options for HTML output -------------------------------------------------
 
 # HTML theme options
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
+# html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {
     "logo_only": True,
@@ -84,7 +84,7 @@ html_js_files = ["js/pk_scripts.js"]
 # html_last_updated_fmt = ''
 
 # Additional sphinx switches
-math_number_all = True
+math_number_all = False
 todo_include_todos = True
 numfig = True
 

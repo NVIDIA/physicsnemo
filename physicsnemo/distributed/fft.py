@@ -79,6 +79,9 @@ class DistributedRFFT2(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, s, dim, norm="ortho"):
+        """
+        Forward pass for DistributedRFFT2.
+        """
         # NVTX marker
         torch.cuda.nvtx.range_push("DistributedRFFT2.forward")
 
@@ -118,6 +121,9 @@ class DistributedRFFT2(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        """
+        Backward pass for DistributedRFFT2.
+        """
         # load
         dim = ctx.dim
         norm = ctx.norm
@@ -162,6 +168,9 @@ class DistributedIRFFT2(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, s, dim, norm="ortho"):
+        """
+        Forward pass for DistributedIRFFT2.
+        """
         # NVTX marker
         torch.cuda.nvtx.range_push("DistributedIRFFT2.forward")
 
@@ -205,6 +214,9 @@ class DistributedIRFFT2(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        """
+        Backward pass for DistributedIRFFT2.
+        """
         # load
         dim = ctx.dim
         norm = ctx.norm

@@ -1216,10 +1216,10 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
 
     2. Similarly to the parent ``SongUNetPosEmbd``, this model predicts
        regression targets, but it can also produce classification predictions.
-        More precisely, some of the ouput channels are probability outputs, that
-        are passed through a softmax activation function. This is useful for
-        multi-task applications, where the objective is a combination of both
-        regression and classification losses.
+       More precisely, some of the ouput channels are probability outputs, that
+       are passed through a softmax activation function. This is useful for
+       multi-task applications, where the objective is a combination of both
+       regression and classification losses.
 
     The mechanism to condition on lead-time labels is implemented by:
 

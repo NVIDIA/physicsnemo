@@ -1,11 +1,11 @@
 PhysicsNeMo Deploy
-===================
+==================
 
 .. automodule:: physicsnemo.deploy
 .. currentmodule:: physicsnemo.deploy
 
 Deploying models trained in PhysicsNeMo
---------------------------------------
+---------------------------------------
 
 Application developers can deploy PhysicsNeMo either as the training framework or 
 deploy inference recipes using models trained in PhysicsNeMo into their applications.

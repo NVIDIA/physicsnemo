@@ -57,7 +57,7 @@ Below are some simple examples of how to use these models.
     torch.Size([32, 3, 32, 32])
 
 How to write your own PhysicsNeMo model
---------------------------------------
+---------------------------------------
 
 There are a few different ways to construct a PhysicsNeMo model. If you are a seasoned
 PyTorch user, the easiest way would be to write your model using the optimized layers and
@@ -209,7 +209,7 @@ complex models.
 .. _physicsnemo-models-from-torch:
 
 Converting PyTorch Models to PhysicsNeMo Models
-----------------------------------------------
+-----------------------------------------------
 
 In the above example we show constructing a PhysicsNeMo model from scratch. However, you
 can also convert existing PyTorch models to PhysicsNeMo models in order to leverage
@@ -325,7 +325,7 @@ model from the ``.mdlus`` file.
 
 
 PhysicsNeMo Model Registry and Entry Points
-------------------------------------------
+-------------------------------------------
 
 PhysicsNeMo contains a model registry that allows for easy access and ingestion of
 models. Below is a simple example of how to use the model registry to obtain a model

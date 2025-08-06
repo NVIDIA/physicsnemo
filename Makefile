@@ -63,6 +63,8 @@ ifeq ($(ARCH), x86_64)
     TARGETPLATFORM := "linux/amd64"
 else ifeq ($(ARCH), aarch64)
     TARGETPLATFORM := "linux/arm64"
+else ifeq ($(ARCH), arm)
+    TARGETPLATFORM := "linux/arm64"
 else
     $(error Unknown CPU architecture ${ARCH} detected)
 endif

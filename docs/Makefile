@@ -14,20 +14,37 @@ help:
 
 .PHONY: help Makefile
 
-# Catch-all target: route all unknown targets to Sphinx using the new
-# "make mode" option.  $(O) is meant as a shortcut for $(SPHINXOPTS).
-%: Makefile
-	@$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O)
+EXAMPLE_SRCDIR := ../examples
+EXAMPLE_BUILDDIR := examples
 
-convert-markdown-to-rst:
-	@echo "Converting Markdown files to reStructuredText..."
-	@mkdir -p examples
-	@find ../examples -name '*.md' -type f -exec sh -c ' \
-		mkdir -p "examples/$$(dirname {})"; \
-		pandoc "{}" -o "examples/$$(dirname {})/$$(basename -s .md {}).rst"; \
-		sed -i ":a; /:alt:/ { N; s/\n   / /; ta }" "examples/$$(dirname {})/$$(basename -s .md {}).rst"; \
-		sed -i "s|\(\(\.\.\/\)\+\)docs/img|\1img|g" "examples/$$(dirname {})/$$(basename -s .md {}).rst" \
-	' \;
+# Find all Markdown files in ../examples
+MD_FILES := $(shell find $(EXAMPLE_SRCDIR) -name '*.md')
+
+# Compute the corresponding .rst output files in examples/
+RST_FILES := $(patsubst $(EXAMPLE_SRCDIR)/%.md,$(EXAMPLE_BUILDDIR)/%.rst,$(MD_FILES))
+
+
+# Make sure the output dir exists
+prepare-examples-dir/:
+	@mkdir -p $(EXAMPLE_BUILDDIR)
+
+# Rule to convert each example md to rst:
+$(EXAMPLE_BUILDDIR)/%.rst: $(EXAMPLE_SRCDIR)/%.md | prepare-examples-dir
+	@mkdir -p $(dir $@)
+	@pandoc $< -o $@ --wrap=none --lua-filter=rewrite_examples_image_paths.lua
+
+clean-examples:
+	@rm -r $(EXAMPLE_BUILDDIR)
+
+
+convert-markdown-to-rst: $(RST_FILES)
+	@echo "All Markdown files have been converted to reStructuredText and post-processed."
+
+.SECONDARY: $(RST_FILES)
+
+
+.PHONY: convert-markdown-to-rst prepare-examples-dir clean-convert-markdown
+
 
 html: convert-markdown-to-rst
 	@echo "Running custom commands..."
@@ -42,3 +59,18 @@ package_docs:
 	mkdir deeplearning/physicsnemo/physicsnemo-core
 	cp -r _build/html/* deeplearning/physicsnemo/physicsnemo-core/
 	zip -r deeplearning.zip deeplearning
+
+.PHONY: clean
+
+clean: clean-examples
+	@echo "All generated files have been cleaned."
+
+
+# Catch-all for Sphinx, but ignore file-like targets
+%: Makefile
+	@if echo "$@" | grep -q '\.'; then \
+		:; \
+	else \
+		echo "Running $@..."; \
+		$(SPHINXBUILD) -M $@ "$(SOURCEDIR)" "$(BUILDDIR)" $(SPHINXOPTS) $(O); \
+	fi
