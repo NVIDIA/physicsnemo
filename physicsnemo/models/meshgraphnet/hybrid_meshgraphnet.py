@@ -85,20 +85,66 @@ class HybridMeshGraphNet(MeshGraphNet):
     This class extends the vanilla MeshGraphNet to support hybrid functionality
     with separate encoders for mesh edges and world edges.
 
+    Parameters
+    ----------
+    input_dim_nodes : int
+        Number of node features
+    input_dim_edges : int
+        Number of edge features (applies to both mesh and world edges)
+    output_dim : int
+        Number of outputs
+    processor_size : int, optional
+        Number of message passing blocks, by default 15
+    mlp_activation_fn : Union[str, List[str]], optional
+        Activation function to use, by default 'relu'
+    num_layers_node_processor : int, optional
+        Number of MLP layers for processing nodes in each message passing block, by default 2
+    num_layers_edge_processor : int, optional
+        Number of MLP layers for processing edge features in each message passing block, by default 2
+    hidden_dim_processor : int, optional
+        Hidden layer size for the message passing blocks, by default 128
+    hidden_dim_node_encoder : int, optional
+        Hidden layer size for the node feature encoder, by default 128
+    num_layers_node_encoder : Union[int, None], optional
+        Number of MLP layers for the node feature encoder, by default 2
+    hidden_dim_edge_encoder : int, optional
+        Hidden layer size for the edge feature encoders, by default 128
+    num_layers_edge_encoder : Union[int, None], optional
+        Number of MLP layers for the edge feature encoders, by default 2
+    hidden_dim_node_decoder : int, optional
+        Hidden layer size for the node feature decoder, by default 128
+    num_layers_node_decoder : Union[int, None], optional
+        Number of MLP layers for the node feature decoder, by default 2
+    aggregation: str, optional
+        Message aggregation type, by default "sum"
+    do_concat_trick: bool, optional
+        Whether to replace concat+MLP with MLP+idx+sum, by default False
+    num_processor_checkpoint_segments: int, optional
+        Number of processor segments for gradient checkpointing, by default 0
+    checkpoint_offloading: bool, optional
+        Whether to offload checkpointing to CPU, by default False
+    recompute_activation: bool, optional
+        Whether to recompute activations, by default False
+    norm_type: str, optional
+        Normalization type, by default "LayerNorm"
+
     Example
     -------
-    >>> model = HybridMeshGraphNet(
-    ...         input_dim_nodes=4,
-    ...         input_dim_edges=3,
-    ...         output_dim=2,
-    ...     )
-    >>> # graph = dgl.rand_graph(10, 5)  # requires DGL
-    >>> node_features = torch.randn(10, 4)
-    >>> mesh_edge_features = torch.randn(5, 3)
-    >>> world_edge_features = torch.randn(3, 3)
-    >>> # output = model(node_features, mesh_edge_features, world_edge_features, graph)
-    >>> # output.size()
-    >>> # torch.Size([10, 2])
+    .. code-block:: python
+
+        # Create model
+        model = HybridMeshGraphNet(input_dim_nodes=4, input_dim_edges=3, output_dim=2)
+
+        # Forward pass requires:
+        # - node_features: (num_nodes, 4)
+        # - mesh_edge_features: (num_mesh_edges, 3)
+        # - world_edge_features: (num_world_edges, 3)
+        # - graph: DGL graph containing both edge types
+
+    Note
+    ----
+    The HybridMeshGraphNet requires separate feature tensors for mesh edges and world edges,
+    allowing for different processing pipelines for different edge types.
     """
 
     def __init__(
