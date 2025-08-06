@@ -28,7 +28,7 @@ import numpy as np
 from omegaconf import DictConfig
 import torch
 
-from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 from deforming_plate_dataset import DeformingPlateDataset
 from physicsnemo.launch.logging import PythonLogger
 from physicsnemo.launch.utils import load_checkpoint
@@ -91,7 +91,7 @@ class MGNRollout:
         )
 
         # instantiate the model
-        self.model = MeshGraphNet(
+        self.model = HybridMeshGraphNet(
             cfg.num_input_features,
             cfg.num_edge_features,
             cfg.num_output_features,
@@ -115,7 +115,9 @@ class MGNRollout:
             device=self.device,
         )
 
+    @torch.inference_mode()
     def predict(self):
+        
         self.pred, self.exact, self.faces, self.graphs = [], [], [], []
         stats = {
             key: value.to(self.device) for key, value in self.dataset.node_stats.items()
@@ -137,8 +139,7 @@ class MGNRollout:
             if i % (self.num_test_time_steps - 1) != 0:
                 graph.ndata["world_pos"] = self.pred[i-1][:, 0:3]
             graph, mesh_edge_features, world_edge_features = add_world_edges(graph)
-            with torch.no_grad():
-                pred_i = self.model(graph.ndata["x"], mesh_edge_features, world_edge_features, graph)  # predict
+            pred_i = self.model(graph.ndata["x"], mesh_edge_features, world_edge_features, graph)  # predict
 
             # denormalize prediction
             pred_velocity_denormalized = self.dataset.denormalize(

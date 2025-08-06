@@ -64,6 +64,7 @@ from .meshgraphnet import MeshGraphNet, MeshGraphNetProcessor
 @dataclass
 class HybridMetaData(ModelMetaData):
     """Metadata for HybridMeshGraphNet"""
+
     name: str = "HybridMeshGraphNet"
     # Optimization, no JIT as DGLGraph causes trouble
     jit: bool = False

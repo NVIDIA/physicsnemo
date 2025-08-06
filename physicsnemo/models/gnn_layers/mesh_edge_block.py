@@ -141,7 +141,7 @@ class HybridMeshEdgeBlock(nn.Module):
     ):
         super().__init__()
 
-        self.world_edge_mlp = MeshGraphHeteroEdgeMLPConcat(
+        self.edge_mlp = MeshGraphHeteroEdgeMLPConcat(
             efeat_dim=input_dim_edges,
             src_dim=input_dim_nodes,
             dst_dim=input_dim_nodes,
@@ -181,11 +181,9 @@ class HybridMeshEdgeBlock(nn.Module):
             Updated mesh edge features, world edge features, and node features
         """
         # Process mesh edges
-        mesh_efeat_new = self.mesh_edge_mlp(mesh_efeat, nfeat, graph)
+        mesh_efeat_new, world_efeat_new = self.edge_mlp(
+            mesh_efeat, world_efeat, nfeat, graph
+        )
         mesh_efeat_new = mesh_efeat_new + mesh_efeat
-
-        # Process world edges
-        world_efeat_new = self.world_edge_mlp(world_efeat, nfeat, graph)
         world_efeat_new = world_efeat_new + world_efeat
-
         return mesh_efeat_new, world_efeat_new, nfeat

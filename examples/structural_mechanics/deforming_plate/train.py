@@ -34,7 +34,7 @@ from physicsnemo.launch.logging import (
     RankZeroLoggingWrapper,
 )
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
 from helpers import add_world_edges
 
@@ -44,6 +44,7 @@ os.makedirs(os.path.expanduser("~/.dgl"), exist_ok=True)
 from torch.utils.tensorboard import SummaryWriter
 
 class InMemoryTimeStepDataset(torch.utils.data.Dataset):
+    """ In-memory dataset."""
     def __init__(self, sample_dir):
         self.data = []
         sample_files = sorted([
@@ -64,6 +65,7 @@ class InMemoryTimeStepDataset(torch.utils.data.Dataset):
         return len(self.data)
 
 class LazyTimeStepDataset(torch.utils.data.Dataset):
+    """ Lazy dataset."""
     def __init__(self, sample_dir, num_time_steps):
         self.sample_files = sorted([
             os.path.join(sample_dir, f)
@@ -121,7 +123,7 @@ class MGNTrainer:
         self.sampler = sampler
 
         # instantiate the model
-        self.model = MeshGraphNet(
+        self.model = HybridMeshGraphNet(
             cfg.num_input_features,
             cfg.num_edge_features,
             cfg.num_output_features,

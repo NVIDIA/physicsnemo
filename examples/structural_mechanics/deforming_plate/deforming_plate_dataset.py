@@ -15,7 +15,6 @@
 # limitations under the License.
 
 
-import functools
 import json
 import os
 
@@ -36,7 +35,6 @@ except ImportError:
 from torch.nn import functional as F
 
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
-
 
 
 class DeformingPlateDataset(DGLDataset):
@@ -97,7 +95,7 @@ class DeformingPlateDataset(DGLDataset):
         index = None  # or path to .index if you generated it
         # Define the schema per meta.json
         meta = json.load(open(os.path.join(data_dir, "meta.json")))
-        description = {k: 'byte' for k in meta["field_names"]}  # raw bytes
+        description = {k: "byte" for k in meta["field_names"]}  # raw bytes
         self.torch_ds = TFRecordDataset(
             tfrecord, index, description,
             transform=lambda rec: self._decode_record(rec, meta)
@@ -151,7 +149,7 @@ class DeformingPlateDataset(DGLDataset):
             targets["stress"] = self._push_forward(data_np["stress"]) # Shape: (num_steps-1, num_nodes, num_features)
 
             # add noise
-            if split == "train":
+            if split == "train":  # TODO: noise has to be added at each iteration during training
                 features["world_pos"], targets["velocity"] = self._add_noise(
                     features["world_pos"],
                     targets["velocity"],

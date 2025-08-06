@@ -77,6 +77,21 @@ cd raw_dataset
 sh download_dataset.sh deforming_plate
 ```
 
+Next, run preprocessing to process the data and prepare and save graphs
+
+```bash
+python preprocessor.py
+```
+
+Preprocessing can be also performed in parallel
+
+```bash
+mpirun -np <num_GPUs> python preprocessor.py
+```
+
+If running in a docker container, you may need to include the `--allow-run-as-root` in
+the multi-GPU run command.
+
 To train the model, run
 
 ```bash
@@ -89,9 +104,6 @@ run
 ```bash
 mpirun -np <num_GPUs> python train.py
 ```
-
-If running in a docker container, you may need to include the `--allow-run-as-root` in
-the multi-GPU run command.
 
 Once the model is trained, run
 
