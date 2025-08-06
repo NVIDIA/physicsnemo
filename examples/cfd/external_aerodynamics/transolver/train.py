@@ -139,7 +139,7 @@ def forward_pass(
         if output_pad_size is not None:
             # Remove the padded outputs:
             outputs = outputs[:, :, :-output_pad_size]
-        loss = loss_fn(outputs, targets, others, cfg.data.mode)
+        loss = loss_fn(outputs, targets, cfg.data.mode)
 
     metrics = metrics_fn(
         outputs, targets, others, dist_manager, cfg.data.mode, norm_factors

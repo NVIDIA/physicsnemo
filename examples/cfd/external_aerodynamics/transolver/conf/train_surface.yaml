@@ -17,14 +17,14 @@
 
 
 output_dir: "runs"
-run_id: "surface/precision-convergence/float16"
+run_id: "surface/float32"
 
 # Training configuration
 training:
-  precision: float16 # float32, float16, bfloat16
-  num_epochs: 251 # Add one to save at 250 :)
+  precision: float32 # float32, float16, bfloat16, or float8
+  num_epochs: 251 # Add one to save at 250
   save_interval: 25  # Save checkpoint every N epochs
-  compile: True
+  compile: false
 
 # Model configuration
 model:
@@ -42,7 +42,7 @@ model:
   unified_pos: false # Whether to use unified positional embeddings
   ref: 8            # Reference dimension for unified pos
   structured_shape: null
-  use_te: false     # Use transformer engine
+  use_te: true     # Use transformer engine
   time_input: false # Whether to use time embeddings
 
 scheduler:
