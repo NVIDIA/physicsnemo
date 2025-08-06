@@ -597,6 +597,14 @@ class ShardTensor(DTensor):
         return _ToTorchTensor.apply(redist_res, grad_placements)
 
     def backward(self, *args, **kwargs):
+        """
+        Backward pass for ShardTensor.
+
+        This method is used to perform the backward pass for a ShardTensor.
+        It handles the redistribution of the tensor to the desired placements
+        and then calls the backward pass on the local tensor.
+        """
+
         # Before calling backward, we need to resolve any partial placements.
         new_placements = []
         # grad_placements = []

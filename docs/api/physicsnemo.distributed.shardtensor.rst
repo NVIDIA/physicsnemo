@@ -54,7 +54,7 @@ The example below shows how to create and work with ``ShardTensor``:
         )
 
 How does this work?
-""""""""""""""""""""
+"""""""""""""""""""
 
 ``ShardTensor`` extends PyTorch's ``DTensor`` to support uneven sharding where different ranks can have different 
 local tensor sizes. It tracks shard size information and handles redistribution between different 
@@ -80,14 +80,14 @@ Operations work by:
    :toctree: generated
 
 ``ShardTensor``
-----------------
+---------------
 
 .. autoclass:: physicsnemo.distributed.shard_tensor.ShardTensor
     :members:
     :show-inheritance:
 
 Utility Functions
-------------------
+-----------------
 
 .. autofunction:: physicsnemo.distributed.shard_tensor.scatter_tensor
 
