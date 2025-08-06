@@ -20,48 +20,28 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-model:
-  embedding_dim: 2
-  n_layers: 3
-  n_hidden: 128
-  dropout: 0.0
-  n_head: 8
-  time_input: False
-  act: gelu
-  mlp_ratio: 1
-  functional_dim: 1
-  out_dim: 1
-  slice_dim: 32
-  ref: 8
-  unified_pos: true
-  slice_num: 32
-  use_te: false
-  
-
-data:
-  resolution: 256
+import sys
+import numpy as np
+from scipy.io import loadmat
 
 
-normaliser:
-  permeability:
-    mean: 1.25
-    std_dev: .75
-  darcy:
-    mean: 4.52E-2
-    std_dev: 2.79E-2
+def main(mat_file, npz_file):
+    # Load the .mat file
+    data = loadmat(mat_file)
 
-scheduler:
-  initial_lr: 1.E-3
-  decay_rate: .85
-  decay_pseudo_epochs: 8
+    # Extract 'coeff' and 'sol'
+    coeff = data["coeff"]
+    sol = data["sol"]
 
-training:
-  resolution: 256
-  batch_size: 8
-  rec_results_freq : 8
-  max_pseudo_epochs: 256
-  pseudo_epoch_sample_size: 2048
+    # Save to .npz file
+    np.savez(npz_file, coeff=coeff, sol=sol)
+    print(f"Saved 'coeff' and 'sol' to {npz_file}")
 
-validation:
-  sample_size: 256
-  validation_pseudo_epochs: 4
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python convert_mat_to_npz.py input.mat")
+        sys.exit(1)
+    mat_file = sys.argv[1]
+    npz_file = mat_file.replace(".mat", ".npz")
+    main(mat_file, npz_file)

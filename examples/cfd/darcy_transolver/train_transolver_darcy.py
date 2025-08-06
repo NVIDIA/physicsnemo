@@ -31,6 +31,7 @@ from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 from physicsnemo.launch.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
+from einops import rearrange
 
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config.yaml")
@@ -54,22 +55,23 @@ def darcy_trainer(cfg: DictConfig) -> None:
 
     # define model, loss, optimiser, scheduler, data loader
     model = Transolver(
-        space_dim=cfg.model.space_dim,
+        out_dim=cfg.model.out_dim,
+        embedding_dim=cfg.model.embedding_dim,
         n_layers=cfg.model.n_layers,
         n_hidden=cfg.model.n_hidden,
         dropout=cfg.model.dropout,
         n_head=cfg.model.n_head,
-        Time_Input=cfg.model.Time_Input,
         act=cfg.model.act,
         mlp_ratio=cfg.model.mlp_ratio,
-        fun_dim=cfg.model.fun_dim,
-        out_dim=cfg.model.out_dim,
+        functional_dim=cfg.model.functional_dim,
         slice_num=cfg.model.slice_num,
+        unified_pos=True,
         ref=cfg.model.ref,
-        unified_pos=cfg.model.unified_pos,
-        H=cfg.training.resolution,
-        W=cfg.training.resolution,
+        structured_shape=[cfg.data.resolution, cfg.data.resolution],
+        use_te=cfg.model.use_te,
+        time_input=cfg.model.time_input,
     ).to(dist.device)
+
     loss_fun = TestLoss(size_average=False)
     optimizer = Adam(model.parameters(), lr=cfg.scheduler.initial_lr)
     scheduler = lr_scheduler.LambdaLR(
@@ -121,6 +123,8 @@ def darcy_trainer(cfg: DictConfig) -> None:
         model=model, optim=optimizer, logger=log, use_amp=False, use_graphs=False
     )
     def forward_train(invars, target):
+        invars_shape = invars.shape
+        invars = rearrange(invars, 'b c h w -> b (h w) c')
         pred = model(invars)
         loss = loss_fun(pred, target)
         return loss
