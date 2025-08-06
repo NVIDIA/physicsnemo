@@ -97,7 +97,6 @@ to their unique exploration needs:
   to enable climate researchers and scientists to explore and experiment with pretrained
   AI models for weather and climate.
 
-
 ### Scalable GPU-Optimized Training Library
 
 PhysicsNeMo provides a highly optimized and scalable training library for maximizing the
