@@ -92,6 +92,47 @@ def cast_precisions(
     else:
         return features, embeddings
 
+def pad_input_for_fp8(
+    features: torch.Tensor, 
+    embeddings: torch.Tensor
+) -> torch.Tensor:
+    """
+    Pads the input features tensor so that the concatenated feature and embedding dimension is a multiple of 16,
+    which is required for FP8 operations.  Only the features is updated.
+
+    Args:
+        features (torch.Tensor): The input features tensor of shape (..., feature_dim).
+        embeddings (torch.Tensor): The embeddings tensor of shape (..., embedding_dim).
+
+    Returns:
+        torch.Tensor: The padded features tensor, so that (features.shape[-1] + embeddings.shape[-1]) is a multiple of 16.
+    """
+    fx_dim = features.shape[-1] + embeddings.shape[-1]
+    if fx_dim % 16 != 0:
+        pad_size = 16 - (fx_dim % 16)
+        features = torch.nn.functional.pad(features, (0, pad_size))
+        fx_dim = features.shape[-1] + embeddings.shape[-1]
+        
+    return features
+
+def unpad_output_for_fp8(
+    outputs: torch.Tensor, 
+    output_pad_size: int | None
+) -> torch.Tensor:
+    """
+    Removes the padding from the output tensor that was added for FP8 compatibility.
+
+    Args:
+        outputs (torch.Tensor): The output tensor of shape (..., output_dim + pad_size) if padded.
+        output_pad_size (int | None): The number of padded elements to remove from the last dimension. If None, no unpadding is performed.
+
+    Returns:
+        torch.Tensor: The unpadded output tensor.
+    """
+    # Remove the padded outputs:
+    if output_pad_size is not None:
+        return outputs[:, :, :-output_pad_size]
+    return outputs
 
 def forward_pass(
     batch: dict,
@@ -128,17 +169,12 @@ def forward_pass(
 
         # For fp8, we may have to pad the inputs:
         if precision == "float8":
-            fx_dim = features.shape[-1] + embeddings.shape[-1]
-            if fx_dim % 16 != 0:
-                pad_size = 16 - (fx_dim % 16)
-                features = torch.nn.functional.pad(features, (0, pad_size))
-                fx_dim = features.shape[-1] + embeddings.shape[-1]
+            features = pad_input_for_fp8(features, embeddings)
 
         outputs = model(features, embeddings)
 
-        if output_pad_size is not None:
-            # Remove the padded outputs:
-            outputs = outputs[:, :, :-output_pad_size]
+        outputs = unpad_output_for_fp8(outputs, output_pad_size)
+
         loss = loss_fn(outputs, targets, cfg.data.mode)
 
     metrics = metrics_fn(
@@ -168,7 +204,7 @@ def train_epoch(
     Train the model for one epoch.
 
     Args:
-        dataloader (list[dict]): Training data loader
+        dataloader: Training data loader
         sampler (torch.utils.data.Sampler): Sampler for distributed or sequential sampling.
         model (torch.nn.Module): The neural network model to train.
         output_pad_size (int | None): Optional output padding size for lowest precisions (FP8).
@@ -292,7 +328,7 @@ def val_epoch(
     Run validation for one epoch.
 
     Args:
-        dataloader (list[dict]): Validation data loader.
+        dataloader: Validation data loader.
         sampler (torch.utils.data.Sampler | None): Sampler for distributed or sequential sampling.
         model (torch.nn.Module): The model to evaluate.
         output_pad_size (int | None): Optional output padding size for lowest precisions (FP8).
@@ -370,6 +406,52 @@ def val_epoch(
     return avg_loss
 
 
+def update_model_params_for_fp8(
+    cfg, logger
+) -> tuple | None:
+    """
+    Adjusts model configuration parameters to ensure compatibility with FP8 computations.
+
+    The output shape will be padded to a multiple of 16.  The input shape
+    is padded dynamically in the forward pass, but that is printed here
+    for information.
+
+    Args:
+        cfg: Configuration object with model and training attributes.
+        logger: Logger object for info messages.
+
+    Returns:
+        tuple: (cfg, output_pad_size) if precision is "float8", where output_pad_size is the amount
+               of padding added to the output dimension (or None if no padding was needed).
+    """
+    # we have to manipulate the output shape
+    # to enable fp8 computations with transformer_engine.
+    # need the input and output to be divisible by 16.
+    # if (cfg.model.embedding_dim + cfg.model.functional_dim) % 16 != 0:
+
+    output_pad_size = None
+    if cfg.training.precision == "float8":
+
+        if cfg.model.out_dim % 16 != 0:
+            # pad the output:
+            output_pad_size = 16 - (cfg.model.out_dim % 16)
+            cfg.model.out_dim += output_pad_size
+            logger.info(
+                f"Padding output dimension to {cfg.model.out_dim} for fp8 autocast"
+            )
+            
+        # This part is informational only:
+        if (cfg.model.functional_dim + cfg.model.embedding_dim) % 16 != 0:
+            input_pad_size = 16 - (
+                (cfg.model.functional_dim + cfg.model.embedding_dim) % 16
+            )
+            cfg.model.functional_dim += input_pad_size
+            logger.info(
+                f"Padding input dimension to {cfg.model.functional_dim} and {cfg.model.embedding_dim} for fp8 autocast"
+            )
+
+    return cfg, output_pad_size
+
 @profile
 def main(cfg: DictConfig):
     """Main training function
@@ -403,32 +485,7 @@ def main(cfg: DictConfig):
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
-    if cfg.training.precision == "float8":
-        # we have to manipulate the output shape
-        # to enable fp8 computations with transformer_engine.
-        # need the input and output to be divisible by 16.
-        # if (cfg.model.embedding_dim + cfg.model.functional_dim) % 16 != 0:
-
-        if cfg.model.out_dim % 16 != 0:
-            # pad the output:
-            output_pad_size = 16 - (cfg.model.out_dim % 16)
-            cfg.model.out_dim += output_pad_size
-            logger.info(
-                f"Padding output dimension to {cfg.model.out_dim} for fp8 autocast"
-            )
-        else:
-            output_pad_size = None
-        if (cfg.model.functional_dim + cfg.model.embedding_dim) % 16 != 0:
-            input_pad_size = 16 - (
-                (cfg.model.functional_dim + cfg.model.embedding_dim) % 16
-            )
-            cfg.model.functional_dim += input_pad_size
-            logger.info(
-                f"Padding input dimension to {cfg.model.functional_dim} and {cfg.model.embedding_dim} for fp8 autocast"
-            )
-    else:
-        input_pad_size = None
-        output_pad_size = None
+    cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)       
 
     # Set up model
     model = hydra.utils.instantiate(cfg.model)
