@@ -156,15 +156,7 @@ class Darcy2D_fix(Datapipe):
         self.max_iterations = max_iterations
         self.convergence_threshold = convergence_threshold
         self.iterations_per_convergence_check = iterations_per_convergence_check
-        # self.nr_multigrids = nr_multigrids
-        # self.normaliser = normaliser
 
-        # # check normaliser keys
-        # if self.normaliser is not None:
-        #     if not {"permeability", "darcy"}.issubset(set(self.normaliser.keys())):
-        #         raise ValueError(
-        #             "normaliser need to have keys permeability and darcy with mean and std"
-        #         )
 
         # Set up device for warp, warp has same naming convention as torch.
         if isinstance(device, torch.device):
@@ -175,9 +167,6 @@ class Darcy2D_fix(Datapipe):
         self.dx = 1.0 / (self.resolution + 1)  # pad edges by 1 for multi-grid
         self.dim = (self.batch_size, self.resolution + 1, self.resolution + 1)
 
-        # assert resolution is compatible with multi-grid method
-        # if (resolution % 2 ** (nr_multigrids - 1)) != 0:
-        #     raise ValueError("Resolution is incompatible with number of sub grids.")
 
         self.train_path = train_path
         self.native_resolution = 421  # Native grid size

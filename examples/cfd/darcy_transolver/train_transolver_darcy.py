@@ -69,7 +69,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
         ref=cfg.model.ref,
         structured_shape=[cfg.data.resolution, cfg.data.resolution],
         use_te=cfg.model.use_te,
-        Time_Input=cfg.model.Time_Input,
+        time_input=cfg.model.time_input,
     ).to(dist.device)
 
     loss_fun = TestLoss(size_average=False)

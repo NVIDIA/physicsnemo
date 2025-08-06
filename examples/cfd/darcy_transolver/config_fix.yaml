@@ -43,7 +43,7 @@ model:
   ref: 8
   slice_num: 64
   use_te: True
-  Time_Input: False
+  time_input: False
   
 precision: bf16
 

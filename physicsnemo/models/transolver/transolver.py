@@ -51,13 +51,9 @@ from .Embedding import timestep_embedding
 
 # from .Physics_Attention import Physics_Attention_Structured_Mesh_2D
 from .Physics_Attention import (
-    Physics_Attention_Irregular_Mesh_2 as Physics_Attention_Irregular_Mesh,
-)
-from .Physics_Attention import (
-    Physics_Attention_Structured_Mesh_2D_2 as Physics_Attention_Structured_Mesh_2D,
-)
-from .Physics_Attention import (
-    Physics_Attention_Structured_Mesh_3D_2 as Physics_Attention_Structured_Mesh_3D,
+    PhysicsAttentionIrregularMesh,
+    PhysicsAttentionStructuredMesh2D,
+    PhysicsAttentionStructuredMesh3D,
 )
 
 ACTIVATION = {
@@ -125,7 +121,7 @@ class Transolver_block(nn.Module):
         last_layer=False,
         out_dim=1,
         slice_num=32,
-        spatial_shape: tuple[int] | None = None,
+        spatial_shape: tuple[int, ...] | None = None,
         use_te=True,
     ):
         super().__init__()
@@ -142,7 +138,7 @@ class Transolver_block(nn.Module):
             self.ln_1 = nn.LayerNorm(hidden_dim)
 
         if spatial_shape is None:
-            self.Attn = Physics_Attention_Irregular_Mesh(
+            self.Attn = PhysicsAttentionIrregularMesh(
                 hidden_dim,
                 heads=num_heads,
                 dim_head=hidden_dim // num_heads,
@@ -152,7 +148,7 @@ class Transolver_block(nn.Module):
             )
         else:
             if len(spatial_shape) == 2:
-                self.Attn = Physics_Attention_Structured_Mesh_2D(
+                self.Attn = PhysicsAttentionStructuredMesh2D(
                     hidden_dim,
                     spatial_shape=spatial_shape,
                     heads=num_heads,
@@ -162,7 +158,7 @@ class Transolver_block(nn.Module):
                     use_te=use_te,
                 )
             elif len(spatial_shape) == 3:
-                self.Attn = Physics_Attention_Structured_Mesh_3D(
+                self.Attn = PhysicsAttentionStructuredMesh3D(
                     hidden_dim,
                     spatial_shape=spatial_shape,
                     heads=num_heads,
@@ -306,7 +302,7 @@ class Transolver(Module):
         `None`, this parameter can only be a length-2 or length-3 tuple of ints.
     use_te: bool
         Whether to use transformer engine backend when possible.
-    Time_Input : bool
+    time_input : bool
         Whether to include time embeddings. Default is false
     """
 
@@ -326,7 +322,7 @@ class Transolver(Module):
         ref: int = 8,
         structured_shape: None | tuple[int] = None,
         use_te: bool = True,
-        Time_Input: bool = False,
+        time_input: bool = False,
     ) -> None:
         super().__init__(meta=MetaData())
         self.__name__ = "Transolver"
@@ -389,9 +385,9 @@ class Transolver(Module):
             use_te=use_te,
         )
 
-        self.Time_Input = Time_Input
+        self.time_input = time_input
         self.n_hidden = n_hidden
-        if Time_Input:
+        if time_input:
             self.time_fc = nn.Sequential(
                 nn.Linear(n_hidden, n_hidden), nn.SiLU(), nn.Linear(n_hidden, n_hidden)
             )
@@ -414,10 +410,6 @@ class Transolver(Module):
             ]
         )
         self.initialize_weights()
-
-        # self.placeholder = nn.Parameter(
-        #     (1 / (n_hidden)) * torch.rand(n_hidden, dtype=torch.float)
-        # )
 
     def initialize_weights(self):
         self.apply(self._init_weights)
@@ -485,60 +477,59 @@ class Transolver(Module):
         self,
         fx: torch.Tensor | None,
         embedding: torch.Tensor | None = None,
-        T: torch.Tensor | None = None,
+        time: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass of the transolver model.
 
-        For structured data, you may pass the functional input and embedding
-        as either [B, N, C] shape or [B, *structure, C]. Output will be returned
-        in the same shape as input.
+        Args:
+            fx (torch.Tensor | None): Functional input tensor. For structured data,
+                shape should be [B, N, C] or [B, *structure, C]. For unstructured data,
+                shape should be [B, N, C]. Can be None if not used.
+            embedding (torch.Tensor | None, optional): Embedding tensor. For structured
+                data, shape should be [B, N, C] or [B, *structure, C]. For unstructured
+                data, shape should be [B, N, C]. Defaults to None.
+            time (torch.Tensor | None, optional): Optional time tensor. Shape and usage
+                depend on the model configuration. Defaults to None.
 
-        Unstructured data must be passed as [B, N, C] for both embeddings and tokens.
-
-        Sublayers expect shape of [B, N, C]
+        Returns:
+            torch.Tensor: Output tensor with the same shape as the input.
 
         """
-        with torch.autograd.profiler.record_function("preprocess"):
-            # Reshape automatically, if necessary:
-            if self.structured_shape is not None:
-                unflatten_output = False
-                if len(fx.shape) != 3:
-                    unflatten_output = True
-                    fx = fx.reshape(fx.shape[0], -1, fx.shape[-1])
-                if embedding is not None and len(embedding.shape) != 3:
-                    embedding = embedding.reshape(
-                        embedding.shape[0], *self.structured_shape, -1
-                    )
-            else:
-                if embedding is None:
-                    raise ValueError("Embedding is required for unstructured data")
-
-            if self.unified_pos:
-                # Extend the embedding to the batch size:
-                embedding = (
-                    self.embedding.repeat(embedding.shape[0], 1, 1)
-                    # .reshape(x.shape[0], -1, self.embedding_dim)
+        # Reshape automatically, if necessary:
+        if self.structured_shape is not None:
+            unflatten_output = False
+            if len(fx.shape) != 3:
+                unflatten_output = True
+                fx = fx.reshape(fx.shape[0], -1, fx.shape[-1])
+            if embedding is not None and len(embedding.shape) != 3:
+                embedding = embedding.reshape(
+                    embedding.shape[0], *self.structured_shape, -1
                 )
+        else:
+            if embedding is None:
+                raise ValueError("Embedding is required for unstructured data")
 
-            # Combine the embedding and functional input:
-            if embedding is not None:
-                fx = torch.cat((embedding, fx), -1)
+        if self.unified_pos:
+            # Extend the embedding to the batch size:
+            embedding = self.embedding.repeat(embedding.shape[0], 1, 1)
 
-            # Apply preprocessing
-            fx = self.preprocess(fx)
+        # Combine the embedding and functional input:
+        if embedding is not None:
+            fx = torch.cat((embedding, fx), -1)
 
-        if T is not None:
-            with torch.autograd.profiler.record_function("Time_Embedding"):
-                Time_emb = timestep_embedding(T, self.n_hidden).repeat(
-                    1, embedding.shape[1], 1
-                )
-                Time_emb = self.time_fc(Time_emb)
-                fx = fx + Time_emb
+        # Apply preprocessing
+        fx = self.preprocess(fx)
+
+        if time is not None:
+            time_emb = timestep_embedding(time, self.n_hidden).repeat(
+                1, embedding.shape[1], 1
+            )
+            time_emb = self.time_fc(time_emb)
+            fx = fx + time_emb
 
         for i, block in enumerate(self.blocks):
-            with torch.autograd.profiler.record_function(f"Block_{i}"):
-                fx = block(fx)
+            fx = block(fx)
 
         if self.structured_shape is not None:
             if unflatten_output:

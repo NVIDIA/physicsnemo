@@ -30,13 +30,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+from abc import ABC, abstractmethod
+
 import torch
 import torch.nn as nn
 import transformer_engine.pytorch as te  # noqa: F401
 from einops import rearrange
 
 
-class Physics_Attention_Base(nn.Module):
+class PhysicsAttentionBase(nn.Module, ABC):
     """
     Base class for all physics attention modules.
 
@@ -93,6 +95,7 @@ class Physics_Attention_Base(nn.Module):
 
         self.out_dropout = nn.Dropout(dropout)
 
+    @abstractmethod
     def project_input_onto_slices(self, x) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Project the input onto the slice space.
@@ -148,21 +151,6 @@ class Physics_Attention_Base(nn.Module):
 
         # Return the original weights, not the normed weights:
         return slice_weights, slice_token
-
-    def compute_slice_attention(self, slice_tokens: torch.Tensor) -> torch.Tensor:
-        """
-        Compute an attention mechansism for the slices
-        """
-        q_slice_token = self.to_q(slice_tokens)
-        k_slice_token = self.to_k(slice_tokens)
-        v_slice_token = self.to_v(slice_tokens)
-
-        dots = torch.matmul(q_slice_token, k_slice_token.transpose(-1, -2)) * self.scale
-        attn = self.softmax(dots)
-        attn = self.dropout(attn)
-        out_slice_token = torch.matmul(attn, v_slice_token)  # B H G D
-
-        return out_slice_token
 
     def compute_slice_attention_te(self, slice_tokens: torch.Tensor) -> torch.Tensor:
         """
@@ -263,7 +251,7 @@ class Physics_Attention_Base(nn.Module):
         return outputs
 
 
-class Physics_Attention_Irregular_Mesh_2(Physics_Attention_Base):
+class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
     """
     Specialization of PhysicsAttention to Irregular Meshes
     """
@@ -294,7 +282,7 @@ class Physics_Attention_Irregular_Mesh_2(Physics_Attention_Base):
         return x_mid, fx_mid
 
 
-class Physics_Attention_Structured_Mesh_2D_2(Physics_Attention_Base):
+class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
     """
     Specialization for 2d image-like meshes
     """
@@ -345,7 +333,7 @@ class Physics_Attention_Structured_Mesh_2D_2(Physics_Attention_Base):
         return input_projected_x, input_projected_fx
 
 
-class Physics_Attention_Structured_Mesh_3D_2(Physics_Attention_Base):
+class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
     """
     Specialization for 3D-image like meshes
     """

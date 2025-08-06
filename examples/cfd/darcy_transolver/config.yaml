@@ -26,7 +26,7 @@ model:
   n_hidden: 128
   dropout: 0.0
   n_head: 8
-  Time_Input: False
+  time_input: False
   act: gelu
   mlp_ratio: 1
   fun_dim: 0
