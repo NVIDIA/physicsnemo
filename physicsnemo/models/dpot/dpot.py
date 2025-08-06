@@ -1,24 +1,31 @@
-# SPDX-FileCopyrightText: Copyright (c) 2020 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple, Optional
-
-import math
-import logging
-import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from einops import rearrange
+
 from ..module import Module
 
 Tensor = torch.Tensor
-_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Activation factory
@@ -45,7 +52,9 @@ def get_activation(name: str) -> nn.Module:
     """
     key = name.lower()
     if key not in _ACTIVATIONS:
-        raise ValueError(f"Unsupported activation '{name}'. Available: {list(_ACTIVATIONS)}")
+        raise ValueError(
+            f"Unsupported activation '{name}'. Available: {list(_ACTIVATIONS)}"
+        )
     return _ACTIVATIONS[key]
 
 
@@ -142,29 +151,28 @@ class DPOT2DLayer(nn.Module):
         kept = min(self.modes, h, w // 2 + 1)
 
         o1_real = torch.zeros(
-            b, h, x_ft.shape[2], self.num_blocks, self.block_size * self.hidden_size_factor, device=x.device
+            b,
+            h,
+            x_ft.shape[2],
+            self.num_blocks,
+            self.block_size * self.hidden_size_factor,
+            device=x.device,
         )
         o1_imag = torch.zeros_like(o1_real)
-        o2_real = torch.zeros(b, h, x_ft.shape[2], self.num_blocks, self.block_size, device=x.device)
+        o2_real = torch.zeros(
+            b, h, x_ft.shape[2], self.num_blocks, self.block_size, device=x.device
+        )
         o2_imag = torch.zeros_like(o2_real)
 
         # First linear (complex) with activation
         o1_real[:, :kept, :kept] = self.act(
-            torch.einsum(
-                "...bi,bio->...bo", x_ft[:, :kept, :kept].real, self.w1[0]
-            )
-            - torch.einsum(
-                "...bi,bio->...bo", x_ft[:, :kept, :kept].imag, self.w1[1]
-            )
+            torch.einsum("...bi,bio->...bo", x_ft[:, :kept, :kept].real, self.w1[0])
+            - torch.einsum("...bi,bio->...bo", x_ft[:, :kept, :kept].imag, self.w1[1])
             + self.b1[0]
         )
         o1_imag[:, :kept, :kept] = self.act(
-            torch.einsum(
-                "...bi,bio->...bo", x_ft[:, :kept, :kept].imag, self.w1[0]
-            )
-            + torch.einsum(
-                "...bi,bio->...bo", x_ft[:, :kept, :kept].real, self.w1[1]
-            )
+            torch.einsum("...bi,bio->...bo", x_ft[:, :kept, :kept].imag, self.w1[0])
+            + torch.einsum("...bi,bio->...bo", x_ft[:, :kept, :kept].real, self.w1[1])
             + self.b1[1]
         )
 
@@ -196,7 +204,9 @@ class DPOT2DLayer(nn.Module):
 class ConvMlp(nn.Module):
     """1x1 Convolutional MLP used inside each mixing Block."""
 
-    def __init__(self, width: int, mlp_ratio: float = 1.0, activation: str = "gelu") -> None:
+    def __init__(
+        self, width: int, mlp_ratio: float = 1.0, activation: str = "gelu"
+    ) -> None:
         super().__init__()
         hidden = int(width * mlp_ratio)
         self.act = get_activation(activation)
@@ -240,9 +250,10 @@ class Block(nn.Module):
         modes: int,
         activation: str = "gelu",
         double_skip: bool = True,
+        norm_groups: int = 8,
     ) -> None:
         super().__init__()
-        self.norm1 = nn.GroupNorm(8, width)
+        self.norm1 = nn.GroupNorm(norm_groups, width)
         self.filter = DPOT2DLayer(
             width=width,
             num_blocks=num_blocks,
@@ -250,7 +261,7 @@ class Block(nn.Module):
             channel_first=True,
             activation=activation,
         )
-        self.norm2 = nn.GroupNorm(8, width)
+        self.norm2 = nn.GroupNorm(norm_groups, width)
         self.mlp = ConvMlp(width=width, mlp_ratio=mlp_ratio, activation=activation)
         self.double_skip = double_skip
 
@@ -299,15 +310,21 @@ class PatchEmbed(nn.Module):
         activation: str = "gelu",
     ) -> None:
         super().__init__()
-        self.inp_shape = (inp_shape, inp_shape) if isinstance(inp_shape, int) else inp_shape
-        self.patch_size = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
+        self.inp_shape = (
+            (inp_shape, inp_shape) if isinstance(inp_shape, int) else inp_shape
+        )
+        self.patch_size = (
+            (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
+        )
         self.out_size = (
             self.inp_shape[0] // self.patch_size[0],
             self.inp_shape[1] // self.patch_size[1],
         )
         self.act = get_activation(activation)
         self.proj = nn.Sequential(
-            nn.Conv2d(in_chans, embed_dim, kernel_size=self.patch_size, stride=self.patch_size),
+            nn.Conv2d(
+                in_chans, embed_dim, kernel_size=self.patch_size, stride=self.patch_size
+            ),
             self.act,
             nn.Conv2d(embed_dim, out_dim, kernel_size=1),
         )
@@ -348,7 +365,7 @@ class TimeAggregator(nn.Module):
     ) -> None:
         super().__init__()
         self.mode = mode
-        scale = 1.0 / (in_timesteps * embed_dim ** 0.5)
+        scale = 1.0 / (in_timesteps * embed_dim**0.5)
         self.w = nn.Parameter(scale * torch.randn(in_timesteps, embed_dim, embed_dim))
         if mode == "exp_mlp":
             gamma = torch.linspace(-10, 10, embed_dim)
@@ -361,7 +378,9 @@ class TimeAggregator(nn.Module):
         if self.mode == "mlp":
             x = torch.einsum("tij,...ti->...j", self.w, x)
         else:  # exp_mlp
-            t = torch.linspace(0, 1, x.shape[-2], device=x.device).unsqueeze(-1)  # (T,1)
+            t = torch.linspace(0, 1, x.shape[-2], device=x.device).unsqueeze(
+                -1
+            )  # (T,1)
             t_embed = torch.cos(t @ self.gamma)  # (T, C)
             x = torch.einsum("tij,...ti->...j", self.w, x * t_embed)
         return x
@@ -440,12 +459,16 @@ class DPOTNet(Module):
         normalize: bool = False,
         activation: str = "gelu",
         time_agg: str = "exp_mlp",
+        norm_groups: int = 8,
     ) -> None:
         super().__init__(meta=DPOTMeta())
 
-
-        self.inp_shape = (inp_shape, inp_shape) if isinstance(inp_shape, int) else inp_shape
-        self.patch_size = (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
+        self.inp_shape = (
+            (inp_shape, inp_shape) if isinstance(inp_shape, int) else inp_shape
+        )
+        self.patch_size = (
+            (patch_size, patch_size) if isinstance(patch_size, int) else patch_size
+        )
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.in_timesteps = in_timesteps
@@ -464,9 +487,7 @@ class DPOTNet(Module):
             activation=activation,
         )
         h_patches, w_patches = self.patch_embed.out_size
-        self.pos_embed = nn.Parameter(
-            torch.zeros(1, embed_dim, h_patches, w_patches)
-        )
+        self.pos_embed = nn.Parameter(torch.zeros(1, embed_dim, h_patches, w_patches))
 
         # Adaptive normalization affine layers (AdaIN style)
         if normalize:
@@ -475,7 +496,10 @@ class DPOTNet(Module):
 
         # Temporal aggregator operates after spatial embedding
         self.time_agg_layer = TimeAggregator(
-            in_channels=in_channels, in_timesteps=in_timesteps, embed_dim=embed_dim, mode=time_agg
+            in_channels=in_channels,
+            in_timesteps=in_timesteps,
+            embed_dim=embed_dim,
+            mode=time_agg,
         )
 
         # AFNO Blocks
@@ -488,6 +512,7 @@ class DPOTNet(Module):
                     modes=modes,
                     activation=activation,
                     double_skip=False,
+                    norm_groups=norm_groups,
                 )
                 for _ in range(depth)
             ]
@@ -524,13 +549,25 @@ class DPOTNet(Module):
     @staticmethod
     def _build_grid(x: Tensor) -> Tensor:
         b, h, w, t, _ = x.shape
-        grid_x = torch.linspace(0, 1, h, device=x.device).view(1, h, 1, 1, 1).repeat(b, 1, w, t, 1)
-        grid_y = torch.linspace(0, 1, w, device=x.device).view(1, 1, w, 1, 1).repeat(b, h, 1, t, 1)
-        grid_t = torch.linspace(0, 1, t, device=x.device).view(1, 1, 1, t, 1).repeat(b, h, w, 1, 1)
+        grid_x = (
+            torch.linspace(0, 1, h, device=x.device)
+            .view(1, h, 1, 1, 1)
+            .repeat(b, 1, w, t, 1)
+        )
+        grid_y = (
+            torch.linspace(0, 1, w, device=x.device)
+            .view(1, 1, w, 1, 1)
+            .repeat(b, h, 1, t, 1)
+        )
+        grid_t = (
+            torch.linspace(0, 1, t, device=x.device)
+            .view(1, 1, 1, t, 1)
+            .repeat(b, h, w, 1, 1)
+        )
         return torch.cat([grid_x, grid_y, grid_t], dim=-1)  # (B,H,W,T,3)
 
     # ---------------------------------------------------------------- forward
-    def forward(self, x: Tensor) -> Tuple[Tensor, Tensor]:  # noqa: D401
+    def forward(self, x: Tensor) -> Tensor:  # noqa: D401
         """Forward pass.
 
         Parameters
@@ -540,9 +577,8 @@ class DPOTNet(Module):
 
         Returns
         -------
-        Tuple[Tensor, Tensor]
-            Prediction tensor of shape ``(B, H, W, out_timesteps, out_channels)`` and
-            classification logits ``(B, n_classes)``.
+        Tensor
+            Prediction tensor of shape ``(B, H, W, out_timesteps, out_channels)``.
         """
         b, h, w, t, c = x.shape
         if t != self.in_timesteps or c != self.in_channels:
@@ -569,14 +605,20 @@ class DPOTNet(Module):
         x_feat = rearrange(x_feat, "b hp wp c -> b c hp wp")
 
         if self.normalize:
-            scale_mu = self.scale_mu(torch.cat([mu, sigma], dim=-1)).squeeze(-2).permute(0, 3, 1, 2)
-            scale_sigma = self.scale_sigma(torch.cat([mu, sigma], dim=-1)).squeeze(-2).permute(0, 3, 1, 2)
+            scale_mu = (
+                self.scale_mu(torch.cat([mu, sigma], dim=-1))
+                .squeeze(-2)
+                .permute(0, 3, 1, 2)
+            )
+            scale_sigma = (
+                self.scale_sigma(torch.cat([mu, sigma], dim=-1))
+                .squeeze(-2)
+                .permute(0, 3, 1, 2)
+            )
             x_feat = scale_sigma * x_feat + scale_mu
 
         for blk in self.blocks:
             x_feat = blk(x_feat)
-
-        
 
         y = self.reconstruct(x_feat)  # (B, out_channels*out_timesteps, H, W)
         y = y.permute(0, 2, 3, 1)
@@ -599,6 +641,7 @@ class DPOTNet(Module):
 # Utility functions for checkpoint compatibility
 # ---------------------------------------------------------------------------
 
+
 def resize_pos_embed(pos_embed: Tensor, new_pos_embed: Tensor) -> Tensor:
     """Resize positional embedding using bilinear interpolation.
 
@@ -616,7 +659,9 @@ def resize_pos_embed(pos_embed: Tensor, new_pos_embed: Tensor) -> Tensor:
     _, _, h_old, w_old = pos_grid.shape
     if (h_old, w_old) == (h_new, w_new):
         return pos_grid
-    pos_grid = F.interpolate(pos_grid, size=(h_new, w_new), mode="bilinear", align_corners=False)
+    pos_grid = F.interpolate(
+        pos_grid, size=(h_new, w_new), mode="bilinear", align_corners=False
+    )
     return pos_grid
 
 

@@ -35,4 +35,4 @@ noise_scale: 0.0005
 grad_clip: 10.0
 
 device: cuda # or cpu
-train: True
+train: true
