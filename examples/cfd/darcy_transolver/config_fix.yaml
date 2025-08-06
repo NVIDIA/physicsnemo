@@ -42,7 +42,7 @@ model:
   unified_pos: False
   ref: 8
   slice_num: 64
-  use_te: True
+  use_te: False
   time_input: False
   
 precision: bf16

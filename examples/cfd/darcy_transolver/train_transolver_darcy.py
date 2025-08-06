@@ -31,6 +31,7 @@ from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 from physicsnemo.launch.logging.mlflow import initialize_mlflow
 
 from validator import GridValidator
+from einops import rearrange
 
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config.yaml")
@@ -54,7 +55,6 @@ def darcy_trainer(cfg: DictConfig) -> None:
 
     # define model, loss, optimiser, scheduler, data loader
     model = Transolver(
-        functional_dim=cfg.model.functional_dim,
         out_dim=cfg.model.out_dim,
         embedding_dim=cfg.model.embedding_dim,
         n_layers=cfg.model.n_layers,
@@ -63,9 +63,9 @@ def darcy_trainer(cfg: DictConfig) -> None:
         n_head=cfg.model.n_head,
         act=cfg.model.act,
         mlp_ratio=cfg.model.mlp_ratio,
-        fun_dim=cfg.model.fun_dim,
+        functional_dim=cfg.model.functional_dim,
         slice_num=cfg.model.slice_num,
-        unified_pos=cfg.model.unified_pos,
+        unified_pos=True,
         ref=cfg.model.ref,
         structured_shape=[cfg.data.resolution, cfg.data.resolution],
         use_te=cfg.model.use_te,
@@ -123,6 +123,8 @@ def darcy_trainer(cfg: DictConfig) -> None:
         model=model, optim=optimizer, logger=log, use_amp=False, use_graphs=False
     )
     def forward_train(invars, target):
+        invars_shape = invars.shape
+        invars = rearrange(invars, 'b c h w -> b (h w) c')
         pred = model(invars)
         loss = loss_fun(pred, target)
         return loss

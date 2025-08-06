@@ -496,6 +496,10 @@ class Transolver(Module):
             torch.Tensor: Output tensor with the same shape as the input.
 
         """
+        if self.unified_pos:
+            # Extend the embedding to the batch size:
+            embedding = self.embedding.repeat(fx.shape[0], 1, 1)
+
         # Reshape automatically, if necessary:
         if self.structured_shape is not None:
             unflatten_output = False
@@ -509,10 +513,6 @@ class Transolver(Module):
         else:
             if embedding is None:
                 raise ValueError("Embedding is required for unstructured data")
-
-        if self.unified_pos:
-            # Extend the embedding to the batch size:
-            embedding = self.embedding.repeat(embedding.shape[0], 1, 1)
 
         # Combine the embedding and functional input:
         if embedding is not None:
