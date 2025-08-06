@@ -175,6 +175,48 @@ def concat_efeat_dgl(
         return graph.edata["cat_feat"]
 
 
+@torch.jit.ignore()
+def concat_efeat_hetero_dgl(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[torch.Tensor, torch.Tensor]],
+    graph: DGLGraph,
+) -> Tensor:
+    """Concatenates edge features with source and destination node features.
+    Use for heterogeneous graphs.
+
+    Parameters
+    ----------
+    mesh_efeat : Tensor
+        Mesh edge features.
+    world_efeat : Tensor
+        World edge features.
+    nfeat : Tensor | Tuple[Tensor, Tensor]
+        Node features.
+    graph : DGLGraph
+        Graph.
+
+    Returns
+    -------
+    Tensor
+        Concatenated edge features with source and destination node features.
+    """
+    if isinstance(nfeat, Tuple):
+        src_feat, dst_feat = nfeat
+        with graph.local_scope():
+            graph.srcdata["x"] = src_feat
+            graph.dstdata["x"] = dst_feat
+            graph.edata["x"] = torch.cat([mesh_efeat, world_efeat], dim=0)
+            graph.apply_edges(concat_message_function)
+            return graph.edata["cat_feat"]
+
+    with graph.local_scope():
+        graph.ndata["x"] = nfeat
+        graph.edata["x"] = torch.cat([mesh_efeat, world_efeat], dim=0)
+        graph.apply_edges(concat_message_function)
+        return graph.edata["cat_feat"]
+
+
 def concat_efeat_pyg(
     efeat: Tensor,
     nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
@@ -201,6 +243,34 @@ def concat_efeat_pyg(
     src_idx, dst_idx = graph.edge_index.long()
     cat_feat = torch.cat((efeat, src_feat[src_idx], dst_feat[dst_idx]), dim=1)
     return cat_feat
+
+
+def concat_efeat_hetero_pyg(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
+    graph: PyGData,
+) -> Tensor:
+    """Concatenates edge features with source and destination node features.
+    Use for heterogeneous PyG graphs.
+
+    Parameters
+    ----------
+    mesh_efeat : Tensor
+        Mesh edge features.
+    world_efeat : Tensor
+        World edge features.
+    nfeat : Tensor | Tuple[Tensor]
+        Node features.
+    graph : PyGData
+        Graph.
+
+    Returns
+    -------
+    Tensor
+        Concatenated edge features with source and destination node features.
+    """
+    raise NotImplementedError("concat_efeat_hetero_pyg is not supported yet.")
 
 
 def concat_efeat(
@@ -450,6 +520,57 @@ def agg_concat_dgl(
         return cat_feat
 
 
+@torch.jit.ignore()
+def agg_concat_hetero_dgl(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    dst_nfeat: Tensor,
+    graph: DGLGraph,
+    aggregation: str,
+) -> Tensor:
+    """Aggregates edge features and concatenates result with destination node features.
+    Use for heterogeneous graphs.
+
+    Parameters
+    ----------
+    mesh_efeat : Tensor
+        Mesh edge features.
+    world_efeat : Tensor
+        World edge features.
+    dst_nfeat : Tensor
+        Node features (destination nodes).
+    graph : DGLGraph
+        Graph.
+    aggregation : str
+        Aggregation method (sum or mean).
+
+    Returns
+    -------
+    Tensor
+        Aggregated edge features concatenated with destination node features.
+
+    Raises
+    ------
+    RuntimeError
+        If aggregation method is not sum or mean.
+    """
+    with graph.local_scope():
+        # populate features on graph edges
+        graph.edata["x"] = torch.cat([mesh_efeat, world_efeat], dim=0)
+
+        # aggregate edge features
+        if aggregation == "sum":
+            graph.update_all(fn.copy_e("x", "m"), fn.sum("m", "h_dest"))
+        elif aggregation == "mean":
+            graph.update_all(fn.copy_e("x", "m"), fn.mean("m", "h_dest"))
+        else:
+            raise RuntimeError("Not a valid aggregation!")
+
+        # concat dst-node & edge features
+        cat_feat = torch.cat((graph.dstdata["h_dest"], dst_nfeat), -1)
+        return cat_feat
+
+
 def agg_concat_pyg(
     efeat: Tensor,
     nfeat: Tensor,
@@ -462,6 +583,19 @@ def agg_concat_pyg(
     )
     cat_feat = torch.cat((h_dest, nfeat), -1)
     return cat_feat
+
+
+def agg_concat_hetero_pyg(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    dst_nfeat: Tensor,
+    graph: PyGData,
+    aggregation: str,
+) -> Tensor:
+    """Aggregates edge features and concatenates result with destination node features.
+    Use for heterogeneous PyG graphs.
+    """
+    raise NotImplementedError("agg_concat_hetero_pyg is not supported yet.")
 
 
 def aggregate_and_concat(
@@ -511,6 +645,59 @@ def aggregate_and_concat(
         cat_feat = agg_concat_dgl(efeat, nfeat, graph, aggregation)
     elif isinstance(graph, PyGData):
         cat_feat = agg_concat_pyg(efeat, nfeat, graph, aggregation)
+    else:
+        raise ValueError(f"Unsupported graph type: {type(graph)}")
+
+    return cat_feat
+
+
+def aggregate_and_concat_hetero(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    nfeat: Tensor,
+    graph: GraphType,
+    aggregation: str,
+):
+    """
+    Aggregates edge features and concatenates result with destination node features.
+    Use for heterogeneous graphs.
+
+    Parameters
+    ----------
+    mesh_efeat : Tensor
+        Mesh edge features.
+    world_efeat : Tensor
+        World edge features.
+    nfeat : Tensor
+        Node features (destination nodes).
+    graph : GraphType
+        Graph.
+    aggregation : str
+        Aggregation method (sum or mean).
+
+    Returns
+    -------
+    Tensor
+        Aggregated edge features concatenated with destination node features.
+
+    Raises
+    ------
+    RuntimeError
+        If aggregation method is not sum or mean.
+    """
+
+    if isinstance(graph, CuGraphCSC):
+        raise NotImplementedError(
+            "aggregate_and_concat_hetero is not supported for CuGraphCSC graphs yet."
+        )
+    elif isinstance(graph, DGLGraph):
+        cat_feat = agg_concat_hetero_dgl(
+            mesh_efeat, world_efeat, nfeat, graph, aggregation
+        )
+    elif isinstance(graph, PyGData):
+        raise NotImplementedError(
+            "aggregate_and_concat_hetero is not supported for PyG graphs yet."
+        )
     else:
         raise ValueError(f"Unsupported graph type: {type(graph)}")
 

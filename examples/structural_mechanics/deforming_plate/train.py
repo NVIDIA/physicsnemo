@@ -19,25 +19,72 @@ import time
 import hydra
 from hydra.utils import to_absolute_path
 import torch
-import wandb
-
-from dgl.dataloading import GraphDataLoader
+from tqdm import tqdm
 
 from omegaconf import DictConfig
 
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data.distributed import DistributedSampler
 
-from physicsnemo.datapipes.gnn.deforming_plate_dataset import DeformingPlateDataset
+from deforming_plate_dataset import DeformingPlateDataset
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.launch.logging.wandb import initialize_wandb
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
+from helpers import add_world_edges
+
+import os
+os.makedirs(os.path.expanduser("~/.dgl"), exist_ok=True)
+
+from torch.utils.tensorboard import SummaryWriter
+
+class InMemoryTimeStepDataset(torch.utils.data.Dataset):
+    """ In-memory dataset."""
+    def __init__(self, sample_dir):
+        self.data = []
+        sample_files = sorted([
+            os.path.join(sample_dir, f)
+            for f in os.listdir(sample_dir)
+            if f.startswith("sample_") and f.endswith(".pt")
+        ])
+        print(f"Found {len(sample_files)} sample files")
+        for sample_file in sample_files:
+            sample_data = torch.load(sample_file, map_location="cpu", weights_only=False)
+            self.data.extend(sample_data)  # Flatten all time steps into one list
+        print(f"Loaded the dataset with {len(self.data)} samples")
+
+    def __getitem__(self, idx):
+        return self.data[idx]  # dict with graph, mesh_edge_features, world_edge_features
+
+    def __len__(self):
+        return len(self.data)
+
+class LazyTimeStepDataset(torch.utils.data.Dataset):
+    """ Lazy dataset."""
+    def __init__(self, sample_dir, num_time_steps):
+        self.sample_files = sorted([
+            os.path.join(sample_dir, f)
+            for f in os.listdir(sample_dir)
+            if f.startswith("sample_") and f.endswith(".pt")
+        ])
+        self.num_steps = num_time_steps - 1
+        self.total_samples = len(self.sample_files) * self.num_steps
+        print(f"Found {len(self.sample_files)} sample files, {self.total_samples} samples in total.")
+
+    def __getitem__(self, idx):
+        file_idx = idx // self.num_steps
+        idx_in_file = idx % self.num_steps
+        sample_file = self.sample_files[file_idx]
+        sample_data = torch.load(sample_file, map_location="cpu", weights_only=False)
+        return sample_data[idx_in_file]
+
+    def __len__(self):
+        return self.total_samples
 
 class MGNTrainer:
     def __init__(self, cfg: DictConfig, rank_zero_logger: RankZeroLoggingWrapper):
@@ -53,28 +100,30 @@ class MGNTrainer:
             )
             mlp_act = "silu"
 
-        # instantiate dataset
-        dataset = DeformingPlateDataset(
-            name="deforming_plate_train",
-            data_dir=to_absolute_path(cfg.data_dir),
-            split="train",
-            num_samples=cfg.num_training_samples,
-            num_steps=cfg.num_training_time_steps,
-        )
+        #dataset = InMemoryTimeStepDataset(to_absolute_path(cfg.preprocess_output_dir))
+        dataset = LazyTimeStepDataset(
+            to_absolute_path(cfg.preprocess_output_dir),
+            cfg.num_training_time_steps
+            )
+        if self.dist.world_size > 1:
+            sampler = DistributedSampler(dataset, num_replicas=self.dist.world_size, rank=self.dist.rank, shuffle=True)
+        else:
+            sampler = None
 
-        # instantiate dataloader
-        self.dataloader = GraphDataLoader(
+        self.dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=cfg.batch_size,
-            shuffle=True,
+            batch_size=1,
+            shuffle=(sampler is None),  # Only shuffle if not using sampler
             drop_last=True,
             pin_memory=True,
-            use_ddp=self.dist.world_size > 1,
             num_workers=cfg.num_dataloader_workers,
+            sampler=sampler,
+            collate_fn=lambda batch: batch[0],
         )
+        self.sampler = sampler
 
         # instantiate the model
-        self.model = MeshGraphNet(
+        self.model = HybridMeshGraphNet(
             cfg.num_input_features,
             cfg.num_edge_features,
             cfg.num_output_features,
@@ -89,8 +138,6 @@ class MGNTrainer:
             self.model = torch.jit.script(self.model).to(self.dist.device)
         else:
             self.model = self.model.to(self.dist.device)
-        if cfg.watch_model and not cfg.jit and self.dist.rank == 0:
-            wandb.watch(self.model)
 
         # distributed data parallel for multi-node training
         if self.dist.world_size > 1:
@@ -140,18 +187,22 @@ class MGNTrainer:
             device=self.dist.device,
         )
 
-    def train(self, graph):
-        graph = graph.to(self.dist.device)
+        if self.dist.rank == 0:
+            self.writer = SummaryWriter(log_dir=to_absolute_path(cfg.tensorboard_log_dir))
+
+    def train(self, graph, mesh_edge_features, world_edge_features, epoch):
+        mesh_edge_features = mesh_edge_features.to(self.dist.device)
+        world_edge_features = world_edge_features.to(self.dist.device)
         self.optimizer.zero_grad()
-        loss = self.forward(graph)
+        loss = self.forward(graph, mesh_edge_features, world_edge_features)
         self.backward(loss)
         self.scheduler.step()
         return loss
 
-    def forward(self, graph):
+    def forward(self, graph, mesh_edge_features, world_edge_features):
         # forward pass
         with autocast(enabled=self.amp):
-            pred = self.model(graph.ndata["x"], graph.edata["x"], graph)
+            pred = self.model(graph.ndata["x"], mesh_edge_features, world_edge_features, graph)
             loss = self.criterion(pred, graph.ndata["y"])
             return loss
 
@@ -172,14 +223,6 @@ def main(cfg: DictConfig) -> None:
     DistributedManager.initialize()
     dist = DistributedManager()
 
-    # Initialize loggers.
-    initialize_wandb(
-        project="Modulus-Launch",
-        entity="Modulus",
-        name="Deforming_Plate-Training",
-        group="Deforming_Plate-DDP-Group",
-        mode=cfg.wandb_mode,
-    )  # Wandb logger
     logger = PythonLogger("main")  # General python logger
     rank_zero_logger = RankZeroLoggingWrapper(logger, dist)  # Rank 0 logger
     rank_zero_logger.file_logging()
@@ -188,12 +231,30 @@ def main(cfg: DictConfig) -> None:
     start = time.time()
     rank_zero_logger.info("Training started...")
     for epoch in range(trainer.epoch_init, cfg.epochs):
-        for graph in trainer.dataloader:
-            loss = trainer.train(graph)
+        if trainer.sampler is not None:
+            trainer.sampler.set_epoch(epoch)
+        start = time.time()
+        # Wrap the dataloader with tqdm and add description with epoch info
+        progress_bar = tqdm(trainer.dataloader, desc=f"Epoch {epoch+1}/{cfg.epochs}", leave=False)
+        
+        for item in progress_bar:
+            graph = item['graph'].to(dist.device)
+            mesh_edge_features = item['mesh_edge_features'].to(dist.device)
+            world_edge_features = item['world_edge_features'].to(dist.device)
+            loss = trainer.train(graph, mesh_edge_features, world_edge_features, epoch)
+                    
+            # Update tqdm postfix with current loss (converted to scalar)
+            progress_bar.set_postfix(loss=f"{loss.item():.3e}")
+            del graph, mesh_edge_features, world_edge_features
+            torch.cuda.empty_cache()
+        
         rank_zero_logger.info(
-            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch+1}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
         )
-        wandb.log({"loss": loss.detach().cpu()})
+        if dist.rank == 0:
+            trainer.writer.add_scalar("loss", loss.detach().cpu().item(), epoch)
+            current_lr = trainer.optimizer.param_groups[0]['lr']
+            trainer.writer.add_scalar("learning_rate", current_lr, epoch)
 
         # save checkpoint
         if dist.world_size > 1:
@@ -205,11 +266,14 @@ def main(cfg: DictConfig) -> None:
                 optimizer=trainer.optimizer,
                 scheduler=trainer.scheduler,
                 scaler=trainer.scaler,
-                epoch=epoch,
+                epoch=epoch+1,
             )
             logger.info(f"Saved model on rank {dist.rank}")
+        torch.cuda.empty_cache()
         start = time.time()
     rank_zero_logger.info("Training completed!")
+    if dist.rank == 0:  
+        trainer.writer.close()
 
 
 if __name__ == "__main__":
