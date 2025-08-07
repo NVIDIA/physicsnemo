@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Domino improvements with Unet attention module and user configs
 - Hybrid MeshGraphNet for modeling structural deformation
 - Enabled TransformerEngine backend in the `transolver` model.
+- Added a new example for external_aerodynamics: training `transolver` on
+  irregular mesh data for DrivaerML surface data.
 
 ### Changed
 
