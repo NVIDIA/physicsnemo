@@ -18,10 +18,11 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import json
-
+import time  
 from math import ceil
 
 # Base PyTorch imports:
+import torchinfo
 import torch
 import torch.distributed as dist
 
@@ -48,28 +49,9 @@ from validator_fix import GridValidator
 
 from physicsnemo.utils.profiling import Profiler
 from contextlib import nullcontext
-import time  # <-- Add this import for timing
+
 
 prof = Profiler()
-
-
-def count_parameters(model: torch.nn.Module) -> int:
-    """
-    Count the total number of trainable parameters in a PyTorch model.
-
-    Args:
-        model (torch.nn.Module): The model whose parameters are to be counted.
-
-    Returns:
-        int: Total number of trainable parameters.
-    """
-    total_params = 0
-    for name, parameter in model.named_parameters():
-        if not parameter.requires_grad:
-            continue
-        params = parameter.numel()
-        total_params += params
-    return total_params
 
 
 def forward_train_full_loop(
@@ -277,12 +259,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
         use_te=cfg.model.use_te,
         time_input=cfg.model.time_input,
     ).to(dm.device)
+    
+    logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
 
     if dm.world_size > 1:
         model = DDP(model, device_ids=[dm.rank])
 
-    n_params = count_parameters(model)
-    logger.info(f"Total Trainable Params: {n_params}")
 
     ########################################################################
     # define loss and optimizer
