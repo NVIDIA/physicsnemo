@@ -21,7 +21,6 @@ def convert_ckp_apex(
     model_args: Dict[str, Any],
     model_dict: Dict[str, Any],
 ) -> Dict[str, Any]:
-
     """Utility for converting Apex GroupNorm-related keys in a checkpoint.
 
     This function modifies the checkpoint arguments and model dictionary
@@ -89,7 +88,7 @@ def convert_ckp_apex(
                     )
                     filtered_state_dict[new_key] = value
                     is_duplicate = True
-                elif f"{norm_layer}.bias" in key:
+                elif f"{norm_layer}.gn.bias" in key:
                     new_key = key.replace(f"{norm_layer}.gn.bias", f"{norm_layer}.bias")
                     filtered_state_dict[new_key] = value
                     is_duplicate = True

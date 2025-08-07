@@ -89,9 +89,9 @@ class PatchEmbed3D(nn.Module):
         self.img_size = img_size
         level, height, width = img_size
         l_patch_size, h_patch_size, w_patch_size = patch_size
-        padding_left = (
-            padding_right
-        ) = padding_top = padding_bottom = padding_front = padding_back = 0
+        padding_left = padding_right = padding_top = padding_bottom = padding_front = (
+            padding_back
+        ) = 0
 
         l_remainder = level % l_patch_size
         h_remainder = height % l_patch_size

@@ -161,7 +161,6 @@ class HEALPixUNet(Module):
         )
 
     def _compute_coupled_channels(self, couplings):
-
         c_channels = 0
         for c in couplings:
             c_channels += len(c["params"]["variables"]) * len(
@@ -228,9 +227,7 @@ class HEALPixUNet(Module):
                             step * self.input_time_dim, (step + 1) * self.input_time_dim
                         ),
                         ...,
-                    ].flatten(
-                        self.channel_dim, self.channel_dim + 1
-                    ),  # DI
+                    ].flatten(self.channel_dim, self.channel_dim + 1),  # DI
                 ]
                 res = th.cat(result, dim=self.channel_dim)
 
@@ -263,9 +260,7 @@ class HEALPixUNet(Module):
                     :,
                     slice(step * self.input_time_dim, (step + 1) * self.input_time_dim),
                     ...,
-                ].flatten(
-                    self.channel_dim, self.channel_dim + 1
-                ),  # DI
+                ].flatten(self.channel_dim, self.channel_dim + 1),  # DI
                 inputs[2].expand(
                     *tuple([inputs[0].shape[0]] + len(inputs[2].shape) * [-1])
                 ),  # constants

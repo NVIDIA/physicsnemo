@@ -19,20 +19,13 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dgl import DGLGraph
 from torch import Tensor
 from torch.autograd.function import once_differentiable
 
-from .utils import CuGraphCSC, concat_efeat, sum_efeat
-
-try:
-    from transformer_engine import pytorch as te
-
-    te_imported = True
-except ImportError:
-    te_imported = False
-
+from physicsnemo.models.layers.layer_norm import get_layer_norm_class
 from physicsnemo.utils.profiling import profile
+
+from .utils import GraphType, concat_efeat, concat_efeat_hetero_dgl, sum_efeat
 
 
 class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
@@ -57,7 +50,11 @@ class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
     @once_differentiable
     def backward(
         ctx, grad_output: torch.Tensor
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor],]:
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
         """backward pass of the SiLU + Linear function"""
 
         from nvfuser import FusionDefinition
@@ -148,21 +145,7 @@ class MeshGraphMLP(nn.Module):
 
             self.norm_type = norm_type
             if norm_type is not None:
-                if norm_type not in [
-                    "LayerNorm",
-                    "TELayerNorm",
-                ]:
-                    raise ValueError(
-                        f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
-                    )
-                if norm_type == "TELayerNorm" and te_imported:
-                    norm_layer = te.LayerNorm
-                elif norm_type == "TELayerNorm" and not te_imported:
-                    raise ValueError(
-                        "TELayerNorm requires transformer-engine to be installed."
-                    )
-                else:
-                    norm_layer = getattr(nn, norm_type)
+                norm_layer = get_layer_norm_class()
                 layers.append(norm_layer(output_dim))
 
             self.model = nn.Sequential(*layers)
@@ -268,11 +251,96 @@ class MeshGraphEdgeMLPConcat(MeshGraphMLP):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         efeat = concat_efeat(efeat, nfeat, graph)
         efeat = self.model(efeat)
         return efeat
+
+
+class MeshGraphHeteroEdgeMLPConcat(nn.Module):
+    """MLP layer which is commonly used in building blocks
+    of models operating on the union of grids and meshes. It
+    consists of a number of linear layers followed by an activation
+    and a norm layer following the last linear layer. It first
+    concatenates the input edge features and the node features of the
+    corresponding source and destination nodes of the corresponding edge
+    to create new edge features. These then are transformed through the
+    transformations mentioned above. Use for heterogeneous graphs.
+
+    Parameters
+    ----------
+    efeat_dim: int
+        dimension of the input edge features
+    src_dim: int
+        dimension of the input src-node features
+    dst_dim: int
+        dimension of the input dst-node features
+    output_dim : int, optional
+        dimensionality of the output features, by default 512
+    hidden_dim : int, optional
+        number of neurons in each hidden layer, by default 512
+    hidden_layers : int, optional
+        number of hidden layers, by default 1
+    activation_fn : nn.Module, optional
+        type of activation function, by default nn.SiLU()
+    norm_type : str, optional
+        Normalization type ["TELayerNorm", "LayerNorm"].
+        Use "TELayerNorm" for optimal performance. By default "LayerNorm".
+    bias : bool, optional
+        whether to use bias in the MLP, by default True
+    recompute_activation : bool, optional
+        Flag for recomputing activation in backward to save memory, by default False.
+        Currently, only SiLU is supported.
+    """
+
+    def __init__(
+        self,
+        efeat_dim: int = 512,
+        src_dim: int = 512,
+        dst_dim: int = 512,
+        output_dim: int = 512,
+        hidden_dim: int = 512,
+        hidden_layers: int = 2,
+        activation_fn: nn.Module = nn.SiLU(),
+        norm_type: str = "LayerNorm",
+        bias: bool = True,
+        recompute_activation: bool = False,
+    ):
+        super().__init__()
+        cat_dim = efeat_dim + src_dim + dst_dim
+
+        self.mesh_mlp = MeshGraphMLP(
+            input_dim=cat_dim,
+            output_dim=output_dim,
+            hidden_dim=hidden_dim,
+            hidden_layers=hidden_layers,
+            activation_fn=activation_fn,
+            norm_type=norm_type,
+            recompute_activation=recompute_activation,
+        )
+        self.world_mlp = MeshGraphMLP(
+            input_dim=cat_dim,
+            output_dim=output_dim,
+            hidden_dim=hidden_dim,
+            hidden_layers=hidden_layers,
+            activation_fn=activation_fn,
+            norm_type=norm_type,
+            recompute_activation=recompute_activation,
+        )
+
+    @profile
+    def forward(
+        self,
+        mesh_efeat: Tensor,
+        world_efeat: Tensor,
+        nfeat: Union[Tensor, Tuple[Tensor]],
+        graph: GraphType,
+    ) -> Tensor:
+        efeat = concat_efeat_hetero_dgl(mesh_efeat, world_efeat, nfeat, graph)
+        mesh_efeat_new = self.mesh_mlp(efeat[0 : len(mesh_efeat)])
+        world_efeat_new = self.world_mlp(efeat[len(mesh_efeat) :])
+        return mesh_efeat_new, world_efeat_new
 
 
 class MeshGraphEdgeMLPSum(nn.Module):
@@ -357,21 +425,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
 
         self.norm_type = norm_type
         if norm_type is not None:
-            if norm_type not in [
-                "LayerNorm",
-                "TELayerNorm",
-            ]:
-                raise ValueError(
-                    f"Invalid norm type {norm_type}. Supported types are LayerNorm and TELayerNorm."
-                )
-            if norm_type == "TELayerNorm" and te_imported:
-                norm_layer = te.LayerNorm
-            elif norm_type == "TELayerNorm" and not te_imported:
-                raise ValueError(
-                    "TELayerNorm requires transformer-engine to be installed."
-                )
-            else:
-                norm_layer = getattr(nn, norm_type)
+            norm_layer = get_layer_norm_class()
             layers.append(norm_layer(output_dim))
 
         self.model = nn.Sequential(*layers)
@@ -388,7 +442,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         """forward pass of the truncated MLP. This uses separate linear layers without
         bias. Bias is added to one MLP, as we sum afterwards. This adds the bias to the
@@ -410,7 +464,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         """Default forward pass of the truncated MLP."""
         mlp_sum = self.forward_truncated_sum(
@@ -425,7 +479,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         """Forward pass of the truncated MLP with custom SiLU function."""
         mlp_sum = self.forward_truncated_sum(
@@ -451,7 +505,7 @@ class MeshGraphEdgeMLPSum(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         if self.recompute_activation:
             return self.custom_silu_linear_forward(efeat, nfeat, graph)

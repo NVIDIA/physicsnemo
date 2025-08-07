@@ -35,7 +35,7 @@ pip install -r requirements.txt
 
 ### Configuration basics
 
-DoMINO data processing, training and testing is managed through YAML configuration files
+DoMINO training and testing is managed through YAML configuration files
 powered by Hydra. The base configuration file, `config.yaml` is located in `src/conf`
 directory.
 
@@ -60,28 +60,9 @@ maintaining reproducibility.
 Save and track project logs, experiments, tensorboard files etc. by specifying a
 project directory with `project.name`. Tag experiments with `expt`.
 
-#### Data processing
+### Data
 
-The first step for running the DoMINO pipeline requires processing the raw data
-(vtp, vtu and stl). The related configs can be set in the `data_processor` tab.
-Also, specify the variable names used in the raw dataset and their types
-in `variables.surface` and `variables.volume`.
-For example, you can set the input directory for raw data using
-`data_processor.input_dir` and output directory for processed files using
-`data_processor.output_dir`.
-
-#### Training
-
-Specify the training and validation data paths, bounding box sizes etc. in the
-`data` tab and the training configs such as epochs, batch size etc.
-in the `train` tab.
-
-#### Testing
-
-The testing is directly carried out on raw files.
-Specify the testing configs in the `test` tab.
-
-### Dataset details
+#### Dataset details
 
 In this example, the DoMINO model is trained using DrivAerML dataset from the
 [CAE ML Dataset collection](https://caemldatasets.org/drivaerml/).
@@ -94,25 +75,42 @@ the industrial state-of-the-art. Geometries and comprehensive aerodynamic data
 are published in open-source formats. For more technical details about this dataset,
 please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
-Download the DrivAer ML dataset using the provided `download_aws_dataset.sh`
-script or using the [Hugging Face repo](https://huggingface.co/datasets/neashton/drivaerml).
+#### Data Preprocessing
 
-### Data processing for DoMINO model
+`PhysicsNeMo` has a related project to help with data processing, called [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
+Using `PhysicsNeMo-Curator`, the data needed to train a DoMINO model can be setup easily.
+Please refer to [these instructions on getting started](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#what-is-physicsnemo-curator)
+with `PhysicsNeMo-Curator`.
 
-Each of the raw simulations files in the `vtp`, `vtu` and `stl` format need to be
-processed and saved into `npy` files. The data processing script extracts minmal
-information from these raw files such as STL mesh, surface mesh and fields,
-volume point cloud and fields. Run `process_data.py` with the correct configurations
-for kicking off data processing. Additionally, run `cache_data.py` to save outputs
+Download the DrivAer ML dataset using the [provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md#download-drivaerml-dataset).
+The first step for running the DoMINO pipeline requires processing the raw data
+(vtp, vtu and stl) into either Zarr or NumPy format for training.
+Each of the raw simulations files are downloaded in `vtp`, `vtu` and `stl` formats.
+For instructions on running data processing to produce a DoMINO training ready dataset,
+please refer to [How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md).
+
+Caching is implemented in [`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1250).
+Optionally, users can run `cache_data.py` to save outputs
 of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate
 Signed Distance Field and Nearest Neighbor interpolations on-the-fly during
-training. Caching will save these as a preprocessing step and should be used in
-cases where the STL surface meshes are upwards of 30 million cells.
+training. Caching will save these as a preprocessing step and can be used in
+cases where the **STL surface meshes are upwards of 30 million cells**.
 Data processing is parallelized and takes a couple of hours to write all the
 processed files.
 
 The final processed dataset should be divided and saved into 2 directories,
 for training and validation.
+
+#### Training
+
+Specify the training and validation data paths, bounding box sizes etc. in the
+`data` tab and the training configs such as epochs, batch size etc.
+in the `train` tab.
+
+#### Testing
+
+The testing is directly carried out on raw files.
+Specify the testing configs in the `test` tab.
 
 ### Training the DoMINO model
 
@@ -191,6 +189,157 @@ launch overhead at the cost of more memory use.  For non-sharded
 training, the `two-loop` setting is more optimal. The difference in `one-loop`
 or `two-loop` is purely computational, not algorithmic.
 
+### Training with Physics Losses
+
+DoMINO supports enforcing of PDE residuals as soft constraints. This can be used
+to improve the model predictions' adherence to the governing laws of the problem
+which include Continuity and Navier Stokes equations.
+
+Note, if you wish to modify the PDEs used for DoMINO, please edit the
+`compute_physics_loss` function from `train.py` appropriately.
+
+#### Prerequisites for PDE residuals
+
+The computation of Physics residuals is supported using the PhysicsNeMo-Sym
+library. Install it using
+
+```bash
+pip install "Cython"
+pip install "nvidia-physicsnemo.sym>2.1.0" --no-build-isolation
+```
+
+To execute the training using physics losses, run the `train.py` with the
+configuration below
+
+```bash
+torchrun --nproc_per_node=<num-gpus> train.py \
+    ++train.add_physics_loss=True ++model.num_neighbors_volume=8
+```
+
+Note, the `num_neighbors_volume` is set to 8 to reduce the memory requirement.
+Also, when the Physics losses are applied, it will automatically sample
+`num_neighbors_volume // 2` additional points, for each point in
+`num_neighbors_volume`. These are considered as "2-hop" neighbors, which are
+required to compute the higher order gradients required for Navier-Stokes
+equations. Hence, even if `num_neighbors_volume` is set to 8, for the fields,
+it will sample `num_neighbors_volume (num_neighbors_volume // 2 ) + 1` (in this
+case 40) total points.
+
+The results of physics addition can be found below (using the DrivAerML
+dataset). The results are computed on the design ID 419 and 439 from the
+validation set and averaged.
+
+We observe that, addition of physics losses improves the model
+predictions' ability to respect the governing laws better.
+
+<!-- markdownlint-disable -->
+<table><thead>
+  <tr>
+    <th></th>
+    <th></th>
+    <th colspan="2">L2 Errors</th>
+  </tr></thead>
+<tbody>
+  <tr>
+    <td>Type</td>
+    <td>Variable</td>
+    <td>Baseline (full dataset)</td>
+    <td>Baseline + Physics (full dataset)</td>
+  </tr>
+  <tr>
+    <td rowspan="5">Volume</td>
+    <td>p</td>
+    <td>0.15413</td>
+    <td>0.17203</td>
+  </tr>
+  <tr>
+    <td>U_x</td>
+    <td>0.15566</td>
+    <td>0.16397</td>
+  </tr>
+  <tr>
+    <td>U_y</td>
+    <td>0.32229</td>
+    <td>0.34383</td>
+  </tr>
+  <tr>
+    <td>U_z</td>
+    <td>0.31027</td>
+    <td>0.32450</td>
+  </tr>
+  <tr>
+    <td>nut</td>
+    <td>0.21049</td>
+    <td>0.21883</td>
+  </tr>
+  <tr>
+    <td rowspan="4">Surface</td>
+    <td>p</td>
+    <td>0.16003</td>
+    <td>0.14298</td>
+  </tr>
+  <tr>
+    <td>wss_x</td>
+    <td>0.21476</td>
+    <td>0.20519</td>
+  </tr>
+  <tr>
+    <td>wss_y</td>
+    <td>0.31697</td>
+    <td>0.30335</td>
+  </tr>
+  <tr>
+    <td>wss_z</td>
+    <td>0.35056</td>
+    <td>0.32095</td>
+  </tr>
+</tbody>
+</table>
+
+<table><thead>
+  <tr>
+    <th></th>
+    <th colspan="2">Total Residual</th>
+    <th></th>
+  </tr></thead>
+<tbody>
+  <tr>
+    <td>Variable</td>
+    <td>Baseline (full dataset)</td>
+    <td>Baseline + Physics (full dataset)</td>
+    <td>% Improvement</td>
+  </tr>
+  <tr>
+    <td>continuity</td>
+    <td>3.14E+11</td>
+    <td>1.58E+11</td>
+    <td>49.69%</td>
+  </tr>
+  <tr>
+    <td>momentum_x</td>
+    <td>1.01E+16</td>
+    <td>1.08E+15</td>
+    <td>89.24%</td>
+  </tr>
+  <tr>
+    <td>momentum_y</td>
+    <td>2.89E+16</td>
+    <td>9.24E+14</td>
+    <td>96.81%</td>
+  </tr>
+  <tr>
+    <td>momentum_z</td>
+    <td>5.44E+15</td>
+    <td>3.58E+14</td>
+    <td>93.43%</td>
+  </tr>
+</tbody>
+</table>
+<!-- markdownlint-enable -->
+
+*Addition of physics constraints to the DoMINO training is under active
+development and might introduce breaking changes in the future*
+
 ### Retraining recipe for DoMINO model
 
 To enable retraining the DoMINO model from a pre-trained checkpoint, follow the steps:
@@ -240,6 +389,52 @@ The DoMINO model can be evaluated directly on unknown STLs using the pre-trained
 
 4. The surface predictions are carried out on the STL surface. The drag and lift
  accuracy will depend on the resolution of the STL.
+
+### Incorporating multiple global simulation parameters for training/inference
+
+DoMINO supports incorporating multiple global simulation parameters (such as inlet
+velocity, air density, etc.) that can vary across different simulations.
+
+1. Define global parameters in the `variables.global_parameters` section of
+   `conf/config.yaml`. Each parameter must specify its type (`vector` or `scalar`)
+   and reference values for non-dimensionalization.
+
+2. For `vector` type parameters:
+   - If values are single-direction vectors (e.g., [30, 0, 0]), define reference as [30]
+   - If values are two-direction vectors (e.g., [30, 30, 0]), define reference as [30, 30]
+
+3. Enable parameter encoding in the model configuration by setting
+   `model.encode_parameters: true`. This will:
+   - Create a dedicated parameter encoding network (`ParameterModel`)
+   - Non-dimensionalize parameters using reference values from `config.yaml`
+   - Integrate parameter encodings into both surface and volume predictions
+
+4. Ensure your simulation data includes global parameter values. The DoMINO
+   datapipe expects these parameters in the pre-processed `.npy`/`.npz` files:
+   - Examine `openfoam_datapipe.py` and `process_data.py` for examples of how global
+     parameter values are incorporated for external aerodynamics
+   - For the automotive example, `air_density` and `inlet_velocity` remain constant
+     across simulations
+   - Adapt these files for your specific case to correctly calculate
+     `global_params_values` and `global_params_reference` during data preprocessing
+
+5. During training, the model automatically handles global parameter encoding when
+   `model.encode_parameters: true` is set
+   - You may need to adapt `train.py` if you plan to use global parameters in loss
+     functions or de-non-dimensionalization
+
+6. During testing with `test.py`, define `global_params_values` for each test sample:
+   - Global parameters must match those defined in `config.yaml`
+   - For each parameter (e.g., "inlet_velocity", "air_density"), provide appropriate
+     values for each simulation
+   - See the `main()` function in `test.py` for implementation examples
+   - If using global parameters for de-non-dimensionalization, modify `test_step()`
+
+7. When inferencing on unseen geometries with `inference_on_stl.py`:
+   - Define `global_params_values` and `global_params_reference` in both
+     `compute_solution_in_volume()` and `compute_solution_on_surface()` methods
+   - Adjust these parameters based on your specific use case and parameters defined
+     in `config.yaml`
 
 ## Extending DoMINO to a custom dataset
 

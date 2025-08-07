@@ -14,33 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
 from dataclasses import dataclass
 from typing import Dict, Tuple, Union
 
 import numpy as np
 import torch
-import warp as wp
 import scipy.io as scio
+import torch.distributed as dist
 
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from physicsnemo.datapipes.benchmarks.kernels.finite_difference import (
-    darcy_mgrid_jacobi_iterative_batched_2d,
-    mgrid_inf_residual_batched_2d,
-)
-from physicsnemo.datapipes.benchmarks.kernels.initialization import (
-    init_uniform_random_4d,
-)
-from physicsnemo.datapipes.benchmarks.kernels.utils import (
-    bilinear_upsample_batched_2d,
-    fourier_to_array_batched_2d,
-    threshold_3d,
-)
 
 Tensor = torch.Tensor
-# TODO unsure if better to remove this. Keeping this in for now
-wp.init()
+
+from physicsnemo.utils.profiling import profile
 
 
 class UnitTransformer:
@@ -138,6 +125,7 @@ class Darcy2D_fix(Datapipe):
         Incompatable multi-grid and resolution settings
     """
 
+    @profile
     def __init__(
         self,
         resolution: int = 256,
@@ -148,13 +136,14 @@ class Darcy2D_fix(Datapipe):
         max_iterations: int = 30000,
         convergence_threshold: float = 1e-6,
         iterations_per_convergence_check: int = 1000,
-        nr_multigrids: int = 4,
-        normaliser: Union[Dict[str, Tuple[float, float]], None] = None,
+        # nr_multigrids: int = 4,
+        # normaliser: Union[Dict[str, Tuple[float, float]], None] = None,
         device: Union[str, torch.device] = "cuda",
         train_path: str = None,
         is_test: bool = False,
         x_normalizer: UnitTransformer = None,
         y_normalizer: UnitTransformer = None,
+        downsample: int = 5,
     ):
         super().__init__(meta=MetaData())
 
@@ -167,15 +156,7 @@ class Darcy2D_fix(Datapipe):
         self.max_iterations = max_iterations
         self.convergence_threshold = convergence_threshold
         self.iterations_per_convergence_check = iterations_per_convergence_check
-        self.nr_multigrids = nr_multigrids
-        self.normaliser = normaliser
 
-        # check normaliser keys
-        if self.normaliser is not None:
-            if not {"permeability", "darcy"}.issubset(set(self.normaliser.keys())):
-                raise ValueError(
-                    "normaliser need to have keys permeability and darcy with mean and std"
-                )
 
         # Set up device for warp, warp has same naming convention as torch.
         if isinstance(device, torch.device):
@@ -185,31 +166,19 @@ class Darcy2D_fix(Datapipe):
         # spatial dims
         self.dx = 1.0 / (self.resolution + 1)  # pad edges by 1 for multi-grid
         self.dim = (self.batch_size, self.resolution + 1, self.resolution + 1)
-        self.fourier_dim = (
-            4,
-            self.batch_size,
-            self.nr_permeability_freq,
-            self.nr_permeability_freq,
-        )
 
-        # assert resolution is compatible with multi-grid method
-        # if (resolution % 2 ** (nr_multigrids - 1)) != 0:
-        #     raise ValueError("Resolution is incompatible with number of sub grids.")
 
-        # allocate arrays for constructing dataset
-        self.darcy0 = wp.zeros(self.dim, dtype=float, device=self.device)
-        self.darcy1 = wp.zeros(self.dim, dtype=float, device=self.device)
-        self.permeability = wp.zeros(self.dim, dtype=float, device=self.device)
-        self.rand_fourier = wp.zeros(self.fourier_dim, dtype=float, device=self.device)
-        self.inf_residual = wp.zeros([1], dtype=float, device=self.device)
         self.train_path = train_path
-        self.downsample = 5
-        self.r = self.downsample
-        self.h = int(((421 - 1) / self.r) + 1)
-        self.s = self.h
-        # print(f"=============={self.s}===============")
-        self.dx = 1.0 / self.s
+        self.native_resolution = 421  # Native grid size
 
+        # Calculate downsampling factor
+        if (self.native_resolution - 1) % (self.resolution - 1) != 0:
+            raise ValueError(
+                f"Resolution {self.resolution} is not achievable by strided sampling from native resolution {self.native_resolution}."
+            )
+        self.r = (self.native_resolution - 1) // (self.resolution - 1)
+        self.s = self.resolution
+        self.dx = 1.0 / self.s
         # Output tenors
         self.output_k = None
         self.output_p = None
@@ -217,10 +186,9 @@ class Darcy2D_fix(Datapipe):
         self.is_test = is_test
 
         if not self.is_test:
-            n_train = 1000
+            self.n_train = 1024
         else:
-            n_train = 200
-        self.n_train = n_train
+            self.n_train = 200
 
         if self.train_path is not None:
             self.__get_data__()
@@ -233,28 +201,58 @@ class Darcy2D_fix(Datapipe):
             self.y_train = self.y_normalizer.encode(self.y_train)
         else:
             self.x_train = x_normalizer.encode(self.x_train)
+            self.y_train = y_normalizer.encode(self.y_train)
 
+    @profile
     def __get_normalizer__(self):
         return self.x_normalizer, self.y_normalizer
 
+    @profile
     def __get_data__(self):
+
+        if self.train_path.endswith(".mat"):
+            data_dict = scio.loadmat(self.train_path)
+        elif self.train_path.endswith(".npz"):
+            data_dict = np.load(self.train_path)
+
+        # Extract data from dicts:
+        self.x_train = data_dict["coeff"]
+        self.y_train = data_dict["sol"]
+
         x = np.linspace(0, 1, self.s)
         y = np.linspace(0, 1, self.s)
         x, y = np.meshgrid(x, y)
         pos = np.c_[x.ravel(), y.ravel()]
-        pos = torch.tensor(pos, dtype=torch.float).unsqueeze(0).cuda()
-        self.x_train = scio.loadmat(self.train_path)["coeff"][
-            : self.n_train, :: self.r, :: self.r
-        ][:, : self.s, : self.s]
-        self.x_train = self.x_train.reshape(self.n_train, -1)
-        self.x_train = torch.from_numpy(self.x_train).float().cuda()
-        self.y_train = scio.loadmat(self.train_path)["sol"][
-            : self.n_train, :: self.r, :: self.r
-        ][:, : self.s, : self.s]
-        self.y_train = self.y_train.reshape(self.n_train, -1)
-        self.y_train = torch.from_numpy(self.y_train).float().cuda()
-        self.pos_train = pos.repeat(self.n_train, 1, 1)
+        pos = torch.tensor(pos, dtype=torch.float).cuda()
 
+        # Downsampling logic
+        if self.r > 1:
+            # Downsample by slicing
+            self.x_train = self.x_train[: self.n_train, :: self.r, :: self.r][
+                :, : self.s, : self.s
+            ]
+            self.y_train = self.y_train[: self.n_train, :: self.r, :: self.r][
+                :, : self.s, : self.s
+            ]
+        else:
+            # No downsampling, use full resolution
+            self.x_train = self.x_train[: self.n_train, : self.s, : self.s]
+            self.y_train = self.y_train[: self.n_train, : self.s, : self.s]
+
+        # Flatten them:
+        self.x_train = self.x_train.reshape(self.n_train, -1)
+        self.y_train = self.y_train.reshape(self.n_train, -1)
+
+        self.x_train = torch.from_numpy(self.x_train).float().cuda()
+        self.y_train = torch.from_numpy(self.y_train).float().cuda()
+        # Why are we repeating the postion?
+        # print(f"pos shape: {pos.shape}")
+        self.pos_train = pos
+        self.pos_train_batched = pos.repeat(self.batch_size, 1, 1).cuda()
+        # print(f"pos shape post repeat: {self.pos_train.shape}")
+        # self.pos_train = pos
+
+    @profile
     def __iter__(self):
         """
         Yields
@@ -263,13 +261,17 @@ class Darcy2D_fix(Datapipe):
             Infinite iterator that returns a batch of (permeability, darcy pressure)
             fields of size [batch, resolution, resolution]
         """
-        # infinite generator
+
         while True:
-            idx = np.random.choice(200, self.batch_size)
+            # Sample batch_size indices from this rank's shard
+            idx = np.random.choice(self.n_train, self.batch_size)
+            # All tensors are already on GPU, so no .cuda() needed
             x = self.x_train[idx]
             y = self.y_train[idx]
-            pos = self.pos_train[idx]
-            yield pos, x, y
+            yield self.pos_train_batched, x, y
+
+    def __getitem__(self, idx):
+        return self.pos_train, self.x_train[idx], self.y_train[idx]
 
     def __len__(self):
-        return self.n_train // self.batch_size
+        return self.n_train

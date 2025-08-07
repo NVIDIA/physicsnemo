@@ -22,36 +22,36 @@ hydra:
 
 # data configs
 data_dir: ./raw_dataset/deforming_plate/deforming_plate
+preprocess_output_dir: ./preprocessed_dataset
 
 # training configs
 batch_size: 1
-epochs: 25
+epochs: 30
 num_training_samples: 1000
-num_training_time_steps: 400
+num_training_time_steps: 200
 lr: 0.0001
-lr_decay_rate: 0.9999991
-num_input_features: 6
+lr_decay_rate: 0.9999917
+num_input_features: 3
 num_output_features: 4
-num_edge_features: 4
+num_edge_features: 8
 
 # performance configs
 use_apex: True
 amp: False
 jit: False
-num_dataloader_workers: 4
+num_dataloader_workers: 8
 do_concat_trick: False
 num_processor_checkpoint_segments: 0
 recompute_activation: False
 
-# wandb configs
-wandb_mode: disabled
-watch_model: False
+# tensorboard configs
+tensorboard_log_dir: ./tensorboard_logs
 
 ckpt_path: "./checkpoints"
 
 # test & visualization configs
 num_test_samples: 5
-num_test_time_steps: 300
-viz_vars: ["stress"]
+num_test_time_steps: 200
+viz_vars: ["disp_mag"]
 frame_skip: 20
 frame_interval: 1

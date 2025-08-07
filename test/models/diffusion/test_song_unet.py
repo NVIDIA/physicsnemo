@@ -199,12 +199,29 @@ def test_song_unet_optims(device):
     # Check JIT
     model, invar = setup_model()
     assert common.validate_jit(model, (*invar,))
-    # Check AMP
+    # Check AMP with amp_mode=True for the layers: should pass
     model, invar = setup_model()
+    model.amp_mode = True
     assert common.validate_amp(model, (*invar,))
-    # Check Combo
+    # Check Combo with amp_mode=True for the layers: should pass
     model, invar = setup_model()
+    model.amp_mode = True
     assert common.validate_combo_optims(model, (*invar,))
+
+    # Check failures (only on GPU, because validate_amp and validate_combo_optims
+    # don't activate amp for SongUNet on CPU)
+    if device == "cuda:0":
+        # Check AMP: should fail because amp_mode is False for the layers
+        with pytest.raises(RuntimeError):
+            model, invar = setup_model()
+            assert common.validate_amp(model, (*invar,))
+        # Check Combo: should fail because amp_mode is False for the layers
+        # NOTE: this test doesn't fail because validate_combo_optims doesn't
+        # activate amp for SongUNet
+        # model, invar = setup_model()
+        # with pytest.raises(RuntimeError):
+        #     model, invar = setup_model()
+        #     assert common.validate_combo_optims(model, (*invar,))
 
     # Check fullgraph compilation
     # run only on GPU
@@ -321,12 +338,13 @@ def test_song_unet_grad_checkpointing(device):
         computed_grads_checkpointed[name] = param.grad.clone()
 
     # Check that the results are the same
-    assert torch.allclose(
-        y_pred_checkpointed, y_pred
-    ), "Outputs do not match. Checkpointing failed!"
+    assert torch.allclose(y_pred_checkpointed, y_pred), (
+        "Outputs do not match. Checkpointing failed!"
+    )
 
     # Compare the gradients
     for name in computed_grads:
-        torch.allclose(
-            computed_grads_checkpointed[name], computed_grads[name]
-        ), "Gradient do not match. Checkpointing failed!"
+        (
+            torch.allclose(computed_grads_checkpointed[name], computed_grads[name]),
+            "Gradient do not match. Checkpointing failed!",
+        )

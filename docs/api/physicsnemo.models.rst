@@ -57,7 +57,7 @@ Below are some simple examples of how to use these models.
     torch.Size([32, 3, 32, 32])
 
 How to write your own PhysicsNeMo model
---------------------------------------
+---------------------------------------
 
 There are a few different ways to construct a PhysicsNeMo model. If you are a seasoned
 PyTorch user, the easiest way would be to write your model using the optimized layers and
@@ -209,7 +209,7 @@ complex models.
 .. _physicsnemo-models-from-torch:
 
 Converting PyTorch Models to PhysicsNeMo Models
-----------------------------------------------
+-----------------------------------------------
 
 In the above example we show constructing a PhysicsNeMo model from scratch. However, you
 can also convert existing PyTorch models to PhysicsNeMo models in order to leverage
@@ -325,7 +325,7 @@ model from the ``.mdlus`` file.
 
 
 PhysicsNeMo Model Registry and Entry Points
-------------------------------------------
+-------------------------------------------
 
 PhysicsNeMo contains a model registry that allows for easy access and ingestion of
 models. Below is a simple example of how to use the model registry to obtain a model
@@ -849,23 +849,25 @@ class to implement a regression model.
 
 .. autoclass:: physicsnemo.models.diffusion.song_unet.SongUNet
     :show-inheritance:
+    :members: amp_mode, profile_mode
 
 .. autoclass:: physicsnemo.models.diffusion.dhariwal_unet.DhariwalUNet
     :show-inheritance:
+    :members: amp_mode, profile_mode
 
 
 .. autoclass:: physicsnemo.models.diffusion.song_unet.SongUNetPosEmbd
     :show-inheritance:
-    :members: positional_embedding_indexing, positional_embedding_selector
+    :members: amp_mode, profile_mode, positional_embedding_indexing, positional_embedding_selector
 
 .. autoclass:: physicsnemo.models.diffusion.song_unet.SongUNetPosLtEmbd
     :show-inheritance:
-    :members: positional_embedding_indexing, positional_embedding_selector
+    :members: amp_mode, profile_mode, positional_embedding_indexing, positional_embedding_selector
 
 
 .. autoclass:: physicsnemo.models.diffusion.unet.UNet
     :show-inheritance:
-    :members: amp_mode
+    :members: amp_mode, profile_mode, use_fp16
 
 .. _diffusion_preconditioners:
 

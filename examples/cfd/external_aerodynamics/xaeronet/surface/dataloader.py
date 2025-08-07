@@ -23,7 +23,7 @@ It normalizes node data (like coordinates, normals, pressure) and edge data base
 on these statistics before returning the processed graph partitions and a corresponding
 label (extracted from the file name). The code also provides a function create_dataloader
 to create a data loader for efficient batch loading with configurable parameters such as
-batch size, shuffle, and prefetching options. 
+batch size, shuffle, and prefetching options.
 """
 
 import json
@@ -31,8 +31,10 @@ import torch
 from torch.utils.data import Dataset
 import os
 import sys
-import dgl
-from dgl.dataloading import GraphDataLoader
+import torch_geometric as pyg
+from torch_geometric.loader import ClusterData
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data.dataloader import DataLoader
 
 # Get the absolute path to the parent directory
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -41,9 +43,66 @@ sys.path.append(parent_dir)
 from utils import find_bin_files
 
 
+class PartitionedGraph:
+    """
+    A class for partitioning a graph into multiple parts with halo regions.
+
+    Parameters:
+    ----------
+        graph (pyg.data.Data): The graph data.
+        num_parts (int): The number of partitions.
+        halo_size (int): The size of the halo region.
+    """
+
+    def __init__(self, graph: pyg.data.Data, num_parts: int, halo_size: int):
+        self.num_nodes = graph.num_nodes
+        self.num_parts = num_parts
+        self.halo_size = halo_size
+
+        # Partition the graph using PyG METIS.
+        # https://pytorch-geometric.readthedocs.io/en/latest/modules/loader.html#torch_geometric.loader.ClusterData
+        cluster_data = pyg.loader.ClusterData(graph, num_parts=self.num_parts)
+        part_meta = cluster_data.partition
+
+        # Create partitions with halo regions using PyG `k_hop_subgraph`.
+        self.partitions = []
+        for i in range(self.num_parts):
+            # Get inner nodes of the partition.
+            part_inner_node = part_meta.node_perm[part_meta.partptr[i] : part_meta.partptr[i + 1]]
+            # Partition the graph with halo regions.
+            # https://pytorch-geometric.readthedocs.io/en/latest/modules/utils.html?#torch_geometric.utils.k_hop_subgraph
+            part_node, part_edge_index, inner_node_mapping, edge_mask = pyg.utils.k_hop_subgraph(
+                part_inner_node,
+                num_hops=self.halo_size,
+                edge_index=graph.edge_index,
+                num_nodes=self.num_nodes,
+                relabel_nodes=True,
+            )
+
+            partition = pyg.data.Data(
+                edge_index=part_edge_index,
+                edge_attr=graph.edge_attr[edge_mask],
+                num_nodes=part_node.size(0),
+                part_node=part_node,
+                inner_node=inner_node_mapping,
+            )
+            # Set partition node attributes.
+            for k, v in graph.items():
+                if graph.is_node_attr(k):
+                    setattr(partition, k, v[part_node])
+
+            self.partitions.append(partition)
+
+    def __len__(self):
+        return len(self.partitions)
+
+    def __getitem__(self, idx: int) -> pyg.data.Data:
+        return self.partitions[idx]
+
+
 class GraphDataset(Dataset):
     """
-    Custom dataset class for loading
+    Custom dataset class for loading partitioned graphs from .bin files.
 
     Parameters:
     ----------
@@ -52,29 +111,25 @@ class GraphDataset(Dataset):
         std (np.ndarray): Global standard deviation for normalization.
     """
 
+    NODE_ATTRS: list[str] = ["coordinates", "normals", "area", "pressure", "shear_stress"]
+
     def __init__(self, file_list, mean, std):
         self.file_list = file_list
         self.mean = mean
         self.std = std
 
         # Store normalization stats as tensors
-        self.coordinates_mean = torch.tensor(mean["coordinates"])
-        self.coordinates_std = torch.tensor(std["coordinates"])
-        self.normals_mean = torch.tensor(mean["normals"])
-        self.normals_std = torch.tensor(std["normals"])
-        self.area_mean = torch.tensor(mean["area"])
-        self.area_std = torch.tensor(std["area"])
-        self.pressure_mean = torch.tensor(mean["pressure"])
-        self.pressure_std = torch.tensor(std["pressure"])
-        self.shear_stress_mean = torch.tensor(mean["shear_stress"])
-        self.shear_stress_std = torch.tensor(std["shear_stress"])
+        # Set normalization statistics as attributes using a loop.
+        for key in self.NODE_ATTRS:
+            setattr(self, f"{key}_mean", torch.tensor(mean[key]))
+            setattr(self, f"{key}_std", torch.tensor(std[key]))
         self.edge_x_mean = torch.tensor(mean["x"])
         self.edge_x_std = torch.tensor(std["x"])
 
     def __len__(self):
         return len(self.file_list)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple[PartitionedGraph, str]:
         file_path = self.file_list[idx]
 
         # Extract the ID from the file name
@@ -83,35 +138,23 @@ class GraphDataset(Dataset):
         run_id = file_name.split("_")[-1].split(".")[0]  # Extract the run ID
 
         # Load the partitioned graphs from the .bin file
-        graphs, _ = dgl.load_graphs(file_path)
+        graphs = torch.load(file_path, weights_only=False)
 
-        # Process each partition (graph)
-        normalized_partitions = []
-        for graph in graphs:
-            # Normalize node data
-            graph.ndata["coordinates"] = (
-                graph.ndata["coordinates"] - self.coordinates_mean
-            ) / self.coordinates_std
-            graph.ndata["normals"] = (
-                graph.ndata["normals"] - self.normals_mean
-            ) / self.normals_std
-            graph.ndata["area"] = (graph.ndata["area"] - self.area_mean) / self.area_std
-            graph.ndata["pressure"] = (
-                graph.ndata["pressure"] - self.pressure_mean
-            ) / self.pressure_std
-            graph.ndata["shear_stress"] = (
-                graph.ndata["shear_stress"] - self.shear_stress_mean
-            ) / self.shear_stress_std
+        # Normalize node and edge data
+        for part in graphs:
+            for key in self.NODE_ATTRS:
+                part[key] = (part[key] - getattr(self, f"{key}_mean")) / getattr(self, f"{key}_std")
 
-            # Normalize edge data
-            if "x" in graph.edata:
-                graph.edata["x"] = (
-                    graph.edata["x"] - self.edge_x_mean
-                ) / self.edge_x_std
+            part.edge_attr = (part.edge_attr - self.edge_x_mean) / self.edge_x_std
 
-            normalized_partitions.append(graph)
+        return graphs, run_id
 
-        return normalized_partitions, run_id
+    @staticmethod
+    def collate_fn(
+        batch: list[tuple[ClusterData, str]]
+    ) -> tuple[list[ClusterData], list[str]]:
+        graphs, run_ids = zip(*batch)
+        return list(graphs), list(run_ids)
 
 
 def create_dataloader(
@@ -129,27 +172,56 @@ def create_dataloader(
     """
     Creates a DataLoader for the GraphDataset with prefetching.
 
-    Args:
+    Parameters:
+    ----------
         file_list (list of str): List of paths to .bin files.
         mean (np.ndarray): Global mean for normalization.
         std (np.ndarray): Global standard deviation for normalization.
         batch_size (int): Number of samples per batch.
+        shuffle (bool): If True, the data will be reshuffled at every epoch.
+        use_ddp (bool): If True, the data loader will use distributed sampling.
+        drop_last (bool): If True, the last batch will be dropped if it is not complete.
         num_workers (int): Number of worker processes for data loading.
         pin_memory (bool): If True, the data loader will copy tensors into CUDA pinned memory.
+        prefetch_factor (int): Number of batches loaded in advance by each worker.
 
-    Returns:
+    Returns
+    -------
         DataLoader: Configured DataLoader for the dataset.
     """
+    if batch_size != 1:
+        raise ValueError(f"Batch size must be 1 for now, but got {batch_size}")
+
     dataset = GraphDataset(file_list, mean, std)
-    dataloader = GraphDataLoader(
+    if use_ddp:
+        from physicsnemo.distributed import DistributedManager
+
+        dist = DistributedManager()
+        world_size = dist.world_size
+        rank = dist.rank
+    else:
+        world_size = 1
+        rank = 0
+
+    sampler = DistributedSampler(
         dataset,
-        batch_size=batch_size,
         shuffle=shuffle,
         drop_last=drop_last,
-        use_ddp=use_ddp,
-        pin_memory=pin_memory,
-        prefetch_factor=prefetch_factor,
+        num_replicas=world_size,
+        rank=rank,
     )
+
+    # instantiate dataloader
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        pin_memory=pin_memory,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
+        collate_fn=GraphDataset.collate_fn,
+    )
+
     return dataloader
 
 

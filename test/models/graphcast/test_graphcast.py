@@ -32,7 +32,9 @@ te_version = "2.0.6"
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_graphcast_forward(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
+def test_graphcast_forward(
+    device, pytestconfig, set_physicsnemo_force_te, num_channels=2, res_h=10, res_w=20
+):
     """Test graphcast forward pass"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
@@ -62,7 +64,13 @@ def test_graphcast_forward(device, pytestconfig, num_channels=2, res_h=10, res_w
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_graphcast_constructor(
-    device, pytestconfig, num_channels_1=2, num_channels_2=3, res_h=10, res_w=20
+    device,
+    pytestconfig,
+    set_physicsnemo_force_te,
+    num_channels_1=2,
+    num_channels_2=3,
+    res_h=10,
+    res_w=20,
 ):
     """Test graphcast constructor options"""
 
@@ -164,7 +172,9 @@ def test_graphcast_te_constructor(
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_graphcast_constructor_backward_compatibility(device, pytestconfig):
+def test_graphcast_constructor_backward_compatibility(
+    device, pytestconfig, set_physicsnemo_force_te
+):
     """Test graphcast constructor for backward compatibility for multimesh_level -> mesh_level"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
@@ -190,7 +200,9 @@ def test_graphcast_constructor_backward_compatibility(device, pytestconfig):
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_GraphCast_optims(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
+def test_GraphCast_optims(
+    device, pytestconfig, set_physicsnemo_force_te, num_channels=2, res_h=10, res_w=20
+):
     """Test GraphCast optimizations"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
@@ -283,7 +295,9 @@ def test_GraphCast_te_optims(pytestconfig, num_channels=2, res_h=10, res_w=20):
 
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_graphcast_checkpoint(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
+def test_graphcast_checkpoint(
+    device, pytestconfig, set_physicsnemo_force_te, num_channels=2, res_h=10, res_w=20
+):
     """Test GraphCast checkpoint save/load"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
@@ -355,7 +369,9 @@ def test_graphcast_checkpoint_te(pytestconfig, num_channels=2, res_h=10, res_w=2
 @import_or_fail("dgl")
 @common.check_ort_version()
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_GraphCast_deploy(device, pytestconfig, num_channels=2, res_h=10, res_w=20):
+def test_GraphCast_deploy(
+    device, pytestconfig, set_physicsnemo_force_te, num_channels=2, res_h=10, res_w=20
+):
     """Test GraphCast deployment support"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet

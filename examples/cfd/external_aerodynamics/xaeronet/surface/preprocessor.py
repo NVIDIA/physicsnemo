@@ -32,18 +32,20 @@ import vtk
 import pyvista as pv
 import numpy as np
 import torch
-import dgl
 import hydra
+
+import torch_geometric as pyg
 
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 from sklearn.neighbors import NearestNeighbors
-from dgl.data.utils import save_graphs
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
 
 from physicsnemo.datapipes.cae.readers import read_vtp
 from physicsnemo.sym.geometry.tessellation import Tessellation
+
+from dataloader import PartitionedGraph
 
 
 def convert_to_triangular_mesh(
@@ -88,7 +90,7 @@ def fetch_mesh_vertices(mesh):
     return vertices
 
 
-def add_edge_features(graph):
+def add_edge_features(graph: pyg.data.Data) -> pyg.data.Data:
     """
     Add relative displacement and displacement norm as edge features to the graph.
     The calculations are done using the 'pos' attribute in the
@@ -99,23 +101,16 @@ def add_edge_features(graph):
 
     Returns
     -------
-    dgl.DGLGraph
+    pyg.data.Data
         Graph with updated edge features.
     """
 
-    pos = graph.ndata.get("coordinates")
-    if pos is None:
-        raise ValueError(
-            "'coordinates' does not exist in the node data of one or more graphs."
-        )
-
-    row, col = graph.edges()
-    row = row.long()
-    col = col.long()
+    pos = graph.coordinates
+    row, col = graph.edge_index
 
     disp = pos[row] - pos[col]
     disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
-    graph.edata["x"] = torch.cat((disp, disp_norm), dim=-1)
+    graph.edge_attr = torch.cat((disp, disp_norm), dim=-1)
 
     return graph
 
@@ -131,28 +126,7 @@ def process_partition(graph, num_partitions, halo_hops):
     Helper function to partition a single graph and include node and edge features.
     """
     # Perform the partitioning
-    partitioned = dgl.metis_partition(
-        graph, k=num_partitions, extra_cached_hops=halo_hops, reshuffle=True
-    )
-
-    # For each partition, restore node and edge features
-    partition_list = []
-    for _, subgraph in partitioned.items():
-        subgraph.ndata["coordinates"] = graph.ndata["coordinates"][
-            subgraph.ndata[dgl.NID]
-        ]
-        subgraph.ndata["normals"] = graph.ndata["normals"][subgraph.ndata[dgl.NID]]
-        subgraph.ndata["area"] = graph.ndata["area"][subgraph.ndata[dgl.NID]]
-        subgraph.ndata["pressure"] = graph.ndata["pressure"][subgraph.ndata[dgl.NID]]
-        subgraph.ndata["shear_stress"] = graph.ndata["shear_stress"][
-            subgraph.ndata[dgl.NID]
-        ]
-        if "x" in graph.edata:
-            subgraph.edata["x"] = graph.edata["x"][subgraph.edata[dgl.EID]]
-
-        partition_list.append(subgraph)
-
-    return partition_list
+    return PartitionedGraph(graph, num_partitions, halo_hops)
 
 
 def process_run(
@@ -243,35 +217,59 @@ def process_run(
 
     try:
         # Create the final graph with multi-level edges
-        graph = dgl.graph((edge_sources, edge_destinations))
-        graph = dgl.remove_self_loop(graph)
-        graph = dgl.to_simple(graph)
-        graph = dgl.to_bidirected(graph, copy_ndata=True)
-        graph = dgl.add_self_loop(graph)
-
-        graph.ndata["coordinates"] = torch.tensor(all_points, dtype=torch.float32)
-        graph.ndata["normals"] = torch.tensor(all_normals, dtype=torch.float32)
-        graph.ndata["area"] = torch.tensor(all_areas, dtype=torch.float32)
-        graph.ndata["pressure"] = torch.tensor(pressure, dtype=torch.float32).unsqueeze(
-            -1
+        edge_index = torch.stack(
+            [
+                torch.tensor(edge_sources, dtype=torch.long),
+                torch.tensor(edge_destinations, dtype=torch.long),
+            ],
+            dim=0,
         )
-        graph.ndata["shear_stress"] = torch.tensor(shear_stress, dtype=torch.float32)
+
+        # Create a bidirectional graph object.
+        edge_index = pyg.utils.coalesce(edge_index)
+        edge_index = pyg.utils.to_undirected(edge_index)
+        edge_index, _ = pyg.utils.add_self_loops(edge_index)
+
+        graph = pyg.data.Data(
+            edge_index=edge_index,
+            coordinates=torch.tensor(all_points, dtype=torch.float32),
+            normals=torch.tensor(all_normals, dtype=torch.float32),
+            area=torch.tensor(all_areas, dtype=torch.float32),
+            pressure=torch.tensor(pressure, dtype=torch.float32).unsqueeze(-1),
+            shear_stress=torch.tensor(shear_stress, dtype=torch.float32),
+        )
+
         graph = add_edge_features(graph)
+
+        # PyG ClusterData uses `x` attribute of the source graph to set the number of nodes in each partition.
+        # This is required to make ClusterData indexing work properly. The real value of `x` will
+        # be set in a trainer, so set `x` to a NaN tensor to make sure it is not used.
+        graph.x = torch.full((graph.coordinates.shape[0], 1), float("nan"))
 
         # Partition the graph
         partitioned_graphs = process_partition(graph, num_partitions, halo_hops)
 
         # Save the partitions
-        save_graphs(partition_file_path, partitioned_graphs)
+        os.makedirs(os.path.dirname(partition_file_path), exist_ok=True)
+        torch.save(partitioned_graphs, partition_file_path)
 
         if save_point_cloud:
-            point_cloud = pv.PolyData(graph.ndata["coordinates"].numpy())
-            point_cloud["coordinates"] = graph.ndata["coordinates"].numpy()
-            point_cloud["normals"] = graph.ndata["normals"].numpy()
-            point_cloud["area"] = graph.ndata["area"].numpy()
-            point_cloud["pressure"] = graph.ndata["pressure"].numpy()
-            point_cloud["shear_stress"] = graph.ndata["shear_stress"].numpy()
-            point_cloud.save(f"point_clouds/point_cloud_{run_id}.vtp")
+            parts = []
+            for part in partitioned_graphs:
+                point_cloud = pv.PolyData(part.coordinates.numpy())
+                point_cloud["coordinates"] = part.coordinates.numpy()
+                point_cloud["normals"] = part.normals.numpy()
+                point_cloud["area"] = part.area.numpy()
+                point_cloud["pressure"] = part.pressure.numpy()
+                point_cloud["shear_stress"] = part.shear_stress.numpy()
+                parts.append(point_cloud)
+
+            multi_point_cloud = pv.MultiBlock(parts)
+            for part_id in range(len(parts)):
+                multi_point_cloud[part_id].name = part_id
+            vtp_file_path = to_absolute_path(f"point_clouds/point_cloud_{run_id}.vtm")
+            os.makedirs(os.path.dirname(vtp_file_path), exist_ok=True)
+            multi_point_cloud.save(vtp_file_path)
 
     except Exception as e:
         print(

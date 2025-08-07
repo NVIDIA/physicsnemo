@@ -66,7 +66,7 @@ Component | Description |
 [**physicsnemo.models**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html) | A collection of optimized, customizable, and easy-to-use families of model architectures such as Neural Operators, Graph Neural Networks, Diffusion models, Transformer models and many more|
 [**physicsnemo.datapipes**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.datapipes.html) | Optimized and scalable built-in data pipelines fine tuned to handle engineering and scientific data structures like point clouds, meshes etc|
 [**physicsnemo.distributed**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.html) | A distributed computing sub-module built on top of `torch.distributed` to enable parallel training with just a few steps|
-[**physicsnemo.curator**](xxx) | A sub-module to streamline and accelerate the data curation for engineering and scientific datasets for training and inference. (coming soon)|
+[**physicsnemo.curator**](https://github.com/NVIDIA/physicsnemo-curator) | A sub-module to streamline and accelerate the process of data curation for engineering datasets.|
 [**physicsnemo.sym.geometry**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/csg_and_tessellated_module.html) | A sub-module to handle geometry for DL training using the Constructive Solid Geometry modeling and CAD files in STL format.|
 [**physicsnemo.sym.eq**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/user_guide/features/nodes.html) | A sub-module to use PDEs in your DL training with several implementations of commonly observed equations and easy ways for customization.|
 <!-- markdownlint-enable -->
@@ -90,6 +90,9 @@ to their unique exploration needs.
 - [PhysicsNeMo CFD](https://github.com/NVIDIA/physicsnemo-cfd): Inference sub-module of PhysicsNeMo
   to enable CFD domain experts to explore, experiment and validate using pretrained
   AI models for CFD use cases.
+- [PhysicsNeMo Curator](https://github.com/NVIDIA/physicsnemo-curator): Inference sub-module
+  of PhysicsNeMo to streamline and accelerate the process of data curation for engineering
+  datasets.
 - [Earth-2 Studio](https://github.com/NVIDIA/earth2studio): Inference sub-module of PhysicsNeMo
   to enable climate researchers and scientists to explore and experiment with pretrained
   AI models for weather and climate.
@@ -361,7 +364,7 @@ The recommended PhysicsNeMo docker image can be pulled from the
 (refer to the NGC registry for the latest tag):
 
 ```Bash
-docker pull nvcr.io/nvidia/physicsnemo/physicsnemo:25.03
+docker pull nvcr.io/nvidia/physicsnemo/physicsnemo:25.06
 ```
 
 Inside the container, you can clone the PhysicsNeMo git repositories and get
@@ -370,7 +373,7 @@ the physicsnemo container and run examples from this repo.
 
 ```bash
 docker run --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --runtime nvidia \
---rm -it nvcr.io/nvidia/physicsnemo/physicsnemo:25.03 bash
+--rm -it nvcr.io/nvidia/physicsnemo/physicsnemo:25.06 bash
 git clone https://github.com/NVIDIA/physicsnemo.git
 cd physicsnemo/examples/cfd/darcy_fno/
 pip install warp-lang # install NVIDIA Warp to run the darcy example

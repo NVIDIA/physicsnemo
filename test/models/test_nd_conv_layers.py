@@ -162,53 +162,61 @@ class SpectralConv4d(nn.Module):
             device=x.device,
         )
 
-        out_ft[
-            :, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
-            self.weights1,
+        out_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
+                self.weights1,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
-            self.weights2,
+        out_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
+                self.weights2,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
-            self.weights3,
+        out_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
+                self.weights3,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
-            self.weights4,
+        out_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
+                self.weights4,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4],
-            self.weights5,
+        out_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
+                ],
+                self.weights5,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4],
-            self.weights6,
+        out_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
+                ],
+                self.weights6,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4],
-            self.weights7,
+        out_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
+                ],
+                self.weights7,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4],
-            self.weights8,
+        out_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
+                ],
+                self.weights8,
+            )
         )
 
         # Return to physical space
@@ -252,9 +260,9 @@ def test_conv_nd(device, dimension):
     nn.init.constant_(comp_nn.bias, ini_b)
     nn.init.constant_(comp_nn.weight, ini_w)
     with torch.no_grad():
-        assert torch.allclose(
-            conv_nd(invar), comp_nn(invar), rtol=1e-05, atol=1e-03
-        ), f"ConvNdKernel1Layer output not identical to that of layer specific for {dimension}d fields :("
+        assert torch.allclose(conv_nd(invar), comp_nn(invar), rtol=1e-05, atol=1e-03), (
+            f"ConvNdKernel1Layer output not identical to that of layer specific for {dimension}d fields :("
+        )
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -286,9 +294,9 @@ def test_conv_ndfc(device, dimension):
     torch.manual_seed(0)
     comp_nn.reset_parameters()
     with torch.no_grad():
-        assert torch.allclose(
-            conv_nd(invar), comp_nn(invar), rtol=1e-05, atol=1e-03
-        ), f"ConvNdFCLayer output not identical to that of layer specific for {dimension}d fields :("
+        assert torch.allclose(conv_nd(invar), comp_nn(invar), rtol=1e-05, atol=1e-03), (
+            f"ConvNdFCLayer output not identical to that of layer specific for {dimension}d fields :("
+        )
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])

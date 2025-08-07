@@ -68,7 +68,6 @@ def tet_verts(flip_x=1):
 
 @import_or_fail("warp")
 def test_sdf(pytestconfig):
-
     from physicsnemo.utils.sdf import signed_distance_field
 
     tet = tet_verts()

@@ -21,21 +21,25 @@
 # SOFTWARE.
 
 model:
-  space_dim: 2
+  embedding_dim: 2
   n_layers: 3
   n_hidden: 128
   dropout: 0.0
   n_head: 8
-  Time_Input: False
+  time_input: False
   act: gelu
   mlp_ratio: 1
-  fun_dim: 0
+  functional_dim: 1
   out_dim: 1
   slice_dim: 32
   ref: 8
-  unified_pos: 1
+  unified_pos: true
   slice_num: 32
+  use_te: false
   
+
+data:
+  resolution: 256
 
 
 normaliser:

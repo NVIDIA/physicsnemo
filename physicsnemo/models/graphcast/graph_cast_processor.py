@@ -14,17 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Union
-
 import torch
 import torch.nn as nn
 import transformer_engine as te
-from dgl import DGLGraph
 from torch import Tensor
 
 from physicsnemo.models.gnn_layers.mesh_edge_block import MeshEdgeBlock
 from physicsnemo.models.gnn_layers.mesh_node_block import MeshNodeBlock
-from physicsnemo.models.gnn_layers.utils import CuGraphCSC, set_checkpoint_fn
+from physicsnemo.models.gnn_layers.utils import GraphType, set_checkpoint_fn
 
 
 class GraphCastProcessor(nn.Module):
@@ -166,7 +163,7 @@ class GraphCastProcessor(nn.Module):
         self,
         efeat: Tensor,
         nfeat: Tensor,
-        graph: Union[DGLGraph, CuGraphCSC],
+        graph: GraphType,
     ) -> Tensor:
         for segment_start, segment_end in self.checkpoint_segments:
             efeat, nfeat = self.checkpoint_fn(

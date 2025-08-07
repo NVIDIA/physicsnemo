@@ -44,6 +44,10 @@ and the data path should be added when `Darcy_2D_fix` dataset is constructed.
 You can download the data
 [here](https://huggingface.co/datasets/lkuang/example_data).
 
+The `fix` dataset training (which uses a fixed dataset) requires you to convert
+data from matlab to numpy format, for faster startup of the training.  Just
+use the `convert_mat_to_npz.py` script to port your data.
+
 ## Model overview and architecture
 
 ## Getting Started

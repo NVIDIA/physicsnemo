@@ -18,14 +18,14 @@ setup-ci:
 	pre-commit install
 
 black:
-	pre-commit run black -a
+	pre-commit run ruff-format -a
 
 interrogate:
 	pre-commit run interrogate -a
 
 lint:
+	pre-commit run ruff-check -a && \
 	pre-commit run markdownlint -a && \
-	pre-commit run ruff -a && \
 	pre-commit run check-added-large-files -a
 
 license: 
@@ -62,6 +62,8 @@ ARCH := $(shell uname -p)
 ifeq ($(ARCH), x86_64)
     TARGETPLATFORM := "linux/amd64"
 else ifeq ($(ARCH), aarch64)
+    TARGETPLATFORM := "linux/arm64"
+else ifeq ($(ARCH), arm)
     TARGETPLATFORM := "linux/arm64"
 else
     $(error Unknown CPU architecture ${ARCH} detected)

@@ -20,23 +20,32 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+output_dir: ./output/darcy_transolver_fix
+run_id: bf16_dev_r85_b8_s64
+
+data:
+  train_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth1.npz
+  test_path: /user_data/datasets/darcy_fix/example_data/piececonst_r421_N1024_smooth2.npz
+  resolution: 85 #421, 211, 141, 106, 85 all viable
+  batch_size: 8 # This is the GLOBAL batch size
+
 model:
-  space_dim: 2
-  n_layers: 8
+  functional_dim: 1
+  out_dim: 1
+  embedding_dim: 2
+  n_layers: 4
   n_hidden: 128
   dropout: 0.0
-  n_head: 8
-  Time_Input: False
+  n_head: 4
   act: gelu
-  mlp_ratio: 1
-  fun_dim: 1
-  out_dim: 1
-  slice_dim: 32
+  mlp_ratio: 4
+  unified_pos: False
   ref: 8
-  unified_pos: 1
   slice_num: 64
+  use_te: False
+  time_input: False
   
-
+precision: bf16
 
 normaliser:
   permeability:
@@ -48,17 +57,15 @@ normaliser:
 
 scheduler:
   initial_lr: 1.E-3
-  decay_rate: 1.E-5
+  decay_rate: 5.E-5
   weight_decay: 1.E-5
   decay_pseudo_epochs: 8
 
 training:
-  resolution: 85
-  batch_size: 4
   rec_results_freq : 100
-  max_pseudo_epochs: 500
-  pseudo_epoch_sample_size: 1000
+  max_pseudo_epochs: 1000
+  pseudo_epoch_sample_size: 1024
 
 validation:
   sample_size: 200
-  validation_pseudo_epochs: 2
+  validation_pseudo_epochs: 1

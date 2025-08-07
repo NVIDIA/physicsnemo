@@ -85,7 +85,6 @@ def assert_partitions_are_equal(a, b):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gp_mapping(global_graph, device, pytestconfig):
-
     from physicsnemo.models.gnn_layers import (
         GraphPartition,
         partition_graph_with_id_mapping,
@@ -138,7 +137,6 @@ def test_gp_mapping(global_graph, device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gp_nodewise(global_graph, device, pytestconfig):
-
     from physicsnemo.models.gnn_layers import (
         GraphPartition,
         partition_graph_nodewise,
@@ -186,7 +184,6 @@ def test_gp_nodewise(global_graph, device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gp_matrixdecomp(global_graph_square, device, pytestconfig):
-
     from physicsnemo.models.gnn_layers import (
         GraphPartition,
         partition_graph_nodewise,
@@ -230,7 +227,6 @@ def test_gp_matrixdecomp(global_graph_square, device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gp_coordinate_bbox(global_graph, device, pytestconfig):
-
     from physicsnemo.models.gnn_layers import (
         GraphPartition,
         partition_graph_by_coordinate_bbox,
@@ -304,7 +300,6 @@ def test_gp_coordinate_bbox(global_graph, device, pytestconfig):
 @import_or_fail("dgl")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gp_coordinate_bbox_lat_long(global_graph, device, pytestconfig):
-
     from physicsnemo.models.gnn_layers import (
         GraphPartition,
         partition_graph_by_coordinate_bbox,
