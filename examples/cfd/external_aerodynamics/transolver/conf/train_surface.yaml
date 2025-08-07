@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
+
+output_dir: "runs"
+run_id: "surface/float32"
+
+# Training configuration
+training:
+  precision: float32 # float32, float16, bfloat16, or float8
+  num_epochs: 251 # Add one to save at 250
+  save_interval: 25  # Save checkpoint every N epochs
+  compile: false
+
+# Model configuration
+model:
+  _target_: physicsnemo.models.transolver.Transolver
+  functional_dim: 2 # Input feature dimension
+  out_dim: 4        # Output feature dimension
+  embedding_dim: 6  # Spatial embedding dimension
+  n_layers: 8       # Number of transformer layers
+  n_hidden: 256     # Hidden dimension
+  dropout: 0.0      # Dropout rate
+  n_head: 8         # Number of attention heads
+  act: "gelu"       # Activation function
+  mlp_ratio: 4      # MLP ratio in attention blocks
+  slice_num: 128     # Number of slices in physics attention
+  unified_pos: false # Whether to use unified positional embeddings
+  ref: 8            # Reference dimension for unified pos
+  structured_shape: null
+  use_te: true     # Use transformer engine
+  time_input: false # Whether to use time embeddings
+
+scheduler:
+  name: "OneCycleLR"
+  params:
+    final_div_factor: 1e4
+
+# # StepLR scheduler: Decays the learning rate by gamma every step_size epochs
+# scheduler:
+#   name: "StepLR"
+#   params:
+#     step_size: 50     # Decay every 100 epochs (set X as desired)
+#     gamma: 0.5        # Decay factor
+
+
+# Optimizer configuration
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 5.0e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+# Data configuration
+data:
+  train:
+    data_path: /user_data/datasets/domino/train/
+  val:
+    data_path: /user_data/datasets/domino/val/
+  max_workers: 8
+  pin_memory: true
+  resolution: 300_000
+  mode: surface
+  data_keys:
+    - "surface_fields"
+    - "surface_mesh_centers"
+    - "surface_normals"
+    - "air_density"
+    - "stream_velocity"
+    - "stl_areas"
+    - "stl_centers"
+  large_keys:
+    - "surface_fields"
+    - "surface_mesh_centers"
+    - "surface_normals"
+    - "stl_areas"
+    - "stl_centers"
+
+# Logging configuration
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
