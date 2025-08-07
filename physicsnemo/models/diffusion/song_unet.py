@@ -1130,9 +1130,9 @@ class SongUNetPosEmbd(SongUNet):
             embeddings = torch.cat(
                 [self.pos_embd, self.lt_embd[lead_time_label[0].int()]]
             )
-        elif self.pos_embd is None:  # positional embedding only
+        elif self.pos_embd is not None:  # positional embedding only
             embeddings = self.pos_embd
-        elif lead_time_label is None:  # lead time embedding only
+        elif lead_time_label is not None:  # lead time embedding only
             embeddings = self.lt_embd[lead_time_label[0].int()]
         else:
             raise ValueError(
