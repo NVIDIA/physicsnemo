@@ -254,7 +254,7 @@ class EDMLoss:
             returns augmented images. If not provided, no data augmentation is applied.
 
         lead_time_label: torch.Tensor, optional
-            Lead-time labels to pass to the model, shape (batch_size, 1).
+            Lead-time labels to pass to the model, shape (batch_size,).
             If not provided, the model is called without a lead-time label input.
 
         Returns:
