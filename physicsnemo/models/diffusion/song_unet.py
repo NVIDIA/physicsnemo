@@ -1160,24 +1160,41 @@ class SongUNetPosEmbd(SongUNet):
         >>>
         """
 
+        # dtype casting of embeddings
         pos_embd = self.pos_embd
         if (pos_embd is not None) and (x.dtype != pos_embd.dtype):
             pos_embd = pos_embd.to(x.dtype)
+        lt_embd = self.lt_embd
+        if (lt_embd is not None) and (x.dtype != lt_embd.dtype):
+            lt_embd = lt_embd.to(x.dtype)
 
-        if pos_embd is not None and lead_time_label is not None:
-            # TODO: here we assume all patches share same lead_time_label -->
-            # need be changed
-            embeddings = torch.cat([pos_embd, self.lt_embd[lead_time_label[0].int()]])
-        elif pos_embd is not None:  # positional embedding only
-            embeddings = pos_embd
-        elif lead_time_label is not None:  # lead time embedding only
-            embeddings = self.lt_embd[lead_time_label[0].int()]
+        embeddings: list[torch.Tensor] = []
+
+        # Get entire positional embedding grid
+        if pos_embd is not None:
+            embeddings.append(pos_embd)
+
+        # Get entire lead-time embedding grid
+        if lt_embd is not None:
+            if lead_time_label is None:
+                raise ValueError(
+                    "`lead_time_label` must be provided when `lt_embd` is not None."
+                )
+            embeddings.append(lt_embd[lead_time_label.int()])
+
+        # Concatenate the embeddings grids
+        if len(embeddings) > 0:
+            embeddings: torch.Tensor = torch.cat(embeddings, dim=1)
         else:
             raise ValueError(
-                "`positional_embedding_selector` should not be called when neither lead-time nor positional embeddings are used."
+                "`positional_embedding_selector` should not be called when neither "
+                "lead-time nor positional embeddings are used."
             )
 
-        return embedding_selector(embeddings)  # (B, N_pe, H, W)
+        # Execute the selector function
+        selected_embd: torch.Tensor = embedding_selector(embeddings)  # (B, N_pe, H, W)
+
+        return selected_embd
 
     def _get_positional_embedding(self):
         if self.N_grid_channels == 0:
