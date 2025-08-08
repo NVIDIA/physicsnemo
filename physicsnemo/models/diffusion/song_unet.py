@@ -1010,6 +1010,10 @@ class SongUNetPosEmbd(SongUNet):
         if (pos_embd is not None) and (x.dtype != pos_embd.dtype):
             pos_embd = pos_embd.to(x.dtype)
 
+        lt_embd = self.lt_embd
+        if (lt_embd is not None) and (x.dtype != lt_embd.dtype):
+            lt_embd = lt_embd.to(x.dtype)
+
         if global_index is None:
             if self.lead_time_mode:
                 selected_pos_embd = []
@@ -1017,10 +1021,10 @@ class SongUNetPosEmbd(SongUNet):
                     selected_pos_embd.append(
                         pos_embd[None].expand((x.shape[0], -1, -1, -1))
                     )
-                if self.lt_embd is not None:
+                if lt_embd is not None:
                     selected_pos_embd.append(
                         torch.reshape(
-                            self.lt_embd[lead_time_label.int()],
+                            lt_embd[lead_time_label.int()],
                             (
                                 x.shape[0],
                                 self.lead_time_channels,
@@ -1045,27 +1049,18 @@ class SongUNetPosEmbd(SongUNet):
             global_index = torch.reshape(
                 torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
             )  # (P, 2, X, Y) to (2, P*X*Y)
-            selected_pos_embd = pos_embd[
-                :, global_index[0], global_index[1]
-            ]  # (C_pe, P*X*Y)
-            selected_pos_embd = torch.permute(
-                torch.reshape(selected_pos_embd, (pos_embd.shape[0], P, H, W)),
-                (1, 0, 2, 3),
-            )  # (P, C_pe, X, Y)
 
-            if self.pos_embd is not None:
-                selected_pos_embd = self.pos_embd[
+            if pos_embd is not None:
+                selected_pos_embd = pos_embd[
                     :, global_index[0], global_index[1]
                 ]  # (C_pe, P*X*Y)
                 selected_pos_embd = torch.permute(
-                    torch.reshape(selected_pos_embd, (self.pos_embd.shape[0], P, H, W)),
+                    torch.reshape(selected_pos_embd, (pos_embd.shape[0], P, H, W)),
                     (1, 0, 2, 3),
                 )  # (P, C_pe, X, Y)
-
                 selected_pos_embd = selected_pos_embd.repeat(
                     B, 1, 1, 1
                 )  # (B*P, C_pe, X, Y)
-
                 embeds = [selected_pos_embd]
             else:
                 embeds = []
