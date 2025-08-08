@@ -64,6 +64,7 @@ package_docs:
 
 clean: clean-examples
 	@echo "All generated files have been cleaned."
+	@rm -r _build
 
 
 # Catch-all for Sphinx, but ignore file-like targets

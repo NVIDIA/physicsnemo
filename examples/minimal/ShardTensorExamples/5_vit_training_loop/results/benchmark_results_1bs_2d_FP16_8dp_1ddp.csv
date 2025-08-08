@@ -1,0 +1,2 @@
+Size (px),Global BS,Local BS,Params ,Fwd (s),Train (s),Inf. Mem (GB),Inf. (samp/s),Inf. (samp/s/gpu),Train Mem (GB),Train (samp/s),Train (samp/s/gpu)
+1024,1,1,126907624,OOM,OOM,OOM,OOM,OOM

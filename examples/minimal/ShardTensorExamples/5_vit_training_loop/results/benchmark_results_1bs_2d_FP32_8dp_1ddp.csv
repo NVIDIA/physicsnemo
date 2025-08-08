@@ -1,0 +1,2 @@
+Size (px),Global BS,Local BS,Params ,Fwd (s),Train (s),Inf. Mem (GB),Inf. (samp/s),Inf. (samp/s/gpu),Train Mem (GB),Train (samp/s),Train (samp/s/gpu)
+1024,1,1,126907624,0.13602,0.53246,1.869,7.352,0.919,2.895,1.878,0.235

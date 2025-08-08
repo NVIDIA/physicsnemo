@@ -1,3 +1,5 @@
+.. _domain_parallelism:
+
 Domain Parallelism and Shard Tensor
 ===================================
 
@@ -111,13 +113,15 @@ In the example above, for a simple convolution, we saw that just splitting the d
 How does ``ShardTensor`` help?
 ------------------------------
 
-PyTorch's ``DTensor`` interface already has an interface for a distributed tensor mechanism, and it's great - great enough, in fact, that ``ShardTensor`` is built upon it.  However, ``DTensor`` is built with a different paradigm of parallelism in mind, including model parallelisms from `DeepSpeed <https://www.deepspeed.ai/getting-started/>`_ and `MegaTron <https://developer.nvidia.com/megatron-core>`_ - which is supported in pytorch via `Fully Sharded Data Parallelism <https://pytorch.org/docs/stable/fsdp.html>`_.  It has several shortcomings: notably, it can not accommodate data that isn't distributed uniformly or according to ``torch.chunk`` syntax.  For scientific data, such as mesh data, point clouds, or anything else irregular, this is a nearly-immediate dead end for deploying domain parallelism.  Further, ``DTensor``'s mechanism for implementing parallelism is largely restricted to lower level ``torch`` operations - great for broad support in PyTorch, but not as accesible for most developers.
+PyTorch's ``DTensor`` interface already has an interface for a distributed tensor mechanism, and it's great - great enough, in fact, that ``ShardTensor`` is built upon it.  However, ``DTensor`` is built with a different paradigm of parallelism in mind, including model parallelisms from `DeepSpeed <https://www.deepspeed.ai/getting-started/>`__ and `MegaTron <https://developer.nvidia.com/megatron-core>`__ - which is supported in pytorch via `Fully Sharded Data Parallelism <https://pytorch.org/docs/stable/fsdp.html>`__.  It has several shortcomings: notably, it can not accommodate data that isn't distributed uniformly or according to ``torch.chunk`` syntax.  For scientific data, such as mesh data, point clouds, or anything else irregular, this is a nearly-immediate dead end for deploying domain parallelism.  Further, ``DTensor``'s mechanism for implementing parallelism is largely restricted to lower level ``torch`` operations - great for broad support in PyTorch, but not as accesible for most developers.
 
 With ``ShardTensor``, we extend the functionality of ``DTensor`` in the ways needed to make domain parallelism simpler and easier to apply.  In practice, this looks like the following, if we reuse the convolution example from before:
 
-.. literalinclude:: ../../test_scripts/domain_parallelism/sharded_conv_example.py
-    :caption: Example of domain parallel convolution with ``ShardTensor``
-    :language: python
+.. dropdown:: Full Sharded Convolution Example
+
+    .. literalinclude:: ../../../examples/minimal/ShardTensorExamples/4_convolution/sharded_conv.py
+        :caption: Example of domain parallel convolution with ``ShardTensor``
+        :language: python
 
 
 If you run this (``torchrun --nproc-per-node 4 conv_example.py``), you'll see the checks on output and gradients both pass.  Further, the last line will print:
@@ -140,11 +144,11 @@ ShardTensor also has dedicated implementations of common reduction operations ``
 There is a substantial amount of care needed to implement layers in ``ShardTensor`` (or ``DTensor``!).  If you're interested in doing so for your custom model, please check out a full tutorial on this subject: :ref:`Implementing new layers for ShardTensor`
 
 When Should You Use ``ShardTensor``?
-====================================
+------------------------------------
 
 ``ShardTensor`` and domain parallelism solve a very specific problem in Scientific AI: input data is such high resolution that models can't train, even at Batch Size of 1, due to memory limitations.  And while that challenge can be partially surmounted with reduced precision and input spatial downsampling, not all models can tolerate those techniques without sacrificing accuracy.  In this case, you should view ``ShardTensor`` as a solution to that problem: it will enable you to run training and inference on higher resolution data than a single GPU can accommodate.  It is not the only technique for this, and in some cases it isn't the best choice.  In this section we'll compare and contrast ``ShardTensor`` to some other techniques for high resolution data, which can highlight some strengths and weaknesses of ``ShardTensor.``
 
-One other technique for high resolution data is `Pipeline Parallelism <https://docs.pytorch.org/docs/stable/distributed.pipelining.html#>`_.  In pipeline parallelism, the model is divided across 2 or more devices, and each device contains full layers and activations, but to run the entire model the data is "pipelined": input data on GPU 0 is propagated through the local layers, and the outputs of the last layer on GPU 0 become the inputs to the first layer on GPU 1, and so on.  Gradients can be computed by running the pipeline in reverse, as well.
+One other technique for high resolution data is `Pipeline Parallelism <https://docs.pytorch.org/docs/stable/distributed.pipelining.html#>`__.  In pipeline parallelism, the model is divided across 2 or more devices, and each device contains full layers and activations, but to run the entire model the data is "pipelined": input data on GPU 0 is propagated through the local layers, and the outputs of the last layer on GPU 0 become the inputs to the first layer on GPU 1, and so on.  Gradients can be computed by running the pipeline in reverse, as well.
 
 For some use cases, pipeline parallelism can be very powerful.  But it also has some weaknesses that ``ShardTensor`` can avoid.  Pipeline parallelism enables scaling of GPU memory resources but does not take much advantage of scaling up GPU compute resources without modifying the training loop.  While GPU 0 is active, all other GPUs are waiting on input.  And once GPU 0 passes data to GPU 1, GPU 0 sits idly until the backward pass or the next batch of data arrives.  For large minibatch data, a good strategy could be to feed each batch of data sequentially: when data passes from GPU 0 to GPU 1, the next example can start processing on GPU 0.  For inference on large datasets, this is quite efficient, but during training this may cause a computational "bubble" or stall everytime gradients are computed and the model is updated.
 
@@ -174,7 +178,7 @@ Another technique for dealing with high resolution input data during training is
 In general, if your model meets all of these conditions, you should consider using ``ShardTensor`` for domain parallelism during training:
 
 - Your model has relatively large input size even at batch size of 1 - so large, in fact, that you run out of GPU memory trying to train the model with batch size 1.
-    - If your model comfortably fits batch_size=1 training, you will have a simpler and more efficient training using PyTorch's `DistributedDataParallel <https://pytorch.org/docs/stable/ddp.html>`_
+    - If your model comfortably fits batch_size=1 training, you will have a simpler and more efficient training using PyTorch's `DistributedDataParallel <https://pytorch.org/docs/stable/ddp.html>`__
 - Your model is composed of supported domain-parallel layers (convolutions, normalizations, upsampling/pooling/reductions, attention layers, etc.)
     - Not every layer has a domain-parallel implementation in PhysicsNeMo.  You can add it to your code yourself if it's simple (consider a P.R. if you do!) or ask for support on github.
     - How do you know if a layer is supported?  Pass a ``ShardTensor`` in like above and test it!
@@ -189,25 +193,25 @@ For the best efficiency training with ``ShardTensor``, look for:
 For inference, on the other hand, ``ShardTensor`` can still be useful for lower latency inference on extremely high resolution data.  Especially if the model is primarly composed of compute- or bandwidth-bound kernels, and the commmunication overhead is small, ``ShardTensor`` can provide reductions of inference latency.
 
 Summary
-=======
+-------
 
 In this tutorial, we saw details about PhysicsNeMo's ``ShardTensor`` object, and how it can be used to enable domain parallelism.  For more behind-the-scenes details of how layers are enabled, see :ref:`Implementing new layers for ShardTensor`.  For an example of combining domain parallelism with other parallelisms through FSDP, see `fsdp_and_shard_tensor :ref:`Domain Decomposition, ShardTensor and FSDP Tutorial`.
 
 Glossary
-========
+--------
 
-- **DeviceMesh**: A pytorch abstraction that represents a set of connected GPUs.  See `DeviceMesh <https://docs.pytorch.org/docs/stable/distributed.html#devicemesh>`_ for more details.  ``DeviceMesh`` is particularly useful for multilevel parallelism (data parallel training + domain parallelism, for example).
+- **DeviceMesh**: A pytorch abstraction that represents a set of connected GPUs.  See `DeviceMesh <https://docs.pytorch.org/docs/stable/distributed.html#devicemesh>`__ for more details.  ``DeviceMesh`` is particularly useful for multilevel parallelism (data parallel training + domain parallelism, for example).
 
-- **DTensor**: PyTorch's distributed tensor object.  See `DTensor <https://docs.pytorch.org/docs/stable/distributed.tensor.html>`_ for more details.
+- **DTensor**: PyTorch's distributed tensor object.  See `DTensor <https://docs.pytorch.org/docs/stable/distributed.tensor.html>`__ for more details.
 
 - **ShardTensor**: PhysicsNeMo's distributed extension to ``DTensor``.  In particular, ``ShardTensor`` removes requirements for even data distribution (though it's still optimal for computational load balancing) and implements domain parallel paths for many operations.
 
-- **NCCL**: NVIDIA's collective communication library for high speed GPU-GPU communication.  See `NCCL <https://developer.nvidia.com/nccl>`_ for more details.
+- **NCCL**: NVIDIA's collective communication library for high speed GPU-GPU communication.  See `NCCL <https://developer.nvidia.com/nccl>`__ for more details.
 
-- **DDP**: PyTorch's distributed data parallel training system.  See `DDP <https://pytorch.org/docs/stable/ddp.html>`_ for more details.
+- **DDP**: PyTorch's distributed data parallel training system.  See `DDP <https://pytorch.org/docs/stable/ddp.html>`__ for more details.
 
-- **FSDP**: PyTorch's fully sharded data parallel training system.  ``FSDP`` is an superset of ``DDP``, and to use ``ShardTensor`` domain parallelism you must use ``FSDP``, not ``DDP``.  See `FSDP <https://pytorch.org/docs/stable/fsdp.html>`_ for more details.
+- **FSDP**: PyTorch's fully sharded data parallel training system.  ``FSDP`` is an superset of ``DDP``, and to use ``ShardTensor`` domain parallelism you must use ``FSDP``, not ``DDP``.  See `FSDP <https://pytorch.org/docs/stable/fsdp.html>`__ for more details.
 
-- **DeepSpeed**: A distributed training and inference framework for large language models, built fully sharding weights, gradients, and optimizer states.  See `DeepSpeed <https://www.deepspeed.ai/>`_ for more details.
+- **DeepSpeed**: A distributed training and inference framework for large language models, built fully sharding weights, gradients, and optimizer states.  See `DeepSpeed <https://www.deepspeed.ai/>`__ for more details.
 
-- **MegaTron**: Another distributed training and inference framework for large language models, built on sharding weights along the channel dimension with optimized Attention collectives.  See `MegaTron <https://developer.nvidia.com/megatron-core>`_ for more details.
+- **MegaTron**: Another distributed training and inference framework for large language models, built on sharding weights along the channel dimension with optimized Attention collectives.  See `MegaTron <https://developer.nvidia.com/megatron-core>`__ for more details.

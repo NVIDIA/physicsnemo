@@ -45,6 +45,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.autosummary",
     "nbsphinx",
+    "sphinx_design",
 ]
 
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
@@ -62,7 +63,7 @@ napoleon_custom_sections = [("Variable Shape", "notes"), ("Forward", "params_sty
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {
     "logo_only": True,
-    "display_version": True,
+    # "display_version": True,
     "prev_next_buttons_location": "bottom",
     "style_external_links": False,
     "style_nav_header_background": "#000000",
@@ -121,7 +122,31 @@ exclude_patterns = [
     "README.md",
     "CONTRIBUTING.md",
     "LICENSE.txt",
+    "examples/minimal/ShardTensorExamples/*.rst",
+    "examples/minimal/ShardTensorExamples/**/*.rst",
+    "examples/README.rst",
+    "examples/cfd/external_aerodynamics/moe/README.rst",
+    "examples/cfd/external_aerodynamics/transolver/README.rst",
+    "examples/cfd/mhd_pino/README.rst",
+    "examples/cfd/navier_stokes_dpot/README.rst",
+    "examples/cfd/swe_nonlinear_pino/README.rst",
+    "examples/cfd/vortex_shedding_mesh_reduced_dgl/README.rst",
+    "examples/cfd/vortex_shedding_mgn_dgl/README.rst",
+    "examples/generative/README.rst",
+    "examples/generative/corrdiff/README.rst",
+    "examples/generative/diffusion/README.rst",
+    "examples/generative/stormcast/README.rst",
+    "examples/generative/topodiff/README.rst",
+    "examples/multi_storage_client/README.rst",
+    "examples/structural_mechanics/deforming_plate/README.rst",
+    "examples/weather/dlwp/data_curation/README.rst",
+    "examples/weather/flood_modeling/hydrographnet/README.rst",
+    "examples/weather/pangu_weather/README.rst",
+    "examples/weather/regen/README.rst",
 ]
+# NOTE: Everything listed manually here is NOT included in the TOC.  This suppresses
+# the warnings, while making it really obvious which ones we need to address by
+# including them into TOC.
 
 # Fake imports
 autodoc_mock_imports = ["torch_scatter", "torch_cluster"]   # install of these packages takes very long
@@ -132,3 +157,4 @@ pdf_documents = [
 ]
 
 # napoleon_custom_sections = ["Variable Shape"]
+
