@@ -254,7 +254,7 @@ class EDMLoss:
             returns augmented images. If not provided, no data augmentation is applied.
 
         lead_time_label: torch.Tensor, optional
-            Lead-time labels to pass to the model, shape (batch_size,).
+            Lead-time labels to pass to the model, shape ``(batch_size,)``.
             If not provided, the model is called without a lead-time label input.
 
         Returns:
@@ -270,24 +270,22 @@ class EDMLoss:
             augment_pipe(images) if augment_pipe is not None else (images, None)
         )
         n = torch.randn_like(y) * sigma
-        additional_labels = {
+        optional_args = {
             "augment_labels": augment_labels,
             "lead_time_label": lead_time_label,
         }
         # drop None items to support models that don't have these arguments in `forward`
-        additional_labels = {
-            k: v for (k, v) in additional_labels.items() if v is not None
-        }
+        optional_args = {k: v for (k, v) in optional_args.items() if v is not None}
         if condition is not None:
             D_yn = net(
                 y + n,
                 sigma,
                 condition=condition,
                 class_labels=labels,
-                **additional_labels,
+                **optional_args,
             )
         else:
-            D_yn = net(y + n, sigma, labels, **additional_labels)
+            D_yn = net(y + n, sigma, labels, **optional_args)
         loss = weight * ((D_yn - y) ** 2)
         return loss
 
