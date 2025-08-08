@@ -149,11 +149,11 @@ def deterministic_sampler(
         Optional tensor containing mean high-resolution images for
         conditioning. Must have same height and width as ``img_lr``, with shape
         :math:`(B_{hr}, C_{hr}, H, W)`  where the batch dimension
-        :math:`B_{hr}` can be either 1, either equal to batch_size, or can be omitted. If
+        :math:`B_{hr}` can be either 1, either equal to ``batch_size``, or can be omitted. If
         :math:`B_{hr} = 1` or is omitted, ``mean_hr`` will be expanded to match the shape
         of ``img_lr``. By default ``None``.
     lead_time_label : Optional[Tensor], optional
-        Lead-time labels to pass to the model, shape (batch_size,).
+        Lead-time labels to pass to the model, shape ``(batch_size,)``.
         If not provided, the model is called without a lead-time label input.
     num_steps : Optional[int]
         Number of time-steps for the stochastic ODE integration. Defaults
