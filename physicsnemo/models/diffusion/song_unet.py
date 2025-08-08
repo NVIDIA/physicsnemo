@@ -830,6 +830,15 @@ class SongUNetPosEmbd(SongUNet):
         lead_time_steps: int = 9,
         prob_channels: List[int] = [],
     ):
+        # Force users to use the correct class for models with lead-time embeddings
+        if not getattr(self, "_is_song_unet_pos_lt_embd", False) and (
+            lead_time_mode or lead_time_channels
+        ):
+            raise ValueError(
+                "For a model with lead-time embeddings, the recommended class is "
+                "`SongUNetPosLtEmbd` instead of `SongUNetPosEmbd`."
+            )
+
         super().__init__(
             img_resolution=img_resolution,
             in_channels=in_channels,
@@ -1432,6 +1441,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         profile_mode: bool = False,
         amp_mode: bool = False,
     ):
+        self._is_song_unet_pos_lt_embd = True
         super().__init__(
             img_resolution=img_resolution,
             in_channels=in_channels,
