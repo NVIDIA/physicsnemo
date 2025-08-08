@@ -10,7 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Improved lead time support for diffusion models
 - Improved documentation for diffusion models and diffusion utils.
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
   `Module.from_checkpoint("chkpt.mdlus", override_args=set(...))`.
@@ -87,6 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated the deforming plate example to use the Hybrid MeshGraphNet model.
 - :warning: **BC-breaking:** Refactored the `transolver` model to improve
   readability and performance, and extend to more use cases.
+- Diffusion models: improved lead time support for `SongUNetPosLtEmbd` and
+  `EDMLoss`. Lead-time embeddings can now be used with/without positional
+  embeddings.
   
 ### Deprecated
 
