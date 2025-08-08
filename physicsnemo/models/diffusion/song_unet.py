@@ -698,7 +698,7 @@ class SongUNetPosEmbd(SongUNet):
     N_grid_channels : int, optional, default=4
         Number of channels :math:`C_{PE}` in the positional embedding grid. For 'sinusoidal' must be 4 or
         multiple of 4. For 'linear' and 'test' must be 2. For 'learnable' can be any
-        value. If 0, positional embedding is disabled (but `lead_time_mode` may still be used).
+        value. If 0, positional embedding is disabled (but ``lead_time_mode`` may still be used).
     lead_time_mode : bool, optional, default=False
         Provided for convenience. It is recommended to use the architecture
         :class:`~physicsnemo.models.diffusion.song_unet.SongUNetPosLtEmbd`
@@ -902,9 +902,6 @@ class SongUNetPosEmbd(SongUNet):
                 raise ValueError(
                     "Cannot provide both embedding_selector and global_index."
                 )
-
-            if (self.pos_embd is not None) and (x.dtype != self.pos_embd.dtype):
-                self.pos_embd = self.pos_embd.to(x.dtype)
 
             # Append positional embedding to input conditioning
             if (self.pos_embd is not None) or (self.lt_embd is not None):
