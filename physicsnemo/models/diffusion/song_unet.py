@@ -940,7 +940,7 @@ class SongUNetPosEmbd(SongUNet):
         self,
         x: torch.Tensor,
         global_index: Optional[torch.Tensor] = None,
-        lead_time_label=None,
+        lead_time_label: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""Select positional embeddings using global indices.
 
@@ -1003,43 +1003,42 @@ class SongUNetPosEmbd(SongUNet):
               for generating the ``global_index`` parameter:
               :meth:`~physicsnemo.utils.patching.BasePatching2D.global_index`.
         """
-        # If no global indices are provided, select all embeddings and expand
-        # to match the batch size of the input
 
+        # dtype casting of embeddings
         pos_embd = self.pos_embd
         if (pos_embd is not None) and (x.dtype != pos_embd.dtype):
             pos_embd = pos_embd.to(x.dtype)
-
         lt_embd = self.lt_embd
         if (lt_embd is not None) and (x.dtype != lt_embd.dtype):
             lt_embd = lt_embd.to(x.dtype)
 
+        # If no global indices are provided, select all embeddings and expand
+        # to match the batch size of the input
         if global_index is None:
-            if self.lead_time_mode:
-                selected_pos_embd = []
-                if pos_embd is not None:
-                    selected_pos_embd.append(
-                        pos_embd[None].expand((x.shape[0], -1, -1, -1))
+            selected_embd = []
+            # Select positional embedding
+            if pos_embd is not None:
+                selected_embd.append(pos_embd[None].expand((x.shape[0], -1, -1, -1)))
+            # Select lead-time embedding
+            if lt_embd is not None:
+                if lead_time_label is None:
+                    raise ValueError(
+                        "`lead_time_label` must be provided when `lt_embd` is not None."
                     )
-                if lt_embd is not None:
-                    selected_pos_embd.append(
-                        torch.reshape(
-                            lt_embd[lead_time_label.int()],
-                            (
-                                x.shape[0],
-                                self.lead_time_channels,
-                                self.img_shape_y,
-                                self.img_shape_x,
-                            ),
-                        )
+                selected_embd.append(
+                    torch.reshape(
+                        lt_embd[lead_time_label.int()],
+                        (
+                            x.shape[0],
+                            self.lead_time_channels,
+                            self.img_shape_y,
+                            self.img_shape_x,
+                        ),
                     )
-                if len(selected_pos_embd) > 0:
-                    selected_pos_embd = torch.cat(selected_pos_embd, dim=1)
-            else:
-                selected_pos_embd = pos_embd[None].expand(
-                    (x.shape[0], -1, -1, -1)
-                )  # (B, C_{PE}, H, W)
+                )
 
+        # If global indices are provided, select the embeddings corresponding
+        # to the patches
         else:
             P = global_index.shape[0]
             B = x.shape[0] // P
@@ -1050,6 +1049,9 @@ class SongUNetPosEmbd(SongUNet):
                 torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
             )  # (P, 2, X, Y) to (2, P*X*Y)
 
+            selected_embd = []
+
+            # Select positional embedding
             if pos_embd is not None:
                 selected_pos_embd = pos_embd[
                     :, global_index[0], global_index[1]
@@ -1061,43 +1063,42 @@ class SongUNetPosEmbd(SongUNet):
                 selected_pos_embd = selected_pos_embd.repeat(
                     B, 1, 1, 1
                 )  # (B*P, C_pe, X, Y)
-                embeds = [selected_pos_embd]
-            else:
-                embeds = []
+                selected_embd.append(selected_pos_embd)
 
-            # Append positional and lead time embeddings to input conditioning
-            if self.lead_time_mode:
-                embeds = []
-                if pos_embd is not None:
-                    embeds.append(selected_pos_embd)  # reuse code below
-                if self.lt_embd is not None:
-                    lt_embds = self.lt_embd[
-                        lead_time_label.int()
-                    ]  # (B, self.lead_time_channels, self.img_shape_y, self.img_shape_x),
+            # Select lead-time embedding
+            if lt_embd is not None:
+                if lead_time_label is None:
+                    raise ValueError(
+                        "`lead_time_label` must be provided when `lt_embd` is not None."
+                    )
+                selected_lt_embd = lt_embd[
+                    lead_time_label.int()
+                ]  # (B, self.lead_time_channels, self.img_shape_y, self.img_shape_x),
+                selected_lt_embd = selected_lt_embd[
+                    :, :, global_index[0], global_index[1]
+                ]  # (B, C_lt, P*X*Y)
+                selected_lt_embd = torch.reshape(
+                    torch.permute(
+                        torch.reshape(
+                            selected_lt_embd,
+                            (B, self.lead_time_channels, P, H, W),
+                        ),
+                        (0, 2, 1, 3, 4),
+                    ).contiguous(),
+                    (B * P, self.lead_time_channels, H, W),
+                )  # (B*P, C_pe, X, Y)
+                selected_embd.append(selected_lt_embd)
 
-                    selected_lt_pos_embd = lt_embds[
-                        :, :, global_index[0], global_index[1]
-                    ]  # (B, C_lt, P*X*Y)
-                    selected_lt_pos_embd = torch.reshape(
-                        torch.permute(
-                            torch.reshape(
-                                selected_lt_pos_embd,
-                                (B, self.lead_time_channels, P, H, W),
-                            ),
-                            (0, 2, 1, 3, 4),
-                        ).contiguous(),
-                        (B * P, self.lead_time_channels, H, W),
-                    )  # (B*P, C_pe, X, Y)
-                    embeds.append(selected_lt_pos_embd)
+        # Concatenate all selected embeddings
+        if len(selected_embd) > 0:
+            selected_embd = torch.cat(selected_embd, dim=1)
+        else:
+            raise ValueError(
+                "`positional_embedding_indexing` should not be called when neither "
+                "lead-time nor positional embeddings are used."
+            )
 
-            if len(embeds) > 0:
-                selected_pos_embd = torch.cat(embeds, dim=1)
-            else:
-                raise ValueError(
-                    "`positional_embedding_indexing` should not be called when neither lead-time nor positional embeddings are used."
-                )
-
-        return selected_pos_embd
+        return selected_embd
 
     def positional_embedding_selector(
         self,
