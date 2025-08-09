@@ -956,8 +956,8 @@ class SongUNetPosEmbd(SongUNet):
         This method uses global indices to select specific subset of the
         positional embedding grid and/or the lead-time embedding grid (called
         *patches*). If no indices are provided, the entire embedding grid is returned.
-        The positional embedding grid is returned if `N_grid_channels > 0`, while
-        the lead-time embedding grid is returned if `lead_time_mode == True`. If
+        The positional embedding grid is returned if ``N_grid_channels > 0``, while
+        the lead-time embedding grid is returned if ``lead_time_mode == True``. If
         both positional and lead-time embedding are enabled, both are returned
         (concatenated). If neither is enabled, this function should not be called;
         doing so will raise a ValueError.
@@ -975,8 +975,8 @@ class SongUNetPosEmbd(SongUNet):
             should represent the indices of the pixels to extract from the
             embedding grid.
         lead_time_label : Optional[torch.Tensor], default=None
-            Tensor of shape :math:`(P,)` that corresponds to the lead-time label for each patch.
-            Only used if ``lead_time_mode`` is True.
+            Tensor of shape :math:`(B,)` that corresponds to the lead-time
+            label for each batch element. Only used if ``lead_time_mode`` is True.
 
         Returns
         -------
@@ -1124,19 +1124,21 @@ class SongUNetPosEmbd(SongUNet):
         ----------
         x : torch.Tensor
             Input tensor of shape :math:`(P \times B, C, H_{in}, W_{in})`.
-            Only used to determine batch size :math:`B`, dtype and device.
-        embedding_selector : Callable
+            Only used to determine the dtype.
+        embedding_selector : Callable[[torch.Tensor], torch.Tensor]
             Function that takes as input the entire embedding grid of shape
-            :math:`(C_{PE}, H, W)` and returns selected embeddings with shape
-            :math:`(P \times B, C_{PE}, H_{in}, W_{in})`.
+            :math:`(C_{PE}, H, W)` (or :math:`(B, C_{LT}, H, W)`
+            when ``lead_time_label`` is provided) and returns selected embeddings with shape
+            :math:`(P \times B, C_{PE}, H_{in}, W_{in})` (or :math:`(P \times B, C_{LT}, H_{in}, W_{in})`
+            when ``lead_time_label`` is provided).
             Each selected embedding should correspond to the portion of the embedding grid
             that corresponds to the batch element in ``x``.
             Typically this should be based on
             :meth:`physicsnemo.utils.patching.BasePatching2D.apply` method to
             maintain consistency with patch extraction.
         lead_time_label : Optional[torch.Tensor], default=None
-            Tensor of shape :math:`(P,)` that corresponds to the lead-time label for each patch.
-            Only used if ``lead_time_mode`` is True.
+            Tensor of shape :math:`(B,)` that corresponds to the lead-time
+            label for each batch element. Only used if ``lead_time_mode`` is ``True``.
 
         Returns
         -------
@@ -1154,44 +1156,52 @@ class SongUNetPosEmbd(SongUNet):
               Patches are processed independently by the model, and the ``embedding_selector`` function is used
               to select the grid of positional embeddings corresponding to each
               patch.
-            - See this method from :class:`physicsnemo.utils.patching.BasePatching2D`
-              for generating the ``embedding_selector`` parameter:
-              :meth:`~physicsnemo.utils.patching.BasePatching2D.apply`
+            - See the method
+              :meth:`~physicsnemo.utils.patching.BasePatching2D.apply` from
+              :class:`physicsnemo.utils.patching.BasePatching2D` for generating
+              the ``embedding_selector`` parameter, as well as the example
+              below.
 
         Example
         -------
         >>> # Define a selector function with a patching utility:
         >>> from physicsnemo.utils.patching import GridPatching2D
         >>> patching = GridPatching2D(img_shape=(16, 16), patch_shape=(8, 8))
-        >>> batch_size = 4
+        >>> B = 4
         >>> def embedding_selector(emb):
-        ...     return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
+        ...     return patching.apply(emb.expand(B, -1, -1, -1))
         >>>
         """
 
         # dtype casting of embeddings
         pos_embd = self.pos_embd
         if (pos_embd is not None) and (x.dtype != pos_embd.dtype):
-            pos_embd = pos_embd.to(x.dtype)
+            pos_embd = pos_embd.to(x.dtype)  # (C_PE, H, W)
         lt_embd = self.lt_embd
         if (lt_embd is not None) and (x.dtype != lt_embd.dtype):
-            lt_embd = lt_embd.to(x.dtype)
+            lt_embd = lt_embd.to(x.dtype)  # (lead_time_steps, C_LT, H, W)
 
         embeddings: list[torch.Tensor] = []
 
-        # Get entire positional embedding grid
+        # Select positional embedding
         if pos_embd is not None:
-            embeddings.append(pos_embd)
+            selected_pos_embd = embedding_selector(pos_embd)  # (P * B, C_PE, H_p, W_p)
+            embeddings.append(selected_pos_embd)
 
-        # Get entire lead-time embedding grid
+        # Select lead-time embedding
         if lt_embd is not None:
             if lead_time_label is None:
                 raise ValueError(
                     "`lead_time_label` must be provided when `lt_embd` is not None."
                 )
-            embeddings.append(lt_embd[lead_time_label.int()])
+            selected_lt_embd: torch.Tensor = lt_embd[
+                lead_time_label.int()
+            ]  # (B, C_LT, H, W)
+            selected_lt_embd = embedding_selector(
+                selected_lt_embd
+            )  # (P * B, C_LT, H_p, W_p)
+            embeddings.append(selected_lt_embd)
 
-        # Concatenate the embeddings grids
         if len(embeddings) > 0:
             embeddings: torch.Tensor = torch.cat(embeddings, dim=1)
         else:
@@ -1200,10 +1210,7 @@ class SongUNetPosEmbd(SongUNet):
                 "lead-time nor positional embeddings are used."
             )
 
-        # Execute the selector function
-        selected_embd: torch.Tensor = embedding_selector(embeddings)  # (B, N_pe, H, W)
-
-        return selected_embd
+        return embeddings
 
     def _get_positional_embedding(self):
         if self.N_grid_channels == 0:

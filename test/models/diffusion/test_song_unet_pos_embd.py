@@ -127,8 +127,8 @@ def test_song_unet_embedding_selector(device):
 
     # Function to select embeddings
     def embedding_selector(emb):
-        return emb[
-            None,
+        return emb.expand(1, -1, -1, -1)[
+            :,
             :,
             offset_y : offset_y + patch_shape_y,
             offset_x : offset_x + patch_shape_x,

@@ -246,7 +246,7 @@ def stochastic_sampler(
         def patch_embedding_selector(emb):
             # emb: (N_pe, image_shape_y, image_shape_x)
             # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
-            return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
+            return patching.apply(emb.expand(batch_size, -1, -1, -1))
 
     else:
         patch_embedding_selector = None
