@@ -99,15 +99,22 @@ def generate_data_no_patches(H, W, device):
 def test_song_unet_forward(device):
     torch.manual_seed(0)
     N_pos = 4
+    lead_time_channels = 4
     # Construct the DDM++ UNet model
-    model = UNet(img_resolution=64, in_channels=2 + N_pos, out_channels=2).to(device)
+    model = UNet(
+        img_resolution=64,
+        in_channels=2 + N_pos + lead_time_channels,
+        out_channels=2,
+        lead_time_channels=lead_time_channels,
+    ).to(device)
     input_image = torch.ones([1, 2, 64, 64]).to(device)
-    noise_labels = noise_labels = torch.randn([1]).to(device)
+    noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
 
     assert common.validate_forward_accuracy(
         model,
-        (input_image, noise_labels, class_labels),
+        (input_image, noise_labels, class_labels, lead_time_labels),
         file_name="ddmpp_unet_output.pth",
         atol=1e-3,
     )
@@ -116,8 +123,9 @@ def test_song_unet_forward(device):
     # Construct the NCSN++ UNet model
     model = UNet(
         img_resolution=64,
-        in_channels=2 + N_pos,
+        in_channels=2 + N_pos + lead_time_channels,
         out_channels=2,
+        lead_time_channels=4,
         embedding_type="fourier",
         channel_mult_noise=2,
         encoder_type="residual",
@@ -126,7 +134,7 @@ def test_song_unet_forward(device):
 
     assert common.validate_forward_accuracy(
         model,
-        (input_image, noise_labels, class_labels),
+        (input_image, noise_labels, class_labels, lead_time_labels),
         file_name="ncsnpp_unet_output.pth",
         atol=1e-3,
     )
@@ -152,7 +160,7 @@ def test_song_unet_lt_indexing(device):
         N_grid_channels=N_pos,
     ).to(device)
     input_image = torch.ones([1, 10, patch_shape_y, patch_shape_x]).to(device)
-    noise_labels = noise_labels = torch.randn([1]).to(device)
+    noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     idx_x = torch.arange(offset_x, offset_x + patch_shape_x)
     idx_y = torch.arange(offset_y, offset_y + patch_shape_y)
@@ -161,15 +169,14 @@ def test_song_unet_lt_indexing(device):
         device
     )  # (2, patch_shape_y, patch_shape_x)
 
-    # NOTE: Commented tests for embedding_selector since current SongUNetPosLtEmbd does not support it
     # # Define a function to select the embeddings
-    # def embedding_selector(emb):
-    #     return emb[
-    #         None,
-    #         :,
-    #         offset_y : offset_y + patch_shape_y,
-    #         offset_x : offset_x + patch_shape_x,
-    #     ]
+    def embedding_selector(emb):
+        return emb.expand(1, -1, -1, -1)[
+            :,
+            :,
+            offset_y : offset_y + patch_shape_y,
+            offset_x : offset_x + patch_shape_x,
+        ]
 
     model.training = True
     output_image_indexing = model(
@@ -179,15 +186,15 @@ def test_song_unet_lt_indexing(device):
         lead_time_label=torch.tensor([8]),
         global_index=global_index,
     )
-    # output_image_selector = model(
-    #     input_image,
-    #     noise_labels,
-    #     class_labels,
-    #     lead_time_label=torch.tensor([8]),
-    #     embedding_selector=embedding_selector,
-    # )
+    output_image_selector = model(
+        input_image,
+        noise_labels,
+        class_labels,
+        lead_time_label=torch.tensor([8]),
+        embedding_selector=embedding_selector,
+    )
     assert output_image_indexing.shape == (1, 10, patch_shape_y, patch_shape_x)
-    # assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
+    assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
 
     model.training = False
     output_image_indexing = model(
@@ -197,15 +204,15 @@ def test_song_unet_lt_indexing(device):
         lead_time_label=torch.tensor([8]),
         global_index=global_index,
     )
-    # output_image_selector = model(
-    #     input_image,
-    #     noise_labels,
-    #     class_labels,
-    #     lead_time_label=torch.tensor([8]),
-    #     embedding_selector=embedding_selector,
-    # )
+    output_image_selector = model(
+        input_image,
+        noise_labels,
+        class_labels,
+        lead_time_label=torch.tensor([8]),
+        embedding_selector=embedding_selector,
+    )
     assert output_image_indexing.shape == (1, 10, patch_shape_y, patch_shape_x)
-    # assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
+    assert torch.allclose(output_image_indexing, output_image_selector, atol=1e-5)
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -216,17 +223,20 @@ def test_song_unet_global_indexing(device):
     patch_shape_x = 64
     offset_y = 12
     offset_x = 45
+    lead_time_channels = 4
     # Construct the DDM++ UNet model
     model = UNet(
         img_resolution=128,
-        in_channels=2 + N_pos,
+        in_channels=2 + N_pos + lead_time_channels,
         out_channels=2,
+        lead_time_channels=lead_time_channels,
         gridtype="test",
         N_grid_channels=N_pos,
     ).to(device)
     input_image = torch.ones([1, 2, patch_shape_y, patch_shape_x]).to(device)
-    noise_labels = noise_labels = torch.randn([1]).to(device)
+    noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
     idx_x = torch.arange(offset_x, offset_x + patch_shape_x)
     idx_y = torch.arange(offset_y, offset_y + patch_shape_y)
     mesh_x, mesh_y = torch.meshgrid(idx_y, idx_x, indexing="ij")
@@ -235,14 +245,18 @@ def test_song_unet_global_indexing(device):
     )  # (2, patch_shape_y, patch_shape_x)
 
     output_image = model(
-        input_image, noise_labels, class_labels, global_index=global_index
+        input_image,
+        noise_labels,
+        class_labels,
+        lead_time_label=lead_time_labels,
+        global_index=global_index,
     )
 
     pos_embed = model.positional_embedding_indexing(
-        input_image, global_index=global_index
+        input_image, lead_time_label=lead_time_labels, global_index=global_index
     )
     assert output_image.shape == (1, 2, patch_shape_y, patch_shape_x)
-    assert torch.equal(pos_embed, global_index)
+    assert torch.equal(pos_embed[:, :N_pos, :, :], global_index)
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -309,17 +323,20 @@ def test_song_unet_embedding_selector(device):
     patch_shape_x = 64
     offset_y = 12
     offset_x = 45
+    lead_time_channels = 4
     # Construct the DDM++ UNet model
     model = UNet(
         img_resolution=128,
-        in_channels=2 + N_pos,
+        in_channels=2 + N_pos + lead_time_channels,
         out_channels=2,
+        lead_time_channels=lead_time_channels,
         gridtype="test",
         N_grid_channels=N_pos,
     ).to(device)
     input_image = torch.ones([1, 2, patch_shape_y, patch_shape_x]).to(device)
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
 
     # Expected embeddings should be the same as global_index
     idx_x = torch.arange(offset_x, offset_x + patch_shape_x)
@@ -331,8 +348,8 @@ def test_song_unet_embedding_selector(device):
 
     # Define a function to select the embeddings
     def embedding_selector(emb):
-        return emb[
-            None,
+        return emb.expand(1, -1, -1, -1)[
+            :,
             :,
             offset_y : offset_y + patch_shape_y,
             offset_x : offset_x + patch_shape_x,
@@ -342,16 +359,16 @@ def test_song_unet_embedding_selector(device):
         input_image,
         noise_labels,
         class_labels,
+        lead_time_label=lead_time_labels,
         embedding_selector=embedding_selector,
     )
     assert output_image.shape == (1, 2, patch_shape_y, patch_shape_x)
 
     # Verify that the embeddings are correctly selected
     selected_embeds = model.positional_embedding_selector(
-        input_image, embedding_selector
+        input_image, embedding_selector, lead_time_label=lead_time_labels
     )
-
-    assert torch.equal(selected_embeds, expected_embeds)
+    assert torch.equal(selected_embeds[:, :N_pos, :, :], expected_embeds)
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
@@ -363,29 +380,34 @@ def test_song_unet_constructor(device):
     in_channels = 2
     out_channels = 2
     N_pos = 4
+    lead_time_channels = 4
     model = UNet(
         img_resolution=img_resolution,
-        in_channels=in_channels + N_pos,
+        in_channels=in_channels + N_pos + lead_time_channels,
         out_channels=out_channels,
+        lead_time_channels=lead_time_channels,
     ).to(device)
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
+    output_image = model(input_image, noise_labels, class_labels, lead_time_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
 
     # test rectangular shape
     model = UNet(
         img_resolution=[img_resolution, img_resolution * 2],
-        in_channels=in_channels + N_pos,
+        in_channels=in_channels + N_pos + lead_time_channels,
         out_channels=out_channels,
+        lead_time_channels=4,
     ).to(device)
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
     input_image = torch.ones([1, out_channels, img_resolution, img_resolution * 2]).to(
         device
     )
-    output_image = model(input_image, noise_labels, class_labels)
+    output_image = model(input_image, noise_labels, class_labels, lead_time_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
 
 
@@ -397,10 +419,12 @@ def test_song_unet_position_embedding(device):
     out_channels = 2
     # NCSN++
     N_pos = 100
+    lead_time_channels = 4
     model = UNet(
         img_resolution=img_resolution,
-        in_channels=in_channels + N_pos,
+        in_channels=in_channels + N_pos + lead_time_channels,
         out_channels=out_channels,
+        lead_time_channels=lead_time_channels,
         embedding_type="fourier",
         channel_mult_noise=2,
         encoder_type="residual",
@@ -411,7 +435,8 @@ def test_song_unet_position_embedding(device):
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
-    output_image = model(input_image, noise_labels, class_labels)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
+    output_image = model(input_image, noise_labels, class_labels, lead_time_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
     assert model.pos_embd.shape == (100, img_resolution, img_resolution)
 
@@ -419,6 +444,7 @@ def test_song_unet_position_embedding(device):
         img_resolution=img_resolution,
         in_channels=in_channels,
         out_channels=out_channels,
+        lead_time_channels=4,
         N_grid_channels=40,
     ).to(device)
     assert model.pos_embd.shape == (40, img_resolution, img_resolution)
@@ -435,6 +461,7 @@ def test_fails_if_grid_is_invalid():
             img_resolution=img_resolution,
             in_channels=in_channels,
             out_channels=out_channels,
+            lead_time_channels=4,
             gridtype="linear",
             N_grid_channels=20,
         )
@@ -444,6 +471,7 @@ def test_fails_if_grid_is_invalid():
             img_resolution=img_resolution,
             in_channels=in_channels,
             out_channels=out_channels,
+            lead_time_channels=4,
             gridtype="sinusoidal",
             N_grid_channels=11,
         )
@@ -457,8 +485,9 @@ def test_song_unet_optims(device):
     def setup_model():
         model = UNet(
             img_resolution=16,
-            in_channels=6,
+            in_channels=10,
             out_channels=2,
+            lead_time_channels=4,
             embedding_type="fourier",
             channel_mult_noise=2,
             encoder_type="residual",
@@ -467,8 +496,9 @@ def test_song_unet_optims(device):
         noise_labels = torch.randn([1]).to(device)
         class_labels = torch.randint(0, 1, (1, 1)).to(device)
         input_image = torch.ones([1, 2, 16, 16]).to(device)
+        lead_time_labels = torch.randint(0, 9, (1,)).to(device)
 
-        return model, [input_image, noise_labels, class_labels]
+        return model, [input_image, noise_labels, class_labels, lead_time_labels]
 
     # Ideally always check graphs first
     model, invar = setup_model()
@@ -508,21 +538,26 @@ def test_song_unet_checkpoint(device):
 
     model_1 = UNet(
         img_resolution=16,
-        in_channels=6,
+        in_channels=10,
         out_channels=2,
+        lead_time_channels=4,
     ).to(device)
 
     model_2 = UNet(
         img_resolution=16,
-        in_channels=6,
+        in_channels=10,
         out_channels=2,
+        lead_time_channels=4,
     ).to(device)
 
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
     assert common.validate_checkpoint(
-        model_1, model_2, (*[input_image, noise_labels, class_labels],)
+        model_1,
+        model_2,
+        (*[input_image, noise_labels, class_labels, lead_time_labels],),
     )
 
 
@@ -532,8 +567,9 @@ def test_son_unet_deploy(device):
     """Test Song UNet deployment support"""
     model = UNet(
         img_resolution=16,
-        in_channels=6,
+        in_channels=10,
         out_channels=2,
+        lead_time_channels=4,
         embedding_type="fourier",
         channel_mult_noise=2,
         encoder_type="residual",
@@ -543,10 +579,59 @@ def test_son_unet_deploy(device):
     noise_labels = torch.randn([1]).to(device)
     class_labels = torch.randint(0, 1, (1, 1)).to(device)
     input_image = torch.ones([1, 2, 16, 16]).to(device)
+    lead_time_labels = torch.randint(0, 9, (1,)).to(device)
 
     assert common.validate_onnx_export(
-        model, (*[input_image, noise_labels, class_labels],)
+        model, (*[input_image, noise_labels, class_labels, lead_time_labels],)
     )
     assert common.validate_onnx_runtime(
-        model, (*[input_image, noise_labels, class_labels],)
+        model, (*[input_image, noise_labels, class_labels, lead_time_labels],)
     )
+
+
+@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("N_grid_channels", [0, 4])
+@pytest.mark.parametrize("lead_time_channels", [0, 2])
+def test_song_unet_positional_leadtime(device, N_grid_channels, lead_time_channels):
+    """Test that both positional and lead-time embeddings can be used independently"""
+
+    lead_time_mode = True
+
+    img_resolution = 16
+    out_channels = 2
+    lead_time_steps = 2
+    in_channels = 2 + N_grid_channels + (lead_time_channels if lead_time_mode else 0)
+
+    def _create_model():
+        return UNet(
+            img_resolution=img_resolution,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            N_grid_channels=N_grid_channels,
+            lead_time_channels=lead_time_channels,
+            lead_time_steps=lead_time_steps,
+        ).to(device)
+
+    if (lead_time_channels > 0) != lead_time_mode:
+        with pytest.raises(ValueError):
+            model = _create_model()
+        return
+    else:
+        model = _create_model()
+
+    noise_labels = torch.randn([2]).to(device)
+    class_labels = torch.randint(0, 1, (2, 1)).to(device)
+    input_image = torch.ones([2, 2, 16, 16]).to(device)
+    lead_time_label = torch.as_tensor([0, 1]).to(device)
+
+    assert bool(N_grid_channels) == (model.pos_embd is not None)
+    assert lead_time_mode == (hasattr(model, "lt_embd") and (model.lt_embd is not None))
+
+    if lead_time_mode:
+        output_image = model(
+            input_image, noise_labels, class_labels, lead_time_label=lead_time_label
+        )
+    else:
+        output_image = model(input_image, noise_labels, class_labels)
+
+    assert output_image.shape == (2, out_channels, img_resolution, img_resolution)

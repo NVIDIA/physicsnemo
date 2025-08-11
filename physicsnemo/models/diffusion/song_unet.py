@@ -698,7 +698,7 @@ class SongUNetPosEmbd(SongUNet):
     N_grid_channels : int, optional, default=4
         Number of channels :math:`C_{PE}` in the positional embedding grid. For 'sinusoidal' must be 4 or
         multiple of 4. For 'linear' and 'test' must be 2. For 'learnable' can be any
-        value.
+        value. If 0, positional embedding is disabled (but ``lead_time_mode`` may still be used).
     lead_time_mode : bool, optional, default=False
         Provided for convenience. It is recommended to use the architecture
         :class:`~physicsnemo.models.diffusion.song_unet.SongUNetPosLtEmbd`
@@ -826,44 +826,57 @@ class SongUNetPosEmbd(SongUNet):
         profile_mode: bool = False,
         amp_mode: bool = False,
         lead_time_mode: bool = False,
-        lead_time_channels: int = None,
+        lead_time_channels: int | None = None,
         lead_time_steps: int = 9,
         prob_channels: List[int] = [],
     ):
+        # Force users to use the correct class for models with lead-time embeddings
+        if not getattr(self, "_is_song_unet_pos_lt_embd", False) and (
+            lead_time_mode or lead_time_channels
+        ):
+            raise ValueError(
+                "For a model with lead-time embeddings, the recommended class is "
+                "`SongUNetPosLtEmbd` instead of `SongUNetPosEmbd`."
+            )
+
         super().__init__(
-            img_resolution,
-            in_channels,
-            out_channels,
-            label_dim,
-            augment_dim,
-            model_channels,
-            channel_mult,
-            channel_mult_emb,
-            num_blocks,
-            attn_resolutions,
-            dropout,
-            label_dropout,
-            embedding_type,
-            channel_mult_noise,
-            encoder_type,
-            decoder_type,
-            resample_filter,
-            checkpoint_level,
-            additive_pos_embed,
-            use_apex_gn,
-            act,
-            profile_mode,
-            amp_mode,
+            img_resolution=img_resolution,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            label_dim=label_dim,
+            augment_dim=augment_dim,
+            model_channels=model_channels,
+            channel_mult=channel_mult,
+            channel_mult_emb=channel_mult_emb,
+            num_blocks=num_blocks,
+            attn_resolutions=attn_resolutions,
+            dropout=dropout,
+            label_dropout=label_dropout,
+            embedding_type=embedding_type,
+            channel_mult_noise=channel_mult_noise,
+            encoder_type=encoder_type,
+            decoder_type=decoder_type,
+            resample_filter=resample_filter,
+            checkpoint_level=checkpoint_level,
+            additive_pos_embed=additive_pos_embed,
+            use_apex_gn=use_apex_gn,
+            act=act,
+            profile_mode=profile_mode,
+            amp_mode=amp_mode,
         )
 
         self.gridtype = gridtype
         self.N_grid_channels = N_grid_channels
-        if self.gridtype == "learnable":
+        if (self.gridtype == "learnable") or (self.N_grid_channels == 0):
             self.pos_embd = self._get_positional_embedding()
         else:
             self.register_buffer("pos_embd", self._get_positional_embedding().float())
         self.lead_time_mode = lead_time_mode
         if self.lead_time_mode:
+            if (lead_time_channels is None) or (lead_time_channels <= 0):
+                raise ValueError(
+                    "`lead_time_channels` must be >= 1 if `lead_time_mode` is enabled."
+                )
             self.lead_time_channels = lead_time_channels
             self.lead_time_steps = lead_time_steps
             self.lt_embd = self._get_lead_time_embedding()
@@ -872,6 +885,12 @@ class SongUNetPosEmbd(SongUNet):
                 self.scalar = torch.nn.Parameter(
                     torch.ones((1, len(self.prob_channels), 1, 1))
                 )
+        else:
+            if lead_time_channels:
+                raise ValueError(
+                    "When `lead_time_mode` is disabled, `lead_time_channels` may not be set."
+                )
+            self.lt_embd = None
 
     def forward(
         self,
@@ -894,7 +913,7 @@ class SongUNetPosEmbd(SongUNet):
                 )
 
             # Append positional embedding to input conditioning
-            if self.pos_embd is not None:
+            if (self.pos_embd is not None) or (self.lt_embd is not None):
                 # Select positional embeddings with a selector function
                 if embedding_selector is not None:
                     selected_pos_embd = self.positional_embedding_selector(
@@ -930,13 +949,18 @@ class SongUNetPosEmbd(SongUNet):
         self,
         x: torch.Tensor,
         global_index: Optional[torch.Tensor] = None,
-        lead_time_label=None,
+        lead_time_label: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""Select positional embeddings using global indices.
 
         This method uses global indices to select specific subset of the
-        positional embedding grid (called *patches*). If no indices are provided,
-        the entire positional embedding grid is returned.
+        positional embedding grid and/or the lead-time embedding grid (called
+        *patches*). If no indices are provided, the entire embedding grid is returned.
+        The positional embedding grid is returned if ``N_grid_channels > 0``, while
+        the lead-time embedding grid is returned if ``lead_time_mode == True``. If
+        both positional and lead-time embedding are enabled, both are returned
+        (concatenated). If neither is enabled, this function should not be called;
+        doing so will raise a ValueError.
 
         Parameters
         ----------
@@ -948,15 +972,24 @@ class SongUNetPosEmbd(SongUNet):
             the patches to extract from the positional embedding grid.
             :math:`P` is the number of distinct patches in the input tensor ``x``.
             The channel dimension should contain :math:`j`, :math:`i` indices that
-            should represent the indices of the pixels to extract from the embedding grid.
+            should represent the indices of the pixels to extract from the
+            embedding grid.
+        lead_time_label : Optional[torch.Tensor], default=None
+            Tensor of shape :math:`(B,)` that corresponds to the lead-time
+            label for each batch element. Only used if ``lead_time_mode`` is True.
 
         Returns
         -------
         torch.Tensor
-            Selected positional embeddings with shape :math:`(P \times B, C_{PE}, H_{in}, W_{in})`
-            (same spatial resolution as ``global_index``) if ``global_index`` is provided.
-            If ``global_index`` is None, the entire positional embedding grid
-            is duplicated :math:`B` times and returned with shape :math:`(B, C_{PE}, H, W)`.
+            Selected embeddings with shape :math:`(P \times B, C_{PE} [+
+            C_{LT}], H_{in}, W_{in})`. :math:`C_{PE}` is the number of
+            embedding channels in the positional embedding grid, and
+            :math:`C_{LT}` is the number of embedding channels in the lead-time
+            embedding grid. If ``lead_time_label`` is provided, the lead-time
+            embedding channels are included. If ``global_index`` is `None`,
+            :math:`P = 1` is assumed, and the positional embedding grid is
+            duplicated :math:`B` times and returned with shape
+            :math:`(B, C_{PE} [+ C_{LT}], H, W)`.
 
         Example
         -------
@@ -979,38 +1012,42 @@ class SongUNetPosEmbd(SongUNet):
               for generating the ``global_index`` parameter:
               :meth:`~physicsnemo.utils.patching.BasePatching2D.global_index`.
         """
+
+        # dtype casting of embeddings
+        pos_embd = self.pos_embd
+        if (pos_embd is not None) and (x.dtype != pos_embd.dtype):
+            pos_embd = pos_embd.to(x.dtype)
+        lt_embd = self.lt_embd
+        if (lt_embd is not None) and (x.dtype != lt_embd.dtype):
+            lt_embd = lt_embd.to(x.dtype)
+
         # If no global indices are provided, select all embeddings and expand
         # to match the batch size of the input
-        pos_embd = self.pos_embd
-        if x.dtype != pos_embd.dtype:
-            pos_embd = pos_embd.to(x.dtype)
-
         if global_index is None:
-            if self.lead_time_mode:
-                selected_pos_embd = []
-                if pos_embd is not None:
-                    selected_pos_embd.append(
-                        pos_embd[None].expand((x.shape[0], -1, -1, -1))
+            selected_embd = []
+            # Select positional embedding
+            if pos_embd is not None:
+                selected_embd.append(pos_embd[None].expand((x.shape[0], -1, -1, -1)))
+            # Select lead-time embedding
+            if lt_embd is not None:
+                if lead_time_label is None:
+                    raise ValueError(
+                        "`lead_time_label` must be provided when `lt_embd` is not None."
                     )
-                if self.lt_embd is not None:
-                    selected_pos_embd.append(
-                        torch.reshape(
-                            self.lt_embd[lead_time_label.int()],
-                            (
-                                x.shape[0],
-                                self.lead_time_channels,
-                                self.img_shape_y,
-                                self.img_shape_x,
-                            ),
-                        )
+                selected_embd.append(
+                    torch.reshape(
+                        lt_embd[lead_time_label.int()],
+                        (
+                            x.shape[0],
+                            self.lead_time_channels,
+                            self.img_shape_y,
+                            self.img_shape_x,
+                        ),
                     )
-                if len(selected_pos_embd) > 0:
-                    selected_pos_embd = torch.cat(selected_pos_embd, dim=1)
-            else:
-                selected_pos_embd = pos_embd[None].expand(
-                    (x.shape[0], -1, -1, -1)
-                )  # (B, C_{PE}, H, W)
+                )
 
+        # If global indices are provided, select the embeddings corresponding
+        # to the patches
         else:
             P = global_index.shape[0]
             B = x.shape[0] // P
@@ -1020,47 +1057,57 @@ class SongUNetPosEmbd(SongUNet):
             global_index = torch.reshape(
                 torch.permute(global_index, (1, 0, 2, 3)), (2, -1)
             )  # (P, 2, X, Y) to (2, P*X*Y)
-            selected_pos_embd = pos_embd[
-                :, global_index[0], global_index[1]
-            ]  # (C_pe, P*X*Y)
-            selected_pos_embd = torch.permute(
-                torch.reshape(selected_pos_embd, (pos_embd.shape[0], P, H, W)),
-                (1, 0, 2, 3),
-            )  # (P, C_pe, X, Y)
 
-            selected_pos_embd = selected_pos_embd.repeat(
-                B, 1, 1, 1
-            )  # (B*P, C_pe, X, Y)
+            selected_embd = []
 
-            # Append positional and lead time embeddings to input conditioning
-            if self.lead_time_mode:
-                embeds = []
-                if pos_embd is not None:
-                    embeds.append(selected_pos_embd)  # reuse code below
-                if self.lt_embd is not None:
-                    lt_embds = self.lt_embd[
-                        lead_time_label.int()
-                    ]  # (B, self.lead_time_channels, self.img_shape_y, self.img_shape_x),
+            # Select positional embedding
+            if pos_embd is not None:
+                selected_pos_embd = pos_embd[
+                    :, global_index[0], global_index[1]
+                ]  # (C_pe, P*X*Y)
+                selected_pos_embd = torch.permute(
+                    torch.reshape(selected_pos_embd, (pos_embd.shape[0], P, H, W)),
+                    (1, 0, 2, 3),
+                )  # (P, C_pe, X, Y)
+                selected_pos_embd = selected_pos_embd.repeat(
+                    B, 1, 1, 1
+                )  # (B*P, C_pe, X, Y)
+                selected_embd.append(selected_pos_embd)
 
-                    selected_lt_pos_embd = lt_embds[
-                        :, :, global_index[0], global_index[1]
-                    ]  # (B, C_lt, P*X*Y)
-                    selected_lt_pos_embd = torch.reshape(
-                        torch.permute(
-                            torch.reshape(
-                                selected_lt_pos_embd,
-                                (B, self.lead_time_channels, P, H, W),
-                            ),
-                            (0, 2, 1, 3, 4),
-                        ).contiguous(),
-                        (B * P, self.lead_time_channels, H, W),
-                    )  # (B*P, C_pe, X, Y)
-                    embeds.append(selected_lt_pos_embd)
+            # Select lead-time embedding
+            if lt_embd is not None:
+                if lead_time_label is None:
+                    raise ValueError(
+                        "`lead_time_label` must be provided when `lt_embd` is not None."
+                    )
+                selected_lt_embd = lt_embd[
+                    lead_time_label.int()
+                ]  # (B, self.lead_time_channels, self.img_shape_y, self.img_shape_x),
+                selected_lt_embd = selected_lt_embd[
+                    :, :, global_index[0], global_index[1]
+                ]  # (B, C_lt, P*X*Y)
+                selected_lt_embd = torch.reshape(
+                    torch.permute(
+                        torch.reshape(
+                            selected_lt_embd,
+                            (B, self.lead_time_channels, P, H, W),
+                        ),
+                        (0, 2, 1, 3, 4),
+                    ).contiguous(),
+                    (B * P, self.lead_time_channels, H, W),
+                )  # (B*P, C_pe, X, Y)
+                selected_embd.append(selected_lt_embd)
 
-                if len(embeds) > 0:
-                    selected_pos_embd = torch.cat(embeds, dim=1)
+        # Concatenate all selected embeddings
+        if len(selected_embd) > 0:
+            selected_embd = torch.cat(selected_embd, dim=1)
+        else:
+            raise ValueError(
+                "`positional_embedding_indexing` should not be called when neither "
+                "lead-time nor positional embeddings are used."
+            )
 
-        return selected_pos_embd
+        return selected_embd
 
     def positional_embedding_selector(
         self,
@@ -1077,19 +1124,21 @@ class SongUNetPosEmbd(SongUNet):
         ----------
         x : torch.Tensor
             Input tensor of shape :math:`(P \times B, C, H_{in}, W_{in})`.
-            Only used to determine batch size :math:`B`, dtype and device.
-        embedding_selector : Callable
+            Only used to determine the dtype.
+        embedding_selector : Callable[[torch.Tensor], torch.Tensor]
             Function that takes as input the entire embedding grid of shape
-            :math:`(C_{PE}, H, W)` and returns selected embeddings with shape
-            :math:`(P \times B, C_{PE}, H_{in}, W_{in})`.
+            :math:`(C_{PE}, H, W)` (or :math:`(B, C_{LT}, H, W)`
+            when ``lead_time_label`` is provided) and returns selected embeddings with shape
+            :math:`(P \times B, C_{PE}, H_{in}, W_{in})` (or :math:`(P \times B, C_{LT}, H_{in}, W_{in})`
+            when ``lead_time_label`` is provided).
             Each selected embedding should correspond to the portion of the embedding grid
             that corresponds to the batch element in ``x``.
             Typically this should be based on
             :meth:`physicsnemo.utils.patching.BasePatching2D.apply` method to
             maintain consistency with patch extraction.
         lead_time_label : Optional[torch.Tensor], default=None
-            Tensor of shape :math:`(P,)` that corresponds to the lead-time label for each patch.
-            Only used if ``lead_time_mode`` is True.
+            Tensor of shape :math:`(B,)` that corresponds to the lead-time
+            label for each batch element. Only used if ``lead_time_mode`` is ``True``.
 
         Returns
         -------
@@ -1107,30 +1156,61 @@ class SongUNetPosEmbd(SongUNet):
               Patches are processed independently by the model, and the ``embedding_selector`` function is used
               to select the grid of positional embeddings corresponding to each
               patch.
-            - See this method from :class:`physicsnemo.utils.patching.BasePatching2D`
-              for generating the ``embedding_selector`` parameter:
-              :meth:`~physicsnemo.utils.patching.BasePatching2D.apply`
+            - See the method
+              :meth:`~physicsnemo.utils.patching.BasePatching2D.apply` from
+              :class:`physicsnemo.utils.patching.BasePatching2D` for generating
+              the ``embedding_selector`` parameter, as well as the example
+              below.
 
         Example
         -------
         >>> # Define a selector function with a patching utility:
         >>> from physicsnemo.utils.patching import GridPatching2D
         >>> patching = GridPatching2D(img_shape=(16, 16), patch_shape=(8, 8))
-        >>> batch_size = 4
+        >>> B = 4
         >>> def embedding_selector(emb):
-        ...     return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
+        ...     return patching.apply(emb.expand(B, -1, -1, -1))
         >>>
         """
+
+        # dtype casting of embeddings
         pos_embd = self.pos_embd
-        if x.dtype != pos_embd.dtype:
-            pos_embd = pos_embd.to(x.dtype)
-        if lead_time_label is not None:
-            # TODO: here we assume all patches share same lead_time_label -->
-            # need be changed
-            embeddings = torch.cat([pos_embd, self.lt_embd[lead_time_label[0].int()]])
+        if (pos_embd is not None) and (x.dtype != pos_embd.dtype):
+            pos_embd = pos_embd.to(x.dtype)  # (C_PE, H, W)
+        lt_embd = self.lt_embd
+        if (lt_embd is not None) and (x.dtype != lt_embd.dtype):
+            lt_embd = lt_embd.to(x.dtype)  # (lead_time_steps, C_LT, H, W)
+
+        embeddings: list[torch.Tensor] = []
+
+        # Select positional embedding
+        if pos_embd is not None:
+            selected_pos_embd = embedding_selector(pos_embd)  # (P * B, C_PE, H_p, W_p)
+            embeddings.append(selected_pos_embd)
+
+        # Select lead-time embedding
+        if lt_embd is not None:
+            if lead_time_label is None:
+                raise ValueError(
+                    "`lead_time_label` must be provided when `lt_embd` is not None."
+                )
+            selected_lt_embd: torch.Tensor = lt_embd[
+                lead_time_label.int()
+            ]  # (B, C_LT, H, W)
+            selected_lt_embd = embedding_selector(
+                selected_lt_embd
+            )  # (P * B, C_LT, H_p, W_p)
+            embeddings.append(selected_lt_embd)
+
+        if len(embeddings) > 0:
+            embeddings: torch.Tensor = torch.cat(embeddings, dim=1)
         else:
-            embeddings = pos_embd
-        return embedding_selector(embeddings)  # (B, N_pe, H, W)
+            raise ValueError(
+                "`positional_embedding_selector` should not be called when neither "
+                "lead-time nor positional embeddings are used."
+            )
+
+        return embeddings
 
     def _get_positional_embedding(self):
         if self.N_grid_channels == 0:
@@ -1216,7 +1296,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
 
     2. Similarly to the parent ``SongUNetPosEmbd``, this model predicts
        regression targets, but it can also produce classification predictions.
-       More precisely, some of the ouput channels are probability outputs, that
+       More precisely, some of the output channels are probability outputs, that
        are passed through a softmax activation function. This is useful for
        multi-task applications, where the objective is a combination of both
        regression and classification losses.
@@ -1358,7 +1438,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         resample_filter: List[int] = [1, 1],
         gridtype: str = "sinusoidal",
         N_grid_channels: int = 4,
-        lead_time_channels: int = None,
+        lead_time_channels: int | None = None,
         lead_time_steps: int = 9,
         prob_channels: List[int] = [],
         checkpoint_level: int = 0,
@@ -1368,36 +1448,37 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         profile_mode: bool = False,
         amp_mode: bool = False,
     ):
+        self._is_song_unet_pos_lt_embd = True
         super().__init__(
-            img_resolution,
-            in_channels,
-            out_channels,
-            label_dim,
-            augment_dim,
-            model_channels,
-            channel_mult,
-            channel_mult_emb,
-            num_blocks,
-            attn_resolutions,
-            dropout,
-            label_dropout,
-            embedding_type,
-            channel_mult_noise,
-            encoder_type,
-            decoder_type,
-            resample_filter,
-            gridtype,
-            N_grid_channels,
-            checkpoint_level,
-            additive_pos_embed,
-            use_apex_gn,
-            act,
-            profile_mode,
-            amp_mode,
-            True,  # Note: lead_time_mode=True is enforced here
-            lead_time_channels,
-            lead_time_steps,
-            prob_channels,
+            img_resolution=img_resolution,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            label_dim=label_dim,
+            augment_dim=augment_dim,
+            model_channels=model_channels,
+            channel_mult=channel_mult,
+            channel_mult_emb=channel_mult_emb,
+            num_blocks=num_blocks,
+            attn_resolutions=attn_resolutions,
+            dropout=dropout,
+            label_dropout=label_dropout,
+            embedding_type=embedding_type,
+            channel_mult_noise=channel_mult_noise,
+            encoder_type=encoder_type,
+            decoder_type=decoder_type,
+            resample_filter=resample_filter,
+            gridtype=gridtype,
+            N_grid_channels=N_grid_channels,
+            checkpoint_level=checkpoint_level,
+            additive_pos_embed=additive_pos_embed,
+            use_apex_gn=use_apex_gn,
+            act=act,
+            profile_mode=profile_mode,
+            amp_mode=amp_mode,
+            lead_time_mode=True,  # Note: lead_time_mode=True is enforced here
+            lead_time_channels=lead_time_channels,
+            lead_time_steps=lead_time_steps,
+            prob_channels=prob_channels,
         )
 
     def forward(

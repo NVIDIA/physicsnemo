@@ -139,6 +139,17 @@ def test_call_method_edm():
     def fake_net(y, sigma, labels, augment_labels=None):
         return torch.tensor([1.0])
 
+    def fake_condition_net_lt(
+        y,
+        sigma,
+        condition,
+        class_labels=None,
+        augment_labels=None,
+        lead_time_label=None,
+    ):
+        assert lead_time_label is not None  # test that this is properly passed through
+        return torch.tensor([1.0])
+
     loss_func = EDMLoss()
 
     img = torch.tensor([[[[1.0]]]])
@@ -159,6 +170,16 @@ def test_call_method_edm():
 
     loss_value_with_augmentation = loss_func(fake_net, img, labels, mock_augment_pipe)
     assert isinstance(loss_value_with_augmentation, torch.Tensor)
+
+    lead_time_label = torch.tensor([1])
+    loss_value = loss_func(
+        fake_condition_net_lt,
+        img,
+        condition=condition,
+        labels=labels,
+        lead_time_label=lead_time_label,
+    )
+    assert isinstance(loss_value, torch.Tensor)
 
 
 # RegressionLoss tests
