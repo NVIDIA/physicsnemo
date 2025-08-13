@@ -92,9 +92,10 @@ def validation_step(
             if i == 0:
                 for chan in range(outvar.size(1)):
                     fig, ax = plt.subplots(1, 3)
-                    vmin, vmax = np.min(
-                        outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()
-                    ), np.max(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy())
+                    vmin, vmax = (
+                        np.min(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()),
+                        np.max(outvar[i, chan, :, :, nz // 2].detach().cpu().numpy()),
+                    )
                     # plot z slices
                     im = ax[0].imshow(
                         outvar[i, chan, :, :, nz // 2].detach().cpu().numpy(),
@@ -137,7 +138,6 @@ def validation_step(
     version_base="1.2", config_path="conf", config_name="config_physics_informed"
 )
 def main(cfg: DictConfig) -> None:
-
     logger = PythonLogger("main")  # General python logger
     LaunchLogger.initialize()
 

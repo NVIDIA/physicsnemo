@@ -16,13 +16,13 @@
 
 """
 This code defines a distributed pipeline for testing the DoMINO model on
-CFD datasets. It includes the instantiating the DoMINO model and datapipe, 
-automatically loading the most recent checkpoint, reading the VTP/VTU/STL 
-testing files, calculation of parameters required for DoMINO model and 
-evaluating the model in parallel using DistributedDataParallel across multiple 
-GPUs. This is a common recipe that enables training of combined models for surface 
-and volume as well either of them separately. The model predictions are loaded in 
-the the VTP/VTU files and saved in the specified directory. The eval tab in 
+CFD datasets. It includes the instantiating the DoMINO model and datapipe,
+automatically loading the most recent checkpoint, reading the VTP/VTU/STL
+testing files, calculation of parameters required for DoMINO model and
+evaluating the model in parallel using DistributedDataParallel across multiple
+GPUs. This is a common recipe that enables training of combined models for surface
+and volume as well either of them separately. The model predictions are loaded in
+the the VTP/VTU files and saved in the specified directory. The eval tab in
 config.yaml can be used to specify the input and output directories.
 """
 
@@ -195,9 +195,9 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         eval_mode="volume",
                     )
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
-                    prediction_vol[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_vol[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
 
@@ -285,11 +285,11 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         global_params_reference,
                         num_sample_points=cfg.model.num_neighbors_surface,
                     )
-                    
+
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
-                    prediction_surf[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_surf[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
@@ -843,7 +843,6 @@ def main(cfg: DictConfig):
             write_to_vtp(celldata_all, vtp_pred_save_path)
 
         if prediction_vol is not None:
-
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
             volParam_vtk.SetName(f"{volume_variable_names[0]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)

@@ -44,7 +44,6 @@ from utils import find_h5_files
 
 
 class H5Dataset(Dataset):  # TODO: Use a Dali datapipe for better performance
-
     """
     Custom dataset class for loading
 

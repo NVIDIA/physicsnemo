@@ -89,9 +89,9 @@ def nested_darcy_generator() -> None:
             permea = sample["permeability"].cpu().detach().numpy()
             darcy = sample["darcy"].cpu().detach().numpy()
             pos = (sample["inset_pos"].cpu().detach().numpy()).astype(int)
-            assert (
-                np.where(pos == fill_val, 0, pos) % ref_fac
-            ).sum() == 0, "inset off coarse grid"
+            assert (np.where(pos == fill_val, 0, pos) % ref_fac).sum() == 0, (
+                "inset off coarse grid"
+            )
 
             # crop out refined region, allow for surrounding area, save in extra array
             for ii in range(batch_size):

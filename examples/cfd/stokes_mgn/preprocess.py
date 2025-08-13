@@ -52,6 +52,7 @@ train_files = all_files[:train_size]
 valid_files = all_files[train_size : train_size + valid_size]
 test_files = all_files[train_size + valid_size :]
 
+
 # Function to copy files
 def copy_files(files, dest_dir):
     for f in files:

@@ -33,7 +33,7 @@ def export_diagnostic(
     out_dir="exports",
     model_name=None,
     epoch=None,  # None loads latest checkpoint (default)
-    **cfg
+    **cfg,
 ):
     # setup model
     model = models.setup_model(**cfg["model"])

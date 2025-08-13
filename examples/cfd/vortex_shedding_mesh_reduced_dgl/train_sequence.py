@@ -326,7 +326,7 @@ if __name__ == "__main__":
             n_batch = n_batch + 1
         avg_loss = loss_total / n_batch
         rank_zero_logger.info(
-            f"epoch: {epoch}, loss: {avg_loss:10.3e}, relative_error: {relative_error:10.3e},time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch}, loss: {avg_loss:10.3e}, relative_error: {relative_error:10.3e},time per epoch: {(time.time() - start):10.3e}"
         )
         wb.log({"loss": loss.detach().cpu()})
 

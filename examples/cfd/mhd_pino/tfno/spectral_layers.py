@@ -70,7 +70,7 @@ class FactorizedSpectralConv1d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.reset_parameters()
 
@@ -174,14 +174,14 @@ class FactorizedSpectralConv2d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights2 = tltorch.FactorizedTensor.new(
             (in_channels, out_channels, self.modes1, self.modes2, 2),
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.reset_parameters()
 
@@ -291,28 +291,28 @@ class FactorizedSpectralConv3d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights2 = tltorch.FactorizedTensor.new(
             (in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2),
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights3 = tltorch.FactorizedTensor.new(
             (in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2),
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights4 = tltorch.FactorizedTensor.new(
             (in_channels, out_channels, self.modes1, self.modes2, self.modes3, 2),
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.reset_parameters()
 
@@ -440,7 +440,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights2 = tltorch.FactorizedTensor.new(
             (
@@ -455,7 +455,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights3 = tltorch.FactorizedTensor.new(
             (
@@ -470,7 +470,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights4 = tltorch.FactorizedTensor.new(
             (
@@ -485,7 +485,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights5 = tltorch.FactorizedTensor.new(
             (
@@ -500,7 +500,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights6 = tltorch.FactorizedTensor.new(
             (
@@ -515,7 +515,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights7 = tltorch.FactorizedTensor.new(
             (
@@ -530,7 +530,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.weights8 = tltorch.FactorizedTensor.new(
             (
@@ -545,7 +545,7 @@ class FactorizedSpectralConv4d(nn.Module):
             rank=rank,
             factorization=factorization,
             fixed_rank_modes=fixed_rank_modes,
-            **decomposition_kwargs
+            **decomposition_kwargs,
         )
         self.reset_parameters()
 
@@ -592,53 +592,61 @@ class FactorizedSpectralConv4d(nn.Module):
         # print(f'mod: size x: {x_ft.size()}, out: {out_ft.size()}')
         # print(f'mod: x_ft[weight4]: {x_ft[:, :, self.modes1 :, self.modes2 :, : -self.modes3, :self.modes4].size()} weight4: {self.weights4.size()}')
 
-        out_ft[
-            :, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
-            self.weights1,
+        out_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
+                self.weights1,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
-            self.weights2,
+        out_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
+                self.weights2,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
-            self.weights3,
+        out_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
+                self.weights3,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
-            self.weights4,
+        out_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
+                self.weights4,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4],
-            self.weights5,
+        out_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
+                ],
+                self.weights5,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4],
-            self.weights6,
+        out_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
+                ],
+                self.weights6,
+            )
         )
-        out_ft[
-            :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4],
-            self.weights7,
+        out_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
+                ],
+                self.weights7,
+            )
         )
-        out_ft[
-            :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
-        ] = self.compl_mul4d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4],
-            self.weights8,
+        out_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+            self.compl_mul4d(
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
+                ],
+                self.weights8,
+            )
         )
 
         # Return to physical space

@@ -170,12 +170,12 @@ def AssembleToSingleField(cfg: DictConfig, dat: dict):
         # overwrite refined regions
         for __, inset in field["ref1"].items():
             pos = inset["pos"] * ref_fac + min_offset
-            perm[
-                ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size
-            ] = inset["permeability"]
-            darc[
-                ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size
-            ] = inset["darcy"]
+            perm[ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size] = (
+                inset["permeability"]
+            )
+            darc[ii, pos[0] : pos[0] + inset_size, pos[1] : pos[1] + inset_size] = (
+                inset["darcy"]
+            )
 
     return {"permeability": perm, "darcy": darc}, ref_fac
 
@@ -199,9 +199,9 @@ def ComputeErrorNorm(cfg: DictConfig, pred_dict: dict, log: PythonLogger, ref0_p
     pred, ref_fac = AssembleToSingleField(cfg, pred_dict)
     tar = AssembleToSingleField(cfg, tar_dict)[0]
 
-    assert np.all(
-        tar["permeability"] == pred["permeability"]
-    ), "Permeability from file is not equal to analysed permeability"
+    assert np.all(tar["permeability"] == pred["permeability"]), (
+        "Permeability from file is not equal to analysed permeability"
+    )
 
     # compute l2 norm of error
     rel_l2_err = GetRelativeL2(pred, tar)

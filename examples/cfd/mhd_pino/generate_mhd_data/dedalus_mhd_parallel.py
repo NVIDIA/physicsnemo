@@ -18,8 +18,8 @@
 Dedalus script simulating a 2D periodic incompressible MHD flow with a passive
 tracer field for visualization. This script demonstrates solving a 2D periodic
 initial value problem. This script is meant to be ran in parallel, and uses the
-built-in analysis framework to save data snapshots to HDF5 files. 
-The simulation should take at least 100 gpu-minutes to run. 
+built-in analysis framework to save data snapshots to HDF5 files.
+The simulation should take at least 100 gpu-minutes to run.
 
 The initial flow is in the x-direction and depends only on z. The problem is
 non-dimensionalized usign the shear-layer spacing and velocity jump, so the
@@ -33,7 +33,6 @@ Schmidt numbers as:
 To run this script:
     $ python dedalus_mhd_parallel.py
 """
-
 
 import os
 import glob

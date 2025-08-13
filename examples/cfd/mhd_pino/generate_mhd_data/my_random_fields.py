@@ -38,7 +38,6 @@ class GRF_Mattern(object):
         constant_eig=None,
         device=None,
     ):
-
         self.dim = dim
         self.device = device
         self.bc = boundary
@@ -144,9 +143,9 @@ class GRF_Mattern(object):
                 )
 
             if constant_eig is not None:
-                self.sqrt_eig[
-                    0, 0, 0
-                ] = constant_eig  # (size**dim)*sigma*(tau**(-alpha))
+                self.sqrt_eig[0, 0, 0] = (
+                    constant_eig  # (size**dim)*sigma*(tau**(-alpha))
+                )
             else:
                 self.sqrt_eig[0, 0, 0] = 0.0
 
@@ -157,7 +156,6 @@ class GRF_Mattern(object):
         self.size = tuple(self.size)
 
     def sample(self, N):
-
         coeff = torch.randn(N, *self.size, dtype=torch.cfloat, device=self.device)
         if self.bc == "dirichlet":
             coeff.real[:] = 0
@@ -212,7 +210,7 @@ if __name__ == "__main__":
             with h5py.File(filename, "w") as hf:
                 hf.create_dataset("u", data=u0)
                 for j in range(dim):
-                    coord_name = f"x{j+1}"
+                    coord_name = f"x{j + 1}"
                     hf.create_dataset(coord_name, data=x)
 
     if cfg.plot:

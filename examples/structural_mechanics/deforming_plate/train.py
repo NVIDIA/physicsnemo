@@ -39,42 +39,57 @@ from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 from helpers import add_world_edges
 
 import os
+
 os.makedirs(os.path.expanduser("~/.dgl"), exist_ok=True)
 
 from torch.utils.tensorboard import SummaryWriter
 
+
 class InMemoryTimeStepDataset(torch.utils.data.Dataset):
-    """ In-memory dataset."""
+    """In-memory dataset."""
+
     def __init__(self, sample_dir):
         self.data = []
-        sample_files = sorted([
-            os.path.join(sample_dir, f)
-            for f in os.listdir(sample_dir)
-            if f.startswith("sample_") and f.endswith(".pt")
-        ])
+        sample_files = sorted(
+            [
+                os.path.join(sample_dir, f)
+                for f in os.listdir(sample_dir)
+                if f.startswith("sample_") and f.endswith(".pt")
+            ]
+        )
         print(f"Found {len(sample_files)} sample files")
         for sample_file in sample_files:
-            sample_data = torch.load(sample_file, map_location="cpu", weights_only=False)
+            sample_data = torch.load(
+                sample_file, map_location="cpu", weights_only=False
+            )
             self.data.extend(sample_data)  # Flatten all time steps into one list
         print(f"Loaded the dataset with {len(self.data)} samples")
 
     def __getitem__(self, idx):
-        return self.data[idx]  # dict with graph, mesh_edge_features, world_edge_features
+        return self.data[
+            idx
+        ]  # dict with graph, mesh_edge_features, world_edge_features
 
     def __len__(self):
         return len(self.data)
 
+
 class LazyTimeStepDataset(torch.utils.data.Dataset):
-    """ Lazy dataset."""
+    """Lazy dataset."""
+
     def __init__(self, sample_dir, num_time_steps):
-        self.sample_files = sorted([
-            os.path.join(sample_dir, f)
-            for f in os.listdir(sample_dir)
-            if f.startswith("sample_") and f.endswith(".pt")
-        ])
+        self.sample_files = sorted(
+            [
+                os.path.join(sample_dir, f)
+                for f in os.listdir(sample_dir)
+                if f.startswith("sample_") and f.endswith(".pt")
+            ]
+        )
         self.num_steps = num_time_steps - 1
         self.total_samples = len(self.sample_files) * self.num_steps
-        print(f"Found {len(self.sample_files)} sample files, {self.total_samples} samples in total.")
+        print(
+            f"Found {len(self.sample_files)} sample files, {self.total_samples} samples in total."
+        )
 
     def __getitem__(self, idx):
         file_idx = idx // self.num_steps
@@ -85,6 +100,7 @@ class LazyTimeStepDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return self.total_samples
+
 
 class MGNTrainer:
     def __init__(self, cfg: DictConfig, rank_zero_logger: RankZeroLoggingWrapper):
@@ -100,13 +116,17 @@ class MGNTrainer:
             )
             mlp_act = "silu"
 
-        #dataset = InMemoryTimeStepDataset(to_absolute_path(cfg.preprocess_output_dir))
+        # dataset = InMemoryTimeStepDataset(to_absolute_path(cfg.preprocess_output_dir))
         dataset = LazyTimeStepDataset(
-            to_absolute_path(cfg.preprocess_output_dir),
-            cfg.num_training_time_steps
-            )
+            to_absolute_path(cfg.preprocess_output_dir), cfg.num_training_time_steps
+        )
         if self.dist.world_size > 1:
-            sampler = DistributedSampler(dataset, num_replicas=self.dist.world_size, rank=self.dist.rank, shuffle=True)
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=self.dist.world_size,
+                rank=self.dist.rank,
+                shuffle=True,
+            )
         else:
             sampler = None
 
@@ -188,7 +208,9 @@ class MGNTrainer:
         )
 
         if self.dist.rank == 0:
-            self.writer = SummaryWriter(log_dir=to_absolute_path(cfg.tensorboard_log_dir))
+            self.writer = SummaryWriter(
+                log_dir=to_absolute_path(cfg.tensorboard_log_dir)
+            )
 
     def train(self, graph, mesh_edge_features, world_edge_features, epoch):
         mesh_edge_features = mesh_edge_features.to(self.dist.device)
@@ -202,7 +224,9 @@ class MGNTrainer:
     def forward(self, graph, mesh_edge_features, world_edge_features):
         # forward pass
         with autocast(enabled=self.amp):
-            pred = self.model(graph.ndata["x"], mesh_edge_features, world_edge_features, graph)
+            pred = self.model(
+                graph.ndata["x"], mesh_edge_features, world_edge_features, graph
+            )
             loss = self.criterion(pred, graph.ndata["y"])
             return loss
 
@@ -235,25 +259,27 @@ def main(cfg: DictConfig) -> None:
             trainer.sampler.set_epoch(epoch)
         start = time.time()
         # Wrap the dataloader with tqdm and add description with epoch info
-        progress_bar = tqdm(trainer.dataloader, desc=f"Epoch {epoch+1}/{cfg.epochs}", leave=False)
-        
+        progress_bar = tqdm(
+            trainer.dataloader, desc=f"Epoch {epoch + 1}/{cfg.epochs}", leave=False
+        )
+
         for item in progress_bar:
-            graph = item['graph'].to(dist.device)
-            mesh_edge_features = item['mesh_edge_features'].to(dist.device)
-            world_edge_features = item['world_edge_features'].to(dist.device)
+            graph = item["graph"].to(dist.device)
+            mesh_edge_features = item["mesh_edge_features"].to(dist.device)
+            world_edge_features = item["world_edge_features"].to(dist.device)
             loss = trainer.train(graph, mesh_edge_features, world_edge_features, epoch)
-                    
+
             # Update tqdm postfix with current loss (converted to scalar)
             progress_bar.set_postfix(loss=f"{loss.item():.3e}")
             del graph, mesh_edge_features, world_edge_features
             torch.cuda.empty_cache()
-        
+
         rank_zero_logger.info(
-            f"epoch: {epoch+1}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch + 1}, loss: {loss:10.3e}, time per epoch: {(time.time() - start):10.3e}"
         )
         if dist.rank == 0:
             trainer.writer.add_scalar("loss", loss.detach().cpu().item(), epoch)
-            current_lr = trainer.optimizer.param_groups[0]['lr']
+            current_lr = trainer.optimizer.param_groups[0]["lr"]
             trainer.writer.add_scalar("learning_rate", current_lr, epoch)
 
         # save checkpoint
@@ -266,13 +292,13 @@ def main(cfg: DictConfig) -> None:
                 optimizer=trainer.optimizer,
                 scheduler=trainer.scheduler,
                 scaler=trainer.scaler,
-                epoch=epoch+1,
+                epoch=epoch + 1,
             )
             logger.info(f"Saved model on rank {dist.rank}")
         torch.cuda.empty_cache()
         start = time.time()
     rank_zero_logger.info("Training completed!")
-    if dist.rank == 0:  
+    if dist.rank == 0:
         trainer.writer.close()
 
 

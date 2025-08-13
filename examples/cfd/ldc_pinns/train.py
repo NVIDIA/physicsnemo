@@ -68,9 +68,10 @@ def ldc_trainer(cfg: DictConfig) -> None:
     x = np.linspace(-0.05, 0.05, 512)
     y = np.linspace(-0.05, 0.05, 512)
     xx, yy = np.meshgrid(x, y, indexing="xy")
-    xx, yy = torch.from_numpy(xx).to(torch.float).to(dist.device), torch.from_numpy(
-        yy
-    ).to(torch.float).to(dist.device)
+    xx, yy = (
+        torch.from_numpy(xx).to(torch.float).to(dist.device),
+        torch.from_numpy(yy).to(torch.float).to(dist.device),
+    )
 
     # bc dataloader
     bc_dataloader = GeometryDatapipe(
@@ -96,7 +97,6 @@ def ldc_trainer(cfg: DictConfig) -> None:
 
     for i in range(10000):
         for bc_data, int_data in zip(bc_dataloader, interior_dataloader):
-
             optimizer.zero_grad()
 
             # subsample points:

@@ -196,7 +196,7 @@ def main(cfg: DictConfig) -> None:
 
         epoch_loss /= len(trainer.dataloader)
         rank_zero_logger.info(
-            f"epoch: {epoch}, loss: {epoch_loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch}, loss: {epoch_loss:10.3e}, time per epoch: {(time.time() - start):10.3e}"
         )
         wandb.log({"loss": epoch_loss})
 

@@ -117,12 +117,17 @@ class MGNRollout:
 
     @torch.inference_mode()
     def predict(self):
-        
         self.pred, self.exact, self.faces, self.graphs = [], [], [], []
         stats = {
             key: value.to(self.device) for key, value in self.dataset.node_stats.items()
         }
-        for i, (graph, cells, moving_points_mask, object_points_mask, clamped_points_mask) in enumerate(self.dataloader):
+        for i, (
+            graph,
+            cells,
+            moving_points_mask,
+            object_points_mask,
+            clamped_points_mask,
+        ) in enumerate(self.dataloader):
             graph = graph.to(self.device)
             moving_points_mask = moving_points_mask.to(self.device)
             object_points_mask = object_points_mask.to(self.device)
@@ -133,13 +138,17 @@ class MGNRollout:
                 stats["velocity_mean"],
                 stats["velocity_std"],
             )
-            exact_next_world_pos = exact_velocity_denormalized + graph.ndata["world_pos"][:, 0:3]
+            exact_next_world_pos = (
+                exact_velocity_denormalized + graph.ndata["world_pos"][:, 0:3]
+            )
 
             # inference step
             if i % (self.num_test_time_steps - 1) != 0:
-                graph.ndata["world_pos"] = self.pred[i-1][:, 0:3]
+                graph.ndata["world_pos"] = self.pred[i - 1][:, 0:3]
             graph, mesh_edge_features, world_edge_features = add_world_edges(graph)
-            pred_i = self.model(graph.ndata["x"], mesh_edge_features, world_edge_features, graph)  # predict
+            pred_i = self.model(
+                graph.ndata["x"], mesh_edge_features, world_edge_features, graph
+            )  # predict
 
             # denormalize prediction
             pred_velocity_denormalized = self.dataset.denormalize(
@@ -147,15 +156,21 @@ class MGNRollout:
                 stats["velocity_mean"],
                 stats["velocity_std"],
             )
-            
+
             # do not update the "wall_boundary" & "outflow" nodes
-            moving_points_mask = torch.cat((moving_points_mask, moving_points_mask, moving_points_mask), dim=-1).to(self.device)
+            moving_points_mask = torch.cat(
+                (moving_points_mask, moving_points_mask, moving_points_mask), dim=-1
+            ).to(self.device)
             pred_velocity_denormalized = torch.where(
-                moving_points_mask, pred_velocity_denormalized, torch.zeros_like(pred_velocity_denormalized)
+                moving_points_mask,
+                pred_velocity_denormalized,
+                torch.zeros_like(pred_velocity_denormalized),
             )
 
             # integration
-            pred_world_pos_denormalized = pred_velocity_denormalized.squeeze(0) + graph.ndata["world_pos"][:, 0:3]  # Note that the world_pos is not normalized
+            pred_world_pos_denormalized = (
+                pred_velocity_denormalized.squeeze(0) + graph.ndata["world_pos"][:, 0:3]
+            )  # Note that the world_pos is not normalized
             # assign boundary conditions to the object points
             pred_world_pos_denormalized = torch.where(
                 object_points_mask, exact_next_world_pos, pred_world_pos_denormalized
@@ -176,7 +191,6 @@ class MGNRollout:
 
     # var_identifier = {"ux": 0, "uy": 1, "uz": 2, "stress": 3, "disp_mag": -1}
     var_identifier = {"ux": 0, "uy": 1, "uz": 2, "disp_mag": -1}
-        
 
     def get_raw_data(self, idx):
         # Support for displacement magnitude

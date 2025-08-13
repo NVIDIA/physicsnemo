@@ -59,7 +59,6 @@ def plot_obs_locations(ax, lat, lon, z, norm=None, cmap=None):
 
 
 def add_features(ax):
-
     reader = shapereader.Reader(COUNTY_SHAPE_FILE.as_posix())
 
     for k, i in enumerate(reader.records()):

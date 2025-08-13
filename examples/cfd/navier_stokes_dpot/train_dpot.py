@@ -48,6 +48,7 @@ def prepare_data(
             data = h5py.File(input_data_path)
         except Exception as e:
             from scipy.io import loadmat
+
             data = loadmat(input_data_path)
         for k, v in data.items():
             arrays[k] = np.array(v)
@@ -58,8 +59,7 @@ def prepare_data(
             start_idx : start_idx + num_samples,
         ]
         outvar = arrays["u"][
-            input_nr_tsteps
-            + predict_nr_tsteps : input_nr_tsteps
+            input_nr_tsteps + predict_nr_tsteps : input_nr_tsteps
             + 2 * predict_nr_tsteps,
             ...,
             start_idx : start_idx + num_samples,
@@ -74,9 +74,13 @@ def prepare_data(
         h.create_dataset("outvar", data=outvar)
         h.close()
 
+
 def rel_l2_loss(pred, target):
     """Relative L2 loss"""
-    return torch.sqrt(torch.sum((pred - target) ** 2)) / torch.sqrt(torch.sum(target ** 2))
+    return torch.sqrt(torch.sum((pred - target) ** 2)) / torch.sqrt(
+        torch.sum(target**2)
+    )
+
 
 def validation_step(model, dataloader, epoch):
     """Validation step"""
@@ -89,12 +93,12 @@ def validation_step(model, dataloader, epoch):
             pred = []
             for t in range(outvar.shape[-2]):
                 predvar = model(invar)
-                invar = torch.cat([invar[...,1:,:], predvar], dim=-2)
+                invar = torch.cat([invar[..., 1:, :], predvar], dim=-2)
                 pred.append(predvar)
             predvar = torch.cat(pred, dim=-2)
 
             loss_epoch += rel_l2_loss(predvar, outvar).item()
-   
+
     return loss_epoch / len(dataloader)
 
 
@@ -183,8 +187,22 @@ def main(cfg: DictConfig) -> None:
     test_save_path = "./test_data_" + str(cfg.model_type) + ".hdf5"
 
     # prepare data
-    prepare_data(raw_data_path,train_save_path, 0, nr_tsteps_to_predict, 0, num_samples,)
-    prepare_data(raw_data_path,test_save_path, 0, nr_tsteps_to_predict, 0, test_samples,)
+    prepare_data(
+        raw_data_path,
+        train_save_path,
+        0,
+        nr_tsteps_to_predict,
+        0,
+        num_samples,
+    )
+    prepare_data(
+        raw_data_path,
+        test_save_path,
+        0,
+        nr_tsteps_to_predict,
+        0,
+        test_samples,
+    )
 
     train_dataset = HDF5MapStyleDataset(train_save_path, device=cfg.device)
     train_dataloader = DataLoader(
@@ -207,7 +225,7 @@ def main(cfg: DictConfig) -> None:
         in_timesteps=nr_tsteps_to_predict,
         out_timesteps=1,
         depth=4,
-        embed_dim=128
+        embed_dim=128,
     )
 
     if device == "cuda":
@@ -246,19 +264,24 @@ def main(cfg: DictConfig) -> None:
                 # go through the full dataset
                 for i, seq in enumerate(train_dataloader):
                     # seq: (B,1,T,H,W)
-                    x = torch.cat(seq, dim=-2) # B, X, Y, T_total, C
+                    x = torch.cat(seq, dim=-2)  # B, X, Y, T_total, C
                     T = x.shape[-2]
 
                     # --- Randomly sample a timestep  ---
-                    t = torch.randint(nr_tsteps_to_predict, T-1, (1,), device=x.device).item()
-                    x_t   = x[..., t-nr_tsteps_to_predict:t, :]          # (B,1,H,W)
-                    y_tp1 = x[..., t:t+1, :]        # (B,1,H,W)
+                    t = torch.randint(
+                        nr_tsteps_to_predict, T - 1, (1,), device=x.device
+                    ).item()
+                    x_t = x[..., t - nr_tsteps_to_predict : t, :]  # (B,1,H,W)
+                    y_tp1 = x[..., t : t + 1, :]  # (B,1,H,W)
 
-                    # noise scale 
+                    # noise scale
                     if cfg.noise_scale > 0:
-                        norm_factor = torch.sqrt(torch.sum(x_t**2, dim=(1,2,3), keepdim=True) + 1e-12)
-                        x_t = x_t + cfg.noise_scale * norm_factor * torch.randn_like(x_t)
-
+                        norm_factor = torch.sqrt(
+                            torch.sum(x_t**2, dim=(1, 2, 3), keepdim=True) + 1e-12
+                        )
+                        x_t = x_t + cfg.noise_scale * norm_factor * torch.randn_like(
+                            x_t
+                        )
 
                     pred = arch(x_t)
                     loss = rel_l2_loss(pred, y_tp1)

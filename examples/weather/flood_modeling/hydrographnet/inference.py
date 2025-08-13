@@ -246,9 +246,7 @@ def main(cfg: DictConfig):
         X_current = g.ndata["x"].to(device)  # Expected shape: [num_nodes, 16]
         num_nodes = X_current.size(0)
 
-        rollout_preds = (
-            []
-        )  # To store predicted actual water depth values for each step.
+        rollout_preds = []  # To store predicted actual water depth values for each step.
         ground_truth_list = []  # To store ground truth water depth values.
         rmse_list = []  # RMSE at each rollout step.
 

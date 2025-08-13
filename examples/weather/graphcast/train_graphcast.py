@@ -307,7 +307,6 @@ class GraphCastTrainer(BaseTrainer):
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # Optionally import apex
     if cfg.use_apex:
         try:
@@ -373,7 +372,6 @@ def main(cfg: DictConfig) -> None:
                 iter < cfg.num_iters_step1 + cfg.num_iters_step2 + cfg.num_iters_step3
             ), "Training is already finished!"
             for _, data in enumerate(trainer.datapipe):
-
                 # profiling
                 if cfg.profile and iter == cfg.profile_range[0]:
                     rank_zero_logger.info("Starting profile", "green")
@@ -468,8 +466,9 @@ def main(cfg: DictConfig) -> None:
                     num_samples_per_year=cfg.num_samples_per_year_train,
                     device=dist.device,
                 )
-                invar_cat, outvar = invar_cat.to(dtype=trainer.dtype), outvar.to(
-                    dtype=trainer.dtype
+                invar_cat, outvar = (
+                    invar_cat.to(dtype=trainer.dtype),
+                    outvar.to(dtype=trainer.dtype),
                 )
 
                 # training step
@@ -508,8 +507,8 @@ def main(cfg: DictConfig) -> None:
                     )
                     logger.info(f"Saved model on rank {dist.rank}")
                     logger.log(
-                        f"iteration: {iter}, loss: {loss_agg/cfg.save_freq:10.3e}, \
-                            time per iter: {(time.time()-start)/cfg.save_freq:10.3e}"
+                        f"iteration: {iter}, loss: {loss_agg / cfg.save_freq:10.3e}, \
+                            time per iter: {(time.time() - start) / cfg.save_freq:10.3e}"
                     )
                     loss_all = loss_agg / cfg.save_freq
                     if dist.rank == 0:
@@ -549,8 +548,8 @@ def main(cfg: DictConfig) -> None:
                         )
                         logger.info(f"Saved model on rank {dist.rank}")
                         logger.log(
-                            f"iteration: {iter}, loss: {loss_agg/cfg.save_freq:10.3e}, \
-                                time per iter: {(time.time()-start)/cfg.save_freq:10.3e}"
+                            f"iteration: {iter}, loss: {loss_agg / cfg.save_freq:10.3e}, \
+                                time per iter: {(time.time() - start) / cfg.save_freq:10.3e}"
                         )
                     terminate_training = True
                     break

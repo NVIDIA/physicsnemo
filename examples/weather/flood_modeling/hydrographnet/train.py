@@ -34,6 +34,7 @@ from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meshgraphnet.meshgraphkan import MeshGraphKAN
 from utils import custom_loss, compute_physics_loss
 
+
 # Custom collate function that checks if each item is a tuple (graph, physics_data) or a plain graph.
 def collate_fn(batch):
     if isinstance(batch[0], tuple):

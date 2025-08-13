@@ -125,7 +125,6 @@ class HrrrEra5DatasetDownscale(Dataset):
         # self.stds_era5 = np.load(os.path.join(self.location, 'era5', 'stats', 'stds.npy'))[:, None, None]
 
     def _get_hrrr_channel_names(self):
-
         base_hrrr_channels = self.hrrr_channels
         kept_hrrr_channels = base_hrrr_channels
 
@@ -137,7 +136,6 @@ class HrrrEra5DatasetDownscale(Dataset):
         return base_hrrr_channels, kept_hrrr_channels
 
     def _get_era5_channel_names(self):
-
         return list(self.era5_channels.values)
 
     def _get_files_stats(self):
@@ -185,11 +183,12 @@ class HrrrEra5DatasetDownscale(Dataset):
         years = [int(os.path.basename(x).replace(".zarr", "")) for x in self.hrrr_paths]
         print("years: ", years)
         print("self.years: ", self.years)
-        assert (
-            years == self.years
-        ), "Number of years for ERA5 in %s and HRRR in %s must match" % (
-            os.path.join(self.location, "era5/*.zarr"),
-            os.path.join(self.location, "hrrr/*.zarr"),
+        assert years == self.years, (
+            "Number of years for ERA5 in %s and HRRR in %s must match"
+            % (
+                os.path.join(self.location, "era5/*.zarr"),
+                os.path.join(self.location, "hrrr/*.zarr"),
+            )
         )
         with xr.open_zarr(self.hrrr_paths[0], consolidated=True) as ds:
             self.hrrr_channels = list(ds.channel.values)
@@ -206,11 +205,9 @@ class HrrrEra5DatasetDownscale(Dataset):
         ]
 
         if self.boundary_padding_pixels > 0:
-
             self.era5_lat, self.era5_lon = self._construct_era5_window()
 
         else:
-
             self.era5_lat = self.hrrr_lat
             self.era5_lon = self.hrrr_lon
 
@@ -224,7 +221,6 @@ class HrrrEra5DatasetDownscale(Dataset):
         return x[:, 0 : self.params.hrrr_img_size[0], 0 : self.params.hrrr_img_size[1]]
 
     def to_datetime(self, date):
-
         timestamp = (date - np.datetime64("1970-01-01T00:00:00")) / np.timedelta64(
             1, "s"
         )
@@ -236,7 +232,6 @@ class HrrrEra5DatasetDownscale(Dataset):
         """
 
         if self.params.localtest:
-
             all_datetimes_ = []
 
             for year in self.years:
@@ -255,7 +250,6 @@ class HrrrEra5DatasetDownscale(Dataset):
             all_datetimes = all_datetimes[:-2]
 
         else:
-
             first_year = sorted(self.years)[0]
             last_year = sorted(self.years)[-1]
             if first_year == 2018:
@@ -432,15 +426,15 @@ class HrrrEra5DatasetDownscale(Dataset):
             )
         )
 
-        assert (
-            added_pixels_x == 2 * boundary_padding_pixels
-        ), "requested {} padding pixels but got {} in x due to interpolation round off errors".format(
-            boundary_padding_pixels, added_pixels_x
+        assert added_pixels_x == 2 * boundary_padding_pixels, (
+            "requested {} padding pixels but got {} in x due to interpolation round off errors".format(
+                boundary_padding_pixels, added_pixels_x
+            )
         )
-        assert (
-            added_pixels_y == 2 * boundary_padding_pixels
-        ), "requested {} padding pixels but got {} in y due to interpolation round off errors".format(
-            boundary_padding_pixels, added_pixels_y
+        assert added_pixels_y == 2 * boundary_padding_pixels, (
+            "requested {} padding pixels but got {} in y due to interpolation round off errors".format(
+                boundary_padding_pixels, added_pixels_y
+            )
         )
 
         era5_lats = xr.DataArray(new_lats, dims=("y", "x"))

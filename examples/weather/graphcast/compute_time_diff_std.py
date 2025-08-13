@@ -29,7 +29,6 @@ from loss.utils import normalized_grid_cell_area
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()

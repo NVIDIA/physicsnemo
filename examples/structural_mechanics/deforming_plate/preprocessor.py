@@ -26,6 +26,7 @@ from physicsnemo.distributed.manager import DistributedManager
 from deforming_plate_dataset import DeformingPlateDataset
 from helpers import add_world_edges
 
+
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     # Initialize distributed manager
@@ -51,7 +52,9 @@ def main(cfg: DictConfig):
     # Split the samples among ranks
     per_rank = num_samples // dist.world_size
     start = dist.rank * per_rank
-    end = (dist.rank + 1) * per_rank if dist.rank != dist.world_size - 1 else num_samples
+    end = (
+        (dist.rank + 1) * per_rank if dist.rank != dist.world_size - 1 else num_samples
+    )
 
     for sample_idx in tqdm(range(start, end), desc=f"Rank {dist.rank} preprocessing"):
         sample_file = os.path.join(output_dir, f"sample_{sample_idx:05d}.pt")
@@ -63,13 +66,16 @@ def main(cfg: DictConfig):
             idx = sample_idx * (num_steps - 1) + t
             graph = dataset[idx].to(dist.device)
             graph, mesh_edge_features, world_edge_features = add_world_edges(graph)
-            sample_data.append({
-                "graph": graph,
-                "mesh_edge_features": mesh_edge_features,
-                "world_edge_features": world_edge_features,
-            })
+            sample_data.append(
+                {
+                    "graph": graph,
+                    "mesh_edge_features": mesh_edge_features,
+                    "world_edge_features": world_edge_features,
+                }
+            )
         torch.save(sample_data, sample_file)
-    print(f"Rank {dist.rank} finished processing samples {start} to {end-1}")
+    print(f"Rank {dist.rank} finished processing samples {start} to {end - 1}")
+
 
 if __name__ == "__main__":
     main()

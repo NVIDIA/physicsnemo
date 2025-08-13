@@ -18,6 +18,7 @@
 import time
 import torch
 
+
 # Track min time and max memory
 class Meter:
     def __init__(self, name: str):

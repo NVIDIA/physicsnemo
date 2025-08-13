@@ -176,9 +176,9 @@ class DrivAerNetDataset(Dataset):
         # val: DrivAer_F_D_WM_WW_0603, 3199.
         coeffs = coeffs.dropna()
         num_missing = {"train": 8, "val": 2, "test": 0}
-        assert (
-            len(file_ids) - len(coeffs) == num_missing[phase]
-        ), f"{len(file_ids)=} {len(coeffs)=}"
+        assert len(file_ids) - len(coeffs) == num_missing[phase], (
+            f"{len(file_ids)=} {len(coeffs)=}"
+        )
 
         coeffs.sort_index(inplace=True)
         self.coeffs = coeffs
@@ -227,9 +227,9 @@ class DrivAerNetDataModule(WebdatasetDataModule):
         if isinstance(data_path, str):
             data_path = Path(data_path)
         assert data_path.is_dir(), f"{data_path} is not a directory."
-        assert (
-            data_path / "train.tar"
-        ).exists(), f"{data_path} does not contain train.tar"
+        assert (data_path / "train.tar").exists(), (
+            f"{data_path} does not contain train.tar"
+        )
         self.data_path = data_path
         if preprocessors is None:
             preprocessors = []

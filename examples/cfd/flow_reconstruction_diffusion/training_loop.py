@@ -99,7 +99,7 @@ def training_loop(
         raise RuntimeError("Please specify the dataset.")
     if dataset not in supported_datasets:
         raise ValueError(
-            f'Invalid dataset: "{dataset}".' "Supported datasets: {supported_datasets}."
+            f'Invalid dataset: "{dataset}".Supported datasets: {{supported_datasets}}.'
         )
     logger0.info(f"Loading {dataset} dataset...")
 
@@ -296,12 +296,10 @@ def training_loop(
     # dist.update_progress(cur_nimg // 1000, total_kimg)  # TODO check if needed
     stats_jsonl = None
     while True:
-
         # Accumulate gradients.
         optimizer.zero_grad()
         for round_idx in range(num_accumulation_rounds):
             with ddp_sync(ddp, (round_idx == num_accumulation_rounds - 1)):
-
                 # # Fetch training data: weather
                 # img_clean, img_lr, labels = next(dataset_iterator)
 
@@ -471,7 +469,9 @@ def training_loop(
                 del value  # conserve memory
             if dist.rank == 0:
                 with open(
-                    os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}.pkl"),
+                    os.path.join(
+                        run_dir, f"network-snapshot-{cur_nimg // 1000:06d}.pkl"
+                    ),
                     "wb",
                 ) as f:
                     pickle.dump(data, f)
@@ -497,7 +497,7 @@ def training_loop(
             logger0.info("Saving full dump of the training state.")
             torch.save(
                 dict(net=net, optimizer_state=optimizer.state_dict()),
-                os.path.join(run_dir, f"training-state-{cur_nimg//1000:06d}.pt"),
+                os.path.join(run_dir, f"training-state-{cur_nimg // 1000:06d}.pt"),
             )
 
         # Update logs.

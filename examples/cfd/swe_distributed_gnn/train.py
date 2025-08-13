@@ -147,12 +147,11 @@ def autoregressive_inference(
                 and (nskip > 0)
                 and (i % nskip == 0)
             ):
-
                 # do plotting, as we aggregated output only on rank0, only use
                 # data from rank 0
                 fig = plt.figure(figsize=(7.5, 6))
                 dataset.solver.plot_griddata(prd[0, plot_channel], fig, vmax=4, vmin=-4)
-                plt.savefig(os.path.join(path_root, f"pred_{i//nskip}.png"))
+                plt.savefig(os.path.join(path_root, f"pred_{i // nskip}.png"))
                 plt.clf()
 
         torch.cuda.synchronize()
@@ -163,7 +162,6 @@ def autoregressive_inference(
             torch.cuda.synchronize()
             start_time = time.time()
             for i in range(1, cfg.data.autoreg_steps + 1):
-
                 # advance classical model
                 uspec = dataset.solver.timestep(uspec, nsteps)
 
@@ -176,7 +174,7 @@ def autoregressive_inference(
                     dataset.solver.plot_griddata(
                         ref[plot_channel], fig, vmax=4, vmin=-4
                     )
-                    plt.savefig(os.path.join(path_root, f"truth_{i//nskip}.png"))
+                    plt.savefig(os.path.join(path_root, f"truth_{i // nskip}.png"))
                     plt.clf()
 
             torch.cuda.synchronize()

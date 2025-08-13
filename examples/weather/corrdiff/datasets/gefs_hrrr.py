@@ -197,9 +197,9 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
             elif self.input_isobaric_variables_load[i] == "t100":
                 self.input_isobaric_variables_load[i] = "t250"
             elif "r" in self.input_isobaric_variables_load[i]:
-                self.input_isobaric_variables_load[
-                    i
-                ] = self.input_isobaric_variables_load[i].replace("r", "q")
+                self.input_isobaric_variables_load[i] = (
+                    self.input_isobaric_variables_load[i].replace("r", "q")
+                )
                 if self.input_isobaric_variables_load[i] == "q100":
                     self.input_isobaric_variables_load[i] = "q250"
 
@@ -316,7 +316,6 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         return datetime.utcfromtimestamp(timestamp)
 
     def compute_total_samples(self):
-
         # Loop through all years and count the total number of samples
 
         first_year = min(self.years)
@@ -442,9 +441,7 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
             hrrr_field = hrrr_field[0]
 
         is_precip = np.sum(
-            hrrr_field[
-                self.prob_channel_index,
-            ],
+            hrrr_field[self.prob_channel_index,],
             axis=0,
             keepdims=True,
         )
@@ -452,9 +449,7 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         hrrr_field = np.concatenate((hrrr_field, hrrr_non_precip), axis=0)
         prob_channel_index = self.prob_channel_index + [hrrr_field.shape[0] - 1]
         hrrr_field[prob_channel_index] = hrrr_field[prob_channel_index] / np.sum(
-            hrrr_field[
-                prob_channel_index,
-            ],
+            hrrr_field[prob_channel_index,],
             axis=0,
             keepdims=True,
         )

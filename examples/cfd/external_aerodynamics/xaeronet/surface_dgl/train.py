@@ -62,7 +62,6 @@ from utils import (
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # Enable cuDNN auto-tuner
     torch.backends.cudnn.benchmark = cfg.enable_cudnn_benchmark
 
@@ -125,7 +124,7 @@ def main(cfg: DictConfig) -> None:
             graph_partitions for graph_partitions, _ in validation_dataloader
         ]
         validation_ids = [id[0] for _, id in validation_dataloader]
-        print(f"Training dataset size: {len(graphs)*dist.world_size}")
+        print(f"Training dataset size: {len(graphs) * dist.world_size}")
         print(f"Validation dataset size: {len(validation_dataloader)}")
 
     ######################################
@@ -219,7 +218,7 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0:
             current_lr = optimizer.param_groups[0]["lr"]
             print(
-                f"Epoch {epoch+1}, Learning Rate: {current_lr}, Total Loss: {total_loss / len(graphs)}"
+                f"Epoch {epoch + 1}, Learning Rate: {current_lr}, Total Loss: {total_loss / len(graphs)}"
             )
             writer.add_scalar("training_loss", total_loss / len(graphs), epoch)
             writer.add_scalar("learning_rate", current_lr, epoch)
@@ -378,7 +377,7 @@ def main(cfg: DictConfig) -> None:
                 point_cloud.save(f"point_cloud_{validation_ids[i]}.vtp")
 
             print(
-                f"Epoch {epoch+1}, Validation Error: {valid_loss / len(validation_graphs)}"
+                f"Epoch {epoch + 1}, Validation Error: {valid_loss / len(validation_graphs)}"
             )
             writer.add_scalar(
                 "validation_loss", valid_loss / len(validation_graphs), epoch

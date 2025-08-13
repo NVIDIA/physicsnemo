@@ -51,8 +51,9 @@ def denorm(x):
 
 
 # %%
-means, stds = np.array([u10_mean, v10_mean, logtp_mean]), np.array(
-    [u10_std, v10_std, logtp_std]
+means, stds = (
+    np.array([u10_mean, v10_mean, logtp_mean]),
+    np.array([u10_std, v10_std, logtp_std]),
 )
 
 # %%
@@ -108,6 +109,7 @@ model = model.to(device)
 
 # %% [markdown]
 # ## Inpaint
+
 
 # %%
 def A(x):

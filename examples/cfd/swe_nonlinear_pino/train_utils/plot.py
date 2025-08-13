@@ -31,7 +31,6 @@ def plot_predictions(
     save_path=None,
     font_size=None,
 ):
-
     """Plot PINO predictions on dataset"""
     if font_size is not None:
         plt.rcParams.update({"font.size": font_size})

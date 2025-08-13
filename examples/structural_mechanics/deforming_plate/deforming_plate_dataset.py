@@ -90,18 +90,25 @@ class DeformingPlateDataset(DGLDataset):
 
         print(f"Preparing the {split} dataset...")
         # create the graphs with edge features
-         # Build TFRecordDataset from .tfrecord file
+        # Build TFRecordDataset from .tfrecord file
         tfrecord = os.path.join(data_dir, f"{split}.tfrecord")
         index = None  # or path to .index if you generated it
         # Define the schema per meta.json
         meta = json.load(open(os.path.join(data_dir, "meta.json")))
         description = {k: "byte" for k in meta["field_names"]}  # raw bytes
         self.torch_ds = TFRecordDataset(
-            tfrecord, index, description,
-            transform=lambda rec: self._decode_record(rec, meta)
+            tfrecord,
+            index,
+            description,
+            transform=lambda rec: self._decode_record(rec, meta),
         )
         self.graphs, self.cells, self.node_type = [], [], []
-        noise_mask, self.moving_points_mask, self.object_points_mask, self.clamped_points_mask = [], [], [], []
+        (
+            noise_mask,
+            self.moving_points_mask,
+            self.object_points_mask,
+            self.clamped_points_mask,
+        ) = [], [], [], []
         self.mesh_pos = []
         for i, rec in enumerate(self.torch_ds):
             if i >= num_samples:
@@ -118,8 +125,10 @@ class DeformingPlateDataset(DGLDataset):
             if self.split != "train":
                 self.mesh_pos.append(torch.tensor(data_np["mesh_pos"][0]))
                 self.cells.append(data_np["cells"][0])
-                moving_points_mask, object_points_mask, clamped_points_mask = self._get_rollout_mask(node_type)
-                self.moving_points_mask.append(moving_points_mask)        
+                moving_points_mask, object_points_mask, clamped_points_mask = (
+                    self._get_rollout_mask(node_type)
+                )
+                self.moving_points_mask.append(moving_points_mask)
                 self.object_points_mask.append(object_points_mask)
                 self.clamped_points_mask.append(clamped_points_mask)
 
@@ -144,12 +153,20 @@ class DeformingPlateDataset(DGLDataset):
                 break
             data_np = {k: v[:num_steps] for k, v in rec.items()}
             features, targets = {}, {}
-            features["world_pos"] = self._drop_last(data_np["world_pos"]) # Shape: (num_steps-1, num_nodes, num_features)
-            targets["velocity"] = self._push_forward_diff(data_np["world_pos"]) # Shape: (num_steps-1, num_nodes, num_features)
-            targets["stress"] = self._push_forward(data_np["stress"]) # Shape: (num_steps-1, num_nodes, num_features)
+            features["world_pos"] = self._drop_last(
+                data_np["world_pos"]
+            )  # Shape: (num_steps-1, num_nodes, num_features)
+            targets["velocity"] = self._push_forward_diff(
+                data_np["world_pos"]
+            )  # Shape: (num_steps-1, num_nodes, num_features)
+            targets["stress"] = self._push_forward(
+                data_np["stress"]
+            )  # Shape: (num_steps-1, num_nodes, num_features)
 
             # add noise
-            if split == "train":  # TODO: noise has to be added at each iteration during training
+            if (
+                split == "train"
+            ):  # TODO: noise has to be added at each iteration during training
                 features["world_pos"], targets["velocity"] = self._add_noise(
                     features["world_pos"],
                     targets["velocity"],
@@ -202,7 +219,13 @@ class DeformingPlateDataset(DGLDataset):
             object_points_mask = self.object_points_mask[gidx]
             clamped_points_mask = self.clamped_points_mask[gidx]
 
-            return graph, cells, moving_points_mask, object_points_mask, clamped_points_mask
+            return (
+                graph,
+                cells,
+                moving_points_mask,
+                object_points_mask,
+                clamped_points_mask,
+            )
 
     def __len__(self):
         return self.length
@@ -354,7 +377,7 @@ class DeformingPlateDataset(DGLDataset):
         return moving_points_mask, object_points_mask, clamped_points_mask
 
     @staticmethod
-    def _add_noise(features, targets, noise_std, noise_mask): 
+    def _add_noise(features, targets, noise_std, noise_mask):
         noise = torch.normal(mean=0, std=noise_std, size=features.size())
         noise_mask = noise_mask.expand(features.size()[0], -1, 3)
         noise = torch.where(noise_mask, noise, torch.zeros_like(noise))
@@ -362,7 +385,6 @@ class DeformingPlateDataset(DGLDataset):
         targets -= noise
         return features, targets
 
-    
     def _decode_record(self, rec_bytes, meta):
         out = {}
         for k, v in rec_bytes.items():
@@ -374,4 +396,3 @@ class DeformingPlateDataset(DGLDataset):
                 arr = np.tile(arr, (meta["trajectory_length"], 1, 1))
             out[k] = arr
         return out
-

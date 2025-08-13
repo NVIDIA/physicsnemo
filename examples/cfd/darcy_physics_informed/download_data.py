@@ -31,9 +31,10 @@ output_filenames = [
 # split_percentage = [80, 20]
 split_percentage = [10, 10]
 
-with h5py.File(output_filenames[0], "w") as f_part1, h5py.File(
-    output_filenames[1], "w"
-) as f_part2:
+with (
+    h5py.File(output_filenames[0], "w") as f_part1,
+    h5py.File(output_filenames[1], "w") as f_part2,
+):
     with h5py.File(filename, "r") as f:
         # Loop through all the datasets in the input file
         for key in f.keys():

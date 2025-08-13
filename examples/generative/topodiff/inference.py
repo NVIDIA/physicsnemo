@@ -35,7 +35,6 @@ from utils import load_data_topodiff, load_data
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     logger = PythonLogger("main")  # General Python Logger
     logger.log("Job start!")
 

@@ -18,7 +18,7 @@
 Dedalus script simulating a 2D periodic incompressible MHD flow with a passive
 tracer field for visualization. This script demonstrates solving a 2D periodic
 initial value problem. This script is meant to be ran serially, and uses the
-built-in analysis framework to save data snapshots to HDF5 files. 
+built-in analysis framework to save data snapshots to HDF5 files.
 The simulation should take at least 150 cpu-minutes to run.
 
 The initial flow is in the x-direction and depends only on z. The problem is
@@ -33,7 +33,6 @@ Schmidt numbers as:
 To run this script:
     $ python dedalus_mhd.py
 """
-
 
 import os
 import glob
@@ -147,7 +146,7 @@ if __name__ == "__main__":
 
     for i in range(Nsamples):
         sim_output_dir = os.path.join(output_dir, f"output-{i:0{digits}}")
-        sim_output_dir_next = os.path.join(output_dir, f"output-{(i+1):0{digits}}")
+        sim_output_dir_next = os.path.join(output_dir, f"output-{(i + 1):0{digits}}")
         sim_outputs = os.path.join(sim_output_dir, "*.h5")
         # skip if the next output directory exits and skip_exists is True because current output may not have finished
         if skip_exists and (os.path.exists(sim_output_dir_next)):

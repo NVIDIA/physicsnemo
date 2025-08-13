@@ -54,7 +54,6 @@ TYPE_TO_COLOR = {
 
 class MGNRollout:
     def __init__(self, cfg: DictConfig):
-
         if cfg.test.batch_size != 1:
             raise ValueError(
                 f"Only batch size 1 is currently supported, got {cfg.test.batch_size}"

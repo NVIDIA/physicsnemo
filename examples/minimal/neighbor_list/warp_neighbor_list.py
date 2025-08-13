@@ -51,7 +51,6 @@ def test_warp(
 
 
 if __name__ == "__main__":
-
     wp.init()
     torch.cuda.init()
     torch.manual_seed(42)

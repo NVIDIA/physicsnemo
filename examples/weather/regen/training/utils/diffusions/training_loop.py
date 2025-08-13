@@ -206,7 +206,6 @@ def downscaling_training_loop(
         return utils.img_utils.image_to_crops(x, resolution, resolution)
 
     while True:
-
         # Accumulate gradients.
         optimizer.zero_grad(set_to_none=True)
         batch = next(dataset_iterator)
@@ -228,7 +227,6 @@ def downscaling_training_loop(
         loss_value.backward()
 
         if params.clip_grad_norm is not None:
-
             torch.nn.utils.clip_grad_norm_(net.parameters(), params.clip_grad_norm)
 
         # Update weights.
@@ -327,7 +325,9 @@ def downscaling_training_loop(
                 del value  # conserve memory
             if dist.get_rank() == 0:
                 with open(
-                    os.path.join(run_dir, f"network-snapshot-{cur_nimg//1000:06d}.pkl"),
+                    os.path.join(
+                        run_dir, f"network-snapshot-{cur_nimg // 1000:06d}.pkl"
+                    ),
                     "wb",
                 ) as f:
                     pickle.dump(data, f)
@@ -335,7 +335,6 @@ def downscaling_training_loop(
             del data  # conserve memory
 
         if cur_tick % params.validate_every == 0:
-
             if log_to_wandb:
                 if dist.get_rank() == 0:
                     print("logging to wandb")
@@ -395,7 +394,7 @@ def downscaling_training_loop(
         ):
             torch.save(
                 dict(net=net, optimizer_state=optimizer.state_dict()),
-                os.path.join(run_dir, f"training-state-{cur_nimg//1000:06d}.pt"),
+                os.path.join(run_dir, f"training-state-{cur_nimg // 1000:06d}.pt"),
             )
 
         # Update logs.

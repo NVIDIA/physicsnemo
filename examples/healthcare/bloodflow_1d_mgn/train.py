@@ -259,7 +259,7 @@ def do_training(cfg: DictConfig):
             loss = trainer.train(graph)
 
         logger.info(
-            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time() - start):10.3e}"
         )
 
         # save checkpoint

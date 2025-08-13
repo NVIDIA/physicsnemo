@@ -234,7 +234,6 @@ def main(cfg: DictConfig) -> None:
     # Main generation definition
     def generate_fn():
         with nvtx.annotate("generate_fn", color="green"):
-
             diffusion_step_kwargs = {}
             if distribution is not None:
                 diffusion_step_kwargs["distribution"] = distribution
@@ -342,7 +341,6 @@ def main(cfg: DictConfig) -> None:
     )
     with torch_cuda_profiler:
         with torch_nvtx_profiler:
-
             data_loader = torch.utils.data.DataLoader(
                 dataset=dataset, sampler=sampler, batch_size=1, pin_memory=True
             )

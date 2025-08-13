@@ -50,7 +50,6 @@ class GridValidator:
     def plot_figure(
         self, target: FloatTensor, prediction: FloatTensor, step: int, resolution: int
     ):
-
         target = target.cpu().numpy().reshape(-1, resolution, resolution)[0, :, :]
         prediction = (
             prediction.reshape(-1, resolution, resolution)

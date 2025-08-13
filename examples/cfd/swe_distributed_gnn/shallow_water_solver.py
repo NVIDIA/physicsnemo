@@ -118,7 +118,7 @@ class ShallowWaterSolver(nn.Module):
         l = l.expand(self.lmax, self.mmax)
         # the laplace operator acting on the coefficients is given by - l (l + 1)
         lap = -l * (l + 1) / self.radius**2
-        invlap = -self.radius**2 / l / (l + 1)
+        invlap = -(self.radius**2) / l / (l + 1)
         invlap[0] = 0.0
 
         # compute coriolis force
@@ -388,9 +388,7 @@ class ShallowWaterSolver(nn.Module):
                 dim=(-2, -1),
             )
         else:
-            out = torch.sum(
-                ugrid * self.quad_weights * dlon * radius**2, dim=(-2, -1)
-            )
+            out = torch.sum(ugrid * self.quad_weights * dlon * radius**2, dim=(-2, -1))
         return out
 
     def plot_griddata(
@@ -420,7 +418,6 @@ class ShallowWaterSolver(nn.Module):
         Lons, Lats = np.meshgrid(lons, lats)
 
         if projection == "mollweide":
-
             # ax = plt.gca(projection=projection)
             ax = fig.add_subplot(projection=projection)
             im = ax.pcolormesh(Lons, Lats, data, cmap=cmap, vmax=vmax, vmin=vmin)
@@ -432,7 +429,6 @@ class ShallowWaterSolver(nn.Module):
             plt.title(title)
 
         elif projection == "3d":
-
             import cartopy.crs as ccrs
 
             proj = ccrs.Orthographic(central_longitude=0.0, central_latitude=25.0)
