@@ -20,6 +20,7 @@ repos:
     hooks:
       - id: ruff-check
         args: [--fix]
+        exclude: ^examples/
       - id: ruff-format
 
 -   repo: https://github.com/econchick/interrogate
