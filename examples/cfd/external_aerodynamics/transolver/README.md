@@ -28,7 +28,7 @@ Transolver requires TransformerEngine from NVIDIA, as well as Zarr >= 3.0 and `z
 for the data pipeline.  Install them with `pip install -r requirements.txt`
 
 > For the Transolver datapipe, zarr > 3.0 is required.  If you are using an older
-> container, you may need to `unset PIP_CONSTRAINTS` to allow zarr 3.0 or higher.
+> container, you may need to `unset PIP_CONSTRAINT` to allow zarr 3.0 or higher.
 
 ## Using Transolver for External Aerodynamics
 

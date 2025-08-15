@@ -852,7 +852,8 @@ class EDMPrecondSuperResolution(Module):
         ValueError
             If `value` is not a boolean.
         """
-        if not isinstance(value, bool):
+        # NOTE: allow 0/1 values for older checkpoints
+        if not (isinstance(value, bool) or value in [0, 1]):
             raise ValueError(
                 f"`use_fp16` must be a boolean, but got {type(value).__name__}."
             )
