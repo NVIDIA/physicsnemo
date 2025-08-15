@@ -95,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- bug fixes in DoMINO model in sphere sampling and tensor reshaping
+
 ### Security
 
 ### Dependencies
