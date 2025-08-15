@@ -1608,7 +1608,7 @@ class DoMINO(nn.Module):
         output = unsqueezed_center + directions * radii
         return output
 
-    def sample_shpere_shell(self, center, r_inner, r_outer, num_points):
+    def sample_sphere_shell(self, center, r_inner, r_outer, num_points):
         """Uniformly sample points in a 3D spherical shell around a center.
 
         This method generates random points within a spherical shell (annulus)
@@ -1797,7 +1797,7 @@ class DoMINO(nn.Module):
                     )  # Skipping the first point, which is the original
                     parent_point = volume_m_c_perturbed[parent_idx]
 
-                    children = self.sample_shpere_shell(
+                    children = self.sample_sphere_shell(
                         parent_point.squeeze(2),
                         1 / noise_intensity,
                         2 / noise_intensity,
