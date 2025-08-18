@@ -88,7 +88,7 @@ def scale_sdf(sdf: torch.Tensor) -> torch.Tensor:
 
     This function applies a non-linear scaling to the SDF values that compresses
     the range while preserving the sign, effectively giving more weight to points
-    near surfaces where |SDF| is small.
+    near surfaces where abs(SDF) is small.
 
     Args:
         sdf: Tensor containing signed distance function values

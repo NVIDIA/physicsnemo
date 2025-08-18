@@ -39,46 +39,50 @@ from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNet
 
 
 class Mesh_Reduced(torch.nn.Module):
-    """PbGMR-GMUS architecture
+    """PbGMR-GMUS architecture.
+
+    A mesh-reduced architecture that combines encoding and decoding processors
+    for physics prediction in reduced mesh space.
+
     Parameters
     ----------
     input_dim_nodes : int
-        Number of node features
+        Number of node features.
     input_dim_edges : int
-        Number of edge features
-    output_decode_dim: int
-        Number of decoding outputs (per node)
-    output_encode_dim: int, optional
-        Number of encoding outputs (per pivotal position),  by default 3
+        Number of edge features.
+    output_decode_dim : int
+        Number of decoding outputs (per node).
+    output_encode_dim : int, optional
+        Number of encoding outputs (per pivotal position), by default 3.
     processor_size : int, optional
-        Number of message passing blocks, by default 15
+        Number of message passing blocks, by default 15.
     num_layers_node_processor : int, optional
-        Number of MLP layers for processing nodes in each message passing block, by default 2
+        Number of MLP layers for processing nodes in each message passing block, by default 2.
     num_layers_edge_processor : int, optional
-        Number of MLP layers for processing edge features in each message passing block, by default 2
+        Number of MLP layers for processing edge features in each message passing block, by default 2.
     hidden_dim_processor : int, optional
-        Hidden layer size for the message passing blocks, by default 128
+        Hidden layer size for the message passing blocks, by default 128.
     hidden_dim_node_encoder : int, optional
-        Hidden layer size for the node feature encoder, by default 128
+        Hidden layer size for the node feature encoder, by default 128.
     num_layers_node_encoder : int, optional
-        Number of MLP layers for the node feature encoder, by default 2
+        Number of MLP layers for the node feature encoder, by default 2.
     hidden_dim_edge_encoder : int, optional
-        Hidden layer size for the edge feature encoder, by default 128
+        Hidden layer size for the edge feature encoder, by default 128.
     num_layers_edge_encoder : int, optional
-        Number of MLP layers for the edge feature encoder, by default 2
+        Number of MLP layers for the edge feature encoder, by default 2.
     hidden_dim_node_decoder : int, optional
-        Hidden layer size for the node feature decoder, by default 128
+        Hidden layer size for the node feature decoder, by default 128.
     num_layers_node_decoder : int, optional
-        Number of MLP layers for the node feature decoder, by default 2
-    k: int, optional
-        Number of nodes considered for per pivotal position, by default 3
-    aggregation: str, optional
-        Message aggregation type, by default "mean"
-    Note
-    ----
+        Number of MLP layers for the node feature decoder, by default 2.
+    k : int, optional
+        Number of nodes considered for per pivotal position, by default 3.
+    aggregation : str, optional
+        Message aggregation type, by default "mean".
+
+    Notes
+    -----
     Reference: Han, Xu, et al. "Predicting physics in mesh-reduced space with temporal attention."
     arXiv preprint arXiv:2201.09113 (2022).
-
     """
 
     def __init__(
@@ -150,6 +154,36 @@ class Mesh_Reduced(torch.nn.Module):
         k: int = 3,
         num_workers: int = 1,
     ):
+        """Perform k-nearest neighbor interpolation.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input features to interpolate.
+        pos_x : torch.Tensor
+            Source positions.
+        pos_y : torch.Tensor
+            Target positions.
+        batch_x : torch.Tensor, optional
+            Batch indices for source positions, by default None.
+        batch_y : torch.Tensor, optional
+            Batch indices for target positions, by default None.
+        k : int, optional
+            Number of nearest neighbors to consider, by default 3.
+        num_workers : int, optional
+            Number of workers for parallel processing, by default 1.
+
+        Returns
+        -------
+        torch.Tensor
+            Interpolated features.
+        torch.Tensor
+            Source indices.
+        torch.Tensor
+            Target indices.
+        torch.Tensor
+            Interpolation weights.
+        """
         with torch.no_grad():
             assign_index = torch_cluster.knn(
                 pos_x,
@@ -174,6 +208,26 @@ class Mesh_Reduced(torch.nn.Module):
         return y.float(), x_idx, y_idx, weights
 
     def encode(self, x, edge_features, graph, position_mesh, position_pivotal):
+        """Encode mesh features to pivotal space.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input node features.
+        edge_features : torch.Tensor
+            Edge features.
+        graph : Union[DGLGraph, pyg.data.Data]
+            Input graph.
+        position_mesh : torch.Tensor
+            Mesh positions.
+        position_pivotal : torch.Tensor
+            Pivotal positions.
+
+        Returns
+        -------
+        torch.Tensor
+            Encoded features in pivotal space.
+        """
         x = self.encoder_processor(x, edge_features, graph)
         x = self.PivotalNorm(x)
         nodes_index = torch.arange(graph.batch_size).to(x.device)
@@ -200,6 +254,26 @@ class Mesh_Reduced(torch.nn.Module):
         return x
 
     def decode(self, x, edge_features, graph, position_mesh, position_pivotal):
+        """Decode pivotal features back to mesh space.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input features in pivotal space.
+        edge_features : torch.Tensor
+            Edge features.
+        graph : Union[DGLGraph, pyg.data.Data]
+            Input graph.
+        position_mesh : torch.Tensor
+            Mesh positions.
+        position_pivotal : torch.Tensor
+            Pivotal positions.
+
+        Returns
+        -------
+        torch.Tensor
+            Decoded features in mesh space.
+        """
         nodes_index = torch.arange(graph.batch_size).to(x.device)
         if isinstance(graph, DGLGraph):
             batch_mesh = nodes_index.repeat_interleave(graph.batch_num_nodes())

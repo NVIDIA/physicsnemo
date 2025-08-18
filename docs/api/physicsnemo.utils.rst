@@ -82,7 +82,7 @@ Geometry utils
 Utilities for geometric operations, including neighbor search and signed distance field calculations.
 These are essential for physics simulations and geometric deep learning applications.
 
-.. automodule:: physicsnemo.utils.neighbor_list
+.. automodule:: physicsnemo.utils.neighbors.radius_search
     :members:
     :show-inheritance:
 
