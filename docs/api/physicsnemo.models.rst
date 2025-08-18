@@ -469,6 +469,12 @@ Recurrent Neural Networks
     :members:
     :show-inheritance:
 
+Operator Models
+~~~~~~~~~~~~~~~
+
+.. automodule:: physicsnemo.models.domino.model
+    :members:
+    :show-inheritance:
 
 Diffusion Models
 ~~~~~~~~~~~~~~~~

@@ -60,7 +60,7 @@ def kcrps(pred: Tensor, obs: Tensor, dim: int = 0, biased: bool = True):
     with
 
     .. math::
-       sum_i=1^m |X_i - y| / m - 1/(2m^2) sum_i,j=1^m |x_i - x_j|
+       \sum_{i=1}^m \|X_i - y\| / m - 1/(2m^2) \sum_{i,j=1}^m \|x_i - x_j\|
 
     Parameters
     ----------
@@ -73,12 +73,13 @@ def kcrps(pred: Tensor, obs: Tensor, dim: int = 0, biased: bool = True):
     dim : int, optional
         The dimension over which to compute the CRPS, assumed to be 0.
     biased :
-        When False, uses the unbiased estimators described in (Zamo and Naveau, 2018)::
+        When False, uses the unbiased estimators described in (Zamo and Naveau, 2018):
 
-            E|X-y|/m - 1/(2m(m-1)) sum_(i,j=1)|x_i - x_j|
+        .. math::
+            E|X-y|/m - 1/(2m(m-1)) \sum_{i,j=1}\|x_i - x_j\|
 
         Unlike ``crps`` this is fair for finite ensembles. Non-fair ``crps`` favors less
-        dispersive ensembles since it is biased high by E|X- X'|/ m where m is the
+        dispersive ensembles since it is biased high by E\|X- X'\|/ m where m is the
         ensemble size.
 
     Returns

@@ -28,6 +28,7 @@ from typing import Callable, Literal, Sequence
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 
 from physicsnemo.models.unet import UNet
 from physicsnemo.utils.neighbors import radius_search
@@ -63,7 +64,6 @@ def fourier_encode_vectorized(coords, freqs):
     D = coords.shape[-1]
     F = freqs.shape[0]
 
-    # freqs = torch.exp(torch.linspace(0, math.pi, num_freqs, device=coords.device))  # [F]
     freqs = freqs[None, None, :, None]  # reshape to [*, F, 1] for broadcasting
 
     coords = coords.unsqueeze(-2)  # [*, 1, D]
@@ -88,7 +88,7 @@ def scale_sdf(sdf: torch.Tensor) -> torch.Tensor:
 
     This function applies a non-linear scaling to the SDF values that compresses
     the range while preserving the sign, effectively giving more weight to points
-    near surfaces where |SDF| is small.
+    near surfaces where abs(SDF) is small.
 
     Args:
         sdf: Tensor containing signed distance function values
@@ -247,7 +247,6 @@ class GeoConvOut(nn.Module):
             Processed geometry features of shape (batch_size, base_neurons_in, nx, ny, nz)
         """
 
-        batch_size = x.shape[0]
         nx, ny, nz = (
             self.grid_resolution[0],
             self.grid_resolution[1],
@@ -274,7 +273,7 @@ class GeoConvOut(nn.Module):
         )
 
         x = torch.sum(x * mask, 2)
-        x = torch.reshape(x, (batch_size, x.shape[-1], nx, ny, nz))
+        x = rearrange(x, "b (x y z) c -> b c x y z", x=nx, y=ny, z=nz)
         return x
 
 
@@ -446,7 +445,7 @@ class GeometryRep(nn.Module):
                         stride=1,
                         conv_activation=self.activation_processor,
                         padding=1,
-                        padding_mode="replicate",
+                        padding_mode="zeros",
                         pooling_type="MaxPool3d",
                         pool_size=2,
                         normalization=normalization_in_unet,
@@ -514,7 +513,7 @@ class GeometryRep(nn.Module):
                 stride=1,
                 conv_activation=self.activation_processor,
                 padding=1,
-                padding_mode="replicate",
+                padding_mode="zeros",
                 pooling_type="MaxPool3d",
                 pool_size=2,
                 normalization=normalization_in_unet,
@@ -561,7 +560,7 @@ class GeometryRep(nn.Module):
                 stride=1,
                 conv_activation=self.activation_processor,
                 padding=1,
-                padding_mode="replicate",
+                padding_mode="zeros",
                 pooling_type="MaxPool3d",
                 pool_size=2,
                 normalization="layernorm",
@@ -1048,7 +1047,7 @@ class DoMINO(nn.Module):
                 stride=1,
                 conv_activation=self.activation_processor,
                 padding=1,
-                padding_mode="replicate",
+                padding_mode="zeros",
                 pooling_type="MaxPool3d",
                 pool_size=2,
                 normalization="layernorm",
@@ -1072,7 +1071,7 @@ class DoMINO(nn.Module):
                 stride=1,
                 conv_activation=self.activation_processor,
                 padding=1,
-                padding_mode="replicate",
+                padding_mode="zeros",
                 pooling_type="MaxPool3d",
                 pool_size=2,
                 normalization="layernorm",
@@ -1397,9 +1396,10 @@ class DoMINO(nn.Module):
 
             encoding_g_inner = []
             for j in range(encoding_g.shape[1]):
-                geo_encoding = torch.reshape(
-                    encoding_g[:, j], (batch_size, 1, nx * ny * nz)
+                geo_encoding = rearrange(
+                    encoding_g[:, j], "b nx ny nz -> b 1 (nx ny nz)"
                 )
+
                 geo_encoding_sampled = torch.index_select(
                     geo_encoding, 2, mapping.flatten()
                 )
@@ -1595,20 +1595,20 @@ class DoMINO(nn.Module):
             Tensor of shape (batch_size, num_points, num_samples, 3) containing
             the sampled points around each center
         """
-        directions = torch.randn(
-            size=(center.shape[0], center.shape[1], num_points, center.shape[2]),
-            device=center.device,
-        )
+        # Adjust the center points to the final shape:
+        unsqueezed_center = center.unsqueeze(2).expand(-1, -1, num_points, -1)
+
+        # Generate directions like the centers:
+        directions = torch.randn_like(unsqueezed_center)
         directions = directions / torch.norm(directions, dim=-1, keepdim=True)
 
-        radii = r * torch.pow(
-            torch.rand(size=(num_points, 1), device=center.device), 1 / 3
-        )
-        return center.unsqueeze(2) + directions * radii[None, None, :, :].expand(
-            -1, center.shape[1], num_points, -1
-        )
+        # Generate radii like the centers:
+        radii = r * torch.pow(torch.rand_like(unsqueezed_center), 1 / 3)
 
-    def sample_shpere_shell(self, center, r_inner, r_outer, num_points):
+        output = unsqueezed_center + directions * radii
+        return output
+
+    def sample_sphere_shell(self, center, r_inner, r_outer, num_points):
         """Uniformly sample points in a 3D spherical shell around a center.
 
         This method generates random points within a spherical shell (annulus)
@@ -1625,23 +1625,26 @@ class DoMINO(nn.Module):
             Tensor of shape (batch_size, num_points, num_samples, 3) containing
             the sampled points within the spherical shell around each center
         """
-        directions = torch.randn(
-            size=(center.shape[0], center.shape[1], num_points, center.shape[2]),
-            device=center.device,
-        )
+        # directions = torch.randn(
+        #     size=(center.shape[0], center.shape[1], num_points, center.shape[2]),
+        #     device=center.device,
+        # )
+        # directions = directions / torch.norm(directions, dim=-1, keepdim=True)
+
+        unsqueezed_center = center.unsqueeze(2).expand(-1, -1, num_points, -1)
+
+        # Generate directions like the centers:
+        directions = torch.randn_like(unsqueezed_center)
         directions = directions / torch.norm(directions, dim=-1, keepdim=True)
 
-        radii = torch.pow(
-            torch.rand(size=(num_points, 1), device=center.device)
-            * (r_outer**3 - r_inner**3)
-            + r_inner**3,
-            1 / 3,
+        radii = (
+            torch.rand_like(unsqueezed_center) * (r_outer**3 - r_inner**3) + r_inner**3
         )
-        return (
-            center.unsqueeze(2)
-            + directions
-            + radii[None, None, :, :].expand(-1, center.shape[1], num_points, -1)
-        )
+        radii = torch.pow(radii, 1 / 3)
+
+        output = unsqueezed_center + directions * radii
+
+        return output
 
     def calculate_solution(
         self,
@@ -1794,7 +1797,7 @@ class DoMINO(nn.Module):
                     )  # Skipping the first point, which is the original
                     parent_point = volume_m_c_perturbed[parent_idx]
 
-                    children = self.sample_shpere_shell(
+                    children = self.sample_sphere_shell(
                         parent_point.squeeze(2),
                         1 / noise_intensity,
                         2 / noise_intensity,
@@ -1892,6 +1895,7 @@ class DoMINO(nn.Module):
 
             # Normalize based on computational domain
             geo_centers_vol = 2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
+
             encoding_g_vol = self.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
             # SDF on volume mesh nodes
