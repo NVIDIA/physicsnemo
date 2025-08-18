@@ -25,7 +25,7 @@ def insolation(
     Calculate the approximate solar insolation for given dates.
 
     For an example reference, see:
-    https://brian-rose.github.io/ClimateLaboratoryBook/courseware/insolation.html
+    https://brian-rose.github.io/ClimateLaboratoryBook/courseware/insolation/
 
     Parameters
     ----------
