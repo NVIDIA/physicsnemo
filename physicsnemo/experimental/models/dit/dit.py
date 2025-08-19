@@ -25,8 +25,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional, Any
 import torch
 import torch.nn as nn
 import numpy as np
@@ -67,12 +66,27 @@ class MetaData(ModelMetaData):
 
 
 def get_2d_sincos_pos_embed(
-    embed_dim, grid_size_h, grid_size_w, cls_token=False, extra_tokens=0
-):
+    embed_dim: int,
+    grid_size_h: int,
+    grid_size_w: int,
+    cls_token: bool = False,
+    extra_tokens: int = 0,
+) -> np.ndarray:
     """
-    grid_size: int of the grid height and width
-    return:
-    pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    Generates 2D sinusoidal positional embeddings.
+
+    Parameters
+    -----------
+    embed_dim (int): The embedding dimension.
+    grid_size_h (int): The height of the grid.
+    grid_size_w (int): The width of the grid.
+    cls_token (bool, optional): Whether to add a classification token. Defaults to False.
+    extra_tokens (int, optional): The number of extra tokens. Defaults to 0.
+
+    Outputs
+    -------
+    np.ndarray: A positional embedding tensor of shape `[grid_size_h * grid_size_w, embed_dim]`
+                or `[1 + grid_size_h * grid_size_w, embed_dim]` if `cls_token` is True.
     """
     grid_h = np.arange(grid_size_h, dtype=np.float32)
     grid_w = np.arange(grid_size_w, dtype=np.float32)
@@ -88,7 +102,19 @@ def get_2d_sincos_pos_embed(
     return pos_embed
 
 
-def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
+def get_2d_sincos_pos_embed_from_grid(embed_dim: int, grid: np.ndarray) -> np.ndarray:
+    """
+    Generates 2D sinusoidal positional embeddings from a grid.
+
+    Parameters
+    -----------
+    embed_dim (int): The embedding dimension.
+    grid (np.ndarray): The grid of positions.
+
+    Outputs
+    -------
+    np.ndarray: The positional embedding tensor.
+    """
     assert embed_dim % 2 == 0
 
     # use half of dimensions to encode grid_h
@@ -99,11 +125,18 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     return emb
 
 
-def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.ndarray:
     """
-    embed_dim: output dimension for each position
-    pos: a list of positions to be encoded: size (M,)
-    out: (M, D)
+    Generates 1D sinusoidal positional embeddings from a grid of positions.
+
+    Parameters
+    -----------
+    embed_dim (int): Output dimension for each position.
+    pos (np.ndarray): A list of positions to be encoded, size (M,).
+
+    Outputs
+    -------
+    np.ndarray: The positional embedding tensor of shape (M, D).
     """
     assert embed_dim % 2 == 0
     omega = np.arange(embed_dim // 2, dtype=np.float64)
@@ -120,7 +153,21 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     return emb
 
 
-def modulate(x, shift, scale):
+def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """
+    Modulates a tensor `x` with a scale and shift. This is a core
+    component of the adaLN-Zero layer.
+
+    Parameters
+    -----------
+    x (torch.Tensor): The input tensor.
+    shift (torch.Tensor): The shift tensor.
+    scale (torch.Tensor): The scale tensor.
+
+    Outputs
+    -------
+    torch.Tensor: The modulated tensor.
+    """
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
@@ -134,7 +181,15 @@ class TimestepEmbedder(nn.Module):
     Embeds scalar timesteps into vector representations.
     """
 
-    def __init__(self, hidden_size, frequency_embedding_size=256):
+    def __init__(self, hidden_size: int, frequency_embedding_size: int = 256):
+        """
+        Initializes the TimestepEmbedder.
+
+        Parameters
+        -----------
+        hidden_size (int): The dimension of the output embedding.
+        frequency_embedding_size (int): The dimension of the sinusoidal frequency embedding.
+        """
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(frequency_embedding_size, hidden_size, bias=True),
@@ -144,14 +199,21 @@ class TimestepEmbedder(nn.Module):
         self.frequency_embedding_size = frequency_embedding_size
 
     @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
+    def timestep_embedding(
+        t: torch.Tensor, dim: int, max_period: int = 10000
+    ) -> torch.Tensor:
         """
-        Create sinusoidal timestep embeddings.
-        :param t: a 1-D Tensor of N indices, one per batch element.
-                          These may be fractional.
-        :param dim: the dimension of the output.
-        :param max_period: controls the minimum frequency of the embeddings.
-        :return: an (N, D) Tensor of positional embeddings.
+        Creates sinusoidal timestep embeddings.
+
+        Parameters
+        -----------
+        t (torch.Tensor): A 1-D Tensor of N indices, one per batch element.
+        dim (int): The dimension of the output.
+        max_period (int): Controls the minimum frequency of the embeddings.
+
+        Outputs
+        -------
+        torch.Tensor: An (N, D) Tensor of positional embeddings.
         """
         # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
@@ -168,7 +230,18 @@ class TimestepEmbedder(nn.Module):
             )
         return embedding
 
-    def forward(self, t):
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        """
+        Performs the forward pass for the TimestepEmbedder.
+
+        Forward
+        -------
+        t (torch.Tensor): A tensor of timesteps.
+
+        Outputs
+        -------
+        torch.Tensor: The embedded timesteps.
+        """
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         t_emb = self.mlp(t_freq)
         return t_emb
@@ -180,6 +253,15 @@ class ConditionEmbedder(nn.Module):
     """
 
     def __init__(self, condition_dim: int, hidden_size: int, dropout_prob: float):
+        """
+        Initializes the ConditionEmbedder.
+
+        Parameters
+        -----------
+        condition_dim (int): The dimensionality of the input condition vector.
+        hidden_size (int): The dimensionality of the output embedding.
+        dropout_prob (float): The dropout probability for classifier-free guidance.
+        """
         super().__init__()
         self.dropout_prob = dropout_prob
         self.condition_dim = condition_dim
@@ -195,10 +277,17 @@ class ConditionEmbedder(nn.Module):
         self, condition: torch.Tensor, train: bool, force_drop: bool = False
     ) -> torch.Tensor:
         """
-        Args:
-            condition (torch.Tensor): A (N, condition_dim) tensor of latent vectors.
-            train (bool): Whether the model is in training mode.
-            force_drop (bool): Whether to force dropping the conditioning.
+        Performs the forward pass for the ConditionEmbedder.
+
+        Forward
+        -------
+        condition (torch.Tensor): A (N, condition_dim) tensor of latent vectors.
+        train (bool): Whether the model is in training mode.
+        force_drop (bool, optional): Whether to force dropping the conditioning. Defaults to False.
+
+        Outputs
+        -------
+        torch.Tensor: The embedded condition vectors.
         """
         # Project the latent vectors to the hidden size
         embeddings = self.projection(condition)
@@ -230,8 +319,24 @@ class DiTBlock(nn.Module):
     """
 
     def __init__(
-        self, hidden_size, num_heads, attention_backbone, mlp_ratio=4.0, **block_kwargs
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attention_backbone: str,
+        mlp_ratio: float = 4.0,
+        **block_kwargs: Any,
     ):
+        """
+        Initializes the DiTBlock.
+
+        Parameters
+        -----------
+        hidden_size (int): The dimensionality of the input and output.
+        num_heads (int): The number of attention heads.
+        attention_backbone (str): The attention implementation to use ('transformer_engine' or 'timm').
+        mlp_ratio (float, optional): The ratio for the MLP's hidden dimension. Defaults to 4.0.
+        **block_kwargs (Any): Additional keyword arguments for the attention layer.
+        """
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         if attention_backbone == "transformer_engine":
@@ -256,7 +361,19 @@ class DiTBlock(nn.Module):
             nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c):
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """
+        Performs the forward pass for the DiTBlock.
+
+        Forward
+        -------
+        x (torch.Tensor): The input tensor of shape (N, T, D).
+        c (torch.Tensor): The conditioning tensor of shape (N, D).
+
+        Outputs
+        -------
+        torch.Tensor: The output tensor of shape (N, T, D).
+        """
         (
             shift_msa,
             scale_msa,
@@ -276,10 +393,19 @@ class DiTBlock(nn.Module):
 
 class FinalLayer(nn.Module):
     """
-    The final layer of DiT.
+    The final layer of the DiT model.
     """
 
-    def __init__(self, hidden_size, patch_size, out_channels):
+    def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
+        """
+        Initializes the FinalLayer.
+
+        Parameters
+        -----------
+        hidden_size (int): The dimensionality of the input from the transformer blocks.
+        patch_size (int): The size of each image patch.
+        out_channels (int): The number of output channels.
+        """
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(
@@ -289,7 +415,19 @@ class FinalLayer(nn.Module):
             nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c):
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """
+        Performs the forward pass for the FinalLayer.
+
+        Forward
+        -------
+        x (torch.Tensor): The input tensor of shape (N, T, D).
+        c (torch.Tensor): The conditioning tensor of shape (N, D).
+
+        Outputs
+        -------
+        torch.Tensor: The output tensor of shape (N, T, patch_size**2 * out_channels).
+        """
         shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
@@ -298,56 +436,7 @@ class FinalLayer(nn.Module):
 
 class DiT(Module):
     """
-    Diffusion Transformer (DiT) model.
-
-    Parameters
-    ----------
-    input_size : Union[int, Tuple[int, int]], optional
-        Height and width of the input images, by default (32, 32).
-    patch_size : int, optional
-        The size of each image patch, by default 2.
-    in_channels : int, optional
-        The number of input channels, by default 4.
-    out_channels : Union[None, int], optional
-        The number of output channels. If None, it is in_channels, by default None.
-    hidden_size : int, optional
-        The dimensionality of the transformer embeddings, by default 1152.
-    depth : int, optional
-        The number of transformer blocks, by default 28.
-    num_heads : int, optional
-        The number of attention heads, by default 16.
-    mlp_ratio : float, optional
-        The ratio of the MLP hidden dimension to the embedding dimension, by default 4.0.
-    attention_backbone : str, optional
-        If 'transformer_engine', uses MultiheadAttention from transformer_engine, by default 'timm'.
-    condition_dropout_prob : float, optional
-        The dropout probability for classifier-free guidance, by default 0.1.
-    condition_dim : int, optional
-        Dimensionality of conditioning. If None, the model is unconditional, by default None.
-    embedding_type : str, optional
-        The type of positional embedding to use. 'sin-cos' for fixed sinusoidal embeddings,
-        'learnable' for learnable positional embeddings, by default 'sin-cos'.
-
-    Example
-    -------
-    >>> model = physicsnemo.experimental.models.dit.DiT(
-    ... input_size=(32,64),
-    ... patch_size=4,
-    ... in_channels=3,
-    ... out_channels=3,
-    ... condition_dim=8,
-    ... )
-    >>> x = torch.randn(2, 3, 32, 64)     # [B, C, H, W]
-    >>> t = torch.randint(0, 1000, (2,))  # [B]
-    >>> condition = torch.randin(2, 8)    # [B, d]
-    >>> output = model(x, t, condition)
-    >>> output.size()
-    torch.Size([2, 3, 32, 64])
-
-    Note
-    ----
-    Reference: Peebles, W., & Xie, S. (2023). Scalable diffusion models with transformers.
-    In Proceedings of the IEEE/CVF international conference on computer vision (pp. 4195-4205).
+    The Diffusion Transformer (DiT) model.
     """
 
     def __init__(
@@ -355,16 +444,55 @@ class DiT(Module):
         input_size: Union[int, Tuple[int, int]] = (32, 32),
         patch_size: int = 2,
         in_channels: int = 4,
-        out_channels: Union[None, int] = None,
+        out_channels: Optional[int] = None,
         hidden_size: int = 1152,
         depth: int = 28,
         num_heads: int = 16,
         mlp_ratio: float = 4.0,
         attention_backbone: str = "timm",
-        condition_dropout_prob=0.1,
-        condition_dim=None,
-        embedding_type="sin-cos",
+        condition_dropout_prob: float = 0.1,
+        condition_dim: Optional[int] = None,
+        embedding_type: str = "sin-cos",
     ):
+        """
+        Initializes the DiT model.
+
+        Parameters
+        -----------
+        input_size (Union[int, Tuple[int, int]], optional): Height and width of the input images. Defaults to (32, 32).
+        patch_size (int, optional): The size of each image patch. Defaults to 2.
+        in_channels (int, optional): The number of input channels. Defaults to 4.
+        out_channels (Union[None, int], optional): The number of output channels. If None, it is `in_channels`. Defaults to None.
+        hidden_size (int, optional): The dimensionality of the transformer embeddings. Defaults to 1152.
+        depth (int, optional): The number of transformer blocks. Defaults to 28.
+        num_heads (int, optional): The number of attention heads. Defaults to 16.
+        mlp_ratio (float, optional): The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
+        attention_backbone (str, optional): If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'timm'.
+        condition_dropout_prob (float, optional): The dropout probability for classifier-free guidance. Defaults to 0.1.
+        condition_dim (int, optional): Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
+        embedding_type (str, optional): The type of positional embedding ('sin-cos' or 'learnable'). Defaults to 'sin-cos'.
+
+        Notes
+        -----
+        Reference: Peebles, W., & Xie, S. (2023). Scalable diffusion models with transformers.
+        In Proceedings of the IEEE/CVF international conference on computer vision (pp. 4195-4205).
+
+        Example
+        --------
+        >>> model = DiT(
+        ...     input_size=(32,64),
+        ...     patch_size=4,
+        ...     in_channels=3,
+        ...     out_channels=3,
+        ...     condition_dim=8,
+        ... )
+        >>> x = torch.randn(2, 3, 32, 64)     # [B, C, H, W]
+        >>> t = torch.randint(0, 1000, (2,))  # [B]
+        >>> condition = torch.randn(2, 8)    # [B, d]
+        >>> output = model(x, t, condition)
+        >>> output.size()
+        torch.Size([2, 3, 32, 64])
+        """
         super().__init__(meta=MetaData())
         self.in_channels = in_channels
         if out_channels:
@@ -398,10 +526,6 @@ class DiT(Module):
                 torch.zeros(1, num_patches, hidden_size), requires_grad=False
             )
 
-        self.pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches, hidden_size), requires_grad=False
-        )
-
         self.blocks = nn.ModuleList(
             [
                 DiTBlock(
@@ -413,7 +537,10 @@ class DiT(Module):
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
-    def initialize_weights(self):
+    def initialize_weights(self) -> None:
+        """
+        Initializes the weights of the DiT model.
+        """
         # Initialize transformer layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
@@ -464,8 +591,15 @@ class DiT(Module):
 
     def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (N, T, patch_size**2 * C)
-        imgs: (N, C, H, W)
+        Reshapes a tensor of patches back into an image.
+
+        Parameters
+        -----------
+        x (torch.Tensor): Input tensor of shape (N, T, patch_size**2 * C).
+
+        Outputs
+        -------
+        torch.Tensor: Output tensor of shape (N, C, H, W).
         """
         c = self.out_channels
         p = self.patch_size
@@ -479,12 +613,21 @@ class DiT(Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
 
-    def forward(self, x, t, condition=None):
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, condition: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        condition: (N, d) tensor of conditions, optional. If None, the model is unconditional.
+        Performs the forward pass of the DiT model.
+
+        Forward
+        -------
+        x (torch.Tensor): (N, C, H, W) tensor of spatial inputs.
+        t (torch.Tensor): (N,) tensor of diffusion timesteps.
+        condition (Optional[torch.Tensor]): (N, d) tensor of conditions.
+
+        Outputs
+        -------
+        torch.Tensor: The output tensor of shape (N, out_channels, H, W).
         """
         x = (
             self.x_embedder(x) + self.pos_embed
@@ -494,6 +637,7 @@ class DiT(Module):
         # Handle conditioning
         if self.cond_embedder is not None:
             if condition is None:
+                # Fallback to using only timestep embedding if condition is not provided
                 c = t
             else:
                 condition_embedding = self.cond_embedder(
