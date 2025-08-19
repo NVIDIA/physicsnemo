@@ -67,7 +67,7 @@ else:
         k: int = 3,
     ) -> None:
         """
-        Dummy implementation for when cuml is not available.
+        Dummy implementation for when scipy is not available.
 
         Args:
             points (torch.Tensor): The points to search in.
@@ -75,9 +75,9 @@ else:
             k (int): The number of neighbors to search for.
 
         Raises:
-            ImportError: If cuml is not installed.
+            ImportError: If scipy is not installed.
         """
 
         raise ImportError(
-            "cuml is not installed, can not be used as a backend for a knn search"
+            "scipy is not installed, can not be used as a backend for a knn search"
         )
