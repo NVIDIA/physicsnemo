@@ -106,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Module.from_checkpoint` that now exposes a `strict` parameter to raise error
   on missing/unexpected keys, similar to that used in
   `torch.nn.Module.load_state_dict`.
-  
+- Migrated Hybrid MGN and deforming plate example to PyTorch Geometric.
+
 ### Deprecated
 
 ### Removed

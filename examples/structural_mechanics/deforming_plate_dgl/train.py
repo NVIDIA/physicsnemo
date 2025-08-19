@@ -23,10 +23,11 @@ from tqdm import tqdm
 
 from omegaconf import DictConfig
 
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 
+from deforming_plate_dataset import DeformingPlateDataset
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.logging import (
     PythonLogger,
@@ -35,6 +36,7 @@ from physicsnemo.launch.logging import (
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
+from helpers import add_world_edges
 
 import os
 
@@ -118,20 +120,24 @@ class MGNTrainer:
         dataset = LazyTimeStepDataset(
             to_absolute_path(cfg.preprocess_output_dir), cfg.num_training_time_steps
         )
-        sampler = DistributedSampler(
-            dataset,
-            shuffle=True,
-            drop_last=True,
-            num_replicas=self.dist.world_size,
-            rank=self.dist.rank,
-        )
+        if self.dist.world_size > 1:
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=self.dist.world_size,
+                rank=self.dist.rank,
+                shuffle=True,
+            )
+        else:
+            sampler = None
 
         self.dataloader = torch.utils.data.DataLoader(
             dataset,
-            batch_size=cfg.batch_size,
-            sampler=sampler,
+            batch_size=1,
+            shuffle=(sampler is None),  # Only shuffle if not using sampler
+            drop_last=True,
             pin_memory=True,
             num_workers=cfg.num_dataloader_workers,
+            sampler=sampler,
             collate_fn=lambda batch: batch[0],
         )
         self.sampler = sampler
@@ -217,9 +223,11 @@ class MGNTrainer:
 
     def forward(self, graph, mesh_edge_features, world_edge_features):
         # forward pass
-        with autocast("cuda", enabled=self.amp):
-            pred = self.model(graph.x, mesh_edge_features, world_edge_features, graph)
-            loss = self.criterion(pred, graph.y)
+        with autocast(enabled=self.amp):
+            pred = self.model(
+                graph.ndata["x"], mesh_edge_features, world_edge_features, graph
+            )
+            loss = self.criterion(pred, graph.ndata["y"])
             return loss
 
     def backward(self, loss):
@@ -247,7 +255,8 @@ def main(cfg: DictConfig) -> None:
     start = time.time()
     rank_zero_logger.info("Training started...")
     for epoch in range(trainer.epoch_init, cfg.epochs):
-        trainer.sampler.set_epoch(epoch)
+        if trainer.sampler is not None:
+            trainer.sampler.set_epoch(epoch)
         start = time.time()
         # Wrap the dataloader with tqdm and add description with epoch info
         progress_bar = tqdm(

@@ -19,13 +19,14 @@ import os
 import hydra
 from hydra.utils import to_absolute_path
 
+from dgl.dataloading import GraphDataLoader
 import matplotlib.pyplot as plt
 from matplotlib import animation
+from matplotlib import tri as mtri
+from matplotlib.patches import Rectangle
 import numpy as np
 from omegaconf import DictConfig
 import torch
-from torch.utils.data import DataLoader
-from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 from deforming_plate_dataset import DeformingPlateDataset
@@ -33,6 +34,8 @@ from physicsnemo.launch.logging import PythonLogger
 from physicsnemo.launch.utils import load_checkpoint
 
 from helpers import add_world_edges
+
+import numpy as np
 
 
 def extract_surface_triangles(tets):
@@ -80,12 +83,11 @@ class MGNRollout:
         )
 
         # instantiate dataloader
-        self.dataloader = DataLoader(
+        self.dataloader = GraphDataLoader(
             self.dataset,
             batch_size=1,
             shuffle=False,
             drop_last=False,
-            collate_fn=lambda batch: batch[0],
         )
 
         # instantiate the model
@@ -132,18 +134,20 @@ class MGNRollout:
             clamped_points_mask = clamped_points_mask.to(self.device)
             # denormalize data
             exact_velocity_denormalized = self.dataset.denormalize(
-                graph.y[:, 0:3],
+                graph.ndata["y"][:, 0:3],
                 stats["velocity_mean"],
                 stats["velocity_std"],
             )
-            exact_next_world_pos = exact_velocity_denormalized + graph.world_pos[:, 0:3]
+            exact_next_world_pos = (
+                exact_velocity_denormalized + graph.ndata["world_pos"][:, 0:3]
+            )
 
             # inference step
             if i % (self.num_test_time_steps - 1) != 0:
-                graph.world_pos = self.pred[i - 1][:, 0:3]
+                graph.ndata["world_pos"] = self.pred[i - 1][:, 0:3]
             graph, mesh_edge_features, world_edge_features = add_world_edges(graph)
             pred_i = self.model(
-                graph.x, mesh_edge_features, world_edge_features, graph
+                graph.ndata["x"], mesh_edge_features, world_edge_features, graph
             )  # predict
 
             # denormalize prediction
@@ -165,7 +169,7 @@ class MGNRollout:
 
             # integration
             pred_world_pos_denormalized = (
-                pred_velocity_denormalized.squeeze(0) + graph.world_pos[:, 0:3]
+                pred_velocity_denormalized.squeeze(0) + graph.ndata["world_pos"][:, 0:3]
             )  # Note that the world_pos is not normalized
             # assign boundary conditions to the object points
             pred_world_pos_denormalized = torch.where(
