@@ -21,7 +21,6 @@ from physicsnemo.metrics.general.power_spectrum import power_spectrum
 
 
 def ps1d_plots(generated, target, fields, diffusion_channels):
-
     assert generated.shape == target.shape
 
     # Comppute PS1D, all channels

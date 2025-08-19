@@ -259,7 +259,6 @@ class Loggers(Logger):
 
 
 def init_logger(config: dict) -> Logger:
-
     if DistributedManager().rank != 0:
         return Loggers([])
 
@@ -283,9 +282,9 @@ def init_logger(config: dict) -> Logger:
                 resume = True
                 # Find the wandb_id text file
                 wandb_id_file = output_dir / "wandb_id.txt"
-                assert (
-                    wandb_id_file.exists()
-                ), f"wandb_id.txt not found in output dir: {output_dir}"
+                assert wandb_id_file.exists(), (
+                    f"wandb_id.txt not found in output dir: {output_dir}"
+                )
                 with open(wandb_id_file) as f:
                     wandb_id = f.read()
                 print(f"Resuming wandb run: {wandb_id}")

@@ -46,6 +46,7 @@ activation: silu                                     # Activation function
 
 partitions_path: partitions                         # Path to the partitions (.bin files)
 validation_partitions_path: validation_partitions   # Path to the validation partitions (.bin files)
+test_partitions_path: test_partitions               # Path to the test partitions (.bin files)
 stats_file: global_stats.json                       # Path to the global statistics (.json file)
 checkpoint_filename: model_checkpoint.pth           # Filename of the model checkpoint
 num_epochs: 2000                                    # Number of epochs

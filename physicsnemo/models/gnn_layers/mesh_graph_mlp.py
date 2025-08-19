@@ -25,7 +25,7 @@ from torch.autograd.function import once_differentiable
 from physicsnemo.models.layers.layer_norm import get_layer_norm_class
 from physicsnemo.utils.profiling import profile
 
-from .utils import GraphType, concat_efeat, concat_efeat_hetero_dgl, sum_efeat
+from .utils import GraphType, concat_efeat, concat_efeat_hetero, sum_efeat
 
 
 class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
@@ -337,7 +337,7 @@ class MeshGraphHeteroEdgeMLPConcat(nn.Module):
         nfeat: Union[Tensor, Tuple[Tensor]],
         graph: GraphType,
     ) -> Tensor:
-        efeat = concat_efeat_hetero_dgl(mesh_efeat, world_efeat, nfeat, graph)
+        efeat = concat_efeat_hetero(mesh_efeat, world_efeat, nfeat, graph)
         mesh_efeat_new = self.mesh_mlp(efeat[0 : len(mesh_efeat)])
         world_efeat_new = self.world_mlp(efeat[len(mesh_efeat) :])
         return mesh_efeat_new, world_efeat_new

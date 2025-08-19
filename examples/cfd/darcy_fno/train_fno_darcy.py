@@ -101,12 +101,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
     if cfg.training.pseudo_epoch_sample_size % cfg.training.batch_size != 0:
         log.warning(
             f"increased pseudo_epoch_sample_size to multiple of \
-                      batch size: {steps_per_pseudo_epoch*cfg.training.batch_size}"
+                      batch size: {steps_per_pseudo_epoch * cfg.training.batch_size}"
         )
     if cfg.validation.sample_size % cfg.training.batch_size != 0:
         log.warning(
             f"increased validation sample size to multiple of \
-                      batch size: {validation_iters*cfg.training.batch_size}"
+                      batch size: {validation_iters * cfg.training.batch_size}"
         )
 
     # define forward passes for training and inference
@@ -127,7 +127,7 @@ def darcy_trainer(cfg: DictConfig) -> None:
     if loaded_pseudo_epoch == 0:
         log.success("Training started...")
     else:
-        log.warning(f"Resuming training from pseudo epoch {loaded_pseudo_epoch+1}.")
+        log.warning(f"Resuming training from pseudo epoch {loaded_pseudo_epoch + 1}.")
 
     for pseudo_epoch in range(
         max(1, loaded_pseudo_epoch + 1), cfg.training.max_pseudo_epochs + 1

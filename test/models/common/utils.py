@@ -15,7 +15,8 @@
 # limitations under the License.
 
 import logging
-from typing import Tuple, Union
+from pathlib import Path
+from typing import Any, Dict, Tuple, Union
 
 import torch
 
@@ -69,10 +70,10 @@ def compare_output(
         If outputs are the same
     """
     # Output of tensor
-    if isinstance(output_1, Tensor):
+    if isinstance(output_1, Tensor) and isinstance(output_2, Tensor):
         return torch.allclose(output_1, output_2, rtol, atol)
     # Output of tuple of tensors
-    elif isinstance(output_1, tuple):
+    elif isinstance(output_1, tuple) and isinstance(output_2, tuple):
         # Loop through tuple of outputs
         for i, (out_1, out_2) in enumerate(zip(output_1, output_2)):
             # If tensor use allclose
@@ -105,3 +106,108 @@ def is_fusion_available(cls_name: str):
         return hasattr(__import__("nvfuser", fromlist=[cls_name]), cls_name)
     except ImportError:
         return False
+
+
+def save_output(output: Union[Tensor, Tuple[Tensor, ...]], file_name: Path):
+    """Saves output of model to file
+
+    Parameters
+    ----------
+    output : Union[Tensor, Tuple[Tensor, ...]]
+        Output from netwrok model
+    file_name : Path
+        File path
+
+    Raises
+    ------
+    IOError
+        If file path has a parent directory that does not exist
+    ValueError
+        If model outputs are larger than 10mb
+    """
+    if not file_name.parent.is_dir():
+        raise IOError(
+            f"Folder path, {file_name.parent}, for output accuracy data not found"
+        )
+
+    # Check size of outputs
+    output_size = 0
+    for out_tensor in output:
+        out_tensor: Tensor = out_tensor.detach().contiguous().cpu()
+        output_size += out_tensor.element_size() * out_tensor.nelement()
+
+    if output_size > 10**7:
+        raise ValueError(
+            "Outputs are greater than 10mb which is too large for this test"
+        )
+
+    output_dict: Dict[int, Tensor] = {
+        i: data.detach().contiguous().cpu() for i, data in enumerate(output)
+    }
+    torch.save(output_dict, file_name)
+
+
+@torch.no_grad()
+def validate_accuracy(
+    output: Tensor | Tuple[Tensor, ...],
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
+    file_name: Union[str, None] = None,
+) -> bool:
+    """Validates the accuracy of a tensor with a reference output
+
+    Parameters
+    ----------
+    output : Tensor | Tuple[Tensor, ...]
+        Output tensor or tuple of tensors
+    rtol : float, optional
+        Relative tolerance of error allowed, by default 1e-3
+    atol : float, optional
+        Absolute tolerance of error allowed, by default 1e-3
+    file_name : Union[str, None], optional
+        Override the default file name of the stored target output, by default
+        None
+
+    Returns
+    -------
+    bool
+        Test passed
+
+    Raises
+    ------
+    IOError
+        Target output tensor file for this model was not found
+    """
+    # File name / path
+    # Output files should live in test/utils/data
+
+    # Always use tuples for this comparison / saving
+    if isinstance(output, Tensor):
+        device: torch.device = output.device
+        output: Tuple[Tensor, ...] = (output,)
+    else:
+        device: torch.device = output[0].device
+
+    file_name: Path = (
+        Path(__file__).parents[1].resolve() / Path("data") / Path(file_name.lower())
+    )
+    # If file does not exist, we will create it then error
+    # Model should then reproduce it on next pytest run
+    if not file_name.exists():
+        save_output(output, file_name)
+        raise IOError(
+            f"Output check file {str(file_name)} wasn't found so one was created. Please re-run the test."
+        )
+    # Load tensor dictionary and check
+    else:
+        tensor_dict: Dict[Any, Tensor] | Tensor | Any = torch.load(str(file_name))
+        if isinstance(tensor_dict, dict):
+            output_target: Tuple[Tensor, ...] = tuple(
+                [value.to(device) for value in tensor_dict.values()]
+            )
+        elif isinstance(tensor_dict, Tensor):
+            output_target: Tuple[Tensor] = (tensor_dict.to(device),)
+        else:
+            raise ValueError(f"Invalid tensor dictionary type: {type(tensor_dict)}. ")
+
+        return compare_output(output, output_target, rtol, atol)

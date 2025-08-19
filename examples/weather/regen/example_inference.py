@@ -65,8 +65,9 @@ v10_mean, v10_std = 0.865, 4.115
 logtp_mean, logtp_std = -8.117, 2.489
 
 
-means, stds = np.array([u10_mean, v10_mean, logtp_mean]), np.array(
-    [u10_std, v10_std, logtp_std]
+means, stds = (
+    np.array([u10_mean, v10_mean, logtp_mean]),
+    np.array([u10_std, v10_std, logtp_std]),
 )
 
 

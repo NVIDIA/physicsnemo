@@ -364,12 +364,12 @@ def darcy_trainer(cfg: DictConfig) -> None:
     if cfg.training.pseudo_epoch_sample_size % cfg.data.batch_size != 0:
         logger.warning(
             f"increased pseudo_epoch_sample_size to multiple of \
-                      batch size: {steps_per_pseudo_epoch*cfg.data.batch_size}"
+                      batch size: {steps_per_pseudo_epoch * cfg.data.batch_size}"
         )
     if cfg.validation.sample_size % cfg.data.batch_size != 0:
         logger.warning(
             f"increased validation sample size to multiple of \
-                      batch size: {validation_iters*cfg.data.batch_size}"
+                      batch size: {validation_iters * cfg.data.batch_size}"
         )
 
     # Initialize GradScaler for mixed precision training
@@ -386,12 +386,13 @@ def darcy_trainer(cfg: DictConfig) -> None:
     if loaded_pseudo_epoch == 0:
         logger.success("Training started...")
     else:
-        logger.warning(f"Resuming training from pseudo epoch {loaded_pseudo_epoch+1}.")
+        logger.warning(
+            f"Resuming training from pseudo epoch {loaded_pseudo_epoch + 1}."
+        )
 
     # Get the first batch of the test dataset for plotting
 
     with prof:
-
         for pseudo_epoch in range(
             max(1, loaded_pseudo_epoch + 1), cfg.training.max_pseudo_epochs + 1
         ):

@@ -16,9 +16,9 @@
 
 """
 This code defines a distributed pipeline for re-training the DoMINO model on
-CFD datasets starting from a pre-trained checkpoint. The model is retrained 
-with a very small learning rate on the new dataset. The train tab in 
-config.yaml can be used to specify batch size, number of epochs and 
+CFD datasets starting from a pre-trained checkpoint. The model is retrained
+with a very small learning rate on the new dataset. The train tab in
+config.yaml can be used to specify batch size, number of epochs and
 other training parameters.
 """
 
@@ -171,10 +171,7 @@ def relative_loss_fn_area(output, target, normals, area, padded_value=-10):
 
     masked_loss_ws = torch.mean(
         (
-            (
-                ws_pred * area * scale_factor**2.0
-                - ws_true * area * scale_factor**2.0
-            )
+            (ws_pred * area * scale_factor**2.0 - ws_true * area * scale_factor**2.0)
             ** 2.0
         ),
         (0, 1),
@@ -237,10 +234,7 @@ def mse_loss_fn_area(output, target, normals, area, padded_value=-10):
 
     masked_loss_ws = torch.mean(
         (
-            (
-                ws_pred * area * scale_factor**2.0
-                - ws_true * area * scale_factor**2.0
-            )
+            (ws_pred * area * scale_factor**2.0 - ws_true * area * scale_factor**2.0)
             ** 2.0
         ),
         (0, 1),
@@ -450,13 +444,11 @@ def train_epoch(
     integral_scaling_factor,
     loss_fn_type,
 ):
-
     running_loss = 0.0
     last_loss = 0.0
     loss_interval = 1
 
     for i_batch, sample_batched in enumerate(dataloader):
-
         sampled_batched = dict_to_device(sample_batched, device)
 
         with autocast(enabled=False):
@@ -474,7 +466,6 @@ def train_epoch(
                     )
 
             if prediction_surf is not None:
-
                 target_surf = sampled_batched["surface_fields"]
                 surface_areas = sampled_batched["surface_areas"]
                 surface_normals = sampled_batched["surface_normals"]
@@ -792,7 +783,7 @@ def main(cfg: DictConfig) -> None:
                 ),  # hacky way of using epoch to store metadata
             )
         print(
-            f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.time() - start_time}"
+            f"Device {dist.device}, Best val loss {best_vloss}, Time taken {time.time() - start_time}"
         )
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:

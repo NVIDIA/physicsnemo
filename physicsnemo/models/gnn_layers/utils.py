@@ -245,34 +245,6 @@ def concat_efeat_pyg(
     return cat_feat
 
 
-def concat_efeat_hetero_pyg(
-    mesh_efeat: Tensor,
-    world_efeat: Tensor,
-    nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
-    graph: PyGData,
-) -> Tensor:
-    """Concatenates edge features with source and destination node features.
-    Use for heterogeneous PyG graphs.
-
-    Parameters
-    ----------
-    mesh_efeat : Tensor
-        Mesh edge features.
-    world_efeat : Tensor
-        World edge features.
-    nfeat : Tensor | Tuple[Tensor]
-        Node features.
-    graph : PyGData
-        Graph.
-
-    Returns
-    -------
-    Tensor
-        Concatenated edge features with source and destination node features.
-    """
-    raise NotImplementedError("concat_efeat_hetero_pyg is not supported yet.")
-
-
 def concat_efeat(
     efeat: Tensor,
     nfeat: Union[Tensor, Tuple[Tensor]],
@@ -358,6 +330,32 @@ def concat_efeat(
             raise ValueError(f"Unsupported graph type: {type(graph)}")
     else:
         raise ValueError(f"Unsupported node feature type: {type(nfeat)}")
+
+    return efeat
+
+
+def concat_efeat_hetero(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
+    graph: GraphType,
+) -> Tensor:
+    """Concatenates edge features with source and destination node features.
+    Use for heterogeneous graphs.
+    """
+
+    if isinstance(graph, CuGraphCSC):
+        raise NotImplementedError(
+            "concat_efeat_hetero is not supported for CuGraphCSC graphs yet."
+        )
+    elif isinstance(graph, DGLGraph):
+        efeat = concat_efeat_hetero_dgl(mesh_efeat, world_efeat, nfeat, graph)
+    elif isinstance(graph, PyGData):
+        efeat = concat_efeat_pyg(
+            torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph
+        )
+    else:
+        raise ValueError(f"Unsupported graph type: {type(graph)}")
 
     return efeat
 
@@ -585,19 +583,6 @@ def agg_concat_pyg(
     return cat_feat
 
 
-def agg_concat_hetero_pyg(
-    mesh_efeat: Tensor,
-    world_efeat: Tensor,
-    dst_nfeat: Tensor,
-    graph: PyGData,
-    aggregation: str,
-) -> Tensor:
-    """Aggregates edge features and concatenates result with destination node features.
-    Use for heterogeneous PyG graphs.
-    """
-    raise NotImplementedError("agg_concat_hetero_pyg is not supported yet.")
-
-
 def aggregate_and_concat(
     efeat: Tensor,
     nfeat: Tensor,
@@ -695,8 +680,8 @@ def aggregate_and_concat_hetero(
             mesh_efeat, world_efeat, nfeat, graph, aggregation
         )
     elif isinstance(graph, PyGData):
-        raise NotImplementedError(
-            "aggregate_and_concat_hetero is not supported for PyG graphs yet."
+        cat_feat = agg_concat_pyg(
+            torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph, aggregation
         )
     else:
         raise ValueError(f"Unsupported graph type: {type(graph)}")

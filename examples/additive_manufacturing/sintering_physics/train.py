@@ -140,7 +140,6 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
     rank_zero_logger.info("Training started...")
 
     for features, targets in tqdm(dataset):
-
         inputs = features["position"]
         particle_types = features["particle_type"]
 
@@ -694,7 +693,7 @@ def Test(rank_zero_logger, dist, cfg):
                 json.dump(rollout_op, file_object)
 
             example_index += 1
-            rank_zero_logger.info(f"Prediction time: {time.time()-start_time}\n")
+            rank_zero_logger.info(f"Prediction time: {time.time() - start_time}\n")
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

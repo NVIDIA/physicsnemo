@@ -302,7 +302,7 @@ def nested_darcy_trainer(cfg: DictConfig) -> None:
     if loaded_epoch == 0:
         logger.success("Training started...")
     else:
-        logger.warning(f"Resuming training from epoch {loaded_epoch+1}.")
+        logger.warning(f"Resuming training from epoch {loaded_epoch + 1}.")
 
     # train model
     TrainModel(cfg, base, loaded_epoch)

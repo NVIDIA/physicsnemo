@@ -22,7 +22,6 @@ Diffusion-Based Generative Models".
 import contextlib
 import importlib
 import math
-import warnings
 from typing import Any, Dict, List, Set
 
 import numpy as np
@@ -322,41 +321,163 @@ class Conv2d(torch.nn.Module):
         return x
 
 
+def _compute_groupnorm_groups(
+    num_channels: int,
+    num_groups: int = 32,
+    min_channels_per_group: int = 4,
+) -> int:
+    """
+    Compute the number of groups for GroupNorm based on the number of channels
+    and the minimum number of channels per group.
+
+    Parameters
+    ----------
+    num_channels : int
+        Number of channels in the input tensor.
+    num_groups : int, optional, default=32
+        Desired number of groups to divide the input channels.
+        This might be adjusted based on the ``min_channels_per_group``.
+    min_channels_per_group : int, optional, default=4
+        Minimum channels required per group. This ensures that no group has fewer
+        channels than this number.
+
+    Returns
+    -------
+    int
+        The number of groups to use for GroupNorm.
+    """
+    num_groups: int = min(
+        num_groups,
+        (num_channels + min_channels_per_group - 1) // min_channels_per_group,
+    )
+    if num_channels % num_groups != 0:
+        raise ValueError(
+            "num_channels must be divisible by num_groups or min_channels_per_group"
+        )
+    return num_groups
+
+
+def get_group_norm(
+    num_channels: int,
+    num_groups: int = 32,
+    min_channels_per_group: int = 4,
+    eps: float = 1e-5,
+    use_apex_gn: bool = False,
+    act: str | None = None,
+    amp_mode: bool = False,
+) -> torch.nn.Module:
+    """
+    Utility function to get the GroupNorm layer, either from apex or from torch.
+
+    Parameters
+    ----------
+    num_channels : int
+        Number of channels in the input tensor.
+    num_groups : int, optional, default=32
+        Desired number of groups to divide the input channels.
+        This might be adjusted based on the ``min_channels_per_group``.
+    min_channels_per_group : int, optional, default=4
+        Minimum channels required per group. This ensures that no group has fewer
+        channels than this number.
+    eps : float, optional, default=1e-5
+        A small number added to the variance to prevent division by zero.
+    use_apex_gn : bool, optional, default=False
+        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
+        Need to set this as False on cpu.
+    act : str, optional, default=None
+        The activation function to use when fusing activation with GroupNorm.
+    amp_mode : bool, optional, default=False
+        A boolean flag indicating whether mixed-precision (AMP) training is enabled.
+
+    Returns
+    -------
+    torch.nn.Module
+        The GroupNorm layer. If ``use_apex_gn`` is ``True``, returns an
+        ApexGroupNorm layer, otherwise returns an instance of
+        :class:`~physicsnemo.models.diffusion.layers.GroupNorm`.
+
+    .. note::
+
+    If ``num_channels`` is not divisible by ``num_groups``, the actual number
+    of groups might be adjusted to satisfy the ``min_channels_per_group``
+    condition.
+    """
+    if use_apex_gn and not _is_apex_available:
+        raise ValueError("'apex' is not installed, set `use_apex_gn=False`")
+
+    act: str | None = act.lower() if act else act
+    if use_apex_gn:
+        # adjust number of groups to be consistent with GroupNorm
+        num_groups: int = _compute_groupnorm_groups(
+            num_channels, num_groups, min_channels_per_group
+        )
+        return ApexGroupNorm(
+            num_groups=num_groups,
+            num_channels=num_channels,
+            eps=eps,
+            affine=True,
+            act=act,
+        )
+    else:
+        return GroupNorm(
+            num_channels=num_channels,
+            num_groups=num_groups,
+            min_channels_per_group=min_channels_per_group,
+            eps=eps,
+            act=act,
+            amp_mode=amp_mode,
+        )
+
+
 class GroupNorm(torch.nn.Module):
     """
     A custom Group Normalization layer implementation.
 
     Group Normalization (GN) divides the channels of the input tensor into groups and
     normalizes the features within each group independently. It does not require the
-    batch size as in Batch Normalization, making itsuitable for batch sizes of any size
+    batch size as in Batch Normalization, making it suitable for batch sizes of any size
     or even for batch-free scenarios.
 
     Parameters
     ----------
     num_channels : int
         Number of channels in the input tensor.
-    num_groups : int, optional
-        Desired number of groups to divide the input channels, by default 32.
-        This might be adjusted based on the `min_channels_per_group`.
-    min_channels_per_group : int, optional
+    num_groups : int, optional, default=32
+        Desired number of groups to divide the input channels.
+        This might be adjusted based on the ``min_channels_per_group``.
+    min_channels_per_group : int, optional, default=4
         Minimum channels required per group. This ensures that no group has fewer
-        channels than this number. By default 4.
-    eps : float, optional
-        A small number added to the variance to prevent division by zero, by default
-        1e-5.
-    use_apex_gn : bool, optional
-        A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
-        Need to set this as False on cpu. Defaults to False.
-    fused_act : bool, optional
-        Whether to fuse the activation function with GroupNorm. Defaults to False.
-    act : str, optional
-        The activation function to use when fusing activation with GroupNorm. Defaults to None.
-    amp_mode : bool, optional
-        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
-    Notes
-    -----
-    If `num_channels` is not divisible by `num_groups`, the actual number of groups
-    might be adjusted to satisfy the `min_channels_per_group` condition.
+        channels than this number.
+    eps : float, optional, default=1e-5
+        A small number added to the variance to prevent division by zero.
+    use_apex_gn : bool, optional, default=False
+        Deprecated. Please use
+        :func:`~physicsnemo.models.diffusion.layers.get_group_norm` instead.
+    fused_act : bool, optional, default=False
+        Deprecated. Please use
+        :func:`~physicsnemo.models.diffusion.layers.get_group_norm` instead.
+    act : str, optional, default=None
+        The activation function to use when fusing activation with GroupNorm.
+    amp_mode : bool, optional, default=False
+        A boolean flag indicating whether mixed-precision (AMP) training is
+        enabled.
+
+    Forward
+    -------
+    x : torch.Tensor
+        4-D input tensor of shape :math:`(B, C, H, W)`, where :math:`B` is batch
+        size, :math:`C` is ``num_channels``, and :math:`H, W` are spatial
+        dimensions.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of the same shape as input: :math:`(B, C, H, W)`.
+
+    .. note::
+
+    If ``num_channels`` is not divisible by ``num_groups``, the actual number of
+    groups might be adjusted to satisfy the ``min_channels_per_group`` condition.
     """
 
     def __init__(
@@ -367,67 +488,45 @@ class GroupNorm(torch.nn.Module):
         eps: float = 1e-5,
         use_apex_gn: bool = False,
         fused_act: bool = False,
-        act: str = None,
+        act: str | None = None,
         amp_mode: bool = False,
     ):
-        if fused_act and act is None:
-            raise ValueError("'act' must be specified when 'fused_act' is set to True.")
-
         super().__init__()
-        self.num_groups = min(
-            num_groups,
-            (num_channels + min_channels_per_group - 1) // min_channels_per_group,
-        )
-        if num_channels % self.num_groups != 0:
+        # backwards compatibility warnings
+        if use_apex_gn:
             raise ValueError(
-                "num_channels must be divisible by num_groups or min_channels_per_group"
+                "'use_apex_gn' is deprecated. Please use 'get_group_norm' to enable "
+                "Apex-based group norm."
             )
+        if fused_act:
+            raise ValueError(
+                "'fused_act' is deprecated and only supported for Apex-based group norm. "
+                "Please use `get_group_norm` to enable fused activations."
+            )
+
+        # initialize groupnorm
+        self.num_groups: int = _compute_groupnorm_groups(
+            num_channels, num_groups, min_channels_per_group
+        )
         self.eps = eps
         self.weight = torch.nn.Parameter(torch.ones(num_channels))
         self.bias = torch.nn.Parameter(torch.zeros(num_channels))
-        if use_apex_gn and not _is_apex_available:
-            raise ValueError("'apex' is not installed, set `use_apex_gn=False`")
-        self.use_apex_gn = use_apex_gn
-        self.fused_act = fused_act
         self.act = act.lower() if act else act
         self.act_fn = None
-        self.amp_mode = amp_mode
-        if self.use_apex_gn:
-            if self.fused_act:
-                self.gn = ApexGroupNorm(
-                    num_groups=self.num_groups,
-                    num_channels=num_channels,
-                    eps=self.eps,
-                    affine=True,
-                    act=self.act,
-                )
-
-            else:
-                self.gn = ApexGroupNorm(
-                    num_groups=self.num_groups,
-                    num_channels=num_channels,
-                    eps=self.eps,
-                    affine=True,
-                )
-        if self.fused_act:
+        if self.act is not None:
             self.act_fn = self.get_activation_function()
+        self.amp_mode = amp_mode
 
     def forward(self, x):
-        if (not x.is_cuda) and self.use_apex_gn:
-            warnings.warn(
-                "Apex GroupNorm is not supported on CPU. Please move your tensor to GPU or disable use_apex_gn."
-            )
         weight, bias = self.weight, self.bias
         _validate_amp(self.amp_mode)
         if not self.amp_mode:
-            if not self.use_apex_gn:
-                if weight.dtype != x.dtype:
-                    weight = self.weight.to(x.dtype)
-                if bias.dtype != x.dtype:
-                    bias = self.bias.to(x.dtype)
-        if self.use_apex_gn:
-            x = self.gn(x)
-        elif self.training:
+            if weight.dtype != x.dtype:
+                weight = self.weight.to(x.dtype)
+            if bias.dtype != x.dtype:
+                bias = self.bias.to(x.dtype)
+
+        if self.training:
             # Use default torch implementation of GroupNorm for training
             # This does not support channels last memory format
             x = torch.nn.functional.group_norm(
@@ -437,8 +536,6 @@ class GroupNorm(torch.nn.Module):
                 bias=bias,
                 eps=self.eps,
             )
-            if self.fused_act:
-                x = self.act_fn(x)
         else:
             # Use custom GroupNorm implementation that supports channels last
             # memory layout for inference
@@ -454,8 +551,8 @@ class GroupNorm(torch.nn.Module):
             bias = rearrange(bias, "c -> 1 c 1 1")
             x = x * weight + bias
 
-            if self.fused_act:
-                x = self.act_fn(x)
+        if self.act_fn is not None:
+            x = self.act_fn(x)
         return x
 
     def get_activation_function(self):
@@ -575,7 +672,17 @@ class Attention(torch.nn.Module):
         fused_conv_bias: bool = False,
     ) -> None:
         super().__init__()
-        self.norm = GroupNorm(
+        # Parameters validation
+        if not isinstance(num_heads, int) or num_heads <= 0:
+            raise ValueError(
+                f"`num_heads` must be a positive integer, but got {num_heads}"
+            )
+        if out_channels % num_heads != 0:
+            raise ValueError(
+                f"`out_channels` must be divisible by `num_heads`, but got {out_channels} and {num_heads}"
+            )
+        self.num_heads = num_heads
+        self.norm = get_group_norm(
             num_channels=out_channels,
             eps=eps,
             use_apex_gn=use_apex_gn,
@@ -597,32 +704,32 @@ class Attention(torch.nn.Module):
             amp_mode=amp_mode,
             **init_zero,
         )
-        if not isinstance(num_heads, int) or num_heads <= 0:
-            raise ValueError(
-                f"`num_heads` must be a positive integer, but got {num_heads}"
-            )
-        self.num_heads = num_heads
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x1: torch.Tensor = self.qkv(self.norm(x))
+
+        # # NOTE: V1.0.1 implementation
+        # q, k, v = x1.reshape(
+        #     x.shape[0] * self.num_heads, x.shape[1] // self.num_heads, 3, -1
+        # ).unbind(2)
+        # w = AttentionOp.apply(q, k)
+        # attn = torch.einsum("nqk,nck->ncq", w, v)
+
         q, k, v = (
-            torch.permute(
-                self.qkv(self.norm(x)), (0, 2, 3, 1)
-            )  # [B,H,W,C*3] in memory layout, shape [B,C*3,H,W] -> [B,H,W,C*3]
-            .reshape(  # -> [X.shape[0], heads, (H*W), C//heads, 3]
-                x.shape[0],
-                self.num_heads,
-                x.shape[2] * x.shape[3],
-                x.shape[1] // self.num_heads,
-                3,
+            (
+                x1.reshape(
+                    x.shape[0], self.num_heads, x.shape[1] // self.num_heads, 3, -1
+                )
             )
-            .unbind(-1)
-        )  # [B, heads, H*W, C//heads]
-
+            .permute(0, 1, 4, 3, 2)
+            .unbind(-2)
+        )
         attn = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, scale=1 / math.sqrt(k.shape[-1])
         )
-        attn = attn.transpose(-1, -2)  # [B, 1, C, H*W]
-        x = self.proj(attn.reshape(*x.shape)).add_(x)
+        attn = attn.transpose(-1, -2)
+
+        x: torch.Tensor = self.proj(attn.reshape(*x.shape)).add_(x)
         return x
 
 
@@ -634,52 +741,69 @@ class UNetBlock(torch.nn.Module):
     Parameters:
     -----------
     in_channels : int
-        Number of input channels.
+        Number of input channels :math:`C_{in}`.
     out_channels : int
-        Number of output channels.
+        Number of output channels :math:`C_{out}`.
     emb_channels : int
-        Number of embedding channels.
-    up : bool, optional
-        If True, applies upsampling in the forward pass. By default False.
-    down : bool, optional
-        If True, applies downsampling in the forward pass. By default False.
-    attention : bool, optional
-        If True, enables the self-attention mechanism in the block. By default False.
-    num_heads : int, optional
-        Number of attention heads. If None, defaults to `out_channels // 64`.
-    channels_per_head : int, optional
-        Number of channels per attention head. By default 64.
-    dropout : float, optional
-        Dropout probability. By default 0.0.
-    skip_scale : float, optional
-        Scale factor applied to skip connections. By default 1.0.
-    eps : float, optional
-        Epsilon value used for normalization layers. By default 1e-5.
-    resample_filter : List[int], optional
-        Filter for resampling layers. By default [1, 1].
-    resample_proj : bool, optional
-        If True, resampling projection is enabled. By default False.
-    adaptive_scale : bool, optional
-        If True, uses adaptive scaling in the forward pass. By default True.
-    init : dict, optional
+        Number of embedding channels :math:`C_{emb}`.
+    up : bool, optional, default=False
+        If True, applies upsampling in the forward pass.
+    down : bool, optional, default=False
+        If True, applies downsampling in the forward pass.
+    attention : bool, optional, default=False
+        If True, enables the self-attention mechanism in the block.
+    num_heads : int, optional, default=None
+        Number of attention heads. If None, defaults to :math:`C_{out} / 64`.
+    channels_per_head : int, optional, default=64
+        Number of channels per attention head.
+    dropout : float, optional, default=0.0
+        Dropout probability.
+    skip_scale : float, optional, default=1.0
+        Scale factor applied to skip connections.
+    eps : float, optional, default=1e-5
+        Epsilon value used for normalization layers.
+    resample_filter : List[int], optional, default=``[1, 1]``
+        Filter for resampling layers.
+    resample_proj : bool, optional, default=False
+        If True, resampling projection is enabled.
+    adaptive_scale : bool, optional, default=True
+        If True, uses adaptive scaling in the forward pass.
+    init : dict, optional, default=``{}``
         Initialization parameters for convolutional and linear layers.
-    init_zero : dict, optional
-        Initialization parameters with zero weights for certain layers. By default
-        {'init_weight': 0}.
-    init_attn : dict, optional
+    init_zero : dict, optional, default=``{'init_weight': 0}``
+        Initialization parameters with zero weights for certain layers.
+    init_attn : dict, optional, default=``None``
         Initialization parameters specific to attention mechanism layers.
-        Defaults to 'init' if not provided.
-    use_apex_gn : bool, optional
+        Defaults to ``init`` if not provided.
+    use_apex_gn : bool, optional, default=False
         A boolean flag indicating whether we want to use Apex GroupNorm for NHWC layout.
-        Need to set this as False on cpu. Defaults to False.
-    act : str, optional
-        The activation function to use when fusing activation with GroupNorm. Defaults to None.
-    fused_conv_bias: bool, optional
-        A boolean flag indicating whether bias will be passed as a parameter of conv2d. By default False.
-    profile_mode:
+        Need to set this as False on cpu.
+    act : str, optional, default=None
+        The activation function to use when fusing activation with GroupNorm.
+    fused_conv_bias: bool, optional, default=False
+        A boolean flag indicating whether bias will be passed as a parameter of conv2d.
+    profile_mode: bool, optional, default=False
         A boolean flag indicating whether to enable all nvtx annotations during profiling.
-    amp_mode : bool, optional
-        A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
+    amp_mode : bool, optional, default=False
+        A boolean flag indicating whether mixed-precision (AMP) training is
+        enabled.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, H, W)`, where :math:`B` is batch
+        size, :math:`C_{in}` is ``in_channels``, and :math:`H, W` are spatial
+        dimensions.
+    emb : torch.Tensor
+        Embedding tensor of shape :math:`(B, C_{emb})`, where :math:`B` is batch
+        size, and :math:`C_{emb}` is ``emb_channels``.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H, W)`, where :math:`B` is batch
+        size, :math:`C_{out}` is ``out_channels``, and :math:`H, W` are spatial
+        dimensions.
     """
 
     # NOTE: these attributes have specific usage in old checkpoints, do not
@@ -694,7 +818,7 @@ class UNetBlock(torch.nn.Module):
         up: bool = False,
         down: bool = False,
         attention: bool = False,
-        num_heads: int = None,
+        num_heads: int | None = None,
         channels_per_head: int = 64,
         dropout: float = 0.0,
         skip_scale: float = 1.0,
@@ -731,11 +855,10 @@ class UNetBlock(torch.nn.Module):
         self.adaptive_scale = adaptive_scale
         self.profile_mode = profile_mode
         self.amp_mode = amp_mode
-        self.norm0 = GroupNorm(
+        self.norm0 = get_group_norm(
             num_channels=in_channels,
             eps=eps,
             use_apex_gn=use_apex_gn,
-            fused_act=True,
             act=act,
             amp_mode=amp_mode,
         )
@@ -757,19 +880,18 @@ class UNetBlock(torch.nn.Module):
             **init,
         )
         if self.adaptive_scale:
-            self.norm1 = GroupNorm(
+            self.norm1 = get_group_norm(
                 num_channels=out_channels,
                 eps=eps,
                 use_apex_gn=use_apex_gn,
                 amp_mode=amp_mode,
             )
         else:
-            self.norm1 = GroupNorm(
+            self.norm1 = get_group_norm(
                 num_channels=out_channels,
                 eps=eps,
                 use_apex_gn=use_apex_gn,
                 act=act,
-                fused_act=True,
                 amp_mode=amp_mode,
             )
         self.conv1 = Conv2d(
@@ -811,6 +933,8 @@ class UNetBlock(torch.nn.Module):
             )
         else:
             self.attn = None
+        # A hook to migrate legacy attention module
+        self.register_load_state_dict_pre_hook(self._migrate_attention_module)
 
     def forward(self, x, emb):
         with (
@@ -857,23 +981,19 @@ class UNetBlock(torch.nn.Module):
             raise AttributeError(f"Attribute '{name}' is reserved and cannot be set.")
         super().__setattr__(name, value)
 
-    def load_state_dict(self, state_dict, strict: bool = True):
-        """Custom ``load_state_dict`` that migrates legacy keys to their
-        new locations before loading the state dict.
-
-        Parameters
-        ----------
-        state_dict : dict
-            A state-dict containing parameters and persistent buffers.
-        strict : bool, optional
-            Passed through to ``torch.nn.Module.load_state_dict``.
-        """
-        # Migrate legacy keys for the attention module
-        self._migrate_attention_module(state_dict)
-        return super().load_state_dict(state_dict, strict=strict)
-
-    def _migrate_attention_module(self, state_dict):
-        """Handle legacy checkpoints that stored attention layers at root.
+    @staticmethod
+    def _migrate_attention_module(
+        module,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        """``load_state_dict`` pre-hook that handles legacy checkpoints that
+        stored attention layers at root.
 
         The earliest versions of ``UNetBlock`` stored the attention-layer
         parameters directly on the block using attribute names contained in
@@ -883,20 +1003,16 @@ class UNetBlock(torch.nn.Module):
         """
 
         _mapping = {
-            "norm2.weight": "attn.norm.weight",
-            "norm2.bias": "attn.norm.bias",
-            "qkv.weight": "attn.qkv.weight",
-            "qkv.bias": "attn.qkv.bias",
-            "proj.weight": "attn.proj.weight",
-            "proj.bias": "attn.proj.bias",
+            f"{prefix}norm2.weight": f"{prefix}attn.norm.weight",
+            f"{prefix}norm2.bias": f"{prefix}attn.norm.bias",
+            f"{prefix}qkv.weight": f"{prefix}attn.qkv.weight",
+            f"{prefix}qkv.bias": f"{prefix}attn.qkv.bias",
+            f"{prefix}proj.weight": f"{prefix}attn.proj.weight",
+            f"{prefix}proj.bias": f"{prefix}attn.proj.bias",
         }
-
-        # Track which legacy keys were found.
-        legacy_found = set()
 
         for old_key, new_key in _mapping.items():
             if old_key in state_dict:
-                legacy_found.add(old_key)
                 # NOTE: Only migrate if destination key not already present to
                 # avoid accidental overwriting when both are present.
                 if new_key not in state_dict:
@@ -905,25 +1021,6 @@ class UNetBlock(torch.nn.Module):
                     raise ValueError(
                         f"Checkpoint contains both legacy and new keys for {old_key}"
                     )
-
-        # Validation and warnings
-        src_keys = set(state_dict.keys()) & set(_mapping.keys())
-        target_keys = set(self.state_dict().keys()) & set(_mapping.values())
-        missing_keys, unexpected_keys = src_keys - target_keys, target_keys - src_keys
-        if missing_keys:
-            warnings.warn(
-                "The following keys from the checkpoint were not found in the current "
-                "model and were ignored: "
-                f"{', '.join(sorted(missing_keys))}",
-                UserWarning,
-            )
-        if unexpected_keys:
-            warnings.warn(
-                "The following keys of the current model are not present in the loaded "
-                "checkpoint: "
-                f"{', '.join(sorted(unexpected_keys))}",
-                UserWarning,
-            )
 
 
 class PositionalEmbedding(torch.nn.Module):

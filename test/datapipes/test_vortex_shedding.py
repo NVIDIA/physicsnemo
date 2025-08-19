@@ -62,7 +62,7 @@ def test_vortex_shedding_constructor(
         assert x0.mesh_pos.shape == (num_nodes, 2)
 
 
-@import_or_fail(["tensorflow", "dgl"])
+@import_or_fail(["tensorflow", "dgl", "torch_geometric", "torch_scatter"])
 @pytest.mark.parametrize("split", ["train", "valid", "test"])
 def test_vortex_shedding_dgl_pyg_equivalence(data_dir, split, pytestconfig):
     """Test that PyG and DGL versions of VortexSheddingDataset produce equivalent outputs."""

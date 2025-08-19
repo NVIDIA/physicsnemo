@@ -68,15 +68,19 @@ class PartitionedGraph:
         self.partitions = []
         for i in range(self.num_parts):
             # Get inner nodes of the partition.
-            part_inner_node = part_meta.node_perm[part_meta.partptr[i] : part_meta.partptr[i + 1]]
+            part_inner_node = part_meta.node_perm[
+                part_meta.partptr[i] : part_meta.partptr[i + 1]
+            ]
             # Partition the graph with halo regions.
             # https://pytorch-geometric.readthedocs.io/en/latest/modules/utils.html?#torch_geometric.utils.k_hop_subgraph
-            part_node, part_edge_index, inner_node_mapping, edge_mask = pyg.utils.k_hop_subgraph(
-                part_inner_node,
-                num_hops=self.halo_size,
-                edge_index=graph.edge_index,
-                num_nodes=self.num_nodes,
-                relabel_nodes=True,
+            part_node, part_edge_index, inner_node_mapping, edge_mask = (
+                pyg.utils.k_hop_subgraph(
+                    part_inner_node,
+                    num_hops=self.halo_size,
+                    edge_index=graph.edge_index,
+                    num_nodes=self.num_nodes,
+                    relabel_nodes=True,
+                )
             )
 
             partition = pyg.data.Data(
@@ -111,7 +115,13 @@ class GraphDataset(Dataset):
         std (np.ndarray): Global standard deviation for normalization.
     """
 
-    NODE_ATTRS: list[str] = ["coordinates", "normals", "area", "pressure", "shear_stress"]
+    NODE_ATTRS: list[str] = [
+        "coordinates",
+        "normals",
+        "area",
+        "pressure",
+        "shear_stress",
+    ]
 
     def __init__(self, file_list, mean, std):
         self.file_list = file_list
@@ -143,7 +153,9 @@ class GraphDataset(Dataset):
         # Normalize node and edge data
         for part in graphs:
             for key in self.NODE_ATTRS:
-                part[key] = (part[key] - getattr(self, f"{key}_mean")) / getattr(self, f"{key}_std")
+                part[key] = (part[key] - getattr(self, f"{key}_mean")) / getattr(
+                    self, f"{key}_std"
+                )
 
             part.edge_attr = (part.edge_attr - self.edge_x_mean) / self.edge_x_std
 
@@ -151,7 +163,7 @@ class GraphDataset(Dataset):
 
     @staticmethod
     def collate_fn(
-        batch: list[tuple[ClusterData, str]]
+        batch: list[tuple[ClusterData, str]],
     ) -> tuple[list[ClusterData], list[str]]:
         graphs, run_ids = zip(*batch)
         return list(graphs), list(run_ids)

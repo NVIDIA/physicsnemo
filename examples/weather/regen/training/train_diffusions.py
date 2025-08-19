@@ -57,7 +57,6 @@ def parse_int_list(s):
 
 
 @click.command()
-
 # Main options.
 @click.option(
     "--outdir", help="Where to save the results", metavar="DIR", type=str, required=True
@@ -91,7 +90,6 @@ def parse_int_list(s):
 @click.option(
     "--run_id", help="run id", metavar="INT", type=int, default=None, show_default=True
 )
-
 # Hyperparameters.
 @click.option(
     "--batch",
@@ -156,7 +154,6 @@ def parse_int_list(s):
     default=False,
     show_default=True,
 )
-
 # Performance-related.
 @click.option(
     "--fp16",
@@ -198,7 +195,6 @@ def parse_int_list(s):
     default=1,
     show_default=True,
 )
-
 # I/O-related.
 @click.option(
     "--desc", help="String to include in result dir name", metavar="STR", type=str

@@ -576,7 +576,6 @@ args = parser.parse_args()
 # ----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-
     main(
         source=args.source,
         dest=args.dest,

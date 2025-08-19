@@ -220,7 +220,15 @@ class EDMLoss:
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-    def __call__(self, net, images, condition=None, labels=None, augment_pipe=None):
+    def __call__(
+        self,
+        net,
+        images,
+        condition=None,
+        labels=None,
+        augment_pipe=None,
+        lead_time_label=None,
+    ):
         """
         Calculate and return the loss corresponding to the EDM formulation.
 
@@ -245,6 +253,10 @@ class EDMLoss:
             An optional data augmentation function that takes images as input and
             returns augmented images. If not provided, no data augmentation is applied.
 
+        lead_time_label: torch.Tensor, optional
+            Lead-time labels to pass to the model, shape ``(batch_size,)``.
+            If not provided, the model is called without a lead-time label input.
+
         Returns:
         -------
         torch.Tensor
@@ -258,16 +270,22 @@ class EDMLoss:
             augment_pipe(images) if augment_pipe is not None else (images, None)
         )
         n = torch.randn_like(y) * sigma
+        optional_args = {
+            "augment_labels": augment_labels,
+            "lead_time_label": lead_time_label,
+        }
+        # drop None items to support models that don't have these arguments in `forward`
+        optional_args = {k: v for (k, v) in optional_args.items() if v is not None}
         if condition is not None:
             D_yn = net(
                 y + n,
                 sigma,
                 condition=condition,
                 class_labels=labels,
-                augment_labels=augment_labels,
+                **optional_args,
             )
         else:
-            D_yn = net(y + n, sigma, labels, augment_labels=augment_labels)
+            D_yn = net(y + n, sigma, labels, **optional_args)
         loss = weight * ((D_yn - y) ** 2)
         return loss
 

@@ -326,8 +326,8 @@ class ERA5Mirror:
             ds = xr.open_zarr(zarr_path)
             time_stamps = ds.time.values
             dt = time_stamps[1:] - time_stamps[:-1]
-            assert np.all(
-                dt == dt[0]
-            ), f"Zarr array {zarr_path} has incorrect dt for time dimension. An error may have occurred during download. Please delete the Zarr array and try again."
+            assert np.all(dt == dt[0]), (
+                f"Zarr array {zarr_path} has incorrect dt for time dimension. An error may have occurred during download. Please delete the Zarr array and try again."
+            )
 
         return zarr_paths

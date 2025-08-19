@@ -47,7 +47,6 @@ logger = PythonLogger("train")
 
 
 def training_loop(cfg):
-
     # Initialize.
     start_time = time.time()
     dist = DistributedManager()
@@ -355,9 +354,9 @@ def training_loop(cfg):
                                 ].item()
                                 for i in range(state_channels)
                             }
-                            wandb_logs[
-                                "channelwise_valid_loss"
-                            ] = channelwise_valid_loss_dict
+                            wandb_logs["channelwise_valid_loss"] = (
+                                channelwise_valid_loss_dict
+                            )
 
                 if dist.world_size > 1:
                     torch.distributed.barrier()
@@ -370,7 +369,6 @@ def training_loop(cfg):
 
             # Save plots locally (and optionally to wandb)
             if dist.rank == 0:
-
                 for i in range(output_images.shape[0]):
                     image = output_images[i].cpu().numpy()
                     fields = cfg.training.validation_plot_variables
@@ -416,10 +414,10 @@ def training_loop(cfg):
         if total_steps % cfg.training.print_progress_freq == 0:
             fields = []
             fields += [f"steps {total_steps:<5d}"]
-            fields += [f"samples {total_steps*batch_size}"]
+            fields += [f"samples {total_steps * batch_size}"]
             fields += [f"tot_time {current_time - start_time: .2f}"]
             fields += [
-                f"step_time {(current_time - train_start - valid_time) / train_steps : .2f}"
+                f"step_time {(current_time - train_start - valid_time) / train_steps: .2f}"
             ]
             fields += [f"valid_time {valid_time: .2f}"]
             fields += [
@@ -428,7 +426,7 @@ def training_loop(cfg):
             fields += [
                 f"gpumem {torch.cuda.max_memory_allocated(device) / 2**30:<6.2f}"
             ]
-            fields += [f"train_loss {avg_train_loss/train_steps:<6.3f}"]
+            fields += [f"train_loss {avg_train_loss / train_steps:<6.3f}"]
             fields += [f"val_loss {val_loss:<6.3f}"]
             logger0.info(" ".join(fields))
 
@@ -444,7 +442,6 @@ def training_loop(cfg):
             and total_steps != 0
             and dist.rank == 0
         ):
-
             save_checkpoint(
                 path=os.path.join(cfg.training.rundir, f"checkpoints_{net_name}"),
                 models=net,

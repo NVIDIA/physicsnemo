@@ -35,9 +35,7 @@ _sync_device = (
     None  # Device to use for multiprocess communication. None = single-process.
 )
 _sync_called = False  # Has _sync() been called yet?
-_counters = (
-    dict()
-)  # Running counters on each device, updated by report(): name => device => torch.Tensor
+_counters = dict()  # Running counters on each device, updated by report(): name => device => torch.Tensor
 _cumulative = (
     dict()
 )  # Cumulative counters on the CPU, updated by _sync(): name => torch.Tensor

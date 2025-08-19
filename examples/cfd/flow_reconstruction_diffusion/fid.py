@@ -165,7 +165,6 @@ def ref(dataset_path, dest_path, batch, dist, logger0):
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_fid")
 def main(cfg: DictConfig) -> None:
-
     """Calculate Frechet Inception Distance (FID)."""
 
     # Initialize distributed manager.

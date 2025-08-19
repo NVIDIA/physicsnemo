@@ -149,11 +149,12 @@ def deterministic_sampler(
         Optional tensor containing mean high-resolution images for
         conditioning. Must have same height and width as ``img_lr``, with shape
         :math:`(B_{hr}, C_{hr}, H, W)`  where the batch dimension
-        :math:`B_{hr}` can be either 1, either equal to batch_size, or can be omitted. If
+        :math:`B_{hr}` can be either 1, either equal to ``batch_size``, or can be omitted. If
         :math:`B_{hr} = 1` or is omitted, ``mean_hr`` will be expanded to match the shape
         of ``img_lr``. By default ``None``.
     lead_time_label : Optional[Tensor], optional
-        Optional lead time labels. By default None.
+        Lead-time labels to pass to the model, shape ``(batch_size,)``.
+        If not provided, the model is called without a lead-time label input.
     num_steps : Optional[int]
         Number of time-steps for the stochastic ODE integration. Defaults
         to 18.
@@ -300,8 +301,7 @@ def deterministic_sampler(
     ve_sigma_deriv = lambda t: 0.5 / t.sqrt()
     ve_sigma_inv = lambda sigma: sigma**2
 
-    # Select default noise level range based on the specified
-    # time step discretization.
+    # Select default noise level range based on the specified time step discretization.
     if sigma_min is None:
         vp_def = vp_sigma(beta_d=19.1, beta_min=0.1)(t=epsilon_s)
         sigma_min = {"vp": vp_def, "ve": 0.02, "iddpm": 0.002, "edm": 0.002}[
@@ -328,7 +328,7 @@ def deterministic_sampler(
         def patch_embedding_selector(emb):
             # emb: (N_pe, image_shape_y, image_shape_x)
             # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
-            return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
+            return patching.apply(emb.expand(batch_size, -1, -1, -1))
 
     else:
         patch_embedding_selector = None

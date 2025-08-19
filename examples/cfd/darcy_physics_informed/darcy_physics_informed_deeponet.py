@@ -150,7 +150,6 @@ class MdlsSymWrapper(Arch):
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config_deeponet.yaml")
 def main(cfg: DictConfig):
-
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")

@@ -156,7 +156,7 @@ class Trainer:
 
         try:
             model.eval()
-            for (i, batch) in enumerate(self.valid_datapipe):
+            for i, batch in enumerate(self.valid_datapipe):
                 (invar, outvar_true) = self.input_output_from_batch_data(batch)
                 invar = invar.detach()
                 outvar_true = outvar_true.detach()

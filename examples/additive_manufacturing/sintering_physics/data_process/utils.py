@@ -35,9 +35,9 @@ def read_raw_folder(data_dir):
     solution_list = glob.glob(build_path + "/volume-deformation-*.pvtu")
     # solution_list = sorted(solution_list, key=get_solution_id)
     solution_list = natsorted(solution_list)
-    assert (
-        len(solution_list) >= 3
-    ), "Need to have at least 3 solution files as input to start prediction or analysis!"
+    assert len(solution_list) >= 3, (
+        "Need to have at least 3 solution files as input to start prediction or analysis!"
+    )
     return solution_list
 
 
@@ -155,9 +155,9 @@ def read_configs(raw_data_path):
     """
     # For each build, read the temperature profile at every time step
     params_prm_path = os.path.join(raw_data_path, "params.prm")
-    assert os.path.exists(
-        params_prm_path
-    ), f"Temperature profile file params.prm not exists! {params_prm_path}"
+    assert os.path.exists(params_prm_path), (
+        f"Temperature profile file params.prm not exists! {params_prm_path}"
+    )
 
     # reading csv file
     with open(params_prm_path, "r") as csvfile:

@@ -164,8 +164,9 @@ def main():
     u10_mean, u10_std = -0.262, 2.372
     v10_mean, v10_std = 0.865, 4.115
     logtp_mean, logtp_std = -8.117, 2.489
-    means, stds = np.array([u10_mean, v10_mean, logtp_mean]), np.array(
-        [u10_std, v10_std, logtp_std]
+    means, stds = (
+        np.array([u10_mean, v10_mean, logtp_mean]),
+        np.array([u10_std, v10_std, logtp_std]),
     )
 
     def denorm(x):
@@ -266,9 +267,7 @@ def main():
                 sde=VPSDE_from_denoiser(
                     model, shape=()
                 ),  # which calls VPSDE_from_denoiser.eps_from_denoiser() which calls the network
-            ).to(
-                device=device
-            ),
+            ).to(device=device),
             shape=inf_obs.shape,
         ).to(device=device)
 
@@ -374,7 +373,6 @@ def main():
 
 
 if __name__ == "__main__":
-
     # parser = argparse.ArgumentParser()
     # parser.add_argument("--config-name", type=str)
     # args = parser.parse_args()

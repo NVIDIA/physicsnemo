@@ -29,7 +29,6 @@ class YParams:
             print("------------------ Configuration ------------------")
 
         with open(yaml_filename) as _file:
-
             for key, val in YAML().load(_file)[config_name].items():
                 if print_params:
                     print(key, val)

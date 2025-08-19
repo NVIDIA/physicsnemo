@@ -63,9 +63,9 @@ class DrivAerNetToWebdataset:
 
     def save(self, num_processes: int = 1):
         # Save each item in as a numpy file in parallel
-        assert (
-            num_processes > 0
-        ), f"num_processes should be greater than 0, got {num_processes}"
+        assert num_processes > 0, (
+            f"num_processes should be greater than 0, got {num_processes}"
+        )
         if num_processes < 2:
             for idx in range(len(self.dataset)):
                 print(f"Saving item {idx}/{len(self.dataset)}")

@@ -207,7 +207,6 @@ def plot_3Danime(rollout_data, pred_denorm, save_name):
     def update_graph(num):
         outputs = []
         for _, label, points, graph in plot_info:
-
             data = points[num, ...]
             graph.set_data(data[:, 0], data[:, 1])
             graph.set_3d_properties(data[:, 2])

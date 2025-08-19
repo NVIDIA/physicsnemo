@@ -157,7 +157,6 @@ class Darcy2D_fix(Datapipe):
         self.convergence_threshold = convergence_threshold
         self.iterations_per_convergence_check = iterations_per_convergence_check
 
-
         # Set up device for warp, warp has same naming convention as torch.
         if isinstance(device, torch.device):
             device = str(device)
@@ -166,7 +165,6 @@ class Darcy2D_fix(Datapipe):
         # spatial dims
         self.dx = 1.0 / (self.resolution + 1)  # pad edges by 1 for multi-grid
         self.dim = (self.batch_size, self.resolution + 1, self.resolution + 1)
-
 
         self.train_path = train_path
         self.native_resolution = 421  # Native grid size
@@ -209,7 +207,6 @@ class Darcy2D_fix(Datapipe):
 
     @profile
     def __get_data__(self):
-
         if self.train_path.endswith(".mat"):
             data_dict = scio.loadmat(self.train_path)
         elif self.train_path.endswith(".npz"):

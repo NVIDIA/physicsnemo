@@ -16,14 +16,14 @@
 
 """
 This code defines a distributed pipeline for training the DoMINO model on
-CFD datasets. It includes the computation of scaling factors, instantiating 
-the DoMINO model and datapipe, automatically loading the most recent checkpoint, 
-training the model in parallel using DistributedDataParallel across multiple 
-GPUs, calculating the loss and updating model parameters using mixed precision. 
-This is a common recipe that enables training of combined models for surface and 
-volume as well either of them separately. Validation is also conducted every epoch, 
+CFD datasets. It includes the computation of scaling factors, instantiating
+the DoMINO model and datapipe, automatically loading the most recent checkpoint,
+training the model in parallel using DistributedDataParallel across multiple
+GPUs, calculating the loss and updating model parameters using mixed precision.
+This is a common recipe that enables training of combined models for surface and
+volume as well either of them separately. Validation is also conducted every epoch,
 where predictions are compared against ground truth values. The code logs training
-and validation metrics to TensorBoard. The train tab in config.yaml can be used to 
+and validation metrics to TensorBoard. The train tab in config.yaml can be used to
 specify batch size, number of epochs and other training parameters.
 """
 
@@ -89,7 +89,7 @@ def compute_physics_loss(
     vol_factors: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute physics-based loss terms for Navier-Stokes equations.
-    
+
     Args:
         output: Model output containing (output, coords_neighbors, output_neighbors, neighbors_list)
         target: Ground truth values
@@ -100,7 +100,7 @@ def compute_physics_loss(
         eqn: Equations
         bounding_box: Bounding box for normalization
         vol_factors: Volume factors for normalization
-        
+
     Returns:
         Tuple of (data_loss, continuity_loss, momentum_x_loss, momentum_y_loss, momentum_z_loss)
     """
@@ -146,10 +146,7 @@ def compute_physics_loss(
         batch_size, len(neighbors_list[0]) + 1, -1
     )
 
-    du = (
-        grad_neighbors_center[:, [0]]
-        - grad_neighbors_center[:, neighbor_ids_tensor]
-    )
+    du = grad_neighbors_center[:, [0]] - grad_neighbors_center[:, neighbor_ids_tensor]
     dv = (
         coords_total_unnormalized[:, [0]]
         - coords_total_unnormalized[:, neighbor_ids_tensor]
@@ -551,7 +548,6 @@ def compute_loss_dict(
             total_loss_terms.append(loss_vol)
 
     if prediction_surf is not None:
-
         target_surf = batch_inputs["surface_fields"]
         surface_areas = batch_inputs["surface_areas"]
         surface_areas = torch.unsqueeze(surface_areas, -1)
@@ -676,7 +672,6 @@ def train_epoch(
     vol_factors: torch.Tensor | None = None,
     add_physics_loss=False,
 ):
-
     dist = DistributedManager()
 
     running_loss = 0.0
@@ -686,7 +681,6 @@ def train_epoch(
     gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
     start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
-
         sampled_batched = dict_to_device(sample_batched, device)
 
         if add_physics_loss:
@@ -737,7 +731,7 @@ def train_epoch(
         # Format the loss dict into a string:
         loss_string = (
             "  "
-            + "\t".join([f"{key.replace('loss_',''):<10}" for key in loss_dict.keys()])
+            + "\t".join([f"{key.replace('loss_', ''):<10}" for key in loss_dict.keys()])
             + "\n"
         )
         loss_string += (
@@ -764,7 +758,6 @@ def train_epoch(
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -788,7 +781,7 @@ def main(cfg: DictConfig) -> None:
 
     # Get physics imports conditionally
     add_physics_loss = getattr(cfg.train, "add_physics_loss", False)
-    
+
     if add_physics_loss:
         from physicsnemo.sym.eq.pde import PDE
         from physicsnemo.sym.eq.ls.grads import FirstDeriv
@@ -987,9 +980,11 @@ def main(cfg: DictConfig) -> None:
     for epoch in range(init_epoch, cfg.train.epochs):
         start_time = time.perf_counter()
         logger.info(f"Device {dist.device}, epoch {epoch_number}:")
-        
+
         if epoch == init_epoch and add_physics_loss:
-            logger.info("Physics loss enabled - mixed precision (autocast) will be disabled as physics loss computation is not supported with mixed precision")
+            logger.info(
+                "Physics loss enabled - mixed precision (autocast) will be disabled as physics loss computation is not supported with mixed precision"
+            )
 
         train_sampler.set_epoch(epoch)
         val_sampler.set_epoch(epoch)
@@ -1073,7 +1068,7 @@ def main(cfg: DictConfig) -> None:
             best_vloss = avg_vloss
 
         if dist.rank == 0:
-            print(f"Device { dist.device}, Best val loss {best_vloss}")
+            print(f"Device {dist.device}, Best val loss {best_vloss}")
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:
             save_checkpoint(
