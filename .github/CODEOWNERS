@@ -21,6 +21,10 @@
 # All changes to documentation:
 docs/ @megnvidia @ktangsali
 
+# Core release files
+Dockerfile @ktangsali
+pyproject.toml @ktangsali
+
 # CORE UTILITIES not attached to specific models:
 physicsnemo/utils/profiling @coreyjadams
 physicsnemo/utils/neighbors @coreyjadams @peterdsharpe
