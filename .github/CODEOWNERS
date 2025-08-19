@@ -33,7 +33,7 @@ physicsnemo/utils/capture.py @nickgeneva @ktangsali
 
 physicsnemo/registry/ @loliverhennigh
 
-physicsnemo/models/module.py @charlelielrt
+physicsnemo/models/module.py @CharlelieLrt
 
 # METRICS that are general:
 physicsnemo/metrics/cae @RishikeshRanade @mnabian @peterdsharpe
@@ -127,12 +127,12 @@ physicsnemo/models/vfgn @mnabian
 # EXAMPLE SPECIFIC OWNERSHIP
 
 # corrdiff
-examples/weather/corrdiff @charlelielrt
+examples/weather/corrdiff @CharlelieLrt
 
 # TEST SPECIFIC OWNERSHIP
 
 # CorrDiff and diffusion
-test/models/diffusion @charlelielrt
-test/metrics/diffusion @charlelielrt
-test/utils/generative @charlelielrt
-test/utils/corrdiff @charlelielrt
+test/models/diffusion @CharlelieLrt
+test/metrics/diffusion @CharlelieLrt
+test/utils/generative @CharlelieLrt
+test/utils/corrdiff @CharlelieLrt
