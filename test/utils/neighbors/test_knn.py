@@ -19,10 +19,12 @@ import torch
 
 from physicsnemo.utils.neighbors import knn
 from physicsnemo.utils.neighbors.knn._cuml_impl import knn_impl as knn_cuml
+from physicsnemo.utils.neighbors.knn._scipy_impl import knn_impl as knn_scipy
+
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("k", [1, 5])
-@pytest.mark.parametrize("backend", ["cuml", "torch"])
+@pytest.mark.parametrize("backend", ["cuml", "torch", "scipy", "auto"])
 def test_knn(device: str, k: int, backend: str):
     """
     Basic test for KNN functionality.
@@ -31,6 +33,9 @@ def test_knn(device: str, k: int, backend: str):
     # Skip cuml tests on CPU as it's not supported
     if backend == "cuml" and device == "cpu":
         pytest.skip("cuml backend not supported on CPU")
+
+    if backend == "scipy" and device == "cuda":
+        pytest.skip("scipy backend not supported on CUDA")
 
     # Generate a grid of query points
     points = torch.linspace(0, 10, 11, device=device)
@@ -70,13 +75,16 @@ def test_knn(device: str, k: int, backend: str):
 
     # Check that distances are non-negative and sorted
     assert (distances >= 0).all()
-    assert torch.all(distances[:, 1:] >= distances[:, :-1])  # Check distances are sorted
+    assert torch.all(
+        distances[:, 1:] >= distances[:, :-1]
+    )  # Check distances are sorted
 
     # For k=1, the closest point should be the offset point
-    if k == 1:
+    if k <= len(offsets):
         assert (distances <= 0.5).all()  # Max offset is 0.5
 
-@pytest.mark.parametrize("device", ["cpu"])
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_knn_torch_compile_no_graph_break(device):
     # Only test if torch.compile is available (PyTorch 2.0+)
     if not hasattr(torch, "compile"):
@@ -92,7 +100,7 @@ def test_knn_torch_compile_no_graph_break(device):
             points,
             queries,
             k=k,
-            backend="torch",  # cuml doesn't support CPU
+            backend="auto",
         )
 
     # Run both and compare outputs
@@ -104,14 +112,22 @@ def test_knn_torch_compile_no_graph_break(device):
     for eager, compiled in zip(out_eager, out_compiled):
         assert torch.allclose(eager, compiled, atol=1e-6)
 
-def test_opcheck(device="cuda"):
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_opcheck(device):
     points = torch.randn(100, 3, device=device)
     queries = torch.randn(10, 3, device=device)
     k = 5
 
-    torch.library.opcheck(knn_cuml, args=(points, queries, k))
+    if device == "cuda":
+        op = knn_cuml
+    else:
+        op = knn_scipy
 
-@pytest.mark.parametrize("device", ["cuda"])  # cuml only works on CUDA
+    torch.library.opcheck(op, args=(points, queries, k))
+
+
+@pytest.mark.parametrize("device", ["cuda", "cpu"])  # cuml only works on CUDA
 def test_knn_comparison(device):
     torch.manual_seed(42)
     if device == "cuda":
@@ -121,15 +137,19 @@ def test_knn_comparison(device):
     queries = torch.randn(21, 3, device=device)
     k = 5
 
-    indices_cuml, distances_cuml = knn(points, queries, k, backend="cuml")
-    indices_torch, distances_torch = knn(points, queries, k, backend="torch")
+    if device == "cuda":
+        indices_cuml, distances_A = knn(points, queries, k, backend="cuml")
+        indices_torch, distances_B = knn(points, queries, k, backend="torch")
+    else:
+        indices_scipy, distances_A = knn(points, queries, k, backend="scipy")
+        indices_torch, distances_B = knn(points, queries, k, backend="torch")
 
     # The points may come in different order between implementations if distances are equal
     # So we check that the sum of distances is approximately equal
-    assert torch.allclose(distances_cuml.sum(), distances_torch.sum(), atol=1e-5)
+    assert torch.allclose(distances_A.sum(), distances_B.sum(), atol=1e-5)
 
     # For each query point, verify both backends found points at similar distances
     # Sort the distances for each query point to compare
-    sorted_dist_cuml = torch.sort(distances_cuml, dim=1)[0]
-    sorted_dist_torch = torch.sort(distances_torch, dim=1)[0]
-    assert torch.allclose(sorted_dist_cuml, sorted_dist_torch, atol=1e-5) 
+    sorted_dist_cuml = torch.sort(distances_A, dim=1)[0]
+    sorted_dist_torch = torch.sort(distances_B, dim=1)[0]
+    assert torch.allclose(sorted_dist_cuml, sorted_dist_torch, atol=1e-5)

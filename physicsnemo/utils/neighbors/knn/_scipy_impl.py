@@ -18,34 +18,32 @@ import torch
 
 from physicsnemo.utils.version_check import check_min_version
 
-CUML_AVAILABLE = check_min_version("cuml", "25.0.0")
+SCIPY_AVAILABLE = check_min_version("scipy", "1.7.0")
 
-if CUML_AVAILABLE:
-    import cuml
-    import cupy as cp
+if SCIPY_AVAILABLE:
+    from scipy.spatial import KDTree
 
-    @torch.library.custom_op("physicsnemo::knn_cuml", mutates_args=())
+    @torch.library.custom_op("physicsnemo::knn_scipy", mutates_args=())
     def knn_impl(
         points: torch.Tensor, queries: torch.Tensor, k: int = 3
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Use dlpack to move the data without copying between pytorch and cuml:
-        points = cp.from_dlpack(points)
-        queries = cp.from_dlpack(queries)
+        points = points.numpy()
+        queries = queries.numpy()
 
-        # Construct the knn:
-        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k)
-        # First pass partitions everything in points to make lookups fast
-        knn.fit(points)
+        interp_func = KDTree(points)
+        distance, indices = interp_func.query(queries, k=k)
 
-        # Second pass uses that partition to quickly find neighbors of points in points
-        distance, indices = knn.kneighbors(queries)
+        # Ensure dtype compatibility: cast distances to the dtype of queries:
+        distance = distance.astype(queries.dtype)
 
-        # convert back to pytorch:
-        distance = torch.from_dlpack(distance)
-        indices = torch.from_dlpack(indices)
+        indices = torch.from_numpy(indices)
+        distance = torch.from_numpy(distance)
 
-        # Return torch objects.
-        return indices, distance
+        # This reshape is to prevent scipy from eating the second dimension whten k ==1
+        return indices.reshape(queries.shape[0], k), distance.reshape(
+            queries.shape[0], k
+        )
 
     @knn_impl.register_fake
     def _(

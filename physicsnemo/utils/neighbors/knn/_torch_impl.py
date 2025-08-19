@@ -21,7 +21,7 @@ def knn_impl(
     points: torch.Tensor,
     queries: torch.Tensor,
     k: int = 3,
-    ) -> torch.Tensor:
+) -> torch.Tensor:
     """
     Perform kNN search with torch.
 
@@ -37,10 +37,9 @@ def knn_impl(
     # N, D_feat = p2_features.shape
 
     # Compute pairwise distances: (M, N)
-    dists = torch.norm(points[:,None,:] - queries[None,:,:], dim=-1)
-
+    dists = torch.norm(points[:, None, :] - queries[None, :, :], dim=-1)
 
     # Find top-k nearest neighbors
-    topk_dists, topk_idx = torch.topk(dists, k=k, dim=1, largest=False)
+    topk_dists, topk_idx = torch.topk(dists, k=k, dim=0, largest=False, sorted=True)
 
-    return topk_idx, topk_dists
+    return topk_idx.T, topk_dists.T
