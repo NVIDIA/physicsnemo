@@ -23,15 +23,21 @@ import torch
 
 from tfrecord.torch.dataset import TFRecordDataset
 
-from torch.nn import functional as F
-from torch.utils.data import Dataset
 
-import torch_geometric as pyg
+try:
+    import dgl
+    from dgl.data import DGLDataset
+except ImportError:
+    raise ImportError(
+        "Mesh Graph Net Datapipe requires the DGL library. Install the "
+        + "desired CUDA version at: https://www.dgl.ai/pages/start.html"
+    )
+from torch.nn import functional as F
 
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
 
 
-class DeformingPlateDataset(Dataset):
+class DeformingPlateDataset(DGLDataset):
     """In-memory MeshGraphNet Dataset for stationary mesh
     Notes:
         - This dataset prepares and processes the data available in MeshGraphNet's repo:
@@ -67,8 +73,14 @@ class DeformingPlateDataset(Dataset):
         num_samples=1000,
         num_steps=400,
         noise_std=0.003,
+        force_reload=False,
+        verbose=False,
     ):
-        self.name = name
+        super().__init__(
+            name=name,
+            force_reload=force_reload,
+            verbose=verbose,
+        )
         self.data_dir = data_dir
         self.split = split
         self.num_samples = num_samples
@@ -128,7 +140,7 @@ class DeformingPlateDataset(Dataset):
 
         # normalize edge features
         for i in range(num_samples):
-            self.graphs[i].edge_attr = self.normalize_edge(
+            self.graphs[i].edata["x"] = self.normalize_edge(
                 self.graphs[i],
                 self.edge_stats["edge_mean"],
                 self.edge_stats["edge_std"],
@@ -195,14 +207,14 @@ class DeformingPlateDataset(Dataset):
             ),
             dim=-1,
         )
-        graph.x = node_features
-        graph.y = node_targets
-        graph.world_pos = self.node_features[gidx]["world_pos"][tidx]
+        graph.ndata["x"] = node_features
+        graph.ndata["y"] = node_targets
+        graph.ndata["world_pos"] = self.node_features[gidx]["world_pos"][tidx]
         if self.split == "train":
             return graph
         else:
-            graph.mesh_pos = self.mesh_pos[gidx]
-            cells = torch.as_tensor(self.cells[gidx])
+            graph.ndata["mesh_pos"] = self.mesh_pos[gidx]
+            cells = self.cells[gidx]
             moving_points_mask = self.moving_points_mask[gidx]
             object_points_mask = self.object_points_mask[gidx]
             clamped_points_mask = self.clamped_points_mask[gidx]
@@ -225,10 +237,10 @@ class DeformingPlateDataset(Dataset):
         }
         for i in range(self.num_samples):
             stats["edge_mean"] += (
-                torch.mean(self.graphs[i].edge_attr, dim=0) / self.num_samples
+                torch.mean(self.graphs[i].edata["x"], dim=0) / self.num_samples
             )
             stats["edge_meansqr"] += (
-                torch.mean(torch.square(self.graphs[i].edge_attr), dim=0)
+                torch.mean(torch.square(self.graphs[i].edata["x"]), dim=0)
                 / self.num_samples
             )
         stats["edge_std"] = torch.sqrt(
@@ -290,16 +302,11 @@ class DeformingPlateDataset(Dataset):
     @staticmethod
     def create_graph(src, dst, dtype=torch.int32):
         """
-        creates a PyG graph from an adj matrix in COO format.
+        creates a DGL graph from an adj matrix in COO format.
         torch.int32 can handle graphs with up to 2**31-1 nodes or edges.
         """
-        edges = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0).long()
-        edges = pyg.utils.to_undirected(edges)
-        edges = pyg.utils.coalesce(edges)
-        # See https://pytorch-geometric.readthedocs.io/en/latest/modules/utils.html#torch_geometric.utils.coalesce
-        if isinstance(edges, tuple):
-            edges = edges[0]
-        graph = pyg.data.Data(edge_index=edges)
+        graph = dgl.to_bidirected(dgl.graph((src, dst), idtype=dtype))
+        graph = dgl.to_simple(graph)
         return graph
 
     @staticmethod
@@ -307,10 +314,10 @@ class DeformingPlateDataset(Dataset):
         """
         adds relative displacement & displacement norm as edge features
         """
-        row, col = graph.edge_index
-        disp = torch.tensor(pos[row] - pos[col])
+        row, col = graph.edges()
+        disp = torch.tensor(pos[row.long()] - pos[col.long()])
         disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
-        graph.edge_attr = torch.cat((disp, disp_norm), dim=1)
+        graph.edata["x"] = torch.cat((disp, disp_norm), dim=1)
         return graph
 
     @staticmethod
@@ -324,11 +331,11 @@ class DeformingPlateDataset(Dataset):
     def normalize_edge(graph, mu, std):
         """normalizes a tensor"""
         if (
-            graph.edge_attr.size()[-1] != mu.size()[-1]
-            or graph.edge_attr.size()[-1] != std.size()[-1]
+            graph.edata["x"].size()[-1] != mu.size()[-1]
+            or graph.edata["x"].size()[-1] != std.size()[-1]
         ):
             raise AssertionError("Graph edge data must be same size as stats.")
-        return (graph.edge_attr - mu) / std
+        return (graph.edata["x"] - mu) / std
 
     @staticmethod
     def denormalize(invar, mu, std):

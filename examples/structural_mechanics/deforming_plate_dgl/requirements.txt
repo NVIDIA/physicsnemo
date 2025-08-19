@@ -2,7 +2,5 @@ hydra-core>=1.3.0
 matplotlib>=3.10.0
 omegaconf>=2.3.0
 tfrecord
-torch_geometric>=2.6.1
-torch_scatter>=2.1.2
 vtk>=9.2.6
 wandb>=0.13.7
