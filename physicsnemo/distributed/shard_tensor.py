@@ -265,7 +265,7 @@ class ShardTensor(DTensor):
     # Then, you likely want to register the handler with
     #
     # ShardTensor.register_named_function_handler("module.function_name.default", handler)
-    _named_function_registry: Dict[str, Callable] = {}
+    _named_function_registry: dict[str, Callable] = {}
 
     # Upon construction of any ShardTensor objects, this will be set to true.
     # Wrappers are triggered dynamically, so the wrapping will be pass-through
