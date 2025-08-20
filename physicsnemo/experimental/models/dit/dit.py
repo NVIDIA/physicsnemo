@@ -17,8 +17,6 @@
 from typing import Tuple, Union, Optional, Any
 import torch
 import torch.nn as nn
-import numpy as np
-import math
 
 from timm.models.vision_transformer import Attention
 
@@ -78,12 +76,18 @@ class DiTBlock(nn.Module):
 
         Parameters
         -----------
-        hidden_size (int): The dimensionality of the input and output.
-        num_heads (int): The number of attention heads.
-        attention_backbone (str): The attention implementation ('timm' or 'transformer_engine').
-        layernorm_backbone (str): The layer normalization implementation ('apex' or 'torch').
-        mlp_ratio (float): The ratio for the MLP's hidden dimension.
-        **block_kwargs (Any): Additional keyword arguments for the attention layer.
+        hidden_size (int):
+            The dimensionality of the input and output.
+        num_heads (int):
+            The number of attention heads.
+        attention_backbone (str):
+            The attention implementation ('timm' or 'transformer_engine').
+        layernorm_backbone (str):
+            The layer normalization implementation ('apex' or 'torch').
+        mlp_ratio (float):
+            The ratio for the MLP's hidden dimension.
+        **block_kwargs (Any):
+            Additional keyword arguments for the attention layer.
         """
         super().__init__()
         if layernorm_backbone == "apex" and not APEX_AVAILABLE:
@@ -144,8 +148,10 @@ class DiTBlock(nn.Module):
 
         Forward
         -------
-        x (torch.Tensor): Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        c (torch.Tensor): Conditioning tensor of shape (Batch, Hidden_Size).
+        x (torch.Tensor):
+            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
+        c (torch.Tensor):
+            Conditioning tensor of shape (Batch, Hidden_Size).
 
         Outputs
         -------
@@ -191,9 +197,12 @@ class ProjLayer(nn.Module):
 
         Parameters
         -----------
-        hidden_size (int): The dimensionality of the input from the transformer blocks.
-        emb_channels (int): The number of embedding channels for final projection.
-        layernorm_backbone (str): The layer normalization implementation ('apex' or 'torch'). Defaults to 'apex'.
+        hidden_size (int):
+            The dimensionality of the input from the transformer blocks.
+        emb_channels (int):
+            The number of embedding channels for final projection.
+        layernorm_backbone (str):
+            The layer normalization implementation ('apex' or 'torch'). Defaults to 'apex'.
         """
         super().__init__()
         if layernorm_backbone == "apex" and not APEX_AVAILABLE:
@@ -223,8 +232,10 @@ class ProjLayer(nn.Module):
 
         Forward
         -------
-        x (torch.Tensor): Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        c (torch.Tensor): Conditioning tensor of shape (Batch, Hidden_Size).
+        x (torch.Tensor):
+            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
+        c (torch.Tensor):
+            Conditioning tensor of shape (Batch, Hidden_Size).
 
         Outputs
         -------
@@ -263,19 +274,32 @@ class DiT(Module):
 
         Parameters
         -----------
-        input_size (Union[int, Tuple[int, int]], optional): Height and width of the input images. Defaults to (32, 32).
-        patch_size (Union[int, Tuple[int, int]], optional): The size of each image patch along height and width. Defaults to (2,2).
-        in_channels (int, optional): The number of input channels. Defaults to 4.
-        out_channels (Union[None, int], optional): The number of output channels. If None, it is `in_channels`. Defaults to None.
-        hidden_size (int, optional): The dimensionality of the transformer embeddings. Defaults to 256.
-        depth (int, optional): The number of transformer blocks. Defaults to 6.
-        num_heads (int, optional): The number of attention heads. Defaults to 8.
-        mlp_ratio (float, optional): The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-        attention_backbone (str, optional): If 'timm' uses Attention from timm. If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'transformer_engine'.
-        layernorm_backbone (str, optional): If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
-        condition_dim (int, optional): Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
-        embedding_type (str, optional): The type of positional embedding ('sin-cos' or 'learnable'). Defaults to 'sin-cos'.
-        pos_embedding_dim (int, optional): The dimensionality of the positional embedding. Defaults to 1.
+        input_size (Union[int, Tuple[int, int]], optional):
+            Height and width of the input images. Defaults to (32, 32).
+        patch_size (Union[int, Tuple[int, int]], optional):
+            The size of each image patch along height and width. Defaults to (2,2).
+        in_channels (int, optional):
+            The number of input channels. Defaults to 4.
+        out_channels (Union[None, int], optional):
+            The number of output channels. If None, it is `in_channels`. Defaults to None.
+        hidden_size (int, optional):
+            The dimensionality of the transformer embeddings. Defaults to 256.
+        depth (int, optional):
+            The number of transformer blocks. Defaults to 6.
+        num_heads (int, optional):
+            The number of attention heads. Defaults to 8.
+        mlp_ratio (float, optional):
+            The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
+        attention_backbone (str, optional):
+            If 'timm' uses Attention from timm. If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'transformer_engine'.
+        layernorm_backbone (str, optional):
+            If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
+        condition_dim (int, optional):
+            Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
+        embedding_type (str, optional):
+            The type of positional embedding ('sin-cos' or 'learnable'). Defaults to 'sin-cos'.
+        pos_embedding_dim (int, optional):
+            The dimensionality of the positional embedding. Defaults to 1.
 
         Notes
         -----
@@ -368,9 +392,12 @@ class DiT(Module):
 
         Forward
         -------
-        x (torch.Tensor): (N, C, H, W) tensor of spatial inputs.
-        t (torch.Tensor): (N,) tensor of diffusion timesteps.
-        condition (Optional[torch.Tensor]): (N, d) tensor of conditions.
+        x (torch.Tensor):
+            (N, C, H, W) tensor of spatial inputs.
+        t (torch.Tensor):
+            (N,) tensor of diffusion timesteps.
+        condition (Optional[torch.Tensor]):
+            (N, d) tensor of conditions.
 
         Outputs
         -------
