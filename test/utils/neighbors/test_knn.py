@@ -25,7 +25,10 @@ from physicsnemo.utils.neighbors.knn._scipy_impl import knn_impl as knn_scipy
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("k", [1, 5])
 @pytest.mark.parametrize("backend", ["cuml", "torch", "scipy", "auto"])
-def test_knn(device: str, k: int, backend: str):
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.float64, torch.bfloat16, torch.float16]
+)
+def test_knn(device: str, k: int, backend: str, dtype: torch.dtype):
     """
     Basic test for KNN functionality.
     We use a predictable grid of points to ensure the results are valid.
@@ -55,6 +58,10 @@ def test_knn(device: str, k: int, backend: str):
     )
     search_space_points = query_space_points[None, :, :] + offsets[:, None, :]
     search_space_points = search_space_points.reshape(-1, 3)
+
+    # Convert to dtype
+    search_space_points = search_space_points.to(dtype)
+    query_space_points = query_space_points.to(dtype)
 
     # Run KNN search
     indices, distances = knn(
@@ -129,10 +136,6 @@ def test_opcheck(device):
 
 @pytest.mark.parametrize("device", ["cuda", "cpu"])  # cuml only works on CUDA
 def test_knn_comparison(device):
-    torch.manual_seed(42)
-    if device == "cuda":
-        torch.cuda.manual_seed(42)
-
     points = torch.randn(53, 3, device=device)
     queries = torch.randn(21, 3, device=device)
     k = 5
@@ -153,3 +156,7 @@ def test_knn_comparison(device):
     sorted_dist_cuml = torch.sort(distances_A, dim=1)[0]
     sorted_dist_torch = torch.sort(distances_B, dim=1)[0]
     assert torch.allclose(sorted_dist_cuml, sorted_dist_torch, atol=1e-5)
+
+
+if __name__ == "__main__":
+    test_knn(device="cuda", k=5, backend="cuml", dtype=torch.bfloat16)

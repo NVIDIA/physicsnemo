@@ -31,7 +31,7 @@ def knn_impl(
         k (int): Number of neighbors
 
     Returns:
-        torch.Tensor: Aggregated features at p1, shape (B, M, D_feat)
+        torch.Tensor: Aggregated features at p1, shape (N, k)
     """
     # M, D = p1.shape
     # N, D_feat = p2_features.shape

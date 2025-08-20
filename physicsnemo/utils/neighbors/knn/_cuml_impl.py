@@ -51,7 +51,8 @@ if CUML_AVAILABLE:
     def _(
         points: torch.Tensor, queries: torch.Tensor, k: int = 3
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        assert points.device == queries.device  # noqa S101
+        if points.device != queries.device:
+            raise RuntimeError("points and queries must be on the same device")
 
         dist_output = torch.empty(
             queries.shape[0], k, device=queries.device, dtype=queries.dtype

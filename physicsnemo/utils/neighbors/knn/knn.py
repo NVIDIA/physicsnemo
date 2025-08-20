@@ -58,6 +58,11 @@ def knn(
             f"`knn` points and queries must be on the same device, got {points.device=} and {queries.device=}"
         )
 
+    if points.dtype != queries.dtype:
+        raise ValueError(
+            f"`knn` points and queries must have the same dtype, got {points.dtype=} and {queries.dtype=}"
+        )
+
     # cuml is GPU only
     # scip is CPU only.
 
@@ -71,19 +76,35 @@ def knn(
         else:
             backend = "scipy"
 
-    if backend == "scipy":
-        if points.device == torch.device("cuda"):
-            raise ValueError(
-                f"`knn` scipy backend does not support CUDA, got {points.device=}"
-            )
-        indices, distances = knn_scipy(points, queries, k)
-    elif backend == "cuml":
-        if points.device == torch.device("cpu"):
-            raise ValueError(
-                f"`knn` cuml backend does not support CPU, got {points.device=}"
-            )
-        indices, distances = knn_cuml(points, queries, k)
-    elif backend == "torch":
-        indices, distances = knn_torch(points, queries, k)
+    # Cuml foes not support bfloat16:
+    # Autocast to float32:
+    original_dtype = points.dtype
+
+    if points.dtype == torch.bfloat16 and (backend == "cuml" or backend == "scipy"):
+        points = points.to(torch.float32)
+        queries = queries.to(torch.float32)
+
+    match backend:
+        case "scipy":
+            if points.device.type != "cpu":
+                raise ValueError(
+                    f"`knn` scipy backend does not support CUDA, got {points.device=}"
+                )
+            method = knn_scipy
+        case "cuml":
+            if points.device.type != "cuda":
+                raise ValueError(
+                    f"`knn` cuml backend does not support CPU, got {points.device=}"
+                )
+            method = knn_cuml
+        case "torch":
+            method = knn_torch
+        case _:
+            raise NotImplementedError(f"Unknown backend: {backend}")
+
+    indices, distances = method(points, queries, k)
+
+    # Return the distances in the original dtype:
+    distances = distances.to(original_dtype)
 
     return indices, distances
