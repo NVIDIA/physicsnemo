@@ -1097,12 +1097,13 @@ class DoMINO(nn.Module):
         surface_neighbors_areas,
         inlet_velocity,
         air_density,
+        num_sample_points=7
     ):
         """Function to approximate solution given the neighborhood information"""
         num_variables = self.num_variables_surf
         nn_basis = self.nn_basis_surf
         agg_model = self.agg_model_surf
-        num_sample_points = surface_mesh_neighbors.shape[2] + 1
+        # num_sample_points = surface_mesh_neighbors.shape[2] + 1
 
         if self.encode_parameters:
             inlet_velocity = torch.unsqueeze(inlet_velocity, 1)
@@ -1128,15 +1129,16 @@ class DoMINO(nn.Module):
             if not self.use_surface_area:
                 surface_mesh_centers = torch.cat(
                     (surface_mesh_centers, surface_normals),
-                    axis=-1,
+                    dim=-1,
                 )
-                surface_mesh_neighbors = torch.cat(
-                    (
-                        surface_mesh_neighbors,
-                        surface_neighbors_normals,
-                    ),
-                    axis=-1,
-                )
+                if num_sample_points > 1:
+                    surface_mesh_neighbors = torch.cat(
+                        (
+                            surface_mesh_neighbors,
+                            surface_neighbors_normals,
+                        ),
+                        dim=-1,
+                    )
 
             else:
                 surface_mesh_centers = torch.cat(
@@ -1145,17 +1147,17 @@ class DoMINO(nn.Module):
                         surface_normals,
                         torch.log(surface_areas) / 10,
                     ),
-                    axis=-1,
+                    dim=-1,
                 )
-                surface_mesh_neighbors = torch.cat(
-                    (
-                        surface_mesh_neighbors,
-                        surface_neighbors_normals,
-                        torch.log(surface_neighbors_areas) / 10,
-                    ),
-                    axis=-1,
-                )
-
+                if num_sample_points > 1:
+                    surface_mesh_neighbors = torch.cat(
+                        (
+                            surface_mesh_neighbors,
+                            surface_neighbors_normals,
+                            torch.log(surface_neighbors_areas) / 10,
+                        ),
+                        dim=-1,
+                    )
         if self.solution_calculation_mode == "one-loop":
             encoding_list = [
                 encoding_node.unsqueeze(2).expand(-1, -1, num_sample_points, -1),
@@ -1560,6 +1562,7 @@ class DoMINO(nn.Module):
                     surface_neighbors_areas,
                     stream_velocity,
                     air_density,
+                    num_sample_points=self.num_surface_neighbors,
                 )
         else:
             output_surf = None

@@ -317,6 +317,8 @@ def main(cfg: DictConfig):
 
     if model_type == "volume" or model_type == "combined":
         volume_variable_names = list(cfg.variables.volume.solution.keys())
+        volume_variable_names_gt = ["UMeanTrim", "pMeanTrim", "nutMeanTrim"]
+        volume_variable_names_base = ["UMeanTrimBasePred", "pMeanTrimBasePred", "nutMeanTrimBasePred"]
         num_vol_vars = 0
         for j in volume_variable_names:
             if cfg.variables.volume.solution[j] == "vector":
@@ -328,6 +330,8 @@ def main(cfg: DictConfig):
 
     if model_type == "surface" or model_type == "combined":
         surface_variable_names = list(cfg.variables.surface.solution.keys())
+        surface_variable_names_gt = ["pMeanTrim", "wallShearStressMeanTrim"]
+        surface_variable_names_base = ["pMeanTrimBasePred", "wallShearStressMeanTrimBasePred"]
         num_surf_vars = 0
         for j in surface_variable_names:
             if cfg.variables.surface.solution[j] == "vector":
@@ -412,8 +416,8 @@ def main(cfg: DictConfig):
         filepath = os.path.join(input_path, dirname)
         tag = int(re.findall(r"(\w+?)(\d+)", dirname)[0][1])
         stl_path = os.path.join(filepath, f"drivaer_{tag}.stl")
-        vtp_path = os.path.join(filepath, f"boundary_{tag}.vtp")
-        vtu_path = os.path.join(filepath, f"volume_{tag}.vtu")
+        vtp_path = os.path.join(filepath, f"boundary_{tag}_predicted.vtp")
+        vtu_path = os.path.join(filepath, f"volume_{tag}_predicted.vtu")
 
         vtp_pred_save_path = os.path.join(
             pred_save_path, f"boundary_{tag}_predicted.vtp"
@@ -516,8 +520,10 @@ def main(cfg: DictConfig):
             celldata_all = get_node_to_elem(polydata_surf)
 
             celldata = celldata_all.GetCellData()
-            surface_fields = get_fields(celldata, surface_variable_names)
+            surface_fields = get_fields(celldata, surface_variable_names_gt)
             surface_fields = np.concatenate(surface_fields, axis=-1)
+            surface_fields_base = get_fields(celldata, surface_variable_names_base)
+            surface_fields_base = np.concatenate(surface_fields_base, axis=-1)
 
             mesh = pv.PolyData(polydata_surf)
             surface_coordinates = np.array(mesh.cell_centers().points, dtype=np.float32)
@@ -585,9 +591,11 @@ def main(cfg: DictConfig):
             reader.Update()
             polydata_vol = reader.GetOutput()
             volume_coordinates, volume_fields = get_volume_data(
-                polydata_vol, volume_variable_names
+                polydata_vol, volume_variable_names_gt
             )
             volume_fields = np.concatenate(volume_fields, axis=-1)
+            volume_coordinates_base, volume_fields_base = get_volume_data(polydata_vol, volume_variable_names_base)
+            volume_fields_base = np.concatenate(volume_fields_base, axis=-1)
             # print(f"Processed vtu {vtu_path}")
 
             bounding_box_dims = []
@@ -744,6 +752,8 @@ def main(cfg: DictConfig):
 
         if prediction_surf is not None:
             surface_sizes = np.expand_dims(surface_sizes, -1)
+            prediction_surf[0, :, 0] = prediction_surf[0, :, 0] + surface_fields_base[:, 0]
+            prediction_surf[0, :, 1:] = prediction_surf[0, :, 1:] + surface_fields_base[:, 1:]
 
             pres_x_pred = np.sum(
                 prediction_surf[0, :, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
@@ -809,6 +819,9 @@ def main(cfg: DictConfig):
         if prediction_vol is not None:
             target_vol = volume_fields
             prediction_vol = prediction_vol[0]
+            prediction_vol[:, :3] = prediction_vol[:, :3] + volume_fields_base[:, :3]
+            prediction_vol[:, 3:4] = prediction_vol[:, 3:4] + volume_fields_base[:, 3:4]
+            prediction_vol[:, 4:5] = prediction_vol[:, 4:5] + volume_fields_base[:, 4:5]
             c_min = vol_grid_max_min[0]
             c_max = vol_grid_max_min[1]
             volume_coordinates = unnormalize(volume_coordinates, c_max, c_min)
@@ -833,11 +846,11 @@ def main(cfg: DictConfig):
 
         if prediction_surf is not None:
             surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 0:1])
-            surfParam_vtk.SetName(f"{surface_variable_names[0]}Pred")
+            surfParam_vtk.SetName(f"{surface_variable_names_gt[0]}Pred")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
             surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 1:])
-            surfParam_vtk.SetName(f"{surface_variable_names[1]}Pred")
+            surfParam_vtk.SetName(f"{surface_variable_names_gt[1]}Pred")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
             write_to_vtp(celldata_all, vtp_pred_save_path)
@@ -845,15 +858,15 @@ def main(cfg: DictConfig):
         if prediction_vol is not None:
 
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
-            volParam_vtk.SetName(f"{volume_variable_names[0]}Pred")
+            volParam_vtk.SetName(f"{volume_variable_names_gt[0]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 3:4])
-            volParam_vtk.SetName(f"{volume_variable_names[1]}Pred")
+            volParam_vtk.SetName(f"{volume_variable_names_gt[1]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 4:5])
-            volParam_vtk.SetName(f"{volume_variable_names[2]}Pred")
+            volParam_vtk.SetName(f"{volume_variable_names_gt[2]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
             write_to_vtu(polydata_vol, vtu_pred_save_path)
@@ -865,7 +878,6 @@ def main(cfg: DictConfig):
     print(
         f"Mean over all samples, surface={l2_surface_mean} and volume={l2_volume_mean}"
     )
-
 
 if __name__ == "__main__":
     main()

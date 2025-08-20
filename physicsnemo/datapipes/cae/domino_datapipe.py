@@ -49,6 +49,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.domino.utils import (
     ArrayType,
     area_weighted_shuffle_array,
+    solution_weighted_shuffle_array,
     calculate_center_of_mass,
     calculate_normal_positional_encoding,
     create_grid,
@@ -680,6 +681,16 @@ class DoMINODataPipe(Dataset):
                         surface_coordinates,
                         self.config.surface_points_sample,
                         surface_sizes,
+                    )
+                elif self.config.surface_sampling_algorithm == "solution_weighted":
+                    (
+                        surface_coordinates_sampled,
+                        idx_surface,
+                    ) = solution_weighted_shuffle_array(
+                        surface_coordinates,
+                        self.config.surface_points_sample,
+                        surface_fields[:, 0],
+                        area_factor=0.5,
                     )
                 else:
                     surface_coordinates_sampled, idx_surface = shuffle_array(

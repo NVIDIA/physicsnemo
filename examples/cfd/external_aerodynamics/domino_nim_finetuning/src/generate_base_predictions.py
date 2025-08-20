@@ -51,7 +51,7 @@ from vtk.util import numpy_support
 
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
-from model_base import DoMINO
+from model_base_predictor import DoMINO
 from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.sdf import signed_distance_field
 
@@ -273,6 +273,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                             surface_neighbors_areas_batch,
                             stream_velocity,
                             air_density,
+                            num_sample_points=cfg.model.num_surface_neighbors,
                         )
                     else:
                         tpredictions_batch = model.calculate_solution(
@@ -391,9 +392,9 @@ def main(cfg: DictConfig):
         vtu_path = os.path.join(filepath, f"volume_{tag}.vtu")
 
         vtp_pred_save_path = os.path.join(
-            filepath, f"boundary_{tag}_predicted.vtp"
+            filepath, f"boundary_{tag}_predicted1.vtp"
         )
-        vtu_pred_save_path = os.path.join(filepath, f"volume_{tag}_predicted.vtu")
+        vtu_pred_save_path = os.path.join(filepath, f"volume_{tag}_predicted1.vtu")
 
         # Skip if required input files are missing
         missing = False
@@ -486,18 +487,23 @@ def main(cfg: DictConfig):
                 surface_normals / np.linalg.norm(surface_normals, axis=1)[:, np.newaxis]
             )
 
-            interp_func = KDTree(surface_coordinates)
-            dd, ii = interp_func.query(
-                surface_coordinates, k=cfg.model.num_surface_neighbors
-            )
+            if cfg.model.num_surface_neighbors > 1:
+                interp_func = KDTree(surface_coordinates)
+                dd, ii = interp_func.query(
+                    surface_coordinates, k=cfg.model.num_surface_neighbors
+                )
 
-            surface_neighbors = surface_coordinates[ii]
-            surface_neighbors = surface_neighbors[:, 1:]
+                surface_neighbors = surface_coordinates[ii]
+                surface_neighbors = surface_neighbors[:, 1:]
 
-            surface_neighbors_normals = surface_normals[ii]
-            surface_neighbors_normals = surface_neighbors_normals[:, 1:]
-            surface_neighbors_sizes = surface_sizes[ii]
-            surface_neighbors_sizes = surface_neighbors_sizes[:, 1:]
+                surface_neighbors_normals = surface_normals[ii]
+                surface_neighbors_normals = surface_neighbors_normals[:, 1:]
+                surface_neighbors_sizes = surface_sizes[ii]
+                surface_neighbors_sizes = surface_neighbors_sizes[:, 1:]
+            else:
+                surface_neighbors = surface_coordinates
+                surface_neighbors_normals = surface_normals
+                surface_neighbors_sizes = surface_sizes
 
             dx, dy, dz = (
                 (s_max[0] - s_min[0]) / nx,
@@ -792,15 +798,6 @@ def main(cfg: DictConfig):
             # print("Number of points in mesh:", vmesh.n_points)
             
             try:
-                # Ensure predictions match the mesh points
-                velocity = prediction_vol[:, 0:3]
-                pressure = prediction_vol[:, 3:4].ravel()
-                viscosity = prediction_vol[:, 4:5].ravel()
-                
-                print("Velocity shape:", velocity.shape)
-                print("Pressure shape:", pressure.shape)
-                print("Viscosity shape:", viscosity.shape)
-
                 volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
                 volParam_vtk.SetName(f"{volume_variable_names[0]}BasePred")
                 polydata_vol.GetPointData().AddArray(volParam_vtk)
