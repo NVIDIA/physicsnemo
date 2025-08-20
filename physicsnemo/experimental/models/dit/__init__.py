@@ -14,4 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .dit import DiT,DiTBlock
+from .layers import DiTBlock, ProjLayer
+from .dit import DiT

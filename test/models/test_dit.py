@@ -81,7 +81,7 @@ def test_dit_constructor(device):
     """Test different DiT constructor options and shape consistency."""
     input_size = (16, 32)
     in_channels = 3
-    out_channels = 3
+    out_channels = 5
     condition_dim = 128
     attention_backbone = "timm"
     layernorm_backbone = "torch"
@@ -112,11 +112,12 @@ def test_dit_constructor(device):
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_dit_checkpoint(device):
     """Test DiT checkpoint save/load."""
-    # TODO Check why it fails if we use attention_backbone="transformer_engine"
     model_1 = (
         DiT(
             input_size=(16, 16),
             patch_size=(4, 4),
+            in_channels=3,
+            out_channels=4,
             hidden_size=64,
             depth=1,
             num_heads=2,
@@ -129,6 +130,8 @@ def test_dit_checkpoint(device):
         DiT(
             input_size=(16, 16),
             patch_size=(4, 4),
+            in_channels=3,
+            out_channels=4,
             hidden_size=64,
             depth=1,
             num_heads=2,
@@ -142,7 +145,7 @@ def test_dit_checkpoint(device):
     with torch.no_grad():
         model_2.proj_layer.output_projection.weight.data.add_(0.1)
 
-    x = torch.randn(2, 4, 16, 16).to(device)
+    x = torch.randn(2, 3, 16, 16).to(device)
     t = torch.randint(0, 1000, (2,)).to(device)
 
     assert common.validate_checkpoint(model_1, model_2, (x, t, None))
