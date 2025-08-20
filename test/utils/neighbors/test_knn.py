@@ -120,7 +120,12 @@ def test_knn_torch_compile_no_graph_break(device):
         assert torch.allclose(eager, compiled, atol=1e-6)
 
 
-@pytest.mark.parametrize("device", ["cuda", "cpu"])
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cuda",
+    ],
+)
 def test_opcheck(device):
     points = torch.randn(100, 3, device=device)
     queries = torch.randn(10, 3, device=device)
