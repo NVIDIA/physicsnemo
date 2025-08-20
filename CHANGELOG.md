@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Diffusion Transformer (DiT) model. The DiT model can be accessed in
+ `physicsnemo.experimental.models.dit.DiT`. **⚠️Warning:** - Experimental feature
+  subject to future API changes.
 - Improved documentation for diffusion models and diffusion utils.
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
   `Module.from_checkpoint("chkpt.mdlus", override_args=set(...))`.
