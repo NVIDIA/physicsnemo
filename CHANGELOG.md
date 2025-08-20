@@ -36,7 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Modified `physicsnemo.models.layers.mlp_layers` to support norm, bias, and Conv2D
 - Diffusion utils: `physicsnemo.utils.generative` renamed into `physicsnemo.utils.diffusion`
 - Diffusion models: in CorrDiff model wrappers (`EDMPrecondSuperResolution` and
   `UNet`), the arguments `profile_mode` and `amp_mode` cannot be overriden by
