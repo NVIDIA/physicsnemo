@@ -40,7 +40,7 @@ from physicsnemo.distributed import ShardTensor  # noqa: E402
 aten = torch.ops.aten
 
 
-def unsqueeze_shape(shape: Union[torch.Size, Sequence[int]], dim: int) -> torch.Size:
+def unsqueeze_shape(shape: torch.Size | Sequence[int], dim: int) -> torch.Size:
     """
     Return a new `torch.Size` with a singleton dimension inserted at `dim`.
 
