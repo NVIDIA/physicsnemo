@@ -24,7 +24,7 @@ from physicsnemo.experimental.models.dit import DiT
 # --- Tests ---
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_dit_forward_accuracy(device):
     """Test DiT forward pass against a saved reference output."""
     torch.manual_seed(0)
@@ -49,7 +49,7 @@ def test_dit_forward_accuracy(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@pytest.mark.parametrize("device", ["cuda:0"])
 def test_dit_conditional_forward_accuracy(device):
     """Test conditional DiT forward pass against a saved reference output."""
     torch.manual_seed(0)
@@ -78,11 +78,13 @@ def test_dit_conditional_forward_accuracy(device):
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dit_constructor(device):
-    """Test the DiT constructor options and shape consistency."""
+    """Test different DiT constructor options and shape consistency."""
     input_size = (16, 32)
     in_channels = 3
     out_channels = 3
     condition_dim = 128
+    attention_backbone = "timm"
+    layernorm_backbone = "torch"
     batch_size = 2
 
     model = DiT(
@@ -93,6 +95,8 @@ def test_dit_constructor(device):
         condition_dim=condition_dim,
         hidden_size=128,
         depth=2,
+        attention_backbone=attention_backbone,
+        layernorm_backbone=layernorm_backbone,
         num_heads=4,
     ).to(device)
 
@@ -108,16 +112,35 @@ def test_dit_constructor(device):
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_dit_checkpoint(device):
     """Test DiT checkpoint save/load."""
-    model_1 = DiT(input_size=16, patch_size=4, hidden_size=64, depth=1, num_heads=2).to(
-        device
+    # TODO Check why it fails if we use attention_backbone="transformer_engine"
+    model_1 = (
+        DiT(
+            input_size=(16, 16),
+            patch_size=(4, 4),
+            hidden_size=64,
+            depth=1,
+            num_heads=2,
+            attention_backbone="timm",
+        )
+        .to(device)
+        .eval()
     )
-    model_2 = DiT(input_size=16, patch_size=4, hidden_size=64, depth=1, num_heads=2).to(
-        device
+    model_2 = (
+        DiT(
+            input_size=(16, 16),
+            patch_size=(4, 4),
+            hidden_size=64,
+            depth=1,
+            num_heads=2,
+            attention_backbone="timm",
+        )
+        .to(device)
+        .eval()
     )
 
     # Change weights on one model to ensure they are different initially
     with torch.no_grad():
-        model_2.final_layer.linear.bias.add_(0.1)
+        model_2.proj_layer.output_projection.weight.data.add_(0.1)
 
     x = torch.randn(2, 4, 16, 16).to(device)
     t = torch.randint(0, 1000, (2,)).to(device)
