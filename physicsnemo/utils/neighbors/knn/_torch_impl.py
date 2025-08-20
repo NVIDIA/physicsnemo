@@ -21,17 +21,19 @@ def knn_impl(
     points: torch.Tensor,
     queries: torch.Tensor,
     k: int = 3,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Perform kNN search with torch.
 
     Args:
-        points (torch.Tensor): Query points, shape ( M, D)
+        points (torch.Tensor): Query points, shape (M, D)
         queries (torch.Tensor): Reference points, shape (N, D)
         k (int): Number of neighbors
 
     Returns:
-        torch.Tensor: Aggregated features at p1, shape (N, k)
+        tuple[torch.Tensor, torch.Tensor]:
+            - indices (torch.Tensor): Indices of the top-k nearest neighbors, shape (N, k)
+            - distances (torch.Tensor): Distances to the top-k nearest neighbors, shape (N, k)
     """
     # M, D = p1.shape
     # N, D_feat = p2_features.shape

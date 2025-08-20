@@ -28,7 +28,7 @@ def knn(
     queries: torch.Tensor,
     k: int,
     backend: Literal["cuml", "torch", "scipy", "auto"] = "auto",
-) -> tuple[torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Perform a k-nearest neighbor search on torch tensors.  Can be done with
     torch directly, or leverage RAPIDS cuML algorithm.
