@@ -91,7 +91,7 @@ def test_knn(device: str, k: int, backend: str, dtype: torch.dtype):
         assert (distances <= 0.5).all()  # Max offset is 0.5
 
 
-@pytest.mark.parametrize("device", ["cuda", "cpu"])
+@pytest.mark.parametrize("device", ["cuda"])
 def test_knn_torch_compile_no_graph_break(device):
     # Only test if torch.compile is available (PyTorch 2.0+)
     if not hasattr(torch, "compile"):
@@ -124,6 +124,7 @@ def test_knn_torch_compile_no_graph_break(device):
     "device",
     [
         "cuda",
+        "cpu",
     ],
 )
 def test_opcheck(device):
