@@ -2,18 +2,15 @@
 
 ## Overview
 
-This example showcases an **advanced fine-tuning recipe** for the **DoMINO-Automotive-Aero NIM** model, featuring an innovative **predictor-corrector approach** specifically designed for automotive CFD simulations.
+This example showcases a **fine-tuning recipe** for the **DoMINO-Automotive-Aero NIM**, featuring an innovative **predictor-corrector approach** specifically designed for automotive CFD simulations.
 
-**Accelerated Training**: Dramatically reduce training time by leveraging pre-trained foundation models instead of starting from scratch
+**Accelerated Training with convergence in fewer epochs**: Dramatically reduce training time by leveraging pre-trained foundation models instead of starting from scratch
 
 **Smart Transfer Learning**: Efficiently adapt powerful base models to new vehicle configurations and boundary conditions
 
-**Predictor-Corrector Approach**: A novel approach that combines the strengths of pre-trained models with AI model based corrections
-
-### How It Works
+**Predictor-Corrector Approach**: An approach that combines the strengths of pre-trained models with AI model based corrections
 
 The predictor-corrector methodology is described below:
-
 ```
 Y_finetuned = Y_predictor + Y_corrector
 ```
@@ -24,6 +21,8 @@ Y_finetuned = Y_predictor + Y_corrector
 - **Y_finetuned**: The final enhanced prediction combining both components
 
 > **💡 Core Insight**: The predictor leverages extensive pre-training to provide robust baseline predictions, while the corrector focuses on learning dataset-specific refinements. This division of labor leads to faster convergence and superior performance compared to training from scratch.
+
+The finetuning example validated on the OSS DrivAerML dataset with only 16 training and 8 testing samples. The results presented are preliminary and show encouraging results. A thourough investigation is underway to provide more concrete datapoints in terms of accuracy improvement and convergence acceleration.
 
 ### Key Features
 
@@ -41,7 +40,7 @@ Y_finetuned = Y_predictor + Y_corrector
 | **Corrector** | Custom DoMINO architecture | Trainable |
 | **Combined** | Predictor + Corrector outputs | End-to-End Inference | 
 
-## Repository Structure
+## Code Structure
 
 ```
 domino_automotive_aero_nim_finetuning/
@@ -72,7 +71,6 @@ The **DrivAerML** dataset provides comprehensive automotive CFD simulations with
 | **Geometry** | Vehicle STL meshes | `.stl` | 3D vehicle structure |
 | **Volume Fields** | 3D flow field data | `.vtu` | Velocity, pressure, turbulence |
 | **Surface Fields** | Vehicle surface data | `.vtp` | Wall pressure, shear stress |
-| **Force Data** | Aerodynamic coefficients | `.csv` | Drag, lift, moments |
 
 ### Dataset Download
 
@@ -103,7 +101,7 @@ wget -O nim_checkpoint/domino-drivesim-recent.pt \
 
 ```mermaid
 graph TD
-    A[Download Dataset] --> B[Generate Base Predictions]
+    A[Download Dataset and pre-trained DoMINO NIM] --> B[Generate Base Predictions]
     B --> C[Process Data VTP → NPY]
     C --> D[Configure Training]
     D --> E[Train Corrector Model]
@@ -167,7 +165,7 @@ python src/test.py \
 
 The finetuning recipe is benchmarked for a subset of the DrivAerML dataset. The finetuning is carried out on the first 24 samples from this dataset and compared against training from scratch with the DoMINO model on the same dataset. The DoMINO-Automotive-Aero NIM is trained on a dataset consisting of RANS simulations and does not include the DrivAer geometries, while this dataset consists of high-fidelity, time-averaged LES simulations. The goal of this recipe is to demonstrate the finetuning of an existing model checkpoint to a new design space and physics and compare it against training from scratch. 
 
-Both models are evaluated at 50, 100, 200, 300, 400 and 500 epochs to demonstrate faster convergence of the finetuned model to an acceptable accuracy as compared to training from scratch. 18 samples are used for training and 6 for validation. The results averaged over the validation set are presented in the table below and demonstrate that finetuning results in faster convergence of results as compared to training from scratch.
+Both models are evaluated at 50, 100, 200, 300, and 400 epochs to demonstrate faster convergence of the finetuned model to an acceptable accuracy as compared to training from scratch. 18 samples are used for training and 6 for validation. The results averaged over the validation set are presented in the table below and demonstrate that finetuning results in faster convergence (in fewer epochs) of results as compared to training from scratch.
 
 | Epochs | Baseline Model $L_2$ Error | | | | Fine-tuned Model $L_2$ Error | | | |
 |--------|----------|----------|----------|----------|----------|----------|----------|----------|
@@ -188,14 +186,14 @@ The recipe is designed for easy customization:
 
 | Component | File | Customization Level |
 |-----------|------|-------------------|
-| **Predictor** | `model_base_predictor.py` | **Interface Only** |
-| **Corrector** | Built-in DoMINO | **Fully Customizable** |
+| **Predictor** | `model_base_predictor.py` | **Pretrained Custom Model (or DoMINO NIM)** |
+| **Corrector** | Built-in DoMINO | **Fully Customizable Models** |
 | **Training** | `train.py` | **Configuration-driven** |
 | **Testing** | `test.py` | **Workflow Adaptable** |
 
 ### Integration Guidelines
 
-**Key Design Principle**: The predictor-corrector approach is model-agnostic!
+The predictor-corrector approach is model-agnostic.
 
 **To use custom architectures:**
 
