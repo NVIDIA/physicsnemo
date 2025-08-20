@@ -23,7 +23,7 @@ This module provides:
 - Small utility helpers for normalizing dimensions and constructing shapes.
 """
 
-from typing import Dict, List, Sequence, Union
+from typing import Dict, List, Sequence
 
 import torch
 
