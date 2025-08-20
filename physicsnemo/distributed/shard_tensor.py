@@ -253,7 +253,7 @@ class ShardTensor(DTensor):
     # For Python-level functions (torch.mean, tensor.mean, etc.)
     _function_registry: Dict[Callable, Callable] = {}
 
-    # For custom functions registered with pytorch,
+    # For custom functions registered with PyTorch,
     # it is sometimes necessary to match by name.
     # For instance, if you declare an op with
     #
