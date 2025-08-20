@@ -73,9 +73,7 @@ def normalize_dim(dim: int, tensor_rank: int) -> int:
     Returns:
         The normalized non-negative dimension index.
     """
-    while dim < 0:
-        dim = tensor_rank + dim + 1
-    return dim
+    return dim if dim >= 0 else (dim % (tensor_rank + 1))
 
 
 def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
