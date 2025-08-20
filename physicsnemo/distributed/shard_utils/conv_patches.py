@@ -514,8 +514,6 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
     Returns:
         The result of the convolution operation
 
-    Raises:
-        : If input, weight, or bias have invalid types
     """
 
     if "transpose" in func.__name__:

@@ -462,7 +462,7 @@ class RingBallQuery(torch.autograd.Function):
             Gradients for inputs (currently not implemented)
         """
 
-        # raise MissingShardPatch("Backward pass for ring ball query not implemented.")
+        raise MissingShardPatch("Backward pass for ring ball query not implemented.")
 
         # (
         #     points,
@@ -531,12 +531,9 @@ class GradReducer(torch.autograd.Function):
 
 def radius_search_wrapper(
     func: Any, type: Any, args: tuple, kwargs: dict
-) -> Union[
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-    Tuple[ShardTensor, ShardTensor, ShardTensor],
-]:
+) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
     """
-    Wrapper for BallQueryLayer.forward to support sharded tensors.
+    Wrapper for radius_search to support sharded tensors.
 
     Handles 4 situations, based on the sharding of points and queries:
     - Points is sharded: a ring computation is performed.
@@ -564,7 +561,7 @@ def radius_search_wrapper(
         kwargs: Keyword arguments
 
     Returns:
-        Tuple of (mapping, num_neighbors, outputs) as torch.Tensor or ShardTensor
+        Tuple of (mapping, num_neighbors, outputs) as ShardTensor
     """
 
     points, queries, bq_kwargs = repackage_radius_search_wrapper_args(*args, **kwargs)
@@ -607,19 +604,15 @@ def radius_search_wrapper(
 
 
 def repackage_radius_search_wrapper_args(
-    points: torch.Tensor | ShardTensor,
-    queries: torch.Tensor | ShardTensor,
+    points: ShardTensor,
+    queries: ShardTensor,
     radius: float,
     max_points: int | None = None,
     return_dists: bool = False,
     return_points: bool = False,
     *args,
     **kwargs,
-) -> Tuple[
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
-    dict,
-]:
+) -> tuple[ShardTensor, ShardTensor, dict]:
     """Repackages ball query arguments into a standard format.
 
     Takes the arguments that could be passed to a ball query operation
