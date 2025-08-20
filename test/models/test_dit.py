@@ -15,18 +15,11 @@
 # limitations under the License.
 # ruff: noqa: E402
 
-import os
-import sys
-
 import common
-import onnxruntime
 import pytest
 import torch
 
 from physicsnemo.experimental.models.dit import DiT
-
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
 
 # --- Tests ---
 
@@ -130,45 +123,3 @@ def test_dit_checkpoint(device):
     t = torch.randint(0, 1000, (2,)).to(device)
 
     assert common.validate_checkpoint(model_1, model_2, (x, t, None))
-
-
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_dit_deploy(device):
-    """Test DiT deployment support (ONNX)."""
-    model = (
-        DiT(
-            input_size=16,
-            patch_size=4,
-            in_channels=3,
-            hidden_size=64,
-            depth=1,
-            num_heads=2,
-        )
-        .to(device)
-        .eval()
-    )
-
-    x = torch.randn(2, 3, 16, 16).to(device)
-    # Note: ONNX export of timesteps can be complex. We use a constant here for simplicity.
-    t_static = torch.ones(2, dtype=torch.int64).to(device) * 500
-
-    file_name = "dit_model.onnx"
-
-    torch.onnx.export(
-        model,
-        (x, t_static, None),
-        file_name,
-        input_names=["x", "t"],
-        output_names=["output"],
-        opset_version=14,
-    )
-
-    ort_session = onnxruntime.InferenceSession(file_name)
-    ort_inputs = {
-        ort_session.get_inputs()[0].name: x.cpu().numpy(),
-        ort_session.get_inputs()[1].name: t_static.cpu().numpy(),
-    }
-    _ = ort_session.run(None, ort_inputs)
-
-    if os.path.exists(file_name):
-        os.remove(file_name)

@@ -1,14 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-# --------------------------------------------------------
-# References:
-# GLIDE: https://github.com/openai/glide-text2im
-# MAE: https://github.com/facebookresearch/mae/blob/main/models_mae.py
-# --------------------------------------------------------
-
 # SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -30,18 +19,26 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from timm.models.vision_transformer import PatchEmbed, Attention
-from transformer_engine.pytorch import MultiheadAttention
 
+from timm.models.vision_transformer import Attention
+
+try:
+    from transformer_engine.pytorch import MultiheadAttention
+except ImportError:
+    print("Transformer Engine not found, use 'timm' Attention.")
+
+try:
+    from apex.normalization import FusedLayerNorm as LayerNorm
+except ImportError:
+    print("Apex not found, using torch LayerNorm.")
+    from torch.nn import LayerNorm
+
+from physicsnemo.models.utils import PatchEmbed2D, PatchRecovery2D
+from physicsnemo.models.diffusion import PositionalEmbedding, Linear
 from physicsnemo.models.layers import Mlp
 from dataclasses import dataclass
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
-
-
-# ------------------------------
-#      Metadata Definition
-# ------------------------------
 
 
 @dataclass
@@ -59,270 +56,16 @@ class MetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-#################################################################################
-#                   Sine/Cosine Positional Embedding Functions                  #
-#################################################################################
-# https://github.com/facebookresearch/mae/blob/main/util/pos_embed.py
-
-
-def get_2d_sincos_pos_embed(
-    embed_dim: int,
-    grid_size_h: int,
-    grid_size_w: int,
-    cls_token: bool = False,
-    extra_tokens: int = 0,
-) -> np.ndarray:
-    """
-    Generates 2D sinusoidal positional embeddings.
-
-    Parameters
-    -----------
-    embed_dim (int): The embedding dimension.
-    grid_size_h (int): The height of the grid.
-    grid_size_w (int): The width of the grid.
-    cls_token (bool, optional): Whether to add a classification token. Defaults to False.
-    extra_tokens (int, optional): The number of extra tokens. Defaults to 0.
-
-    Outputs
-    -------
-    np.ndarray: A positional embedding tensor of shape `[grid_size_h * grid_size_w, embed_dim]`
-                or `[1 + grid_size_h * grid_size_w, embed_dim]` if `cls_token` is True.
-    """
-    grid_h = np.arange(grid_size_h, dtype=np.float32)
-    grid_w = np.arange(grid_size_w, dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h)  # here w goes first
-    grid = np.stack(grid, axis=0)
-
-    grid = grid.reshape([2, 1, grid_size_h, grid_size_w])
-    pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
-    if cls_token and extra_tokens > 0:
-        pos_embed = np.concatenate(
-            [np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0
-        )
-    return pos_embed
-
-
-def get_2d_sincos_pos_embed_from_grid(embed_dim: int, grid: np.ndarray) -> np.ndarray:
-    """
-    Generates 2D sinusoidal positional embeddings from a grid.
-
-    Parameters
-    -----------
-    embed_dim (int): The embedding dimension.
-    grid (np.ndarray): The grid of positions.
-
-    Outputs
-    -------
-    np.ndarray: The positional embedding tensor.
-    """
-    assert embed_dim % 2 == 0
-
-    # use half of dimensions to encode grid_h
-    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
-    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
-
-    emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
-    return emb
-
-
-def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.ndarray:
-    """
-    Generates 1D sinusoidal positional embeddings from a grid of positions.
-
-    Parameters
-    -----------
-    embed_dim (int): Output dimension for each position.
-    pos (np.ndarray): A list of positions to be encoded, size (M,).
-
-    Outputs
-    -------
-    np.ndarray: The positional embedding tensor of shape (M, D).
-    """
-    assert embed_dim % 2 == 0
-    omega = np.arange(embed_dim // 2, dtype=np.float64)
-    omega /= embed_dim / 2.0
-    omega = 1.0 / 10000**omega  # (D/2,)
-
-    pos = pos.reshape(-1)  # (M,)
-    out = np.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
-
-    emb_sin = np.sin(out)  # (M, D/2)
-    emb_cos = np.cos(out)  # (M, D/2)
-
-    emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
-    return emb
-
-
-def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    """
-    Modulates a tensor `x` with a scale and shift. This is a core
-    component of the adaLN-Zero layer.
-
-    Parameters
-    -----------
-    x (torch.Tensor): The input tensor.
-    shift (torch.Tensor): The shift tensor.
-    scale (torch.Tensor): The scale tensor.
-
-    Outputs
-    -------
-    torch.Tensor: The modulated tensor.
-    """
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
-
-
-#################################################################################
-#               Embedding Layers for Timesteps and Conditions                 #
-#################################################################################
-
-
-class TimestepEmbedder(nn.Module):
-    """
-    Embeds scalar timesteps into vector representations.
-    """
-
-    def __init__(self, hidden_size: int, frequency_embedding_size: int = 256):
-        """
-        Initializes the TimestepEmbedder.
-
-        Parameters
-        -----------
-        hidden_size (int): The dimension of the output embedding.
-        frequency_embedding_size (int): The dimension of the sinusoidal frequency embedding.
-        """
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
-        )
-        self.frequency_embedding_size = frequency_embedding_size
-
-    @staticmethod
-    def timestep_embedding(
-        t: torch.Tensor, dim: int, max_period: int = 10000
-    ) -> torch.Tensor:
-        """
-        Creates sinusoidal timestep embeddings.
-
-        Parameters
-        -----------
-        t (torch.Tensor): A 1-D Tensor of N indices, one per batch element.
-        dim (int): The dimension of the output.
-        max_period (int): Controls the minimum frequency of the embeddings.
-
-        Outputs
-        -------
-        torch.Tensor: An (N, D) Tensor of positional embeddings.
-        """
-        # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
-        half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period)
-            * torch.arange(start=0, end=half, dtype=torch.float32)
-            / half
-        ).to(device=t.device)
-        args = t[:, None].float() * freqs[None]
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        if dim % 2:
-            embedding = torch.cat(
-                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
-            )
-        return embedding
-
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        """
-        Performs the forward pass for the TimestepEmbedder.
-
-        Forward
-        -------
-        t (torch.Tensor): A tensor of timesteps.
-
-        Outputs
-        -------
-        torch.Tensor: The embedded timesteps.
-        """
-        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
-        t_emb = self.mlp(t_freq)
-        return t_emb
-
-
-class ConditionEmbedder(nn.Module):
-    """
-    Embeds Condition vectors into latent vector representations.
-    """
-
-    def __init__(self, condition_dim: int, hidden_size: int, dropout_prob: float):
-        """
-        Initializes the ConditionEmbedder.
-
-        Parameters
-        -----------
-        condition_dim (int): The dimensionality of the input condition vector.
-        hidden_size (int): The dimensionality of the output embedding.
-        dropout_prob (float): The dropout probability for classifier-free guidance.
-        """
-        super().__init__()
-        self.dropout_prob = dropout_prob
-        self.condition_dim = condition_dim
-        self.out_features = hidden_size
-
-        self.projection = nn.Linear(condition_dim, hidden_size, bias=True)
-
-        # If using dropout for classifier-free guidance, create a learnable unconditional embedding
-        if self.dropout_prob > 0:
-            self.unconditional_embedding = nn.Parameter(torch.randn(1, hidden_size))
-
-    def forward(
-        self, condition: torch.Tensor, train: bool, force_drop: bool = False
-    ) -> torch.Tensor:
-        """
-        Performs the forward pass for the ConditionEmbedder.
-
-        Forward
-        -------
-        condition (torch.Tensor): A (N, condition_dim) tensor of latent vectors.
-        train (bool): Whether the model is in training mode.
-        force_drop (bool, optional): Whether to force dropping the conditioning. Defaults to False.
-
-        Outputs
-        -------
-        torch.Tensor: The embedded condition vectors.
-        """
-        # Project the latent vectors to the hidden size
-        embeddings = self.projection(condition)
-
-        # Apply dropout for classifier-free guidance
-        if self.dropout_prob > 0 and (train or force_drop):
-            mask = (
-                torch.rand(condition.shape[0], device=condition.device)
-                < self.dropout_prob
-            )
-            if force_drop:
-                mask = torch.ones_like(mask)
-            uncond_embeddings = self.unconditional_embedding.expand(
-                embeddings.shape[0], -1
-            )
-            embeddings = torch.where(mask[:, None], uncond_embeddings, embeddings)
-
-        return embeddings
-
-
-#################################################################################
-#                                 Core DiT Model                                #
-#################################################################################
-
-
 class DiTBlock(nn.Module):
     """
-    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    A Diffusion Transformer (DiT) block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
 
     def __init__(
         self,
         hidden_size: int,
         num_heads: int,
-        attention_backbone: str,
+        attention_backbone: str = "timm",
         mlp_ratio: float = 4.0,
         **block_kwargs: Any,
     ):
@@ -333,33 +76,38 @@ class DiTBlock(nn.Module):
         -----------
         hidden_size (int): The dimensionality of the input and output.
         num_heads (int): The number of attention heads.
-        attention_backbone (str): The attention implementation to use ('transformer_engine' or 'timm').
-        mlp_ratio (float, optional): The ratio for the MLP's hidden dimension. Defaults to 4.0.
+        attention_backbone (str): The attention implementation ('timm' or 'transformer_engine').
+        mlp_ratio (float): The ratio for the MLP's hidden dimension.
         **block_kwargs (Any): Additional keyword arguments for the attention layer.
         """
         super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.pre_attention_norm = LayerNorm(
+            hidden_size, elementwise_affine=False, eps=1e-6
+        )
+
         if attention_backbone == "transformer_engine":
-            self.attn = MultiheadAttention(
+            self.attention = MultiheadAttention(
                 hidden_size=hidden_size, num_attention_heads=num_heads, **block_kwargs
             )
         else:
-            self.attn = Attention(
+            self.attention = Attention(
                 dim=hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs
             )
 
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.pre_mlp_norm = LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(
+        self.linear = Mlp(
             in_features=hidden_size,
             hidden_features=mlp_hidden_dim,
-            act_layer=approx_gelu,
+            act_layer=lambda: nn.GELU(approximate="tanh"),
             drop=0,
         )
-        self.adaLN_modulation = nn.Sequential(
+        self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
+        self.modulation = lambda x, scale, shift: x * (
+            1 + scale.unsqueeze(1)
+        ) + shift.unsqueeze(1)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
@@ -367,71 +115,85 @@ class DiTBlock(nn.Module):
 
         Forward
         -------
-        x (torch.Tensor): The input tensor of shape (N, T, D).
-        c (torch.Tensor): The conditioning tensor of shape (N, D).
+        x (torch.Tensor): Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
+        c (torch.Tensor): Conditioning tensor of shape (Batch, Hidden_Size).
 
         Outputs
         -------
-        torch.Tensor: The output tensor of shape (N, T, D).
+        torch.Tensor: Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
         """
         (
-            shift_msa,
-            scale_msa,
-            gate_msa,
-            shift_mlp,
-            scale_mlp,
-            gate_mlp,
-        ) = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(
-            modulate(self.norm1(x), shift_msa, scale_msa)
+            attention_shift,
+            attention_scale,
+            attention_gate,
+            mlp_shift,
+            mlp_scale,
+            mlp_gate,
+        ) = self.adaptive_modulation(c).chunk(6, dim=1)
+
+        # Attention block
+        modulated_attention_input = self.modulation(
+            self.pre_attention_norm(x), attention_scale, attention_shift
         )
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(
-            modulate(self.norm2(x), shift_mlp, scale_mlp)
+        attention_output = self.attention(modulated_attention_input)
+        x = x + attention_gate.unsqueeze(1) * attention_output
+
+        # Feed-forward block
+        modulated_mlp_input = self.modulation(
+            self.pre_mlp_norm(x), mlp_scale, mlp_shift
         )
+        mlp_output = self.linear(modulated_mlp_input)
+        x = x + mlp_gate.unsqueeze(1) * mlp_output
+
         return x
 
 
-class FinalLayer(nn.Module):
+class ProjLayer(nn.Module):
     """
-    The final layer of the DiT model.
+    The penultimate layer of the DiT model, which projects the transformer output
+    to a final embedding space.
     """
 
-    def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
+    def __init__(self, hidden_size: int, emb_channels: int):
         """
-        Initializes the FinalLayer.
+        Initializes the ProjLayer.
 
         Parameters
         -----------
         hidden_size (int): The dimensionality of the input from the transformer blocks.
-        patch_size (int): The size of each image patch.
-        out_channels (int): The number of output channels.
+        emb_channels (int): The number of embedding channels for final projection.
         """
         super().__init__()
-        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(
-            hidden_size, patch_size * patch_size * out_channels, bias=True
+        self.final_layer_norm = nn.LayerNorm(
+            hidden_size, elementwise_affine=False, eps=1e-6
         )
-        self.adaLN_modulation = nn.Sequential(
+        self.output_projection = nn.Linear(hidden_size, emb_channels, bias=True)
+        self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True)
         )
+        self.modulation = lambda x, scale, shift: x * (
+            1 + scale.unsqueeze(1)
+        ) + shift.unsqueeze(1)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
-        Performs the forward pass for the FinalLayer.
+        Performs the forward pass for the ProjLayer.
 
         Forward
         -------
-        x (torch.Tensor): The input tensor of shape (N, T, D).
-        c (torch.Tensor): The conditioning tensor of shape (N, D).
+        x (torch.Tensor): Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
+        c (torch.Tensor): Conditioning tensor of shape (Batch, Hidden_Size).
 
         Outputs
         -------
-        torch.Tensor: The output tensor of shape (N, T, patch_size**2 * out_channels).
+        torch.Tensor: Output tensor of shape (Batch, Sequence_Length, Embed_Size).
         """
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
-        x = modulate(self.norm_final(x), shift, scale)
-        x = self.linear(x)
-        return x
+        final_shift, final_scale = self.adaptive_modulation(c).chunk(2, dim=1)
+        modulated_output = self.modulation(
+            self.final_layer_norm(x), final_scale, final_shift
+        )
+        projected_output = self.output_projection(modulated_output)
+        return projected_output
 
 
 class DiT(Module):
@@ -442,17 +204,16 @@ class DiT(Module):
     def __init__(
         self,
         input_size: Union[int, Tuple[int, int]] = (32, 32),
-        patch_size: int = 2,
+        patch_size: Union[int, Tuple[int, int]] = (2, 2),
         in_channels: int = 4,
         out_channels: Optional[int] = None,
-        hidden_size: int = 1152,
-        depth: int = 28,
-        num_heads: int = 16,
+        hidden_size: int = 256,
+        depth: int = 6,
+        num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        attention_backbone: str = "timm",
-        condition_dropout_prob: float = 0.1,
+        attention_backbone: str = "transformer_engine",
         condition_dim: Optional[int] = None,
-        embedding_type: str = "sin-cos",
+        pos_embedding_dim: int = 1,
     ):
         """
         Initializes the DiT model.
@@ -460,17 +221,17 @@ class DiT(Module):
         Parameters
         -----------
         input_size (Union[int, Tuple[int, int]], optional): Height and width of the input images. Defaults to (32, 32).
-        patch_size (int, optional): The size of each image patch. Defaults to 2.
+        patch_size (Union[int, Tuple[int, int]], optional): The size of each image patch along height and width. Defaults to (2,2).
         in_channels (int, optional): The number of input channels. Defaults to 4.
         out_channels (Union[None, int], optional): The number of output channels. If None, it is `in_channels`. Defaults to None.
-        hidden_size (int, optional): The dimensionality of the transformer embeddings. Defaults to 1152.
-        depth (int, optional): The number of transformer blocks. Defaults to 28.
-        num_heads (int, optional): The number of attention heads. Defaults to 16.
+        hidden_size (int, optional): The dimensionality of the transformer embeddings. Defaults to 256.
+        depth (int, optional): The number of transformer blocks. Defaults to 6.
+        num_heads (int, optional): The number of attention heads. Defaults to 8.
         mlp_ratio (float, optional): The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-        attention_backbone (str, optional): If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'timm'.
-        condition_dropout_prob (float, optional): The dropout probability for classifier-free guidance. Defaults to 0.1.
+        attention_backbone (str, optional): If 'timm' uses Attention from timm. If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'transformer_engine'.
         condition_dim (int, optional): Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
         embedding_type (str, optional): The type of positional embedding ('sin-cos' or 'learnable'). Defaults to 'sin-cos'.
+        pos_embedding_dim (int, optional): The dimensionality of the positional embedding. Defaults to 1.
 
         Notes
         -----
@@ -499,33 +260,39 @@ class DiT(Module):
             self.out_channels = out_channels
         else:
             self.out_channels = in_channels
-        self.patch_size = patch_size
+        self.patch_size = (
+            patch_size if isinstance(patch_size, tuple) else (patch_size, patch_size)
+        )
         self.num_heads = num_heads
         self.condition_dim = condition_dim
-        self.embedding_type = embedding_type
 
-        self.x_embedder = PatchEmbed(
-            input_size, patch_size, in_channels, hidden_size, bias=True
+        self.x_embedder = PatchEmbed2D(
+            input_size,
+            self.patch_size,
+            in_channels + pos_embedding_dim,
+            hidden_size,
         )
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        if self.condition_dim is not None:
-            self.cond_embedder = ConditionEmbedder(
-                condition_dim, hidden_size, condition_dropout_prob
+        self.t_embedder = PositionalEmbedding(hidden_size)
+        init_zero = dict(init_mode="kaiming_uniform", init_weight=0, init_bias=0)
+        self.cond_embedder = (
+            Linear(
+                in_features=condition_dim,
+                out_features=hidden_size,
+                bias=False,
+                **init_zero,
             )
-        else:
-            self.cond_embedder = None
-        num_patches = self.x_embedder.num_patches
+            if condition_dim
+            else None
+        )
+        self.h_patches = input_size[0] // self.patch_size[0]
+        self.w_patches = input_size[1] // self.patch_size[1]
+        self.num_patches = self.h_patches * self.w_patches
 
-        # Will use either fixed sin-cos embedding or learnable positional embedding:
-        if self.embedding_type == "learnable":
-            self.pos_embed = nn.Parameter(
-                torch.zeros(1, num_patches, hidden_size), requires_grad=True
-            )
-        else:
-            self.pos_embed = nn.Parameter(
-                torch.zeros(1, num_patches, hidden_size), requires_grad=False
-            )
-
+        # Learnable positional embedding:
+        self.pos_embed = nn.Parameter(
+            torch.zeros(pos_embedding_dim, input_size[0], input_size[1]),
+            requires_grad=True,
+        )
         self.blocks = nn.ModuleList(
             [
                 DiTBlock(
@@ -534,84 +301,15 @@ class DiT(Module):
                 for _ in range(depth)
             ]
         )
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.initialize_weights()
-
-    def initialize_weights(self) -> None:
-        """
-        Initializes the weights of the DiT model.
-        """
-        # Initialize transformer layers:
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-
-        self.apply(_basic_init)
-
-        # Initialize pos_embed by either sin-cos or normal init:
-        if self.embedding_type == "learnable":
-            nn.init.normal_(self.pos_embed, std=0.02)
-        else:
-            # Initialize (and freeze) pos_embed by sin-cos embedding:
-            pos_embed = get_2d_sincos_pos_embed(
-                self.pos_embed.shape[-1],
-                self.x_embedder.grid_size[0],
-                self.x_embedder.grid_size[1],
-            )
-            self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.x_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.x_embedder.proj.bias, 0)
-
-        # Initialize Condition embedding table if it exists:
-        if self.cond_embedder is not None:
-            nn.init.normal_(self.cond_embedder.projection.weight, std=0.02)
-            nn.init.constant_(self.cond_embedder.projection.bias, 0)
-            if hasattr(self.cond_embedder, "unconditional_embedding"):
-                nn.init.normal_(self.cond_embedder.unconditional_embedding, std=0.02)
-
-        # Initialize timestep embedding MLP:
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-
-        # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
-        # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
-
-    def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Reshapes a tensor of patches back into an image.
-
-        Parameters
-        -----------
-        x (torch.Tensor): Input tensor of shape (N, T, patch_size**2 * C).
-
-        Outputs
-        -------
-        torch.Tensor: Output tensor of shape (N, C, H, W).
-        """
-        c = self.out_channels
-        p = self.patch_size
-        h, w = self.x_embedder.grid_size
-        assert (
-            h * w == x.shape[1]
-        ), "The number of patches does not match the grid size."
-
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
-        x = torch.einsum("nhwpqc->nchpwq", x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
-        return imgs
+        self.final_layer = ProjLayer(
+            hidden_size, patch_size[0] * patch_size[1] * self.out_channels
+        )
+        self.patch_recovery = PatchRecovery2D(
+            input_size,
+            self.patch_size,
+            patch_size[0] * patch_size[1] * self.out_channels,
+            self.out_channels,
+        )
 
     def forward(
         self, x: torch.Tensor, t: torch.Tensor, condition: Optional[torch.Tensor] = None
@@ -629,9 +327,12 @@ class DiT(Module):
         -------
         torch.Tensor: The output tensor of shape (N, out_channels, H, W).
         """
-        x = (
-            self.x_embedder(x) + self.pos_embed
-        )  # (N, T, D), where T = H * W / patch_size ** 2
+        b, ch, h, w = x.shape
+        x = torch.cat([x, self.pos_embed.repeat(b, 1, 1, 1)], dim=1)
+        x_emb = self.x_embedder(x)
+        # (N, D, H//patch[0], W//patch[1])
+        x = x_emb.flatten(2).transpose(1, 2)
+        # (N, T, D) T = H//patch[0] * W//patch[1]
         t = self.t_embedder(t)  # (N, D)
 
         # Handle conditioning
@@ -640,15 +341,14 @@ class DiT(Module):
                 # Fallback to using only timestep embedding if condition is not provided
                 c = t
             else:
-                condition_embedding = self.cond_embedder(
-                    condition, self.training
-                )  # (N, D)
+                condition_embedding = self.cond_embedder(condition)  # (N, D)
                 c = t + condition_embedding  # (N, D)
         else:
             c = t  # (N, D)
-
         for block in self.blocks:
             x = block(x, c)  # (N, T, D)
-        x = self.final_layer(x, c)  # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x)  # (N, out_channels, H, W)
+        x = self.final_layer(x, c)  # (N, T, D')
+        x = x.reshape(x.shape[0], x.shape[-1], self.h_patches, self.w_patches)
+        # (N, D', H//patch[0], W//patch[1])
+        x = self.patch_recovery(x)  # (N, out_channels, H, W)
         return x
