@@ -169,7 +169,7 @@ The finetuning recipe is benchmarked for a subset of the DrivAerML dataset. The 
 
 Both models are evaluated at 50, 100, 200, 300, 400 and 500 epochs to demonstrate faster convergence of the finetuned model to an acceptable accuracy as compared to training from scratch. 18 samples are used for training and 6 for validation. The results averaged over the validation set are presented in the table below and demonstrate that finetuning results in faster convergence of results as compared to training from scratch.
 
-| Epochs | Baseline Model $L_2$ Error | | | | Fine-tuned Model $L_2$ Error | | | |
+| Epochs | Baseline Model $L_2$ Error | | Fine-tuned Model $L_2$ Error | |
 |--------|----------|----------|----------|----------|----------|----------|----------|----------|
 | | Velocity | Vol. Pressure | Surf. Pressure | Wall-Shear | Velocity | Vol. Pressure | Surf. Pressure | Wall-Shear |
 | 50 | 0.521 | 0.558 | 0.546 | 0.683 | 0.342 | 0.316 | 0.374 | 0.563 |
