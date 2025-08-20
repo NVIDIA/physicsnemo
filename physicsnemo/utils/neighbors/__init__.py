@@ -15,5 +15,5 @@
 # limitations under the License.
 
 
-from .radius_search import radius_search
 from .knn import knn
+from .radius_search import radius_search
