@@ -171,7 +171,7 @@ Both models are evaluated at 50, 100, 200, 300, 400 and 500 epochs to demonstrat
 
 | Epochs | Baseline Model $L_2$ Error | | | | Fine-tuned Model $L_2$ Error | | | |
 |--------|----------|----------|----------|----------|----------|----------|----------|----------|
-| | $vel$ | $Vol p$ | $Surf p$ | $wall-shear$ | $vel$ | $Vol p$ | $Surf p$ | $wall-shear$ |
+| | Velocity | Vol. Pressure | Surf. Pressure | Wall-Shear | Velocity | Vol. Pressure | Surf. Pressure | Wall-Shear |
 | 50 | 0.521 | 0.558 | 0.546 | 0.683 | 0.342 | 0.316 | 0.374 | 0.563 |
 | 100 | 0.444 | 0.474 | 0.436 | 0.613 | 0.332 | 0.307 | 0.333 | 0.473 |
 | 200 | 0.405 | 0.388 | 0.386 | 0.571 | 0.313 | 0.303 | 0.312 | 0.416 |
