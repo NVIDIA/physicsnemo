@@ -78,6 +78,19 @@ class DiT(Module):
     pos_embedding_dim (int, optional):
         The dimensionality of the positional embedding. Defaults to 1.
 
+    Forward
+    -------
+    x (torch.Tensor):
+        (N, C, H, W) tensor of spatial inputs.
+    t (torch.Tensor):
+        (N,) tensor of diffusion timesteps.
+    condition (Optional[torch.Tensor]):
+        (N, d) tensor of conditions.
+
+    Outputs
+    -------
+    torch.Tensor: The output tensor of shape (N, out_channels, H, W).
+    
     Notes
     -----
     Reference: Peebles, W., & Xie, S. (2023). Scalable diffusion models with transformers.
@@ -185,19 +198,6 @@ class DiT(Module):
     ) -> torch.Tensor:
         """
         Performs the forward pass of the DiT model.
-
-        Forward
-        -------
-        x (torch.Tensor):
-            (N, C, H, W) tensor of spatial inputs.
-        t (torch.Tensor):
-            (N,) tensor of diffusion timesteps.
-        condition (Optional[torch.Tensor]):
-            (N, d) tensor of conditions.
-
-        Outputs
-        -------
-        torch.Tensor: The output tensor of shape (N, out_channels, H, W).
         """
         b, ch, h, w = x.shape
         x = torch.cat([x, self.pos_embed.repeat(b, 1, 1, 1)], dim=1)
