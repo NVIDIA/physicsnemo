@@ -806,7 +806,8 @@ def shuffle_array(
     if n_points > arr.shape[0]:
         # If asking too many points, truncate the ask but still shuffle.
         n_points = arr.shape[0]
-    idx = xp.random.choice(arr.shape[0], size=n_points, replace=False)
+    idx = np.random.choice(arr.shape[0], size=n_points, replace=False)
+    idx = xp.asarray(idx)
     return arr[idx], idx
 
 
