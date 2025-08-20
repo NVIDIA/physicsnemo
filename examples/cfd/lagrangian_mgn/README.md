@@ -165,6 +165,6 @@ material selected for training the model:
 
 ## References
 
-- [Learning to simulate complex physicswith graph networks](arxiv.org/abs/2002.09405)
+- [Learning to simulate complex physicswith graph networks](https://arxiv.org/abs/2002.09405)
 - [Dataset](https://sites.google.com/view/learning-to-simulate)
 - [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/abs/2010.03409)

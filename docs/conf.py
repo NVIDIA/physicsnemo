@@ -23,8 +23,6 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 import os
 
-import sphinx_rtd_theme
-
 from physicsnemo import __version__ as version
 
 project = "NVIDIA PhysicsNeMo"
@@ -58,8 +56,7 @@ napoleon_custom_sections = [("Variable Shape", "notes"), ("Forward", "params_sty
 # -- Options for HTML output -------------------------------------------------
 
 # HTML theme options
-# html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
-html_theme = "sphinx_rtd_theme"
+html_theme = "nvidia_sphinx_theme"
 html_theme_options = {
     "logo_only": True,
     "display_version": True,

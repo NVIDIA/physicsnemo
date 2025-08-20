@@ -115,8 +115,48 @@ and adapt to the specified distributed structure.
 
 For example, see the constructor of the ``DistributedAFNO`` class:
 
-.. literalinclude:: ../../physicsnemo/models/afno/distributed/afno.py
-   :pyobject: DistributedAFNO.__init__
+.. code-block:: python
+
+    def __init__(
+        self,
+        inp_shape: Tuple[int, int],
+        in_channels: int,
+        out_channels: Union[int, Any] = None,
+        patch_size: int = 16,
+        embed_dim: int = 256,
+        depth: int = 4,
+        num_blocks: int = 4,
+        channel_parallel_inputs: bool = False,
+        channel_parallel_outputs: bool = False,
+    ) -> None:
+        super().__init__()
+
+        out_channels = out_channels or in_channels
+
+        if DistributedManager().group("model_parallel") is None:
+            raise RuntimeError(
+                "Distributed AFNO needs to have model parallel group created first. "
+                "Check the MODEL_PARALLEL_SIZE environment variable"
+            )
+
+        comm_size = DistributedManager().group_size("model_parallel")
+        if channel_parallel_inputs:
+            if not (in_channels % comm_size == 0):
+                raise ValueError(
+                    "Error, in_channels needs to be divisible by model_parallel size"
+                )
+
+        self._impl = DistributedAFNONet(
+            inp_shape=inp_shape,
+            patch_size=(patch_size, patch_size),
+            in_chans=in_channels,
+            out_chans=out_channels,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_blocks=num_blocks,
+            input_is_matmul_parallel=False,
+            output_is_matmul_parallel=False,
+        )
 
 This model parallel implementation can just instantiate ``DistributedManager`` and query
 if the process group named ``"model_parallel"`` exists and if so, what its size is. Similarly,
