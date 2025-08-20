@@ -33,7 +33,6 @@ from torch.distributed.tensor.placement_types import (  # noqa: E402
 from physicsnemo.distributed import ShardTensor, ShardTensorSpec  # noqa: E402
 from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
     MissingShardPatch,
-    UndeterminedShardingError,
 )
 
 from .halo import HaloConfig, halo_padding  # noqa: E402
@@ -515,8 +514,6 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
     Returns:
         The result of the convolution operation
 
-    Raises:
-        UndeterminedShardingError: If input, weight, or bias have invalid types
     """
 
     if "transpose" in func.__name__:
@@ -526,44 +523,24 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
     else:
         input, weight, bias, conv_kwargs = repackage_conv_args(*args, **kwargs)
 
-    # Handle regular torch tensor inputs
-    if (
-        isinstance(input, torch.Tensor)
-        and isinstance(weight, torch.nn.parameter.Parameter)
-        and (bias is None or isinstance(bias, torch.nn.parameter.Parameter))
-    ):
-        return func(*args, **kwargs)
+    # Gather any distributed weights/bias
+    if isinstance(weight, (ShardTensor, DTensor)):
+        weight = weight.full_tensor()
+    if isinstance(bias, (ShardTensor, DTensor)):
+        bias = bias.full_tensor()
 
-    # Handle distributed ShardTensor inputs
-    elif isinstance(input, ShardTensor):
-        # Gather any distributed weights/bias
-        if isinstance(weight, (ShardTensor, DTensor)):
-            weight = weight.full_tensor()
-        if isinstance(bias, (ShardTensor, DTensor)):
-            bias = bias.full_tensor()
+    kernel_shape = weight.shape[2:]
 
-        kernel_shape = weight.shape[2:]
+    # Promote scalar args to match kernel dimensions
+    promotables = ["stride", "padding", "dilation", "output_padding"]
 
-        # Promote scalar args to match kernel dimensions
-        promotables = ["stride", "padding", "dilation", "output_padding"]
+    conv_kwargs = {
+        key: promote_to_iterable(p, kernel_shape) if key in promotables else p
+        for key, p in conv_kwargs.items()
+    }
 
-        conv_kwargs = {
-            key: promote_to_iterable(p, kernel_shape) if key in promotables else p
-            for key, p in conv_kwargs.items()
-        }
-
-        # Use the convolution args to compute the sharded halo
-        return partial_conv_nd(input, weight, bias, conv_kwargs)
-
-    else:
-        msg = (
-            "input, weight, bias (if not None) must all be the valid types "
-            "(torch.Tensor or ShardTensor), but got "
-            f"{type(input)}, "
-            f"{type(weight)}, "
-            f"{type(bias)}, "
-        )
-        raise UndeterminedShardingError(msg)
+    # Use the convolution args to compute the sharded halo
+    return partial_conv_nd(input, weight, bias, conv_kwargs)
 
 
 @profile
