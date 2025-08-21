@@ -15,15 +15,11 @@
 # limitations under the License.
 
 """
-This code defines a distributed pipeline for testing the DoMINO model on
-CFD datasets. It includes the instantiating the DoMINO model and datapipe, 
-automatically loading the most recent checkpoint, reading the VTP/VTU/STL 
-testing files, calculation of parameters required for DoMINO model and 
-evaluating the model in parallel using DistributedDataParallel across multiple 
-GPUs. This is a common recipe that enables training of combined models for surface 
-and volume as well either of them separately. The model predictions are loaded in 
-the the VTP/VTU files and saved in the specified directory. The eval tab in 
-config.yaml can be used to specify the input and output directories.
+This code defines a distributed pipeline for testing the finetuned DoMINO model on 
+CFD datasets. The finetuned model is combined with the base predictions to generate 
+the final predictions. The model predictions are loaded in the VTP/VTU files and 
+saved in the specified directory. The eval tab in config.yaml can be used to 
+specify the input and output directories. 
 """
 
 import os, re

@@ -690,7 +690,7 @@ class DoMINODataPipe(Dataset):
                         surface_coordinates,
                         self.config.surface_points_sample,
                         surface_fields[:, 0],
-                        area_factor=0.5,
+                        scaling_factor=0.5,
                     )
                 else:
                     surface_coordinates_sampled, idx_surface = shuffle_array(

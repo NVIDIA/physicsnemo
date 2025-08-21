@@ -4,7 +4,7 @@
 
 This example showcases a **fine-tuning recipe** for the **DoMINO-Automotive-Aero NIM**, featuring an innovative **predictor-corrector approach** specifically designed for automotive CFD simulations.
 
-**Accelerated Training with convergence in fewer epochs**: Dramatically reduce training time by leveraging pre-trained foundation models instead of starting from scratch
+**Accelerated Training**: Dramatically reduce training time by leveraging pre-trained models instead of starting from scratch
 
 **Smart Transfer Learning**: Efficiently adapt powerful base models to new vehicle configurations and boundary conditions
 
@@ -64,7 +64,7 @@ domino_automotive_aero_nim_finetuning/
 
 ### DrivAerML Dataset
 
-The **DrivAerML** dataset provides comprehensive automotive CFD simulations with multiple vehicle configurations:
+The **DrivAerML** dataset provides comprehensive automotive CFD simulations with multiple vehicle configurations. The dataset maybe found here: [DrivAerML Dataset](https://caemldatasets.org/drivaerml/)
 
 | File Type | Description | Extension | Use Case |
 |-----------|-------------|-----------|----------|
@@ -81,15 +81,9 @@ The **DrivAerML** dataset provides comprehensive automotive CFD simulations with
 
 ### DoMINO-Automotive-Aero NIM Checkpoint
 
-Download the DoMINO-Automotive-Aero NIM checkpoint from NGC
+Download the DoMINO-Automotive-Aero NIM checkpoint from NGC and add it to the checkpoint directory
 
-**Source**: [NVIDIA NGC Catalog](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/containers/domino-automotive-aero)
-
-```bash
-# Download pre-trained checkpoint
-wget -O nim_checkpoint/domino-drivesim-recent.pt \
-     "https://api.ngc.nvidia.com/v2/models/nvidia/nim/domino-automotive-aero/files?redirect=true&path=domino-drivesim-recent.pt"
-```
+**Source**: [Domino Checkpoint](https://catalog.ngc.nvidia.com/orgs/nim/teams/nvidia/models/domino-drivsim)
 
 **Note**: Requires NGC API key for access. See [NGC documentation](https://docs.nvidia.com/ngc/) for setup.
 
@@ -114,7 +108,7 @@ graph TD
 ### Step-by-Step Instructions
 
 #### **Step 1: Generate Base Predictions**
-Generate initial predictions using the pre-trained DoMINO-Automotive-Aero NIM. Modify the eval tab in `config_base_pred.yaml` to specify the path to the pre-trained checkpoint.
+Generate initial predictions using the pre-trained checkpoint. Modify the eval tab in `config_base_pred.yaml` to specify the path to the downloaded checkpoint.
 
 ```bash
 # Run predictor model on dataset
@@ -142,7 +136,8 @@ python src/train.py exp_tag=combined
 
 # Custom configuration example
 python src/train.py \
-    exp_tag=high_resolution \
+    exp_tag=1 \
+    project.name=Dataset_Finetune \
     model.volume_points_sample=16384 \
     model.surface_points_sample=16384 \
     train.epochs=500
@@ -154,29 +149,103 @@ Evaluate the combined predictor-corrector model:
 ```bash
 # Run inference on test dataset
 python src/test.py \
-    exp_tag=combined \
+    exp_tag=1 \
     eval.checkpoint_name=DoMINO.0.500.pt \
-    eval.save_path=/path/to/results
-
-# Output: Final predictions combining predictor + corrector
+    eval.save_path=/path/to/results \
+    eval.test_path=/path/to/test_data
 ```
+Output of the test script are final predictions combining predictor + corrector written to a VTP/VTU file.
 
 ## Benchmarking results on DrivAerML dataset 
 
-The finetuning recipe is benchmarked for a subset of the DrivAerML dataset. The finetuning is carried out on the first 24 samples from this dataset and compared against training from scratch with the DoMINO model on the same dataset. The DoMINO-Automotive-Aero NIM is trained on a dataset consisting of RANS simulations and does not include the DrivAer geometries, while this dataset consists of high-fidelity, time-averaged LES simulations. The goal of this recipe is to demonstrate the finetuning of an existing model checkpoint to a new design space and physics and compare it against training from scratch. 
+The finetuning recipe is benchmarked for a subset of the DrivAerML dataset. The finetuning is carried out on the first 24 samples from this dataset and compared against training from scratch with the DoMINO model on the same dataset. The DoMINO-Automotive-Aero NIM is trained on a dataset consisting of RANS simulations, while this DrivAerML dataset consists of high-fidelity, time-averaged LES simulations. The goal of this recipe is to demonstrate the finetuning of an existing model checkpoint to a new design space and physics and compare it against training from scratch. 
 
 Both models are evaluated at 50, 100, 200, 300, and 400 epochs to demonstrate faster convergence of the finetuned model to an acceptable accuracy as compared to training from scratch. 18 samples are used for training and 6 for validation. The results averaged over the validation set are presented in the table below and demonstrate that finetuning results in faster convergence (in fewer epochs) of results as compared to training from scratch.
 
-| Epochs | Baseline Model $L_2$ Error | | | | Fine-tuned Model $L_2$ Error | | | |
-|--------|----------|----------|----------|----------|----------|----------|----------|----------|
-| | Velocity | Vol. Pressure | Surf. Pressure | Wall-Shear | Velocity | Vol. Pressure | Surf. Pressure | Wall-Shear |
-| 50 | 0.521 | 0.558 | 0.546 | 0.683 | 0.342 | 0.316 | 0.374 | 0.563 |
-| 100 | 0.444 | 0.474 | 0.436 | 0.613 | 0.332 | 0.307 | 0.333 | 0.473 |
-| 200 | 0.405 | 0.388 | 0.386 | 0.571 | 0.313 | 0.303 | 0.312 | 0.416 |
-| 300 | 0.390 | 0.365 | 0.369 | 0.563 | 0.310 | 0.301 | 0.308 | 0.406 |
-| 400 | 0.384 | 0.362 | 0.365 | 0.552 | 0.309 | 0.300 | 0.307 | 0.403 |
+<style type="text/css">
+.tg  {border-collapse:collapse;border-spacing:0;}
+.tg td{border-color:black;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;
+  overflow:hidden;padding:7px 16px;word-break:normal;}
+.tg th{border-color:black;border-style:solid;border-width:1px;font-family:Arial, sans-serif;font-size:14px;
+  font-weight:normal;overflow:hidden;padding:7px 16px;word-break:normal;}
+.tg .tg-baqh{text-align:center;vertical-align:top}
+.tg .tg-c3ow{border-color:inherit;text-align:center;vertical-align:top}
+</style>
+<table class="tg"><thead>
+  <tr>
+    <th class="tg-c3ow" rowspan="2">Epochs</th>
+    <th class="tg-baqh" colspan="4">Baseline Model L2 Error</th>
+    <th class="tg-baqh" colspan="4">Fine-tuned Model L2 Error</th>
+  </tr>
+  <tr>
+    <th class="tg-baqh">Velocity</th>
+    <th class="tg-baqh">Vol. Pressure</th>
+    <th class="tg-baqh">Surf. Pressure</th>
+    <th class="tg-baqh">Wall Shear</th>
+    <th class="tg-baqh">Velocity</th>
+    <th class="tg-baqh">Vol. Pressure</th>
+    <th class="tg-baqh">Surf. Pressure</th>
+    <th class="tg-baqh">Wall Shear</th>
+  </tr></thead>
+<tbody>
+  <tr>
+    <td class="tg-baqh">50</td>
+    <td class="tg-baqh">0.521</td>
+    <td class="tg-baqh">0.557</td>
+    <td class="tg-baqh">0.546</td>
+    <td class="tg-baqh">0.683</td>
+    <td class="tg-baqh">0.342</td>
+    <td class="tg-baqh">0.316</td>
+    <td class="tg-baqh">0.374</td>
+    <td class="tg-baqh">0.563</td>
+  </tr>
+  <tr>
+    <td class="tg-baqh">100</td>
+    <td class="tg-baqh">0.444</td>
+    <td class="tg-baqh">0.474</td>
+    <td class="tg-baqh">0.436</td>
+    <td class="tg-baqh">0.613</td>
+    <td class="tg-baqh">0.332</td>
+    <td class="tg-baqh">0.307</td>
+    <td class="tg-baqh">0.333</td>
+    <td class="tg-baqh">0.473</td>
+  </tr>
+  <tr>
+    <td class="tg-baqh">200</td>
+    <td class="tg-baqh">0.405</td>
+    <td class="tg-baqh">0.388</td>
+    <td class="tg-baqh">0.386</td>
+    <td class="tg-baqh">0.571</td>
+    <td class="tg-baqh">0.313</td>
+    <td class="tg-baqh">0.303</td>
+    <td class="tg-baqh">0.312</td>
+    <td class="tg-baqh">0.416</td>
+  </tr>
+  <tr>
+    <td class="tg-baqh">300</td>
+    <td class="tg-baqh">0.390</td>
+    <td class="tg-baqh">0.365</td>
+    <td class="tg-baqh">0.369</td>
+    <td class="tg-baqh">0.563</td>
+    <td class="tg-baqh">0.310</td>
+    <td class="tg-baqh">0.301</td>
+    <td class="tg-baqh">0.308</td>
+    <td class="tg-baqh">0.406</td>
+  </tr>
+  <tr>
+    <td class="tg-baqh">400</td>
+    <td class="tg-baqh">0.380</td>
+    <td class="tg-baqh">0.362</td>
+    <td class="tg-baqh">0.365</td>
+    <td class="tg-baqh">0.552</td>
+    <td class="tg-baqh">0.309</td>
+    <td class="tg-baqh">0.300</td>
+    <td class="tg-baqh">0.307</td>
+    <td class="tg-baqh">0.403</td>
+  </tr>
+</tbody></table>
 
-It must be noted that the training and validation accuracy for training from scratch can be improved as more samples are added and the same is the case with finetuning. A more comprehensive analysis correlating the training from scratch and finetuning accuracy with the dataset size will be published as a separate paper. The goal of this analysis is to demonstrate the benefits of finetuning a model from a foundational model checkpoint as compared to training from scratch.
+It must be noted that the training and validation accuracy for training from scratch can be improved as more samples are added and the same is the case with finetuning. The goal of this analysis is to demonstrate the benefits of finetuning from a pretrained model checkpoint as compared to training from scratch. A more comprehensive analysis correlating the training from scratch and finetuning accuracy with the dataset size will be carried out in future.
 
 ## Customization & Extensions
 
@@ -197,20 +266,10 @@ The predictor-corrector approach is model-agnostic.
 
 **To use custom architectures:**
 
-1. **Custom Predictor**: Replace `model_base_predictor.py` with your foundation model
+1. **Custom Predictor**: Replace `model_base_predictor.py` with your pretrained model
 2. **Custom Corrector**: Modify the corrector architecture in training configuration  
 3. **Maintain Interface**: Ensure input/output compatibility between components
 4. **Update Testing**: Adapt `test.py` for new model combinations
-
-```python
-# Example: Custom predictor integration
-class CustomPredictorModel(nn.Module):
-    def forward(self, geometry, boundary_conditions):
-        # Your custom prediction logic
-        return predictions
-
-# The corrector training remains unchanged!
-```
 
 ---
 

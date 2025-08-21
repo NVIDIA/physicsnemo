@@ -15,15 +15,11 @@
 # limitations under the License.
 
 """
-This code defines a distributed pipeline for testing the DoMINO model on
-CFD datasets. It includes the instantiating the DoMINO model and datapipe, 
-automatically loading the most recent checkpoint, reading the VTP/VTU/STL 
-testing files, calculation of parameters required for DoMINO model and 
-evaluating the model in parallel using DistributedDataParallel across multiple 
-GPUs. This is a common recipe that enables training of combined models for surface 
-and volume as well either of them separately. The model predictions are loaded in 
-the the VTP/VTU files and saved in the specified directory. The eval tab in 
-config.yaml can be used to specify the input and output directories.
+This code defines a distributed pipeline for running the
+DoMINO-Automotive-Aero NIM model. The model predictions 
+are loaded in the the VTP/VTU files and saved in the 
+specified directory. The eval tab in config.yaml can be 
+used to specify the input and output directories.
 """
 
 import os, re
@@ -411,11 +407,11 @@ def main(cfg: DictConfig):
             continue
 
         # Skip if output files already exist
-        # skip_surface = (model_type in ["surface", "combined"]) and os.path.exists(vtp_pred_save_path)
-        # skip_volume = (model_type in ["volume", "combined"]) and os.path.exists(vtu_pred_save_path)
-        # if skip_surface and skip_volume:
-        #     print(f"Skipping {dirname}: output files already exist.")
-        #     continue
+        skip_surface = (model_type in ["surface", "combined"]) and os.path.exists(vtp_pred_save_path)
+        skip_volume = (model_type in ["volume", "combined"]) and os.path.exists(vtu_pred_save_path)
+        if skip_surface and skip_volume:
+            print(f"Skipping {dirname}: output files already exist.")
+            continue
 
         # Read STL
         reader = pv.get_reader(stl_path)
@@ -792,11 +788,6 @@ def main(cfg: DictConfig):
             write_to_vtp(celldata_all, vtp_pred_save_path)
 
         if prediction_vol is not None:
-            # Debug prints
-            # print("Original mesh point data keys:", vmesh.point_data.keys())
-            # print("Prediction volume shape:", prediction_vol.shape)
-            # print("Number of points in mesh:", vmesh.n_points)
-            
             try:
                 volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
                 volParam_vtk.SetName(f"{volume_variable_names[0]}BasePred")
