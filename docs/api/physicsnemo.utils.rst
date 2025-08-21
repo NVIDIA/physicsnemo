@@ -22,6 +22,16 @@ These are particularly useful when implementing custom training loops or special
     :members:
     :show-inheritance:
 
+Neighbor utils
+--------------
+
+Utilities for optimized layers for neighbor searches.
+
+.. automodule:: physicsnemo.utils.neighbors
+    :members:
+    :show-inheritance:
+
+
 GraphCast utils
 ---------------
 

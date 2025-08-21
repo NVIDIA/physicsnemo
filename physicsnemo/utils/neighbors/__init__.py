@@ -17,3 +17,6 @@
 
 from .knn import knn
 from .radius_search import radius_search
+
+# This is exclusively for the autodoc to generate the api docs:
+__all__ = ["radius_search"]
