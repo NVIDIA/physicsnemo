@@ -24,4 +24,5 @@ Computational Fluid Dynamics (CFD) examples using PhysicsNeMo.
    examples/cfd/vortex_shedding_mesh_reduced/README.rst
    examples/cfd/darcy_transolver/README.rst
    examples/cfd/flow_reconstruction_diffusion/README.rst
-   examples/cfd/datacenter/README.rst 
+   examples/cfd/datacenter/README.rst
+   examples/cfd/external_aerodynamics/domino_nim_finetuning/README.rst

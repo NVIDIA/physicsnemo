@@ -1151,3 +1151,71 @@ def area_weighted_shuffle_array(
     selected_indices = xp.asarray(selected_indices)
 
     return arr[selected_indices], selected_indices
+
+
+def solution_weighted_shuffle_array(
+    arr: ArrayType, n_points: int, solution: ArrayType, scaling_factor: float = 1.0
+) -> tuple[ArrayType, ArrayType]:
+    """Perform solution-weighted random sampling from array.
+
+    This function samples points from an array with probability proportional to
+    their associated solution weights. This is particularly useful in CFD applications
+    where larger cells or surface elements should have higher sampling probability.
+
+    Args:
+        arr: Input array to sample from, shape (n_points, ...).
+        n_points: Number of points to sample. If greater than arr.shape[0],
+            samples all available points.
+        solution: Solution weights for each point, shape (n_points,). Larger values
+            indicate higher sampling probability.
+        scaling_factor: Exponent applied to solution weights to control sampling bias.
+            Values > 1.0 increase bias toward larger solution fields, values < 1.0 reduce bias.
+            Defaults to 1.0 (linear weighting).
+
+    Returns:
+        Tuple containing:
+        - Sampled array subset weighted by solution fields
+        - Indices of the selected points
+
+    Note:
+        For GPU arrays (CuPy), the sampling is performed on CPU due to memory
+        efficiency considerations. The Alias method could be implemented for
+        future GPU acceleration.
+
+    Examples:
+        >>> import numpy as np
+        >>> np.random.seed(42)  # For reproducible results
+        >>> mesh_data = np.array([[1.0], [2.0], [3.0], [4.0]])
+        >>> solution = np.array([0.1, 0.1, 0.1, 10.0])  # Last point has much larger solution field
+        >>> subset, indices = solution_weighted_shuffle_array(mesh_data, 2, solution)
+        >>> subset.shape
+        (2, 1)
+        >>> indices.shape
+        (2,)
+        >>> # The point with large area (index 3) should likely be selected
+        >>> len(set(indices)) <= 2  # At most 2 unique indices
+        True
+        >>> # Use higher scaling_factor for stronger bias toward large solution fields
+        >>> subset_biased, _ = solution_weighted_shuffle_array(mesh_data, 2, solution, scaling_factor=2.0)
+    """
+    xp = array_type(arr)
+    # Calculate solution-weighted probabilities
+    sampling_probabilities = solution**scaling_factor
+    sampling_probabilities /= xp.sum(sampling_probabilities)  # Normalize to sum to 1
+
+    # Ensure we don't request more points than available
+    n_points = min(n_points, arr.shape[0])
+
+    # Create index array for all available points
+    point_indices = xp.arange(arr.shape[0])
+
+    if xp != np:
+        point_indices = point_indices.get()
+        sampling_probabilities = sampling_probabilities.get()
+
+    selected_indices = np.random.choice(
+        point_indices, n_points, p=sampling_probabilities
+    )
+    selected_indices = xp.asarray(selected_indices)
+
+    return arr[selected_indices], selected_indices
