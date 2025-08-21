@@ -49,7 +49,6 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.domino.utils import (
     ArrayType,
     area_weighted_shuffle_array,
-    solution_weighted_shuffle_array,
     calculate_center_of_mass,
     calculate_normal_positional_encoding,
     create_grid,
@@ -59,6 +58,7 @@ from physicsnemo.utils.domino.utils import (
     pad,
     # sample_array,
     shuffle_array,
+    solution_weighted_shuffle_array,
     standardize,
 )
 from physicsnemo.utils.profiling import profile

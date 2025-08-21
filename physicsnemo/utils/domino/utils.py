@@ -1152,6 +1152,7 @@ def area_weighted_shuffle_array(
 
     return arr[selected_indices], selected_indices
 
+
 def solution_weighted_shuffle_array(
     arr: ArrayType, n_points: int, solution: ArrayType, scaling_factor: float = 1.0
 ) -> tuple[ArrayType, ArrayType]:
