@@ -39,10 +39,6 @@ from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
 
 aten = torch.ops.aten
 
-__all__ = [
-    "index_select_wrapper",
-]
-
 
 class ShardedIndexSelect(torch.autograd.Function):
     """
@@ -197,7 +193,9 @@ class ShardedIndexSelect(torch.autograd.Function):
         local_index = index.full_tensor()
 
         grad_inputs = torch.zeros(
-            spec.tensor_meta.shape, device=grad_output._local_tensor.device
+            spec.tensor_meta.shape,
+            device=grad_output._local_tensor.device,
+            dtype=grad_output._local_tensor.dtype,
         )
         # local_grad_output = grad_output.to_local()
         local_grad_output = grad_output.full_tensor()
