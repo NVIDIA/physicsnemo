@@ -13,7 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
   by dispatching to the proper optimized library, and torch.compile compatible.
 
-## [1.2.0a0] - 2025-08-XX
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+### Dependencies
+
+## [1.2.0a0] - 2025-08-26
 
 ### Added
 
@@ -114,19 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.Module.load_state_dict`.
 - Migrated Hybrid MGN and deforming plate example to PyTorch Geometric.
 
-### Deprecated
-
-### Removed
-
 ### Fixed
 
-- bug fixes in DoMINO model in sphere sampling and tensor reshaping
-- bug fixes in DoMINO utils random sampling and test.py
-- optimized DoMINO config params based on DrivAer ML
+- Bug fixes in DoMINO model in sphere sampling and tensor reshaping
+- Bug fixes in DoMINO utils random sampling and test.py
+- Optimized DoMINO config params based on DrivAer ML
 
-### Security
-
-### Dependencies
 
 ## [1.1.1] - 2025-06-16
 
