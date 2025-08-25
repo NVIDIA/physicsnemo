@@ -132,7 +132,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bug fixes in DoMINO utils random sampling and test.py
 - Optimized DoMINO config params based on DrivAer ML
 
-
 ## [1.1.1] - 2025-06-16
 
 ### Fixed
