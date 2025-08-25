@@ -92,10 +92,8 @@ def cast_precisions(
     else:
         return features, embeddings
 
-def pad_input_for_fp8(
-    features: torch.Tensor, 
-    embeddings: torch.Tensor
-) -> torch.Tensor:
+
+def pad_input_for_fp8(features: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
     """
     Pads the input features tensor so that the concatenated feature and embedding dimension is a multiple of 16,
     which is required for FP8 operations.  Only the features is updated.
@@ -112,12 +110,12 @@ def pad_input_for_fp8(
         pad_size = 16 - (fx_dim % 16)
         features = torch.nn.functional.pad(features, (0, pad_size))
         fx_dim = features.shape[-1] + embeddings.shape[-1]
-        
+
     return features
 
+
 def unpad_output_for_fp8(
-    outputs: torch.Tensor, 
-    output_pad_size: int | None
+    outputs: torch.Tensor, output_pad_size: int | None
 ) -> torch.Tensor:
     """
     Removes the padding from the output tensor that was added for FP8 compatibility.
@@ -133,6 +131,7 @@ def unpad_output_for_fp8(
     if output_pad_size is not None:
         return outputs[:, :, :-output_pad_size]
     return outputs
+
 
 def forward_pass(
     batch: dict,
@@ -166,7 +165,6 @@ def forward_pass(
     # Cast precisions:
     features, embeddings = cast_precisions(features, embeddings, precision)
     with get_autocast_context(precision):
-
         # For fp8, we may have to pad the inputs:
         if precision == "float8":
             features = pad_input_for_fp8(features, embeddings)
@@ -406,9 +404,7 @@ def val_epoch(
     return avg_loss
 
 
-def update_model_params_for_fp8(
-    cfg, logger
-) -> tuple | None:
+def update_model_params_for_fp8(cfg, logger) -> tuple | None:
     """
     Adjusts model configuration parameters to ensure compatibility with FP8 computations.
 
@@ -431,7 +427,6 @@ def update_model_params_for_fp8(
 
     output_pad_size = None
     if cfg.training.precision == "float8":
-
         if cfg.model.out_dim % 16 != 0:
             # pad the output:
             output_pad_size = 16 - (cfg.model.out_dim % 16)
@@ -439,7 +434,7 @@ def update_model_params_for_fp8(
             logger.info(
                 f"Padding output dimension to {cfg.model.out_dim} for fp8 autocast"
             )
-            
+
         # This part is informational only:
         if (cfg.model.functional_dim + cfg.model.embedding_dim) % 16 != 0:
             input_pad_size = 16 - (
@@ -451,6 +446,7 @@ def update_model_params_for_fp8(
             )
 
     return cfg, output_pad_size
+
 
 @profile
 def main(cfg: DictConfig):
@@ -485,7 +481,7 @@ def main(cfg: DictConfig):
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
 
-    cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)       
+    cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)
 
     # Set up model
     model = hydra.utils.instantiate(cfg.model)
@@ -547,7 +543,7 @@ def main(cfg: DictConfig):
         norm_file = "surface_fields_normalization.npz"
     elif cfg.data.mode == "volume":
         raise Exception("Volume training not yet supported.")
-    
+
     norm_data = np.load(norm_file)
     norm_factors = {
         "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),

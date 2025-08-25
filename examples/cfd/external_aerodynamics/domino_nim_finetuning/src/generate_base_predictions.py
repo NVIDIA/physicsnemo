@@ -16,9 +16,9 @@
 
 """
 This code defines a distributed pipeline for running the
-DoMINO-Automotive-Aero NIM model. The model predictions 
-are loaded in the the VTP/VTU files and saved in the 
-specified directory. The eval tab in config.yaml can be 
+DoMINO-Automotive-Aero NIM model. The model predictions
+are loaded in the the VTP/VTU files and saved in the
+specified directory. The eval tab in config.yaml can be
 used to specify the input and output directories.
 """
 
@@ -178,11 +178,13 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         num_sample_points=cfg.eval.stencil_size,
                         eval_mode="volume",
                     )
-                    tpredictions_batch = tpredictions_batch[:, :, [0, 1, 2, 3, 5]]  # drop the second to last one 
+                    tpredictions_batch = tpredictions_batch[
+                        :, :, [0, 1, 2, 3, 5]
+                    ]  # drop the second to last one
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
-                    prediction_vol[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_vol[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
 
@@ -282,9 +284,9 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                             eval_mode="surface",
                         )
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
-                    prediction_surf[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_surf[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
@@ -332,17 +334,25 @@ def main(cfg: DictConfig):
     else:
         num_surf_vars = None
 
-    vol_factors = np.array([[2.1508515, 1.0027921, 1.0663894, 1.1288369, 0.05063211],
-                            [-1.9028450e+00, -1.0032533e+00, -1.0505041e+00, -1.4412953e+00, 1.5563720e-18]])
-    surf_factors = np.array([[0.98881036, 0.00550783, 0.00854675, 0.00452144],
-                             [-2.4203062,  -0.00740275, -0.00848471, -0.00448634]])
+    vol_factors = np.array(
+        [
+            [2.1508515, 1.0027921, 1.0663894, 1.1288369, 0.05063211],
+            [-1.9028450e00, -1.0032533e00, -1.0505041e00, -1.4412953e00, 1.5563720e-18],
+        ]
+    )
+    surf_factors = np.array(
+        [
+            [0.98881036, 0.00550783, 0.00854675, 0.00452144],
+            [-2.4203062, -0.00740275, -0.00848471, -0.00448634],
+        ]
+    )
 
     print("Vol factors:", vol_factors)
     print("Surf factors:", surf_factors)
 
     model = DoMINO(
         input_features=3,
-        output_features_vol=num_vol_vars + 1, # +1 for nutmean
+        output_features_vol=num_vol_vars + 1,  # +1 for nutmean
         output_features_surf=num_surf_vars,
         model_parameters=cfg.model,
     ).to(dist.device)
@@ -350,7 +360,9 @@ def main(cfg: DictConfig):
     model = torch.compile(model, disable=True)
 
     checkpoint = torch.load(
-        to_absolute_path(os.path.join(cfg.eval.checkpoint_dir, cfg.eval.checkpoint_name)),
+        to_absolute_path(
+            os.path.join(cfg.eval.checkpoint_dir, cfg.eval.checkpoint_name)
+        ),
         map_location=dist.device,
     )
 
@@ -369,7 +381,7 @@ def main(cfg: DictConfig):
             static_graph=True,
         )
         model = model.module
-        dirnames = get_filenames(input_path)  
+        dirnames = get_filenames(input_path)
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
@@ -387,9 +399,7 @@ def main(cfg: DictConfig):
         vtp_path = os.path.join(filepath, f"boundary_{tag}.vtp")
         vtu_path = os.path.join(filepath, f"volume_{tag}.vtu")
 
-        vtp_pred_save_path = os.path.join(
-            filepath, f"boundary_{tag}_predicted1.vtp"
-        )
+        vtp_pred_save_path = os.path.join(filepath, f"boundary_{tag}_predicted1.vtp")
         vtu_pred_save_path = os.path.join(filepath, f"volume_{tag}_predicted1.vtu")
 
         # Skip if required input files are missing
@@ -407,8 +417,12 @@ def main(cfg: DictConfig):
             continue
 
         # Skip if output files already exist
-        skip_surface = (model_type in ["surface", "combined"]) and os.path.exists(vtp_pred_save_path)
-        skip_volume = (model_type in ["volume", "combined"]) and os.path.exists(vtu_pred_save_path)
+        skip_surface = (model_type in ["surface", "combined"]) and os.path.exists(
+            vtp_pred_save_path
+        )
+        skip_volume = (model_type in ["volume", "combined"]) and os.path.exists(
+            vtu_pred_save_path
+        )
         if skip_surface and skip_volume:
             print(f"Skipping {dirname}: output files already exist.")
             continue
@@ -777,11 +791,15 @@ def main(cfg: DictConfig):
             surfParam_vtk.SetName(f"{surface_variable_names[1]}BasePred")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
-            surfParam_vtk = numpy_support.numpy_to_vtk(surface_fields[:, 0:1] - prediction_surf[0, :, 0:1])
+            surfParam_vtk = numpy_support.numpy_to_vtk(
+                surface_fields[:, 0:1] - prediction_surf[0, :, 0:1]
+            )
             surfParam_vtk.SetName(f"{surface_variable_names[0]}Delta")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
-            surfParam_vtk = numpy_support.numpy_to_vtk(surface_fields[:, 1:] - prediction_surf[0, :, 1:])
+            surfParam_vtk = numpy_support.numpy_to_vtk(
+                surface_fields[:, 1:] - prediction_surf[0, :, 1:]
+            )
             surfParam_vtk.SetName(f"{surface_variable_names[1]}Delta")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
@@ -801,24 +819,31 @@ def main(cfg: DictConfig):
                 volParam_vtk.SetName(f"{volume_variable_names[2]}BasePred")
                 polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-                volParam_vtk = numpy_support.numpy_to_vtk(volume_fields[:, 0:3] - prediction_vol[:, 0:3])
+                volParam_vtk = numpy_support.numpy_to_vtk(
+                    volume_fields[:, 0:3] - prediction_vol[:, 0:3]
+                )
                 volParam_vtk.SetName(f"{volume_variable_names[0]}Delta")
                 polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-                volParam_vtk = numpy_support.numpy_to_vtk(volume_fields[:, 3:4] - prediction_vol[:, 3:4])
+                volParam_vtk = numpy_support.numpy_to_vtk(
+                    volume_fields[:, 3:4] - prediction_vol[:, 3:4]
+                )
                 volParam_vtk.SetName(f"{volume_variable_names[1]}Delta")
                 polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-                volParam_vtk = numpy_support.numpy_to_vtk(volume_fields[:, 4:5]- prediction_vol[:, 4:5])
+                volParam_vtk = numpy_support.numpy_to_vtk(
+                    volume_fields[:, 4:5] - prediction_vol[:, 4:5]
+                )
                 volParam_vtk.SetName(f"{volume_variable_names[2]}Delta")
                 polydata_vol.GetPointData().AddArray(volParam_vtk)
 
                 write_to_vtu(polydata_vol, vtu_pred_save_path)
-                
+
             except Exception as e:
                 print("Error occurred:", str(e))
                 print("Error type:", type(e))
                 import traceback
+
                 traceback.print_exc()
 
 

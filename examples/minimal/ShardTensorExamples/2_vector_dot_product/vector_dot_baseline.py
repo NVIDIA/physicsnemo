@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
- 
+
 import torch
 import time
 
@@ -25,13 +25,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 a = torch.randn(N, device=device)
 b = torch.randn(N, device=device)
 
+
 def f(a, b):
     # This is a truly non-local operation: full reduction is needed.
     return torch.dot(a, b)
 
+
 # run a couple times to warmup:
 for i in range(5):
-    c = f(a,b)
+    c = f(a, b)
 
 # Optional: Benchmark it if you like:
 
@@ -39,7 +41,7 @@ for i in range(5):
 torch.cuda.synchronize()
 start_time = time.time()
 for i in range(10):
-    c = f(a,b)
+    c = f(a, b)
 torch.cuda.synchronize()
 end_time = time.time()
 elapsed_time = end_time - start_time

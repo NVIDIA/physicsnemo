@@ -267,7 +267,6 @@ class DomainParallelZarrDataset(Dataset):
         placements: tuple[Placement],
         sharding_shapes: dict[int, tuple[int]] | None = None,
     ) -> ShardTensorSpec:
-
         # Unpack the batch index:
         shape = (1,) + zarr_array.shape
         # Don't forget to unpack it in the sharding shapes too:
@@ -373,7 +372,6 @@ class DomainParallelZarrDataset(Dataset):
         # Now, spawn threads to do each of those reads.
 
         for i in range(len(slice_sizes)):
-
             zarr_slice = np.s_[zarr_slice_starts[i] : zarr_slice_stops[i]]
             cpu_slice = np.s_[cpu_slice_starts[i] : cpu_slice_stops[i]]
 
@@ -406,7 +404,6 @@ class DomainParallelZarrDataset(Dataset):
 
         # Handle scalar values
         if zarr_array.shape == ():
-
             if self.device_mesh is not None:
                 self.tensor_specs[key] = self.create_tensor_spec(
                     zarr_array,
@@ -477,7 +474,6 @@ class DomainParallelZarrDataset(Dataset):
 
         # Process each key
         for key in self.keys_to_read:
-
             # if key not in group_keys:
             #     continue
 
@@ -507,7 +503,6 @@ class DomainParallelZarrDataset(Dataset):
         result = {}
 
         with torch.cuda.stream(self.data_loader_stream):
-
             for key, array in data.items():
                 # Move to GPU if available
                 if self.dm.cuda:
@@ -535,7 +530,6 @@ class DomainParallelZarrDataset(Dataset):
         result = {}
 
         for key, tensor in tensors.items():
-
             # Create a ShardTensor with whatever layout the data is actually in:
             st = ShardTensor.__new__(
                 ShardTensor,

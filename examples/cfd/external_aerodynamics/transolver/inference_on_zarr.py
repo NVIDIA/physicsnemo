@@ -42,10 +42,8 @@ from train import (
     get_autocast_context,
     pad_input_for_fp8,
     unpad_output_for_fp8,
-    update_model_params_for_fp8
+    update_model_params_for_fp8,
 )
-
-
 
 
 def inference(cfg: DictConfig) -> None:
@@ -71,7 +69,7 @@ def inference(cfg: DictConfig) -> None:
     logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
     model.eval()
     model.to(dist_manager.device)
-    
+
     if cfg.training.compile:
         model = torch.compile(model)
 
@@ -106,7 +104,6 @@ def inference(cfg: DictConfig) -> None:
     results = []
     start = time.time()
     for batch_idx in range(len(val_dataset)):
-
         batch = val_dataset[batch_idx]
         with torch.no_grad():
             loss, metrics = forward_pass(
@@ -175,7 +172,9 @@ def inference(cfg: DictConfig) -> None:
         arr = np.array(results)[:, 1:].astype(float)
         means = arr.mean(axis=0)
         mean_row = ["Mean"] + [f"{m:.4f}" for m in means]
-        logger.info(f"Summary:\n{tabulate([mean_row], headers=headers, tablefmt='github')}")
+        logger.info(
+            f"Summary:\n{tabulate([mean_row], headers=headers, tablefmt='github')}"
+        )
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="train_surface")

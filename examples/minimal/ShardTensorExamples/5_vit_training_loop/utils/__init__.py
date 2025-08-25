@@ -13,9 +13,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
- 
-from . parser import parse_args
-from . print_and_save import print_and_save_results
-from . benchmark import end_to_end_benchmark
-from . measure_perf import benchmark_model
-from . measure_memory import get_model_memory_usage
+
+from .parser import parse_args
+from .print_and_save import print_and_save_results
+from .benchmark import end_to_end_benchmark
+from .measure_perf import benchmark_model
+from .measure_memory import get_model_memory_usage

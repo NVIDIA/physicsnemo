@@ -15,11 +15,11 @@
 # limitations under the License.
 
 """
-This code defines a distributed pipeline for testing the finetuned DoMINO model on 
-CFD datasets. The finetuned model is combined with the base predictions to generate 
-the final predictions. The model predictions are loaded in the VTP/VTU files and 
-saved in the specified directory. The eval tab in config.yaml can be used to 
-specify the input and output directories. 
+This code defines a distributed pipeline for testing the finetuned DoMINO model on
+CFD datasets. The finetuned model is combined with the base predictions to generate
+the final predictions. The model predictions are loaded in the VTP/VTU files and
+saved in the specified directory. The eval tab in config.yaml can be used to
+specify the input and output directories.
 """
 
 import os, re
@@ -191,9 +191,9 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         eval_mode="volume",
                     )
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
-                    prediction_vol[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_vol[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
 
@@ -281,11 +281,11 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         global_params_reference,
                         num_sample_points=cfg.model.num_neighbors_surface,
                     )
-                    
+
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
-                    prediction_surf[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_surf[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
@@ -314,7 +314,11 @@ def main(cfg: DictConfig):
     if model_type == "volume" or model_type == "combined":
         volume_variable_names = list(cfg.variables.volume.solution.keys())
         volume_variable_names_gt = ["UMeanTrim", "pMeanTrim", "nutMeanTrim"]
-        volume_variable_names_base = ["UMeanTrimBasePred", "pMeanTrimBasePred", "nutMeanTrimBasePred"]
+        volume_variable_names_base = [
+            "UMeanTrimBasePred",
+            "pMeanTrimBasePred",
+            "nutMeanTrimBasePred",
+        ]
         num_vol_vars = 0
         for j in volume_variable_names:
             if cfg.variables.volume.solution[j] == "vector":
@@ -327,7 +331,10 @@ def main(cfg: DictConfig):
     if model_type == "surface" or model_type == "combined":
         surface_variable_names = list(cfg.variables.surface.solution.keys())
         surface_variable_names_gt = ["pMeanTrim", "wallShearStressMeanTrim"]
-        surface_variable_names_base = ["pMeanTrimBasePred", "wallShearStressMeanTrimBasePred"]
+        surface_variable_names_base = [
+            "pMeanTrimBasePred",
+            "wallShearStressMeanTrimBasePred",
+        ]
         num_surf_vars = 0
         for j in surface_variable_names:
             if cfg.variables.surface.solution[j] == "vector":
@@ -590,7 +597,9 @@ def main(cfg: DictConfig):
                 polydata_vol, volume_variable_names_gt
             )
             volume_fields = np.concatenate(volume_fields, axis=-1)
-            volume_coordinates_base, volume_fields_base = get_volume_data(polydata_vol, volume_variable_names_base)
+            volume_coordinates_base, volume_fields_base = get_volume_data(
+                polydata_vol, volume_variable_names_base
+            )
             volume_fields_base = np.concatenate(volume_fields_base, axis=-1)
             # print(f"Processed vtu {vtu_path}")
 
@@ -748,8 +757,12 @@ def main(cfg: DictConfig):
 
         if prediction_surf is not None:
             surface_sizes = np.expand_dims(surface_sizes, -1)
-            prediction_surf[0, :, 0] = prediction_surf[0, :, 0] + surface_fields_base[:, 0]
-            prediction_surf[0, :, 1:] = prediction_surf[0, :, 1:] + surface_fields_base[:, 1:]
+            prediction_surf[0, :, 0] = (
+                prediction_surf[0, :, 0] + surface_fields_base[:, 0]
+            )
+            prediction_surf[0, :, 1:] = (
+                prediction_surf[0, :, 1:] + surface_fields_base[:, 1:]
+            )
 
             pres_x_pred = np.sum(
                 prediction_surf[0, :, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
@@ -852,7 +865,6 @@ def main(cfg: DictConfig):
             write_to_vtp(celldata_all, vtp_pred_save_path)
 
         if prediction_vol is not None:
-
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
             volParam_vtk.SetName(f"{volume_variable_names_gt[0]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
@@ -874,6 +886,7 @@ def main(cfg: DictConfig):
     print(
         f"Mean over all samples, surface={l2_surface_mean} and volume={l2_volume_mean}"
     )
+
 
 if __name__ == "__main__":
     main()

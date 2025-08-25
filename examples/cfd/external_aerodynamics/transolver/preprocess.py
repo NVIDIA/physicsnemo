@@ -25,7 +25,6 @@ def preprocess_surface_data(
     batch: dict,
     norm_factors: dict[str, torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
-
     """
     Preprocess the surface data.  The functional input
     is the air density and stream velocity.  The embeddings
@@ -87,7 +86,6 @@ def preprocess_surface_data(
     return node_features, embeddings, targets, others
 
 
-
 @profile
 def downsample_surface(
     features: torch.Tensor,
@@ -95,7 +93,6 @@ def downsample_surface(
     targets: torch.Tensor,
     num_keep=1024,
 ):
-
     if num_keep == -1:
         features = features.unsqueeze(1).expand(1, embeddings.shape[1], -1)
         return features, embeddings, targets
@@ -105,7 +102,6 @@ def downsample_surface(
     use it to sample the same points from the features, embeddings,
     and targets.  Using torch.multinomial to sample without replacement.
     """
-    
 
     num_samples = embeddings.shape[1]
     # Generate random indices to keep (faster for large num_samples)
@@ -116,11 +112,10 @@ def downsample_surface(
     # Use the same indices to downsample all tensors
     downsampled_embeddings = embeddings[:, indices]
     downsampled_targets = targets[:, indices]
-    # This unsqueezes the features (air density and stream velocity) to 
+    # This unsqueezes the features (air density and stream velocity) to
     # the same shape as the embeddings
     downsampled_features = features.unsqueeze(1).expand(
         1, downsampled_embeddings.shape[1], -1
     )
 
     return downsampled_features, downsampled_embeddings, downsampled_targets
-

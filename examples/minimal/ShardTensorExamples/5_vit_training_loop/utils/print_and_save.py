@@ -13,36 +13,36 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
- 
+
 import csv
 import os
 
 from tabulate import tabulate
 
+
 def print_and_save_results(results, args, precision_mode, world_size):
-    
     # Prepare table data with units as first row
     headers = [
-        "Size\n(px)", 
-        "Global\nBS", 
-        "Local\nBS", 
-        "Params\n", 
-        "Fwd\n(s)", 
-        "Train\n(s)", 
-        "Inf.\nMem (GB)", 
-        "Inf.\n(samp/s)", 
+        "Size\n(px)",
+        "Global\nBS",
+        "Local\nBS",
+        "Params\n",
+        "Fwd\n(s)",
+        "Train\n(s)",
+        "Inf.\nMem (GB)",
+        "Inf.\n(samp/s)",
         "Inf.\n(samp/s/gpu)",
-        "Train\nMem (GB)", 
+        "Train\nMem (GB)",
         "Train\n(samp/s)",
-        "Train\n(samp/s/gpu)"
+        "Train\n(samp/s/gpu)",
     ]
     table_data = []
-    
+
     for result in results:
-        if result['forward_time'] != float('inf'):
+        if result["forward_time"] != float("inf"):
             # Successful run
             row = [
-                result['image_size'],
+                result["image_size"],
                 args.batch_size,  # Global batch size
                 args.batch_size,  # Local batch size (same as global for single GPU)
                 f"{result['params']}",
@@ -58,35 +58,41 @@ def print_and_save_results(results, args, precision_mode, world_size):
         else:
             # Out of memory
             row = [
-                result['image_size'],
+                result["image_size"],
                 args.batch_size,  # Global batch size
                 args.batch_size,  # Local batch size (same as global for single GPU)
                 f"{result['params']}",
-                "OOM", "OOM", "OOM", "OOM", "OOM"
+                "OOM",
+                "OOM",
+                "OOM",
+                "OOM",
+                "OOM",
             ]
         table_data.append(row)
-    
-    
+
     # Print summary table
-    print("\n" + "="*80)
-    print(f"BENCHMARK SUMMARY - Hybrid ViT Base in {args.dimension}D ({precision_mode})")
-    print("="*80)
+    print("\n" + "=" * 80)
+    print(
+        f"BENCHMARK SUMMARY - Hybrid ViT Base in {args.dimension}D ({precision_mode})"
+    )
+    print("=" * 80)
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
     # Save the data to csv:
 
     # Create results directory if it doesn't exist
-    os.makedirs('results', exist_ok=True)
-    
+    os.makedirs("results", exist_ok=True)
+
     # Generate filename with timestamp
     from datetime import datetime
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f'results/benchmark_results_{args.batch_size}bs_{args.dimension}d_{precision_mode}_{args.domain_size}dp_{args.ddp_size}ddp.csv'
-    
+    filename = f"results/benchmark_results_{args.batch_size}bs_{args.dimension}d_{precision_mode}_{args.domain_size}dp_{args.ddp_size}ddp.csv"
+
     # Write to CSV
-    with open(filename, 'w', newline='') as f:
+    with open(filename, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([h.replace('\n', ' ') for h in headers])
+        writer.writerow([h.replace("\n", " ") for h in headers])
         writer.writerows(table_data)
-    
+
     print(f"\nResults saved to {filename}")

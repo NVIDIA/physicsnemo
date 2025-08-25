@@ -15,9 +15,9 @@
 # limitations under the License.
 
 """
-This code runs the data processing in parallel to load OpenFoam files, process them 
-and save in the npy format for faster processing in the DoMINO datapipes. Several 
-parameters such as number of processors, input and output paths, etc. can be 
+This code runs the data processing in parallel to load OpenFoam files, process them
+and save in the npy format for faster processing in the DoMINO datapipes. Several
+parameters such as number of processors, input and output paths, etc. can be
 configured in config.yaml in the data_processing tab.
 """
 

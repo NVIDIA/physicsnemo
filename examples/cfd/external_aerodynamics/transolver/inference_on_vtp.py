@@ -41,6 +41,7 @@ from train import (
     unpad_output_for_fp8,
 )
 
+
 def read_data_from_stl(
     stl_path: str,
     air_density: float = 1.2050,
@@ -178,11 +179,9 @@ def preprocess_data(
 
 
 def model_inference(model, features, embeddings, precision, output_pad_size):
-    
     # Cast precisions:
     features, embeddings = cast_precisions(features, embeddings, precision)
     with get_autocast_context(precision):
-
         # For fp8, we may have to pad the inputs:
         if precision == "float8":
             features = pad_input_for_fp8(features, embeddings)
@@ -228,14 +227,10 @@ def process_vtp_file(
     fx, embedding = preprocess_data(batch)
 
     with torch.no_grad():
-
         if batch_size > fx.shape[1]:
-
             outputs = model_inference(model, fx, embedding, precision, output_pad_size)
 
-            prediction = (
-                outputs * norm_factors["std"] + norm_factors["mean"]
-            )
+            prediction = outputs * norm_factors["std"] + norm_factors["mean"]
 
         else:
             # Split the indices by a batch size.  We shuffle the cells into
@@ -248,7 +243,7 @@ def process_vtp_file(
             for i, index_block in enumerate(index_blocks):
                 local_fx = fx[:, index_block]
                 local_embedding = embedding[:, index_block]
-                
+
                 # Just in the fp8 case, we have to pad the batch shape, too:
                 sample_shape = local_fx.shape[1]
                 if precision == "float8" and sample_shape % 8 != 0:
@@ -256,22 +251,34 @@ def process_vtp_file(
                     padding = 8 - (sample_shape % 8)
 
                     # Create zero tensors to pad
-                    fx_pad = torch.zeros(*local_fx.shape[:1], padding, *local_fx.shape[2:], dtype=local_fx.dtype, device=local_fx.device)
-                    emb_pad = torch.zeros(*local_embedding.shape[:1], padding, *local_embedding.shape[2:], dtype=local_embedding.dtype, device=local_embedding.device)
-                   
+                    fx_pad = torch.zeros(
+                        *local_fx.shape[:1],
+                        padding,
+                        *local_fx.shape[2:],
+                        dtype=local_fx.dtype,
+                        device=local_fx.device,
+                    )
+                    emb_pad = torch.zeros(
+                        *local_embedding.shape[:1],
+                        padding,
+                        *local_embedding.shape[2:],
+                        dtype=local_embedding.dtype,
+                        device=local_embedding.device,
+                    )
+
                     # Concatenate along dim=1
                     local_fx = torch.cat([local_fx, fx_pad], dim=1)
                     local_embedding = torch.cat([local_embedding, emb_pad], dim=1)
-                    
-                outputs = model_inference(model, local_fx, local_embedding, precision, output_pad_size)
-                
+
+                outputs = model_inference(
+                    model, local_fx, local_embedding, precision, output_pad_size
+                )
+
                 # And, if we padded, we have to unpad the output:
                 if precision == "float8" and sample_shape % 8 != 0:
                     outputs = outputs[:, :-padding, :]
 
-                predictions.append(
-                    outputs * norm_factors["std"]+ norm_factors["mean"]
-                )
+                predictions.append(outputs * norm_factors["std"] + norm_factors["mean"])
 
             prediction = torch.cat(predictions, dim=1)
 
@@ -351,7 +358,6 @@ def inference_on_vtp_or_stl(cfg: DictConfig) -> None:
 
     run_id = cfg.run_id
 
-
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
 
     cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)
@@ -380,7 +386,9 @@ def inference_on_vtp_or_stl(cfg: DictConfig) -> None:
     print(f"loaded epoch: {loaded_epoch}")
 
     stl_input_path = "/group_data/datasets/drivaer_aws/drivaer_data_full/"
-    vtp_output_path = f"/user_data/datasets/drivaer_aws/drivaer_data_full-test/{run_id}/"
+    vtp_output_path = (
+        f"/user_data/datasets/drivaer_aws/drivaer_data_full-test/{run_id}/"
+    )
 
     all_files = list(range(1, 501))
 
@@ -407,13 +415,13 @@ def inference_on_vtp_or_stl(cfg: DictConfig) -> None:
 
         # Process files:
         process_vtp_file(
-            vtp_file, 
-            model, 
-            norm_factors, 
-            vtp_output_path, 
+            vtp_file,
+            model,
+            norm_factors,
+            vtp_output_path,
             precision=cfg.training.precision,
             output_pad_size=output_pad_size,
-            batch_size=cfg.data.resolution
+            batch_size=cfg.data.resolution,
         )
         end = time.time()
         print(f"time taken: {end - start}")

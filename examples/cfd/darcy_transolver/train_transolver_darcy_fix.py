@@ -18,7 +18,7 @@
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import json
-import time  
+import time
 from math import ceil
 
 # Base PyTorch imports:
@@ -259,12 +259,11 @@ def darcy_trainer(cfg: DictConfig) -> None:
         use_te=cfg.model.use_te,
         time_input=cfg.model.time_input,
     ).to(dm.device)
-    
+
     logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
 
     if dm.world_size > 1:
         model = DDP(model, device_ids=[dm.rank])
-
 
     ########################################################################
     # define loss and optimizer
