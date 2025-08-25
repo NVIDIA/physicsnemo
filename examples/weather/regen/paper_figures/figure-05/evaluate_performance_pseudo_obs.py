@@ -54,8 +54,9 @@ model.eval().to(device=device).to(memory_format=torch.channels_last)
 u10_mean, u10_std = -0.262, 2.372
 v10_mean, v10_std = 0.865, 4.115
 logtp_mean, logtp_std = -8.117, 2.489
-means, stds = np.array([u10_mean, v10_mean, logtp_mean]), np.array(
-    [u10_std, v10_std, logtp_std]
+means, stds = (
+    np.array([u10_mean, v10_mean, logtp_mean]),
+    np.array([u10_std, v10_std, logtp_std]),
 )
 
 

@@ -386,7 +386,18 @@ def load_checkpoint(
                 model.load(file_name)
             else:
                 file_to_load = _cache_if_needed(file_name)
-                model.load_state_dict(torch.load(file_to_load, map_location=device))
+                missing_keys, unexpected_keys = model.load_state_dict(
+                    torch.load(file_to_load, map_location=device)
+                )
+                if missing_keys:
+                    checkpoint_logging.warning(
+                        f"Missing keys when loading {name}: {missing_keys}"
+                    )
+                if unexpected_keys:
+                    checkpoint_logging.warning(
+                        f"Unexpected keys when loading {name}: {unexpected_keys}"
+                    )
+
             checkpoint_logging.success(
                 f"Loaded model state dictionary {file_name} to device {device}"
             )

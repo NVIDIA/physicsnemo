@@ -15,8 +15,8 @@
 # limitations under the License.
 
 """
-This is the datapipe to read OpenFoam files (vtp/vtu/stl) and save them as point clouds 
-in npy format. 
+This is the datapipe to read OpenFoam files (vtp/vtu/stl) and save them as point clouds
+in npy format.
 
 """
 
@@ -101,9 +101,9 @@ class OpenFoamDataset(Dataset):
         self.data_path = data_path
 
         supported_kinds = ["drivesim", "drivaer_aws"]
-        assert (
-            kind in supported_kinds
-        ), f"kind should be one of {supported_kinds}, got {kind}"
+        assert kind in supported_kinds, (
+            f"kind should be one of {supported_kinds}, got {kind}"
+        )
         self.path_getter = DriveSimPaths if kind == "drivesim" else DrivAerAwsPaths
 
         assert self.data_path.exists(), f"Path {self.data_path} does not exist"

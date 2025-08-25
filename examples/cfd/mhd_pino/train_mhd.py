@@ -220,7 +220,6 @@ def main(cfg: DictConfig) -> None:
             num_mini_batch=len(dataloader_train),
             epoch_alert_freq=1,
         ) as log:
-
             if dist.distributed:
                 sampler_train.set_epoch(epoch)
 

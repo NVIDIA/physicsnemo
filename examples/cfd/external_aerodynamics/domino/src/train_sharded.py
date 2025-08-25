@@ -32,14 +32,14 @@
 
 """
 This code defines a distributed pipeline for training the DoMINO model on
-CFD datasets. It includes the computation of scaling factors, instantiating 
-the DoMINO model and datapipe, automatically loading the most recent checkpoint, 
-training the model in parallel using DistributedDataParallel across multiple 
-GPUs, calculating the loss and updating model parameters using mixed precision. 
-This is a common recipe that enables training of combined models for surface and 
-volume as well either of them separately. Validation is also conducted every epoch, 
+CFD datasets. It includes the computation of scaling factors, instantiating
+the DoMINO model and datapipe, automatically loading the most recent checkpoint,
+training the model in parallel using DistributedDataParallel across multiple
+GPUs, calculating the loss and updating model parameters using mixed precision.
+This is a common recipe that enables training of combined models for surface and
+volume as well either of them separately. Validation is also conducted every epoch,
 where predictions are compared against ground truth values. The code logs training
-and validation metrics to TensorBoard. The train tab in config.yaml can be used to 
+and validation metrics to TensorBoard. The train tab in config.yaml can be used to
 specify batch size, number of epochs and other training parameters.
 """
 
@@ -120,7 +120,6 @@ def validation_step(
             # sampled_batched = dict_to_device(sample_batched, device)
 
             with autocast(enabled=True):
-
                 prediction_vol, prediction_surf = model(sampled_batched)
                 loss, loss_dict = compute_loss_dict(
                     prediction_vol,
@@ -185,7 +184,6 @@ def train_epoch(
     gpu_start_info = [nvmlDeviceGetMemoryInfo(gpu_handle) for gpu_handle in gpu_handles]
     start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
-
         sampled_batched = sample_batched
 
         with autocast(enabled=True):
@@ -235,7 +233,7 @@ def train_epoch(
         # the full_tensor() reduction is only over the mesh domain.`
         loss_string = (
             "  "
-            + "\t".join([f"{key.replace('loss_',''):<10}" for key in loss_dict.keys()])
+            + "\t".join([f"{key.replace('loss_', ''):<10}" for key in loss_dict.keys()])
             + "\n"
         )
         loss_string += (
@@ -274,7 +272,6 @@ def train_epoch(
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # initialize distributed manager
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -602,7 +599,7 @@ def main(cfg: DictConfig) -> None:
             )
         if dist.rank == 0:
             print(
-                f"Device { dist.device}, Best val loss {best_vloss}, Time taken {time.perf_counter() - start_time:.3f}"
+                f"Device {dist.device}, Best val loss {best_vloss}, Time taken {time.perf_counter() - start_time:.3f}"
             )
 
         if dist.rank == 0 and (epoch + 1) % cfg.train.checkpoint_interval == 0.0:

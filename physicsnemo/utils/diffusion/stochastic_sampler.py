@@ -112,7 +112,7 @@ def stochastic_sampler(
             - **class_labels** (*torch.Tensor, optional*): Optional class labels
             - **lead_time_label** (*torch.Tensor, optional*): Optional lead time labels
             - **embedding_selector** (*callable, optional*): Function to select
-            positional embeddings. Used for patch-based diffusion.
+              positional embeddings. Used for patch-based diffusion.
 
         Output:
             - **denoised** (*torch.Tensor*): Denoised prediction of shape :math:`(B, C_{out}, H, W)`
@@ -246,7 +246,7 @@ def stochastic_sampler(
         def patch_embedding_selector(emb):
             # emb: (N_pe, image_shape_y, image_shape_x)
             # return: (batch_size * patch_num, N_pe, patch_shape_y, patch_shape_x)
-            return patching.apply(emb[None].expand(batch_size, -1, -1, -1))
+            return patching.apply(emb.expand(batch_size, -1, -1, -1))
 
     else:
         patch_embedding_selector = None

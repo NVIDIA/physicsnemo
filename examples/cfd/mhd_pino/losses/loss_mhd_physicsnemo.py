@@ -53,7 +53,7 @@ class LossMHD_PhysicsNeMo(object):
         Ly=1.0,
         tend=1.0,
         use_weighted_mean=False,
-        **kwargs
+        **kwargs,
     ):  # add **kwards so that we ignore unexpected kwargs when passing a config dict
         self.nu = nu
         self.eta = eta

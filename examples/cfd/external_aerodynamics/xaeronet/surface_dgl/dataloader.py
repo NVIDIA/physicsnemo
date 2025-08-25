@@ -23,7 +23,7 @@ It normalizes node data (like coordinates, normals, pressure) and edge data base
 on these statistics before returning the processed graph partitions and a corresponding
 label (extracted from the file name). The code also provides a function create_dataloader
 to create a data loader for efficient batch loading with configurable parameters such as
-batch size, shuffle, and prefetching options. 
+batch size, shuffle, and prefetching options.
 """
 
 import json

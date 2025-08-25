@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Standard Python logging configuration, as described here:
+# https://docs.python.org/3.10/library/logging.config.html
+
+version: 1
+disable_existing_loggers: false
+
+output: ???
+rank: ???
+rank0_only: true
+base_filename: train
+
+formatters:
+  default:
+    (): loggers.TermColorFormatter
+    format: "[%(asctime)s - %(name)s - %(levelname)s] %(message)s"
+    datefmt: "%H:%M:%S"
+    log_colors:
+      DEBUG: blue
+      INFO: light_blue
+      WARNING: light_yellow
+      ERROR: light_red
+      CRITICAL: red
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: ${...loggers.lmgn.level}
+    formatter: default
+
+  file:
+    class: logging.FileHandler
+    filename: ${...output}/${...base_filename}_${...rank}.log
+    level: ${...loggers.lmgn.level}
+    formatter: default
+
+loggers:
+  root:
+    level: INFO
+    handlers: [console, file]
+  lmgn:
+    handlers: [console, file]
+    level: INFO
+    propagate: false

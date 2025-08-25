@@ -16,13 +16,13 @@
 
 """
 This code defines a distributed pipeline for testing the DoMINO model on
-CFD datasets. It includes the instantiating the DoMINO model and datapipe, 
-automatically loading the most recent checkpoint, reading the VTP/VTU/STL 
-testing files, calculation of parameters required for DoMINO model and 
-evaluating the model in parallel using DistributedDataParallel across multiple 
-GPUs. This is a common recipe that enables training of combined models for surface 
-and volume as well either of them separately. The model predictions are loaded in 
-the the VTP/VTU files and saved in the specified directory. The eval tab in 
+CFD datasets. It includes the instantiating the DoMINO model and datapipe,
+automatically loading the most recent checkpoint, reading the VTP/VTU/STL
+testing files, calculation of parameters required for DoMINO model and
+evaluating the model in parallel using DistributedDataParallel across multiple
+GPUs. This is a common recipe that enables training of combined models for surface
+and volume as well either of them separately. The model predictions are loaded in
+the the VTP/VTU files and saved in the specified directory. The eval tab in
 config.yaml can be used to specify the input and output directories.
 """
 
@@ -34,6 +34,7 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
 import numpy as np
+import cupy as cp
 
 from collections import defaultdict
 from pathlib import Path
@@ -195,9 +196,9 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         eval_mode="volume",
                     )
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
-                    prediction_vol[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_vol[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
 
@@ -285,11 +286,11 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         global_params_reference,
                         num_sample_points=cfg.model.num_neighbors_surface,
                     )
-                    
+
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
-                    prediction_surf[
-                        :, start_idx:end_idx
-                    ] = tpredictions_batch.cpu().numpy()
+                    prediction_surf[:, start_idx:end_idx] = (
+                        tpredictions_batch.cpu().numpy()
+                    )
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
@@ -397,7 +398,7 @@ def main(cfg: DictConfig):
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
-    num_files = int(len(dirnames) / dist.world_size) + 1
+    num_files = int(len(dirnames) / dist.world_size)
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path
@@ -453,11 +454,13 @@ def main(cfg: DictConfig):
 
         # SDF calculation on the grid using WARP
         sdf_surf_grid = signed_distance_field(
-            stl_vertices,
-            mesh_indices_flattened,
-            surf_grid_reshaped,
+            cp.asarray(stl_vertices).astype(cp.float32),
+            cp.asarray(mesh_indices_flattened).astype(cp.int32),
+            cp.asarray(surf_grid_reshaped).astype(cp.float32),
             use_sign_winding_number=True,
+            return_cupy=False,
         ).reshape(nx, ny, nz)
+
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
@@ -588,7 +591,6 @@ def main(cfg: DictConfig):
                 polydata_vol, volume_variable_names
             )
             volume_fields = np.concatenate(volume_fields, axis=-1)
-            # print(f"Processed vtu {vtu_path}")
 
             bounding_box_dims = []
             bounding_box_dims.append(np.asarray(cfg.data.bounding_box.max))
@@ -616,19 +618,21 @@ def main(cfg: DictConfig):
 
             # SDF calculation on the grid using WARP
             sdf_grid = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                grid_reshaped,
+                cp.asarray(stl_vertices).astype(cp.float32),
+                cp.asarray(mesh_indices_flattened).astype(cp.int32),
+                cp.asarray(grid_reshaped).astype(cp.float32),
                 use_sign_winding_number=True,
+                return_cupy=False,
             ).reshape(nx, ny, nz)
 
             # SDF calculation
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                volume_coordinates,
+                cp.asarray(stl_vertices).astype(cp.float32),
+                cp.asarray(mesh_indices_flattened).astype(cp.int32),
+                cp.asarray(volume_coordinates).astype(cp.float32),
                 include_hit_points=True,
                 use_sign_winding_number=True,
+                return_cupy=False,
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
 
@@ -843,7 +847,6 @@ def main(cfg: DictConfig):
             write_to_vtp(celldata_all, vtp_pred_save_path)
 
         if prediction_vol is not None:
-
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
             volParam_vtk.SetName(f"{volume_variable_names[0]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)

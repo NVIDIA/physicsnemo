@@ -61,7 +61,6 @@ class HrrrEra5Dataset(StormCastDataset):
     """
 
     def __init__(self, params, train):
-
         dist = DistributedManager()
         self.logger0 = RankZeroLoggingWrapper(logger, dist)
 
@@ -132,9 +131,9 @@ class HrrrEra5Dataset(StormCastDataset):
         invariant_channels_in_dataset = list(invariants.channel.values)
 
         for invariant in self.invariants:
-            assert (
-                invariant in invariant_channels_in_dataset
-            ), f"Requested invariant {invariant} not in dataset"
+            assert invariant in invariant_channels_in_dataset, (
+                f"Requested invariant {invariant} not in dataset"
+            )
 
         invariant_array = (
             invariants["HRRR_invariants"].sel(channel=self.invariants).values
@@ -232,11 +231,12 @@ class HrrrEra5Dataset(StormCastDataset):
         years = [int(os.path.basename(x).replace(".zarr", "")) for x in self.hrrr_paths]
         self.logger0.info(f"years: {years}")
         self.logger0.info(f"self.years: {self.years}")
-        assert (
-            years == self.years
-        ), "Number of years for ERA5 in %s and HRRR in %s must match" % (
-            os.path.join(self.location, "era5/*.zarr"),
-            os.path.join(self.location, "hrrr/*.zarr"),
+        assert years == self.years, (
+            "Number of years for ERA5 in %s and HRRR in %s must match"
+            % (
+                os.path.join(self.location, "era5/*.zarr"),
+                os.path.join(self.location, "hrrr/*.zarr"),
+            )
         )
         with xr.open_zarr(self.hrrr_paths[0], consolidated=True) as ds:
             self.hrrr_channels = list(ds.channel.values)
@@ -253,11 +253,9 @@ class HrrrEra5Dataset(StormCastDataset):
         ]
 
         if self.boundary_padding_pixels > 0:
-
             self.era5_lat, self.era5_lon = self._construct_era5_window()
 
         else:
-
             self.era5_lat = self.hrrr_lat
             self.era5_lon = self.hrrr_lon
 
@@ -265,7 +263,6 @@ class HrrrEra5Dataset(StormCastDataset):
         return self.n_samples_total
 
     def to_datetime(self, date):
-
         timestamp = (date - np.datetime64("1970-01-01T00:00:00")) / np.timedelta64(
             1, "s"
         )
@@ -476,15 +473,15 @@ class HrrrEra5Dataset(StormCastDataset):
             )
         )
 
-        assert (
-            added_pixels_x == 2 * boundary_padding_pixels
-        ), "requested {} padding pixels but got {} in x due to interpolation round off errors".format(
-            boundary_padding_pixels, added_pixels_x
+        assert added_pixels_x == 2 * boundary_padding_pixels, (
+            "requested {} padding pixels but got {} in x due to interpolation round off errors".format(
+                boundary_padding_pixels, added_pixels_x
+            )
         )
-        assert (
-            added_pixels_y == 2 * boundary_padding_pixels
-        ), "requested {} padding pixels but got {} in y due to interpolation round off errors".format(
-            boundary_padding_pixels, added_pixels_y
+        assert added_pixels_y == 2 * boundary_padding_pixels, (
+            "requested {} padding pixels but got {} in y due to interpolation round off errors".format(
+                boundary_padding_pixels, added_pixels_y
+            )
         )
 
         era5_lats = xr.DataArray(new_lats, dims=("y", "x"))

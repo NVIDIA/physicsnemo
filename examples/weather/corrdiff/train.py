@@ -109,7 +109,6 @@ def profiler_emit_nvtx():
 # Train the CorrDiff model using the configurations in "conf/config_training.yaml"
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_training")
 def main(cfg: DictConfig) -> None:
-
     # Initialize distributed environment for training
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -521,7 +520,6 @@ def main(cfg: DictConfig) -> None:
     # enable profiler:
     with cuda_profiler():
         with profiler_emit_nvtx():
-
             while not done:
                 tick_start_nimg = cur_nimg
                 tick_start_time = time.time()
@@ -575,9 +573,9 @@ def main(cfg: DictConfig) -> None:
                                 "augment_pipe": None,
                             }
                             if use_patch_grad_acc is not None:
-                                loss_fn_kwargs[
-                                    "use_patch_grad_acc"
-                                ] = use_patch_grad_acc
+                                loss_fn_kwargs["use_patch_grad_acc"] = (
+                                    use_patch_grad_acc
+                                )
 
                             if lead_time_label:
                                 lead_time_label = (
@@ -724,9 +722,9 @@ def main(cfg: DictConfig) -> None:
                                         "augment_pipe": None,
                                     }
                                     if use_patch_grad_acc is not None:
-                                        loss_valid_kwargs[
-                                            "use_patch_grad_acc"
-                                        ] = use_patch_grad_acc
+                                        loss_valid_kwargs["use_patch_grad_acc"] = (
+                                            use_patch_grad_acc
+                                        )
                                     if lead_time_label_valid:
                                         lead_time_label_valid = (
                                             lead_time_label_valid[0]

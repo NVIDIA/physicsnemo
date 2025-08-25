@@ -76,9 +76,9 @@ class NestedDarcyDataset:
         ], "mode in NestedDarcyDataset must be train or eval."
 
         if mode == "eval" and int(self.model_name[-1]) > 0:
-            assert (
-                parent_prediction is not None
-            ), f"pass parent result to evaluate level {int(self.model_name[-1])}"
+            assert parent_prediction is not None, (
+                f"pass parent result to evaluate level {int(self.model_name[-1])}"
+            )
             parent_prediction = parent_prediction.detach().cpu().numpy()
         self.load_dataset(parent_prediction)
 
@@ -112,7 +112,7 @@ class NestedDarcyDataset:
                         parent = parent_prediction[int(id), 0, ...]
                     elif self.mode == "train":
                         parent = (
-                            samp[f"ref{int(mod[-1])-1}"]["0"]["darcy"]
+                            samp[f"ref{int(mod[-1]) - 1}"]["0"]["darcy"]
                             - self.norm["darcy"][0]
                         ) / self.norm["darcy"][1]
                     par_pred.append(
@@ -418,9 +418,9 @@ class DarcyInset2D(Darcy2D):
         self.fine_res = fine_res
         self.fine_freq = fine_permeability_freq
         self.ref_fac = ref_fac
-        assert (
-            resolution % self.ref_fac == 0
-        ), "simulation res must be multiple of ref_fac"
+        assert resolution % self.ref_fac == 0, (
+            "simulation res must be multiple of ref_fac"
+        )
 
         # force inset on coarse grid
         if not min_offset % self.ref_fac == 0:
@@ -431,9 +431,9 @@ class DarcyInset2D(Darcy2D):
         self.min_dist_frac = min_dist_frac
         self.fill_val = fill_val
 
-        assert (
-            self.max_n_insets <= 3
-        ), f"at most 3 insets supported, change max_n_insets accordingly"
+        assert self.max_n_insets <= 3, (
+            f"at most 3 insets supported, change max_n_insets accordingly"
+        )
         assert (self.beg_max - self.beg_min) % ref_fac == 0, "lsdhfgn3x!!!!"
 
     def initialize_batch(self) -> None:

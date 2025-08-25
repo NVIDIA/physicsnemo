@@ -22,6 +22,16 @@ These are particularly useful when implementing custom training loops or special
     :members:
     :show-inheritance:
 
+Neighbor utils
+--------------
+
+Utilities for optimized layers for neighbor searches.
+
+.. automodule:: physicsnemo.utils.neighbors
+    :members:
+    :show-inheritance:
+
+
 GraphCast utils
 ---------------
 
@@ -82,7 +92,7 @@ Geometry utils
 Utilities for geometric operations, including neighbor search and signed distance field calculations.
 These are essential for physics simulations and geometric deep learning applications.
 
-.. automodule:: physicsnemo.utils.neighbor_list
+.. automodule:: physicsnemo.utils.neighbors.radius_search
     :members:
     :show-inheritance:
 

@@ -578,7 +578,6 @@ class SongUNet(torch.nn.Module):
                 )
 
     def forward(self, x, noise_labels, class_labels, augment_labels=None):
-
         emb = self.map_noise(noise_labels)
         emb = (
             emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)

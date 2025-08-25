@@ -25,6 +25,8 @@ from typing import Optional
 import torch
 from torch import Tensor
 from torch.nn import functional as F
+from torch.utils.data import Dataset
+from torch_geometric.data import Data as PyGData
 
 try:
     import tensorflow.compat.v1 as tf
@@ -32,15 +34,6 @@ except ImportError:
     raise ImportError(
         "Mesh Graph Net Datapipe requires the Tensorflow library. "
         'Install: pip install "tensorflow<=2.17.1"'
-    )
-
-try:
-    import dgl
-    from dgl.data import DGLDataset
-except ImportError:
-    raise ImportError(
-        "Mesh Graph Net Datapipe requires the DGL library. Install the "
-        + "desired CUDA version at: https://www.dgl.ai/pages/start.html"
     )
 
 from .lagrangian_reading_utils import parse_serialized_simulation_example
@@ -72,56 +65,49 @@ def compute_edge_index(pos, radius):
     return edge_index
 
 
-def compute_edge_attr(graph, radius=0.015):
+def compute_edge_attr(graph: PyGData, radius: float = 0.015) -> PyGData:
     """Computes edge attributes (displacement and distance).
 
     Parameters
     ----------
-    graph : DGLGraph
+    graph : PyGData
         Input graph
     radius : float, optional
         Radius for distance calculation, by default 0.015
     """
-    edge_index = graph.edges()
-    displacement = graph.ndata["pos"][edge_index[1]] - graph.ndata["pos"][edge_index[0]]
+    edge_index = graph.edge_index
+    displacement = graph.pos[edge_index[1]] - graph.pos[edge_index[0]]
     distance = torch.pairwise_distance(
-        graph.ndata["pos"][edge_index[0]],
-        graph.ndata["pos"][edge_index[1]],
+        graph.pos[edge_index[0]],
+        graph.pos[edge_index[1]],
         keepdim=True,
     )
     # direction = displacement / distance
     distance = torch.exp(-(distance**2) / radius**2)
-    graph.edata["x"] = torch.cat((displacement, distance), dim=-1)
-    return
+    graph.edge_attr = torch.cat((displacement, distance), dim=-1)
+    return graph
 
 
-def graph_update(graph, radius):
+def graph_update(graph: PyGData, radius) -> PyGData:
     """Updates graph structure by reconstructing edges based on positions.
 
     Parameters
     ----------
-    graph : DGLGraph
+    graph : PyGData
         Input graph
     radius : float
         Connectivity radius
 
     Returns
     -------
-    DGLGraph
+    PyGData
         Updated graph
     """
-    # TODO: use more efficient graph construction method
-    num_edges = graph.num_edges()
-    if num_edges > 0:
-        graph.remove_edges(torch.arange(num_edges, device=graph.device))
-    pos = graph.ndata["pos"]
-    edge_index = compute_edge_index(pos, radius)
-    graph.add_edges(edge_index[0], edge_index[1])
-    compute_edge_attr(graph)
-    return graph
+    graph.edge_index = compute_edge_index(graph.pos, radius)
+    return compute_edge_attr(graph)
 
 
-class LagrangianDataset(DGLDataset):
+class LagrangianDataset(Dataset):
     """In-memory MeshGraphNet Dataset for Lagrangian mesh.
     Notes:
         - This dataset prepares and processes the data available in MeshGraphNet's repo:
@@ -142,17 +128,15 @@ class LagrangianDataset(DGLDataset):
     num_steps : int, optional
         Number of time steps in each sequence, by default is set from the dataset metadata.
     noise_std : float, optional
-        The standard deviation of the noise added to the "train" split, by default 0.0003
+        The standard deviation of the noise added to the "train" split, by default 0.0003.
     radius : float, optional
         Connectivity radius, by default is set from the dataset metadata.
     dt : float, optional
         Time step increment, by default is set from the dataset metadata.
     bounds :
         Domain bounds, by default is set from the dataset metadata.
-    force_reload : bool, optional
-        force reload, by default False
-    verbose : bool, optional
-        verbose, by default False
+    num_node_types : int, optional
+        Number of node types, by default 6.
     """
 
     KINEMATIC_PARTICLE_ID = 3  # See train.py in DeepMind code.
@@ -170,14 +154,8 @@ class LagrangianDataset(DGLDataset):
         dt: Optional[float] = None,
         bounds: Optional[Sequence[tuple[float, float]]] = None,
         num_node_types: int = 6,
-        force_reload: bool = False,
-        verbose: bool = False,
     ):
-        super().__init__(
-            name=name,
-            force_reload=force_reload,
-            verbose=verbose,
-        )
+        self.name = name
         self.data_dir = data_dir
         self.split = split
         self.num_sequences = num_sequences
@@ -283,12 +261,12 @@ class LagrangianDataset(DGLDataset):
 
         node_targets = torch.cat((target_pos, target_vel, target_acc), dim=-1)
 
-        graph = dgl.graph(([], []), num_nodes=node_features.shape[0])
-        graph.ndata["x"] = node_features
-        graph.ndata["y"] = node_targets
-        graph.ndata["pos"] = pos_t
-        graph.ndata["mask"] = mask
-        graph.ndata["t"] = torch.tensor([tidx]).repeat(
+        graph = PyGData(num_nodes=node_features.shape[0])
+        graph.x = node_features
+        graph.y = node_targets
+        graph.pos = pos_t
+        graph.mask = mask
+        graph.t = torch.tensor([tidx]).repeat(
             node_features.shape[0]
         )  # just to track the start
         graph_update(graph, radius=self.radius)
@@ -413,7 +391,7 @@ class LagrangianDataset(DGLDataset):
 
         return torch.cat((position, vel_history, boundary_features, node_type), dim=-1)
 
-    def unpack_inputs(self, graph: dgl.DGLGraph):
+    def unpack_inputs(self, graph: PyGData):
         """Unpacks the graph inputs into position, velocity and node type.
 
         Returns:
@@ -421,7 +399,7 @@ class LagrangianDataset(DGLDataset):
         Tuple
             position, velocity and node type inputs. Velocity is normalized.
         """
-        ndata = graph.ndata["x"]
+        ndata = graph.x
         pos = ndata[..., : self.dim]
         vel = ndata[..., self.dim : self.dim + self.dim * self.num_history]
         # (num_particles, t * dimension) -> (t, num_particles, dimension)
@@ -430,7 +408,7 @@ class LagrangianDataset(DGLDataset):
         node_type = ndata[..., -self.num_node_types :]
         return pos, vel, node_type
 
-    def unpack_targets(self, graph: dgl.DGLGraph):
+    def unpack_targets(self, graph: PyGData):
         """Unpacks the graph targets into position, velocity and acceleration.
 
         Returns:
@@ -438,7 +416,7 @@ class LagrangianDataset(DGLDataset):
         Tuple
             position, velocity, acceleration targets. Velocity and acceleration are normalized.
         """
-        ndata = graph.ndata["y"]
+        ndata = graph.y
         pos = ndata[..., : self.dim]
         vel = ndata[..., self.dim : 2 * self.dim]
         acc = ndata[..., 2 * self.dim : 3 * self.dim]

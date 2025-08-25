@@ -141,7 +141,7 @@ class Validation:
 
                     for t in range(outvar.shape[0]):
                         im_pred = ax[0, t].imshow(pred[t, chan], vmin=-1.5, vmax=1.5)
-                        ax[0, t].set_title(f"Prediction (t={t+1})", fontsize=10)
+                        ax[0, t].set_title(f"Prediction (t={t + 1})", fontsize=10)
                         fig.colorbar(
                             im_pred, ax=ax[0, t], orientation="horizontal", pad=0.4
                         )
@@ -149,7 +149,7 @@ class Validation:
                         im_outvar = ax[1, t].imshow(
                             outvar[t, chan], vmin=-1.5, vmax=1.5
                         )
-                        ax[1, t].set_title(f"Ground Truth (t={t+1})", fontsize=10)
+                        ax[1, t].set_title(f"Ground Truth (t={t + 1})", fontsize=10)
                         fig.colorbar(
                             im_outvar, ax=ax[1, t], orientation="horizontal", pad=0.4
                         )
@@ -157,7 +157,7 @@ class Validation:
                         im_diff = ax[2, t].imshow(
                             abs(pred[t, chan] - outvar[t, chan]), vmin=0.0, vmax=0.5
                         )
-                        ax[2, t].set_title(f"Abs. Diff. (t={t+1})", fontsize=10)
+                        ax[2, t].set_title(f"Abs. Diff. (t={t + 1})", fontsize=10)
                         fig.colorbar(
                             im_diff, ax=ax[2, t], orientation="horizontal", pad=0.4
                         )

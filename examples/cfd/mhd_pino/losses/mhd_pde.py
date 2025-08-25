@@ -24,7 +24,6 @@ class MHD_PDE(PDE):
     name = "MHD_PDE"
 
     def __init__(self, nu=1e-4, eta=1e-4, rho0=1.0):
-
         # x, y, time
         x, y, t, lap = Symbol("x"), Symbol("y"), Symbol("t"), Symbol("lap")
 

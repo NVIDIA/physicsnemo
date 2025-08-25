@@ -193,7 +193,6 @@ def save_to_vtu(data_dict, bounds, output_file):
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_inference")
 def main(cfg: DictConfig) -> None:
-
     print("Inference Started!")
 
     # initialize distributed manager

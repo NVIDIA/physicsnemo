@@ -35,7 +35,6 @@ from utils.plots import inference_plot
 
 @hydra.main(version_base=None, config_path="config", config_name="stormcast_inference")
 def main(cfg: DictConfig):
-
     # Initialize
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -92,7 +91,6 @@ def main(cfg: DictConfig):
     )
 
     with torch.no_grad():
-
         for i in range(n_steps):
             data = dataset[i + hours_since_jan_01]
 

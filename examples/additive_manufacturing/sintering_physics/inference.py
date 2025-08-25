@@ -272,7 +272,7 @@ def Inference(rank_zero_logger, dist, cfg):
                 json.dump(rollout_op, file_object)
 
             example_index += 1
-            rank_zero_logger.info(f"prediction time: {time.time()-start_time}\n")
+            rank_zero_logger.info(f"prediction time: {time.time() - start_time}\n")
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

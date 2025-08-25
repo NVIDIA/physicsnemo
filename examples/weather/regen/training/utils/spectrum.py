@@ -84,7 +84,6 @@ def powerspect(x):
 
 
 def compute_ps1d(generated, target, fields, diffusion_channels):
-
     assert generated.shape == target.shape
 
     # Comppute PS1D, all channels

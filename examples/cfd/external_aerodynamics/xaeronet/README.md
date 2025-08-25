@@ -90,15 +90,17 @@ To train the XAeroNet-S model, follow these steps:
 
 5. Run `preprocessing.py`. This will prepare and save the partitioned graphs.
 
-6. Create a `partitions_validation` folder, and move the samples you wish to use for
-   validation to that folder.
+6. Create `validation_partitions` and `test_partitions` folders,
+   and move the samples you wish to use for validation and test to those folders.
 
 7. Run `compute_stats.py` to compute the global mean and standard deviation from the
    training samples.
 
-8. Run `train.py` to start the training.
+8. Run `train.py` to start the training. Multi-GPU training is supported.
 
-9. Download the validation results (saved in form of point clouds in `.vtp` format),
+9. Run `inference.py` to start the inference. Multi-GPU inference is supported.
+
+10. Download the validation results (saved in form of point clouds in `.vtp` format),
    and visualize in Paraview.
 
 ![XAeroNet-S Validation results for the sample #500.](../../../../docs/img/xaeronet_s_results.png)

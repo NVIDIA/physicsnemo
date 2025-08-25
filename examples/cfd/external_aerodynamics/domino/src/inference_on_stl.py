@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-This code defines a standalone distributed inference pipeline the DoMINO model. 
+This code defines a standalone distributed inference pipeline the DoMINO model.
 This inference pipeline can be used to evaluate the model given an STL and
 an inflow speed. The pre-trained model checkpoint can be specified in this script
 or inferred from the config file. The results are calculated on a point cloud
@@ -585,7 +585,6 @@ class inferenceDataPipe:
     def sample_points_in_volume(
         self, num_points_vol, max_min, center_of_mass, bounding_box=None
     ):
-
         if bounding_box is not None:
             c_max = bounding_box[1]
             c_min = bounding_box[0]
@@ -670,7 +669,6 @@ class dominoInference:
         dist: None,
         cached_geo_encoding: bool = False,
     ):
-
         self.cfg = cfg
         self.dist = dist
         self.stream_velocity = None
@@ -1318,7 +1316,6 @@ class dominoInference:
     def calculate_geometry_encoding(
         self, geo_centers, p_grid, sdf_grid, s_grid, sdf_surf_grid, model
     ):
-
         vol_min = self.bounding_box_min_max[0]
         vol_max = self.bounding_box_min_max[1]
         surf_min = self.bounding_box_surface_min_max[0]
@@ -1448,7 +1445,6 @@ class dominoInference:
         inlet_velocity,
         air_density,
     ):
-
         ## Global parameters
         global_params_values = torch.cat(
             (inlet_velocity, air_density), axis=1

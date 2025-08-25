@@ -304,6 +304,7 @@ def test_HEALPixRecUNet_integration_steps(
 
 @import_or_fail("omegaconf")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@torch.no_grad()
 def test_HEALPixRecUNet_reset(
     device,
     encoder_dict,
@@ -356,6 +357,7 @@ def test_HEALPixRecUNet_reset(
 
 @import_or_fail("omegaconf")
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@torch.no_grad()
 def test_HEALPixRecUNet_forward(
     device,
     encoder_dict,

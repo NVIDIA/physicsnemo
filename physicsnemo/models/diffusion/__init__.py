@@ -20,6 +20,7 @@ from .layers import (
     Conv2d,
     FourierEmbedding,
     GroupNorm,
+    get_group_norm,
     Linear,
     PositionalEmbedding,
     UNetBlock,

@@ -17,15 +17,16 @@
 import logging
 import time
 
-from dgl.dataloading import GraphDataLoader
-
 import hydra
 from hydra.utils import instantiate, to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
 import torch
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data.distributed import DistributedSampler
+
+from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
@@ -64,10 +65,20 @@ class MGNTrainer:
         logger.info(f"Using {len(self.dataset)} training samples.")
 
         # instantiate dataloader
-        self.dataloader = GraphDataLoader(
+        sampler = DistributedSampler(
             self.dataset,
-            **cfg.train.dataloader,
-            use_ddp=self.dist.world_size > 1,
+            shuffle=cfg.train.dataloader.shuffle,
+            drop_last=cfg.train.dataloader.drop_last,
+            num_replicas=self.dist.world_size,
+            rank=self.dist.rank,
+        )
+
+        self.dataloader = PyGDataLoader(
+            self.dataset,
+            batch_size=cfg.train.dataloader.batch_size,
+            sampler=sampler,
+            pin_memory=cfg.train.dataloader.pin_memory,
+            num_workers=cfg.train.dataloader.num_workers,
         )
 
         # instantiate the model
@@ -145,11 +156,11 @@ class MGNTrainer:
 
     def forward(self, graph):
         # forward pass
-        with autocast(enabled=self.amp):
+        with autocast(device_type="cuda", enabled=self.amp):
             gt_pos, gt_vel, gt_acc = self.dataset.unpack_targets(graph)
             # Predict the acceleration using normalized inputs and targets.
-            pred_acc = self.model(graph.ndata["x"], graph.edata["x"], graph)
-            mask = graph.ndata["mask"].unsqueeze(-1)
+            pred_acc = self.model(graph.x, graph.edge_attr, graph)
+            mask = graph.mask.unsqueeze(-1)
             num_nz = mask.sum() * self.dim
             loss_acc_norm = mask * self.criterion(pred_acc, gt_acc)
             loss_acc_norm = loss_acc_norm.sum() / num_nz

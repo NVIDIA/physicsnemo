@@ -67,7 +67,6 @@ from utils import (
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # Enable cuDNN auto-tuner
     torch.backends.cudnn.benchmark = cfg.enable_cudnn_benchmark
 
@@ -119,7 +118,7 @@ def main(cfg: DictConfig) -> None:
     valid_dataloader = create_dataloader(
         valid_dataset, mean, std, batch_size=1, num_workers=1, sampler=None
     )
-    print(f"Training dataset size: {len(train_dataloader)*dist.world_size}")
+    print(f"Training dataset size: {len(train_dataloader) * dist.world_size}")
     print(f"Validation dataset size: {len(valid_dataloader)}")
 
     # Partitioning
@@ -256,7 +255,7 @@ def main(cfg: DictConfig) -> None:
         if dist.rank == 0:
             current_lr = optimizer.param_groups[0]["lr"]
             print(
-                f"Epoch {epoch+1}, Learning Rate: {current_lr}, Data Loss: {total_loss_data/len(data)}, Continuity Loss: {cfg.continuity_lambda * total_loss_continuity/len(data)}, Total Loss: {(total_loss_data + cfg.continuity_lambda * total_loss_continuity) / len(data)}"
+                f"Epoch {epoch + 1}, Learning Rate: {current_lr}, Data Loss: {total_loss_data / len(data)}, Continuity Loss: {cfg.continuity_lambda * total_loss_continuity / len(data)}, Total Loss: {(total_loss_data + cfg.continuity_lambda * total_loss_continuity) / len(data)}"
             )
             writer.add_scalar("training_data_loss", total_loss_data / len(data), epoch)
             writer.add_scalar(
@@ -327,7 +326,7 @@ def main(cfg: DictConfig) -> None:
                         )
                         valid_loss += err
                         pred = pred.to(torch.float32).cpu().numpy()
-            print(f"Epoch {epoch+1}, Validation Error: {valid_loss/len(vdata)}")
+            print(f"Epoch {epoch + 1}, Validation Error: {valid_loss / len(vdata)}")
             writer.add_scalar("validation_loss", valid_loss / len(vdata), epoch)
             wb.log({"Validation Error": valid_loss / len(vdata)}, step=epoch)
 

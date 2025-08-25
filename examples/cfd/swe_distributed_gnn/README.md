@@ -120,7 +120,7 @@ We refer to to these chunks as partitioned tensors. A visualization of distribut
 the MLP computations on partitioned tensors is shown below.
 
 <!-- {: .center} -->
-![Visualization of MLP layers on "global" tensors and on "partitioned" tensors on each rank.](figures/dist_mlp.png)
+![Visualization of MLP layers on "global" tensors and on "partitioned" tensors on each rank.](../../../docs/img/swe_distributed_gnn_figures/dist_mlp.png)
 
 In the backward - as the model weights are shared across rank - we also need to do is to
 reduce the weight gradients. If e.g. the whole GraphCast model is used in such a fashion,
@@ -145,7 +145,7 @@ node are on the same rank, we can already minimize the need to exchange tensors 
 design.
 
 <!-- {: .center} -->
-![Visualization of the global graph vs. local graphs on rank 0 and 1 respectively.](figures/global_vs_local_graph.png)
+![Visualization of the global graph vs. local graphs on rank 0 and 1 respectively.](../../../docs/img/swe_distributed_gnn_figures/global_vs_local_graph.png)
 
 Finally, to allow each rank perform the message operations indepdently, we need to exchange
 the necessary and missing source node features. This is done in a formed of indexed
@@ -158,7 +158,7 @@ passing is done, the partitioned node and edge features have been updated and th
 follows in a similar fashion.
 
 <!-- {: .center} -->
-![Visualization of Distributed Message Passing](figures/dist_message_passing.png)
+![Visualization of Distributed Message Passing](../../../docs/img/swe_distributed_gnn_figures/dist_message_passing.png)
 
 Most of these distributed primitives are hidden away in the `CuGraphCSC` wrapper class.
 The following example briefly shows how these would work in a simplified context.
@@ -287,7 +287,7 @@ of the memory footprint on each GPUs which allows for weak scaling to higher res
 
 Loss Validation Experiment | Scaling Experiment
 :-------------------------:|:-------------------------:
-![Validation of Loss Convergence](figures/val_loss_latlon.png)  |  ![Validation of Loss Convergence](figures/memory_scaling_dim128.png)
+![Validation of Loss Convergence](../../../docs/img/swe_distributed_gnn_figures/val_loss_latlon.png)  |  ![Validation of Loss Convergence](../../../docs/img/swe_distributed_gnn_figures/memory_scaling_dim128.png)
 
 ## References
 

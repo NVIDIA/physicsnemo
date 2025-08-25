@@ -91,7 +91,6 @@ def prepare_input(
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     DistributedManager.initialize()
     dist = DistributedManager()
 
@@ -236,7 +235,6 @@ def main(cfg: DictConfig) -> None:
                     forces_pair = []
                     cosines = []
                     for data in test_dataloader:
-
                         pos = data[0][0]
                         forces = data[1][0]
                         pos, forces = prepare_input(

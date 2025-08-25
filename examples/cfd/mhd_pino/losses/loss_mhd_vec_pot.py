@@ -50,9 +50,8 @@ class LossMHDVecPot(LossMHD):
         Ly=1.0,
         tend=1.0,
         use_weighted_mean=False,
-        **kwargs
+        **kwargs,
     ):  # add **kwargs so that we ignore unexpected kwargs when passing a config dict):
-
         super().__init__(
             nu=nu,
             eta=eta,

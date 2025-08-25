@@ -24,7 +24,6 @@ class SWE_NL(PDE):
     name = "SWE_NL"
 
     def __init__(self, g=1.0, nu=1.0e-3):
-
         # x, y, time
         x, y, t = Symbol("x"), Symbol("y"), Symbol("t")
 

@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import importlib
 import inspect
 import json
@@ -30,9 +29,34 @@ import torch
 
 import physicsnemo
 from physicsnemo.models.meta import ModelMetaData
-from physicsnemo.models.util_compatibility import convert_ckp_apex
 from physicsnemo.registry import ModelRegistry
 from physicsnemo.utils.filesystem import _download_cached, _get_fs
+
+
+def _load_state_dict_with_logging(
+    module: torch.nn.Module, state_dict: Dict[str, Any], *args, **kwargs
+):
+    """Load state dictionary and log missing and unexpected keys
+
+    Parameters
+    ----------
+    module : torch.nn.Module
+        Module to load state dictionary into
+    state_dict : Dict[str, Any]
+        State dictionary to load
+    *args, **kwargs
+        Additional arguments to pass to load_state_dict
+    """
+    missing_keys, unexpected_keys = module.load_state_dict(state_dict, *args, **kwargs)
+    if missing_keys:
+        logging.warning(
+            f"Missing keys when loading {module.__class__.__name__}: {missing_keys}"
+        )
+    if unexpected_keys:
+        logging.warning(
+            f"Unexpected keys when loading {module.__class__.__name__}: {unexpected_keys}"
+        )
+    return missing_keys, unexpected_keys
 
 
 class Module(torch.nn.Module):
@@ -415,11 +439,14 @@ class Module(torch.nn.Module):
             model_dict = torch.load(
                 local_path.joinpath("model.pt"), map_location=device
             )
-            self.load_state_dict(model_dict, strict=strict)
+            _load_state_dict_with_logging(self, model_dict, strict=strict)
 
     @classmethod
     def from_checkpoint(
-        cls, file_name: str, override_args: Optional[Dict[str, Any]] = None
+        cls,
+        file_name: str,
+        override_args: Optional[Dict[str, Any]] = None,
+        strict: bool = True,
     ) -> "Module":
         """Simple utility for constructing a model from a checkpoint
 
@@ -445,6 +472,8 @@ class Module(torch.nn.Module):
             class attribute. Attempting to override any other argument will raise
             a ``ValueError``. This API should be used with caution and only if
             you fully understand the implications of the override.
+        strict : bool, optional
+            Whether to strictly enforce that the keys in state_dict match, by default True
 
         Returns
         -------
@@ -483,8 +512,6 @@ class Module(torch.nn.Module):
             with open(local_path.joinpath("args.json"), "r") as f:
                 args = json.load(f)
 
-            ckp_args = copy.deepcopy(args)
-
             # Load metadata to get version
             with open(local_path.joinpath("metadata.json"), "r") as f:
                 metadata = json.load(f)
@@ -520,8 +547,7 @@ class Module(torch.nn.Module):
                 local_path.joinpath("model.pt"), map_location=model.device
             )
 
-            model_dict = convert_ckp_apex(ckp_args, override_args, model_dict)
-            model.load_state_dict(model_dict, strict=False)
+            _load_state_dict_with_logging(model, model_dict, strict=strict)
         return model
 
     @staticmethod

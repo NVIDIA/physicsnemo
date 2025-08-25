@@ -209,7 +209,7 @@ if __name__ == "__main__":
         for graph in tqdm(trainer.dataloader):
             loss = trainer.train(graph, position_mesh, position_pivotal)
         rank_zero_logger.info(
-            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time() - start):10.3e}"
         )
         wb.log({"loss": loss.detach().cpu()})
 

@@ -299,7 +299,7 @@ predictions' ability to respect the governing laws better.
 <table><thead>
   <tr>
     <th></th>
-    <th colspan="2">Total Residual</th>
+    <th colspan="2">Residual L2 Error (Computed w.r.t true Residuals)</th>
     <th></th>
   </tr></thead>
 <tbody>
@@ -311,27 +311,27 @@ predictions' ability to respect the governing laws better.
   </tr>
   <tr>
     <td>continuity</td>
-    <td>3.14E+11</td>
-    <td>1.58E+11</td>
-    <td>49.69%</td>
+    <td>30.352072</td>
+    <td>2.11262</td>
+    <td>93.04%</td>
   </tr>
   <tr>
     <td>momentum_x</td>
-    <td>1.01E+16</td>
-    <td>1.08E+15</td>
-    <td>89.24%</td>
+    <td>19.109278</td>
+    <td>2.33800</td>
+    <td>87.77%</td>
   </tr>
   <tr>
     <td>momentum_y</td>
-    <td>2.89E+16</td>
-    <td>9.24E+14</td>
-    <td>96.81%</td>
+    <td>99.36662</td>
+    <td>3.18452</td>
+    <td>96.80%</td>
   </tr>
   <tr>
     <td>momentum_z</td>
-    <td>5.44E+15</td>
-    <td>3.58E+14</td>
-    <td>93.43%</td>
+    <td>45.73862</td>
+    <td>2.691725</td>
+    <td>94.11%</td>
   </tr>
 </tbody>
 </table>

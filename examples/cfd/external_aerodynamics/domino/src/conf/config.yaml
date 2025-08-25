@@ -71,14 +71,14 @@ variables:
 # │          Training Data Configs            │
 # └───────────────────────────────────────────┘  
 data: # Input directory for training and validation data
-  input_dir: /user/aws_data_all/
-  input_dir_val: /user/aws_data_all_val/
+  input_dir: /user/data/aws_data_all/
+  input_dir_val: /user/data/aws_data_all_val/
   bounding_box: # Bounding box dimensions for computational domain
-    min: [-3.5, -2.25 , -0.32]
-    max: [8.5 , 2.25  , 3.00]
+    min: [-3.5, -2.25, -0.32]
+    max: [8.5, 2.25, 3.00]
   bounding_box_surface: # Bounding box dimensions for car surface
-    min: [-1.1, -1.2 , -0.32]
-    max: [4.2 , 1.2  , 1.3]
+    min: [-1.1, -1.2, -0.32]
+    max: [4.5, 1.2, 1.3]
   gpu_preprocessing: true
   gpu_output: true
 
@@ -98,24 +98,24 @@ model:
   activation: "relu" # "relu" or "gelu"
   loss_function: 
     loss_type: "mse" # mse or rmse
-    area_weighing_factor: 20000 # Generally inverse of maximum area
+    area_weighing_factor: 10000 # Generally inverse of maximum area
   interp_res: [128, 64, 64] # resolution of latent space 128, 64, 48
   use_sdf_in_basis_func: true # SDF in basis function network
   positional_encoding: false # calculate positional encoding?
   volume_points_sample: 8192 # Number of points to sample in volume per epoch
   surface_points_sample: 8192 # Number of points to sample on surface per epoch
-  surface_sampling_algorithm: random # random or area_weighted
+  surface_sampling_algorithm: area_weighted #random or area_weighted
   geom_points_sample: 300_000 # Number of points to sample on STL per epoch
-  num_neighbors_surface: 1 # How many neighbors on surface?
-  num_neighbors_volume: 1 # How many neighbors on volume?
+  num_neighbors_surface: 7 # How many neighbors on surface?
+  num_neighbors_volume: 10 # How many neighbors on volume?
   combine_volume_surface: false # combine volume and surface encodings
-  return_volume_neighbors: True # Whether to return volume neighbors or not
+  return_volume_neighbors: true # Whether to return volume neighbors or not
   use_surface_normals: true # Use surface normals and surface areas for surface computation?
   use_surface_area: true # Use only surface normals and not surface area
-  integral_loss_scaling_factor: 1 # Scale integral loss by this factor
+  integral_loss_scaling_factor: 100 # Scale integral loss by this factor
   normalization: min_max_scaling # or mean_std_scaling
   encode_parameters: false # encode inlet velocity and air density in the model
-  surf_loss_scaling: 1.0 # scale surface loss with this factor in combined mode
+  surf_loss_scaling: 5.0 # scale surface loss with this factor in combined mode
   vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
   geometry_encoding_type: both # geometry encoder type, sdf, stl, both
   solution_calculation_mode: two-loop # one-loop is better for sharded, two-loop is lower memory but more overhead. Physics losses are not supported via one-loop presently.
@@ -125,23 +125,23 @@ model:
   geometry_rep: # Hyperparameters for geometry representation network
     geo_conv:
       base_neurons: 32 # 256 or 64
-      base_neurons_in: 8
-      base_neurons_out: 8
-      volume_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # radii for volume
-      surface_radii: [0.01, 0.05, 0.1, 0.5, 1.0] # radii for surface
-      surface_hops: 5 # Number of surface iterations
+      base_neurons_in: 1
+      base_neurons_out: 1
+      volume_radii: [0.1, 0.5, 1.0, 2.5] # radii for volume
+      surface_radii: [0.01, 0.05, 1.0] # radii for surface
+      surface_hops: 1 # Number of surface iterations
       volume_hops: 1 # Number of volume iterations
-      volume_neighbors_in_radius: [8, 16, 24, 30, 36] # Number of neighbors in radius for volume
-      surface_neighbors_in_radius: [8, 16, 24, 30, 36] # Number of neighbors in radius for surface
+      volume_neighbors_in_radius: [10, 10, 10, 10] # Number of neighbors in radius for volume
+      surface_neighbors_in_radius: [10, 10, 10] # Number of neighbors in radius for surface
       fourier_features: false
       num_modes: 5
       activation: ${model.activation}
     geo_processor:
       base_filters: 8
       activation: ${model.activation}
-      processor_type: unet # conv or unet
-      self_attention: false
-      cross_attention: false
+      processor_type: conv # conv or unet (conv is better; fno, fignet to be added)
+      self_attention: false # can be used only with unet
+      cross_attention: false # can be used only with unet
   nn_basis_functions: # Hyperparameters for basis function network
     base_layer: 512
     fourier_features: true
@@ -158,10 +158,10 @@ model:
     fourier_features: true
     num_modes: 5
   geometry_local: # Hyperparameters for local geometry extraction
-    volume_neighbors_in_radius: [32, 64, 128, 256] # Number of radius points
-    surface_neighbors_in_radius: [32, 64, 128, 256] # Number of radius points
-    volume_radii: [0.05, 0.1, 0.5, 1.0] # Volume radii
-    surface_radii: [0.05, 0.1, 0.5, 1.0] # Surface radii
+    volume_neighbors_in_radius: [64, 128] # Number of radius points
+    surface_neighbors_in_radius: [32, 128] # Number of radius points
+    volume_radii: [0.1, 0.25] # Volume radii
+    surface_radii: [0.05, 0.25] # Surface radii
     base_layer: 512
   parameter_model:
     base_layer: 512

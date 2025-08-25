@@ -16,7 +16,6 @@
 
 import os
 import random
-import urllib
 
 import numpy as np
 import pytest
@@ -26,19 +25,23 @@ stl = pytest.importorskip("stl")
 
 
 @pytest.fixture
-def download_stl(tmp_path):
-    url = "https://upload.wikimedia.org/wikipedia/commons/4/43/Stanford_Bunny.stl"
+def sphere_stl(tmp_path):
+    try:
+        import pyvista as pv
+    except ImportError:
+        pytest.skip("pyvista not available")
 
-    parsed_url = urllib.parse.urlparse(url)
-    if parsed_url.scheme not in ("http", "https"):
-        raise ValueError(f"URL scheme '{parsed_url.scheme}' is not permitted.")
+    # Create a sphere using PyVista
+    sphere = pv.Sphere(
+        radius=1.0, center=(0, 0, 0), phi_resolution=30, theta_resolution=30
+    )
 
-    file_path = tmp_path / "Stanford_Bunny.stl"
+    file_path = tmp_path / "sphere.stl"
 
-    # Download the STL file
-    urllib.request.urlretrieve(url, file_path)  # noqa: S310
+    # Save the sphere as STL file
+    sphere.save(str(file_path))
 
-    # Return the path to the downloaded file
+    # Return the path to the created STL file
     return file_path
 
 
@@ -176,9 +179,9 @@ def test_mesh_utils(tmp_path, pytestconfig):
     assert os.path.exists(tmp_path / "converted/random.vtp")
 
 
-@import_or_fail(["warp", "skimage", "stl"])
+@import_or_fail(["warp", "skimage", "stl", "pyvista"])
 @pytest.mark.parametrize("backend", ["warp", "skimage"])
-def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
+def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     from stl import mesh
 
     from physicsnemo.utils.mesh import (
@@ -186,9 +189,9 @@ def test_stl_gen(pytestconfig, backend, download_stl, tmp_path):
     )
     from physicsnemo.utils.sdf import signed_distance_field
 
-    bunny_mesh = mesh.Mesh.from_file(str(download_stl))
+    sphere_mesh = mesh.Mesh.from_file(str(sphere_stl))
 
-    vertices = np.array(bunny_mesh.vectors, dtype=np.float64)
+    vertices = np.array(sphere_mesh.vectors, dtype=np.float64)
     vertices_3d = vertices.reshape(-1, 3)
     vert_indices = np.arange((vertices_3d.shape[0]))
 
