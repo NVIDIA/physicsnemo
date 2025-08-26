@@ -39,10 +39,6 @@ from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
 
 aten = torch.ops.aten
 
-__all__ = [
-    "index_select_wrapper",
-]
-
 
 class ShardedIndexSelect(torch.autograd.Function):
     """
@@ -197,7 +193,9 @@ class ShardedIndexSelect(torch.autograd.Function):
         local_index = index.full_tensor()
 
         grad_inputs = torch.zeros(
-            spec.tensor_meta.shape, device=grad_output._local_tensor.device
+            spec.tensor_meta.shape,
+            device=grad_output._local_tensor.device,
+            dtype=grad_output._local_tensor.dtype,
         )
         # local_grad_output = grad_output.to_local()
         local_grad_output = grad_output.full_tensor()
@@ -424,54 +422,7 @@ def sharded_select_backward_helper(
     )
 
 
-def select_wrapper(tensor, dim, index):
-    if not isinstance(dim, int):
-        raise TypeError(f"Dim must be an int, got {type(dim)}")
-    if not isinstance(index, int):
-        raise TypeError(f"Index must be an int, got {type(index)}")
-
-    #  This is a _dispatch_level_ wrapper, so we're intercepting aten.select.int
-
-    if isinstance(tensor, ShardTensor):
-        # if the select index is not sharded, just perform locally, repackage, and return.
-
-        # Perform the select locally:
-        return sharded_select_helper(tensor, dim, index)
-
-    elif isinstance(tensor, torch.Tensor):
-        return aten.select.int(tensor, dim, index)
-    else:
-        raise MissingShardPatch(f"Unsupported tensor type: {type(tensor)}")
-
-
-def select_backward_wrapper(grad_output, input_sizes, dim, index):
-    """
-    Backward function for select operation.
-
-    Args:
-        grad_output: Gradient from the downstream operation
-        input_sizes: Original tensor sizes before select operation
-        dim: Dimension along which select was performed
-        index: Index that was selected
-
-    Returns:
-        Gradient with respect to the input tensor
-    """
-    # Create a zero tensor with the original input shape
-    # Place the gradient at the selected index
-    if isinstance(grad_output, ShardTensor):
-        # Handle ShardTensor case
-        return sharded_select_backward_helper(grad_output, input_sizes, dim, index)
-    elif isinstance(grad_output, torch.Tensor):
-        # Regular tensor case
-        return aten.select_backward.default(grad_output, input_sizes, dim, index)
-    else:
-        raise MissingShardPatch(
-            f"Unsupported tensor types: grad_output {type(grad_output)}"
-        )
-
-
-ShardTensor.register_dispatch_handler(torch.ops.aten.select.int, select_wrapper)
+ShardTensor.register_dispatch_handler(torch.ops.aten.select.int, sharded_select_helper)
 ShardTensor.register_dispatch_handler(
-    torch.ops.aten.select_backward.default, select_backward_wrapper
+    torch.ops.aten.select_backward.default, sharded_select_backward_helper
 )

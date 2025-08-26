@@ -137,8 +137,8 @@ def run_sharded_ball_query_layer_forward(
 
         # Create the input dict:
         bsize = 1
-        npoints = 17
-        nx, ny, nz = 12, 6, 4
+        npoints = 37
+        nx, ny, nz = 16, 6, 4
         # This is pretty aggressive, it'd never actually be this many.
         # But it enables checking the ring ball query deterministically.
         if reverse_mapping:
@@ -270,10 +270,4 @@ def test_shard_tensor_ball_query(shard_points, shard_grid, reverse_mapping):
         nprocs=num_gpus,
         join=True,
         daemon=True,
-    )
-
-
-if __name__ == "__main__":
-    test_shard_tensor_ball_query(
-        shard_points=True, shard_grid=True, reverse_mapping=True
     )

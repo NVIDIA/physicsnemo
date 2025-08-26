@@ -621,7 +621,7 @@ def validation_step(
         for i_batch, sample_batched in enumerate(dataloader):
             sampled_batched = dict_to_device(sample_batched, device)
 
-            with autocast(enabled=False):
+            with autocast(enabled=True):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(
                         sampled_batched, return_volume_neighbors=True

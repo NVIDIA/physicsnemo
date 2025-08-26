@@ -253,6 +253,20 @@ class ShardTensor(DTensor):
     # For Python-level functions (torch.mean, tensor.mean, etc.)
     _function_registry: Dict[Callable, Callable] = {}
 
+    # For custom functions registered with PyTorch,
+    # it is sometimes necessary to match by name.
+    # For instance, if you declare an op with
+    #
+    # @torch.library.custom_op(
+    #    "module::function_name", mutates_args=()
+    # )
+    # def function_external_to_torch(
+    #
+    # Then, you likely want to register the handler with
+    #
+    # ShardTensor.register_named_function_handler("module.function_name.default", handler)
+    _named_function_registry: dict[str, Callable] = {}
+
     # Upon construction of any ShardTensor objects, this will be set to true.
     # Wrappers are triggered dynamically, so the wrapping will be pass-through
     # exclusively until true.
@@ -278,6 +292,11 @@ class ShardTensor(DTensor):
     def register_function_handler(cls, func: Callable, handler: Callable) -> None:
         """Register a handler for a Python-level function or method."""
         cls._function_registry[func] = handler
+
+    @classmethod
+    def register_named_function_handler(cls, func_name: str, handler: Callable) -> None:
+        """Register a named function that has been named via torch.library.custom_op"""
+        cls._named_function_registry[func_name] = handler
 
     @staticmethod
     def __new__(
@@ -375,6 +394,11 @@ class ShardTensor(DTensor):
             if func in cls._function_registry and cls._enable_shard_patches:
                 res = cls._function_registry[func](func, types, args, kwargs)
                 return res
+            elif (
+                str(func) in cls._named_function_registry and cls._enable_shard_patches
+            ):
+                res = cls._named_function_registry[str(func)](func, types, args, kwargs)
+                return res
             # Fall back to the default behavior:
             return super().__torch_function__(func, types, args, kwargs)
 
@@ -413,6 +437,8 @@ class ShardTensor(DTensor):
                 """
                 This function searches the input for ShardTensors that match output shapes.
                 It prevents collectives, since we can copy the sharding shapes for irregular shards.
+                The idea here is that, if the global shape is unchanged, and
+                the placements are unchanged, the sharding shapes should be unchanged.
 
                 If no matches are found, it falls back to inference based on DTensor.
 
@@ -431,6 +457,7 @@ class ShardTensor(DTensor):
                             spec=arg._spec,
                             requires_grad=dtensor.requires_grad,
                         )
+
                 # Fall back to default conversion
                 return ShardTensor.from_dtensor(dtensor)
 

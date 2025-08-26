@@ -58,6 +58,7 @@ from physicsnemo.utils.domino.utils import (
     pad,
     # sample_array,
     shuffle_array,
+    solution_weighted_shuffle_array,
     standardize,
 )
 from physicsnemo.utils.profiling import profile
@@ -680,6 +681,16 @@ class DoMINODataPipe(Dataset):
                         surface_coordinates,
                         self.config.surface_points_sample,
                         surface_sizes,
+                    )
+                elif self.config.surface_sampling_algorithm == "solution_weighted":
+                    (
+                        surface_coordinates_sampled,
+                        idx_surface,
+                    ) = solution_weighted_shuffle_array(
+                        surface_coordinates,
+                        self.config.surface_points_sample,
+                        surface_fields[:, 0],
+                        scaling_factor=0.5,
                     )
                 else:
                     surface_coordinates_sampled, idx_surface = shuffle_array(

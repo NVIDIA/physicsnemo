@@ -34,10 +34,10 @@ pathological conditions.
 ## Dataset
 
 The dataset is composed of 310 simulations obtained on 8 different
-patient-specific models available in the [Vascular Model Repository](www.vascularmodel.com).
+patient-specific models available in the [Vascular Model Repository](https://www.vascularmodel.com).
 Each simulation is stored as a `.vtp` file containing pressure and flow rate information
 at points located in the centerlines of the models and at different timesteps.
-The three-dimensional simulations were set up using [SimVascular](www.simvascular.org),
+The three-dimensional simulations were set up using [SimVascular](https://simvascular.github.io/),
 an open-software software package for cardiovascular modeling and simulation, and
 run on 128 dual-socket AMD(R) EPYC 7742 cores of the San Diego Super Computing
 Center (SDSC) Expanse cluster. The simulations were obtained by varying inflow

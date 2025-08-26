@@ -34,6 +34,7 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
 import numpy as np
+import cupy as cp
 
 from collections import defaultdict
 from pathlib import Path
@@ -397,7 +398,7 @@ def main(cfg: DictConfig):
 
     dirnames = get_filenames(input_path)
     dev_id = torch.cuda.current_device()
-    num_files = int(len(dirnames) / dist.world_size) + 1
+    num_files = int(len(dirnames) / dist.world_size)
     dirnames_per_gpu = dirnames[int(num_files * dev_id) : int(num_files * (dev_id + 1))]
 
     pred_save_path = cfg.eval.save_path
@@ -453,11 +454,13 @@ def main(cfg: DictConfig):
 
         # SDF calculation on the grid using WARP
         sdf_surf_grid = signed_distance_field(
-            stl_vertices,
-            mesh_indices_flattened,
-            surf_grid_reshaped,
+            cp.asarray(stl_vertices).astype(cp.float32),
+            cp.asarray(mesh_indices_flattened).astype(cp.int32),
+            cp.asarray(surf_grid_reshaped).astype(cp.float32),
             use_sign_winding_number=True,
+            return_cupy=False,
         ).reshape(nx, ny, nz)
+
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
@@ -588,7 +591,6 @@ def main(cfg: DictConfig):
                 polydata_vol, volume_variable_names
             )
             volume_fields = np.concatenate(volume_fields, axis=-1)
-            # print(f"Processed vtu {vtu_path}")
 
             bounding_box_dims = []
             bounding_box_dims.append(np.asarray(cfg.data.bounding_box.max))
@@ -616,19 +618,21 @@ def main(cfg: DictConfig):
 
             # SDF calculation on the grid using WARP
             sdf_grid = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                grid_reshaped,
+                cp.asarray(stl_vertices).astype(cp.float32),
+                cp.asarray(mesh_indices_flattened).astype(cp.int32),
+                cp.asarray(grid_reshaped).astype(cp.float32),
                 use_sign_winding_number=True,
+                return_cupy=False,
             ).reshape(nx, ny, nz)
 
             # SDF calculation
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                volume_coordinates,
+                cp.asarray(stl_vertices).astype(cp.float32),
+                cp.asarray(mesh_indices_flattened).astype(cp.int32),
+                cp.asarray(volume_coordinates).astype(cp.float32),
                 include_hit_points=True,
                 use_sign_winding_number=True,
+                return_cupy=False,
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
 

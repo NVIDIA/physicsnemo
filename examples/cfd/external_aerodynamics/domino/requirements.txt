@@ -1,4 +1,5 @@
 torchinfo
 warp-lang
 tensorboard
-cuml-cu12>=25.6.0
+cuml
+einops

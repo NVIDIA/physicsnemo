@@ -1,0 +1,180 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This is the config for generating base model predictions.
+
+# ┌───────────────────────────────────────────┐
+# │            Project Details                │
+# └───────────────────────────────────────────┘  
+project: # Project name
+  name: domino_base_pred
+  
+exp_tag: 1 # Experiment tag
+# Main output directory.
+project_dir: outputs/${project.name}/
+output: outputs/${project.name}/${exp_tag}
+
+hydra: # Hydra config
+  run:
+    dir: ${output}
+  output_subdir: hydra  # Default is .hydra which causes files not being uploaded in W&B.
+
+# The directory to search for checkpoints to continue training.
+resume_dir: ${output}/models
+
+# ┌───────────────────────────────────────────┐
+# │            Data Preprocessing             │
+# └───────────────────────────────────────────┘  
+data_processor: # Data processor configurable parameters
+  kind: drivesim # must be either drivesim or drivaer_aws
+  output_dir: /user/data/drivaer_data_finetune_processed
+  input_dir: /user/datasets/drivaer_aws/drivaer_data_finetune
+  cached_dir: /user/cached/drivaer_aws/drivaer_data_full/
+  use_cache: false
+  num_processors: 12
+
+# ┌───────────────────────────────────────────┐
+# │            Solution variables             │
+# └───────────────────────────────────────────┘  
+variables:
+  surface:
+    solution:
+      # The following is for AWS DrivAer dataset.
+      pMeanTrim: scalar
+      wallShearStressMeanTrim: vector
+  volume:
+    solution:
+      # The following is for AWS DrivAer dataset.
+      UMeanTrim: vector
+      pMeanTrim: scalar
+      nutMeanTrim: scalar
+
+# ┌───────────────────────────────────────────┐
+# │          Training Data Configs            │
+# └───────────────────────────────────────────┘  
+data: # Input directory for training and validation data
+  input_dir:  /user/data/drivaer_data_finetune_processed
+  input_dir_val: /user/data/drivaer_data_finetune_processed_val
+  bounding_box: # Bounding box dimensions for computational domain
+    min: [-3, -2.5 , -0.35]
+    max: [8.5 , 2.5  , 3.5]
+  bounding_box_surface: # Bounding box dimensions for car surface
+    min: [-1.4, -1.5 , -0.35]
+    max: [5.25 , 1.5  , 2.0]
+
+# ┌───────────────────────────────────────────┐
+# │          Domain Parallelism Settings      │
+# └───────────────────────────────────────────┘  
+domain_parallelism:
+  domain_size: 1
+  shard_grid: false
+  shard_points: false
+
+# ┌───────────────────────────────────────────┐
+# │          Model Parameters                 │
+# └───────────────────────────────────────────┘  
+model:
+  model_type: combined # train which model? surface, volume, combined
+  loss_function: 
+    loss_type: "mse" # mse or rmse
+    area_weighing_factor: 1000 # Generally inverse of maximum area
+  interp_res: [128, 64, 64] # resolution of latent space 128, 64, 48
+  use_sdf_in_basis_func: true # SDF in basis function network
+  positional_encoding: false # calculate positional encoding?
+  volume_points_sample: 8192 # Number of points to sample in volume per epoch
+  surface_points_sample: 8192 # Number of points to sample on surface per epoch
+  surface_sampling_algorithm: area_weighted # random or area_weighted
+  geom_points_sample: 300_000 # Number of points to sample on STL per epoch
+  surface_neighbors: true # Pre-compute surface neighborhood from input data
+  num_surface_neighbors: 1 # How many neighbors?
+  use_surface_normals: true # Use surface normals and surface areas for surface computation?
+  use_surface_area: true # Use only surface normals and not surface area
+  integral_loss_scaling_factor: 100 # Scale integral loss by this factor
+  normalization: min_max_scaling # or mean_std_scaling
+  encode_parameters: true # encode inlet velocity and air density in the model
+  surf_loss_scaling: 5.0 # scale surface loss with this factor in combined mode
+  vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
+  geometry_encoding_type: both # geometry encoder type, sdf, stl, both
+  solution_calculation_mode: two-loop # one-loop is better for sharded, two-loop is lower memory but more overhead
+  resampling_surface_mesh: # resampling of surface mesh before constructing kd tree
+    resample: false #false or true
+    points: 1_000_000 # number of points
+  geometry_rep: # Hyperparameters for geometry representation network
+    geo_conv:
+      base_neurons: 32 # 256 or 64
+      base_neurons_out: 1
+      volume_radii: [0.1, 0.5, 2.5, 5.0]
+      surface_radii: [0.01, 0.05, 0.1] # 0.05
+      hops: 1
+    geo_processor:
+      base_filters: 8
+    geo_processor_sdf:
+      base_filters: 8
+  nn_basis_functions: # Hyperparameters for basis function network
+    base_layer: 512
+    fourier_features: false
+    num_modes: 5
+  aggregation_model: # Hyperparameters for aggregation network
+    base_layer: 512
+  position_encoder: # Hyperparameters for position encoding network
+    base_neurons: 512
+  geometry_local: # Hyperparameters for local geometry extraction
+    volume_neighbors_in_radius: [64] # [64, 128]
+    surface_neighbors_in_radius: [64] # [64]
+    volume_radii: [0.05] # [0.05. 0.1]
+    surface_radii: [0.05] # [0.05]
+    base_layer: 512
+  parameter_model:
+    base_layer: 512
+    scaling_params: [30.0, 1.226] # [inlet_velocity, air_density]
+    fourier_features: false
+    num_modes: 5
+
+# ┌───────────────────────────────────────────┐
+# │          Training Configs                 │
+# └───────────────────────────────────────────┘  
+train: # Training configurable parameters
+  epochs: 1000
+  checkpoint_interval: 1
+  dataloader:
+    batch_size: 1
+    pin_memory: false # if the preprocessing is outputing GPU data, set this to false
+  sampler:
+    shuffle: true
+    drop_last: false
+  checkpoint_dir: /code/user/finetuning # Use only for retraining
+  
+# ┌───────────────────────────────────────────┐
+# │          Validation Configs               │
+# └───────────────────────────────────────────┘  
+val: # Validation configurable parameters
+  dataloader:
+    batch_size: 1 # Set to 1
+    pin_memory: false # if the preprocessing is outputing GPU data, set this to false
+  sampler:
+    shuffle: true
+    drop_last: false
+
+# ┌───────────────────────────────────────────┐
+# │          Testing data Configs             │
+# └───────────────────────────────────────────┘  
+eval: # Testing configurable parameters
+  test_path: /user/datasets/drivaer_aws/drivaer_data_finetune
+  save_path: /user/nim_predictions # Dir to save predicted results in raw format (vtp, vtu)
+  checkpoint_dir: /user/nim_checkpoint
+  checkpoint_name: domino-drivesim-recent.pt # Name of checkpoint to select from saved checkpoints
+  refine_stl: False # Automatically refine STL during inference
+  stencil_size: 1 # Stencil size for evaluating surface and volume model

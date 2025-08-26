@@ -327,18 +327,18 @@ class ClimateDatapipe(Datapipe):
     with the following structure, where {name} indicates the name of the data
     source provided:
 
-    - `state_seq-{name}`: Tensors of shape
+    - ``state_seq-{name}``: Tensors of shape
         (batch_size, num_steps, num_channels, height, width).
         This sequence is drawn from the data file and normalized if a
         statistics file is provided.
-    - `timestamps-{name}`: Tensors of shape (batch_size, num_steps), containing
+    - ``timestamps-{name}``: Tensors of shape (batch_size, num_steps), containing
         timestamps for each timestep in the sequence.
-    - `{aux_variable}-{name}`: Tensors of shape
+    - ``{aux_variable}-{name}``: Tensors of shape
         (batch_size, num_steps, aux_channels, height, width),
         containing the auxiliary variables returned by each data source
-    - `cos_zenith-{name}`: Tensors of shape (batch_size, num_steps, 1, height, width),
+    - ``cos_zenith-{name}``: Tensors of shape (batch_size, num_steps, 1, height, width),
         containing the cosine of the solar zenith angle if specified.
-    - `{invariant_name}: Tensors of shape (batch_size, invariant_channels, height, width),
+    - ``{invariant_name}``: Tensors of shape (batch_size, invariant_channels, height, width),
         containing the time-invariant data (depending only on spatial coordinates)
         returned by the datapipe. These can include e.g.
         land-sea mask and geopotential/surface elevation.
@@ -362,7 +362,7 @@ class ClimateDatapipe(Datapipe):
 
     Parameters
     ----------
-    sources: Iterable[ClimateDataSpec]
+    sources: Iterable[ClimateDataSourceSpec]
         A list of data specifications defining the sources for the climate variables
     batch_size : int, optional
         Batch size, by default 1
