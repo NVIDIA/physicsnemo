@@ -66,8 +66,8 @@ changes.`
 
 ## 📊 Dataset
 
-ERA5 dataset is used for training. We do not provide the ERA5 dataset it in the
-tutorial. However, ERA5 data can be downloaded by the dataset creation script
+ERA5 dataset is used for training. We do not provide the ERA5 dataset. However,
+ERA5 data can be downloaded using the dataset creation script
 by changing the DataSource to one of the built-in earth2studio ERA5 sources.
 
 ⚠️ `Warning - This example requires multiple TBs of disk space.`
