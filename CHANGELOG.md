@@ -6,10 +6,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0a0] - 2025-08-XX
+## [1.3.0a0] - 2025-XX-YY
 
 ### Added
 
+- Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
+  by dispatching to the proper optimized library, and torch.compile compatible.
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+### Dependencies
+
+## [1.2.0] - 2025-08-26
+
+### Added
+
+- Diffusion Transformer (DiT) model. The DiT model can be accessed in
+ `physicsnemo.experimental.models.dit.DiT`. **⚠️Warning:** - Experimental feature
+  subject to future API changes.
 - Improved documentation for diffusion models and diffusion utils.
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
   `Module.from_checkpoint("chkpt.mdlus", override_args=set(...))`.
@@ -32,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hybrid MeshGraphNet for modeling structural deformation
 - Enabled TransformerEngine backend in the `transolver` model.
 - Inference code for x-meshgraphnet example for external aerodynamics.
+- Added a new example for external_aerodynamics: training `transolver` on
+  irregular mesh data for DrivaerML surface data.
+- Added a new example for external aerodynamics for finetuning pretrained models.
 
 ### Changed
 
@@ -101,15 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.Module.load_state_dict`.
 - Migrated Hybrid MGN and deforming plate example to PyTorch Geometric.
 
-### Deprecated
-
-### Removed
-
 ### Fixed
 
-### Security
-
-### Dependencies
+- Bug fixes in DoMINO model in sphere sampling and tensor reshaping
+- Bug fixes in DoMINO utils random sampling and test.py
+- Optimized DoMINO config params based on DrivAer ML
 
 ## [1.1.1] - 2025-06-16
 

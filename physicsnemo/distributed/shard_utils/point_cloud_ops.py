@@ -20,11 +20,7 @@ import torch
 import torch.distributed as dist
 import warp as wp
 
-from physicsnemo.models.layers.ball_query import (
-    _ball_query_backward_primitive_,
-    _ball_query_forward_primitive_,
-    ball_query_layer,
-)
+from physicsnemo.utils.neighbors.radius_search._warp_impl import radius_search_impl
 from physicsnemo.utils.version_check import check_module_requirements
 
 check_module_requirements("physicsnemo.distributed.shard_tensor")
@@ -45,26 +41,24 @@ from physicsnemo.distributed.shard_utils.ring import (  # noqa: E402
 
 wp.config.quiet = True
 
-__all__ = ["ball_query_layer_wrapper"]
-
 
 def ring_ball_query(
-    points1: ShardTensor,
-    points2: ShardTensor,
+    points: ShardTensor,
+    queries: ShardTensor,
     bq_kwargs: dict,
 ) -> Tuple[ShardTensor, ShardTensor, ShardTensor]:
     """
     Performs ball query operation on points distributed across ranks in a ring configuration.
 
     Args:
-        points1: First set of points as a ShardTensor
-        points2: Second set of points as a ShardTensor
+        points: First set of points as a ShardTensor
+        queries: Second set of points as a ShardTensor
         bq_kwargs: Keyword arguments for the ball query operation
 
     Returns:
         Tuple of (mapping, num_neighbors, outputs) as ShardTensors
     """
-    mesh = points1._spec.mesh
+    mesh = points._spec.mesh
     # We can be confident of this because 1D meshes are enforced
     mesh_dim = 0
 
@@ -80,217 +74,222 @@ def ring_ball_query(
     )
 
     # Now, get the inputs locally:
-    local_points1 = points1.to_local()
-    local_points2 = points2.to_local()
+    local_points = points.to_local()
+    local_queries = queries.to_local()
 
     # Get the shard sizes for the point cloud going around the ring.
     # We've already checked that the mesh is 1D so call the '0' index.
-    p2_shard_sizes = points2._spec.sharding_shapes()[0]
+
+    points_shard_sizes = points._spec.sharding_shapes()[0]
 
     # Call the differentiable version of the ring-ball-query:
-    mapping_shard, num_neighbors_shard, outputs_shard = RingBallQuery.apply(
-        local_points1,
-        local_points2,
+    indices_shard, outputs_shard, _, num_neighbors_shard = RingBallQuery.apply(
+        local_points,
+        local_queries,
         mesh,
         ring_config,
-        p2_shard_sizes,
+        points_shard_sizes,
         bq_kwargs,
     )
 
     # TODO
-    # the output shapes can be computed directly from the input sharding of points1
+    # the output shapes can be computed directly from the input sharding of queries
     # Requires a little work to fish out parameters but that's it.
     # For now, using blocking inference to get the output shapes.
 
     # For the output shapes, we can compute the output sharding if needed.  If the placement
     # is Replicate, just infer since there aren't shardings.
-    if isinstance(points1._spec.placements[0], Replicate):
-        map_shard_shapes = "infer"
+    if isinstance(queries._spec.placements[0], Replicate):
+        indices_shard_shapes = "infer"
         neighbors_shard_shapes = "infer"
         outputs_shard_shapes = "infer"
-    elif isinstance(points1._spec.placements[0], Shard):
-        p1_shard_sizes = points1._spec.sharding_shapes()[0]
+    elif isinstance(queries._spec.placements[0], Shard):
+        queries_shard_sizes = queries._spec.sharding_shapes()[0]
 
         # This conversion to shard tensor can be done explicitly computing the output shapes.
 
-        b = mapping_shard.shape[0]
-        mp = mapping_shard.shape[-1]
-        d = points1.shape[-1]
-        mapping_shard_output_sharding = {
-            0: tuple(torch.Size([b, s[1], mp]) for s in p1_shard_sizes),
+        mp = indices_shard.shape[-1]
+        d = queries.shape[-1]
+        indices_shard_output_sharding = {
+            0: tuple(torch.Size([s[0], mp]) for s in queries_shard_sizes),
         }
         num_neighbors_shard_output_sharding = {
-            0: tuple(torch.Size([b, s[1]]) for s in p1_shard_sizes),
+            0: tuple(torch.Size([s[0]]) for s in queries_shard_sizes),
         }
         outputs_shard_output_sharding = {
-            0: tuple(torch.Size([b, s[1], mp, d]) for s in p1_shard_sizes),
+            0: tuple(torch.Size([s[0], mp, d]) for s in queries_shard_sizes),
         }
 
-        map_shard_shapes = mapping_shard_output_sharding
-        # map_shard_shapes = "infer"
+        indices_shard_shapes = indices_shard_output_sharding
         neighbors_shard_shapes = num_neighbors_shard_output_sharding
         outputs_shard_shapes = outputs_shard_output_sharding
 
     # Convert back to ShardTensor
-    mapping_shard = ShardTensor.from_local(
-        mapping_shard, points1._spec.mesh, points1._spec.placements, map_shard_shapes
+    indices_shard = ShardTensor.from_local(
+        indices_shard,
+        queries._spec.mesh,
+        queries._spec.placements,
+        indices_shard_shapes,
     )
     num_neighbors_shard = ShardTensor.from_local(
         num_neighbors_shard,
-        points1._spec.mesh,
-        points1._spec.placements,
+        queries._spec.mesh,
+        queries._spec.placements,
         neighbors_shard_shapes,
     )
     outputs_shard = ShardTensor.from_local(
         outputs_shard,
-        points1._spec.mesh,
-        points1._spec.placements,
+        queries._spec.mesh,
+        queries._spec.placements,
         outputs_shard_shapes,
     )
-    return mapping_shard, num_neighbors_shard, outputs_shard
+    return indices_shard, outputs_shard, None, num_neighbors_shard
 
 
 def ringless_ball_query(
-    points1: ShardTensor,
-    points2: ShardTensor,
+    points: ShardTensor,
+    queries: ShardTensor,
     bq_kwargs: dict,
 ) -> Tuple[ShardTensor, ShardTensor, ShardTensor]:
     """
-    Performs ball query operation on points distributed across ranks, without a ring.
-    Used when points2 is replicated (not sharded).
+    Performs ball query operation on queries distributed across ranks, without a ring.
+    Used when points is replicated (not sharded).
 
-    points1 may or may not be sharded.
+    queries may or may not be sharded.  Outputs will match queries for sharding.
 
     Args:
-        points1: First set of points as a ShardTensor
-        points2: Second set of points as a ShardTensor
+        points: First set of points as a ShardTensor
+        queries: Second set of points as a ShardTensor
         bq_kwargs: Keyword arguments for the ball query operation
 
     Returns:
         Tuple of (mapping, num_neighbors, outputs) as ShardTensors
     """
 
-    local_p1 = points1.to_local()
-    local_p2 = points2.to_local()
+    local_points = points.to_local()
+    local_queries = queries.to_local()
 
-    # if points1 is sharded, then it will compute a partial gradient of points2
+    # if queries is sharded, then it will compute a partial gradient of queries
     # in the backwards pass.  So, this operation will do the reduction going backward
     # by summing:
-    p1_placement = points1._spec.placements[0]
-    if p1_placement.is_shard():
-        local_p2 = GradReducer.apply(local_p2, points2._spec)
+    queries_placement = queries._spec.placements[0]
+    if queries_placement.is_shard():
+        local_points = GradReducer.apply(local_points, queries._spec)
 
-    mapping, num_neighbors, outputs = ball_query_layer(
-        local_p1,
-        local_p2,
+    local_indices, local_points, _, local_num_neighbors = radius_search_impl(
+        local_points,
+        local_queries,
         **bq_kwargs,
     )
 
-    k = bq_kwargs["k"]
-    b = points1.shape[0]
+    max_points = bq_kwargs["max_points"]
 
-    mapping_placement = {}
+    indices_placement = {}
     num_neighbors_placement = {}
-    outputs_placement = {}
+    output_points_placement = {}
 
-    for k, s in points1._spec.sharding_shapes().items():
-        n_points = [int(_s[1]) for _s in s]
-        mapping_placement[k] = tuple(torch.Size([b, np, k]) for np in n_points)
-        num_neighbors_placement[k] = tuple(torch.Size([b, np]) for np in n_points)
-        outputs_placement[k] = tuple(torch.Size([b, np, k, 3]) for np in n_points)
+    # Output sharding should match the query shapes:
+    for i_dim, s in queries._spec.sharding_shapes().items():
+        n_points = [int(_s[0]) for _s in s]
+        indices_placement[i_dim] = tuple(
+            torch.Size([np, max_points]) for np in n_points
+        )
+        num_neighbors_placement[i_dim] = tuple(torch.Size([np]) for np in n_points)
+        output_points_placement[i_dim] = tuple(
+            torch.Size([np, max_points, 3]) for np in n_points
+        )
 
-    mapping = ShardTensor.from_local(
-        mapping,
-        points1._spec.mesh,
-        points1._spec.placements,
-        sharding_shapes=mapping_placement,
+    indices = ShardTensor.from_local(
+        local_indices,
+        queries._spec.mesh,
+        queries._spec.placements,
+        sharding_shapes=indices_placement,
     )
     num_neighbors = ShardTensor.from_local(
-        num_neighbors,
-        points1._spec.mesh,
-        points1._spec.placements,
+        local_num_neighbors,
+        queries._spec.mesh,
+        queries._spec.placements,
         sharding_shapes=num_neighbors_placement,
     )
-    outputs = ShardTensor.from_local(
-        outputs,
-        points1._spec.mesh,
-        points1._spec.placements,
-        sharding_shapes=outputs_placement,
+    output_points = ShardTensor.from_local(
+        local_points,
+        queries._spec.mesh,
+        queries._spec.placements,
+        sharding_shapes=output_points_placement,
     )
 
-    return mapping, num_neighbors, outputs
+    return indices, num_neighbors, output_points
 
 
 def merge_outputs(
-    current_mapping: Union[torch.Tensor, None],
+    current_indices: Union[torch.Tensor, None],
     current_num_neighbors: Union[torch.Tensor, None],
-    current_outputs: Union[torch.Tensor, None],
-    incoming_mapping: torch.Tensor,
+    current_points: Union[torch.Tensor, None],
+    incoming_indices: torch.Tensor,
     incoming_num_neighbors: torch.Tensor,
-    incoming_outputs: torch.Tensor,
+    incoming_points: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Perform a gather/scatter operation on the mapping and outputs tensors.
     This is an _inplace_ operation on the current tensors, assuming they are not None
 
     Args:
-        current_mapping: Current mapping tensor or None
+        current_indices: Current mapping tensor or None
         current_num_neighbors: Current number of neighbors tensor or None
-        current_outputs: Current outputs tensor or None
-        incoming_mapping: Incoming mapping tensor to merge
+        current_points: Current outputs tensor or None
+        incoming_indices: Incoming mapping tensor to merge
         incoming_num_neighbors: Incoming number of neighbors tensor to merge
-        incoming_outputs: Incoming outputs tensor to merge
+        incoming_points: Incoming outputs tensor to merge
 
     Returns:
         Tuple of merged (mapping, num_neighbors, outputs) tensors
     """
 
     @wp.kernel
-    def merge_mapping_and_outputs(
-        current_m: wp.array3d(dtype=wp.int32),
-        current_nn: wp.array2d(dtype=wp.int32),
-        current_o: wp.array4d(dtype=wp.float32),
-        incoming_m: wp.array3d(dtype=wp.int32),
-        incoming_nn: wp.array2d(dtype=wp.int32),
-        incoming_o: wp.array4d(dtype=wp.float32),
+    def merge_indices_and_points(
+        current_m: wp.array2d(dtype=wp.int32),
+        current_nn: wp.array(dtype=wp.int32),
+        current_o: wp.array3d(dtype=wp.float32),
+        incoming_m: wp.array2d(dtype=wp.int32),
+        incoming_nn: wp.array(dtype=wp.int32),
+        incoming_o: wp.array3d(dtype=wp.float32),
         max_neighbors: int,
     ):
-        # This is a kernel that is essentially doing a gather/scatter operation.
+        # This is a kernel that is essentially doing a ragged concat + truncate
 
         # Which points are we looking at?
         tid = wp.tid()
 
         # How many neighbors do we have?
-        num_neighbors = current_nn[0, tid]
+        num_neighbors = current_nn[tid]
         available_space = max_neighbors - num_neighbors
 
         # How many neighbors do we have in the incoming tensor?
-        incoming_num_neighbors = incoming_nn[0, tid]
+        incoming_num_neighbors = incoming_nn[tid]
 
         # Can't add more neighbors than we have space for:
         neighbors_to_add = min(incoming_num_neighbors, available_space)
-
         # Now, copy the incoming neighbors to offset locations in the current tensor:
         for i in range(neighbors_to_add):
             # incoming has no offset
             # current has offset of num_neighbors
-            current_m[0, tid, num_neighbors + i] = incoming_m[0, tid, i]
-            current_o[0, tid, num_neighbors + i, 0] = incoming_o[0, tid, i, 0]
-            current_o[0, tid, num_neighbors + i, 1] = incoming_o[0, tid, i, 1]
-            current_o[0, tid, num_neighbors + i, 2] = incoming_o[0, tid, i, 2]
+            current_m[tid, num_neighbors + i] = incoming_m[tid, i]
+            current_o[tid, num_neighbors + i, 0] = incoming_o[tid, i, 0]
+            current_o[tid, num_neighbors + i, 1] = incoming_o[tid, i, 1]
+            current_o[tid, num_neighbors + i, 2] = incoming_o[tid, i, 2]
 
         # Finally, update the number of neighbors:
-        current_nn[0, tid] = num_neighbors + incoming_num_neighbors
+        current_nn[tid] = num_neighbors + neighbors_to_add
         return
 
     if (
-        current_mapping is None
+        current_indices is None
         and current_num_neighbors is None
-        and current_outputs is None
+        and current_points is None
     ):
-        return incoming_mapping, incoming_num_neighbors, incoming_outputs
+        return incoming_indices, incoming_num_neighbors, incoming_points
 
-    _, n_points, max_neighbors = current_mapping.shape
+    n_points, max_neighbors = current_indices.shape
 
     # This is a gather/scatter operation:
     # We need to merge the incoming values into the current arrays.  The arrays
@@ -303,21 +302,23 @@ def merge_outputs(
     # - gather / scatter from incoming to current.
     # - Update the current num neighbors correctly
 
+    stream = wp.stream_from_torch(current_indices.device)
     wp.launch(
-        merge_mapping_and_outputs,
+        merge_indices_and_points,
         dim=n_points,
         inputs=[
-            wp.from_torch(current_mapping, return_ctype=True),
+            wp.from_torch(current_indices, return_ctype=True),
             wp.from_torch(current_num_neighbors, return_ctype=True),
-            wp.from_torch(current_outputs, return_ctype=True),
-            wp.from_torch(incoming_mapping, return_ctype=True),
+            wp.from_torch(current_points, return_ctype=True),
+            wp.from_torch(incoming_indices, return_ctype=True),
             wp.from_torch(incoming_num_neighbors, return_ctype=True),
-            wp.from_torch(incoming_outputs, return_ctype=True),
+            wp.from_torch(incoming_points, return_ctype=True),
             max_neighbors,
         ],
+        stream=stream,
     )
 
-    return current_mapping, current_num_neighbors, current_outputs
+    return current_indices, current_num_neighbors, current_points
 
 
 class RingBallQuery(torch.autograd.Function):
@@ -331,8 +332,8 @@ class RingBallQuery(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx: torch.autograd.function.FunctionCtx,
-        points1: torch.Tensor,
-        points2: torch.Tensor,
+        points: torch.Tensor,
+        queries: torch.Tensor,
         mesh: Any,
         ring_config: RingPassingConfig,
         shard_sizes: list,
@@ -343,10 +344,10 @@ class RingBallQuery(torch.autograd.Function):
 
         Args:
             ctx: Context for saving variables for backward pass
-            points1: First set of points
-            points2: Second set of points
-            lengths1: Lengths of each batch in points1
-            lengths2: Lengths of each batch in points2
+            points: First set of points
+            queries: Second set of points
+            lengths1: Lengths of each batch in points
+            lengths2: Lengths of each batch in queries
             mesh: Distribution mesh specification
             ring_config: Configuration for ring passing
             shard_sizes: Sizes of each shard across ranks
@@ -361,12 +362,12 @@ class RingBallQuery(torch.autograd.Function):
         ctx.ring_config = ring_config
 
         # Create buffers to store outputs
-        current_mapping = None
+        current_indices = None
         current_num_neighbors = None
-        current_outputs = None
+        current_out_points = None
 
         # For the first iteration, use local tensors
-        current_p1, current_p2 = (points1, points2)
+        current_points, current_queries = (points, queries)
 
         mesh_rank = mesh.get_local_rank()
 
@@ -376,31 +377,34 @@ class RingBallQuery(torch.autograd.Function):
         # Store results from each rank to merge in the correct order
         rank_results = [None] * world_size
         # For uneven point clouds, the global stide is important:
-        strides = [s[1] for s in shard_sizes]
+        strides = [s[0] for s in shard_sizes]
 
-        ctx.k = bq_kwargs["k"]
+        ctx.max_points = bq_kwargs["max_points"]
         ctx.radius = bq_kwargs["radius"]
-        ctx.hash_grid = bq_kwargs["hash_grid"]
+        ctx.return_dists = bq_kwargs["return_dists"]
+        ctx.return_points = bq_kwargs["return_points"]
 
         for i in range(world_size):
             source_rank = (mesh_rank - i) % world_size
 
             (
-                local_mapping,
+                local_indices,
+                local_points,
+                _,
                 local_num_neighbors,
-                local_outputs,
-            ) = _ball_query_forward_primitive_(
-                current_p1[0],
-                current_p2[0],
-                ctx.k,
+            ) = radius_search_impl(
+                current_points,
+                current_queries,
                 ctx.radius,
-                ctx.hash_grid,
+                ctx.max_points,
+                ctx.return_dists,
+                ctx.return_points,
             )
             # Store the result with its source rank
             rank_results[source_rank] = (
-                local_mapping,
+                local_indices,
+                local_points,
                 local_num_neighbors,
-                local_outputs,
             )
 
             # For point clouds, we need to pass the size of the incoming shard.
@@ -409,8 +413,8 @@ class RingBallQuery(torch.autograd.Function):
             # TODO - this operation should be done async and checked for completion at the start of the next loop.
             if i != world_size - 1:
                 # Don't do a ring on the last iteration.
-                current_p2 = perform_ring_iteration(
-                    current_p2,
+                current_points = perform_ring_iteration(
+                    current_points,
                     ctx.mesh,
                     ctx.ring_config,
                     recv_shape=shard_sizes[next_source_rank],
@@ -420,23 +424,25 @@ class RingBallQuery(torch.autograd.Function):
         stride = 0
         for r in range(world_size):
             if rank_results[r] is not None:
-                local_mapping, local_num_neighbors, local_outputs = rank_results[r]
+                local_indices, local_points, local_num_neighbors = rank_results[r]
 
-                current_mapping, current_num_neighbors, current_outputs = merge_outputs(
-                    current_mapping,
-                    current_num_neighbors,
-                    current_outputs,
-                    local_mapping + stride,
-                    local_num_neighbors,
-                    local_outputs,
+                current_indices, current_num_neighbors, current_out_points = (
+                    merge_outputs(
+                        current_indices,
+                        current_num_neighbors,
+                        current_out_points,
+                        local_indices + stride,
+                        local_num_neighbors,
+                        local_points,
+                    )
                 )
 
                 stride += strides[r]
         ctx.save_for_backward(
-            points1, points2, current_mapping, current_num_neighbors, current_outputs
+            points, queries, current_indices, current_num_neighbors, current_out_points
         )
 
-        return current_mapping, current_num_neighbors, current_outputs
+        return current_indices, current_out_points, None, current_num_neighbors
 
     @staticmethod
     def backward(
@@ -458,40 +464,40 @@ class RingBallQuery(torch.autograd.Function):
 
         raise MissingShardPatch("Backward pass for ring ball query not implemented.")
 
-        (
-            points1,
-            points2,
-            current_mapping,
-            current_num_neighbors,
-            current_outputs,
-        ) = ctx.saved_tensors
+        # (
+        #     points,
+        #     queries,
+        #     current_indices,
+        #     current_num_neighbors,
+        #     current_outputs,
+        # ) = ctx.saved_tensors
 
-        # We need to do a ring again in the backward direction.
-        # The backward pass is computed locally, and then the gradients
-        # and p2 are moved along the ring together.
-        # for i in range(world_size):
-        # Calculate which source rank this data is from
+        # # We need to do a ring again in the backward direction.
+        # # The backward pass is computed locally, and then the gradients
+        # # and p2 are moved along the ring together.
+        # # for i in range(world_size):
+        # # Calculate which source rank this data is from
 
-        local_p2_grad = _ball_query_backward_primitive_(
-            points1[0],
-            points2[0],
-            current_mapping,
-            current_num_neighbors,
-            current_outputs,
-            mapping_grad,
-            num_neighbors_grad,
-            outputs_grad,
-        )
-        local_p1_grad = torch.zeros_like(points1)
+        # local_p2_grad = _ball_query_backward_primitive_(
+        #     points[0],
+        #     queries[0],
+        #     current_indices,
+        #     current_num_neighbors,
+        #     current_outputs,
+        #     mapping_grad,
+        #     num_neighbors_grad,
+        #     outputs_grad,
+        # )
+        # local_points_grad = torch.zeros_like(points)
 
-        return (
-            local_p1_grad,
-            local_p2_grad.unsqueeze(0),
-            None,
-            None,
-            None,
-            None,
-        )
+        # return (
+        #     local_points_grad,
+        #     local_p2_grad,
+        #     None,
+        #     None,
+        #     None,
+        #     None,
+        # )
 
 
 class GradReducer(torch.autograd.Function):
@@ -523,120 +529,126 @@ class GradReducer(torch.autograd.Function):
         return grad_output, None
 
 
-def ball_query_layer_wrapper(
+def radius_search_wrapper(
     func: Any, type: Any, args: tuple, kwargs: dict
-) -> Union[
-    Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-    Tuple[ShardTensor, ShardTensor, ShardTensor],
-]:
+) -> tuple[ShardTensor, ShardTensor, ShardTensor]:
     """
-    Wrapper for BallQueryLayer.forward to support sharded tensors.
+    Wrapper for radius_search to support sharded tensors.
 
-    Handles 4 situations, based on the sharding of points 1 and points 2:
-    - Points 2 is sharded: a ring computation is performed.
-        - Points 1 is sharded: each rank contains a partial output,
-          which is returned sharded like Points 1.
-        - Points 1 is replicated: each rank returns the full output,
-          even though the input points 2 is sharded.
-    - Points 1 is replicated: No ring is needed.
-        - Points 1 is sharded: each rank contains a partial output,
-          which is returned sharded like Points 1.
-        - Points 1 is replicated: each rank returns the full output,
+    Handles 4 situations, based on the sharding of points and queries:
+    - Points is sharded: a ring computation is performed.
+        - queries is sharded: each rank contains a partial output,
+          which is returned sharded like queries.
+        - queries is replicated: each rank returns the full output,
+          even though the input points is sharded.
+    - Points is replicated: No ring is needed.
+        - queries is sharded: each rank contains a partial output,
+          which is returned sharded like queries.
+        - queries is replicated: each rank returns the full output,
           even though the input points 2 is sharded.
 
     All input sharding has to be over a 1D mesh.  2D Point cloud sharding
     is not supported at this time.
 
     Regardless of the input sharding, the output will always be sharded like
-    points 1, and the output points will always have queried every input point
+    queries, and the output points will always have queried every input point
     like in the non-sharded case.
 
     Args:
         func: Original forward method
         type: Types of the inputs
-        args: Positional arguments (points1, points2)
+        args: Positional arguments (points, queries)
         kwargs: Keyword arguments
 
     Returns:
-        Tuple of (mapping, num_neighbors, outputs) as torch.Tensor or ShardTensor
+        Tuple of (mapping, num_neighbors, outputs) as ShardTensor
     """
 
-    points1, points2, bq_kwargs = repackage_ball_query_args(*args, **kwargs)
+    points, queries, bq_kwargs = repackage_radius_search_wrapper_args(*args, **kwargs)
+
+    if bq_kwargs["max_points"] is None:
+        raise MissingShardPatch(
+            "sharded radius_search_wrapper for radius_search does not currently support max_points=None"
+        )
+
+    if bq_kwargs["return_dists"] is True:
+        raise MissingShardPatch(
+            "sharded radius_search_wrapper for radius_search does not currently support return_dists=True"
+        )
 
     # Make sure all meshes are the same
-    if points1._spec.mesh != points2._spec.mesh:
+    if points._spec.mesh != queries._spec.mesh:
         raise MissingShardPatch(
-            "point_cloud_ops.ball_query_layer_wrapper: All point inputs must be on the same mesh"
+            "point_cloud_ops.radius_search_wrapper: All point inputs must be on the same mesh"
         )
 
     # make sure all meshes are 1D
-    if points1._spec.mesh.ndim != 1:
+    if points._spec.mesh.ndim != 1:
         raise MissingShardPatch(
-            "point_cloud_ops.ball_query_layer_wrapper: All point inputs must be on 1D meshes"
+            "point_cloud_ops.radius_search_wrapper: All point inputs must be on 1D meshes"
         )
 
     # Do we need a ring?
-    points2_placement = points2._spec.placements[0]
-    if points2_placement.is_shard():
+    points_placement = points._spec.placements[0]
+
+    if points_placement.is_shard():
         # We need a ring
-        mapping, num_neighbors, outputs = ring_ball_query(points1, points2, bq_kwargs)
+        mapping, outputs, _, num_neighbors = ring_ball_query(points, queries, bq_kwargs)
     else:
         # No ring is needed
         mapping, num_neighbors, outputs = ringless_ball_query(
-            points1, points2, bq_kwargs
+            points, queries, bq_kwargs
         )
 
-    return mapping, num_neighbors, outputs
+    return mapping, outputs, None, num_neighbors
 
 
-def repackage_ball_query_args(
-    points1: Union[torch.Tensor, ShardTensor],
-    points2: Union[torch.Tensor, ShardTensor],
-    k: int,
+def repackage_radius_search_wrapper_args(
+    points: ShardTensor,
+    queries: ShardTensor,
     radius: float,
-    hash_grid: wp.HashGrid,
-    *args: Any,
-    **kwargs: Any,
-) -> Tuple[
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
-    dict,
-]:
+    max_points: int | None = None,
+    return_dists: bool = False,
+    return_points: bool = False,
+    *args,
+    **kwargs,
+) -> tuple[ShardTensor, ShardTensor, dict]:
     """Repackages ball query arguments into a standard format.
 
     Takes the arguments that could be passed to a ball query operation
-    and separates them into core tensor inputs (points1, points2, lengths1, lengths2)
+    and separates them into core tensor inputs (points, queries, lengths1, lengths2)
     and configuration parameters packaged as a kwargs dict.
 
     Args:
-        points1: First set of points
-        points2: Second set of points
-        lengths1: Lengths of each batch in points1
-        lengths2: Lengths of each batch in points2
+        points: First set of points
+        queries: Second set of points
+        lengths1: Lengths of each batch in points
+        lengths2: Lengths of each batch in queries
         *args: Additional positional args
         **kwargs: Additional keyword args
 
     Returns:
         Tuple containing:
-        - points1 tensor
-        - points2 tensor
+        - points tensor
+        - queries tensor
         - Dict of ball query configuration parameters
     """
     # Extract any additional parameters that might be in kwargs
     # or use defaults if not provided
     return_kwargs = {
-        "k": k,
         "radius": radius,
-        "hash_grid": hash_grid,
+        "max_points": max_points,
+        "return_dists": return_dists,
+        "return_points": return_points,
     }
 
     # Add any explicitly passed parameters
     if kwargs:
         return_kwargs.update(kwargs)
 
-    return points1, points2, return_kwargs
+    return points, queries, return_kwargs
 
 
-ShardTensor.register_function_handler(ball_query_layer, ball_query_layer_wrapper)
+ShardTensor.register_named_function_handler(
+    "physicsnemo.radius_search_warp.default", radius_search_wrapper
+)

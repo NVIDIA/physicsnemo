@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.04-py3
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.06-py3
 FROM ${BASE_CONTAINER} as builder
 
 ARG TARGETPLATFORM
@@ -132,6 +132,35 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Skipping onnxruntime_gpu install."; \
     fi
 
+# Install torch-geometric and torch-scatter
+
+RUN pip install --no-cache-dir "torch_geometric>=2.6.1"
+
+ARG TORCH_SCATTER_ARM64_WHEEL
+ENV TORCH_SCATTER_ARM64_WHEEL=${TORCH_SCATTER_ARM64_WHEEL:-unknown}
+
+ARG TORCH_SCATTER_AMD64_WHEEL
+ENV TORCH_SCATTER_AMD64_WHEEL=${TORCH_SCATTER_AMD64_WHEEL:-unknown}
+
+ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 9.0 10.0 12.0+PTX"
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$TORCH_SCATTER_AMD64_WHEEL" != "unknown" ]; then \
+        echo "Installing torch_scatter for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${TORCH_SCATTER_AMD64_WHEEL}; \
+    elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$TORCH_SCATTER_ARM64_WHEEL" != "unknown" ]; then \
+        echo "Installing torch_scatter for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${TORCH_SCATTER_ARM64_WHEEL}; \
+    else \
+        echo "No custom wheel present for scatter, building from source"; \
+        mkdir -p /physicsnemo/deps/; \
+        cd /physicsnemo/deps/; \
+        git clone https://github.com/rusty1s/pytorch_scatter.git; \
+        cd pytorch_scatter; \
+        git checkout tags/2.1.2; \
+        FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
+        pip install dist/*.whl --force-reinstall --no-cache-dir && \
+        cd ../ && rm -r pytorch_scatter; \
+    fi
+
 # cleanup of stage
 RUN rm -rf /physicsnemo/
 
@@ -150,25 +179,9 @@ RUN pip install --no-cache-dir "mlflow>=2.1.1"
 
 COPY . /physicsnemo/
 
-# Install torch-scatter, torch-cluster, and pyg
-ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 9.0 10.0 12.0+PTX"
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl" ]; then \
-        echo "Installing torch_scatter and for: $TARGETPLATFORM" && \
-        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl; \
-    else \
-        echo "No custom wheel present for scatter, building from source"; \
-        mkdir -p /physicsnemo/deps/; \
-        cd /physicsnemo/deps/; \
-        git clone https://github.com/rusty1s/pytorch_scatter.git; \
-        cd pytorch_scatter; \
-        git checkout tags/2.1.2; \
-        FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
-        pip install dist/*.whl --force-reinstall --no-cache-dir && \
-        cd ../ && rm -r pytorch_scatter; \
-    fi
-
+# Install torch_cluster
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl" ]; then \
-        echo "Installing torch_cluster and for: $TARGETPLATFORM" && \
+        echo "Installing torch_cluster for: $TARGETPLATFORM" && \
         pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl; \
     else \
         echo "No custom wheel present for cluster, building from source"; \
@@ -181,6 +194,8 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cl
         pip install dist/*.whl --force-reinstall --no-cache-dir && \
         cd ../ && rm -r pytorch_cluster; \
     fi
+
+# TODO: Install pyg-lib
 
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Installing tensorflow and warp-lang for: $TARGETPLATFORM" && \

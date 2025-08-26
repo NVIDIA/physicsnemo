@@ -9,7 +9,7 @@ acquisition:
 1. Set up CDS API access:
    - Create an account at [Copernicus](https://cds.climate.copernicus.eu/)
    - Install the CDS API key following instructions at
-   [CDS API How To](https://cds.climate.copernicus.eu/api-how-to)
+   [CDS API How To](https://cds.climate.copernicus.eu/how-to-api)
    - The key should be stored in `$HOME/.cdsapirc`
 
 2. Install required packages:

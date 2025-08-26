@@ -1,0 +1,8 @@
+stages:
+  - test
+
+include:
+
+  - project: 'modulus/modulus-ci'
+    ref: main
+    file: '.gitlab-ci/physicsnemo/security.gitlab-ci.yml'

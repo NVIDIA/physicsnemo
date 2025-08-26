@@ -1,0 +1,9 @@
+hydra-core
+tabulate
+tensorboard
+termcolor
+torchinfo
+einops
+transformer_engine[pytorch]
+zarr>=3.0
+zarrs
