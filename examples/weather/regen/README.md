@@ -1,3 +1,4 @@
+<!-- markdownlint-disable -->
 # Generative Data Assimilation of Sparse Weather Station Observations at Kilometer Scales
 
 Peter Manshausen, Yair Cohen, Jaideep Pathak, Mike Pritchard, Piyush Garg, Morteza
@@ -5,7 +6,9 @@ Mardani, Karthik Kashinath, Simon Byrne, Noah Brenowitz
 
 [https://arxiv.org/abs/2406.16947](https://arxiv.org/abs/2406.16947), in submission.
 
-![Method animation showing the denoising process](paper_figures/figures/denoising_process/method_anim/method.gif)
+<p align="center">
+<img src="../../../docs/img/regen_method.gif"/>
+</p>
 
 *Constructing an atmospheric state from noise, guided by observations. The noisy state
 is denoised with the trained model, the denoised state evaluated with the observation
