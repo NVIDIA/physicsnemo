@@ -14,9 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dgl
 import numpy as np
 import torch
-import torch_geometric as pyg
 import vtk
 from torch import Tensor
 
@@ -88,7 +88,7 @@ def get_dataset(path, return_graph=False):
     nu = 0.01
 
     if return_graph:
-        # generate PyG graph
+        # generate DGL graph
         polys = pv_mesh.GetPolys()
         polys.InitTraversal()
         edge_list = []
@@ -101,21 +101,21 @@ def get_dataset(path, return_graph=False):
                     (id_list.GetId(j), id_list.GetId((j + 1) % num_ids))
                 )
 
-        graph = pyg.data.Data(edge_index=torch.tensor(edge_list).t())
+        graph = dgl.graph(edge_list, idtype=torch.int32)
 
         # Assign node features using the vertex data
         points = pv_mesh.GetPoints()
         vertices = np.array(
             [points.GetPoint(i) for i in range(points.GetNumberOfPoints())]
         )
-        graph.pos = torch.tensor(vertices[:, :2], dtype=torch.float32)
+        graph.ndata["pos"] = torch.tensor(vertices[:, :2], dtype=torch.float32)
 
         # Add one-hot embedding of markers
         point_data = pv_mesh.GetPointData()
         marker = np.array(point_data.GetArray("marker"))
         num_classes = 5
         one_hot_marker = np.eye(num_classes)[marker.astype(int)]
-        graph.marker = torch.tensor(one_hot_marker, dtype=torch.float32)
+        graph.ndata["marker"] = torch.tensor(one_hot_marker, dtype=torch.float32)
 
         # Extract node attributes from the vtkPolyData
         for i in range(point_data.GetNumberOfArrays()):
@@ -128,23 +128,27 @@ def get_dataset(path, return_graph=False):
                 for j in range(points.GetNumberOfPoints()):
                     array.GetTuple(j, array_data[j])
 
-                # Assign node attributes to the PyG graph
-                graph[array_name] = torch.tensor(array_data, dtype=torch.float32)
+                # Assign node attributes to the DGL graph
+                graph.ndata[array_name] = torch.tensor(array_data, dtype=torch.float32)
 
         # compute freq features
         B = 10 * torch.randn((2, 64))
-        x_proj = torch.matmul(graph.pos, B)
+        x_proj = torch.matmul(graph.ndata["pos"], B)
         x_proj = torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
-        graph.freq = x_proj
+        graph.ndata["freq"] = x_proj
 
-        graph.x = torch.cat([graph[key] for key in ["pos", "marker", "freq"]], dim=-1)
-        graph.y = torch.cat([graph[key] for key in ["u", "v", "p"]], dim=-1)
+        graph.ndata["x"] = torch.cat(
+            [graph.ndata[key] for key in ["pos", "marker", "freq"]], dim=-1
+        )
+        graph.ndata["y"] = torch.cat(
+            [graph.ndata[key] for key in ["u", "v", "p"]], dim=-1
+        )
 
-        pos = graph.pos
-        row, col = graph.edge_index
-        disp = pos[row] - pos[col]
+        pos = graph.ndata["pos"]
+        row, col = graph.edges()
+        disp = torch.tensor(pos[row.long()] - pos[col.long()])
         disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
-        graph.edge_attr = torch.cat((disp, disp_norm), dim=-1)
+        graph.edata["x"] = torch.cat((disp, disp_norm), dim=-1)
         return (
             ref_u,
             ref_v,
