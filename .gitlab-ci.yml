@@ -6,3 +6,6 @@ include:
   - project: 'modulus/modulus-ci'
     ref: main
     file: '.gitlab-ci/physicsnemo/security.gitlab-ci.yml'
+  - project: 'modulus/modulus-ci'
+    ref: main
+    file: '.gitlab-ci/physicsnemo/multigpu.gitlab-ci.yml'
