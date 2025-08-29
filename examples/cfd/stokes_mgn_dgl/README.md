@@ -2,8 +2,8 @@
 
 This example demonstrates how to train the MeshGraphNet model to learn the flow field
 of Stokes flow and further
-improve the accuracy of the model predictions by physics-informed inference. This example
-also demonstrates how to use physics utilities from
+improve the accuary of the model predictions by physics-informed inference. This example
+also demonstrates how to use physics utilites from
 [PhysicsNeMo-Sym](https://github.com/NVIDIA/physicsnemo-sym) to introduce physics-based
 constraints.
 
@@ -52,7 +52,7 @@ helps the PINN model converge faster than training from scratch.
 
 Our dataset provides  numerical simulations of Stokes flow in a pipe domain obstructed
 by a random polygon. It contains 1000 random samples and all the simulations were
-performed using Fenics. For each sample, the numerical solution contains the mesh and
+performed using Fenics. For each sample, the numerical solution cotains the mesh and
 the flow information about velocity, pressure, and markers identifying different
 boundaries within the domain.
 
@@ -74,15 +74,15 @@ Output of the MeshGraphNet model are:
 - pressure field
 
 The input to the model is in form of a `.vtp` file and is then converted to
-bi-directional graphs in the dataloader. The final results are also written in the
+bi-directional DGL graphs in the dataloader. The final results are also written in the
 form of `.vtp` files in the inference code. A hidden dimensionality of 256 is used in
 the encoder, processor, and decoder. The encoder and decoder consist of two hidden
 layers, and the processor includes 15 message passing layers. Batch size per GPU is
 set to 1. Summation aggregation is used in the
-processor for message aggregation. A learning rate of 1e-4 is used, which decays
-exponentially to 1e-6 over 500 epochs.
+processor for message aggregation. A learning rate of 0.0001 is used, decaying
+exponentially with a rate of 0.99985.
 
-![Comparison of the MeshGraphNet prediction and the filtered prediction against the
+![Comparison of the MeshGraphNet prediction and the filetered prediction against the
 ground truth for velocity and pressure for one
 of the samples from the test dataset.](../../../docs/img/stokes.png)
 
@@ -92,6 +92,7 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
+pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 pip install nvidia-physicsnemo.sym --no-build-isolation
 ```
 
@@ -130,10 +131,9 @@ If running in a docker container, you may need to include the `--allow-run-as-ro
 the multi-GPU run command.
 
 Progress and loss logs can be monitored using Weights & Biases. To activate that,
-set `wandb_mode` to `online` in the `config.yaml` file or via the command line.
-This requires to have an active Weights & Biases account. You also need to provide
-your API key. There are multiple ways for providing the API key but you can simply
-export it as an environment variable
+set `wandb_mode` to `online` in the `constants.py`. This requires to have an active
+Weights & Biases account. You also need to provide your API key. There are multiple ways
+for providing the API key but you can simply export it as an environment variable
 
 ```bash
 export WANDB_API_KEY=<your_api_key>
@@ -163,7 +163,7 @@ If you are running this fine-tuning outside of the PhysicsNeMo container, instal
 PhysicsNeMo Sym using the instructions from [here](https://github.com/NVIDIA/physicsnemo-sym?tab=readme-ov-file#pypi)
 
 This will save the predictions for the test dataset in `.vtp` format in the `results`
-directory. Use ParaView to open and explore the results.
+directory. Use Paraview to open and explore the results.
 
 ## References
 
