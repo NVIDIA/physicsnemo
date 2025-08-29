@@ -43,6 +43,8 @@ def run_test_distributed_graphcast(
     os.environ["WORLD_SIZE"] = f"{world_size}"
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(12355)
+    local_rank = rank % torch.cuda.device_count()
+    os.environ["LOCAL_RANK"] = f"{local_rank}"
 
     DistributedManager.initialize()
     DistributedManager.create_process_subgroup(
@@ -161,6 +163,7 @@ def run_test_distributed_graphcast(
     del os.environ["WORLD_SIZE"]
     del os.environ["MASTER_ADDR"]
     del os.environ["MASTER_PORT"]
+    del os.environ["LOCAL_RANK"]
 
 
 @import_or_fail("dgl")
