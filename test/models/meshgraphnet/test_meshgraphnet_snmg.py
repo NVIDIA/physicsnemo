@@ -261,7 +261,7 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
 
 
 @import_or_fail("dgl")
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize(
     "partition_scheme", ["mapping", "nodewise", "coordinate_bbox", "none"]
 )

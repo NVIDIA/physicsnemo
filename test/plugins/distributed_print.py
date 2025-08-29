@@ -101,12 +101,3 @@ def pytest_unconfigure(config):
     # Only restore stdout if it was redirected (non-debug mode)
     if not is_master() and original_stdout and not debug_mode:
         sys.stdout = original_stdout
-
-
-def pytest_addoption(parser):
-    """Add pytest command line option for debug mode"""
-    parser.addoption(
-        "--distributed-debug",
-        action="store_true",
-        help="Enable debug mode for distributed tests (show output from all ranks with prefixes)",
-    )

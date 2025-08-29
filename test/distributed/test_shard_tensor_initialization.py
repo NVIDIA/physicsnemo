@@ -44,7 +44,7 @@ def init_global_shape_and_placements(domain_mesh):
     # Why these numbers?  Making sure these axes are actually divisible
     # by these numbers.  ShardTensor can handle the funky distribution
     # but dtensor can not.
-    global_shape = (10, 2 * 3 * 5 * 7, 2 * 3 * 5 * 7, 10)
+    global_shape = (10, 2 * 3 * 4 * 5 * 7, 2 * 3 * 4 * 5 * 7, 10)
 
     placements = [Shard(1)]
     # 2D placements if mesh is 2D
@@ -57,6 +57,11 @@ def init_global_shape_and_placements(domain_mesh):
 def init_from_data_rank_worker(mesh):
     # This test uses a worker function since I want to enable
     # both 1D and 2D meshes
+
+    # It emulates loading the data on one rank of a mesh, and scattering
+    # the data to the rest of the mesh.  Testing w/ both 1d and 2d meshes
+    # tests scatter_tensor function appropriately.
+
     dm = DistributedManager()
     rank = dm.rank
 
@@ -65,9 +70,7 @@ def init_from_data_rank_worker(mesh):
     )
 
     # Create the raw data on the first rank of the first dimension of the domain mesh:
-    first_axis_group = mesh.get_group(0)
-    first_axis_ranks = dist.get_process_group_ranks(first_axis_group)
-    source = min(first_axis_ranks)
+    source = 0
 
     if rank == source:
         raw_data = torch.randn(

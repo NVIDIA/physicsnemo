@@ -21,309 +21,153 @@ from physicsnemo.utils.version_check import check_module_requirements
 
 try:
     check_module_requirements("physicsnemo.distributed.shard_tensor")
-    from test_shard_tensor_initialization import (
-        init_dist,
-    )
-    from test_shard_tensor_redistribute import shard_tensor_factory
 
-    from physicsnemo.distributed import ShardTensor
 except ImportError:
     pytest.skip(
         "Skipping test because physicsnemo.distributed.shard_tensor is not available",
         allow_module_level=True,
     )
 
-from pytest_utils import modify_environment
+from test_shard_tensor_redistribute import shard_tensor_factory
 
-from physicsnemo.distributed import DistributedManager
-
-
-def run_shard_tensor_detach(rank, num_gpus, mesh_names, mesh_sizes, uneven, verbose):
-    with modify_environment(
-        RANK=f"{rank}",
-        WORLD_SIZE=f"{num_gpus}",
-        MASTER_ADDR="localhost",
-        MASTER_PORT=str(13245),
-        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
-    ):
-        init_dist(rank, num_gpus)
-        shard_tensor = shard_tensor_factory(
-            mesh_names, mesh_sizes, requires_grad=True, uneven=uneven
-        )
-        shard_tensor_detached = shard_tensor.detach()
-
-        # Detaching should not change the original data nor should it change the spec:
-        assert shard_tensor._spec == shard_tensor_detached._spec
-
-        assert torch.allclose(
-            shard_tensor.full_tensor(), shard_tensor_detached.full_tensor()
-        )
-
-        DistributedManager().cleanup()
+from physicsnemo.distributed import ShardTensor
 
 
-@pytest.mark.multigpu
-@pytest.mark.timeout(120)
-@pytest.mark.parametrize("data_parallel_size", [-1])
-@pytest.mark.parametrize("domain_H", [2, 4])
-@pytest.mark.parametrize("domain_W", [1, 2])
-@pytest.mark.parametrize("uneven", [True, False])
-def test_shard_tensor_detach(data_parallel_size, domain_H, domain_W, uneven):
-    """
-    This test is meant to ensure ShardTensor can be initialized correctly
-    from local data.  Checks the following:
+def run_shard_tensor_detach(mesh, uneven, verbose):
+    shard_tensor = shard_tensor_factory(mesh, uneven=uneven)
+    shard_tensor_detached = shard_tensor.detach()
 
-    """
-    num_gpus = torch.cuda.device_count()
-    if num_gpus < 2:
-        pytest.skip("Not enough GPUs available for distributed tests")
+    # Detaching should not change the original data nor should it change the spec:
+    assert shard_tensor._spec == shard_tensor_detached._spec
 
-    if domain_H == 1 and domain_W == 1:
-        pytest.skip("No point testing this without parallelism in the domain axes")
-
-    if domain_H * domain_W > num_gpus:
-        pytest.skip("Not enough GPUs available for test")
-
-    remaining_gpus = num_gpus
-    mesh_names = ["data_parallel"]
-    mesh_sizes = [data_parallel_size]
-
-    if int(remaining_gpus / domain_H) != 0:
-        mesh_names.append("domain_H")
-        mesh_sizes.append(domain_H)
-        remaining_gpus = int(remaining_gpus / domain_H)
-
-    if int(remaining_gpus / domain_W) != 0:
-        mesh_names.append("domain_W")
-        mesh_sizes.append(domain_W)
-        remaining_gpus = int(remaining_gpus / domain_W)
-
-    verbose = False  # Change to True for debug
-
-    torch.multiprocessing.set_start_method("spawn", force=True)
-
-    torch.multiprocessing.spawn(
-        run_shard_tensor_detach,
-        args=(num_gpus, mesh_names, mesh_sizes, uneven, verbose),
-        nprocs=num_gpus,
-        join=True,
-        daemon=True,
+    assert torch.allclose(
+        shard_tensor.full_tensor(), shard_tensor_detached.full_tensor()
     )
 
 
-def run_shard_tensor_input_gradient_full_loss(
-    rank, num_gpus, mesh_names, mesh_sizes, uneven, verbose
-):
-    with modify_environment(
-        RANK=f"{rank}",
-        WORLD_SIZE=f"{num_gpus}",
-        MASTER_ADDR="localhost",
-        MASTER_PORT=str(13245),
-        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
-    ):
-        init_dist(rank, num_gpus)
-        shard_tensor = shard_tensor_factory(
-            mesh_names, mesh_sizes, requires_grad=True, uneven=uneven
-        )
-        shard_tensor = (
-            shard_tensor.detach()
-        )  # Make it a leaf tensor by calling detach andrequires_grad_
-        shard_tensor = shard_tensor.detach().requires_grad_(
-            True
-        )  # Make it a leaf tensor by calling detach andrequires_grad_
-
-        # For this test, we're testing that the gradients of the input tensor work
-        # We'll compare them to the local gradients
-
-        # Compute the input gradients on the full_tensor:
-        full_local_tensor = shard_tensor.full_tensor().detach()
-        full_local_tensor.requires_grad_(True)
-
-        def loss(_input):
-            if isinstance(_input, ShardTensor):
-                x = _input.full_tensor()
-            else:
-                x = _input
-            x = x**2
-            return torch.sum(x)
-
-        computed_local_loss = loss(full_local_tensor)
-        computed_local_loss.backward()
-
-        # This should have gradients
-        assert full_local_tensor.grad is not None
-
-        # Now compute the sharded gradients with FULL TENSOR LOSS:
-        sharded_loss = loss(shard_tensor)
-        sharded_loss.backward()
-
-        # Check if shard_tensor requires grad
-        assert shard_tensor.requires_grad, "ShardTensor should require grad"
-        assert shard_tensor.grad is not None
-        assert torch.allclose(shard_tensor.grad.full_tensor(), full_local_tensor.grad)
-
-        DistributedManager().cleanup()
-
-
-@pytest.mark.multigpu
+@pytest.mark.multigpu_static
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("data_parallel_size", [-1])
-@pytest.mark.parametrize("domain_H", [2, 4])
-@pytest.mark.parametrize("domain_W", [1, 2])
 @pytest.mark.parametrize("uneven", [True, False])
-def test_shard_tensor_input_gradient_full_loss(
-    data_parallel_size, domain_H, domain_W, uneven
-):
-    """
-    This test is meant to ensure ShardTensor can be initialized correctly
-    from local data.  Checks the following:
+def test_shard_tensor_detach(distributed_mesh, uneven):
+    run_shard_tensor_detach(distributed_mesh, uneven, verbose=False)
 
-    """
-    num_gpus = torch.cuda.device_count()
-    if num_gpus < 2:
-        pytest.skip("Not enough GPUs available for distributed tests")
 
-    if domain_H == 1 and domain_W == 1:
-        pytest.skip("No point testing this without parallelism in the domain axes")
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("uneven", [True, False])
+def test_shard_tensor_detach_2d(distributed_mesh_2d, uneven):
+    run_shard_tensor_detach(distributed_mesh_2d, uneven, verbose=False)
 
-    if domain_H * domain_W > num_gpus:
-        pytest.skip("Not enough GPUs available for test")
 
-    remaining_gpus = num_gpus
-    mesh_names = ["data_parallel"]
-    mesh_sizes = [data_parallel_size]
+def run_shard_tensor_input_gradient_full_loss(mesh, uneven, verbose):
+    shard_tensor = shard_tensor_factory(mesh, uneven)
 
-    if int(remaining_gpus / domain_H) != 0:
-        mesh_names.append("domain_H")
-        mesh_sizes.append(domain_H)
-        remaining_gpus = int(remaining_gpus / domain_H)
+    shard_tensor = shard_tensor.detach().requires_grad_(
+        True
+    )  # Make it a leaf tensor by calling detach andrequires_grad_
 
-    if int(remaining_gpus / domain_W) != 0:
-        mesh_names.append("domain_W")
-        mesh_sizes.append(domain_W)
-        remaining_gpus = int(remaining_gpus / domain_W)
+    # For this test, we're testing that the gradients of the input tensor work
+    # We'll compare them to the local gradients
 
-    verbose = False  # Change to True for debug
+    # Compute the input gradients on the full_tensor:
+    full_local_tensor = shard_tensor.full_tensor().detach()
+    full_local_tensor.requires_grad_(True)
 
-    torch.multiprocessing.set_start_method("spawn", force=True)
+    def loss(_input):
+        if isinstance(_input, ShardTensor):
+            x = _input.full_tensor()
+        else:
+            x = _input
+        x = x**2
+        return torch.sum(x)
 
-    torch.multiprocessing.spawn(
-        run_shard_tensor_input_gradient_full_loss,
-        args=(num_gpus, mesh_names, mesh_sizes, uneven, verbose),
-        nprocs=num_gpus,
-        join=True,
-        daemon=True,
+    computed_local_loss = loss(full_local_tensor)
+    computed_local_loss.backward()
+
+    # This should have gradients
+    assert full_local_tensor.grad is not None
+
+    # Now compute the sharded gradients with FULL TENSOR LOSS:
+    sharded_loss = loss(shard_tensor)
+    sharded_loss.backward()
+
+    # Check if shard_tensor requires grad
+    assert shard_tensor.requires_grad, "ShardTensor should require grad"
+    assert shard_tensor.grad is not None
+    assert torch.allclose(shard_tensor.grad.full_tensor(), full_local_tensor.grad)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("uneven", [True, False])
+def test_shard_tensor_input_gradient_full_loss(distributed_mesh, uneven):
+    run_shard_tensor_input_gradient_full_loss(distributed_mesh, uneven, verbose=False)
+
+
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("uneven", [True, False])
+def test_shard_tensor_input_gradient_full_loss_2d(distributed_mesh_2d, uneven):
+    run_shard_tensor_input_gradient_full_loss(
+        distributed_mesh_2d, uneven, verbose=False
     )
 
 
-def run_shard_tensor_input_gradient_local_loss(
-    rank, num_gpus, mesh_names, mesh_sizes, uneven, verbose
-):
-    with modify_environment(
-        RANK=f"{rank}",
-        WORLD_SIZE=f"{num_gpus}",
-        MASTER_ADDR="localhost",
-        MASTER_PORT=str(13245),
-        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
-    ):
-        init_dist(rank, num_gpus)
-        shard_tensor = shard_tensor_factory(
-            mesh_names, mesh_sizes, requires_grad=True, uneven=uneven
-        )
+def run_shard_tensor_input_gradient_local_loss(mesh, uneven, verbose):
+    shard_tensor = shard_tensor_factory(mesh, uneven)
 
-        # shard_tensor = (
-        #     shard_tensor.detach()
-        # )  # Make it a leaf tensor by calling detach andrequires_grad_
-        shard_tensor = shard_tensor.detach().requires_grad_(
-            True
-        )  # Make it a leaf tensor by calling detach andrequires_grad_
+    # shard_tensor = (
+    #     shard_tensor.detach()
+    # )  # Make it a leaf tensor by calling detach andrequires_grad_
+    shard_tensor = shard_tensor.detach().requires_grad_(
+        True
+    )  # Make it a leaf tensor by calling detach andrequires_grad_
 
-        # For this test, we're testing that the gradients of the input tensor work
-        # We'll compare them to the local gradients
+    # For this test, we're testing that the gradients of the input tensor work
+    # We'll compare them to the local gradients
 
-        # Compute the input gradients on the full_tensor:
-        full_local_tensor = shard_tensor.full_tensor().detach()
-        full_local_tensor.requires_grad_(True)
+    # Compute the input gradients on the full_tensor:
+    full_local_tensor = shard_tensor.full_tensor().detach()
+    full_local_tensor.requires_grad_(True)
 
-        def loss(_input):
-            # Compute the loss *locally*
-            if isinstance(_input, ShardTensor):
-                x = _input.to_local()
-            else:
-                x = _input
-            x = x**2
-            return torch.sum(x)
+    def loss(_input):
+        # Compute the loss *locally*
+        if isinstance(_input, ShardTensor):
+            x = _input.to_local()
+        else:
+            x = _input
+        x = x**2
+        return torch.sum(x)
 
-        computed_local_loss = loss(full_local_tensor)
-        computed_local_loss.backward()
+    computed_local_loss = loss(full_local_tensor)
+    computed_local_loss.backward()
 
-        # This should have gradients
-        assert full_local_tensor.grad is not None
+    # This should have gradients
+    assert full_local_tensor.grad is not None
 
-        # Now compute the sharded gradients:
-        sharded_loss = loss(shard_tensor)
+    # Now compute the sharded gradients:
+    sharded_loss = loss(shard_tensor)
 
-        sharded_loss.backward()
+    sharded_loss.backward()
 
-        # Check if shard_tensor requires grad
-        assert shard_tensor.requires_grad, "ShardTensor should require grad"
-        assert shard_tensor.grad is not None
+    # Check if shard_tensor requires grad
+    assert shard_tensor.requires_grad, "ShardTensor should require grad"
+    assert shard_tensor.grad is not None
 
-        assert torch.allclose(shard_tensor.grad.full_tensor(), full_local_tensor.grad)
-
-        DistributedManager().cleanup()
+    assert torch.allclose(shard_tensor.grad.full_tensor(), full_local_tensor.grad)
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_static
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("data_parallel_size", [-1])
-@pytest.mark.parametrize("domain_H", [2, 4])
-@pytest.mark.parametrize("domain_W", [1, 2])
 @pytest.mark.parametrize("uneven", [True, False])
-def test_shard_tensor_input_gradient_local_loss(
-    data_parallel_size, domain_H, domain_W, uneven
-):
-    """
-    This test is meant to ensure ShardTensor can be initialized correctly
-    from local data.  Checks the following:
+def test_shard_tensor_input_gradient_local_loss(distributed_mesh, uneven):
+    run_shard_tensor_input_gradient_local_loss(distributed_mesh, uneven, verbose=False)
 
-    """
-    num_gpus = torch.cuda.device_count()
-    if num_gpus < 2:
-        pytest.skip("Not enough GPUs available for distributed tests")
 
-    if domain_H == 1 and domain_W == 1:
-        pytest.skip("No point testing this without parallelism in the domain axes")
-
-    if domain_H * domain_W > num_gpus:
-        pytest.skip("Not enough GPUs available for test")
-
-    remaining_gpus = num_gpus
-    mesh_names = ["data_parallel"]
-    mesh_sizes = [data_parallel_size]
-
-    if int(remaining_gpus / domain_H) != 0:
-        mesh_names.append("domain_H")
-        mesh_sizes.append(domain_H)
-        remaining_gpus = int(remaining_gpus / domain_H)
-
-    if int(remaining_gpus / domain_W) != 0:
-        mesh_names.append("domain_W")
-        mesh_sizes.append(domain_W)
-        remaining_gpus = int(remaining_gpus / domain_W)
-
-    verbose = False  # Change to True for debug
-
-    torch.multiprocessing.set_start_method("spawn", force=True)
-
-    torch.multiprocessing.spawn(
-        run_shard_tensor_input_gradient_local_loss,
-        args=(num_gpus, mesh_names, mesh_sizes, uneven, verbose),
-        nprocs=num_gpus,
-        join=True,
-        daemon=True,
+@pytest.mark.multigpu_static
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("uneven", [True, False])
+def test_shard_tensor_input_gradient_local_loss_2d(distributed_mesh_2d, uneven):
+    run_shard_tensor_input_gradient_local_loss(
+        distributed_mesh_2d, uneven, verbose=False
     )
-
-
-if __name__ == "__main__":
-    test_shard_tensor_input_gradient_local_loss(-1, 2, 2, True)

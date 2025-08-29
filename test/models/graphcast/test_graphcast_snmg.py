@@ -164,7 +164,7 @@ def run_test_distributed_graphcast(
 
 
 @import_or_fail("dgl")
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 @pytest.mark.parametrize("do_concat_trick", [False, True])
 @pytest.mark.parametrize("do_checkpointing", [False, True])

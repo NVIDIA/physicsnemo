@@ -228,7 +228,7 @@ def run_test_mark_shared(rank, world_size):
         DistributedManager.cleanup()
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_reduce_loss():
     num_gpus = torch.cuda.device_count()
     assert num_gpus > 1
@@ -245,7 +245,7 @@ def test_reduce_loss():
     )
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_mark_shared():
     num_gpus = torch.cuda.device_count()
     assert num_gpus > 1

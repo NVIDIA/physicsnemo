@@ -131,8 +131,8 @@ def test_sharded_radius_search_layer_forward(
 
     # Create the input dict:
     bsize = 1
-    npoints = 17
-    nx, ny, nz = 12, 6, 4
+    npoints = 8 * 17
+    nx, ny, nz = 8 * 12, 6, 4
     # This is pretty aggressive, it'd never actually be this many.
     # But it enables checking the ring ball query deterministically.
     if reverse_mapping:

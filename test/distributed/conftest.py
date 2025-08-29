@@ -36,16 +36,35 @@ every time.
 
 
 @pytest.fixture(scope="session", autouse=False)
-def distributed_mesh():
-    """Initialize the domain-parallel mesh once per test session"""
+def distributed_mesh(request):
+    """Initialize the domain-parallel mesh once per test session when distributed_static marker is used"""
+    # Check if any test in the session has the distributed_static marker
+    # session = request.session
+    # has_distributed_static = any(
+    #     "distributed_static" in item.keywords
+    #     for item in session.items
+    # )
+
+    # if not has_distributed_static:
+    #     pytest.skip("distributed_mesh fixture only available for tests with distributed_static marker")
+
     # Setup
     mesh = DistributedManager().initialize_mesh([-1], ["domain"])
     yield mesh
 
 
-@pytest.fixture(scope="session", autouse=True)
-def distributed_mesh_2d():
-    """Initialize the 2D mesh once per test session"""
+@pytest.fixture(scope="session", autouse=False)
+def distributed_mesh_2d(request):
+    """Initialize the 2D mesh once per test session when distributed_static marker is used"""
+    # # Check if any test in the session has the distributed_static marker
+    # session = request.session
+    # has_distributed_static = any(
+    #     "distributed_static" in item.keywords
+    #     for item in session.items
+    # )
+
+    # if not has_distributed_static:
+    #     pytest.skip("distributed_mesh_2d fixture only available for tests with distributed_static marker")
 
     # Divide the number of visible GPUs in 2 for the mesh calculation.
     # raise an exception if the number of GPUs isn't divisible
@@ -63,6 +82,36 @@ def distributed_mesh_2d():
     mesh = dm.initialize_mesh([-1, num_gpus_per_dim], ["axis1", "axis2"])
 
     yield mesh
+
+
+# @pytest.fixture(scope="session", autouse=False)
+# def distributed_mesh():
+#     """Initialize the domain-parallel mesh once per test session"""
+#     # Setup
+#     mesh = DistributedManager().initialize_mesh([-1], ["domain"])
+#     yield mesh
+
+
+# @pytest.fixture(scope="session", autouse=True)
+# def distributed_mesh_2d():
+#     """Initialize the 2D mesh once per test session"""
+
+#     # Divide the number of visible GPUs in 2 for the mesh calculation.
+#     # raise an exception if the number of GPUs isn't divisible
+#     dm = DistributedManager()
+#     num_gpus = dm.world_size
+
+#     if num_gpus % 2 != 0:
+#         raise ValueError(
+#             f"Number of GPUs ({num_gpus}) must be divisible by 2 for 2D mesh testing"
+#         )
+
+#     num_gpus_per_dim = num_gpus // 2
+
+#     # Create a mesh with the same number of GPUs per dimension
+#     mesh = dm.initialize_mesh([-1, num_gpus_per_dim], ["axis1", "axis2"])
+
+#     yield mesh
 
 
 def pytest_sessionfinish(session, exitstatus):
