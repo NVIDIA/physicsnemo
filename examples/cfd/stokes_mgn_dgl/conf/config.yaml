@@ -19,7 +19,7 @@ hydra:
     chdir: True
   run:
     dir: ./outputs/
-
+  
 ckpt_path: "./checkpoints"
 ckpt_name: "./stokes.pt"
 data_dir: "./dataset"
@@ -41,8 +41,7 @@ num_validation_samples: 10
 num_test_samples: 10
 
 lr: 1e-4
-# If not set, will be calculated based on the number of epochs.
-lr_decay_rate: null
+lr_decay_rate: 0.99985
 
 amp: False
 jit: False
