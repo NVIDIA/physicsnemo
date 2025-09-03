@@ -14,26 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
+import os
 import time
 
 import hydra
 import torch
 import wandb
+from dgl.dataloading import GraphDataLoader
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data.distributed import DistributedSampler
-from torch_geometric.loader import DataLoader as PyGDataLoader
-
 
 try:
     import apex
 except:
     pass
 
-from physicsnemo.datapipes.gnn.stokes_dataset import StokesDataset
+from physicsnemo.datapipes.gnn.stokes_dataset_dgl import StokesDataset
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.logging import (
     PythonLogger,
@@ -68,30 +66,24 @@ class MGNTrainer:
             num_samples=cfg.num_validation_samples,
         )
 
-        # create distributed samplers
-        train_sampler = DistributedSampler(
-            dataset,
-            shuffle=True,
-            drop_last=True,
-            num_replicas=self.dist.world_size,
-            rank=self.dist.rank,
-        )
-
         # instantiate dataloader
-        self.dataloader = PyGDataLoader(
+        self.dataloader = GraphDataLoader(
             dataset,
             batch_size=cfg.batch_size,
-            sampler=train_sampler,
+            shuffle=False,
+            drop_last=True,
             pin_memory=True,
+            use_ddp=dist.world_size > 1,
         )
 
         # instantiate validation dataloader
-        self.validation_dataloader = PyGDataLoader(
+        self.validation_dataloader = GraphDataLoader(
             validation_dataset,
             batch_size=cfg.batch_size,
             shuffle=False,
             drop_last=True,
             pin_memory=True,
+            use_ddp=False,
         )
 
         # instantiate the model
@@ -131,21 +123,9 @@ class MGNTrainer:
             rank_zero_logger.info("Using FusedAdam optimizer")
         except:
             self.optimizer = torch.optim.Adam(self.model.parameters(), lr=cfg.lr)
-        # If lr_decay_rate is not set, calculate it based on the number of epochs
-        # and the final learning rate multiplier.
-        lr_decay_rate = cfg.lr_decay_rate
-        if lr_decay_rate is None:
-            # StepLR is used to decay the learning rate every epoch
-            # (note the scheduler is called every _iteration_, not every epoch)
-            # with the final learning rate being 1% of the initial learning rate.
-            final_lr_multiplier = 0.01
-            lr_decay_rate = math.pow(final_lr_multiplier, 1.0 / cfg.epochs)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer,
-            step_size=len(self.dataloader),
-            gamma=lr_decay_rate,
+        self.scheduler = torch.optim.lr_scheduler.LambdaLR(
+            self.optimizer, lr_lambda=lambda epoch: cfg.lr_decay_rate**epoch
         )
-
         self.scaler = GradScaler()
 
         # load checkpoint
@@ -170,9 +150,9 @@ class MGNTrainer:
 
     def forward(self, graph):
         # forward pass
-        with autocast(device_type=self.dist.device.type, enabled=self.amp):
-            pred = self.model(graph.x, graph.edge_attr, graph)
-            loss = self.criterion(pred, graph.y)
+        with autocast(enabled=self.amp):
+            pred = self.model(graph.ndata["x"], graph.edata["x"], graph)
+            loss = self.criterion(pred, graph.ndata["y"])
             return loss
 
     def backward(self, loss):
@@ -198,11 +178,11 @@ class MGNTrainer:
 
         for graph in self.validation_dataloader:
             graph = graph.to(self.dist.device)
-            pred = self.model(graph.x, graph.edge_attr, graph)
+            pred = self.model(graph.ndata["x"], graph.edata["x"], graph)
 
             for index, key in enumerate(error_keys):
                 pred_val = pred[:, index : index + 1]
-                target_val = graph.y[:, index : index + 1]
+                target_val = graph.ndata["y"][:, index : index + 1]
                 errors[key] += relative_lp_error(pred_val, target_val)
 
         for key in error_keys:
@@ -242,11 +222,10 @@ def main(cfg: DictConfig) -> None:
     rank_zero_logger.info("Training started...")
 
     for epoch in range(trainer.epoch_init, cfg.epochs):
-        trainer.dataloader.sampler.set_epoch(epoch)
         loss_agg = 0
         for graph in trainer.dataloader:
             loss = trainer.train(graph)
-            loss_agg += loss.detach().item()
+            loss_agg += loss.detach().cpu().numpy()
         loss_agg /= len(trainer.dataloader)
         rank_zero_logger.info(
             f"epoch: {epoch}, loss: {loss_agg:10.3e}, lr: {trainer.get_lr()}, time per epoch: {(time.time() - start):10.3e}"

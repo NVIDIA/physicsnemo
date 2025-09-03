@@ -29,8 +29,8 @@ try:
         from .conv_patches import generic_conv_nd_wrapper
         from .index_ops import (
             index_select_wrapper,
-            select_backward_wrapper,
-            select_wrapper,
+            sharded_select_backward_helper,
+            sharded_select_helper,
         )
 
         # Currently disabled until wrapt is removed

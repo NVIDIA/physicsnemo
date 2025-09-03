@@ -38,17 +38,18 @@ except:
     )
 
 from collections import OrderedDict
-from typing import Dict, Optional
+from typing import Dict
 
 from physicsnemo.launch.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
 from physicsnemo.launch.logging.wandb import initialize_wandb
-from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.models.mlp.fully_connected import FullyConnected
 from physicsnemo.sym.eq.pde import PDE
 from physicsnemo.sym.eq.phy_informer import PhysicsInformer
-from physicsnemo.sym.eq.spatial_grads.spatial_grads import compute_connectivity_tensor
+from physicsnemo.sym.key import Key
+from physicsnemo.sym.models.arch import Arch
 from sympy import Function, Number, Symbol
 
 from utils import get_dataset, relative_lp_error
@@ -103,6 +104,100 @@ class Stokes(PDE):
             self.equations.pop("momentum_z")
 
 
+class DNN(torch.nn.Module):
+    """
+    Custom PyTorch model
+    """
+
+    def __init__(self, layers, fourier_features=64):
+        super().__init__()
+
+        # parameters
+        self.depth = len(layers) - 1
+
+        # Fourier features
+        self.fourier_features = fourier_features
+        self.register_buffer(
+            "B", 10 * torch.randn((layers[0], fourier_features))
+        )  # Random matrix
+
+        # set up layer order dict
+        self.activation = torch.nn.GELU
+
+        layer_list = list()
+        for i in range(1, self.depth - 1):
+            layer_list.append(
+                ("layer_%d" % i, torch.nn.Linear(layers[i], layers[i + 1]))
+            )
+            layer_list.append(("activation_%d" % i, self.activation()))
+
+        layer_list.append(
+            ("layer_%d" % (self.depth - 1), torch.nn.Linear(layers[-2], layers[-1]))
+        )
+        layerDict = OrderedDict(layer_list)
+
+        # deploy layers
+        self.layers = torch.nn.Sequential(layerDict)
+
+    def forward(self, x):
+        # Add Fourier features
+        x_proj = torch.matmul(x, self.B)
+        x_proj = torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+        # Pass through layers
+        out = self.layers(x_proj)
+        return out
+
+
+class MdlsSymDNN(Arch):
+    """
+    Wrapper model to convert PyTorch model to PhysicsNeMo-Sym model.
+
+    PhysicsNeMo Sym relies on the inputs/outputs of the model being dictionary of tensors.
+    This wrapper converts the input dictionary of tensors to a single tensor by
+    concatenating them along appropriate dimension before passing them as an input to
+    the pytorch model. During the output, the process is reversed,
+    the output tensor from pytorch model is split across appropriate dimensions and then
+    converted to a dictionary with appropriate keys to produce the final output.
+
+    The model arguments thus become a list of `Key` objects that informs the model
+    about the input and output dimensionality of the pytorch model.
+
+    For more details on PhysicsNeMo Sym models, refer:
+    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/tutorials/simple_training_example.html#using-custom-models-in-physicsnemo
+    For more details on Key class, refer:
+    https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-sym/api/physicsnemo.sym.html#module-physicsnemo.sym.key
+    """
+
+    def __init__(
+        self,
+        input_keys=[Key("x"), Key("y")],
+        output_keys=[Key("u"), Key("v"), Key("p")],
+        layers=[2, 128, 128, 128, 128, 3],
+        fourier_features=64,
+    ):
+        super().__init__(
+            input_keys=input_keys,
+            output_keys=output_keys,
+        )
+
+        self.mdls_model = DNN(layers, fourier_features)
+
+    def forward(self, dict_tensor: Dict[str, torch.Tensor]):
+        # Use concat_input method of the Arch class to convert dict of tensors to
+        # a single multi-dimensional tensor. Ref: https://github.com/NVIDIA/physicsnemo-sym/blob/main/physicsnemo/sym/models/arch.py#L251
+        x = self.concat_input(
+            dict_tensor,
+            self.input_key_dict,
+            detach_dict=self.detach_key_dict,
+            dim=-1,
+        )
+        out = self.mdls_model(x)
+        # Use split_output method of the Arch class to convert a single muli-dimensional
+        # tensor to a dict of tensors. Ref: https://github.com/NVIDIA/physicsnemo-sym/blob/main/physicsnemo/sym/models/arch.py#L381
+        return self.split_output(out, self.output_key_dict, dim=1)
+
+
 class PhysicsInformedFineTuner:
     """
     Class to define all the physics informed utils and inference.
@@ -110,7 +205,6 @@ class PhysicsInformedFineTuner:
 
     def __init__(
         self,
-        cfg,
         device,
         gnn_u,
         gnn_v,
@@ -122,20 +216,11 @@ class PhysicsInformedFineTuner:
         ref_u,
         ref_v,
         ref_p,
-        pyg_graph,
     ):
         super().__init__()
 
         self.device = device
         self.nu = nu
-        self.pyg_graph = pyg_graph.to(self.device)
-        edge_tensor = self.pyg_graph.edge_index.t().to(self.device)
-        self.connectivity_tensor = compute_connectivity_tensor(
-            torch.arange(self.pyg_graph.num_nodes), edge_tensor
-        )
-        self.connectivity_tensor = tuple(
-            t.to(self.device) for t in self.connectivity_tensor
-        )
 
         self.ref_u = torch.tensor(ref_u).float().to(self.device)
         self.ref_v = torch.tensor(ref_v).float().to(self.device)
@@ -153,15 +238,11 @@ class PhysicsInformedFineTuner:
             torch.tensor(coords_noslip, requires_grad=True).float().to(self.device)
         )
 
-        self.model = MeshGraphNet(
-            cfg.input_dim_nodes
-            + 128,  # additional 128 node features from fourier features
-            cfg.input_dim_edges,
-            cfg.output_dim,
-            aggregation=cfg.aggregation,
-            hidden_dim_node_encoder=cfg.hidden_dim_node_encoder,
-            hidden_dim_edge_encoder=cfg.hidden_dim_edge_encoder,
-            hidden_dim_node_decoder=cfg.hidden_dim_node_decoder,
+        self.model = MdlsSymDNN(
+            input_keys=[Key("x"), Key("y")],
+            output_keys=[Key("u"), Key("v"), Key("p")],
+            layers=[2, 128, 128, 128, 128, 3],
+            fourier_features=64,
         ).to(self.device)
 
         self.node_pde = Stokes(nu=self.nu, dim=2)
@@ -175,19 +256,14 @@ class PhysicsInformedFineTuner:
         self.phy_informer = PhysicsInformer(
             required_outputs=["continuity", "momentum_x", "momentum_y"],
             equations=self.node_pde,
-            grad_method="least_squares",
+            grad_method="autodiff",
             device=self.device,
-            compute_connectivity=False,
         )
 
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
-            lr=cfg.pi_lr,
+            lr=0.001,
             fused=True if torch.cuda.is_available() else False,
-        )
-
-        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self.optimizer, gamma=0.99935
         )
 
     def parabolic_inflow(self, y, U_max=0.3):
@@ -196,50 +272,31 @@ class PhysicsInformedFineTuner:
         return u, v
 
     def loss(self):
-        out = self.model(self.pyg_graph.x, self.pyg_graph.edge_attr, self.pyg_graph)
-
         # inflow points
-        mask_inflow = (
-            self.pyg_graph.marker == torch.tensor([0, 1, 0, 0, 0], device=self.device)
-        ).all(dim=1)
-        results_inflow = {
-            k: out[:, i : i + 1][mask_inflow] for i, k in enumerate(["u", "v", "p"])
-        }
+        x_in, y_in = self.coords_inflow[:, 0:1], self.coords_inflow[:, 1:2]
+        results_inflow = self.model({"x": x_in, "y": y_in})
         pred_u_in, pred_v_in = results_inflow["u"], results_inflow["v"]
 
         # no-slip points
-        mask_1 = (
-            self.pyg_graph.marker == torch.tensor([0, 0, 0, 1, 0], device=self.device)
-        ).all(dim=1)
-        mask_2 = (
-            self.pyg_graph.marker == torch.tensor([0, 0, 0, 0, 1], device=self.device)
-        ).all(dim=1)
-        mask_noslip = torch.logical_or(mask_1, mask_2)
-        results_noslip = {
-            k: out[:, i : i + 1][mask_noslip] for i, k in enumerate(["u", "v", "p"])
-        }
+        x_no_slip, y_no_slip = self.coords_noslip[:, 0:1], self.coords_noslip[:, 1:2]
+        results_noslip = self.model({"x": x_no_slip, "y": y_no_slip})
         pred_u_noslip, pred_v_noslip = results_noslip["u"], results_noslip["v"]
 
         # interior points
-        mask_int = (
-            self.pyg_graph.marker == torch.tensor([1, 0, 0, 0, 0], device=self.device)
-        ).all(dim=1)
-        model_out = {
-            k: out[:, i : i + 1][mask_int] for i, k in enumerate(["u", "v", "p"])
-        }
+        x_int, y_int = self.coords[:, 0:1], self.coords[:, 1:2]
+        model_out = self.model({"x": x_int, "y": y_int})
         results_int = self.phy_informer.forward(
             {
-                "coordinates": self.pyg_graph.pos[:, 0:2],
-                "u": out[:, 0:1],
-                "v": out[:, 1:2],
-                "p": out[:, 2:3],
-                "connectivity_tensor": self.connectivity_tensor,
+                "coordinates": self.coords,
+                "u": model_out["u"],
+                "v": model_out["v"],
+                "p": model_out["p"],
             }
         )
         pred_mom_u, pred_mom_v, pred_cont = (
-            results_int["momentum_x"][mask_int],
-            results_int["momentum_y"][mask_int],
-            results_int["continuity"][mask_int],
+            results_int["momentum_x"],
+            results_int["momentum_y"],
+            results_int["continuity"],
         )
         pred_u, pred_v, pred_p = model_out["u"], model_out["v"], model_out["p"]
 
@@ -247,9 +304,9 @@ class PhysicsInformedFineTuner:
 
         # Compute losses
         # data loss
-        loss_u = torch.mean((self.gnn_u[mask_int] - pred_u) ** 2)
-        loss_v = torch.mean((self.gnn_v[mask_int] - pred_v) ** 2)
-        loss_p = torch.mean((self.gnn_p[mask_int] - pred_p) ** 2)
+        loss_u = torch.mean((self.gnn_u - pred_u) ** 2)
+        loss_v = torch.mean((self.gnn_v - pred_v) ** 2)
+        loss_p = torch.mean((self.gnn_p - pred_p) ** 2)
 
         # inflow boundary condition loss
         loss_u_in = torch.mean((u_in - pred_u_in) ** 2)
@@ -310,7 +367,6 @@ class PhysicsInformedFineTuner:
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        self.scheduler.step()
 
         return (
             loss_u,
@@ -323,15 +379,14 @@ class PhysicsInformedFineTuner:
             loss_mom_u,
             loss_mom_v,
             loss_cont,
-            self.optimizer.param_groups[0]["lr"],
         )
 
     def validation(self):
         """Validation during the PINN fine-tuning step"""
         self.model.eval()
         with torch.no_grad():
-            out = self.model(self.pyg_graph.x, self.pyg_graph.edge_attr, self.pyg_graph)
-            model_out = {k: out[:, i : i + 1] for i, k in enumerate(["u", "v", "p"])}
+            x_int, y_int = self.coords[:, 0:1], self.coords[:, 1:2]
+            model_out = self.model({"x": x_int, "y": y_int})
             pred_u, pred_v, pred_p = (
                 model_out["u"],
                 model_out["v"],
@@ -394,15 +449,11 @@ def main(cfg: DictConfig) -> None:
         coords_wall,
         coords_polygon,
         nu,
-        pyg_graph,
-    ) = get_dataset(path, return_graph=True)
+    ) = get_dataset(path)
     coords_noslip = np.concatenate([coords_wall, coords_polygon], axis=0)
-
-    pyg_graph = pyg_graph.to(device)
 
     # Initialize model
     pi_fine_tuner = PhysicsInformedFineTuner(
-        cfg,
         device,
         gnn_u,
         gnn_v,
@@ -414,7 +465,6 @@ def main(cfg: DictConfig) -> None:
         ref_u,
         ref_v,
         ref_p,
-        pyg_graph,
     )
 
     logger.info("Inference (with physics-informed training for fine-tuning) started...")
@@ -433,7 +483,6 @@ def main(cfg: DictConfig) -> None:
             loss_mom_u,
             loss_mom_v,
             loss_cont,
-            current_lr,
         ) = pi_fine_tuner.train()
 
         if iters % 100 == 0:
@@ -451,7 +500,6 @@ def main(cfg: DictConfig) -> None:
             logger.info(f"Loss momentum u: {loss_mom_u.detach().cpu().numpy():.3e}")
             logger.info(f"Loss momentum v: {loss_mom_v.detach().cpu().numpy():.3e}")
             logger.info(f"Loss continuity: {loss_cont.detach().cpu().numpy():.3e}")
-            logger.info(f"Learning Rate: {current_lr}")
 
             # Print errors
             logger.info(f"Error u: {error_u:.3e}")
@@ -470,8 +518,11 @@ def main(cfg: DictConfig) -> None:
     # Save results
     # Final inference call after fine-tuning predictions using the PINN model
     with torch.no_grad():
-        out = pi_fine_tuner.model(pyg_graph.x, pyg_graph.edge_attr, pyg_graph)
-        results_int_inf = {k: out[:, i : i + 1] for i, k in enumerate(["u", "v", "p"])}
+        x_int_inf, y_int_inf = (
+            pi_fine_tuner.coords[:, 0:1],
+            pi_fine_tuner.coords[:, 1:2],
+        )
+        results_int_inf = pi_fine_tuner.model({"x": x_int_inf, "y": y_int_inf})
         pred_u_inf, pred_v_inf, pred_p_inf = (
             results_int_inf["u"],
             results_int_inf["v"],

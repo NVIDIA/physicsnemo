@@ -122,16 +122,18 @@ class PhysicsInformedFineTuner:
         ref_u,
         ref_v,
         ref_p,
-        pyg_graph,
+        dgl_graph,
     ):
         super().__init__()
 
         self.device = device
         self.nu = nu
-        self.pyg_graph = pyg_graph.to(self.device)
-        edge_tensor = self.pyg_graph.edge_index.t().to(self.device)
+        self.dgl_graph = dgl_graph.to(self.device)
+        edge_tensor = torch.stack(
+            [dgl_graph.edges()[0], dgl_graph.edges()[1]], dim=1
+        ).to(self.device)
         self.connectivity_tensor = compute_connectivity_tensor(
-            torch.arange(self.pyg_graph.num_nodes), edge_tensor
+            dgl_graph.nodes(), edge_tensor
         )
         self.connectivity_tensor = tuple(
             t.to(self.device) for t in self.connectivity_tensor
@@ -196,11 +198,14 @@ class PhysicsInformedFineTuner:
         return u, v
 
     def loss(self):
-        out = self.model(self.pyg_graph.x, self.pyg_graph.edge_attr, self.pyg_graph)
+        out = self.model(
+            self.dgl_graph.ndata["x"], self.dgl_graph.edata["x"], self.dgl_graph
+        )
 
         # inflow points
         mask_inflow = (
-            self.pyg_graph.marker == torch.tensor([0, 1, 0, 0, 0], device=self.device)
+            self.dgl_graph.ndata["marker"]
+            == torch.tensor([0, 1, 0, 0, 0]).to(self.device)
         ).all(dim=1)
         results_inflow = {
             k: out[:, i : i + 1][mask_inflow] for i, k in enumerate(["u", "v", "p"])
@@ -209,10 +214,12 @@ class PhysicsInformedFineTuner:
 
         # no-slip points
         mask_1 = (
-            self.pyg_graph.marker == torch.tensor([0, 0, 0, 1, 0], device=self.device)
+            self.dgl_graph.ndata["marker"]
+            == torch.tensor([0, 0, 0, 1, 0]).to(self.device)
         ).all(dim=1)
         mask_2 = (
-            self.pyg_graph.marker == torch.tensor([0, 0, 0, 0, 1], device=self.device)
+            self.dgl_graph.ndata["marker"]
+            == torch.tensor([0, 0, 0, 0, 1]).to(self.device)
         ).all(dim=1)
         mask_noslip = torch.logical_or(mask_1, mask_2)
         results_noslip = {
@@ -222,14 +229,15 @@ class PhysicsInformedFineTuner:
 
         # interior points
         mask_int = (
-            self.pyg_graph.marker == torch.tensor([1, 0, 0, 0, 0], device=self.device)
+            self.dgl_graph.ndata["marker"]
+            == torch.tensor([1, 0, 0, 0, 0]).to(self.device)
         ).all(dim=1)
         model_out = {
             k: out[:, i : i + 1][mask_int] for i, k in enumerate(["u", "v", "p"])
         }
         results_int = self.phy_informer.forward(
             {
-                "coordinates": self.pyg_graph.pos[:, 0:2],
+                "coordinates": self.dgl_graph.ndata["pos"][:, 0:2],
                 "u": out[:, 0:1],
                 "v": out[:, 1:2],
                 "p": out[:, 2:3],
@@ -330,7 +338,9 @@ class PhysicsInformedFineTuner:
         """Validation during the PINN fine-tuning step"""
         self.model.eval()
         with torch.no_grad():
-            out = self.model(self.pyg_graph.x, self.pyg_graph.edge_attr, self.pyg_graph)
+            out = self.model(
+                self.dgl_graph.ndata["x"], self.dgl_graph.edata["x"], self.dgl_graph
+            )
             model_out = {k: out[:, i : i + 1] for i, k in enumerate(["u", "v", "p"])}
             pred_u, pred_v, pred_p = (
                 model_out["u"],
@@ -394,11 +404,11 @@ def main(cfg: DictConfig) -> None:
         coords_wall,
         coords_polygon,
         nu,
-        pyg_graph,
+        dgl_graph,
     ) = get_dataset(path, return_graph=True)
     coords_noslip = np.concatenate([coords_wall, coords_polygon], axis=0)
 
-    pyg_graph = pyg_graph.to(device)
+    dgl_graph = dgl_graph.to(device)
 
     # Initialize model
     pi_fine_tuner = PhysicsInformedFineTuner(
@@ -414,7 +424,7 @@ def main(cfg: DictConfig) -> None:
         ref_u,
         ref_v,
         ref_p,
-        pyg_graph,
+        dgl_graph,
     )
 
     logger.info("Inference (with physics-informed training for fine-tuning) started...")
@@ -470,7 +480,7 @@ def main(cfg: DictConfig) -> None:
     # Save results
     # Final inference call after fine-tuning predictions using the PINN model
     with torch.no_grad():
-        out = pi_fine_tuner.model(pyg_graph.x, pyg_graph.edge_attr, pyg_graph)
+        out = pi_fine_tuner.model(dgl_graph.ndata["x"], dgl_graph.edata["x"], dgl_graph)
         results_int_inf = {k: out[:, i : i + 1] for i, k in enumerate(["u", "v", "p"])}
         pred_u_inf, pred_v_inf, pred_p_inf = (
             results_int_inf["u"],
