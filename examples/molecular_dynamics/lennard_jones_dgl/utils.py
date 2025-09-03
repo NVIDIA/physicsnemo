@@ -98,7 +98,7 @@ def _custom_collate(batch):
 
 def get_rotation_matrix():
     """
-    Randomly rotate the point clouds to augment the dataset
+    Randomly rotate the point clouds to augument the dataset
     rotation is per shape based along up direction
 
     Reference: https://github.com/BaratiLab/GAMD/blob/main/code/LJ/train_network_lj.py#L38
