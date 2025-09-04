@@ -37,11 +37,15 @@ class StormCastDataset(torch.utils.data.Dataset, ABC):
         - `state`: a 2-tuple of numpy.ndarray or torch.Tensor of shape
             `(num_channels_state, height, width)` with index 0 containing the input state data
             and index 1 containing the target state data
+        - `lead_time_label` (optional): this must be returned if lead_time_steps > 0. A single
+            integer indicating which lead time embedding should be used
         The outputs of __getitem__ should be already normalized (this is not done in the training
         loop for performance reasons).
 
     An example implementation of a dataset is given in `data_loader_hrrr_era5.py`.
     """
+
+    lead_time_steps: int = 0  # number of lead time embeddings
 
     @abstractmethod
     def background_channels(self) -> list[str]:
