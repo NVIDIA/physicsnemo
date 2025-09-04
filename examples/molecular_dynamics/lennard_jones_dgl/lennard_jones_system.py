@@ -17,9 +17,9 @@
 import torch
 import os
 from torch.utils.data import DataLoader
-import torch_geometric as pyg
 from typing import Tuple
 import numpy as np
+import dgl
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 import matplotlib.pyplot as plt
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import LaunchLogger
+from physicsnemo.launch.logging import LaunchLogger, PythonLogger
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
 
@@ -190,8 +190,7 @@ def main(cfg: DictConfig) -> None:
                 src, dst, edge_features = create_edges(
                     pos, distance_threshold, box_size
                 )
-                edge_index = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0)
-                g = pyg.data.Data(edge_index=edge_index).to(dist.device)
+                g = dgl.graph((src, dst)).to(dist.device)
 
                 node_fea = torch.ones(
                     size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
@@ -250,10 +249,7 @@ def main(cfg: DictConfig) -> None:
                         src, dst, edge_features = create_edges(
                             pos, distance_threshold, box_size
                         )
-                        edge_index = torch.stack(
-                            [torch.tensor(src), torch.tensor(dst)], dim=0
-                        )
-                        g = pyg.data.Data(edge_index=edge_index).to(dist.device)
+                        g = dgl.graph((src, dst)).to(dist.device)
                         node_fea = torch.ones(
                             size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
                         ).to(dist.device)

@@ -73,6 +73,18 @@ automatic workflows that represent the industrial state-of-the-art. Geometries a
 aerodynamic data are published in open-source formats. For more technical details about this
 dataset, please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
+## XAeroNet-S prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+pip install pyg-lib -f https://data.pyg.org/whl/torch-2.8.0+cu129.html
+```
+
+See `pyg-lib` [installation instructions](https://github.com/pyg-team/pyg-lib?tab=readme-ov-file#installation)
+for more details.
+
 ## Training the XAeroNet-S model
 
 To train the XAeroNet-S model, follow these steps:
@@ -88,7 +100,7 @@ To train the XAeroNet-S model, follow these steps:
    solids. Those should be combined into a single solid to properly generate a surface point
    cloud using the PhysicsNeMo Tesselated geometry module.
 
-5. Run `preprocessing.py`. This will prepare and save the partitioned graphs.
+5. Run `preprocessor.py`. This will prepare and save the partitioned graphs.
 
 6. Create `validation_partitions` and `test_partitions` folders,
    and move the samples you wish to use for validation and test to those folders.
@@ -105,6 +117,14 @@ To train the XAeroNet-S model, follow these steps:
 
 ![XAeroNet-S Validation results for the sample #500.](../../../../docs/img/xaeronet_s_results.png)
 
+## XAeroNet-V prerequisites
+
+Install the requirements using:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Training the XAeroNet-V model
 
 To train the XAeroNet-V model, follow these steps:
@@ -116,7 +136,7 @@ To train the XAeroNet-V model, follow these steps:
 3. Specify the configurations in `conf/config.yaml`. Make sure path to the dataset
    is specified correctly.
 
-4. Run `preprocessing.py`. This will prepare and save the voxel grids.
+4. Run `preprocessor.py`. This will prepare and save the voxel grids.
 
 5. Create a `drivaer_aws_h5_validation` folder, and move the samples you wish to
    use for validation to that folder.
