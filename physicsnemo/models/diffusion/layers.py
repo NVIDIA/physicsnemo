@@ -1038,7 +1038,8 @@ class PositionalEmbedding(torch.nn.Module):
         If True, the embedding considers the endpoint. By default False.
     amp_mode : bool, optional
         A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
-
+    learnable : bool, optional
+        A boolean flag indicating whether learnable positional embedding is enabled. Defaults to False.
     """
 
     def __init__(
