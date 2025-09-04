@@ -1,0 +1,138 @@
+# PHYSICSNEMO CODEOWNERS
+
+# The owners file is organized as follows:
+# First, customer-facing locations with high priority (docs, readme.md)
+
+# Next, core utilities (not attached to specific models)
+
+# Next, most active models (most likely to get a PR)
+# Model-specific utilities are included here, and relevant examples
+
+# Currently, the code owners is using specific people: however, we could
+# and probably should make teams in the NVIDIA org, assign people to those
+# teams, and use org teams instead.  Let's do that in an update.
+
+
+# Top level markdown files:
+# Keep CHANGELOG separate - don't require specific people to approve updates to it.
+./CHANGELOG.md 
+./*.md @ram-cherukuri @megnvidia
+
+# All changes to documentation:
+docs/ @megnvidia @ktangsali
+
+# Core release files
+Dockerfile @ktangsali
+pyproject.toml @ktangsali
+
+# CORE UTILITIES not attached to specific models:
+physicsnemo/utils/profiling @coreyjadams
+physicsnemo/utils/neighbors @coreyjadams @peterdsharpe
+physicsnemo/utils/version_check.py @coreyjadams
+physicsnemo/utils/capture.py @nickgeneva @ktangsali
+
+physicsnemo/registry/ @loliverhennigh
+
+physicsnemo/models/module.py @CharlelieLrt
+
+# METRICS that are general:
+physicsnemo/metrics/cae @RishikeshRanade @mnabian @peterdsharpe
+physicsnemo/metrics/general @dallasfoster @nickgeneva
+physicsnemo/metrics/climate @dallasfoster @nickgeneva
+
+# LAUNCH and DEPLOY TOOLS
+# NEEDSOWNER
+physicsnemo/launch
+physicsnemo/deploy
+
+
+# DATAPIPES
+physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
+physicsnemo/datapipes/cae @RishikeshRanade @coreyjadams @peterdsharpe @mnabian @Alexey-Kamenev
+physicsnemo/datapipes/gnn @mnabian @Alexey-Kamenev
+physicsnemo/datapipes/healpix @pzharrington 
+# Distributed tools
+physicsnemo/distributed @coreyjadams
+
+# MODEL SPECIFIC OWNERSHIP.  These are in roughly the same order as the code repo.
+# They are grouped "logically" together, though.  
+# For example, gnn_layers, graphcast, and meshgraphnet are together.
+
+# AFNO
+# NEEDSOWNER
+
+# CorrDiff and Diffusion
+physicsnemo/models/diffusion @CharlelieLrt
+physicsnemo/utils/corrdiff @CharlelieLrt
+physicsnemo/utils/diffusion @CharlelieLrt
+physicsnemo/utils/generative @CharlelieLrt
+physicsnemo/utils/patching.py @CharlelieLrt
+physicsnemo/metrics/diffusion @CharlelieLrt
+
+
+# DLWP
+# NEEDSOWNER
+physicsnemo/models/dlwp @pzharrington
+physicsnemo/models/dlwp_healpix @pzharrington
+physicsnemo/models/dlwp_healpix_layers @pzharrington
+physicsnemo/utils/insolation.py @pzharrington
+
+# DoMINO
+physicsnemo/models/domino @RishikeshRanade
+physicsnemo/utils/domino @RishikeshRanade
+physicsnemo/utils/sdf.py @RishikeshRanade @peterdsharpe
+examples/cfd/external_aerodynamics/domino @RishikeshRanade
+
+
+# fengwu, pangu, swinrnn
+# NEEDSOWNER
+physicsnemo/models/fengu @dallasfoster
+physicsnemo/models/pangu @dallasfoster
+physicsnemo/models/swinvrnn @dallasfoster
+
+# figconvnet
+physicsnemo/models/figconvnet @Alexey-Kamenev
+
+# FNO
+# NEEDSOWNER
+
+# GNN layers, mesh graphnet, graphcast
+physicsnemo/models/gnn_layers @mnabian @Alexey-Kamenev
+physicsnemo/models/meshgraphnet @mnabian @Alexey-Kamenev
+physicsnemo/models/graphcast @mnabian @Alexey-Kamenev
+physicsnemo/models/mesh_reduced @mnabian @Alexey-Kamenev
+physicsnemo/utils/mesh @mnabian
+
+# pix2pix
+# NEEDSOWNER
+physicsnemo/models/pix2pix
+
+# rnn, srnn
+physicsnemo/models/rnn @ktangsali
+physicsnemo/models/srnn @ktangsali
+
+# topodiff
+# NEEDSOWNER
+physicsnemo/models/topodiff
+
+# transolver
+physicsnemo/models/transolver @coreyjadams
+
+# unet
+physicsnemo/models/unet @mnabian @peterdsharpe
+
+# vfgn
+physicsnemo/models/vfgn @mnabian
+
+# EXAMPLE SPECIFIC OWNERSHIP
+
+# corrdiff
+examples/weather/corrdiff @CharlelieLrt
+
+# TEST SPECIFIC OWNERSHIP
+
+# CorrDiff and diffusion
+test/models/diffusion @CharlelieLrt
+test/metrics/diffusion @CharlelieLrt
+test/utils/generative @CharlelieLrt
+test/utils/corrdiff @CharlelieLrt

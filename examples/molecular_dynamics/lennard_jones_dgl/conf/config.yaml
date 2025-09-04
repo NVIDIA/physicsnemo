@@ -21,9 +21,9 @@ hydra:
     dir: ./outputs
 
 # while some parameters are hyper-parameters, some are based on physics of the problem.
-# unless specified explicitly, the parameter is a hyper-parameter.
-model:
-  input_dim_nodes: 1  # Single atom type (change this if the system contains different type of atoms)
+# unless specified explicity, the parameter is a hyper-parameter.
+model: 
+  input_dim_nodes: 1  # Single atom type (change this if the system contains different type of atoms) 
   input_dim_edges: 4  # 3 for 3 components of relative distance, 1 for norm of distance
   output_dim: 3 # Predict 3 components of the forces
   processor_size: 4

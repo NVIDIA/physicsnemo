@@ -10,12 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added lead-time aware training support to the StormCast example.
 - Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
   by dispatching to the proper optimized library, and torch.compile compatible.
 
 ### Changed
 
 - Migrated Stokes MGN example to PyTorch Geometric.
+- Migrated Lennard Jones example to PyTorch Geometric.
 
 ### Deprecated
 

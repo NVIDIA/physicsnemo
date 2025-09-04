@@ -15,7 +15,7 @@ Lennard Jones system (liquid Argon) given the positions of its atoms.
 The model is trained on data generated using OpenMM MD simulator. The dataset consists
 of 10000 samples of the 258 atom system. For original dataset please refer
 the [original publication](https://arxiv.org/abs/2112.03383) and
-[Git repo](https://github.com/BaratiLab/GAMD) of the original work.
+[Git repo](https://github.com/BaratiLab/GAMD) of the origial work.
 
 ## Model overview and architecture
 
@@ -31,6 +31,7 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
+pip install  dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 ```
 
 ## Getting Started
