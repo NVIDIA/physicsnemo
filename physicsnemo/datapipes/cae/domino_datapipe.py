@@ -522,8 +522,6 @@ class DoMINODataPipe(Dataset):
         if mesh_indices_flattened.dtype != xp.int32:
             mesh_indices_flattened = mesh_indices_flattened.astype(xp.int32)
 
-        length_scale = xp.amax(xp.amax(stl_vertices, 0) - xp.amin(stl_vertices, 0))
-
         center_of_mass = calculate_center_of_mass(stl_centers, stl_sizes)
 
         if self.config.bounding_box_dims_surf is None:
@@ -570,7 +568,6 @@ class DoMINODataPipe(Dataset):
         surf_grid_max_min = xp.stack([s_min, s_max])
 
         return_dict = {
-            "length_scale": length_scale,
             "surf_grid": surf_grid,
             "sdf_surf_grid": sdf_surf_grid,
             "surface_min_max": surf_grid_max_min,
@@ -651,7 +648,7 @@ class DoMINODataPipe(Dataset):
                     (s_max[2] - s_min[2]) / nz,
                 )
                 pos_normals_com_surface = calculate_normal_positional_encoding(
-                    surface_coordinates, center_of_mass, cell_length=[dx, dy, dz]
+                    surface_coordinates, center_of_mass, cell_dimensions=[dx, dy, dz]
                 )
             else:
                 pos_normals_com_surface = surface_coordinates - xp.asarray(
@@ -744,7 +741,13 @@ class DoMINODataPipe(Dataset):
 
             else:
                 # We are *not* sampling, kNN on ALL points:
-                ii = knn.kneighbors(surface_coordinates, return_distance=False)
+                if self.array_provider == cp:
+                    ii = knn.kneighbors(surface_coordinates, return_distance=False)
+                else:
+                    _, ii = interp_func.query(
+                        surface_coordinates,
+                        k=self.config.num_surface_neighbors,
+                    )
 
                 # Construct the neighbors arrays:
                 surface_neighbors = surface_coordinates[ii][:, 1:]
@@ -892,10 +895,10 @@ class DoMINODataPipe(Dataset):
                 pos_normals_closest_vol = calculate_normal_positional_encoding(
                     volume_coordinates,
                     sdf_node_closest_point,
-                    cell_length=[dx, dy, dz],
+                    cell_dimensions=[dx, dy, dz],
                 )
                 pos_normals_com_vol = calculate_normal_positional_encoding(
-                    volume_coordinates, center_of_mass, cell_length=[dx, dy, dz]
+                    volume_coordinates, center_of_mass, cell_dimensions=[dx, dy, dz]
                 )
             else:
                 pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
