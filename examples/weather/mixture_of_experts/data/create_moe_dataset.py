@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -6,7 +6,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-# http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,12 +15,12 @@
 # limitations under the License.
 
 import os
-import json 
+import json
 from datetime import datetime, timedelta
-from typing import Any, List, Callable
+from typing import Any, List
 from importlib.metadata import version
 import queue
-import threading 
+import threading
 
 import xarray as xr
 import numpy as np
@@ -42,7 +42,6 @@ from earth2studio.utils.type import TimeArray, VariableArray
 from earth2studio.utils.time import to_time_array
 from earth2studio.utils.coords import map_coords, split_coords
 
-import nvtx 
 # Dealing with zarr 3.0 API breaks and type checking
 try:
     zarr_version = version("zarr")
@@ -80,12 +79,13 @@ class h5DataSetFile:
         Loaded data array
     """
 
-    def __init__(self, 
-        file_dir: str, 
+    def __init__(
+        self,
+        file_dir: str,
         metadata_file_path: str,
-        array_name: str, 
+        array_name: str,
         years: int | list[int],
-        **xr_args: Any
+        **xr_args: Any,
     ):
         self.file_dir = file_dir
         self.metadata_file_path = metadata_file_path
@@ -93,10 +93,10 @@ class h5DataSetFile:
         # Open metadata
         with open(metadata_file_path) as f:
             metadata = json.load(f)
-            
-        dims = list(metadata['dims'])
+
+        dims = list(metadata["dims"])
         dims = ["variable" if d == "channel" else d for d in dims]
-        time_step = timedelta(hours = 6) #metadata['dhours']
+        time_step = timedelta(hours=6)  # metadata['dhours']
 
         if isinstance(years, int):
             years = [years]
@@ -105,24 +105,24 @@ class h5DataSetFile:
         for year in years:
             file_path = os.path.join(file_dir, f"{year}.h5")
             ds = xr.open_dataset(
-                file_path, 
-                engine = "h5netcdf", 
-                phony_dims = "sort", 
-                **xr_args
+                file_path, engine="h5netcdf", phony_dims="sort", **xr_args
             )[array_name]
 
             ds = ds.rename(dict(zip(ds.dims, dims)))
             ds = ds.assign_coords(
-                    time = [ datetime(year, 1, 1) + time_step * int(i) for i in range(len(ds.time)) ] , 
-                    **dict(
-                        [
-                            ["variable", metadata["coords"]['channel']],
-                            ["lat", metadata["coords"]["lat"]],
-                            ["lon", metadata["coords"]["lon"]],
-                        ]
-                    ),
-                )
-            ds = ds.chunk(dict(time = 4))
+                time=[
+                    datetime(year, 1, 1) + time_step * int(i)
+                    for i in range(len(ds.time))
+                ],
+                **dict(
+                    [
+                        ["variable", metadata["coords"]["channel"]],
+                        ["lat", metadata["coords"]["lat"]],
+                        ["lon", metadata["coords"]["lon"]],
+                    ]
+                ),
+            )
+            ds = ds.chunk(dict(time=4))
             self.ds.append(ds)
 
         self.ds = xr.concat(self.ds, dim="time")
@@ -132,26 +132,75 @@ class h5DataSetFile:
         time: datetime | list[datetime] | TimeArray,
         variable: str | list[str] | VariableArray,
     ) -> xr.DataArray:
-        """Function to get data.
-        """
+        """Function to get data."""
         return self.ds.sel(time=time, variable=variable)
 
+
 class AsyncDataFetcher:
-    def __init__(self, 
-        data_source: DataSource, 
-        time_arrays: List[np.array], 
-        variables: np.array, 
+    """
+    An asynchronous data prefetcher that streams batches from a data source in a background thread.
+
+    This class is designed to asynchronously fetch data (e.g., weather or scientific datasets)
+    from a `DataSource` using a worker thread, buffering the results in a queue to overlap
+    I/O or preprocessing with model training. It behaves like an iterator and can be used
+    in a `for` loop to consume data sequentially.
+
+    Parameters
+    ----------
+    data_source : DataSource
+        The backend data source object used to retrieve samples (must be compatible with `fetch_data`).
+    time_arrays : List[np.ndarray]
+        A list of time indices or timestamps to fetch data for.
+    variables : np.ndarray
+        Array of variables to extract from the data source (e.g., temperature, pressure).
+    lead_times : np.ndarray
+        Lead times for which forecasts or lagged values should be fetched.
+    device : torch.device
+        The device to which the fetched tensors should be moved (e.g., `torch.device("cuda")`).
+    max_prefetch : int, optional (default=4)
+        Maximum number of batches to prefetch and hold in the internal queue.
+    **fetch_kwargs
+        Additional keyword arguments passed to the underlying `fetch_data` call.
+
+    Notes
+    -----
+    - The class spawns a background thread that sequentially calls `fetch_data`
+      on the provided `time_arrays` and enqueues the results.
+    - Iteration stops automatically when all items are consumed or if `close()` is called.
+    - Exceptions raised in the worker thread are propagated to the main thread
+      during iteration.
+
+    Examples
+    --------
+    >>> fetcher = AsyncDataFetcher(
+    ...     data_source=my_source,
+    ...     time_arrays=[np.array([0, 1]), np.array([2, 3])],
+    ...     variables=np.array(["t2m", "w10m"]),
+    ...     lead_times=np.array([0, 6]),
+    ...     device=torch.device("cuda"),
+    ... )
+    >>> for batch in fetcher:
+    ...     # batch is ready on GPU
+    ...     train_step(batch)
+    >>> fetcher.close()
+    """
+
+    def __init__(
+        self,
+        data_source: DataSource,
+        time_arrays: List[np.array],
+        variables: np.array,
         lead_times: np.array,
         device: torch.device,
-        max_prefetch=4, 
-        **fetch_kwargs
+        max_prefetch=4,
+        **fetch_kwargs,
     ):
         self.data_source = data_source
         self.time_arrays = time_arrays
         self.variables = variables
-        self.lead_times = lead_times 
+        self.lead_times = lead_times
         self.device = device
-        
+
         self.max_prefetch = max_prefetch
         self._queue = queue.Queue(max_prefetch)
         self._thread = threading.Thread(target=self._worker)
@@ -194,9 +243,9 @@ class AsyncDataFetcher:
         if self._thread.is_alive():
             self._thread.join()
 
+
 @hydra.main(config_path=".", config_name="config.yaml")
 def main(cfg: DictConfig):
-
     DistributedManager.initialize()
     manager = DistributedManager()
     device = manager.device
@@ -212,10 +261,10 @@ def main(cfg: DictConfig):
 
     # Create the data source
     data_source = h5DataSetFile(
-        file_dir = cfg.data_source.file_dir,
-        metadata_file_path = cfg.data_source.metadata_path,
-        array_name = cfg.data_source.array_name,
-        years = cfg.data_source.years,
+        file_dir=cfg.data_source.file_dir,
+        metadata_file_path=cfg.data_source.metadata_path,
+        array_name=cfg.data_source.array_name,
+        years=cfg.data_source.years,
     )
     logger.info(f"Data source loaded on rank {rank}")
 
@@ -227,16 +276,12 @@ def main(cfg: DictConfig):
     for key, value in output_coords.items():
         output_coords[key] = np.asarray(value)
 
-    times = pd.date_range(
-        start=cfg.start_time, 
-        end = cfg.end_time,  
-        freq=cfg.freq
-    )
+    times = pd.date_range(start=cfg.start_time, end=cfg.end_time, freq=cfg.freq)
     times = to_time_array(times)
 
     rank_times = times[rank::world_size]
 
-    if cfg.initialize_io :
+    if cfg.initialize_io:
         if rank == 0:
             logger.info(f"Initializing IO on rank {rank}")
             # Set up IO backend
@@ -246,7 +291,7 @@ def main(cfg: DictConfig):
             ).items():  # Scrub batch dims
                 if value.shape == (0,):
                     del total_coords[key]
-            
+
             total_coords["time"] = times
             total_coords["lead_time"] = np.asarray(
                 [
@@ -264,36 +309,40 @@ def main(cfg: DictConfig):
 
             # Completed timesteps
             io.add_array(
-                {"time": total_coords["time"]}, 
-                "timesteps_completed", 
-                data=torch.zeros(len(total_coords["time"]), dtype=torch.int32)
+                {"time": total_coords["time"]},
+                "timesteps_completed",
+                data=torch.zeros(len(total_coords["time"]), dtype=torch.int32),
             )
-    
+
     torch.distributed.barrier()
 
     # Create batches of initial conditions
     bt = []
     for i in range(0, len(rank_times), cfg.batch_size):
-        time = rank_times[i:i+cfg.batch_size]
+        time = rank_times[i : i + cfg.batch_size]
         timesteps_completed, _ = io.read({"time": time}, "timesteps_completed")
         if torch.all(timesteps_completed == 1):
-            logger.info(f"Skipping timestep {time} because it has already been completed on rank {rank}")
+            logger.info(
+                f"Skipping timestep {time} because it has already been completed on rank {rank}"
+            )
             continue
         else:
-            bt.append(rank_times[i:i+cfg.batch_size])
-            
+            bt.append(rank_times[i : i + cfg.batch_size])
+
     logger.info(f"Running {len(bt)} batches on rank {rank}")
-    
+
     fetcher = AsyncDataFetcher(
-        data_source = data_source,
-        time_arrays = bt,
-        variables = model.input_coords()["variable"],
-        lead_times = model.input_coords()["lead_time"],
-        device = device,
+        data_source=data_source,
+        time_arrays=bt,
+        variables=model.input_coords()["variable"],
+        lead_times=model.input_coords()["lead_time"],
+        device=device,
     )
-    
-    for x, coords in tqdm(fetcher, desc=f"Processing timesteps on rank {rank}", total=len(bt)):
-        logger.info(f"Running model on rank {rank} at time {coords["time"]}")
+
+    for x, coords in tqdm(
+        fetcher, desc=f"Processing timesteps on rank {rank}", total=len(bt)
+    ):
+        logger.info(f"Running model on rank {rank} at time {coords['time']}")
         x, coords = map_coords(x, coords, model.input_coords())
 
         iterator = model.create_iterator(x, coords)
@@ -306,10 +355,15 @@ def main(cfg: DictConfig):
             io.write(*split_coords(x, coords))
             if step == cfg.nsteps:
                 break
-        
+
         # Update completed timesteps
-        io.write(torch.ones(x.shape[0], dtype=torch.int32), {"time": coords["time"]}, "timesteps_completed")
+        io.write(
+            torch.ones(x.shape[0], dtype=torch.int32),
+            {"time": coords["time"]},
+            "timesteps_completed",
+        )
     torch.distributed.barrier()
+
 
 if __name__ == "__main__":
     main()
