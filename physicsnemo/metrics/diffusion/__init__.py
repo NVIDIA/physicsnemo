@@ -18,6 +18,8 @@ from .fid import calculate_fid_from_inception_stats
 from .loss import (
     EDMLoss,
     EDMLossSR,
+    LogNormalSigma,
+    LogUniformSigma,
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,

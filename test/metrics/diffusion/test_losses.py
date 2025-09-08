@@ -14,11 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import pytest
 import torch
 
 from physicsnemo.metrics.diffusion import (
     EDMLoss,
+    LogNormalSigma,
+    LogUniformSigma,
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,
@@ -122,14 +125,28 @@ def test_call_method_ve():
 
 def test_edmloss_initialization():
     loss_func = EDMLoss()
-    assert loss_func.P_mean == -1.2
-    assert loss_func.P_std == 1.2
+    assert isinstance(loss_func.sigma_sampler, LogNormalSigma)
+    assert loss_func.sigma_sampler.P_mean == -1.2
+    assert loss_func.sigma_sampler.P_std == 1.2
     assert loss_func.sigma_data == 0.5
 
     loss_func = EDMLoss(P_mean=-2.0, P_std=2.0, sigma_data=0.3)
-    assert loss_func.P_mean == -2.0
-    assert loss_func.P_std == 2.0
+    assert isinstance(loss_func.sigma_sampler, LogNormalSigma)
+    assert loss_func.sigma_sampler.P_mean == -2.0
+    assert loss_func.sigma_sampler.P_std == 2.0
     assert loss_func.sigma_data == 0.3
+
+    loss_func = EDMLoss(sigma_sampler="LogUniformSigma", sigma_min=0.1, sigma_max=200)
+    assert isinstance(loss_func.sigma_sampler, LogUniformSigma)
+    assert loss_func.sigma_sampler.log_sigma_min == pytest.approx(np.log(0.1))
+    assert loss_func.sigma_sampler.log_sigma_diff == pytest.approx(
+        np.log(200) - np.log(0.1)
+    )
+
+    with pytest.raises(TypeError):
+        loss_func = EDMLoss(
+            sigma_sampler="LogNormalSigma", sigma_min=0.1, sigma_max=200
+        )
 
 
 def test_call_method_edm():
