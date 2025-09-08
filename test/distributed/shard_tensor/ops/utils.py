@@ -68,7 +68,7 @@ def sharded_to_local(container):
         return container
 
 
-def default_tensor_comparison(output, d_output):
+def default_tensor_comparison(output, d_output, atol, rtol):
     # We assume a single output!
 
     local_output = sharded_to_local(d_output)
@@ -78,7 +78,7 @@ def default_tensor_comparison(output, d_output):
     # max_abs_diff_allowed = 1e-8 + 1e-5 * torch.abs(output)
 
     # Check forward agreement:
-    assert torch.allclose(output, local_output, atol=1e-5, rtol=1e-5)
+    assert torch.allclose(output, local_output, atol=atol, rtol=rtol)
 
     return True
 
@@ -95,6 +95,8 @@ def numerical_shard_tensor_check(
     check_grads: bool = False,
     fwd_comparison_fn: callable = default_tensor_comparison,
     loss_fn: callable = default_loss_fn,
+    atol: float = 1e-5,
+    rtol: float = 1e-5,
 ):
     # Make sure the module's parameters all align on ever rank of the mesh:
     d_module = distribute_module(module, device_mesh=mesh)
@@ -113,7 +115,7 @@ def numerical_shard_tensor_check(
     # Run the distributed module on the distributed data:
     d_output = d_module(*input_args, **input_kwargs)
 
-    fwd_comparison_fn(output, d_output)
+    fwd_comparison_fn(output, d_output, atol, rtol)
 
     if check_grads:
         # single device grads:
@@ -124,13 +126,13 @@ def numerical_shard_tensor_check(
 
         # compare the grads:
         for param, d_param in zip(module.parameters(), d_module.parameters()):
-            assert torch.allclose(param.grad, d_param.grad)
+            assert torch.allclose(param.grad, d_param.grad, atol=atol, rtol=rtol)
 
         # Check the input grads, if they are required:
 
         for input_arg, d_input_arg in zip(local_input_args, input_args):
             if d_input_arg.requires_grad:
-                default_tensor_comparison(input_arg.grad, d_input_arg.grad)
+                default_tensor_comparison(input_arg.grad, d_input_arg.grad, atol, rtol)
 
                 # input gradients should have the same sharding and placements.
                 # Check the spec:
