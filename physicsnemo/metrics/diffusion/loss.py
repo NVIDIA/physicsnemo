@@ -18,7 +18,8 @@
 """Loss functions used in the paper
 "Elucidating the Design Space of Diffusion-Based Generative Models"."""
 
-from typing import Callable, Optional, Tuple, Union
+from abc import ABC, abstractmethod
+from typing import Callable, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -193,9 +194,32 @@ class VELoss:
         return loss
 
 
-class EDMLoss:
+class SigmaSampler(ABC):
+    """Base class for sigma samplers."""
+
+    @abstractmethod
+    def __call__(self, shape: tuple, device: torch.device) -> torch.Tensor:
+        """
+        Sample from the distribution.
+
+        Parameters
+        ----------
+        shape: tuple
+            The shape of the returned tensor.
+        device: torch.device
+            The device on which the returned tensor should be placed.
+
+        Returns
+        -------
+        torch.Tensor
+            A tensor of the specified shape with the sampled values.
+        """
+        pass
+
+
+class LogNormalSigma(SigmaSampler):
     """
-    Loss function proposed in the EDM paper.
+    Log-normal sampling for `sigma`.
 
     Parameters
     ----------
@@ -203,8 +227,69 @@ class EDMLoss:
         Mean value for `sigma` computation, by default -1.2.
     P_std: float, optional:
         Standard deviation for `sigma` computation, by default 1.2.
-    sigma_data: float, optional
-        Standard deviation for data, by default 0.5.
+    """
+
+    def __init__(self, P_mean: float = -1.2, P_std: float = 1.2):
+        self.P_mean = P_mean
+        self.P_std = P_std
+
+    def __call__(self, shape: tuple, device: torch.device) -> torch.Tensor:
+        """
+        Sample from the distribution.
+
+        For details, see the docstring of `SigmaSampler.__call__`.
+        """
+        rnd_normal = torch.randn(shape, device=device)
+        return (rnd_normal * self.P_std + self.P_mean).exp()
+
+
+class LogUniformSigma(SigmaSampler):
+    """
+    Log-uniform sampling for `sigma`.
+
+    Parameters
+    ----------
+    sigma_min: float, optional
+        Minimum value for `sigma` computation, by default 0.02.
+    sigma_max: float, optional:
+        Minimum value for `sigma` computation, by default 1000.
+    """
+
+    def __init__(self, sigma_min: float = 0.02, sigma_max: float = 1000):
+        self.log_sigma_min = float(np.log(sigma_min))
+        self.log_sigma_diff = float(np.log(sigma_max)) - self.log_sigma_min
+
+    def __call__(self, shape: tuple, device: torch.device) -> torch.Tensor:
+        """
+        Sample from the distribution.
+
+        For details, see the docstring of `SigmaSampler.__call__`.
+        """
+        rnd_uniform = torch.rand(shape, device=device)
+        return (self.log_sigma_min + rnd_uniform * self.log_sigma_diff).exp()
+
+
+# The supported sigma samplers. Applications may add items to this dict in order to add
+# new samplers.
+sigma_samplers = {
+    "LogNormalSigma": LogNormalSigma,
+    "LogUniformSigma": LogUniformSigma,
+}
+
+
+class EDMLoss:
+    """
+    Loss function proposed in the EDM paper.
+
+    Parameters
+    ----------
+    sigma_data: float | torch.Tensor, optional
+        Standard deviation for data, by default 0.5. Can also be a tensor; to use
+        per-channel sigma_data, pass a tensor of shape (1, number_of_channels, 1, 1).
+    sampler: str
+        The name of the noise amplitude (sigma) distribution sampler to be used.
+        Supported values: "LogNormalSigma" (log-normal sampling), "LogUniformSigma"
+        (log-uniform sampling).
 
     Note
     ----
@@ -214,29 +299,31 @@ class EDMLoss:
     """
 
     def __init__(
-        self, P_mean: float = -1.2, P_std: float = 1.2, sigma_data: float = 0.5
+        self,
+        sigma_data: float | torch.Tensor = 0.5,
+        sigma_sampler: Literal["LogNormalSigma", "LogUniformSigma"] = "LogNormalSigma",
+        **sampler_kwargs,
     ):
-        self.P_mean = P_mean
-        self.P_std = P_std
         self.sigma_data = sigma_data
+        self.sigma_sampler = sigma_samplers[sigma_sampler](**sampler_kwargs)
 
     def __call__(
         self,
-        net,
-        images,
-        condition=None,
-        labels=None,
-        augment_pipe=None,
-        lead_time_label=None,
-    ):
+        net: torch.nn.Module,
+        images: torch.Tensor,
+        condition: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        augment_pipe: Callable | None = None,
+        lead_time_label: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         Calculate and return the loss corresponding to the EDM formulation.
 
         The method adds random noise to the input images and calculates the loss as the
         square difference between the network's predictions and the input images.
-        The noise level is determined by 'sigma', which is computed as a function of
-        'P_mean' and 'P_std' random values. The calculated loss is weighted as a
-        function of 'sigma' and 'sigma_data'.
+        The noise level is determined by 'sigma', which is drawn from the `sigma_sampler`
+        specified in the constructor. The calculated loss is weighted as a function of
+        'sigma' and 'sigma_data'.
 
         Parameters:
         ----------
@@ -245,6 +332,9 @@ class EDMLoss:
 
         images: torch.Tensor
             Input images to the neural network.
+
+        condition: torch.Tensor
+            Condition to be passed to the `condition` argument of `net.forward`.
 
         labels: torch.Tensor
             Ground truth labels for the input images.
@@ -263,8 +353,7 @@ class EDMLoss:
             A tensor representing the loss calculated based on the network's
             predictions.
         """
-        rnd_normal = torch.randn([images.shape[0], 1, 1, 1], device=images.device)
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        sigma = self.sigma_sampler((images.shape[0], 1, 1, 1), device=images.device)
         weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
         y, augment_labels = (
             augment_pipe(images) if augment_pipe is not None else (images, None)

@@ -16,6 +16,7 @@
 
 """Main training loop."""
 
+from collections.abc import Sequence
 import os
 import time
 import numpy as np
@@ -188,7 +189,13 @@ def training_loop(cfg):
     if cfg.training.loss == "regression":
         loss_fn = regression_loss_fn
     elif cfg.training.loss == "edm":
-        loss_fn = EDMLoss(P_mean=cfg.model.P_mean)
+        sigma_params = dict(cfg.model.get("sigma_distribution", {}))
+        sigma_data = sigma_params.pop("sigma_data", 0.5)
+        if isinstance(sigma_data, Sequence):
+            sigma_data = torch.as_tensor(
+                list(sigma_data), dtype=torch.float32, device=device
+            )[None, :, None, None]
+        loss_fn = EDMLoss(sigma_data=sigma_data, **sigma_params)
     if cfg.training.compile_model:
         loss_fn = torch.compile(loss_fn)
     optimizer = torch.optim.Adam(net.parameters(), lr=cfg.training.lr)
