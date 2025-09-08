@@ -80,7 +80,7 @@ def run_mesh_creation(rank, num_gpus, mesh_names, mesh_sizes, verbose):
         DistributedManager.cleanup()
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("data_parallel_size", [-1])
 @pytest.mark.parametrize("domain_parallel_size", [2, 1])
 @pytest.mark.parametrize("model_parallel_size", [4, 2])

@@ -144,7 +144,7 @@ def run_distributed_model_config(rank, model_parallel_size, verbose):
         DistributedManager.cleanup()
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_distributed_model_config():
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
