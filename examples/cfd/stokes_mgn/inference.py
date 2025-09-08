@@ -25,17 +25,9 @@ from physicsnemo.launch.logging import PythonLogger
 from physicsnemo.launch.utils import load_checkpoint
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 from omegaconf import DictConfig
+from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from utils import relative_lp_error
-
-try:
-    from dgl import DGLGraph
-    from dgl.dataloading import GraphDataLoader
-except:
-    raise ImportError(
-        "Stokes  example requires the DGL library. Install the "
-        + "desired CUDA version at: \n https://www.dgl.ai/pages/start.html"
-    )
 
 try:
     import pyvista as pv
@@ -64,7 +56,7 @@ class MGNRollout:
         )
 
         # instantiate dataloader
-        self.dataloader = GraphDataLoader(
+        self.dataloader = PyGDataLoader(
             self.dataset,
             batch_size=cfg.batch_size,
             shuffle=False,
@@ -113,14 +105,14 @@ class MGNRollout:
         }
         for i, graph in enumerate(self.dataloader):
             graph = graph.to(self.device)
-            pred = self.model(graph.ndata["x"], graph.edata["x"], graph).detach()
+            pred = self.model(graph.x, graph.edge_attr, graph).detach()
 
             keys = ["u", "v", "p"]
             polydata = pv.read(self.dataset.data_list[i])
 
             for key_index, key in enumerate(keys):
                 pred_val = pred[:, key_index : key_index + 1]
-                target_val = graph.ndata["y"][:, key_index : key_index + 1]
+                target_val = graph.y[:, key_index : key_index + 1]
 
                 pred_val = self.dataset.denormalize(
                     pred_val, stats[f"{key}_mean"], stats[f"{key}_std"]

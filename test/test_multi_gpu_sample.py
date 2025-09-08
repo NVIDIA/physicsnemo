@@ -18,7 +18,7 @@ import pytest
 import torch
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_multi_gpu():
     num_gpus = torch.cuda.device_count()
     assert num_gpus > 1, "Not enough GPUs available for test"
