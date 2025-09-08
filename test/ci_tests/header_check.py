@@ -124,7 +124,9 @@ def get_committed_files():
     files = []
     for line in result.stdout.splitlines():
         status, *file_path = line.split("\t")
-        if status != "D":
+        if status.startswith("R"):
+            files.append(file_path[1])
+        elif status != "D":
             files.append("\t".join(file_path))
     return files
 
