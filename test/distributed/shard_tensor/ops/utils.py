@@ -17,10 +17,32 @@
 from collections.abc import Iterable
 
 import torch
-from torch.distributed.tensor import distribute_module
+from torch.distributed.tensor import DTensor, distribute_module
 from torch.distributed.tensor.device_mesh import DeviceMesh
 
 from physicsnemo.distributed import ShardTensor
+
+
+def unparallelize_module(module):
+    """
+    This is the inverse of "distribute_module".  Don't use this except in tests.
+
+    (Why need this?  We're leveraging distribute_module to make sure all
+    ranks have the same weights, if needed, instead of relying on random seeds.)
+    """
+    for name, param in list(module._parameters.items()):
+        if isinstance(param, torch.nn.Parameter) and isinstance(param.data, DTensor):
+            # gather to replicated then unwrap
+            local_tensor = param.data.full_tensor()
+            # replace with a normal Parameter
+            module._parameters[name] = torch.nn.Parameter(
+                local_tensor, requires_grad=param.requires_grad
+            )
+    # recurse into submodules
+    for child in module.children():
+        unparallelize_module(child)
+
+    return module
 
 
 def generate_image_like_data(
@@ -79,8 +101,7 @@ def numerical_shard_tensor_check(
     # (By default this replicates)
 
     # Then, get a local copy of the parameters
-    for param, d_param in zip(module.parameters(), d_module.parameters()):
-        param.data = d_param.data.full_tensor()
+    module = unparallelize_module(module)
 
     # Now, get the local version of the data:
     local_input_args = sharded_to_local(input_args)
