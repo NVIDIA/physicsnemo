@@ -35,6 +35,8 @@ def test_dit_forward_accuracy(device):
         hidden_size=128,
         depth=2,
         num_heads=4,
+        layernorm_backbone="torch",
+        attention_backbone="timm",
     ).to(device)
     model.eval()  # Set to eval to avoid dropout randomness
 
@@ -61,6 +63,8 @@ def test_dit_conditional_forward_accuracy(device):
         depth=2,
         num_heads=4,
         condition_dim=128,
+        layernorm_backbone="torch",
+        attention_backbone="timm",
     ).to(device)
     model.eval()  # Set to eval to avoid dropout randomness
 
@@ -122,6 +126,7 @@ def test_dit_checkpoint(device):
             depth=1,
             num_heads=2,
             attention_backbone="timm",
+            layernorm_backbone="torch",
         )
         .to(device)
         .eval()
@@ -136,6 +141,7 @@ def test_dit_checkpoint(device):
             depth=1,
             num_heads=2,
             attention_backbone="timm",
+            layernorm_backbone="torch",
         )
         .to(device)
         .eval()
@@ -143,7 +149,8 @@ def test_dit_checkpoint(device):
 
     # Change weights on one model to ensure they are different initially
     with torch.no_grad():
-        model_2.proj_layer.output_projection.weight.data.add_(0.1)
+        for param in model_2.parameters():
+            param.add_(0.1)
 
     x = torch.randn(2, 3, 16, 16).to(device)
     t = torch.randint(0, 1000, (2,)).to(device)

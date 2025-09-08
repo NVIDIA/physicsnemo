@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+io:
+  checkpoint_dir: "./checkpoints"     # Directory where model checkpoints are saved
+  model_name: "MoE_base"              # Name of the model (used in logs/checkpoints)
+  load_checkpoint: True              # Whether to resume training from an existing checkpoint
+  log_freq: 100                       # Logging frequency (steps per log update)
+  checkpoint_freq: 1                  # Frequency (in epochs) for saving checkpoints
+
+data:
+  data_dirs:                          # List of directories containing training data from multiple models
+    ["/earth2/era5_75var/train/",
+     "/code/data/moe/fcn3_hdf5_reforecasts/train/",
+     "/code/data/moe/aurora_multi_hdf5/train/",
+     "/code/data/moe/pangu_multi_hdf5/train/"]  # Additional datasets can be added here
+  stats_dir: "/earth2/era5_75var/stats/"        # Directory with dataset statistics (mean, std for normalization)
+  in_channels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]   # Input channel indices used from dataset
+  out_channels: [0, 1, 4, 15, 18, 28, 31, 41, 44, 54, 57]  # Target/output channel indices from ERA5
+  orig_index: [3, 6, 0, 4, 5, 7, 8, 9, 10, 1, 2]   # Reordering of channels to align inputs/outputs
+  model_time_offsets: [0, 1, 1]        # Time offsets for different models (e.g., lead time alignment)
+  num_samples_per_year: 1459           # Number of training samples per year
+  max_lead_time: 8                     # Maximum forecast horizon in steps
+  shuffle_model_idx:                   # Optionally shuffle model indices (empty = disabled)
+  shuffle_channel_order:               # Optionally shuffle channel order (empty = disabled)
+  batch_size_train: 16                  # Batch size for training
+  batch_size_validation: 8             # Batch size for validation
+  num_workers_train: 4                 # Data loader workers for training
+  num_workers_validation: 2            # Data loader workers for validation
+
+# Model parameters (Mixture of Experts, MoE)
+model_params:
+  input_size: [720, 1440]              # Spatial resolution (height, width)
+  in_channels: 11                      # Number of input channels
+  out_channels: 11                     # Number of output channels
+  patch_size: 8                        # Size of patches
+  n_models: 3                          # Number of expert models in the MoE
+  hidden_size: 384                     # Hidden dimension of transformer layers
+  depth: 6                             # Number of transformer layers
+  num_heads: 6                         # Number of attention heads
+  mlp_ratio: 4.0                       # MLP expansion factor in transformer
+  noise_dim:                           # Dimension of noise input (optional, left blank here)
+  return_probabilities: True           # Whether to output expert probabilities (for MoE gating)
+  bias: True                           # Whether to include bias in MoE gating
+  attention_backbone: "transformer_engine"           # Backend for attention implementation (timm/transformer_engine)
+  layernorm_backbone: "apex"           # Backend for layer normalization (torch/apex)
+
+# WandB configuration
+wandb:
+  entity: "dib43"                      # WandB user/entity name
+  project: "MoWE"                      # WandB project name
+  name: "Base"                         # Run name
+  group: "Base"                        # Group name (to cluster runs)
+  notes: "Base architecture"           # Additional notes for this run
+  mode: "online"                       # WandB mode: "online", "offline", or "disabled"
+  results_dir: "./wandb"               # Directory for saving WandB logs
+
+training:
+  lr: 0.0002                           # Learning rate
+  weight_decay: 0.05                   # Weight decay for optimizer
+  max_epochs: 50                      # Number of training epochs
+  train_split_ratio: 0.98              # Fraction of data used for training (rest for validation; 0.98 leaves 2015 for validation)
