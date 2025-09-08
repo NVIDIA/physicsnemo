@@ -28,9 +28,9 @@ except ImportError:
         allow_module_level=True,
     )
 
-from test_shard_tensor_redistribute import shard_tensor_factory
-
 from physicsnemo.distributed import ShardTensor
+
+from .test_shard_tensor_redistribute import shard_tensor_factory
 
 
 def run_shard_tensor_detach(mesh, uneven, verbose):
