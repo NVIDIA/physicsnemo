@@ -15,22 +15,12 @@
 # limitations under the License.
 
 import pytest
-import torch
 from torch.distributed.tensor.placement_types import Shard
 from torch.nn import Upsample
 
 from physicsnemo.distributed import DistributedManager, scatter_tensor
 
-from .utils import numerical_shard_tensor_check
-
-
-def generate_image_like_data(
-    batch_size: int, C_in: int, spatial_shape: tuple[int, ...]
-) -> torch.Tensor:
-    """
-    Generate a random image-like tensor
-    """
-    return torch.randn(batch_size, C_in, *spatial_shape)
+from .utils import generate_image_like_data, numerical_shard_tensor_check
 
 
 @pytest.mark.multigpu_static

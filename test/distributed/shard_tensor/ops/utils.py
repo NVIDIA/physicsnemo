@@ -23,6 +23,15 @@ from torch.distributed.tensor.device_mesh import DeviceMesh
 from physicsnemo.distributed import ShardTensor
 
 
+def generate_image_like_data(
+    batch_size: int, C_in: int, spatial_shape: tuple[int, ...]
+) -> torch.Tensor:
+    """
+    Generate a random image-like tensor
+    """
+    return torch.randn(batch_size, C_in, *spatial_shape)
+
+
 def sharded_to_local(container):
     if isinstance(container, ShardTensor):
         local_output = container.full_tensor()
