@@ -33,7 +33,7 @@ except ImportError:
 
 import torch
 
-from ..test_shard_tensor_redistribute import shard_tensor_factory
+from ..test_redistribute import shard_tensor_factory
 
 
 @pytest.mark.multigpu_static
