@@ -136,8 +136,17 @@ def test_edmloss_initialization():
     assert loss_func.sigma_sampler.P_std == 2.0
     assert loss_func.sigma_data == 0.3
 
-    loss_func = EDMLoss(sigma_sampler="LogUniformSigma", sigma_min=0.1, sigma_max=200)
+    sigma_data = torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[
+        None, :, None, None
+    ]
+    loss_func = EDMLoss(
+        sigma_sampler="LogUniformSigma",
+        sigma_min=0.1,
+        sigma_max=200,
+        sigma_data=sigma_data,
+    )
     assert isinstance(loss_func.sigma_sampler, LogUniformSigma)
+    assert (loss_func.sigma_data == sigma_data).all()
     assert loss_func.sigma_sampler.log_sigma_min == pytest.approx(np.log(0.1))
     assert loss_func.sigma_sampler.log_sigma_diff == pytest.approx(
         np.log(200) - np.log(0.1)
@@ -149,7 +158,11 @@ def test_edmloss_initialization():
         )
 
 
-def test_call_method_edm():
+@pytest.mark.parametrize(
+    "sigma_data",
+    [0.5, torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[None, :, None, None]],
+)
+def test_call_method_edm(sigma_data):
     def fake_condition_net(y, sigma, condition, class_labels=None, augment_labels=None):
         return torch.tensor([1.0])
 
@@ -167,7 +180,7 @@ def test_call_method_edm():
         assert lead_time_label is not None  # test that this is properly passed through
         return torch.tensor([1.0])
 
-    loss_func = EDMLoss()
+    loss_func = EDMLoss(sigma_data=sigma_data)
 
     img = torch.tensor([[[[1.0]]]])
     labels = None
