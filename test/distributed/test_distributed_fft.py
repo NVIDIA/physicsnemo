@@ -196,7 +196,7 @@ def run_distributed_fft(rank, model_parallel_size, verbose):
         ), "Distributed FFT backward does not match single GPU version!"
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_distributed_fft():
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"

@@ -44,13 +44,16 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
     os.environ["WORLD_SIZE"] = f"{world_size}"
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(12355)
+    local_rank = rank % torch.cuda.device_count()
+    os.environ["LOCAL_RANK"] = f"{local_rank}"
 
     DistributedManager.initialize()
+
+    manager = DistributedManager()
     DistributedManager.create_process_subgroup(
         name="graph_partition",
         size=world_size,
     )
-    manager = DistributedManager()
     assert manager.is_initialized() and manager._distributed
 
     model_kwds = {
@@ -256,12 +259,13 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
     del os.environ["WORLD_SIZE"]
     del os.environ["MASTER_ADDR"]
     del os.environ["MASTER_PORT"]
+    del os.environ["LOCAL_RANK"]
 
     DistributedManager.cleanup()
 
 
 @import_or_fail("dgl")
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize(
     "partition_scheme", ["mapping", "nodewise", "coordinate_bbox", "none"]
 )
@@ -269,7 +273,7 @@ def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme)
 def test_distributed_meshgraphnet(dtype, partition_scheme, pytestconfig):
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"
-    world_size = 2
+    world_size = num_gpus
 
     torch.multiprocessing.set_start_method("spawn", force=True)
 

@@ -343,7 +343,7 @@ def run_test_distributed_graph(
 
 
 @import_or_fail("dgl")
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("partition_scheme", ["lat_lon_bbox", "default"])
 def test_distributed_graph(partition_scheme, pytestconfig):
     num_gpus = torch.cuda.device_count()

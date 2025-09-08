@@ -24,9 +24,6 @@ from physicsnemo.utils.version_check import check_module_requirements
 
 try:
     check_module_requirements("physicsnemo.distributed.shard_tensor")
-    from test_shard_tensor_initialization import (
-        init_dist,
-    )
 
 except ImportError:
     pytest.skip(
@@ -35,99 +32,42 @@ except ImportError:
     )
 
 import torch
-from pytest_utils import modify_environment
 from test_shard_tensor_redistribute import shard_tensor_factory
 
-from physicsnemo.distributed import DistributedManager
+
+@pytest.mark.multigpu_static
+def test_shard_tensor_unsqueeze(distributed_mesh, verbose=True):
+    run_shard_tensor_unsqueeze(distributed_mesh, verbose=verbose)
 
 
-def run_shard_tensor_unsqueeze(rank, num_gpus, mesh_names, mesh_sizes, verbose):
-    with modify_environment(
-        RANK=f"{rank}",
-        WORLD_SIZE=f"{num_gpus}",
-        MASTER_ADDR="localhost",
-        MASTER_PORT=str(13245),
-        LOCAL_RANK=f"{rank % torch.cuda.device_count()}",
-    ):
-        init_dist(rank, num_gpus)
-
-        shard_tensor = shard_tensor_factory(mesh_names, mesh_sizes)
-        if verbose:
-            print()
-
-        # For this test, we're testing that the unsqueeze of the tensor works correctly
-
-        full_original_tensor = shard_tensor.full_tensor()
-
-        indexes = list(range(len(full_original_tensor.shape)))
-
-        for i in indexes:
-            i_sharded_unsqueeze = shard_tensor.unsqueeze(i)
-            i_unsharded_unsqueeze = full_original_tensor.unsqueeze(i)
-
-            assert i_sharded_unsqueeze.shape == i_sharded_unsqueeze.shape
-            assert torch.allclose(
-                i_sharded_unsqueeze.full_tensor(), i_unsharded_unsqueeze
-            )
-
-            ni_sharded_unsqueeze = shard_tensor.unsqueeze(-i)
-            ni_unsharded_unsqueeze = full_original_tensor.unsqueeze(-i)
-
-            assert ni_sharded_unsqueeze.shape == ni_sharded_unsqueeze.shape
-            assert torch.allclose(
-                ni_sharded_unsqueeze.full_tensor(), ni_unsharded_unsqueeze
-            )
-
-        DistributedManager().cleanup()
+@pytest.mark.multigpu_static
+def test_shard_tensor_unsqueeze_2d(distributed_mesh_2d, verbose=True):
+    run_shard_tensor_unsqueeze(distributed_mesh_2d, verbose=verbose)
 
 
-@pytest.mark.multigpu
-@pytest.mark.parametrize("data_parallel_size", [-1])
-@pytest.mark.parametrize("domain_H", [2, 4])
-@pytest.mark.parametrize("domain_W", [1, 2])
-def test_shard_tensor_unsqueeze(data_parallel_size, domain_H, domain_W):
-    """
-    This test is meant to ensure ShardTensor can be initialized correctly
-    from local data. Checks that reduction operations work correctly.
+def run_shard_tensor_unsqueeze(mesh, verbose=False):
+    shard_tensor = shard_tensor_factory(mesh)
 
-    Note: Mean reduction is expected to fail since averaging over uneven tensor shapes
-    is not yet supported.
-    """
-    num_gpus = torch.cuda.device_count()
-    assert num_gpus >= 2, "Not enough GPUs available for test"
+    # For this test, we're testing that the unsqueeze of the tensor works correctly
+    if verbose:
+        print(
+            f"Shard tensor shape is {shard_tensor.shape} and local tensor shape is {shard_tensor._local_tensor.shape}"
+        )
+    full_original_tensor = shard_tensor.full_tensor()
 
-    if domain_H == 1 and domain_W == 1:
-        pytest.skip("No point testing this without parallelism in the domain axes")
+    indexes = list(range(len(full_original_tensor.shape)))
 
-    # if op == torch.mean:
-    # pytest.xfail("Mean reduction not yet supported for uneven tensor shapes")
+    for i in indexes:
+        i_sharded_unsqueeze = shard_tensor.unsqueeze(i)
+        i_unsharded_unsqueeze = full_original_tensor.unsqueeze(i)
 
-    remaining_gpus = num_gpus
-    mesh_names = ["data_parallel"]
-    mesh_sizes = [data_parallel_size]
+        assert i_sharded_unsqueeze.shape == i_sharded_unsqueeze.shape
+        assert torch.allclose(i_sharded_unsqueeze.full_tensor(), i_unsharded_unsqueeze)
 
-    if int(remaining_gpus / domain_H) != 0:
-        mesh_names.append("domain_H")
-        mesh_sizes.append(domain_H)
-        remaining_gpus = int(remaining_gpus / domain_H)
+        ni_sharded_unsqueeze = shard_tensor.unsqueeze(-i)
+        ni_unsharded_unsqueeze = full_original_tensor.unsqueeze(-i)
 
-    if int(remaining_gpus / domain_W) != 0:
-        mesh_names.append("domain_W")
-        mesh_sizes.append(domain_W)
-        remaining_gpus = int(remaining_gpus / domain_W)
-
-    verbose = False  # Change to True for debug
-
-    torch.multiprocessing.set_start_method("spawn", force=True)
-
-    torch.multiprocessing.spawn(
-        run_shard_tensor_unsqueeze,
-        args=(num_gpus, mesh_names, mesh_sizes, verbose),
-        nprocs=num_gpus,
-        join=True,
-        daemon=True,
-    )
-
-
-if __name__ == "__main__":
-    test_shard_tensor_unsqueeze(-1, 4, 1)
+        assert ni_sharded_unsqueeze.shape == ni_sharded_unsqueeze.shape
+        assert torch.allclose(
+            ni_sharded_unsqueeze.full_tensor(), ni_unsharded_unsqueeze
+        )
