@@ -20,8 +20,7 @@ import torch
 
 from physicsnemo.metrics.diffusion import (
     EDMLoss,
-    LogNormalSigma,
-    LogUniformSigma,
+    EDMLossLogUniform,
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,
@@ -125,44 +124,34 @@ def test_call_method_ve():
 
 def test_edmloss_initialization():
     loss_func = EDMLoss()
-    assert isinstance(loss_func.sigma_sampler, LogNormalSigma)
-    assert loss_func.sigma_sampler.P_mean == -1.2
-    assert loss_func.sigma_sampler.P_std == 1.2
+    assert loss_func.P_mean == -1.2
+    assert loss_func.P_std == 1.2
     assert loss_func.sigma_data == 0.5
 
     loss_func = EDMLoss(P_mean=-2.0, P_std=2.0, sigma_data=0.3)
-    assert isinstance(loss_func.sigma_sampler, LogNormalSigma)
-    assert loss_func.sigma_sampler.P_mean == -2.0
-    assert loss_func.sigma_sampler.P_std == 2.0
+    assert loss_func.P_mean == -2.0
+    assert loss_func.P_std == 2.0
     assert loss_func.sigma_data == 0.3
 
     sigma_data = torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[
         None, :, None, None
     ]
-    loss_func = EDMLoss(
-        sigma_sampler="LogUniformSigma",
+    loss_func = EDMLossLogUniform(
         sigma_min=0.1,
         sigma_max=200,
         sigma_data=sigma_data,
     )
-    assert isinstance(loss_func.sigma_sampler, LogUniformSigma)
     assert (loss_func.sigma_data == sigma_data).all()
-    assert loss_func.sigma_sampler.log_sigma_min == pytest.approx(np.log(0.1))
-    assert loss_func.sigma_sampler.log_sigma_diff == pytest.approx(
-        np.log(200) - np.log(0.1)
-    )
-
-    with pytest.raises(TypeError):
-        loss_func = EDMLoss(
-            sigma_sampler="LogNormalSigma", sigma_min=0.1, sigma_max=200
-        )
+    assert loss_func.log_sigma_min == pytest.approx(np.log(0.1))
+    assert loss_func.log_sigma_diff == pytest.approx(np.log(200) - np.log(0.1))
 
 
+@pytest.mark.parametrize("loss", ["lognormal", "loguniform"])
 @pytest.mark.parametrize(
     "sigma_data",
     [0.5, torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[None, :, None, None]],
 )
-def test_call_method_edm(sigma_data):
+def test_call_method_edm(loss, sigma_data):
     def fake_condition_net(y, sigma, condition, class_labels=None, augment_labels=None):
         return torch.tensor([1.0])
 
@@ -180,7 +169,10 @@ def test_call_method_edm(sigma_data):
         assert lead_time_label is not None  # test that this is properly passed through
         return torch.tensor([1.0])
 
-    loss_func = EDMLoss(sigma_data=sigma_data)
+    if loss == "lognormal":
+        loss_func = EDMLoss(sigma_data=sigma_data)
+    elif loss == "loguniform":
+        loss_func = EDMLossLogUniform(sigma_data=sigma_data)
 
     img = torch.tensor([[[[1.0]]]])
     labels = None

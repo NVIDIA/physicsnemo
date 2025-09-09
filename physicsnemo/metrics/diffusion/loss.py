@@ -18,8 +18,7 @@
 """Loss functions used in the paper
 "Elucidating the Design Space of Diffusion-Based Generative Models"."""
 
-from abc import ABC, abstractmethod
-from typing import Callable, Literal, Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -194,32 +193,9 @@ class VELoss:
         return loss
 
 
-class SigmaSampler(ABC):
-    """Base class for sigma samplers."""
-
-    @abstractmethod
-    def __call__(self, shape: tuple, device: torch.device) -> torch.Tensor:
-        """
-        Sample from the distribution.
-
-        Parameters
-        ----------
-        shape: tuple
-            The shape of the returned tensor.
-        device: torch.device
-            The device on which the returned tensor should be placed.
-
-        Returns
-        -------
-        torch.Tensor
-            A tensor of the specified shape with the sampled values.
-        """
-        pass
-
-
-class LogNormalSigma(SigmaSampler):
+class EDMLoss:
     """
-    Log-normal sampling for `sigma`.
+    Loss function proposed in the EDM paper.
 
     Parameters
     ----------
@@ -227,69 +203,9 @@ class LogNormalSigma(SigmaSampler):
         Mean value for `sigma` computation, by default -1.2.
     P_std: float, optional:
         Standard deviation for `sigma` computation, by default 1.2.
-    """
-
-    def __init__(self, P_mean: float = -1.2, P_std: float = 1.2):
-        self.P_mean = P_mean
-        self.P_std = P_std
-
-    def __call__(self, shape: tuple, device: torch.device) -> torch.Tensor:
-        """
-        Sample from the distribution.
-
-        For details, see the docstring of `SigmaSampler.__call__`.
-        """
-        rnd_normal = torch.randn(shape, device=device)
-        return (rnd_normal * self.P_std + self.P_mean).exp()
-
-
-class LogUniformSigma(SigmaSampler):
-    """
-    Log-uniform sampling for `sigma`.
-
-    Parameters
-    ----------
-    sigma_min: float, optional
-        Minimum value for `sigma` computation, by default 0.02.
-    sigma_max: float, optional:
-        Minimum value for `sigma` computation, by default 1000.
-    """
-
-    def __init__(self, sigma_min: float = 0.02, sigma_max: float = 1000):
-        self.log_sigma_min = float(np.log(sigma_min))
-        self.log_sigma_diff = float(np.log(sigma_max)) - self.log_sigma_min
-
-    def __call__(self, shape: tuple, device: torch.device) -> torch.Tensor:
-        """
-        Sample from the distribution.
-
-        For details, see the docstring of `SigmaSampler.__call__`.
-        """
-        rnd_uniform = torch.rand(shape, device=device)
-        return (self.log_sigma_min + rnd_uniform * self.log_sigma_diff).exp()
-
-
-# The supported sigma samplers. Applications may add items to this dict in order to add
-# new samplers.
-sigma_samplers = {
-    "LogNormalSigma": LogNormalSigma,
-    "LogUniformSigma": LogUniformSigma,
-}
-
-
-class EDMLoss:
-    """
-    Loss function proposed in the EDM paper.
-
-    Parameters
-    ----------
     sigma_data: float | torch.Tensor, optional
         Standard deviation for data, by default 0.5. Can also be a tensor; to use
         per-channel sigma_data, pass a tensor of shape (1, number_of_channels, 1, 1).
-    sampler: str
-        The name of the noise amplitude (sigma) distribution sampler to be used.
-        Supported values: "LogNormalSigma" (log-normal sampling), "LogUniformSigma"
-        (log-uniform sampling).
 
     Note
     ----
@@ -300,12 +216,31 @@ class EDMLoss:
 
     def __init__(
         self,
+        P_mean: float = -1.2,
+        P_std: float = 1.2,
         sigma_data: float | torch.Tensor = 0.5,
-        sigma_sampler: Literal["LogNormalSigma", "LogUniformSigma"] = "LogNormalSigma",
-        **sampler_kwargs,
     ):
+        self.P_mean = P_mean
+        self.P_std = P_std
         self.sigma_data = sigma_data
-        self.sigma_sampler = sigma_samplers[sigma_sampler](**sampler_kwargs)
+
+    def get_noise_params(self, y: torch.Tensor) -> tuple[float]:
+        """Sample the sigma noise parameter for each sample."""
+        shape = (y.shape[0], 1, 1, 1)
+        rnd_normal = torch.randn(shape, device=y.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+        return (sigma,)
+
+    def get_loss_weight(self, y: torch.Tensor, *noise_params: float) -> torch.Tensor:
+        """Compute loss weight for each sample."""
+        (sigma,) = noise_params
+        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
+        return weight
+
+    def sample_noise(self, y: torch.Tensor, *noise_params: float):
+        """Sample the noise."""
+        (sigma,) = noise_params
+        return torch.randn_like(y) * sigma
 
     def __call__(
         self,
@@ -353,12 +288,13 @@ class EDMLoss:
             A tensor representing the loss calculated based on the network's
             predictions.
         """
-        sigma = self.sigma_sampler((images.shape[0], 1, 1, 1), device=images.device)
-        weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
         y, augment_labels = (
             augment_pipe(images) if augment_pipe is not None else (images, None)
         )
-        n = torch.randn_like(y) * sigma
+        (sigma,) = self.get_noise_params(y)
+        weight = self.get_loss_weight(y, sigma)
+        n = self.sample_noise(y, sigma)
+
         optional_args = {
             "augment_labels": augment_labels,
             "lead_time_label": lead_time_label,
@@ -377,6 +313,39 @@ class EDMLoss:
             D_yn = net(y + n, sigma, labels, **optional_args)
         loss = weight * ((D_yn - y) ** 2)
         return loss
+
+
+class EDMLossLogUniform(EDMLoss):
+    """
+    EDM Loss with log-uniform sampling for `sigma`.
+
+    Parameters
+    ----------
+    sigma_min: float, optional
+        Minimum value for `sigma` computation, by default 0.02.
+    sigma_max: float, optional:
+        Minimum value for `sigma` computation, by default 1000.
+    sigma_data: float | torch.Tensor, optional
+        Standard deviation for data, by default 0.5. Can also be a tensor; to use
+        per-channel sigma_data, pass a tensor of shape (1, number_of_channels, 1, 1).
+    """
+
+    def __init__(
+        self,
+        sigma_min: float = 0.02,
+        sigma_max: float = 1000,
+        sigma_data: float | torch.Tensor = 0.5,
+    ):
+        self.sigma_data = sigma_data
+        self.log_sigma_min = float(np.log(sigma_min))
+        self.log_sigma_diff = float(np.log(sigma_max)) - self.log_sigma_min
+
+    def get_noise_params(self, y: torch.Tensor) -> tuple[float]:
+        """Sample the sigma noise parameter for each sample."""
+        shape = (y.shape[0], 1, 1, 1)
+        rnd_uniform = torch.rand(shape, device=y.device)
+        sigma = (self.log_sigma_min + rnd_uniform * self.log_sigma_diff).exp()
+        return (sigma,)
 
 
 class EDMLossSR:
