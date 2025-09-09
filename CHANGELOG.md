@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added mixture_of_experts for weather example in physicsnemo.examples.weather.
+  **⚠️Warning:** - It uses experimental DiT model subject to future API changes.
+  Added some modifications to DiT architecture in physicsnemo.experimental.models.dit.
+  Added learnable option to PositionalEmbedding in physicsnemo.models.diffusion.layers.
 - Added lead-time aware training support to the StormCast example.
 - Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
   by dispatching to the proper optimized library, and torch.compile compatible.

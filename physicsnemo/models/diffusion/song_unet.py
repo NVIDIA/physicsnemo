@@ -1237,8 +1237,8 @@ class SongUNetPosEmbd(SongUNet):
             x2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_x)))
             y1 = np.meshgrid(np.sin(np.linspace(0, 2 * np.pi, self.img_shape_y)))
             y2 = np.meshgrid(np.cos(np.linspace(0, 2 * np.pi, self.img_shape_y)))
-            grid_y1, grid_x1 = np.meshgrid(x1, y1)
-            grid_y2, grid_x2 = np.meshgrid(x2, y2)
+            grid_x1, grid_y1 = np.meshgrid(x1, y1)
+            grid_x2, grid_y2 = np.meshgrid(x2, y2)
             grid = torch.from_numpy(
                 np.stack((grid_x1, grid_y1, grid_x2, grid_y2), axis=0)
             )
