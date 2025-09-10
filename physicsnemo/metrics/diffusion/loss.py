@@ -224,22 +224,20 @@ class EDMLoss:
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-    def get_noise_params(self, y: torch.Tensor) -> tuple[float]:
+    def get_noise_level(self, y: torch.Tensor) -> torch.Tensor:
         """Sample the sigma noise parameter for each sample."""
         shape = (y.shape[0], 1, 1, 1)
         rnd_normal = torch.randn(shape, device=y.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        return (sigma,)
+        return sigma
 
-    def get_loss_weight(self, y: torch.Tensor, *noise_params: float) -> torch.Tensor:
+    def get_loss_weight(self, y: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         """Compute loss weight for each sample."""
-        (sigma,) = noise_params
         weight = (sigma**2 + self.sigma_data**2) / (sigma * self.sigma_data) ** 2
         return weight
 
-    def sample_noise(self, y: torch.Tensor, *noise_params: float):
+    def sample_noise(self, y: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         """Sample the noise."""
-        (sigma,) = noise_params
         return torch.randn_like(y) * sigma
 
     def __call__(
@@ -256,9 +254,8 @@ class EDMLoss:
 
         The method adds random noise to the input images and calculates the loss as the
         square difference between the network's predictions and the input images.
-        The noise level is determined by 'sigma', which is drawn from the `sigma_sampler`
-        specified in the constructor. The calculated loss is weighted as a function of
-        'sigma' and 'sigma_data'.
+        The noise level is determined by 'sigma', which is drawn from the `get_noise_level`
+        function. The calculated loss is weighted as a function of 'sigma' and 'sigma_data'.
 
         Parameters:
         ----------
@@ -291,7 +288,7 @@ class EDMLoss:
         y, augment_labels = (
             augment_pipe(images) if augment_pipe is not None else (images, None)
         )
-        (sigma,) = self.get_noise_params(y)
+        sigma = self.get_noise_level(y)
         weight = self.get_loss_weight(y, sigma)
         n = self.sample_noise(y, sigma)
 
@@ -340,12 +337,12 @@ class EDMLossLogUniform(EDMLoss):
         self.log_sigma_min = float(np.log(sigma_min))
         self.log_sigma_diff = float(np.log(sigma_max)) - self.log_sigma_min
 
-    def get_noise_params(self, y: torch.Tensor) -> tuple[float]:
+    def get_noise_level(self, y: torch.Tensor) -> torch.Tensor:
         """Sample the sigma noise parameter for each sample."""
         shape = (y.shape[0], 1, 1, 1)
         rnd_uniform = torch.rand(shape, device=y.device)
         sigma = (self.log_sigma_min + rnd_uniform * self.log_sigma_diff).exp()
-        return (sigma,)
+        return sigma
 
 
 class EDMLossSR:
