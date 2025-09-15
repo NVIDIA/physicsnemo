@@ -42,7 +42,8 @@ model:
   spatial_pos_embed: True
 
 training:
-  loss: 'edm'
+  loss:
+    type: 'edm'
   total_train_steps: 450000 # use more training samples for diffusion training; follows StormCast paper
   checkpoint_freq: 10000 # How often to save the checkpoints, measured in number of training steps
   validation_freq: 10000 # how often to record the validation loss, measured in number of training steps

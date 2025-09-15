@@ -14,11 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import pytest
 import torch
 
 from physicsnemo.metrics.diffusion import (
     EDMLoss,
+    EDMLossLogUniform,
     RegressionLoss,
     RegressionLossCE,
     ResidualLoss,
@@ -131,8 +133,25 @@ def test_edmloss_initialization():
     assert loss_func.P_std == 2.0
     assert loss_func.sigma_data == 0.3
 
+    sigma_data = torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[
+        None, :, None, None
+    ]
+    loss_func = EDMLossLogUniform(
+        sigma_min=0.1,
+        sigma_max=200,
+        sigma_data=sigma_data,
+    )
+    assert (loss_func.sigma_data == sigma_data).all()
+    assert loss_func.log_sigma_min == pytest.approx(np.log(0.1))
+    assert loss_func.log_sigma_diff == pytest.approx(np.log(200) - np.log(0.1))
 
-def test_call_method_edm():
+
+@pytest.mark.parametrize("loss", ["lognormal", "loguniform"])
+@pytest.mark.parametrize(
+    "sigma_data",
+    [0.5, torch.as_tensor([0.3, 0.4, 0.5], dtype=torch.float32)[None, :, None, None]],
+)
+def test_call_method_edm(loss, sigma_data):
     def fake_condition_net(y, sigma, condition, class_labels=None, augment_labels=None):
         return torch.tensor([1.0])
 
@@ -150,7 +169,10 @@ def test_call_method_edm():
         assert lead_time_label is not None  # test that this is properly passed through
         return torch.tensor([1.0])
 
-    loss_func = EDMLoss()
+    if loss == "lognormal":
+        loss_func = EDMLoss(sigma_data=sigma_data)
+    elif loss == "loguniform":
+        loss_func = EDMLossLogUniform(sigma_data=sigma_data)
 
     img = torch.tensor([[[[1.0]]]])
     labels = None
