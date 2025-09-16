@@ -14,6 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Testing sharded reductions.
+
+There are two challenges with sharded reductions: first, the uneven
+nature of shardtensor requires careful accumulation of partial results. It
+isn't an issue with `max` or `min` or `sum` but it is a big problem with `mean`.
+
+Second, backwards gradient distribution would suggest that the shape of local
+gradients should match the local tensor shape, on each rank.  However,
+DTensor does not specifically support that and the backwards pass will align
+with torch.chunk syntax.
+
+ShardTensor addresses both of these, and these tests are meant to trigger it.
+"""
 
 import pytest
 

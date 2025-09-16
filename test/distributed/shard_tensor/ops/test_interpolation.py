@@ -14,6 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Interpolation is the operation used in upsampling, which is why we're
+testing this with upsampling.
+
+Interpolation generally needs a spatial halo + local interpolation,
+and the sharding is always over spatial dims.  The channel
+count never really matters except > 0.
+
+Here, we're testing 1d, 2d, 3d interpolation with Upsample on 1d
+and 2d meshes.
+"""
+
 import pytest
 from torch.distributed.tensor.placement_types import Shard
 from torch.nn import Upsample

@@ -14,6 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Test selection operations on ShardTensor.  This file tests
+both torch.select and torch.index_select.  We use a 3D tensor to
+do the tests, it has no special significance.  We're not testing
+over all possible selection dimensions, especially not along sharded dimensions.
+
+That could be implemented in the future.
+"""
 
 import pytest
 import torch

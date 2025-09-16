@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Test scaled dot product attention with shard tensor inputs.
+
+Sharding is supported only over the sequence dimension.
+"""
+
 import pytest
 import torch
 from torch.distributed.tensor.placement_types import Shard

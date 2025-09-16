@@ -14,6 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+The tests here validate the correctness of the convolution operator over
+sharded inputs.  We check conv1d, conv2d, conv3d, and the transposed
+operations as well.  For 2d and 3d, we test on both 1D and 2D sharding.
+
+Sharding must always be over spatial dimensions (H, W, D) so the sharded
+axes are always Shard(2), Shard(3), or Shard(4).
+
+The channels dimension is largely irrelevant, we have a couple parameters
+for it but it just has to be non-zero.
+
+Some sharded convolutions aren't well supported: these ones are xfail'd.
+"""
+
 import pytest
 import torch
 from torch.distributed.tensor.placement_types import Shard

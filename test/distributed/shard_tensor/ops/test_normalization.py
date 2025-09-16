@@ -14,6 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Here, we're testing normalization layers.  Tests are currently only implemented
+for 1D data.  LayerNorm is actually supported upstream in pytorch by DTensor
+itself, this test just cross checks it works on ShardTensor too.
+
+GroupNorm is supported in physicsnemo.  Notably, GroupNorm can suffer from
+some numerical instabilities for smaller datasets. So the tolerance is turned
+up slightly.
+"""
+
 import pytest
 import torch
 from torch.distributed.tensor.placement_types import Shard

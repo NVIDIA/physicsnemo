@@ -14,6 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+The tests in this file are meant to test the gradient sharding of ShardTensor.
+
+We need to be able to call "backward()" on a ShardTensor, and the gradients
+should agree with the local computations.
+"""
+
 import pytest
 import torch
 

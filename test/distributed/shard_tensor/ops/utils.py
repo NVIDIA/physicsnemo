@@ -55,6 +55,12 @@ def generate_image_like_data(
 
 
 def sharded_to_local(container):
+    """
+    Convert a ShardTensor to a local tensor.
+
+    In case the input is an iterable containing ShardTensors, this will convert
+    each ShardTensor to a local tensor.
+    """
     if isinstance(container, ShardTensor):
         local_output = container.full_tensor()
         if container.requires_grad:
@@ -72,10 +78,6 @@ def default_tensor_comparison(output, d_output, atol, rtol):
     # We assume a single output!
 
     local_output = sharded_to_local(d_output)
-
-    # diff = output - local_output
-    # abs_diff = torch.abs(diff)
-    # max_abs_diff_allowed = 1e-8 + 1e-5 * torch.abs(output)
 
     # Check forward agreement:
     assert torch.allclose(output, local_output, atol=atol, rtol=rtol)

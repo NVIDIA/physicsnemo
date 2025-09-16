@@ -14,6 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+These tests are testing the different supported ways to initialize a ShardTensor.
+
+"""
+
 import random
 
 import pytest

@@ -14,6 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Test redistribution between different sharding schemes on ShardTensor.
+
+One major feature of ShardTensor is that it knows both the global shape
+and local layout of every shard, and can seamlessly translate between them.
+
+In many ways, this is an extension of DTensor's utilities, but we're testing
+here specifically any uneven shardings, etc.
+
+The tests will test over 1d and 2d meshes of shard tensors, with increasingly
+complex resharding requirements.  In all cases, the input tensors are sharded:
+(Shard(1),) for 1d, (Shard(1), Shard(2)) for 2d.
+"""
+
 import pytest
 
 from physicsnemo.utils.version_check import check_module_requirements

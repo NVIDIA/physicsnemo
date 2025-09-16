@@ -14,6 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Pooling operations are testing on average and max pooling for 1, 2 and 3
+dimensions as well as 1d and 2d meshes.  Testing over image like data,
+and the channels dimension is largely irrelevant.
+
+Sharding is only over spatial dimensions (Shard(2),) (or 3, or 4)
+"""
+
 import pytest
 import torch
 from torch.distributed.tensor.placement_types import Shard

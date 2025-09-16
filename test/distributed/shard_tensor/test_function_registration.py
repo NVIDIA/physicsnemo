@@ -14,6 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+The tests in this file are meant to test the registration tools of ShardTensor.
+
+It mocks up some functions that we then plug in to ShardTensor and verify they
+connect correctly.
+"""
+
 import pytest
 import torch
 

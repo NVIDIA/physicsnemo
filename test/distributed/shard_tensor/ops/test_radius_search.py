@@ -14,6 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+This file tests the `radius_search` function from physicsnemo when
+applied on sharded tensors.
+
+This has a departure from the usual structure of tests.  The radius_search
+function does not guarantee any ordering of it's output points nor which
+points will be returned, if there are more points inside a radius than requested.
+
+Here, we are manually checking the points agree with two tweaks: first, the
+number of input points requested is always more than the number of points
+available.  Second, the points are sorted before making a comparison.
+"""
+
 import pytest
 import torch
 
