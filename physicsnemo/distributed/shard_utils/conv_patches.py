@@ -17,12 +17,12 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 
 from physicsnemo.utils.profiling import annotate, profile
 from physicsnemo.utils.version_check import check_module_requirements
 
 check_module_requirements("physicsnemo.distributed.shard_tensor")
-
 
 from torch.distributed.tensor import DTensor  # noqa: E402
 from torch.distributed.tensor.placement_types import (  # noqa: E402
@@ -487,6 +487,14 @@ class PartialConvND(torch.autograd.Function):
             output_mask=output_mask,
             **conv_kwargs,
         )
+
+        # Now, loop over the mesh dims and make sure we sync gradients
+        for mesh_dim in range(ctx.spec.mesh.ndim):
+            if ctx.spec.placements[mesh_dim].is_shard():
+                group = ctx.spec.mesh.get_group(mesh_dim)
+                dist.all_reduce(grad_weight, group=group)
+                if grad_bias is not None:
+                    dist.all_reduce(grad_bias, group=group)
 
         return grad_input, grad_weight, grad_bias, None, None
 
