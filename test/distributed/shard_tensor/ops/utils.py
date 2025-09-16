@@ -46,12 +46,17 @@ def unparallelize_module(module):
 
 
 def generate_image_like_data(
-    batch_size: int, C_in: int, spatial_shape: tuple[int, ...]
+    batch_size: int,
+    C_in: int,
+    spatial_shape: tuple[int, ...],
+    *,
+    device: torch.device = None,
+    dtype: torch.dtype = None,
 ) -> torch.Tensor:
     """
     Generate a random image-like tensor
     """
-    return torch.randn(batch_size, C_in, *spatial_shape)
+    return torch.randn(batch_size, C_in, *spatial_shape, device=device, dtype=dtype)
 
 
 def sharded_to_local(container):

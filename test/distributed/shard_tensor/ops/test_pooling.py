@@ -260,7 +260,7 @@ def test_max_pool_2d_1dmesh(distributed_mesh, H, K, stride, backward):
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H), device=dm.device)
 
     placements = (Shard(3),)
 
@@ -294,7 +294,7 @@ def test_max_pool_2d_2dmesh(distributed_mesh_2d, H, K, stride, backward):
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H), device=dm.device)
 
     placements = (
         Shard(2),
@@ -331,7 +331,7 @@ def test_max_pool_3d_1dmesh(distributed_mesh, H, K, stride, backward):
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
     placements = (Shard(4),)
 
@@ -365,7 +365,7 @@ def test_max_pool_3d_2dmesh(distributed_mesh_2d, H, K, stride, backward):
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
     placements = (
         Shard(3),

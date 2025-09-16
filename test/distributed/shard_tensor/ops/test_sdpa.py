@@ -52,13 +52,18 @@ class SDPAWrapper(torch.nn.Module):
 
 
 def generate_sequence_data(
-    batch_size: int, seq_len: int, num_heads: int, head_dim: int
+    batch_size: int,
+    seq_len: int,
+    num_heads: int,
+    head_dim: int,
+    *,
+    device: torch.device = None,
 ) -> torch.Tensor:
     """
     Generate a random sequence-like tensor
     """
 
-    return torch.randn(batch_size, num_heads, seq_len, head_dim)
+    return torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
 
 
 @pytest.mark.multigpu_static

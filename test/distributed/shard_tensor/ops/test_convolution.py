@@ -64,7 +64,7 @@ def test_conv1d_1dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H,)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H,), device=dm.device)
 
     placements = (Shard(2),)
 
@@ -122,7 +122,7 @@ def test_conv_transpose_1d_1dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H,)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H,), device=dm.device)
 
     placements = (Shard(2),)
 
@@ -237,7 +237,8 @@ def test_conv_transpose_2d_1dmesh(
             H,
             H,
         ),
-    ).to(dm.device)
+        device=dm.device,
+    )
 
     placements = (Shard(2),)
 
@@ -287,7 +288,10 @@ def test_conv2d_2dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H)).to(dm.device)
+    if dm.world_size < 4:
+        pytest.xfail("Conv3d with 2D mesh requires at least 4 GPUs")
+
+    image = generate_image_like_data(2, C_in, (H, H), device=dm.device)
 
     placements = (Shard(2), Shard(3))
 
@@ -352,7 +356,8 @@ def test_conv_transpose_2d_2dmesh(
             H,
             H,
         ),
-    ).to(dm.device)
+        device=dm.device,
+    )
 
     placements = (Shard(2), Shard(3))
 
@@ -402,7 +407,7 @@ def test_conv3d_1dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
     placements = (Shard(2),)
 
@@ -460,7 +465,7 @@ def test_conv_transpose_3d_1dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
     placements = (Shard(2),)
 
@@ -510,7 +515,10 @@ def test_conv3d_2dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H, H)).to(dm.device)
+    if dm.world_size < 4:
+        pytest.xfail("Conv3d with 2D mesh requires at least 4 GPUs")
+
+    image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
     placements = (Shard(2), Shard(3))
 
@@ -568,7 +576,7 @@ def test_conv_transpose_3d_2dmesh(
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, H, H)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
     placements = (Shard(2), Shard(3))
 

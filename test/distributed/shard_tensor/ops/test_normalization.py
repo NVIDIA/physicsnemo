@@ -45,7 +45,7 @@ def test_layer_norm_1d(distributed_mesh, affine, backward):
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H,)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H,), device=dm.device)
 
     placements = (Shard(2),)
 
@@ -83,7 +83,8 @@ def test_group_norm_1d(distributed_mesh, num_groups, affine, backward):
             H,
             H,
         ),
-    ).to(dm.device)
+        device=dm.device,
+    )
 
     placements = (Shard(2),)
 

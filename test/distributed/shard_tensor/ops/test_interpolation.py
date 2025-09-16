@@ -62,7 +62,7 @@ def test_upsample_2d_1dmesh(distributed_mesh, H, W, scale_factor, mode, backward
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, W)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, W), device=dm.device)
 
     placements = (Shard(2),)
 
@@ -104,7 +104,7 @@ def test_upsample_2d_2dmesh(distributed_mesh_2d, H, W, scale_factor, mode, backw
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, W)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, W), device=dm.device)
 
     placements = (Shard(2), Shard(3))
 
@@ -152,7 +152,7 @@ def test_upsample_3d_1dmesh(distributed_mesh, H, W, D, scale_factor, mode, backw
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, W, D)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, W, D), device=dm.device)
 
     placements = (Shard(4),)
 
@@ -200,7 +200,7 @@ def test_upsample_3d_2dmesh(distributed_mesh_2d, H, W, D, scale_factor, mode, ba
 
     dm = DistributedManager()
 
-    image = generate_image_like_data(2, C_in, (H, W, D)).to(dm.device)
+    image = generate_image_like_data(2, C_in, (H, W, D), device=dm.device)
 
     placements = (Shard(3), Shard(4))
 

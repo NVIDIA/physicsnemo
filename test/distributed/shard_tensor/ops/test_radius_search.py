@@ -152,9 +152,9 @@ def test_sharded_radius_search_layer_forward(
         num_neigh = npoints
     else:
         num_neigh = nx * ny * nz
-    geom_centers = torch.randn(bsize, npoints, 3).to(device)
-    surf_grid = torch.randn(bsize, nx, ny, nz, 3).to(device)
-    surf_grid_max_min = torch.randn(bsize, 2, 3).to(device)
+    geom_centers = torch.randn(bsize, npoints, 3, device=device)
+    surf_grid = torch.randn(bsize, nx, ny, nz, 3, device=device)
+    surf_grid_max_min = torch.randn(bsize, 2, 3, device=device)
     input_dict = {
         "geometry_coordinates": geom_centers,
         "surf_grid": surf_grid,
