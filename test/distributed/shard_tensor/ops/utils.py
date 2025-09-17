@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 from collections.abc import Iterable
 
 import torch
@@ -66,12 +67,12 @@ def sharded_to_local(container):
     In case the input is an iterable containing ShardTensors, this will convert
     each ShardTensor to a local tensor.
     """
-    if isinstance(container, ShardTensor):
+    if isinstance(container, ShardTensor) or isinstance(container, DTensor):
         local_output = container.full_tensor()
         if container.requires_grad:
             local_output = local_output.detach().requires_grad_(True)
         return local_output
-    if isinstance(container, dict):
+    elif isinstance(container, dict):
         return {key: sharded_to_local(value) for key, value in container.items()}
     elif isinstance(container, Iterable):
         return [sharded_to_local(item) for item in container]
@@ -110,6 +111,7 @@ def numerical_shard_tensor_check(
     # (By default this replicates)
 
     # Then, get a local copy of the parameters
+    module = copy.deepcopy(d_module)
     module = unparallelize_module(module)
 
     # Now, get the local version of the data:
@@ -133,7 +135,7 @@ def numerical_shard_tensor_check(
 
         # compare the grads:
         for param, d_param in zip(module.parameters(), d_module.parameters()):
-            assert torch.allclose(param.grad, d_param.grad, atol=atol, rtol=rtol)
+            default_tensor_comparison(param.grad, d_param.grad, atol=atol, rtol=rtol)
 
         # Check the input grads, if they are required:
 

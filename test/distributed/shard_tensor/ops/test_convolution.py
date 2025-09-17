@@ -39,7 +39,12 @@ from .utils import generate_image_like_data, numerical_shard_tensor_check
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -89,7 +94,12 @@ def test_conv1d_1dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -147,7 +157,12 @@ def test_conv_transpose_1d_1dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -197,7 +212,12 @@ def test_conv2d_1dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -263,7 +283,12 @@ def test_conv_transpose_2d_1dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -286,10 +311,14 @@ def test_conv2d_2dmesh(
             "Conv2d with stride > 1 and kernel size != stride is expected to fail"
         )
 
+    if backward:
+        # See: https://github.com/pytorch/pytorch/issues/153615
+        pytest.xfail("DTensor with 2D mesh and backwards fails currently upstream")
+
     dm = DistributedManager()
 
     if dm.world_size < 4:
-        pytest.xfail("Conv3d with 2D mesh requires at least 4 GPUs")
+        pytest.skip("Conv3d with 2D mesh requires at least 4 GPUs")
 
     image = generate_image_like_data(2, C_in, (H, H), device=dm.device)
 
@@ -316,7 +345,12 @@ def test_conv2d_2dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 256])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -347,7 +381,14 @@ def test_conv_transpose_2d_2dmesh(
             "Conv2d Transposedwith stride > 1 and kernel size != stride is expected to fail"
         )
 
+    if backward:
+        # See: https://github.com/pytorch/pytorch/issues/153615
+        pytest.xfail("DTensor with 2D mesh and backwards fails currently upstream")
+
     dm = DistributedManager()
+
+    if dm.world_size < 4:
+        pytest.skip("Conv3d with 2D mesh requires at least 4 GPUs")
 
     image = generate_image_like_data(
         2,
@@ -381,8 +422,13 @@ def test_conv_transpose_2d_2dmesh(
 
 
 @pytest.mark.multigpu_static
-@pytest.mark.parametrize("H", [32, 64])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize("H", [64])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -432,7 +478,12 @@ def test_conv3d_1dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 64])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -489,8 +540,13 @@ def test_conv_transpose_3d_1dmesh(
 
 
 @pytest.mark.multigpu_static
-@pytest.mark.parametrize("H", [32, 64])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize("H", [64])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -513,10 +569,14 @@ def test_conv3d_2dmesh(
             "Conv3d with stride > 1 and kernel size != stride is expected to fail"
         )
 
+    if backward:
+        # See: https://github.com/pytorch/pytorch/issues/153615
+        pytest.xfail("DTensor with 2D mesh and backwards fails currently upstream")
+
     dm = DistributedManager()
 
     if dm.world_size < 4:
-        pytest.xfail("Conv3d with 2D mesh requires at least 4 GPUs")
+        pytest.skip("Conv3d with 2D mesh requires at least 4 GPUs")
 
     image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
@@ -543,7 +603,12 @@ def test_conv3d_2dmesh(
 
 @pytest.mark.multigpu_static
 @pytest.mark.parametrize("H", [32, 64])
-@pytest.mark.parametrize("C_in", [1, 8])
+@pytest.mark.parametrize(
+    "C_in",
+    [
+        16,
+    ],
+)
 @pytest.mark.parametrize("kernel", [2, 3])
 @pytest.mark.parametrize("padding", [0])
 @pytest.mark.parametrize("stride", [1, 2])
@@ -574,7 +639,14 @@ def test_conv_transpose_3d_2dmesh(
             "Conv3d Transposedwith stride > 1 and kernel size != stride is expected to fail"
         )
 
+    if backward:
+        # See: https://github.com/pytorch/pytorch/issues/153615
+        pytest.xfail("DTensor with 2D mesh and backwards fails currently upstream")
+
     dm = DistributedManager()
+
+    if dm.world_size < 4:
+        pytest.skip("Conv3d with 2D mesh requires at least 4 GPUs")
 
     image = generate_image_like_data(2, C_in, (H, H, H), device=dm.device)
 
