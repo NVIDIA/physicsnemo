@@ -19,6 +19,7 @@ import random
 
 import numpy as np
 import pytest
+import torch
 from pytest_utils import import_or_fail
 
 stl = pytest.importorskip("stl")
@@ -213,7 +214,14 @@ def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
         [xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], axis=1
     )
 
-    sdf_test = signed_distance_field(vertices_3d, vert_indices, coords.flatten())
+    # SDF only accepts torch tensors:
+
+    sdf_test, _ = signed_distance_field(
+        torch.from_numpy(vertices_3d),
+        torch.from_numpy(vert_indices),
+        torch.from_numpy(coords.flatten()),
+    )
+    sdf_test = sdf_test.numpy()
     output_filename = tmp_path / "output_stl.stl"
     sdf_to_stl(
         sdf_test.reshape(n[0], n[1], n[2]),
