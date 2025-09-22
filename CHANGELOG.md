@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
+
 ### Security
 
 ### Dependencies
