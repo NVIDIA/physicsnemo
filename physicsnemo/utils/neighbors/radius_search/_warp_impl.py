@@ -318,7 +318,7 @@ if WARP_AVAILABLE:
 
                 if not total_count < 2**31 - 1:
                     raise RuntimeError(
-                        f"Total found neighbors is too large: {total_count} > 2**31 - 1"
+                        f"Total found neighbors is too large: {total_count} >= 2**31 - 1"
                     )
 
                 return gather_neighbors(
