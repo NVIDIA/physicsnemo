@@ -219,7 +219,7 @@ def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     sdf_test, _ = signed_distance_field(
         torch.from_numpy(vertices_3d),
         torch.from_numpy(vert_indices),
-        torch.from_numpy(coords.flatten()),
+        torch.from_numpy(coords),
     )
     sdf_test = sdf_test.numpy()
     output_filename = tmp_path / "output_stl.stl"
