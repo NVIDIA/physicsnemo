@@ -203,7 +203,7 @@ def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     }
 
     res = {k: v[1] - v[0] for k, v in bounds.items()}
-    min_res = min(res.values()) / 100
+    min_res = min(res.values()) / 10
     n = [int((bounds[k][1] - bounds[k][0] + 2) // min_res) for k in bounds.keys()]
     x = np.linspace(bounds["x"][0] - 1, bounds["x"][1] + 1, n[0], dtype=np.float64)
     y = np.linspace(bounds["y"][0] - 1, bounds["y"][1] + 1, n[1], dtype=np.float64)
@@ -215,13 +215,13 @@ def test_stl_gen(pytestconfig, backend, sphere_stl, tmp_path):
     )
 
     # SDF only accepts torch tensors:
-
     sdf_test, _ = signed_distance_field(
         torch.from_numpy(vertices_3d),
         torch.from_numpy(vert_indices),
         torch.from_numpy(coords),
     )
     sdf_test = sdf_test.numpy()
+
     output_filename = tmp_path / "output_stl.stl"
     sdf_to_stl(
         sdf_test.reshape(n[0], n[1], n[2]),
