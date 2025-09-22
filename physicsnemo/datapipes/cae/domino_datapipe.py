@@ -71,7 +71,7 @@ these aren't necessary after that.
 """
 
 
-def convert_array_to_torch(array: cp.ndarray | np.ndarray) -> torch.Tensor:
+def _convert_array_to_torch(array: cp.ndarray | np.ndarray) -> torch.Tensor:
     """
     TEMPORARY function to convert cupy and numpy arrays to torch tensors.
     """
@@ -83,7 +83,7 @@ def convert_array_to_torch(array: cp.ndarray | np.ndarray) -> torch.Tensor:
         raise ValueError(f"Unsupported array type: {type(array)}")
 
 
-def convert_torch_to_array(array: torch.Tensor, provider) -> cp.ndarray | np.ndarray:
+def _convert_torch_to_array(array: torch.Tensor, provider) -> cp.ndarray | np.ndarray:
     """
     TEMPORARY function to convert torch tensors to cupy arrays.
     """
@@ -563,13 +563,13 @@ class DoMINODataPipe(Dataset):
             surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
 
             sdf_surf_grid, _ = signed_distance_field(
-                convert_array_to_torch(stl_vertices),
-                convert_array_to_torch(mesh_indices_flattened),
-                convert_array_to_torch(surf_grid_reshaped),
+                _convert_array_to_torch(stl_vertices),
+                _convert_array_to_torch(mesh_indices_flattened),
+                _convert_array_to_torch(surf_grid_reshaped),
                 use_sign_winding_number=True,
             )
             sdf_surf_grid = sdf_surf_grid.reshape(nx, ny, nz)
-            sdf_surf_grid = convert_torch_to_array(sdf_surf_grid, self.array_provider)
+            sdf_surf_grid = _convert_torch_to_array(sdf_surf_grid, self.array_provider)
 
         else:
             surf_grid = None
@@ -883,13 +883,13 @@ class DoMINODataPipe(Dataset):
 
             # SDF calculation on the grid using WARP
             sdf_grid, _ = signed_distance_field(
-                convert_array_to_torch(stl_vertices),
-                convert_array_to_torch(mesh_indices_flattened),
-                convert_array_to_torch(grid_reshaped),
+                _convert_array_to_torch(stl_vertices),
+                _convert_array_to_torch(mesh_indices_flattened),
+                _convert_array_to_torch(grid_reshaped),
                 use_sign_winding_number=True,
             )
             sdf_grid = sdf_grid.reshape((nx, ny, nz))
-            sdf_grid = convert_torch_to_array(sdf_grid, self.array_provider)
+            sdf_grid = _convert_torch_to_array(sdf_grid, self.array_provider)
 
             if self.config.sampling:
                 volume_coordinates_sampled, idx_volume = shuffle_array(
@@ -908,13 +908,13 @@ class DoMINODataPipe(Dataset):
                 volume_coordinates = volume_coordinates_sampled
 
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
-                convert_array_to_torch(stl_vertices),
-                convert_array_to_torch(mesh_indices_flattened),
-                convert_array_to_torch(volume_coordinates),
+                _convert_array_to_torch(stl_vertices),
+                _convert_array_to_torch(mesh_indices_flattened),
+                _convert_array_to_torch(volume_coordinates),
                 use_sign_winding_number=True,
             )
-            sdf_nodes = convert_torch_to_array(sdf_nodes, self.array_provider)
-            sdf_node_closest_point = convert_torch_to_array(
+            sdf_nodes = _convert_torch_to_array(sdf_nodes, self.array_provider)
+            sdf_node_closest_point = _convert_torch_to_array(
                 sdf_node_closest_point, self.array_provider
             )
 

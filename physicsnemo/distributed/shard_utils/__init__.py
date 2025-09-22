@@ -37,8 +37,8 @@ if SHARD_TENSOR_AVAILABLE:
             sharded_select_backward_helper,
             sharded_select_helper,
         )
-        from .mesh_ops import sharded_signed_distance_field_wrapper
         from .knn import knn_sharded_wrapper
+        from .mesh_ops import sharded_signed_distance_field_wrapper
 
         # Currently disabled until wrapt is removed
         # from .natten_patches import na2d_wrapper
