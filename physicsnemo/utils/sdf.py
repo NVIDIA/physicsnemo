@@ -105,7 +105,7 @@ def signed_distance_field(
     Returns:
         tuple[torch.Tensor, torch.Tensor] of:
             - signed distance to the mesh, per input point
-            - hith point, per input point. "hit points" are the points on the
+            - hit point, per input point. "hit points" are the points on the
               mesh that are closest to the input points, and hence, are
               defining the SDF.
 
