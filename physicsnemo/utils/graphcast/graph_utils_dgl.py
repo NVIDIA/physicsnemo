@@ -16,9 +16,168 @@
 
 from typing import List, Tuple
 
+import dgl
 import numpy as np
 import torch
-from torch import Tensor
+from dgl import DGLGraph
+from torch import Tensor, testing
+
+
+def create_graph(
+    src: List,
+    dst: List,
+    to_bidirected: bool = True,
+    add_self_loop: bool = False,
+    dtype: torch.dtype = torch.int32,
+) -> DGLGraph:
+    """
+    Creates a DGL graph from an adj matrix in COO format.
+
+    Parameters
+    ----------
+    src : List
+        List of source nodes
+    dst : List
+        List of destination nodes
+    to_bidirected : bool, optional
+        Whether to make the graph bidirectional, by default True
+    add_self_loop : bool, optional
+        Whether to add self loop to the graph, by default False
+    dtype : torch.dtype, optional
+        Graph index data type, by default torch.int32
+
+    Returns
+    -------
+    DGLGraph
+        The dgl Graph.
+    """
+    graph = dgl.graph((src, dst), idtype=dtype)
+    if to_bidirected:
+        graph = dgl.to_bidirected(graph)
+    if add_self_loop:
+        graph = dgl.add_self_loop(graph)
+    return graph
+
+
+def create_heterograph(
+    src: List,
+    dst: List,
+    labels: str,
+    dtype: torch.dtype = torch.int32,
+    num_nodes_dict: dict = None,
+) -> DGLGraph:
+    """Creates a heterogeneous DGL graph from an adj matrix in COO format.
+
+    Parameters
+    ----------
+    src : List
+        List of source nodes
+    dst : List
+        List of destination nodes
+    labels : str
+        Label of the edge type
+    dtype : torch.dtype, optional
+        Graph index data type, by default torch.int32
+    num_nodes_dict : dict, optional
+        number of nodes for some node types, see dgl.heterograph for more information
+
+    Returns
+    -------
+    DGLGraph
+        The dgl Graph.
+    """
+    graph = dgl.heterograph(
+        {labels: ("coo", (src, dst))}, num_nodes_dict=num_nodes_dict, idtype=dtype
+    )
+    return graph
+
+
+def add_edge_features(graph: DGLGraph, pos: Tensor, normalize: bool = True) -> DGLGraph:
+    """Adds edge features to the graph.
+
+    Parameters
+    ----------
+    graph : DGLGraph
+        The graph to add edge features to.
+    pos : Tensor
+        The node positions.
+    normalize : bool, optional
+        Whether to normalize the edge features, by default True
+
+    Returns
+    -------
+    DGLGraph
+        The graph with edge features.
+    """
+
+    if isinstance(pos, tuple):
+        src_pos, dst_pos = pos
+    else:
+        src_pos = dst_pos = pos
+    src, dst = graph.edges()
+
+    src_pos, dst_pos = src_pos[src.long()], dst_pos[dst.long()]
+    dst_latlon = xyz2latlon(dst_pos, unit="rad")
+    dst_lat, dst_lon = dst_latlon[:, 0], dst_latlon[:, 1]
+
+    # azimuthal & polar rotation
+    theta_azimuthal = azimuthal_angle(dst_lon)
+    theta_polar = polar_angle(dst_lat)
+
+    src_pos = geospatial_rotation(src_pos, theta=theta_azimuthal, axis="z", unit="rad")
+    dst_pos = geospatial_rotation(dst_pos, theta=theta_azimuthal, axis="z", unit="rad")
+    # y values should be zero
+    try:
+        testing.assert_close(dst_pos[:, 1], torch.zeros_like(dst_pos[:, 1]))
+    except ValueError:
+        raise ValueError("Invalid projection of edge nodes to local ccordinate system")
+    src_pos = geospatial_rotation(src_pos, theta=theta_polar, axis="y", unit="rad")
+    dst_pos = geospatial_rotation(dst_pos, theta=theta_polar, axis="y", unit="rad")
+    # x values should be one, y & z values should be zero
+    try:
+        testing.assert_close(dst_pos[:, 0], torch.ones_like(dst_pos[:, 0]))
+        testing.assert_close(dst_pos[:, 1], torch.zeros_like(dst_pos[:, 1]))
+        testing.assert_close(dst_pos[:, 2], torch.zeros_like(dst_pos[:, 2]))
+    except ValueError:
+        raise ValueError("Invalid projection of edge nodes to local ccordinate system")
+
+    # prepare edge features
+    disp = src_pos - dst_pos
+    disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
+
+    # normalize using the longest edge
+    if normalize:
+        max_disp_norm = torch.max(disp_norm)
+        graph.edata["x"] = torch.cat(
+            (disp / max_disp_norm, disp_norm / max_disp_norm), dim=-1
+        )
+    else:
+        graph.edata["x"] = torch.cat((disp, disp_norm), dim=-1)
+    return graph
+
+
+def add_node_features(graph: DGLGraph, pos: Tensor) -> DGLGraph:
+    """Adds cosine of latitude, sine and cosine of longitude as the node features
+    to the graph.
+
+    Parameters
+    ----------
+    graph : DGLGraph
+        The graph to add node features to.
+    pos : Tensor
+        The node positions.
+
+    Returns
+    -------
+    graph : DGLGraph
+        The graph with node features.
+    """
+    latlon = xyz2latlon(pos)
+    lat, lon = latlon[:, 0], latlon[:, 1]
+    graph.ndata["x"] = torch.stack(
+        (torch.cos(lat), torch.sin(lon), torch.cos(lon)), dim=-1
+    )
+    return graph
 
 
 def latlon2xyz(latlon: Tensor, radius: float = 1, unit: str = "deg") -> Tensor:
