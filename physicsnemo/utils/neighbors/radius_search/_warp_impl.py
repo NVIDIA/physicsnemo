@@ -278,11 +278,6 @@ if WARP_AVAILABLE:
         if points.device != queries.device:
             raise ValueError("points and queries must be on the same device")
 
-        # We're in the warp-backended regime.  So, the first thing to do is to convert these torch tensors to warp
-        # These are readonly in warp, allocated with pytorch.
-        wp_points = wp.from_torch(points, dtype=wp.vec3)
-        wp_queries = wp.from_torch(queries, dtype=wp.vec3, return_ctype=True)
-
         N_queries = len(queries)
 
         # Compute follows data.
@@ -297,92 +292,104 @@ if WARP_AVAILABLE:
             wp_launch_stream = None
             wp_launch_device = "cpu"  # CPUs have no streams
 
-        # We need to create a hash grid:
-        grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_points.device)
-        grid.reserve(N_queries)
-        grid.build(points=wp_points, radius=0.5 * radius)
+        with wp.ScopedStream(wp_launch_stream):
+            # We're in the warp-backended regime.  So, the first thing to do is to convert these torch tensors to warp
+            # These are readonly in warp, allocated with pytorch.
+            wp_points = wp.from_torch(points, dtype=wp.vec3)
+            wp_queries = wp.from_torch(queries, dtype=wp.vec3, return_ctype=True)
 
-        # Now, the situations diverge based on max_points.
+            # We need to create a hash grid:
+            grid = wp.HashGrid(dim_x=128, dim_y=128, dim_z=128, device=wp_points.device)
+            grid.reserve(N_queries)
+            grid.build(points=wp_points, radius=0.5 * radius)
 
-        if max_points is None:
-            total_count, wp_offset = count_neighbors(
-                grid,
-                wp_points,
-                wp_queries,
-                wp_launch_device,
-                wp_launch_stream,
-                radius,
-                N_queries,
-            )
+            # Now, the situations diverge based on max_points.
 
-            if not total_count < 2**31 - 1:
-                raise RuntimeError(
-                    f"Total found neighbors is too large: {total_count} > 2**31 - 1"
-                )
-
-            return gather_neighbors(
-                grid,
-                points.device,
-                wp_points,
-                wp_queries,
-                wp_offset,
-                wp_launch_device,
-                wp_launch_stream,
-                radius,
-                N_queries,
-                return_dists,
-                return_points,
-                total_count,
-            )
-
-        else:
-            # With a fixed number of output points, we have no need for a second kernel.
-            indices = torch.full(
-                (N_queries, max_points), 0, dtype=torch.int32, device=points.device
-            )
-            if return_dists:
-                distances = torch.zeros(
-                    (N_queries, max_points), dtype=torch.float32, device=points.device
-                )
-            else:
-                distances = torch.empty(0, dtype=torch.float32, device=points.device)
-            num_neighbors = torch.zeros(
-                (N_queries,), dtype=torch.int32, device=points.device
-            )
-
-            if return_points:
-                points = torch.zeros(
-                    (len(queries), max_points, 3),
-                    dtype=torch.float32,
-                    device=points.device,
-                )
-            else:
-                points = torch.empty(
-                    (0, max_points, 3), dtype=torch.float32, device=points.device
-                )
-            # This kernel selects up to max_points hits per query.
-            # It is not necessarily deterministic.
-            # If the number of matches > max_points, you may get different results.
-
-            wp.launch(
-                kernel=radius_search_limited_select,
-                dim=N_queries,
-                inputs=[
-                    grid.id,
+            if max_points is None:
+                total_count, wp_offset = count_neighbors(
+                    grid,
                     wp_points,
                     wp_queries,
-                    max_points,
+                    wp_launch_device,
+                    wp_launch_stream,
                     radius,
-                    wp.from_torch(indices, return_ctype=True),
-                    wp.from_torch(num_neighbors, return_ctype=True),
+                    N_queries,
+                )
+
+                if not total_count < 2**31 - 1:
+                    raise RuntimeError(
+                        f"Total found neighbors is too large: {total_count} > 2**31 - 1"
+                    )
+
+                return gather_neighbors(
+                    grid,
+                    points.device,
+                    wp_points,
+                    wp_queries,
+                    wp_offset,
+                    wp_launch_device,
+                    wp_launch_stream,
+                    radius,
+                    N_queries,
                     return_dists,
-                    wp.from_torch(distances, return_ctype=True),
                     return_points,
-                    wp.from_torch(points, return_ctype=True) if return_points else None,
-                ],
-                stream=wp_launch_stream,
-                device=wp_launch_device,
-            )
+                    total_count,
+                )
+
+            else:
+                # With a fixed number of output points, we have no need for a second kernel.
+                indices = torch.full(
+                    (N_queries, max_points), 0, dtype=torch.int32, device=points.device
+                )
+                if return_dists:
+                    distances = torch.zeros(
+                        (N_queries, max_points),
+                        dtype=torch.float32,
+                        device=points.device,
+                    )
+                else:
+                    distances = torch.empty(
+                        0, dtype=torch.float32, device=points.device
+                    )
+                num_neighbors = torch.zeros(
+                    (N_queries,), dtype=torch.int32, device=points.device
+                )
+
+                if return_points:
+                    points = torch.zeros(
+                        (len(queries), max_points, 3),
+                        dtype=torch.float32,
+                        device=points.device,
+                    )
+                else:
+                    points = torch.empty(
+                        (0, max_points, 3), dtype=torch.float32, device=points.device
+                    )
+                # This kernel selects up to max_points hits per query.
+                # It is not necessarily deterministic.
+                # If the number of matches > max_points, you may get different results.
+
+                wp.launch(
+                    kernel=radius_search_limited_select,
+                    dim=N_queries,
+                    inputs=[
+                        grid.id,
+                        wp_points,
+                        wp_queries,
+                        max_points,
+                        radius,
+                        wp.from_torch(indices, return_ctype=True),
+                        wp.from_torch(num_neighbors, return_ctype=True),
+                        return_dists,
+                        wp.from_torch(distances, return_ctype=True),
+                        return_points,
+                        wp.from_torch(points, return_ctype=True)
+                        if return_points
+                        else None,
+                    ],
+                    stream=wp_launch_stream,
+                    device=wp_launch_device,
+                )
 
         # Handle the matrix of return values:
         return indices, points, distances, num_neighbors
