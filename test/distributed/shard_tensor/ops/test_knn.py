@@ -51,9 +51,6 @@ def test_knn_1dmesh(
     points = torch.randn(1043, 3).to(dm.device)
     queries = torch.randn(2198, 3).to(dm.device)
 
-    # points = torch.randn(10, 3).to(dm.device)
-    # queries = torch.randn(8, 3).to(dm.device)
-
     # Distribute the inputs:
     points_placements = (Shard(0),) if scatter_points else (Replicate(),)
     queries_placements = (Shard(0),) if scatter_queries else (Replicate(),)

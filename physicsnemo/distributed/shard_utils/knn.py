@@ -39,8 +39,36 @@ def ring_knn(
     points: ShardTensor, queries: ShardTensor, k: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Ring based kNN implementation, where the points travel around a ring and the
-    queries stay local.
+    Ring based kNN implementation where points travel around a ring and queries stay local.
+
+    This function performs k-nearest neighbor search using a distributed ring-based
+    algorithm. The points are passed around different devices in a ring topology while
+    the queries remain local to each device.
+
+    Parameters
+    ----------
+    points : ShardTensor
+        The point cloud data tensor that will be distributed around the ring.
+        Must be sharded on the same mesh as queries.
+    queries : ShardTensor
+        The query points tensor that stays local on each device.
+        Must be sharded on the same mesh as points.
+    k : int
+        Number of nearest neighbors to find for each query point.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        A tuple containing:
+        - shard_idx : torch.Tensor
+            Indices of the k nearest neighbors for each query point
+        - shard_distances : torch.Tensor
+            Distances to the k nearest neighbors for each query point
+
+    Raises
+    ------
+    NotImplementedError
+        If points and queries tensors are not sharded on the same mesh.
     """
     # Each tensor has a _spec attribute, which contains information about the tensor's placement
     # and the devices it lives on:
@@ -141,7 +169,12 @@ def ring_knn(
     return current_topk_idx, current_dists
 
 
-def extract_knn_args(points, queries, k, *args, **kwargs):
+def extract_knn_args(
+    points: torch.Tensor, queries: torch.Tensor, k: int, *args, **kwargs
+):
+    """
+    Minimal function to use python's argument unpacking to extract the points, queries, and k values.
+    """
     return points, queries, k
 
 
@@ -150,6 +183,30 @@ def knn_sharded_wrapper(
 ) -> tuple[ShardTensor, ShardTensor]:
     """
     Dispatch the proper kNN tools based on the input sharding.
+
+    `args` and `kwargs` are passed to `extract_knn_args` to extract
+    the points, queries, and k values needed for the kNN operation.
+
+    Parameters
+    ----------
+    func : Callable
+        The function to dispatch.
+    types : Any
+        The types of the inputs.
+    args : tuple
+        The positional arguments.
+    kwargs : dict
+        The keyword arguments.
+
+    Returns
+    -------
+    tuple[ShardTensor, ShardTensor]
+        A tuple containing the shard_idx and shard_distances.
+
+    Raises
+    ------
+    MissingShardPatch
+        If the points and queries tensors are not sharded on the same mesh.
     """
 
     points, queries, k = extract_knn_args(*args, **kwargs)
@@ -182,13 +239,13 @@ def knn_sharded_wrapper(
     input_queries_spec = queries._spec
     # The global output tensor will be (N_q, k)
 
-    output_queries_shard_shapes = {
-        mesh_dim: tuple(
+    output_queries_shard_shapes = {}
+    for mesh_dim in input_queries_spec.sharding_shapes().keys():
+        shard_shapes = tuple(
             torch.Size((s[0], k))
             for s in input_queries_spec.sharding_shapes()[mesh_dim]
         )
-        for mesh_dim in input_queries_spec.sharding_shapes().keys()
-    }
+        output_queries_shard_shapes[mesh_dim] = shard_shapes
 
     # Convert the selected points and indexes to shards:
     shard_idx = ShardTensor.from_local(

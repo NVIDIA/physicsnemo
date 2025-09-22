@@ -81,37 +81,13 @@ def sharded_to_local(container):
         return container
 
 
-def default_tensor_comparison(output, d_output, atol, rtol):
-    if not isinstance(output, torch.Tensor):
-        if isinstance(output, Iterable):
-            return all(
-                [
-                    default_tensor_comparison(item, d_item, atol, rtol)
-                    for item, d_item in zip(output, d_output)
-                ]
-            )
-
-    if isinstance(d_output, ShardTensor):
-        validate_shard_tensor_spec(d_output)
-
-    local_output = sharded_to_local(d_output)
-
-    # diff = output - local_output
-    # abs_diff = torch.abs(diff)
-    # max_abs_diff_allowed = 1e-8 + 1e-5 * torch.abs(output)
-
-    # Check forward agreement:
-    assert torch.allclose(output, local_output, atol=atol, rtol=rtol)
-
-    return True
-
-
-def default_loss_fn(output):
-    return output.mean()
-
-
 def validate_shard_tensor_spec(shard_tensor):
-    # Take a shard tensor and cross check on the dimensions.
+    """
+    Take a shard tensor and cross check on the dimensions and shapes.
+
+    Basically, this is a consistency-check on sharding shapes.
+    """
+
     # Take care about assertions here, since this is a collective
 
     # Check out shard shapes
@@ -136,6 +112,31 @@ def validate_shard_tensor_spec(shard_tensor):
             assert (
                 sharding_shapes[mesh_dim][mesh_rank] == shard_tensor._local_tensor.shape
             )
+
+
+def default_tensor_comparison(output, d_output, atol, rtol):
+    if not isinstance(output, torch.Tensor):
+        if isinstance(output, Iterable):
+            return all(
+                [
+                    default_tensor_comparison(item, d_item, atol, rtol)
+                    for item, d_item in zip(output, d_output)
+                ]
+            )
+
+    if isinstance(d_output, ShardTensor):
+        validate_shard_tensor_spec(d_output)
+
+    local_output = sharded_to_local(d_output)
+
+    # Check forward agreement:
+    assert torch.allclose(output, local_output, atol=atol, rtol=rtol)
+
+    return True
+
+
+def default_loss_fn(output):
+    return output.mean()
 
 
 def numerical_shard_tensor_check(
