@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Migrated Stokes MGN example to PyTorch Geometric.
 - Migrated Lennard Jones example to PyTorch Geometric.
+- Migrated blood flow example to PyTorch Geometric.
 
 ### Deprecated
 
