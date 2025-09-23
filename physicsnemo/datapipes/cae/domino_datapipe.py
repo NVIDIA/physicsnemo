@@ -64,6 +64,31 @@ from physicsnemo.utils.domino.utils import (
 from physicsnemo.utils.profiling import profile
 from physicsnemo.utils.sdf import signed_distance_field
 
+"""
+These functions, below, are to handle the SDF calculation which only 
+accepts torch tensors.  The entire pipeline is moving to torch, so
+these aren't necessary after that.
+"""
+
+
+def _convert_array_to_torch(array: cp.ndarray | np.ndarray) -> torch.Tensor:
+    """
+    TEMPORARY function to convert cupy and numpy arrays to torch tensors.
+    """
+    if isinstance(array, cp.ndarray):
+        return torch.utils.dlpack.from_dlpack(array)
+    elif isinstance(array, np.ndarray):
+        return torch.from_numpy(array)
+    else:
+        raise ValueError(f"Unsupported array type: {type(array)}")
+
+
+def _convert_torch_to_array(array: torch.Tensor, provider) -> cp.ndarray | np.ndarray:
+    """
+    TEMPORARY function to convert torch tensors to cupy arrays.
+    """
+    return provider.from_dlpack(array)
+
 
 def domino_collate_fn(batch):
     """
@@ -537,12 +562,14 @@ class DoMINODataPipe(Dataset):
             surf_grid = create_grid(s_max, s_min, [nx, ny, nz])
             surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
 
-            sdf_surf_grid = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                surf_grid_reshaped,
+            sdf_surf_grid, _ = signed_distance_field(
+                _convert_array_to_torch(stl_vertices),
+                _convert_array_to_torch(mesh_indices_flattened),
+                _convert_array_to_torch(surf_grid_reshaped),
                 use_sign_winding_number=True,
-            ).reshape(nx, ny, nz)
+            )
+            sdf_surf_grid = sdf_surf_grid.reshape(nx, ny, nz)
+            sdf_surf_grid = _convert_torch_to_array(sdf_surf_grid, self.array_provider)
 
         else:
             surf_grid = None
@@ -855,12 +882,14 @@ class DoMINODataPipe(Dataset):
             grid_reshaped = grid.reshape(nx * ny * nz, 3)
 
             # SDF calculation on the grid using WARP
-            sdf_grid = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                grid_reshaped,
+            sdf_grid, _ = signed_distance_field(
+                _convert_array_to_torch(stl_vertices),
+                _convert_array_to_torch(mesh_indices_flattened),
+                _convert_array_to_torch(grid_reshaped),
                 use_sign_winding_number=True,
-            ).reshape((nx, ny, nz))
+            )
+            sdf_grid = sdf_grid.reshape((nx, ny, nz))
+            sdf_grid = _convert_torch_to_array(sdf_grid, self.array_provider)
 
             if self.config.sampling:
                 volume_coordinates_sampled, idx_volume = shuffle_array(
@@ -879,12 +908,16 @@ class DoMINODataPipe(Dataset):
                 volume_coordinates = volume_coordinates_sampled
 
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
-                stl_vertices,
-                mesh_indices_flattened,
-                volume_coordinates,
-                include_hit_points=True,
+                _convert_array_to_torch(stl_vertices),
+                _convert_array_to_torch(mesh_indices_flattened),
+                _convert_array_to_torch(volume_coordinates),
                 use_sign_winding_number=True,
             )
+            sdf_nodes = _convert_torch_to_array(sdf_nodes, self.array_provider)
+            sdf_node_closest_point = _convert_torch_to_array(
+                sdf_node_closest_point, self.array_provider
+            )
+
             # TODO - is this needed?
             sdf_nodes = xp.asarray(sdf_nodes)
             sdf_node_closest_point = xp.asarray(sdf_node_closest_point)

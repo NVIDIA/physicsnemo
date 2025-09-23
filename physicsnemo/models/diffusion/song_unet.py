@@ -312,7 +312,7 @@ class SongUNet(Module):
             emb_channels=emb_channels,
             num_heads=1,
             dropout=dropout,
-            skip_scale=np.sqrt(0.5),
+            skip_scale=0.7071067811865476,  # 1 / sqrt(2)
             eps=1e-6,
             resample_filter=resample_filter,
             resample_proj=True,

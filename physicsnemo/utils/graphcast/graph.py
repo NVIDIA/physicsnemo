@@ -21,11 +21,10 @@ import torch
 from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 
+from physicsnemo.models.gnn_layers.utils import GraphType
+from physicsnemo.utils.graphcast.graph_backend import DglGraphBackend, PyGGraphBackend
+
 from .graph_utils import (
-    add_edge_features,
-    add_node_features,
-    create_graph,
-    create_heterograph,
     get_face_centroids,
     latlon2xyz,
     max_edge_length,
@@ -71,9 +70,16 @@ class Graph:
         multimesh: bool = True,
         khop_neighbors: int = 0,
         dtype=torch.float,
+        backend: str = "dgl",
     ) -> None:
         self.khop_neighbors = khop_neighbors
         self.dtype = dtype
+        if backend == "dgl":
+            self.backend = DglGraphBackend
+        elif backend == "pyg":
+            self.backend = PyGGraphBackend
+        else:
+            raise ValueError(f"Unsupported backend: {backend}")
 
         # flatten lat/lon gird
         self.lat_lon_grid_flat = lat_lon_grid.permute(2, 0, 1).view(2, -1).permute(1, 0)
@@ -93,23 +99,7 @@ class Graph:
             self.mesh_vertices = self.finest_mesh_vertices
         self.mesh_faces = mesh.faces
 
-    @staticmethod
-    def khop_adj_all_k(g, kmax):
-        if not g.is_homogeneous:
-            raise NotImplementedError("only homogeneous graph is supported")
-        min_degree = g.in_degrees().min()
-        with torch.no_grad():
-            adj = g.adj_external(transpose=True, scipy_fmt=None)
-            adj_k = adj
-            adj_all = adj.clone()
-            for _ in range(2, kmax + 1):
-                # scale with min-degree to avoid too large values
-                # but >= 1.0
-                adj_k = (adj @ adj_k) / min_degree
-                adj_all += adj_k
-        return adj_all.to_dense().bool()
-
-    def create_mesh_graph(self, verbose: bool = True) -> Tensor:
+    def create_mesh_graph(self, verbose: bool = True) -> GraphType:
         """Create the multimesh graph.
 
         Parameters
@@ -119,10 +109,10 @@ class Graph:
 
         Returns
         -------
-        DGLGraph
+        GraphType
             Multimesh graph
         """
-        mesh_graph = create_graph(
+        mesh_graph = self.backend.create_graph(
             self.mesh_src,
             self.mesh_dst,
             to_bidirected=True,
@@ -133,23 +123,31 @@ class Graph:
             self.mesh_vertices,
             dtype=torch.float32,
         )
-        mesh_graph = add_edge_features(mesh_graph, mesh_pos)
-        mesh_graph = add_node_features(mesh_graph, mesh_pos)
-        mesh_graph.ndata["lat_lon"] = xyz2latlon(mesh_pos)
-        # ensure fields set to dtype to avoid later conversions
-        mesh_graph.ndata["x"] = mesh_graph.ndata["x"].to(dtype=self.dtype)
-        mesh_graph.edata["x"] = mesh_graph.edata["x"].to(dtype=self.dtype)
+        mesh_graph = self.backend.add_edge_features(mesh_graph, mesh_pos)
+        mesh_graph = self.backend.add_node_features(mesh_graph, mesh_pos)
+        if self.backend.name == "dgl":
+            mesh_graph.ndata["lat_lon"] = xyz2latlon(mesh_pos)
+            # ensure fields set to dtype to avoid later conversions
+            mesh_graph.ndata["x"] = mesh_graph.ndata["x"].to(dtype=self.dtype)
+            mesh_graph.edata["x"] = mesh_graph.edata["x"].to(dtype=self.dtype)
+        elif self.backend.name == "pyg":
+            mesh_graph.lat_lon = xyz2latlon(mesh_pos)
+            # ensure fields set to dtype to avoid later conversions
+            mesh_graph.x = mesh_graph.x.to(dtype=self.dtype)
+            mesh_graph.edge_attr = mesh_graph.edge_attr.to(dtype=self.dtype)
+
         if self.khop_neighbors > 0:
             # Make a graph whose edges connect the k-hop neighbors of the original graph.
-            khop_adj_bool = self.khop_adj_all_k(g=mesh_graph, kmax=self.khop_neighbors)
-            mask = ~khop_adj_bool
+            mask = ~self.backend.khop_adj_all_k(
+                graph=mesh_graph, kmax=self.khop_neighbors
+            )
         else:
             mask = None
         if verbose:
             print("mesh graph:", mesh_graph)
         return mesh_graph, mask
 
-    def create_g2m_graph(self, verbose: bool = True) -> Tensor:
+    def create_g2m_graph(self, verbose: bool = True) -> GraphType:
         """Create the graph2mesh graph.
 
         Parameters
@@ -159,7 +157,7 @@ class Graph:
 
         Returns
         -------
-        DGLGraph
+        GraphType
             Graph2mesh graph.
         """
         # get the max edge length of icosphere with max order
@@ -182,36 +180,56 @@ class Graph:
                     dst.append(indices[i][j])
                     # NOTE this gives 1,618,820 edges, in the paper it is 1,618,746
 
-        g2m_graph = create_heterograph(
+        g2m_graph = self.backend.create_heterograph(
             src, dst, ("grid", "g2m", "mesh"), dtype=torch.int32
         )
-        g2m_graph.srcdata["pos"] = cartesian_grid.to(torch.float32)
-        g2m_graph.dstdata["pos"] = torch.tensor(
-            self.mesh_vertices,
-            dtype=torch.float32,
-        )
-        g2m_graph.srcdata["lat_lon"] = self.lat_lon_grid_flat
-        g2m_graph.dstdata["lat_lon"] = xyz2latlon(g2m_graph.dstdata["pos"])
+        if self.backend.name == "dgl":
+            g2m_graph.srcdata["pos"] = cartesian_grid.to(torch.float32)
+            g2m_graph.dstdata["pos"] = torch.tensor(
+                self.mesh_vertices,
+                dtype=torch.float32,
+            )
+            g2m_graph.srcdata["lat_lon"] = self.lat_lon_grid_flat
+            g2m_graph.dstdata["lat_lon"] = xyz2latlon(g2m_graph.dstdata["pos"])
 
-        g2m_graph = add_edge_features(
-            g2m_graph, (g2m_graph.srcdata["pos"], g2m_graph.dstdata["pos"])
-        )
+            g2m_graph = self.backend.add_edge_features(
+                g2m_graph, (g2m_graph.srcdata["pos"], g2m_graph.dstdata["pos"])
+            )
 
-        # avoid potential conversions at later points
-        g2m_graph.srcdata["pos"] = g2m_graph.srcdata["pos"].to(dtype=self.dtype)
-        g2m_graph.dstdata["pos"] = g2m_graph.dstdata["pos"].to(dtype=self.dtype)
-        g2m_graph.ndata["pos"]["grid"] = g2m_graph.ndata["pos"]["grid"].to(
-            dtype=self.dtype
-        )
-        g2m_graph.ndata["pos"]["mesh"] = g2m_graph.ndata["pos"]["mesh"].to(
-            dtype=self.dtype
-        )
-        g2m_graph.edata["x"] = g2m_graph.edata["x"].to(dtype=self.dtype)
+            # avoid potential conversions at later points
+            g2m_graph.srcdata["pos"] = g2m_graph.srcdata["pos"].to(dtype=self.dtype)
+            g2m_graph.dstdata["pos"] = g2m_graph.dstdata["pos"].to(dtype=self.dtype)
+            g2m_graph.ndata["pos"]["grid"] = g2m_graph.ndata["pos"]["grid"].to(
+                dtype=self.dtype
+            )
+            g2m_graph.ndata["pos"]["mesh"] = g2m_graph.ndata["pos"]["mesh"].to(
+                dtype=self.dtype
+            )
+            g2m_graph.edata["x"] = g2m_graph.edata["x"].to(dtype=self.dtype)
+        elif self.backend.name == "pyg":
+            g2m_graph["grid"].pos = cartesian_grid.to(torch.float32)
+            g2m_graph["mesh"].pos = torch.tensor(
+                self.mesh_vertices,
+                dtype=torch.float32,
+            )
+
+            g2m_graph["grid"].lat_lon = self.lat_lon_grid_flat
+            g2m_graph["mesh"].lat_lon = xyz2latlon(g2m_graph["mesh"].pos)
+
+            g2m_graph = self.backend.add_edge_features(
+                g2m_graph, (g2m_graph["grid"].pos, g2m_graph["mesh"].pos)
+            )
+
+            g2m_graph["grid"].pos = g2m_graph["grid"].pos.to(dtype=self.dtype)
+            g2m_graph["mesh"].pos = g2m_graph["mesh"].pos.to(dtype=self.dtype)
+
+            g2m_graph.edge_attr = g2m_graph.edge_attr.to(dtype=self.dtype)
+
         if verbose:
             print("g2m graph:", g2m_graph)
         return g2m_graph
 
-    def create_m2g_graph(self, verbose: bool = True) -> Tensor:
+    def create_m2g_graph(self, verbose: bool = True) -> GraphType:
         """Create the mesh2grid graph.
 
         Parameters
@@ -221,7 +239,7 @@ class Graph:
 
         Returns
         -------
-        DGLGraph
+        GraphType
             Mesh2grid graph.
         """
         # create the mesh2grid bipartite graph
@@ -234,32 +252,51 @@ class Graph:
 
         src = [p for i in indices for p in self.mesh_faces[i]]
         dst = [i for i in range(len(cartesian_grid)) for _ in range(3)]
-        m2g_graph = create_heterograph(
+        m2g_graph = self.backend.create_heterograph(
             src, dst, ("mesh", "m2g", "grid"), dtype=torch.int32
         )  # number of edges is 3,114,720, exactly matches with the paper
 
-        m2g_graph.srcdata["pos"] = torch.tensor(
-            self.mesh_vertices,
-            dtype=torch.float32,
-        )
-        m2g_graph.dstdata["pos"] = cartesian_grid.to(dtype=torch.float32)
+        if self.backend.name == "dgl":
+            m2g_graph.srcdata["pos"] = torch.tensor(
+                self.mesh_vertices,
+                dtype=torch.float32,
+            )
+            m2g_graph.dstdata["pos"] = cartesian_grid.to(dtype=torch.float32)
 
-        m2g_graph.srcdata["lat_lon"] = xyz2latlon(m2g_graph.srcdata["pos"])
-        m2g_graph.dstdata["lat_lon"] = self.lat_lon_grid_flat
+            m2g_graph.srcdata["lat_lon"] = xyz2latlon(m2g_graph.srcdata["pos"])
+            m2g_graph.dstdata["lat_lon"] = self.lat_lon_grid_flat
 
-        m2g_graph = add_edge_features(
-            m2g_graph, (m2g_graph.srcdata["pos"], m2g_graph.dstdata["pos"])
-        )
-        # avoid potential conversions at later points
-        m2g_graph.srcdata["pos"] = m2g_graph.srcdata["pos"].to(dtype=self.dtype)
-        m2g_graph.dstdata["pos"] = m2g_graph.dstdata["pos"].to(dtype=self.dtype)
-        m2g_graph.ndata["pos"]["grid"] = m2g_graph.ndata["pos"]["grid"].to(
-            dtype=self.dtype
-        )
-        m2g_graph.ndata["pos"]["mesh"] = m2g_graph.ndata["pos"]["mesh"].to(
-            dtype=self.dtype
-        )
-        m2g_graph.edata["x"] = m2g_graph.edata["x"].to(dtype=self.dtype)
+            m2g_graph = self.backend.add_edge_features(
+                m2g_graph, (m2g_graph.srcdata["pos"], m2g_graph.dstdata["pos"])
+            )
+            # avoid potential conversions at later points
+            m2g_graph.srcdata["pos"] = m2g_graph.srcdata["pos"].to(dtype=self.dtype)
+            m2g_graph.dstdata["pos"] = m2g_graph.dstdata["pos"].to(dtype=self.dtype)
+            m2g_graph.ndata["pos"]["grid"] = m2g_graph.ndata["pos"]["grid"].to(
+                dtype=self.dtype
+            )
+            m2g_graph.ndata["pos"]["mesh"] = m2g_graph.ndata["pos"]["mesh"].to(
+                dtype=self.dtype
+            )
+            m2g_graph.edata["x"] = m2g_graph.edata["x"].to(dtype=self.dtype)
+        elif self.backend.name == "pyg":
+            m2g_graph["mesh"].pos = torch.tensor(
+                self.mesh_vertices,
+                dtype=torch.float32,
+            )
+            m2g_graph["grid"].pos = cartesian_grid.to(dtype=torch.float32)
+
+            m2g_graph["mesh"].lat_lon = xyz2latlon(m2g_graph["mesh"].pos)
+            m2g_graph["grid"].lat_lon = self.lat_lon_grid_flat
+
+            m2g_graph = self.backend.add_edge_features(
+                m2g_graph, (m2g_graph["mesh"].pos, m2g_graph["grid"].pos)
+            )
+
+            m2g_graph["mesh"].pos = m2g_graph["mesh"].pos.to(dtype=self.dtype)
+            m2g_graph["grid"].pos = m2g_graph["grid"].pos.to(dtype=self.dtype)
+
+            m2g_graph.edge_attr = m2g_graph.edge_attr.to(dtype=self.dtype)
 
         if verbose:
             print("m2g graph:", m2g_graph)

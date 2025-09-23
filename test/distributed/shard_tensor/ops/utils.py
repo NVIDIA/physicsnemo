@@ -18,6 +18,7 @@ import copy
 from collections.abc import Iterable
 
 import torch
+import torch.distributed as dist
 from torch.distributed.tensor import DTensor, distribute_module
 from torch.distributed.tensor.device_mesh import DeviceMesh
 
@@ -80,8 +81,51 @@ def sharded_to_local(container):
         return container
 
 
+def validate_shard_tensor_spec(shard_tensor):
+    """
+    Take a shard tensor and cross check on the dimensions and shapes.
+
+    Basically, this is a consistency-check on sharding shapes.
+    """
+
+    # Take care about assertions here, since this is a collective
+
+    # Check out shard shapes
+    # The local shard shape needs to match the local tensor shape:
+    sharding_shapes = shard_tensor._spec.sharding_shapes()
+    mesh = shard_tensor._spec.mesh
+
+    for mesh_dim in range(mesh.ndim):
+        mesh_rank = mesh.get_local_rank(mesh_dim)
+        mesh_size = dist.get_world_size(mesh.get_group(mesh_dim))
+
+        # Is this axis sharded?
+        this_placement = shard_tensor._spec.placements[mesh_dim]
+        if this_placement.is_shard():
+            # This axis is sharded.  the mesh dim should be in the shapes
+            assert mesh_dim in sharding_shapes.keys()
+
+            # The length of the sharding shapes should match the mesh size:
+            assert len(sharding_shapes[mesh_dim]) == mesh_size
+
+            # The local shape should match the listed shape for this rank:
+            assert (
+                sharding_shapes[mesh_dim][mesh_rank] == shard_tensor._local_tensor.shape
+            )
+
+
 def default_tensor_comparison(output, d_output, atol, rtol):
-    # We assume a single output!
+    if not isinstance(output, torch.Tensor):
+        if isinstance(output, Iterable):
+            return all(
+                [
+                    default_tensor_comparison(item, d_item, atol, rtol)
+                    for item, d_item in zip(output, d_output)
+                ]
+            )
+
+    if isinstance(d_output, ShardTensor):
+        validate_shard_tensor_spec(d_output)
 
     local_output = sharded_to_local(d_output)
 

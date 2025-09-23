@@ -22,6 +22,7 @@ import torch
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import Data as PyGData
+from torch_geometric.data import HeteroData as PyGHeteroData
 
 try:
     import dgl  # noqa: F401 for docs
@@ -48,7 +49,7 @@ except ImportError:
 
 from physicsnemo.models.gnn_layers import CuGraphCSC
 
-GraphType: TypeAlias = PyGData | DGLGraph | CuGraphCSC
+GraphType: TypeAlias = PyGData | PyGHeteroData | DGLGraph | CuGraphCSC
 
 
 try:
@@ -220,7 +221,7 @@ def concat_efeat_hetero_dgl(
 def concat_efeat_pyg(
     efeat: Tensor,
     nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
-    graph: PyGData,
+    graph: PyGData | PyGHeteroData,
 ) -> Tensor:
     """Concatenates edge features with source and destination node features.
     Use for PyG graphs.
@@ -240,7 +241,10 @@ def concat_efeat_pyg(
         Concatenated edge features with source and destination node features.
     """
     src_feat, dst_feat = nfeat if isinstance(nfeat, Tuple) else (nfeat, nfeat)
-    src_idx, dst_idx = graph.edge_index.long()
+    if isinstance(graph, PyGHeteroData):
+        src_idx, dst_idx = graph[graph.edge_types[0]].edge_index.long()
+    else:
+        src_idx, dst_idx = graph.edge_index.long()
     cat_feat = torch.cat((efeat, src_feat[src_idx], dst_feat[dst_idx]), dim=1)
     return cat_feat
 
@@ -299,7 +303,7 @@ def concat_efeat(
                     )
         elif isinstance(graph, DGLGraph):
             efeat = concat_efeat_dgl(efeat, nfeat, graph)
-        elif isinstance(graph, PyGData):
+        elif isinstance(graph, (PyGData, PyGHeteroData)):
             efeat = concat_efeat_pyg(efeat, nfeat, graph)
         else:
             raise ValueError(f"Unsupported graph type: {type(graph)}")
@@ -324,7 +328,7 @@ def concat_efeat(
                 )
         elif isinstance(graph, DGLGraph):
             efeat = concat_efeat_dgl(efeat, (src_feat, dst_feat), graph)
-        elif isinstance(graph, PyGData):
+        elif isinstance(graph, (PyGData, PyGHeteroData)):
             efeat = concat_efeat_pyg(efeat, (src_feat, dst_feat), graph)
         else:
             raise ValueError(f"Unsupported graph type: {type(graph)}")
@@ -465,8 +469,11 @@ def sum_efeat(
         elif isinstance(graph, DGLGraph):
             src, dst = (item.long() for item in graph.edges())
             sum_efeat = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
-        elif isinstance(graph, PyGData):
-            src, dst = graph.edge_index.long()
+        elif isinstance(graph, (PyGData, PyGHeteroData)):
+            if isinstance(graph, PyGHeteroData):
+                src, dst = graph[graph.edge_types[0]].edge_index.long()
+            else:
+                src, dst = graph.edge_index.long()
             sum_efeat = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
         else:
             raise ValueError(f"Unsupported graph type: {type(graph)}")
@@ -572,10 +579,13 @@ def agg_concat_hetero_dgl(
 def agg_concat_pyg(
     efeat: Tensor,
     nfeat: Tensor,
-    graph: PyGData,
+    graph: PyGData | PyGHeteroData,
     aggregation: str,
 ) -> Tensor:
-    src, dst = graph.edge_index
+    if isinstance(graph, PyGHeteroData):
+        _, dst = graph[graph.edge_types[0]].edge_index.long()
+    else:
+        _, dst = graph.edge_index.long()
     h_dest = torch_scatter.scatter(
         efeat, dst, dim=0, dim_size=nfeat.shape[0], reduce=aggregation
     )
@@ -628,7 +638,7 @@ def aggregate_and_concat(
             cat_feat = agg_concat_e2n(nfeat, efeat, static_graph, aggregation)
     elif isinstance(graph, DGLGraph):
         cat_feat = agg_concat_dgl(efeat, nfeat, graph, aggregation)
-    elif isinstance(graph, PyGData):
+    elif isinstance(graph, (PyGData, PyGHeteroData)):
         cat_feat = agg_concat_pyg(efeat, nfeat, graph, aggregation)
     else:
         raise ValueError(f"Unsupported graph type: {type(graph)}")
