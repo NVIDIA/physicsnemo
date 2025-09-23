@@ -59,20 +59,20 @@ from physicsnemo.distributed import ShardTensor
 from physicsnemo.distributed.shard_utils.natten_patches import partial_na2d
 
 
-def build_layer_norm(
+def get_layer_norm(
     hidden_size: int,
-    layernorm_backbone: Literal["apex", "torch"],
+    layernorm_backend: Literal["apex", "torch"],
     elementwise_affine: bool = False,
     eps: float = 1e-6,
 ) -> nn.Module:
     """
-    Construct a LayerNorm module based on the selected backbone.
+    Construct a LayerNorm module based on the selected backend.
 
     Parameters
     ----------
     hidden_size: int
         Normalized feature dimension.
-    layernorm_backbone: Literal["apex", "torch"]
+    layernorm_backend: Literal["apex", "torch"]
         Implementation selector.
     elementwise_affine: bool
         Whether to learn per-element affine parameters.
@@ -82,23 +82,24 @@ def build_layer_norm(
     Returns
     -------
     nn.Module
-        A configured LayerNorm module from Apex or Torch.
+        A configured LayerNorm module from Apex or Torch. The returned module is a subclass of nn.Module
+        and expects a tensor shape (B, L, D) as input, returning a normalized tensor of the same shape.
     """
-    if layernorm_backbone == "apex":
+    if layernorm_backend == "apex":
         if not APEX_AVAILABLE:
             raise ImportError(
                 "Apex is not available. Please install Apex to use FusedLayerNorm or choose 'torch'."
             )
         return FusedLayerNorm(hidden_size, elementwise_affine=elementwise_affine, eps=eps)
-    if layernorm_backbone == "torch":
+    if layernorm_backend == "torch":
         return nn.LayerNorm(hidden_size, elementwise_affine=elementwise_affine, eps=eps)
-    raise ValueError("layernorm_backbone must be one of 'apex' or 'torch'.")
+    raise ValueError("layernorm_backend must be one of 'apex' or 'torch'.")
 
 
-def build_attention(
+def get_attention(
     hidden_size: int,
     num_heads: int,
-    attention: Literal["transformer_engine", "timm", "natten2d"],
+    attention_backend: Literal["transformer_engine", "timm", "natten2d"],
     attn_drop_rate: float = 0.0,
     proj_drop_rate: float = 0.0,
     **attn_kwargs: Any,
@@ -112,23 +113,27 @@ def build_attention(
         The embedding dimension.
     num_heads: int
         Number of attention heads.
-    attention: str
+    attention_backend: str
         One of {"timm", "transformer_engine", "natten2d"} to select between pre-defined attention modules.
+    attn_drop_rate: float
+        The dropout rate for the attention operation.
+    proj_drop_rate: float
+        The dropout rate for the projection operation.
     **attn_kwargs: Any
         Additional keyword arguments for the attention module.
 
     Returns
     -------
     nn.Module
-        A module whose forward accepts (B, T, D) and returns (B, T, D).
+        A module whose forward accepts (B, L, D) and returns (B, L, D).
     """
-    if attention == "timm":
+    if attention_backend == "timm":
         return TimmSelfAttention(hidden_size, num_heads, attn_drop_rate=attn_drop_rate, proj_drop_rate=proj_drop_rate, **attn_kwargs)
-    if attention == "transformer_engine":
+    if attention_backend == "transformer_engine":
         return TESelfAttention(hidden_size, num_heads, attn_drop_rate=attn_drop_rate, proj_drop_rate=proj_drop_rate, **attn_kwargs)
-    if attention == "natten2d":
+    if attention_backend == "natten2d":
         return Natten2DSelfAttention(hidden_size, num_heads, attn_drop_rate=attn_drop_rate, proj_drop_rate=proj_drop_rate, **attn_kwargs)
-    raise ValueError("attention must be one of 'timm', 'transformer_engine', 'natten2d' if using pre-defined attention modules.")
+    raise ValueError("attention_backend must be one of 'timm', 'transformer_engine', 'natten2d' if using pre-defined attention modules.")
 
 
 class AttentionModuleBase(nn.Module, ABC):
@@ -139,29 +144,27 @@ class AttentionModuleBase(nn.Module, ABC):
     (batch, sequence_length, hidden_size) and returns a tensor of the same shape.
     Subclasses must implement the forward method, and may add additional input arguments
     as needed.
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, L, D).
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, L, D).
     """
 
     @abstractmethod
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass of attention module.
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        """
         pass
 
 
 class TimmSelfAttention(AttentionModuleBase):
     """Self-attention module that performs self-attention using the timm library implementation.
-    Expects an input tensor of shape (Batch, Sequence_Length, Hidden_Size) and 
-    returns a tensor of the same shape.
+    Expects an input tensor of shape (B, L, D) and returns a tensor of the same shape. Under the hood,
+    timm uses torch.nn.functional.scaled_dot_product_attention for the attention operation.
 
     Parameters
     ----------
@@ -170,32 +173,30 @@ class TimmSelfAttention(AttentionModuleBase):
     num_heads: int
         Number of attention heads.
     attn_drop_rate: float
-        The dropout rate for the attention module.
+        The dropout rate for the attention operation.
     proj_drop_rate: float
-        The dropout rate for the projection module.
+        The dropout rate for the projection operation.
     **kwargs: Any
         Additional keyword arguments for the timm attention module.
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, L, D).
+    attn_mask: Optional[torch.Tensor]
+        The attention mask to apply to the input tensor (passed to timm's Attention module).
+        If None, no mask will be applied. This is only supported for timm version 1.0.16 and higher.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, L, D).
     """
     def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
         super().__init__()
         self.attn_op = Attention(dim=hidden_size, num_heads=num_heads, attn_drop=attn_drop_rate, proj_drop=proj_drop_rate, qkv_bias=True, **kwargs)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Forward pass of the TimmSelfAttention module.
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        attn_mask: Optional[torch.Tensor]
-            The attention mask to apply to the input tensor (passed to timm's Attention module).
-            If None, no mask will be applied. This is only supported for timm version 1.0.16 and higher.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        """
         if attn_mask is not None and not timm_v1_0_16:
             raise ValueError("attn_mask in TimmSelfAttention is only supported for timm version 1.0.16 and higher")
         
@@ -207,7 +208,7 @@ class TimmSelfAttention(AttentionModuleBase):
 
 class TESelfAttention(AttentionModuleBase):
     """Self-attention module that performs self-attention using the transformer_engine library implementation.
-    Expects an input tensor of shape (Batch, Sequence_Length, Hidden_Size) and 
+    Expects an input tensor of shape (B, L, D) and 
     returns a tensor of the same shape.
 
     Parameters
@@ -217,11 +218,27 @@ class TESelfAttention(AttentionModuleBase):
     num_heads: int
         Number of attention heads.
     attn_drop_rate: float
-        The dropout rate for the attention module.
+        The dropout rate for the attention operation.
     proj_drop_rate: float
-        The dropout rate for the projection module.
+        The dropout rate for the projection operation.
     **kwargs: Any
         Additional keyword arguments for the transformer_engine attention module.
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, L, D).
+    attn_mask: Optional[torch.Tensor]
+        The attention mask to apply to the input tensor (passed to transformer_engine's MultiheadAttention module).
+        If None, no mask will be applied.
+    mask_type: Optional[str]
+        The type of mask to apply to the input tensor (passed to transformer_engine's MultiheadAttention module).
+        If no mask is provided, "no_mask" will be used.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, L, D).
     """
     def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
         super().__init__()
@@ -238,24 +255,6 @@ class TESelfAttention(AttentionModuleBase):
         self.attn_op = MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, mask_type: Optional[str] = "no_mask") -> torch.Tensor:
-        """Forward pass of the TESelfAttention module.
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        attn_mask: Optional[torch.Tensor]
-            The attention mask to apply to the input tensor (passed to transformer_engine's MultiheadAttention module).
-            If None, no mask will be applied.
-        mask_type: Optional[str]
-            The type of mask to apply to the input tensor (passed to transformer_engine's MultiheadAttention module).
-            If no mask is provided, "no_mask" will be used.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        """
         if attn_mask is not None:
             mask_type = "arbitrary"
         return self.attn_op(x, attention_mask=attn_mask, attn_mask_type=mask_type)
@@ -263,7 +262,7 @@ class TESelfAttention(AttentionModuleBase):
 
 class Natten2DSelfAttention(AttentionModuleBase):
     """Self-attention module that performs 2D neighborhood attention using NATTEN.
-    Expects an input tensor of shape (Batch, Sequence_Length, Hidden_Size) and 
+    Expects an input tensor of shape (B, L, D) and 
     returns a tensor of the same shape (reshapes sequence to 2D internally).
 
     Parameters
@@ -279,9 +278,27 @@ class Natten2DSelfAttention(AttentionModuleBase):
     qk_norm: bool
         Whether to use layer normalization on the query and key.
     proj_drop_rate: float
-        The dropout rate for the projection.
+        The dropout rate for the projection operation.
     norm_layer: Literal["apex", "torch"]
         The layer normalization to use.
+
+    References
+    ----------
+    - https://arxiv.org/abs/2204.07143
+    - https://natten.org/
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, L, D).
+    latent_hw: Tuple[int, int]
+        The desired height and width of the 2D latent space, used for reshaping before applying attention.
+        The total token sequence length must be latent_hw[0] * latent_hw[1].
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, L, D).
     """
     def __init__(
         self,
@@ -313,8 +330,8 @@ class Natten2DSelfAttention(AttentionModuleBase):
 
         self.qkv = nn.Linear(hidden_size, hidden_size * 3, bias=qkv_bias)
         if qk_norm:
-            self.q_norm = build_layer_norm(self.head_dim, norm_layer)
-            self.k_norm = build_layer_norm(self.head_dim, norm_layer)
+            self.q_norm = get_layer_norm(self.head_dim, norm_layer)
+            self.k_norm = get_layer_norm(self.head_dim, norm_layer)
         else:
             self.q_norm = nn.Identity()
             self.k_norm = nn.Identity()
@@ -326,21 +343,6 @@ class Natten2DSelfAttention(AttentionModuleBase):
 
 
     def forward(self, x: torch.Tensor, latent_hw: Tuple[int, int]) -> torch.Tensor:
-        """Forward pass of the Natten2DSelfAttention module. Performs 2D neighborhood attention.
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        latent_hw: Tuple[int, int]
-            The desired height and width of the 2D latent space, used for reshaping before applying attention.
-            The total token sequence length must be latent_hw[0] * latent_hw[1].
-    
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        """
 
         B, N, C = x.shape
         h, w = latent_hw
@@ -379,6 +381,21 @@ class PerSampleDropout(nn.Module):
     ----------
     inplace: bool
         Whether to perform the dropout in place.
+
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, L, D).
+    p: Optional[float | torch.Tensor]
+        The dropout probability for the intermediate dropout module. If None, no dropout will be applied.
+        If a scalar, the same dropout probability will be applied to all samples.
+        Otherwise, it should be a tensor of shape (Batch,) to apply per-sample dropout to each sample in a batch.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, L, D).
     """
 
     def __init__(self, inplace: bool = False):
@@ -386,22 +403,7 @@ class PerSampleDropout(nn.Module):
         self.inplace = inplace
 
     def forward(self, x: torch.Tensor, p: Optional[float | torch.Tensor] = None) -> torch.Tensor:
-        """Forward pass, applying uniform or per-sample dropout.
 
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        p: Optional[float | torch.Tensor]
-            The dropout probability for the intermediate dropout module. If None, no dropout will be applied.
-            If a scalar, the same dropout probability will be applied to all samples.
-            Otherwise, it should be a tensor of shape (Batch,) to apply per-sample dropout to each sample in a batch.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        """
         if (not self.training) or p is None:
             return x
 
@@ -453,16 +455,18 @@ class DiTBlock(nn.Module):
         The dimensionality of the input and output.
     num_heads (int):
         The number of attention heads.
-    attention_backbone (Union[str, nn.Module]):
+    attention_backend (Union[str, nn.Module]):
         Either the name of a pre-defined attention implementation ('timm', 'transformer_engine', or 'natten2d'),
-        or a user-provided nn.Module implementing the same (B, T, D)->(B, T, D) interface for self-attention.
+        or a user-provided nn.Module implementing the same (B, L, D)->(B, L, D) interface for self-attention.
         Options:
-            'timm' uses the self-attention module from timm
-            'transformer_engine' uses the MultiheadAttention module from transformer_engine
-            'natten2d' uses an attention module performing 2D neighborhood attention using NATTEN
+            - 'timm' uses the self-attention module from timm. For timm version 1.0.16 and higher, passing an attention mask to the forward method is supported.
+              Under the hood, timm uses torch.nn.functional.scaled_dot_product_attention. See physicsnemo.experimental.models.dit.layers.TimmSelfAttention for more details.
+            - 'transformer_engine' uses the MultiheadAttention module from transformer_engine. This performs the same operation as timm, but uses an efficient fused implementation.
+              See physicsnemo.experimental.models.dit.layers.TESelfAttention for more details.
+            - 'natten2d' uses an attention module performing 2D neighborhood attention using NATTEN. See physicsnemo.experimental.models.dit.layers.Natten2DSelfAttention for more details.
         The expected interface for the attention module is defined in physicsnemo.experimental.models.dit.layers.AttentionModuleBase.
         Default is 'transformer_engine'.
-    layernorm_backbone (str):
+    layernorm_backend (str):
         The layer normalization implementation ('apex' or 'torch'). Default is 'torch'.
     mlp_ratio (float):
         The ratio for the MLP's hidden dimension. Default is 4.0.
@@ -471,32 +475,44 @@ class DiTBlock(nn.Module):
         module supports scalar or per-sample dropout depending on the type/shape of the p_dropout tensor passed to the forward method.
         Default is False.
     attn_drop_rate (float):
-        The dropout rate for the attention module. Default is 0.0.
+        The dropout rate for the attention operation. Default is 0.0.
     proj_drop_rate (float):
-        The dropout rate for the projection module. Default is 0.0.
+        The dropout rate for the projection operation. Default is 0.0.
     mlp_drop_rate (float):
-        The dropout rate for the MLP module. Default is 0.0.
+        The dropout rate for the MLP operation. Default is 0.0.
     **attn_kwargs (Any):
         Additional keyword arguments for the attention module.
+
+    Note
+    -----
+    The attention module configured by `attention_backend` is not expected to be cross-compatible in terms of state_dict keys, but the
+    layer norm module configured by `layernorm_backend` is expected to be cross-compatible (models trained with `torch` layernorms can be loaded with `apex` layernorms and vice versa).
     
     Forward
     -------
     x (torch.Tensor):
-        Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
+        Input tensor of shape (B, L, D).
     c (torch.Tensor):
-        Conditioning tensor of shape (Batch, Hidden_Size).
+        Conditioning tensor of shape (B, D).
+    attn_kwargs (Optional[Dict[str, Any]]):
+        Additional keyword arguments for the attention module.
+    p_dropout (Optional[float | torch.Tensor]):
+        The dropout probability for the intermediate dropout module. If None, no dropout will be applied.
+        If a scalar, the same dropout probability will be applied to all samples.
+        Otherwise, it should be a tensor of shape (B,) to apply per-sample dropout to each sample in a batch.
 
-    Outputs
+    Returns
     -------
-    torch.Tensor: Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
+    torch.Tensor
+        Output tensor of shape (B, L, D).
     """
 
     def __init__(
         self,
         hidden_size: int,
         num_heads: int,
-        attention_backbone: Union[Literal["transformer_engine", "timm", "natten2d"], nn.Module] = "transformer_engine",
-        layernorm_backbone: Literal["apex", "torch"] = "torch",
+        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], nn.Module] = "transformer_engine",
+        layernorm_backend: Literal["apex", "torch"] = "torch",
         mlp_ratio: float = 4.0,
         intermediate_dropout: bool = False,
         attn_drop_rate: float = 0.0,
@@ -506,23 +522,23 @@ class DiTBlock(nn.Module):
     ):
         super().__init__()
 
-        if isinstance(attention_backbone, nn.Module):
-            self.attention = attention_backbone
+        if isinstance(attention_backend, nn.Module):
+            self.attention = attention_backend
         else:
-            self.attention = build_attention(
+            self.attention = get_attention(
                 hidden_size=hidden_size,
                 num_heads=num_heads,
-                attention=attention_backbone,
+                attention_backend=attention_backend,
                 attn_drop_rate=attn_drop_rate,
                 proj_drop_rate=proj_drop_rate,
                 **attn_kwargs,
             )
 
-        self.pre_attention_norm = build_layer_norm(
-            hidden_size, layernorm_backbone, elementwise_affine=False, eps=1e-6
+        self.pre_attention_norm = get_layer_norm(
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
         )
-        self.pre_mlp_norm = build_layer_norm(
-            hidden_size, layernorm_backbone, elementwise_affine=False, eps=1e-6
+        self.pre_mlp_norm = get_layer_norm(
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
         )
         
         # Optional dropout/per-sample dropout module applied before attention
@@ -552,26 +568,7 @@ class DiTBlock(nn.Module):
         attn_kwargs: Optional[Dict[str, Any]] = None,
         p_dropout: Optional[float | torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Performs the forward pass for the DiTBlock.
 
-        Parameters
-        ----------
-        x: torch.Tensor
-            Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        c: torch.Tensor
-            Conditioning tensor of shape (Batch, Hidden_Size).
-        attn_kwargs: Optional[Dict[str, Any]]
-            Additional keyword arguments for the attention module.
-        p_dropout: Optional[float | torch.Tensor]
-            The dropout probability for the intermediate dropout module. If None, no dropout will be applied.
-            If a scalar, the same dropout probability will be applied to all samples.
-            Otherwise, it should be a tensor of shape (Batch,) to apply per-sample dropout to each sample in a batch.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape (Batch, Sequence_Length, Hidden_Size).
-        """
         (
             attention_shift,
             attention_scale,
@@ -623,37 +620,34 @@ class ProjLayer(nn.Module):
         The dimensionality of the input from the transformer blocks.
     emb_channels (int):
         The number of embedding channels for final projection.
-    layernorm_backbone (str):
+    layernorm_backend (str):
         The layer normalization implementation ('apex' or 'torch'). Defaults to 'apex'.
     
     Forward
     -------
     x (torch.Tensor):
-        Input tensor of shape (Batch, Sequence_Length, Hidden_Size).
+        Input tensor of shape (B, L, D).
     c (torch.Tensor):
-        Conditioning tensor of shape (Batch, Hidden_Size).
+        Conditioning tensor of shape (B, D).
 
     Outputs
     -------
-    torch.Tensor: Output tensor of shape (Batch, Sequence_Length, Embed_Size).
+    torch.Tensor: Output tensor of shape (B, L, D).
     """
 
     def __init__(
         self, hidden_size: int,
         emb_channels: int,
-        layernorm_backbone: Literal["apex", "torch"] = "torch",
+        layernorm_backend: Literal["apex", "torch"] = "torch",
     ):
-        """
-        Initializes the ProjLayer.
-        """
         super().__init__()
-        if layernorm_backbone == "apex" and not APEX_AVAILABLE:
+        if layernorm_backend == "apex" and not APEX_AVAILABLE:
             raise ImportError(
                 "Apex is not available. Please install Apex to use ProjLayer with FusedLayerNorm.\
-                Or use 'torch' as layernorm_backbone."
+                Or use 'torch' as layernorm_backend."
             )
-        self.proj_layer_norm = build_layer_norm(
-            hidden_size, layernorm_backbone, elementwise_affine=False, eps=1e-6
+        self.proj_layer_norm = get_layer_norm(
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
         )
         self.output_projection = nn.Linear(hidden_size, emb_channels, bias=True)
         self.adaptive_modulation = nn.Sequential(
@@ -664,9 +658,6 @@ class ProjLayer(nn.Module):
         ) + shift.unsqueeze(1)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """
-        Performs the forward pass for the ProjLayer.
-        """
         shift, scale = self.adaptive_modulation(c).chunk(2, dim=1)
         modulated_output = self.modulation(
             self.proj_layer_norm(x), scale, shift

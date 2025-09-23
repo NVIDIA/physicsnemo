@@ -39,8 +39,8 @@ def test_dit_forward_accuracy(device):
         hidden_size=128,
         depth=2,
         num_heads=4,
-        layernorm_backbone="torch",
-        attention_backbone="timm",
+        layernorm_backend="torch",
+        attention_backend="timm",
     ).to(device)
     model.eval()  # Set to eval to avoid dropout randomness
 
@@ -67,8 +67,8 @@ def test_dit_conditional_forward_accuracy(device):
         depth=2,
         num_heads=4,
         condition_dim=128,
-        layernorm_backbone="torch",
-        attention_backbone="timm",
+        layernorm_backend="torch",
+        attention_backend="timm",
     ).to(device)
     model.eval()  # Set to eval to avoid dropout randomness
 
@@ -91,8 +91,8 @@ def test_dit_constructor(device):
     in_channels = 3
     out_channels = 5
     condition_dim = 128
-    attention_backbone = "timm"
-    layernorm_backbone = "torch"
+    attention_backend = "timm"
+    layernorm_backend = "torch"
     batch_size = 2
 
     model = DiT(
@@ -103,8 +103,8 @@ def test_dit_constructor(device):
         condition_dim=condition_dim,
         hidden_size=128,
         depth=2,
-        attention_backbone=attention_backbone,
-        layernorm_backbone=layernorm_backbone,
+        attention_backend=attention_backend,
+        layernorm_backend=layernorm_backend,
         num_heads=4,
     ).to(device)
 
@@ -129,8 +129,8 @@ def test_dit_checkpoint(device):
             hidden_size=64,
             depth=1,
             num_heads=2,
-            attention_backbone="timm",
-            layernorm_backbone="torch",
+            attention_backend="timm",
+            layernorm_backend="torch",
         )
         .to(device)
         .eval()
@@ -144,8 +144,8 @@ def test_dit_checkpoint(device):
             hidden_size=64,
             depth=1,
             num_heads=2,
-            attention_backbone="timm",
-            layernorm_backbone="torch",
+            attention_backend="timm",
+            layernorm_backend="torch",
         )
         .to(device)
         .eval()
@@ -211,8 +211,8 @@ def test_ditblock_forward_accuracy_timm(device):
         DiTBlock(
             hidden_size=hidden_size,
             num_heads=num_heads,
-            attention_backbone="timm",
-            layernorm_backbone="torch",
+            attention_backend="timm",
+            layernorm_backend="torch",
         )
         .to(device)
         .eval()
@@ -247,8 +247,8 @@ def test_ditblock_forward_accuracy_natten(device, pytestconfig):
         DiTBlock(
             hidden_size=hidden_size,
             num_heads=num_heads,
-            attention_backbone="natten2d",
-            layernorm_backbone="torch",
+            attention_backend="natten2d",
+            layernorm_backend="torch",
             attn_kernel=3,
         )
         .to(device)
@@ -285,8 +285,8 @@ def test_ditblock_forward_accuracy_transformer_engine(device, pytestconfig):
         DiTBlock(
             hidden_size=hidden_size,
             num_heads=num_heads,
-            attention_backbone="transformer_engine",
-            layernorm_backbone="torch",
+            attention_backend="transformer_engine",
+            layernorm_backend="torch",
         )
         .to(device)
         .eval()
@@ -318,8 +318,8 @@ def test_ditblock_exceptions(device):
         DiTBlock(
             hidden_size=hidden_size,
             num_heads=num_heads,
-            attention_backbone="timm",
-            layernorm_backbone="torch",
+            attention_backend="timm",
+            layernorm_backend="torch",
             intermediate_dropout=True,
         )
         .to(device)
@@ -343,8 +343,8 @@ def test_ditblock_exceptions(device):
     nat_block = DiTBlock(
         hidden_size=hidden_size,
         num_heads=num_heads,
-        attention_backbone="natten2d",
-        layernorm_backbone="torch",
+        attention_backend="natten2d",
+        layernorm_backend="torch",
         attn_kernel=3,
     ).to(device)
 
@@ -363,8 +363,8 @@ def test_ditblock_intermediate_dropout_scalar_and_per_sample(device):
     block = DiTBlock(
         hidden_size=hidden_size,
         num_heads=num_heads,
-        attention_backbone="timm",
-        layernorm_backbone="torch",
+        attention_backend="timm",
+        layernorm_backend="torch",
         intermediate_dropout=True,
     ).to(device)
 
