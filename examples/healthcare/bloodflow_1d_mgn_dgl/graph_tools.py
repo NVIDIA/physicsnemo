@@ -15,8 +15,8 @@
 
 import torch as th
 import numpy as np
-import torch_geometric as pyg
 import scipy
+import dgl
 
 
 def generate_types(bif_id, indices):
@@ -424,7 +424,7 @@ def generate_graph(point_data, points, edges1, edges2, add_boundary_edges, rcr_v
     """
     Generate graph.
 
-    Generate graph out of data obtained from a vtp file.
+    Generate DGL graph out of data obtained from a vtp file.
 
     Arguments:
         point_data: dictionary containing point data (key: name, value: data)
@@ -436,7 +436,7 @@ def generate_graph(point_data, points, edges1, edges2, add_boundary_edges, rcr_v
                     of RCR boundary conditions
 
     Returns:
-        graph
+        DGL graph
         dictionary containing indices of inlet and outlet nodes
         n x 3 numpy array of point coordinates
         n-dimensional array containin junction ids
@@ -513,27 +513,40 @@ def generate_graph(point_data, points, edges1, edges2, add_boundary_edges, rcr_v
     jmasks["inlets"] = np.zeros(bif_id.size)
     jmasks["all"] = np.zeros(bif_id.size)
 
-    edges = th.stack([th.tensor(edges1), th.tensor(edges2)], dim=0).long()
-    graph = pyg.data.Data(
-        edge_index=edges,
-        x=th.tensor(points, dtype=th.float32),
-        tangent=th.unsqueeze(th.tensor(point_data["tangent"], dtype=th.float32), 2),
-        area=th.reshape(th.tensor(area, dtype=th.float32), (-1, 1, 1)),
-        type=th.unsqueeze(types, 2),
-        inlet_mask=th.tensor(inlet_mask, dtype=th.int8),
-        outlet_mask=th.tensor(outlet_mask, dtype=th.int8),
-        jun_inlet_mask=th.tensor(jmasks["inlets"], dtype=th.int8),
-        jun_mask=th.tensor(jmasks["all"], dtype=th.int8),
-        branch_mask=th.tensor(types[:, 0].detach().numpy() == 1, dtype=th.int8),
-        branch_id=th.tensor(point_data["BranchId"], dtype=th.int8),
-        resistance1=th.reshape(th.tensor(rcr[:, 0], dtype=th.float32), (-1, 1, 1)),
-        capacitance=th.reshape(th.tensor(rcr[:, 1], dtype=th.float32), (-1, 1, 1)),
-        resistance2=th.reshape(th.tensor(rcr[:, 2], dtype=th.float32), (-1, 1, 1)),
-        edge_rel_position=th.unsqueeze(th.tensor(rel_position, dtype=th.float32), 2),
-        edge_distance=th.reshape(th.tensor(distance, dtype=th.float32), (-1, 1, 1)),
-        edge_type=th.unsqueeze(
-            th.nn.functional.one_hot(th.tensor(etypes), num_classes=5), 2
-        ),
+    graph = dgl.graph((edges1, edges2), idtype=th.int32)
+
+    graph.ndata["x"] = th.tensor(points, dtype=th.float32)
+    tangent = th.tensor(point_data["tangent"], dtype=th.float32)
+    graph.ndata["tangent"] = th.unsqueeze(tangent, 2)
+    graph.ndata["area"] = th.reshape(th.tensor(area, dtype=th.float32), (-1, 1, 1))
+
+    graph.ndata["type"] = th.unsqueeze(types, 2)
+    graph.ndata["inlet_mask"] = th.tensor(inlet_mask, dtype=th.int8)
+    graph.ndata["outlet_mask"] = th.tensor(outlet_mask, dtype=th.int8)
+    graph.ndata["jun_inlet_mask"] = th.tensor(jmasks["inlets"], dtype=th.int8)
+    graph.ndata["jun_mask"] = th.tensor(jmasks["all"], dtype=th.int8)
+    graph.ndata["branch_mask"] = th.tensor(
+        types[:, 0].detach().numpy() == 1, dtype=th.int8
     )
+    graph.ndata["branch_id"] = th.tensor(point_data["BranchId"], dtype=th.int8)
+
+    graph.ndata["resistance1"] = th.reshape(
+        th.tensor(rcr[:, 0], dtype=th.float32), (-1, 1, 1)
+    )
+    graph.ndata["capacitance"] = th.reshape(
+        th.tensor(rcr[:, 1], dtype=th.float32), (-1, 1, 1)
+    )
+    graph.ndata["resistance2"] = th.reshape(
+        th.tensor(rcr[:, 2], dtype=th.float32), (-1, 1, 1)
+    )
+
+    graph.edata["rel_position"] = th.unsqueeze(
+        th.tensor(rel_position, dtype=th.float32), 2
+    )
+    graph.edata["distance"] = th.reshape(
+        th.tensor(distance, dtype=th.float32), (-1, 1, 1)
+    )
+    etypes = th.nn.functional.one_hot(th.tensor(etypes), num_classes=5)
+    graph.edata["type"] = th.unsqueeze(etypes, 2)
 
     return graph

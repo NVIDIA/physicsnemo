@@ -66,8 +66,8 @@ class MGNRollout:
         )
         graph = graphs[list(graphs)[0]]
 
-        infeat_nodes = graph.nfeatures.shape[1] + 1
-        infeat_edges = graph.efeatures.shape[1]
+        infeat_nodes = graph.ndata["nfeatures"].shape[1] + 1
+        infeat_edges = graph.edata["efeatures"].shape[1]
         nout = 2
         nodes_features = [
             "area",
@@ -132,11 +132,11 @@ class MGNRollout:
         Average flowrate over branch nodes
 
         Arguments:
-            graph: graph
+            graph: DGL graph
             flowrate: 1D tensor containing nodal flow rate values
 
         """
-        branch_id = graph.branch_id.cpu().detach().numpy()
+        branch_id = graph.ndata["branch_id"].cpu().detach().numpy()
         bmax = np.max(branch_id)
         for i in range(bmax + 1):
             idxs = np.where(branch_id == i)[0]
@@ -155,30 +155,30 @@ class MGNRollout:
         graph = graph.to(self.device)
         self.graph = graph
 
-        ntimes = graph.pressure.shape[-1]
-        nnodes = graph.pressure.shape[0]
+        ntimes = graph.ndata["pressure"].shape[-1]
+        nnodes = graph.ndata["pressure"].shape[0]
 
         self.pred = torch.zeros((nnodes, 2, ntimes), device=self.device)
-        self.exact = graph.nfeatures[:, 0:2, :]
+        self.exact = graph.ndata["nfeatures"][:, 0:2, :]
         # copy initial condition
-        self.pred[:, 0:2, 0] = graph.nfeatures[:, 0:2, 0]
+        self.pred[:, 0:2, 0] = graph.ndata["nfeatures"][:, 0:2, 0]
 
-        inmask = graph.inlet_mask.bool()
-        invar = graph.nfeatures[:, :, 0].clone().squeeze()
-        efeatures = graph.efeatures.squeeze()
+        inmask = graph.ndata["inlet_mask"].bool()
+        invar = graph.ndata["nfeatures"][:, :, 0].clone().squeeze()
+        efeatures = graph.edata["efeatures"].squeeze()
         nnodes = inmask.shape[0]
         nf = torch.zeros((nnodes, 1), device=self.device)
         start = time.time()
         for i in range(ntimes - 1):
             # set loading variable (check original paper for reference)
-            invar[:, -1] = graph.nfeatures[:, -1, i]
+            invar[:, -1] = graph.ndata["nfeatures"][:, -1, i]
             # we set the next flow rate at the inlet (boundary condition)
-            nf[inmask, 0] = graph.nfeatures[inmask, 1, i + 1]
+            nf[inmask, 0] = graph.ndata["nfeatures"][inmask, 1, i + 1]
             nfeatures = torch.cat((invar, nf), 1)
             pred = self.model(nfeatures, efeatures, graph).detach()
             invar[:, 0:2] += pred
             # we set the next flow rate at the inlet since that is known
-            invar[inmask, 1] = graph.nfeatures[inmask, 1, i + 1]
+            invar[inmask, 1] = graph.ndata["nfeatures"][inmask, 1, i + 1]
             # flow rate must be constant in branches
             self.compute_average_branches(graph, invar[:, 1])
 
@@ -224,7 +224,7 @@ class MGNRollout:
         at the branch nodes for all timesteps.
 
         """
-        bm = torch.reshape(self.graph.branch_mask, (-1, 1, 1))
+        bm = torch.reshape(self.graph.ndata["branch_mask"], (-1, 1, 1))
         bm = bm.repeat(1, 2, self.pred.shape[2])
         diff = (self.pred - self.exact) * bm
         errs = torch.sum(torch.sum(diff**2, axis=0), axis=1)
@@ -244,13 +244,13 @@ class MGNRollout:
             idx: Index of the node to plot pressure and flow rate at.
 
         """
-        load = self.graph.nfeatures[0, -1, :]
+        load = self.graph.ndata["nfeatures"][0, -1, :]
         p_pred_values = []
         q_pred_values = []
         p_exact_values = []
         q_exact_values = []
 
-        bm = self.graph.branch_mask.bool()
+        bm = self.graph.ndata["branch_mask"].bool()
 
         nsol = self.pred.shape[2]
         for isol in range(nsol):

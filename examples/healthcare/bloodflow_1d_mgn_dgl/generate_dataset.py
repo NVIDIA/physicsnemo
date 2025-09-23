@@ -13,15 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import os
-import random
-import time
-
 import numpy as np
-import torch as th
-from torch.utils.data import Dataset
+import random
 from tqdm import tqdm
+import torch as th
+from dgl.data.utils import load_graphs as lg
+from dgl.data import DGLDataset
+import time
+import copy
 
 
 def compute_statistics(graphs, fields, statistics):
@@ -35,10 +35,10 @@ def compute_statistics(graphs, fields, statistics):
         graphs: list of graphs
         fields: dictionary containing field names, divided into node and edge
                 fields
-        statistics: dictionary containing statistics
+        statistics: dictionary containining statistics
                     (key: statistics name, value: value)
     Returns:
-        dictionary containing statistics (key: statistics name, value: value).
+        dictionary containining statistics (key: statistics name, value: value).
         New fields are appended to the input 'statistics' argument.
     """
 
@@ -55,12 +55,12 @@ def compute_statistics(graphs, fields, statistics):
             for graph_n in tqdm(graphs, desc=field_name, colour="green"):
                 graph = graphs[graph_n]
                 if etype == "node":
-                    d = graph[field_name]
+                    d = graph.ndata[field_name]
                 elif etype == "edge":
-                    d = graph[f"edge_{field_name}"]
+                    d = graph.edata[field_name]
                 elif etype == "outlet_node":
-                    mask = graph["outlet_mask"].bool()
-                    d = graph[field_name][mask]
+                    mask = graph.ndata["outlet_mask"].bool()
+                    d = graph.ndata[field_name][mask]
 
                 # number of nodes
                 N = d.shape[0]
@@ -98,9 +98,9 @@ def compute_statistics(graphs, fields, statistics):
 
     for graph_n in graphs:
         graph = graphs[graph_n]
-        graph_sts["nodes"].append(graph.num_nodes)
-        graph_sts["edges"].append(graph.num_edges)
-        graph_sts["tsteps"].append(graph.pressure.shape[2])
+        graph_sts["nodes"].append(graph.ndata["x"].shape[0])
+        graph_sts["edges"].append(graph.edata["distance"].shape[0])
+        graph_sts["tsteps"].append(graph.ndata["pressure"].shape[2])
 
     for name in graph_sts:
         cur_statistics = {}
@@ -123,7 +123,7 @@ def load_graphs(input_dir):
         input_dir (string): input directory path
 
     Returns:
-        list of graphs
+        list of DGL graphs
 
     """
     files = os.listdir(input_dir)
@@ -133,7 +133,7 @@ def load_graphs(input_dir):
     graphs = {}
     for file in tqdm(files, desc="Loading graphs", colour="green"):
         if "grph" in file:
-            graphs[file] = th.load(input_dir + file, weights_only=False)
+            graphs[file] = lg(input_dir + file)[0][0]
 
     return graphs
 
@@ -192,18 +192,18 @@ def normalize_graphs(graphs, fields, statistics, norm_dict_label):
             for graph_n in tqdm(graphs, desc=field_name, colour="green"):
                 graph = graphs[graph_n]
                 if etype == "node":
-                    d = graph[field_name]
-                    graph[field_name] = normalize(
+                    d = graph.ndata[field_name]
+                    graph.ndata[field_name] = normalize(
                         d, field_name, statistics, norm_dict_label
                     )
                 elif etype == "edge":
-                    d = graph[f"edge_{field_name}"]
-                    graph[f"edge_{field_name}"] = normalize(
+                    d = graph.edata[field_name]
+                    graph.edata[field_name] = normalize(
                         d, field_name, statistics, norm_dict_label
                     )
                 elif etype == "outlet_node":
-                    d = graph[field_name]
-                    graph[field_name] = normalize(
+                    d = graph.ndata[field_name]
+                    graph.ndata[field_name] = normalize(
                         d, field_name, statistics, norm_dict_label
                     )
 
@@ -236,7 +236,7 @@ def add_features(graphs):
 
     for graph_n in tqdm(graphs, desc="Add features", colour="green"):
         graph = graphs[graph_n]
-        ntimes = graph.pressure.shape[2]
+        ntimes = graph.ndata["pressure"].shape[2]
 
         cf = []
 
@@ -244,28 +244,31 @@ def add_features(graphs):
             if label in desired_features:
                 cf.append(tensor)
 
-        add_feature(graph.area.repeat(1, 1, ntimes), nodes_features, "area")
-        add_feature(graph.tangent.repeat(1, 1, ntimes), nodes_features, "tangent")
-        add_feature(graph.type.repeat(1, 1, ntimes), nodes_features, "type")
-        add_feature(graph.T.repeat(1, 1, ntimes), nodes_features, "T")
+        # graph.ndata['dt'].repeat(1, 1, ntimes)
+        add_feature(graph.ndata["area"].repeat(1, 1, ntimes), nodes_features, "area")
+        add_feature(
+            graph.ndata["tangent"].repeat(1, 1, ntimes), nodes_features, "tangent"
+        )
+        add_feature(graph.ndata["type"].repeat(1, 1, ntimes), nodes_features, "type")
+        add_feature(graph.ndata["T"].repeat(1, 1, ntimes), nodes_features, "T")
 
-        loading = graph.loading
+        loading = graph.ndata["loading"]
 
-        p = graph.pressure.clone()
-        q = graph.flowrate.clone()
+        p = graph.ndata["pressure"].clone()
+        q = graph.ndata["flowrate"].clone()
 
         add_feature(th.ones(p.shape[0], 1, ntimes) * th.min(p), nodes_features, "dip")
         add_feature(th.ones(p.shape[0], 1, ntimes) * th.max(p), nodes_features, "sysp")
 
-        outmask = graph.outlet_mask.bool()
+        outmask = graph.ndata["outlet_mask"].bool()
         nnodes = outmask.shape[0]
 
         r1 = th.zeros((nnodes, 1, ntimes), dtype=th.float32)
         c = th.zeros((nnodes, 1, ntimes), dtype=th.float32)
         r2 = th.zeros((nnodes, 1, ntimes), dtype=th.float32)
-        r1[outmask, 0, :] = graph.resistance1[outmask, 0, :]
-        c[outmask, 0, :] = graph.capacitance[outmask, 0, :]
-        r2[outmask, 0, :] = graph.resistance2[outmask, 0, :]
+        r1[outmask, 0, :] = graph.ndata["resistance1"][outmask, 0, :]
+        c[outmask, 0, :] = graph.ndata["capacitance"][outmask, 0, :]
+        r2[outmask, 0, :] = graph.ndata["resistance2"][outmask, 0, :]
         add_feature(r1, nodes_features, "resistance1")
         add_feature(c, nodes_features, "capacitance")
         add_feature(r2, nodes_features, "resistance2")
@@ -273,17 +276,17 @@ def add_features(graphs):
         cfeatures = th.cat(cf, axis=1)
 
         if "loading" in nodes_features:
-            loading = graph.loading
-            graph.nfeatures = th.cat((p, q, cfeatures, loading), axis=1)
+            loading = graph.ndata["loading"]
+            graph.ndata["nfeatures"] = th.cat((p, q, cfeatures, loading), axis=1)
         else:
-            graph.nfeatures = th.cat((p, q, cfeatures), axis=1)
+            graph.ndata["nfeatures"] = th.cat((p, q, cfeatures), axis=1)
 
         cf = []
-        add_feature(graph.edge_rel_position, edges_features, "rel_position")
-        add_feature(graph.edge_distance, edges_features, "distance")
-        add_feature(graph.edge_type, edges_features, "type")
+        add_feature(graph.edata["rel_position"], edges_features, "rel_position")
+        add_feature(graph.edata["distance"], edges_features, "distance")
+        add_feature(graph.edata["type"], edges_features, "type")
 
-        graph.efeatures = th.cat(cf, axis=1)
+        graph.edata["efeatures"] = th.cat(cf, axis=1)
 
 
 def generate_normalized_graphs(input_dir, norm_type, geometries, statistics=None):
@@ -353,9 +356,9 @@ def generate_normalized_graphs(input_dir, norm_type, geometries, statistics=None
     return graphs, params
 
 
-class Bloodflow1DDataset(Dataset):
+class Bloodflow1DDataset(DGLDataset):
     """
-    Class to store and traverse a dataset.
+    Class to store and traverse a DGL dataset.
 
     Attributes:
         graphs: list of graphs in the dataset
@@ -382,14 +385,12 @@ class Bloodflow1DDataset(Dataset):
             index_map:
 
         """
-        self.name = "dataset"
         self.graphs = graphs
         self.params = params
         self.times = []
         self.lightgraphs = []
         self.graph_names = graph_names
-
-        self.process()
+        super().__init__(name="dataset")
 
     def create_index_map(self):
         """
@@ -430,24 +431,15 @@ class Bloodflow1DDataset(Dataset):
         for graph in tqdm(self.graphs, desc="Processing dataset", colour="green"):
             lightgraph = copy.deepcopy(graph)
 
-            node_data = [
-                ndata
-                for ndata in lightgraph.keys()
-                if not ndata.startswith("edge_") and ndata not in ("x",)
-            ]
-            edge_data = [
-                edata
-                for edata in lightgraph.keys()
-                if edata.startswith("edge_")
-                and edata not in ("edge_attr", "edge_index")
-            ]
+            node_data = [ndata for ndata in lightgraph.ndata]
+            edge_data = [edata for edata in lightgraph.edata]
             for ndata in node_data:
                 if "mask" not in ndata:
-                    del lightgraph[ndata]
+                    del lightgraph.ndata[ndata]
             for edata in edge_data:
-                del lightgraph[edata]
+                del lightgraph.edata[edata]
 
-            self.times.append(graph.nfeatures.shape[2])
+            self.times.append(graph.ndata["nfeatures"].shape[2])
             self.lightgraphs.append(lightgraph)
 
         self.times = np.array(self.times)
@@ -469,32 +461,32 @@ class Bloodflow1DDataset(Dataset):
             i: index of the graph
 
         Returns:
-            The graph
+            The DGL graph
         """
         indices = self.index_map[i, :]
         igraph = indices[0]
         itime = indices[1]
 
-        features = self.graphs[igraph].nfeatures
+        features = self.graphs[igraph].ndata["nfeatures"]
 
         nf = features[:, :, itime].clone()
         nfsize = nf[:, :2].shape
 
-        dt = self.graphs[igraph].dt[0]
+        dt = self.graphs[igraph].ndata["dt"][0]
 
         # add random noise to pressure and flowrate to account for error
         # injected by the network
         curnoise = np.random.normal(0, self.params["rate_noise"] * dt, nfsize)
-        curnoise[self.graphs[igraph].inlet_mask.bool(), 1] = 0
+        curnoise[self.graphs[igraph].ndata["inlet_mask"].bool(), 1] = 0
 
         nf[:, :2] = nf[:, :2] + curnoise
-        self.lightgraphs[igraph].nfeatures = nf
+        self.lightgraphs[igraph].ndata["nfeatures"] = nf
 
         ns = features[:, 0:2, itime + 1 : itime + 1 + self.params["stride"]]
-        self.lightgraphs[igraph].next_steps = ns
+        self.lightgraphs[igraph].ndata["next_steps"] = ns
 
-        ef = self.graphs[igraph].efeatures
-        self.lightgraphs[igraph].efeatures = ef.squeeze()
+        ef = self.graphs[igraph].edata["efeatures"]
+        self.lightgraphs[igraph].edata["efeatures"] = ef.squeeze()
 
         return self.lightgraphs[igraph]
 
@@ -539,7 +531,7 @@ def train_test_split(graphs, perc):
     graphs are assigned to the same set as the original one)
 
     Arguments:
-        graphs: dictionary of graphs (key: name, value: graph)
+        graphs: dictionary of graphs (key: name, value: DGL graph)
         perc: percentage of graphs in the train set (between 0 and 1)
 
     Returns:

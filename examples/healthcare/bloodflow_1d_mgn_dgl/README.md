@@ -20,7 +20,7 @@ using Reduced-Order models. For example, one-dimensional Reduced-Order models
 approximate the geometry of arteries as a composition of segments,
 the centerlines of the vessels, and the pressure and flow rate along the centerlines
 are found by solving special one-dimensional Partial Differential Equations (PDEs).
-These models are sometimes inaccurate due to their simplifying assumptions.
+These models are sometimes inaccurate due to their simplyfing assumptions.
 
 We developed a one-dimensional Reduced-Order model able to mimic
 three-dimensional simulations accurately. The model is based on MeshGraphNet and
@@ -78,7 +78,7 @@ condition information transfer.
 Note: the default configuration for the architecture specified in `config.yaml`
 defines 64 as the dimension for hidden layers and outputs of encoder, processor
 and decoder. The results in the original paper were obtained by using 64 neurons
-in the hidden layers of each part of the network, and 16 neurons for the output
+in the hiddenl layers of each part of the network, and 16 neurons for the output
 layers of encoder and processor. This slight change in architecture does not
 influences the performance of the network dramatically.
 
@@ -88,6 +88,7 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
+pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 ```
 
 ## Getting Started
@@ -101,8 +102,8 @@ bash download_dataset.sh
 ```
 
 After downloading the dataset, an intermediate step necessary to run MeshGraphNet
-is converting the simulation files into graphs compatible with PyTorch Geometric.
-This can be done with:
+is converting the simulation files into graphs compatible with DGL. This can be
+done with:
 
 ```bash
 cd ..

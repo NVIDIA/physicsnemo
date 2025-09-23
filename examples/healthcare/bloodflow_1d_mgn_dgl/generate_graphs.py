@@ -15,6 +15,7 @@
 
 import os
 import numpy as np
+import dgl
 from tqdm import tqdm
 import json
 import shutil
@@ -27,14 +28,14 @@ import torch as th
 
 def add_field(graph, field, field_name, offset=0, pad=10):
     """
-    Add time-dependent fields to a graph.
+    Add time-dependent fields to a DGL graph.
 
     Add time-dependent scalar fields as graph node features. The time-dependent
     fields are stored as n x 1 x m Pytorch tensors, where n is the number of
     graph nodes and m the number of timesteps.
 
     Arguments:
-        graph: graph
+        graph: DGL graph
         field: dictionary with (key: timestep, value: field value)
         field_name (string): name of the field
         offset (int): number of timesteps to skip.
@@ -78,10 +79,14 @@ def add_field(graph, field, field_name, offset=0, pad=10):
         field_t[:, 0, i + pad] = f
         loading_t[:, 0, i + pad] = False
 
-    graph[field_name] = field_t
-    graph.loading = loading_t
-    graph.dt = th.reshape(th.ones(graph.num_nodes, dtype=th.float32) * dt, (-1, 1, 1))
-    graph.T = th.reshape(th.ones(graph.num_nodes, dtype=th.float32) * T, (-1, 1, 1))
+    graph.ndata[field_name] = field_t
+    graph.ndata["loading"] = loading_t
+    graph.ndata["dt"] = th.reshape(
+        th.ones(graph.num_nodes(), dtype=th.float32) * dt, (-1, 1, 1)
+    )
+    graph.ndata["T"] = th.reshape(
+        th.ones(graph.num_nodes(), dtype=th.float32) * T, (-1, 1, 1)
+    )
 
 
 def load_vtp(file, input_dir):
@@ -261,7 +266,7 @@ def add_time_dependent_fields(
     starting time.
 
     Arguments:
-        graph: a graph.
+        graph: a DGL graph.
         graph_data: dictionary containing graph_data (created using
                     generate_datastructures)
         do_resample_time (bool): specify whether we should resample the
@@ -313,7 +318,7 @@ def add_time_dependent_fields(
 
 """
 The main function reads all vtps files from the folder specified in input_dir
-and generates graphs. The graphs are saved in output_dir.
+and generates DGL graphs. The graphs are saved in output_dir.
 """
 if __name__ == "__main__":
     input_dir = "raw_dataset/vtps"
@@ -326,7 +331,6 @@ if __name__ == "__main__":
     print("Processing all files in {}".format(input_dir))
     print("File list:")
     print(files)
-    os.makedirs(output_dir, exist_ok=True)
     for file in tqdm(files, desc="Generating graphs", colour="green"):
         if ".vtp" in file and "s" in file:
             vtp_data = load_vtp(file, input_dir)
@@ -348,6 +352,6 @@ if __name__ == "__main__":
 
             for i, graph in enumerate(graphs):
                 filename = file.replace(".vtp", "." + str(i) + ".grph")
-                th.save(graph, output_dir + filename)
+                dgl.save_graphs(output_dir + filename, graph)
 
     shutil.copy(input_dir + "/dataset_info.json", output_dir + "/dataset_info.json")
