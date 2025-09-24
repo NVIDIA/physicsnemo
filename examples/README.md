@@ -90,6 +90,9 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 | --- | --- |
 |[Force Prediciton for Lennard Jones system](./molecular_dynamics/lennard_jones/)|MeshGraphNet|
 
+|Use case|Model|
+| --- | --- |
+|[Diffusion model for full-waveform inversion](./geophysics/diffusion_fwi/)|UNet, Global Filter Net|
 
 ## Additional examples
 

@@ -13,4 +13,5 @@ PhysicsNeMo examples organized by application domain.
    examples_weather
    examples_healthcare
    examples_additive_manufacturing
-   examples_molecular_dynamics 
+   examples_molecular_dynamics
+   examples_geophysics
