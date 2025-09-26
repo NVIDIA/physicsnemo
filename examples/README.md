@@ -51,6 +51,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Vortex Shedding with Temporal Attention](./cfd/vortex_shedding_mesh_reduced/)|MeshGraphNet|YES|
 |[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
 |[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|Denoising Diffusion Probablistic Model|YES|
+|[Pre-trained DPOT for Navier-Stokes*](./cfd/navier_stokes_dpot/)|Denoising Operator Transformer|YES|
 
 ### Weather
 
