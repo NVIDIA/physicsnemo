@@ -372,6 +372,18 @@ class inferenceDataPipe:
         surf_sdf_grid = torch.reshape(surf_sdf_grid, (nx, ny, nz))
 
         if self.normalize_coordinates:
+            sdf_grid = (
+                2.0
+                * (sdf_grid - torch.amax(grid))
+                / (torch.amax(grid) - torch.amin(grid))
+                - 1.0
+            )
+            surf_sdf_grid = (
+                2.0
+                * (surf_sdf_grid - torch.amax(s_grid))
+                / (torch.amax(s_grid) - torch.amin(s_grid))
+                - 1.0
+            )
             grid = 2.0 * (grid - c_min) / (c_max - c_min) - 1.0
             s_grid = 2.0 * (s_grid - surf_min) / (surf_max - surf_min) - 1.0
 
@@ -533,6 +545,16 @@ class inferenceDataPipe:
 
         surface_area = np.float32(boundary["area"])
 
+        if self.normalize_coordinates:
+            surface_coordinates = (
+                2.0 * (surface_coordinates - c_min) / (c_max - c_min) - 1.0
+            )
+            center_of_mass_normalized = (
+                2.0 * (center_of_mass - c_min) / (c_max - c_min) - 1.0
+            )
+        else:
+            center_of_mass_normalized = center_of_mass
+
         interp_func = KDTree(surface_coordinates)
         dd, ii = interp_func.query(surface_coordinates, k=stencil_size)
         surface_neighbors = surface_coordinates[ii]
@@ -553,12 +575,7 @@ class inferenceDataPipe:
             self.device
         )
 
-        pos_normals_com = surface_coordinates - center_of_mass
-
-        if self.normalize_coordinates:
-            surface_coordinates = (
-                2.0 * (surface_coordinates - c_min) / (c_max - c_min) - 1.0
-            )
+        pos_normals_com = surface_coordinates - center_of_mass_normalized
 
         surface_coordinates = torch.unsqueeze(surface_coordinates, 0)
         surface_normals = torch.unsqueeze(surface_normals, 0)
@@ -637,13 +654,27 @@ class inferenceDataPipe:
         )
         sdf_nodes = torch.unsqueeze(sdf_nodes, -1)
 
-        pos_normals_closest = volume_coordinates - sdf_node_closest_point
-        pos_normals_com = volume_coordinates - center_of_mass
-
         if self.normalize_coordinates:
             volume_coordinates = (
                 2.0 * (volume_coordinates - c_min) / (c_max - c_min) - 1.0
             )
+            sdf_nodes = (
+                2.0
+                * (sdf_nodes - torch.amax(c_max))
+                / (torch.amax(c_max) - torch.amin(c_min))
+                - 1.0
+            )
+            sdf_node_closest_point = (
+                2.0 * (sdf_node_closest_point - c_min) / (c_max - c_min) - 1.0
+            )
+            center_of_mass_normalized = (
+                2.0 * (center_of_mass - c_min) / (c_max - c_min) - 1.0
+            )
+        else:
+            center_of_mass_normalized = center_of_mass
+
+        pos_normals_closest = volume_coordinates - sdf_node_closest_point
+        pos_normals_com = volume_coordinates - center_of_mass_normalized
 
         volume_coordinates = torch.unsqueeze(volume_coordinates, 0)
         pos_normals_com = torch.unsqueeze(pos_normals_com, 0)

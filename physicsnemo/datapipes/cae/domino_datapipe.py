@@ -50,7 +50,6 @@ from physicsnemo.utils.domino.utils import (
     ArrayType,
     area_weighted_shuffle_array,
     calculate_center_of_mass,
-    calculate_normal_positional_encoding,
     create_grid,
     get_filenames,
     mean_std_sampling,
@@ -134,8 +133,6 @@ class DoMINODataConfig:
         surface_variables: (Surface specific) Names of surface variables.
         surface_points_sample: (Surface specific) Number of surface points to sample per batch.
         num_surface_neighbors: (Surface specific) Number of surface neighbors to consider for nearest neighbors approach.
-        resample_surfaces: (Surface specific) Whether to resample the surface before kdtree/knn. Not available if caching.
-        resampling_points: (Surface specific) Number of points to resample the surface to.
         surface_sampling_algorithm: (Surface specific) Algorithm to use for surface sampling ("area_weighted" or "random").
         surface_factors: (Surface specific) Non-dimensionalization factors for surface variables.
             If set, and scaling_type is:
@@ -168,10 +165,6 @@ class DoMINODataConfig:
             - volume.points_sample
         geom_points_sample: Number of STL points sampled per batch.
             Independent of volume.points_sample and surface.points_sample.
-        positional_encoding: Whether to use positional encoding. Affects the calculation of:
-            - pos_volume_closest
-            - pos_volume_center_of_mass
-            - pos_surface_centter_of_mass
         scaling_type: Scaling type for volume variables.
             If used, will rescale the volume_fields and surface fields outputs.
             Requires volume.factor and surface.factor to be set.
@@ -193,8 +186,6 @@ class DoMINODataConfig:
     surface_variables: Optional[Sequence] = ("pMean", "wallShearStress")
     surface_points_sample: int = 1024
     num_surface_neighbors: int = 11
-    resample_surfaces: bool = False
-    resampling_points: int = 1_000_000
     surface_sampling_algorithm: str = Literal["area_weighted", "random"]
     surface_factors: Optional[Sequence] = None
     bounding_box_dims_surf: Optional[Union[BoundingBox, Sequence]] = None
@@ -210,7 +201,6 @@ class DoMINODataConfig:
     sample_in_bbox: bool = False
     sampling: bool = False
     geom_points_sample: int = 300000
-    positional_encoding: bool = False
     scaling_type: Optional[Literal["min_max_scaling", "mean_std_scaling"]] = None
     compute_scaling_factors: bool = False
     caching: bool = False
@@ -236,8 +226,6 @@ class DoMINODataConfig:
                 raise ValueError("Sampling should be False for caching")
             if self.compute_scaling_factors:
                 raise ValueError("Compute scaling factors should be False for caching")
-            if self.resample_surfaces:
-                raise ValueError("Resample surface should be False for caching")
 
         if self.phase not in [
             "train",
@@ -547,14 +535,14 @@ class DoMINODataPipe(Dataset):
         if mesh_indices_flattened.dtype != xp.int32:
             mesh_indices_flattened = mesh_indices_flattened.astype(xp.int32)
 
-        center_of_mass = calculate_center_of_mass(stl_centers, stl_sizes)
-
         if self.config.bounding_box_dims_surf is None:
             s_max = xp.amax(stl_vertices, 0)
             s_min = xp.amin(stl_vertices, 0)
         else:
             s_max = xp.asarray(self.config.bounding_box_dims_surf[0])
             s_min = xp.asarray(self.config.bounding_box_dims_surf[1])
+
+        center_of_mass = calculate_center_of_mass(stl_centers, stl_sizes)
 
         # SDF calculation on the grid using WARP
         if not self.config.compute_scaling_factors:
@@ -570,6 +558,8 @@ class DoMINODataPipe(Dataset):
             )
             sdf_surf_grid = sdf_surf_grid.reshape(nx, ny, nz)
             sdf_surf_grid = _convert_torch_to_array(sdf_surf_grid, self.array_provider)
+            if self.config.normalize_coordinates:
+                sdf_surf_grid = normalize(sdf_surf_grid, xp.amax(surf_grid), xp.amin(surf_grid))
 
         else:
             surf_grid = None
@@ -634,19 +624,6 @@ class DoMINODataPipe(Dataset):
 
         xp = self.array_provider
 
-        if self.config.resample_surfaces:
-            if self.config.resampling_points > surface_coordinates.shape[0]:
-                resampling_points = surface_coordinates.shape[0]
-            else:
-                resampling_points = self.config.resampling_points
-
-            surface_coordinates, idx_s = shuffle_array(
-                surface_coordinates, resampling_points
-            )
-            surface_normals = surface_normals[idx_s]
-            surface_sizes = surface_sizes[idx_s]
-            surface_fields = surface_fields[idx_s]
-
         if not self.config.compute_scaling_factors:
             c_max = self.config.bounding_box_dims[0]
             c_min = self.config.bounding_box_dims[1]
@@ -667,20 +644,16 @@ class DoMINODataPipe(Dataset):
                 surface_sizes = surface_sizes[ids_in_bbox]
                 surface_fields = surface_fields[ids_in_bbox]
 
-            # Compute the positional encoding before sampling
-            if self.config.positional_encoding:
-                dx, dy, dz = (
-                    (s_max[0] - s_min[0]) / nx,
-                    (s_max[1] - s_min[1]) / ny,
-                    (s_max[2] - s_min[2]) / nz,
-                )
-                pos_normals_com_surface = calculate_normal_positional_encoding(
-                    surface_coordinates, center_of_mass, cell_dimensions=[dx, dy, dz]
-                )
+            
+            # Have to normalize neighbors after the kNN and sampling
+            if self.config.normalize_coordinates:
+                core_dict["surf_grid"] = normalize(core_dict["surf_grid"], s_max, s_min)
+                surface_coordinates = normalize(surface_coordinates, s_max, s_min)
+                center_of_mass_normalized = normalize(xp.asarray(center_of_mass), s_max, s_min)
             else:
-                pos_normals_com_surface = surface_coordinates - xp.asarray(
-                    center_of_mass
-                )
+                center_of_mass_normalized = xp.asarray(center_of_mass)
+
+            pos_normals_com_surface = surface_coordinates - center_of_mass_normalized
 
             # Fit the kNN (or KDTree, if CPU) on ALL points:
             if self.config.num_surface_neighbors > 1:
@@ -781,12 +754,6 @@ class DoMINODataPipe(Dataset):
                 surface_neighbors_normals = surface_normals[ii][:, 1:]
                 surface_neighbors_sizes = surface_sizes[ii][:, 1:]
 
-            # Have to normalize neighbors after the kNN and sampling
-            if self.config.normalize_coordinates:
-                core_dict["surf_grid"] = normalize(core_dict["surf_grid"], s_max, s_min)
-                surface_coordinates = normalize(surface_coordinates, s_max, s_min)
-                surface_neighbors = normalize(surface_neighbors, s_max, s_min)
-
             if self.config.scaling_type is not None:
                 if self.config.surface_factors is not None:
                     if self.config.scaling_type == "mean_std_scaling":
@@ -870,12 +837,6 @@ class DoMINODataPipe(Dataset):
                 volume_coordinates = volume_coordinates[ids_in_bbox]
                 volume_fields = volume_fields[ids_in_bbox]
 
-            dx, dy, dz = (
-                (c_max[0] - c_min[0]) / nx,
-                (c_max[1] - c_min[1]) / ny,
-                (c_max[2] - c_min[2]) / nz,
-            )
-
             # Generate a grid of specified resolution to map the bounding box
             # The grid is used for capturing structured geometry features and SDF representation of geometry
             grid = create_grid(c_max, c_min, [nx, ny, nz])
@@ -924,22 +885,18 @@ class DoMINODataPipe(Dataset):
 
             sdf_nodes = sdf_nodes.reshape((-1, 1))
 
-            if self.config.positional_encoding:
-                pos_normals_closest_vol = calculate_normal_positional_encoding(
-                    volume_coordinates,
-                    sdf_node_closest_point,
-                    cell_dimensions=[dx, dy, dz],
-                )
-                pos_normals_com_vol = calculate_normal_positional_encoding(
-                    volume_coordinates, center_of_mass, cell_dimensions=[dx, dy, dz]
-                )
-            else:
-                pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
-                pos_normals_com_vol = volume_coordinates - center_of_mass
-
             if self.config.normalize_coordinates:
                 volume_coordinates = normalize(volume_coordinates, c_max, c_min)
                 grid = normalize(grid, c_max, c_min)
+                sdf_grid = normalize(sdf_grid, xp.amax(grid), xp.amin(grid))
+                sdf_nodes = normalize(sdf_nodes, xp.amax(grid), xp.amin(grid))
+                sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
+                center_of_mass_normalized = normalize(xp.asarray(center_of_mass), c_max, c_min)
+            else:
+                center_of_mass_normalized = xp.asarray(center_of_mass)
+        
+            pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
+            pos_normals_com_vol = volume_coordinates - center_of_mass_normalized
 
             if self.config.scaling_type is not None:
                 if self.config.volume_factors is not None:
@@ -1086,7 +1043,6 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 sample_in_bbox=True,
                 volume_points_sample=cfg.model.volume_points_sample,
                 geom_points_sample=cfg.model.geom_points_sample,
-                positional_encoding=cfg.model.positional_encoding,
                 model_type=cfg.model.model_type,
                 bounding_box_dims=cfg.data.bounding_box,
                 bounding_box_dims_surf=cfg.data.bounding_box_surface,
@@ -1200,7 +1156,6 @@ def compute_scaling_factors(cfg: DictConfig, input_path: str, use_cache: bool) -
                 sample_in_bbox=True,
                 volume_points_sample=cfg.model.volume_points_sample,
                 geom_points_sample=cfg.model.geom_points_sample,
-                positional_encoding=cfg.model.positional_encoding,
                 model_type=cfg.model.model_type,
                 bounding_box_dims=cfg.data.bounding_box,
                 bounding_box_dims_surf=cfg.data.bounding_box_surface,
@@ -1484,7 +1439,6 @@ def create_domino_dataset(
             volume_points_sample=cfg.model.volume_points_sample,
             surface_points_sample=cfg.model.surface_points_sample,
             geom_points_sample=cfg.model.geom_points_sample,
-            positional_encoding=cfg.model.positional_encoding,
             volume_factors=vol_factors,
             surface_factors=surf_factors,
             scaling_type=cfg.model.normalization,
@@ -1492,8 +1446,6 @@ def create_domino_dataset(
             bounding_box_dims=cfg.data.bounding_box,
             bounding_box_dims_surf=cfg.data.bounding_box_surface,
             num_surface_neighbors=cfg.model.num_neighbors_surface,
-            resample_surfaces=cfg.model.resampling_surface_mesh.resample,
-            resampling_points=cfg.model.resampling_surface_mesh.points,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
             **overrides,
         )

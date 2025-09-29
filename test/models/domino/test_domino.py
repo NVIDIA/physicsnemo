@@ -22,9 +22,8 @@ import pytest
 import torch
 from pytest_utils import import_or_fail
 
-# from . import common
-from .common.fwdaccuracy import save_output
-from .common.utils import compare_output
+from ..common.fwdaccuracy import save_output
+from ..common.utils import compare_output
 
 
 def validate_domino(
@@ -44,7 +43,7 @@ def validate_domino(
     if file_name is None:
         file_name = model.meta.name + "_output.pth"
     file_name = (
-        Path(__file__).parents[0].resolve() / Path("data") / Path(file_name.lower())
+        Path(__file__).parents[1].resolve() / Path("data") / Path(file_name.lower())
     )
     # If file does not exist, we will create it then error
     # Model should then reproduce it on next pytest run

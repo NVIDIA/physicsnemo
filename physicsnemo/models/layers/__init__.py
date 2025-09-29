@@ -22,9 +22,16 @@ from .activations import (
     Stan,
     get_activation,
 )
+from .ball_query import BQWarp
 from .conv_layers import ConvBlock, CubeEmbedding
 from .dgm_layers import DGMLayer
-from .fourier_layers import FourierFilter, FourierLayer, GaborFilter
+from .fourier_layers import (
+    FourierFilter,
+    FourierLayer,
+    FourierMLP,
+    GaborFilter,
+    fourier_encode,
+)
 from .fully_connected_layers import (
     Conv1dFCLayer,
     Conv2dFCLayer,

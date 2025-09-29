@@ -464,6 +464,8 @@ def main(cfg: DictConfig):
         surf_grid = np.float32(surf_grid)
         sdf_surf_grid = np.float32(sdf_surf_grid)
         surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
+        if cfg.model.normalize_coordinates:
+            sdf_surf_grid = normalize(sdf_surf_grid, xp.amax(surf_grid), xp.amin(surf_grid))
 
         # Get global parameters and global parameters scaling from config.yaml
         global_params_names = list(cfg.variables.global_parameters.keys())
@@ -536,6 +538,13 @@ def main(cfg: DictConfig):
                 surface_normals / np.linalg.norm(surface_normals, axis=1)[:, np.newaxis]
             )
 
+            if cfg.model.normalize_coordinates:
+                surface_coordinates = normalize(surface_coordinates, s_max, s_min)
+                surf_grid = normalize(surf_grid, s_max, s_min)
+                center_of_mass_normalized = normalize(center_of_mass, s_max, s_min)
+            else:
+                center_of_mass_normalized = center_of_mass
+
             if cfg.model.num_neighbors_surface > 1:
                 interp_func = KDTree(surface_coordinates)
                 dd, ii = interp_func.query(
@@ -554,22 +563,11 @@ def main(cfg: DictConfig):
                 surface_neighbors_normals = surface_normals
                 surface_neighbors_sizes = surface_sizes
 
-            dx, dy, dz = (
-                (s_max[0] - s_min[0]) / nx,
-                (s_max[1] - s_min[1]) / ny,
-                (s_max[2] - s_min[2]) / nz,
-            )
+            
+            pos_surface_center_of_mass = surface_coordinates - center_of_mass_normalized
 
-            if cfg.model.positional_encoding:
-                pos_surface_center_of_mass = calculate_normal_positional_encoding(
-                    surface_coordinates, center_of_mass, cell_length=[dx, dy, dz]
-                )
-            else:
-                pos_surface_center_of_mass = surface_coordinates - center_of_mass
-
-            surface_coordinates = normalize(surface_coordinates, s_max, s_min)
-            surface_neighbors = normalize(surface_neighbors, s_max, s_min)
-            surf_grid = normalize(surf_grid, s_max, s_min)
+            # surface_coordinates = normalize(surface_coordinates, s_max, s_min)
+            # surface_neighbors = normalize(surface_neighbors, s_max, s_min)
 
         else:
             surface_coordinates = None
@@ -606,11 +604,6 @@ def main(cfg: DictConfig):
                 c_max = np.float32(bounding_box_dims[0])
                 c_min = np.float32(bounding_box_dims[1])
 
-            dx, dy, dz = (
-                (c_max[0] - c_min[0]) / nx,
-                (c_max[1] - c_min[1]) / ny,
-                (c_max[2] - c_min[2]) / nz,
-            )
             # Generate a grid of specified resolution to map the bounding box
             # The grid is used for capturing structured geometry features and SDF representation of geometry
             grid = create_grid(c_max, c_min, [nx, ny, nz])
@@ -635,21 +628,20 @@ def main(cfg: DictConfig):
                 return_cupy=False,
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
-
-            if cfg.model.positional_encoding:
-                pos_volume_closest = calculate_normal_positional_encoding(
-                    volume_coordinates, sdf_node_closest_point, cell_length=[dx, dy, dz]
-                )
-                pos_volume_center_of_mass = calculate_normal_positional_encoding(
-                    volume_coordinates, center_of_mass, cell_length=[dx, dy, dz]
-                )
-            else:
-                pos_volume_closest = volume_coordinates - sdf_node_closest_point
-                pos_volume_center_of_mass = volume_coordinates - center_of_mass
-
-            volume_coordinates = normalize(volume_coordinates, c_max, c_min)
-            grid = normalize(grid, c_max, c_min)
             vol_grid_max_min = np.asarray([c_min, c_max])
+
+            if cfg.model.normalize_coordinates:
+                volume_coordinates = normalize(volume_coordinates, c_max, c_min)
+                grid = normalize(grid, c_max, c_min)
+                center_of_mass_normalized = normalize(center_of_mass, c_max, c_min)
+                sdf_grid = normalize(sdf_grid, xp.amax(grid), xp.amin(grid))
+                sdf_nodes = normalize(sdf_nodes, xp.amax(grid), xp.amin(grid))
+                sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
+            else:
+                center_of_mass_normalized = center_of_mass
+
+            pos_volume_closest = volume_coordinates - sdf_node_closest_point
+            pos_volume_center_of_mass = volume_coordinates - center_of_mass_normalized
 
         else:
             volume_coordinates = None
