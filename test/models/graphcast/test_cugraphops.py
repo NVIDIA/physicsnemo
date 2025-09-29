@@ -30,8 +30,9 @@ from utils import fix_random_seeds  # noqa: E402
 @import_or_fail("dgl")
 @pytest.mark.parametrize("recomp_act", [False, True])
 @pytest.mark.parametrize("concat_trick", [False, True])
+@pytest.mark.parametrize("backend", ["dgl"])
 def test_cugraphops(
-    pytestconfig, recomp_act, concat_trick, num_channels=2, res_h=21, res_w=10
+    pytestconfig, recomp_act, concat_trick, backend, num_channels=2, res_h=21, res_w=10
 ):
     """Test cugraphops"""
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
@@ -65,6 +66,7 @@ def test_cugraphops(
         use_cugraphops_encoder=True,
         use_cugraphops_processor=True,
         recompute_activation=recomp_act,
+        graph_backend=backend,
     ).to("cuda")
 
     # Fix random seeds again
@@ -84,6 +86,7 @@ def test_cugraphops(
         use_cugraphops_encoder=False,
         use_cugraphops_processor=False,
         recompute_activation=False,
+        graph_backend=backend,
     ).to("cuda")
 
     # Forward pass without checkpointing

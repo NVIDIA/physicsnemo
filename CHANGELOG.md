@@ -18,17 +18,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
   by dispatching to the proper optimized library, and torch.compile compatible.
 - Added additional testing of the DoMINO datapipe.
+- Examples: added a new example for full-waveform inversion using diffusion
+  models. Accessible in `examples/geophysics/diffusion_fwi`.
 
 ### Changed
 
 - Migrated Stokes MGN example to PyTorch Geometric.
 - Migrated Lennard Jones example to PyTorch Geometric.
+- Migrated physicsnemo.utils.sdf.signed_distance_field to a static return,
+  torch-only interface.  It also now works on distributed meshes and input fields.
+- Refactored DiTBlock to be more modular
+- Added NATTEN 2D neighborhood attention backend for DiTBlock
+- Migrated blood flow example to PyTorch Geometric.
 
 ### Deprecated
 
 ### Removed
 
 ### Fixed
+
+- Set `skip_scale` to Python float in U-Net to ensure compilation works.
+- Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
 
 ### Security
 

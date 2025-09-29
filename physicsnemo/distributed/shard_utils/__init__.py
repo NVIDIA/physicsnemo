@@ -21,7 +21,12 @@ from physicsnemo.utils.version_check import check_module_requirements
 # Prevent importing this module if the minimum version of pytorch is not met.
 try:
     check_module_requirements("physicsnemo.distributed.shard_tensor")
+    SHARD_TENSOR_AVAILABLE = True
 
+except ImportError:
+    pass
+
+if SHARD_TENSOR_AVAILABLE:
     from physicsnemo.distributed.shard_tensor import ShardTensor
 
     def register_shard_wrappers():
@@ -32,6 +37,8 @@ try:
             sharded_select_backward_helper,
             sharded_select_helper,
         )
+        from .knn import knn_sharded_wrapper
+        from .mesh_ops import sharded_signed_distance_field_wrapper
 
         # Currently disabled until wrapt is removed
         # from .natten_patches import na2d_wrapper
@@ -40,6 +47,3 @@ try:
         from .pooling_patches import generic_avg_pool_nd_wrapper
         from .unary_ops import unsqueeze_wrapper
         from .unpooling_patches import generic_interpolate_wrapper
-
-except ImportError:
-    pass

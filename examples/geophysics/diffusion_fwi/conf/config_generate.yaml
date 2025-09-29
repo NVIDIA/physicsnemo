@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Model configuration
+model:
+  # Path to checkpoint file for the diffusion model
+  checkpoint_path: <path_to_checkpoint>
+  
+# Dataset configuration
+dataset:
+  # Data directory that should contain a subdirectory "samples/"" and
+  # a file stats.json
+  directory: <path_to_dataset>
+  # Variables in the velocity model.
+  x_vars: ["vp", "vs", "rho"]
+  # Variables in the seismic data.
+  y_vars: ["vx", "vz"]
+  # Spatial resolution [depth, width] of the velocity model.
+  # Note: if velocity models from the dataset are at a
+  # different resolution, interpolation is performed to match 'x_resolution'.
+  x_resolution: [80, 80]
+  # Spatial resolution [time steps, # receivers along width] of the seismic
+  # data. The second dimension should be equal to the width of the velocity
+  # model.
+  y_resolution: [1000, 80]
+  # Number of shots/sources in each sample
+  nb_shots: 5
+  # Number of workers for data loading
+  num_workers: 4
+
+# Generation configuration
+generation:
+  # Global random seed for reproducibility
+  global_seed: 0
+  # Number of input samples from the dataset (seismic observations) to process
+  num_samples: 3
+  # Number of ensembles to generate per input. The total number of samples
+  # generated will be num_samples * num_ensembles.
+  num_ensembles: 16
+  # Number of seeds to process per batch. Defines the effective batch size per
+  # device.
+  seed_batch_size: 2
+  # Sampler configuration
+  sampler:
+    # Number of inverse diffusion steps for the sampler
+    num_steps: 20
+    # Minimum noise level for the sampler
+    sigma_min: 0.002
+    # Maximum noise level for the sampler
+    sigma_max: 80.0
+    # Whether to use physics-informed guidance for the sampler
+    physics_informed: true
+    # Physics-informed guidance configuration (only used if physics_informed is
+    # true)
+    physics_informed_guidance:
+      # Standard deviation of measurement noise
+      std: 0.01
+      # Gamma scaling parameter for the guidance, depends on the covariance of
+      # the prior P(x)
+      gamma: 0.01
+      # Strength of the guidance (multiplier for the guidance term)
+      scale: 0.1
+      # Noise level exponent for the guidance scaling
+      power: 2.0
+      # Order of the norm used to compute the error in the guidance term
+      norm_ord: 1
+      # Whether to normalize the guidance term by its magnitude
+      magnitude_scaling: true
+      # Frequency of the source in the physics-informed guidance term. Should
+      # be consistent with the frequency that is used to generate the seismic
+      # observations.
+      source_frequency: 15
+      # Physical range constraints for velocity model parameters.
+      # When null, defaults to [0, inf] (no constraints).
+      # Format: [min_value, max_value]. Providing these ranges may improve
+      # stability of the sampling procedure.
+      vp_range: null  # P-wave velocity range (m/s), e.g., [1500, 6000]
+      vs_range: null  # S-wave velocity range (m/s), e.g., [800, 3500]
+      rho_range: null  # Density range (kg/m³), e.g., [1000, 3000]
+      # Clip scaled score likelihood to given range. By default, the sclaled
+      # score is not clipped. Should typically of order [-1, 1]. Clipping may
+      # improve stability of the sampling procedure.
+      score_clip_range: null  # e.g., [-1, 1]
+
+# I/O configuration
+io:
+  # Output directory
+  output_dir: "./outputs_generate"
+
+# Wandb configuration
+wandb:
+  # "online", "offline", or "disabled"
+  mode: "offline"
+  # Directory to save wandb logs
+  results_dir: "./wandb/"
+  # Entity (username or team name) for Weights & Biases
+  entity: <wandb_entity_name>
+  # Wandb ID to resume from an existing run. Specify the run of the training
+  # run to resume from. If null, a new run will be created.
+  wandb_id: null
+ 

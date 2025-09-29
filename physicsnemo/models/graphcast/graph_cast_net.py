@@ -17,7 +17,7 @@
 import logging
 import warnings
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import torch
 from torch import Tensor
@@ -221,6 +221,8 @@ class GraphCastNet(Module):
         which the group is distributed or only on group_rank 0. This can be helpful
         for computing the loss using global targets only on a single rank which can
         avoid either having to distribute the computation of a loss function.
+    graph_backend : str, default="pyg"
+        Backend to use for the graph. Available options are "dgl" and "pyg".
 
     Note
     ----
@@ -273,6 +275,7 @@ class GraphCastNet(Module):
         global_features_on_rank_0: bool = False,
         produce_aggregated_output: bool = True,
         produce_aggregated_output_on_all_ranks: bool = True,
+        graph_backend: Literal["dgl", "pyg"] = "pyg",
     ):
         super().__init__(meta=MetaData())
 
@@ -310,22 +313,43 @@ class GraphCastNet(Module):
         activation_fn = get_activation(activation_fn)
 
         # construct the graph
-        self.graph = Graph(self.lat_lon_grid, mesh_level, multimesh, khop_neighbors)
+        self.graph = Graph(
+            self.lat_lon_grid,
+            mesh_level,
+            multimesh,
+            khop_neighbors,
+            backend=graph_backend,
+        )
 
         self.mesh_graph, self.attn_mask = self.graph.create_mesh_graph(verbose=False)
         self.g2m_graph = self.graph.create_g2m_graph(verbose=False)
         self.m2g_graph = self.graph.create_m2g_graph(verbose=False)
 
-        self.g2m_edata = self.g2m_graph.edata["x"]
-        self.m2g_edata = self.m2g_graph.edata["x"]
-        self.mesh_ndata = self.mesh_graph.ndata["x"]
-        if self.processor_type == "MessagePassing":
-            self.mesh_edata = self.mesh_graph.edata["x"]
-        elif self.processor_type == "GraphTransformer":
-            # Dummy tensor to avoid breaking the API
-            self.mesh_edata = torch.zeros((1, input_dim_edges))
+        # Handle data access based on backend
+        if graph_backend == "dgl":
+            self.g2m_edata = self.g2m_graph.edata["x"]
+            self.m2g_edata = self.m2g_graph.edata["x"]
+            self.mesh_ndata = self.mesh_graph.ndata["x"]
+            if self.processor_type == "MessagePassing":
+                self.mesh_edata = self.mesh_graph.edata["x"]
+            elif self.processor_type == "GraphTransformer":
+                # Dummy tensor to avoid breaking the API.
+                self.mesh_edata = torch.zeros((1, input_dim_edges))
+            else:
+                raise ValueError(f"Invalid processor type {processor_type}")
+        elif graph_backend == "pyg":
+            self.g2m_edata = self.g2m_graph.edge_attr
+            self.m2g_edata = self.m2g_graph.edge_attr
+            self.mesh_ndata = self.mesh_graph.x
+            if self.processor_type == "MessagePassing":
+                self.mesh_edata = self.mesh_graph.edge_attr
+            elif self.processor_type == "GraphTransformer":
+                # Dummy tensor to avoid breaking the API
+                self.mesh_edata = torch.zeros((1, input_dim_edges))
+            else:
+                raise ValueError(f"Invalid processor type {processor_type}")
         else:
-            raise ValueError(f"Invalid processor type {processor_type}")
+            raise ValueError(f"Unsupported graph backend: {graph_backend}")
 
         if use_cugraphops_encoder or self.is_distributed:
             kwargs = {}

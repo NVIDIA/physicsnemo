@@ -1,0 +1,4 @@
+hydra-core>=1.2.0
+omegaconf>=2.3.0
+wandb>=0.13.7
+deepwave>=0.0.21

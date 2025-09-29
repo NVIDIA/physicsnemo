@@ -70,9 +70,9 @@ class DiT(Module):
         The number of attention heads. Defaults to 8.
     mlp_ratio (float, optional):
         The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-    attention_backbone (str, optional):
+    attention_backend (str, optional):
         If 'timm' uses Attention from timm. If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'transformer_engine'.
-    layernorm_backbone (str, optional):
+    layernorm_backend (str, optional):
         If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
     condition_dim (int, optional):
         Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
@@ -124,8 +124,8 @@ class DiT(Module):
         depth: int = 12,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        attention_backbone: Literal["timm", "transformer_engine"] = "transformer_engine",
-        layernorm_backbone: Literal["apex", "torch"] = "torch",
+        attention_backend: Literal["timm", "transformer_engine"] = "transformer_engine",
+        layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
         dit_initialization: Optional[int] = True,
     ):
@@ -174,8 +174,8 @@ class DiT(Module):
                 DiTBlock(
                     hidden_size,
                     num_heads,
-                    attention_backbone,
-                    layernorm_backbone,
+                    attention_backend,
+                    layernorm_backend,
                     mlp_ratio=mlp_ratio,
                 )
                 for _ in range(depth)
@@ -184,7 +184,7 @@ class DiT(Module):
         self.proj_layer = ProjLayer(
             hidden_size,
             self.patch_size[0] * self.patch_size[1] * self.out_channels,
-            layernorm_backbone,
+            layernorm_backend,
         )
         if dit_initialization:
             self.initialize_weights()
