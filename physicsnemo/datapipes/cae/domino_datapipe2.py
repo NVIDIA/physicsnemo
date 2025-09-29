@@ -17,7 +17,7 @@
 """
 This code provides the datapipe for reading the processed npy files,
 generating multi-res grids, calculating signed distance fields,
-positional encodings, sampling random points in the volume and on surface,
+sampling random points in the volume and on surface,
 normalizing fields and returning the output tensors as a dictionary.
 
 This datapipe also non-dimensionalizes the fields, so the order in which the variables should
@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torch.cuda.nvtx as nvtx
 from omegaconf import DictConfig
+from torch.distributed.tensor.placement_types import Replicate
 from torch.utils.data import Dataset
 
 from physicsnemo.datapipes.cae.drivaer_ml_dataset import (
@@ -41,9 +42,9 @@ from physicsnemo.datapipes.cae.drivaer_ml_dataset import (
     compute_mean_std_min_max,
 )
 from physicsnemo.distributed import DistributedManager
+from physicsnemo.distributed.shard_tensor import ShardTensor, scatter_tensor
 from physicsnemo.utils.domino.utils import (
     calculate_center_of_mass,
-    calculate_normal_positional_encoding,
     create_grid,
     get_filenames,
     normalize,
@@ -77,8 +78,6 @@ class DoMINODataConfig:
         surface_variables: (Surface specific) Names of surface variables.
         surface_points_sample: (Surface specific) Number of surface points to sample per batch.
         num_surface_neighbors: (Surface specific) Number of surface neighbors to consider for nearest neighbors approach.
-        resample_surfaces: (Surface specific) Whether to resample the surface before kdtree/knn. Not available if caching.
-        resampling_points: (Surface specific) Number of points to resample the surface to.
         surface_sampling_algorithm: (Surface specific) Algorithm to use for surface sampling ("area_weighted" or "random").
         surface_factors: (Surface specific) Non-dimensionalization factors for surface variables.
             If set, and scaling_type is:
@@ -111,10 +110,6 @@ class DoMINODataConfig:
             - volume.points_sample
         geom_points_sample: Number of STL points sampled per batch.
             Independent of volume.points_sample and surface.points_sample.
-        positional_encoding: Whether to use positional encoding. Affects the calculation of:
-            - pos_volume_closest
-            - pos_volume_center_of_mass
-            - pos_surface_centter_of_mass
         scaling_type: Scaling type for volume variables.
             If used, will rescale the volume_fields and surface fields outputs.
             Requires volume.factor and surface.factor to be set.
@@ -136,8 +131,6 @@ class DoMINODataConfig:
     surface_variables: Optional[Sequence] = ("pMean", "wallShearStress")
     surface_points_sample: int = 1024
     num_surface_neighbors: int = 11
-    resample_surfaces: bool = False
-    resampling_points: int = 1_000_000
     surface_sampling_algorithm: str = Literal["area_weighted", "random"]
     surface_factors: Optional[Sequence] = None
     bounding_box_dims_surf: Optional[Union[BoundingBox, Sequence]] = None
@@ -153,7 +146,6 @@ class DoMINODataConfig:
     sample_in_bbox: bool = False
     sampling: bool = False
     geom_points_sample: int = 300000
-    positional_encoding: bool = False
     scaling_type: Optional[Literal["min_max_scaling", "mean_std_scaling"]] = None
     compute_scaling_factors: bool = False
     caching: bool = False
@@ -180,8 +172,6 @@ class DoMINODataConfig:
                 raise ValueError("Sampling should be False for caching")
             if self.compute_scaling_factors:
                 raise ValueError("Compute scaling factors should be False for caching")
-            if self.resample_surfaces:
-                raise ValueError("Resample surface should be False for caching")
 
         if self.phase not in [
             "train",
@@ -202,7 +192,8 @@ class DoMINODataConfig:
 
 
 ##### TODO
-# - check the bounding box protocol works
+# - The SDF normalization here is based on using a normalized mesh and
+#   a normalized coordinate.  The alternate method is to normalize to the min/max of the grid.
 
 
 class DoMINODataPipe(Dataset):
@@ -373,6 +364,7 @@ class DoMINODataPipe(Dataset):
 
         if self.config.sampling:
             geometry_points = self.config.geom_points_sample
+
             geometry_coordinates_sampled, idx_geometry = shuffle_array(
                 stl_vertices, geometry_points
             )
@@ -417,23 +409,6 @@ class DoMINODataPipe(Dataset):
             surface_fields = surface_fields[idx]
 
         ########################################################################
-        # Surface resampling ...
-        ########################################################################
-        if self.config.resample_surfaces:
-            if self.config.resampling_points > surface_coordinates.shape[0]:
-                resampling_points = surface_coordinates.shape[0]
-            else:
-                resampling_points = self.config.resampling_points
-
-            surface_coordinates, idx_s = shuffle_array(
-                surface_coordinates, resampling_points
-            )
-            surface_normals = surface_normals[idx_s]
-            surface_sizes = surface_sizes[idx_s]
-            if surface_fields is not None:
-                surface_fields = surface_fields[idx_s]
-
-        ########################################################################
         # Reject surface points outside of the Bounding Box
         # NOTE - this is using the VOLUME bounding box!
         ########################################################################
@@ -449,19 +424,6 @@ class DoMINODataPipe(Dataset):
             surface_sizes = surface_sizes[ids_in_bbox]
             if surface_fields is not None:
                 surface_fields = surface_fields[ids_in_bbox]
-
-        # Compute the positional encoding before sampling
-        if self.config.positional_encoding:
-            dx, dy, dz = (
-                (s_max[0] - s_min[0]) / nx,
-                (s_max[1] - s_min[1]) / ny,
-                (s_max[2] - s_min[2]) / nz,
-            )
-            pos_normals_com_surface = calculate_normal_positional_encoding(
-                surface_coordinates, center_of_mass, cell_dimensions=[dx, dy, dz]
-            )
-        else:
-            pos_normals_com_surface = surface_coordinates - center_of_mass
 
         ########################################################################
         # Perform Down sampling of the surface fields.
@@ -496,7 +458,7 @@ class DoMINODataPipe(Dataset):
             # Select out the sampled points for non-neighbor arrays:
             if surface_fields is not None:
                 surface_fields = surface_fields[idx_surface]
-            pos_normals_com_surface = pos_normals_com_surface[idx_surface]
+
             # Subsample the normals and sizes:
             surface_normals = surface_normals[idx_surface]
             surface_sizes = surface_sizes[idx_surface]
@@ -526,6 +488,10 @@ class DoMINODataPipe(Dataset):
             surf_grid = normalize(surf_grid, s_max, s_min)
             surface_coordinates = normalize(surface_coordinates, s_max, s_min)
             surface_neighbors = normalize(surface_neighbors, s_max, s_min)
+            # Make sure to normalize the center of mass for the normals_com_surface calc
+            center_of_mass = normalize(center_of_mass, s_max, s_min)
+
+        pos_normals_com_surface = surface_coordinates - center_of_mass
 
         ########################################################################
         # Apply scaling to the targets, if desired:
@@ -691,26 +657,13 @@ class DoMINODataPipe(Dataset):
         sdf_node_closest_point: torch.Tensor,
         center_of_mass: torch.Tensor,
     ):
-        nx, ny, nz = self.config.grid_resolution
+        if self.config.normalize_coordinates:
+            volume_coordinates = normalize(volume_coordinates, c_max, c_min)
+            sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
+            center_of_mass = normalize(center_of_mass, c_max, c_min)
 
-        dx, dy, dz = (
-            (c_max[0] - c_min[0]) / nx,
-            (c_max[1] - c_min[1]) / ny,
-            (c_max[2] - c_min[2]) / nz,
-        )
-
-        if self.config.positional_encoding:
-            pos_normals_closest_vol = calculate_normal_positional_encoding(
-                volume_coordinates,
-                sdf_node_closest_point,
-                cell_dimensions=[dx, dy, dz],
-            )
-            pos_normals_com_vol = calculate_normal_positional_encoding(
-                volume_coordinates, center_of_mass, cell_dimensions=[dx, dy, dz]
-            )
-        else:
-            pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
-            pos_normals_com_vol = volume_coordinates - center_of_mass
+        pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
+        pos_normals_com_vol = volume_coordinates - center_of_mass
 
         return pos_normals_closest_vol, pos_normals_com_vol
 
@@ -728,9 +681,50 @@ class DoMINODataPipe(Dataset):
 
         # This function gets information about the surface scale,
         # and decides what the surface grid will be:
+
+        stl_coordinates = data_dict["stl_coordinates"]
+
         s_min, s_max, surf_grid = self.compute_stl_scaling_and_surface_grids(
-            data_dict["stl_coordinates"]
+            stl_coordinates
         )
+
+        if isinstance(stl_coordinates, ShardTensor):
+            mesh = stl_coordinates._spec.mesh
+            # Then, replicate the bounding box along the mesh if present.
+            s_max = scatter_tensor(
+                s_max,
+                0,
+                mesh=mesh,
+                placements=[
+                    Replicate(),
+                ],
+                global_shape=s_max.shape,
+                dtype=s_max.dtype,
+                requires_grad=False,
+            )
+            s_min = scatter_tensor(
+                s_min,
+                0,
+                mesh=mesh,
+                placements=[
+                    Replicate(),
+                ],
+                global_shape=s_min.shape,
+                dtype=s_min.dtype,
+                requires_grad=False,
+            )
+            surf_grid = scatter_tensor(
+                surf_grid,
+                0,
+                mesh=mesh,
+                placements=[
+                    Replicate(),
+                ],
+                global_shape=surf_grid.shape,
+                dtype=surf_grid.dtype,
+                requires_grad=False,
+            )
+
         return_dict["surf_grid"] = surf_grid
 
         # We always need to calculate the SDF on the surface grid:
@@ -1203,7 +1197,6 @@ def create_domino_dataset(
             volume_points_sample=cfg.model.volume_points_sample,
             surface_points_sample=cfg.model.surface_points_sample,
             geom_points_sample=cfg.model.geom_points_sample,
-            positional_encoding=cfg.model.positional_encoding,
             volume_factors=vol_factors,
             surface_factors=surf_factors,
             scaling_type=cfg.model.normalization,
@@ -1211,8 +1204,6 @@ def create_domino_dataset(
             bounding_box_dims=cfg.data.bounding_box,
             bounding_box_dims_surf=cfg.data.bounding_box_surface,
             num_surface_neighbors=cfg.model.num_neighbors_surface,
-            resample_surfaces=cfg.model.resampling_surface_mesh.resample,
-            resampling_points=cfg.model.resampling_surface_mesh.points,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
             **overrides,
         )
