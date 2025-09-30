@@ -34,7 +34,8 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |Use case|Model|Transient|
 | --- | --- |  --- |
 |[Vortex Shedding](./cfd/vortex_shedding_mgn/)|MeshGraphNet|YES|
-|[Drag prediction - External Aero](./cfd/external_aerodynamics/)|MeshGraphNet, UNet, DoMINO, FigConvNet|NO|
+|[Drag prediction - External Aero](./cfd/external_aerodynamics/)|MeshGraphNet, UNet, DoMINO, FigConvNet, Transolver|NO|
+|[Drag prediction - External Aero - Mixture of Experts](./cfd/external_aerodynamics/)|MoE Model|NO|
 |[Navier-Stokes Flow](./cfd/navier_stokes_rnn/)|RNN|YES|
 |[Gray-Scott System](./cfd/gray_scott_rnn/)|RNN|YES|
 |[Lagrangian Fluid Flow](./cfd/lagrangian_mgn/)|MeshGraphNet|YES|
@@ -49,6 +50,8 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Shallow Water Equations using Distributed GNNs](./cfd/swe_distributed_gnn/)|GraphCast|YES|
 |[Vortex Shedding with Temporal Attention](./cfd/vortex_shedding_mesh_reduced/)|MeshGraphNet|YES|
 |[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
+|[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|Denoising Diffusion Probablistic Model|YES|
+|[Pre-trained DPOT for Navier-Stokes*](./cfd/navier_stokes_dpot/)|Denoising Operator Transformer|YES|
 
 ### Weather
 
@@ -64,12 +67,15 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Unified Recipe for training several Global Weather Forecasting models](./weather/unified_recipe/)|AFNO, FCN-SFNO, GraphCast|
 |[Generative Correction Diffusion Model for Km-scale Atmospheric Downscaling](./weather/corrdiff/)|CorrDiff|
 |[StormCast: Generative Diffusion Model for Km-scale, Convection allowing Model Emulation](./weather/stormcast/)|StormCast|
+|[Medium-range global weather forecast using Mixture of Experts](./weather/mixture_of_experts/)|MoE Model|
+|[Generative Data Assimilation of Sparse Weather Observations](./weather/regen/)|Denoising Diffusion Model|
+|[Flood Forecasting](./weather/flood_modeling/)|GNN + KAN|
 
-### Generative
+### Structural Mechanics
 
 |Use case|Model|
 | --- | --- |
-|[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|flow_reconstruction_diffusion|
+|[Deforming Plate](./structural_mechanics/deforming_plate/)|MeshGraphNet|
 
 ### Healthcare
 
@@ -90,9 +96,17 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 | --- | --- |
 |[Force Prediciton for Lennard Jones system](./molecular_dynamics/lennard_jones/)|MeshGraphNet|
 
+### Geophysics
+
 |Use case|Model|
 | --- | --- |
 |[Diffusion model for full-waveform inversion](./geophysics/diffusion_fwi/)|UNet, Global Filter Net|
+
+### Generative
+
+|Use case|Model|
+| --- | --- |
+|[TopoDiff*](./generative/topodiff)|Conditional diffusion-model|
 
 ## Additional examples
 
