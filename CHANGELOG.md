@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored DiTBlock to be more modular
 - Added NATTEN 2D neighborhood attention backend for DiTBlock
 - Migrated blood flow example to PyTorch Geometric.
+- Migrated HydroGraphNet example to PyTorch Geometric.
 
 ### Deprecated
 
