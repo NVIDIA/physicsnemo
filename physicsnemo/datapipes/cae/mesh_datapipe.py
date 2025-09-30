@@ -81,10 +81,10 @@ class MeshDatapipe(Datapipe):
     process_rank : int, optional
         Rank ID of local process, by default 0
     world_size : int, optional
-        Number of trainiang processes, by default 1
+        Number of training processes, by default 1
     cache_data : False, optional
         Whether to cache the data in memory for faster access in subsequent epochs, by default False
-    Parallel: True, optional 
+    Parallel: True, optional
         Setting parallel=True for an external_source node indicates to the pipeline to run the source in Python worker processes started by DALI.
     """
 

@@ -252,7 +252,6 @@ def main(cfg: DictConfig) -> None:
             "train", epoch=epoch, num_mini_batch=len(dataset), epoch_alert_freq=1
         ) as log:
             for i, data in enumerate(dataset):
-                print(f"Epoch {epoch}, Mini-batch {i}")
                 optimizer.zero_grad()
                 bs, _, chans = data[0]["x"].shape
 
