@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Set `skip_scale` to Python float in U-Net to ensure compilation works.
 - Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
+- Fixed the issue with incorrect handling of files with consecutive runs of
+  `combine_stl_solids.py` in the X-MGN recipe.
 
 ### Security
 
