@@ -184,10 +184,6 @@ def train_epoch(
     with Profiler():
         io_start_time = time.perf_counter()
         for i_batch, sampled_batched in enumerate(dataloader):
-            for key in sampled_batched.keys():
-                print(
-                    f"{key} has shape {sampled_batched[key].shape} and autograd fn {sampled_batched[key].autograd_fn if hasattr(sampled_batched[key], 'autograd_fn') else None}"
-                )
             io_end_time = time.perf_counter()
             if add_physics_loss:
                 autocast_enabled = False
