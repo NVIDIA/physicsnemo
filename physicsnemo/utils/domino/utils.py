@@ -442,7 +442,7 @@ def shuffle_array(
 
     # If there are no weights, use uniform weights:
     if weights is None:
-        weights = torch.ones_like(points, device=points.device)
+        weights = torch.ones(points.shape[0], device=points.device)
 
     # Using torch multinomial for this.
     # Multinomial can't work with more than 2^24 input points.

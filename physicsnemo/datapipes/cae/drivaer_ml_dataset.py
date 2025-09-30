@@ -669,7 +669,11 @@ class DrivaerMLDataset:
             raise NotADirectoryError(f"Data directory {data_dir} is not a directory")
 
         self._keys_to_read = keys_to_read
-        self._keys_to_read_if_available = keys_to_read_if_available
+
+        # Make sure the optional keys are on the right device:
+        self._keys_to_read_if_available = {
+            k: v.to(output_device) for k, v in keys_to_read_if_available.items()
+        }
 
         self.file_reader, self._filenames = self._infer_file_type_and_filenames(
             data_dir

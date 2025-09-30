@@ -18,7 +18,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional, Sequence
 
 import numpy as np
 import pytest
@@ -32,6 +32,7 @@ from physicsnemo.datapipes.cae.domino_datapipe2 import (
     DoMINODataConfig,
     DoMINODataPipe,
 )
+from physicsnemo.datapipes.cae.drivaer_ml_dataset import DrivaerMLDataset
 
 Tensor = torch.Tensor
 
@@ -242,7 +243,22 @@ def bounding_boxes():
     }
 
 
-def create_basic_dataset(data_dir, model_type, **kwargs):
+def create_basic_dataset(
+    data_dir,
+    model_type,
+    gpu_preprocessing: bool = False,
+    gpu_output: bool = False,
+    normalize_coordinates: bool = False,
+    sample_in_bbox: bool = False,
+    sampling: bool = False,
+    volume_points_sample: int = 1234,
+    surface_points_sample: int = 1234,
+    surface_sampling_algorithm: str = "random",
+    caching: bool = False,
+    scaling_type: Optional[Literal["min_max_scaling", "mean_std_scaling"]] = None,
+    volume_factors: Optional[Sequence] = None,
+    surface_factors: Optional[Sequence] = None,
+):
     """Helper function to create a basic DoMINODataPipe with default settings."""
 
     # assert model_type in ["volume", "surface", "combined"]
@@ -251,35 +267,72 @@ def create_basic_dataset(data_dir, model_type, **kwargs):
 
     bounding_box = bounding_boxes()
 
+    keys_to_read = [
+        "stl_coordinates",
+        "stl_faces",
+        "stl_centers",
+        "stl_areas",
+    ]
+
+    if model_type == "volume" or model_type == "combined":
+        keys_to_read += [
+            "volume_mesh_centers",
+            "volume_fields",
+        ]
+
+    if model_type == "surface" or model_type == "combined":
+        keys_to_read += [
+            "surface_mesh_centers",
+            "surface_areas",
+            "surface_normals",
+            "surface_fields",
+        ]
+
+    keys_to_read_if_available = {
+        "global_params_values": torch.tensor([1.225, 10.0]),
+        "global_params_reference": torch.tensor([1.225, 10.0]),
+    }
+
+    dataset = DrivaerMLDataset(
+        data_dir=input_path,
+        keys_to_read=keys_to_read,
+        keys_to_read_if_available=keys_to_read_if_available,
+        output_device=torch.device("cuda")
+        if gpu_preprocessing
+        else torch.device("cpu"),
+        preload_depth=0,
+        pin_memory=False,
+        device_mesh=None,
+        placements=None,
+    )
+
     default_kwargs = {
         "phase": "test",
         "grid_resolution": [64, 64, 64],
-        "volume_points_sample": 1234,
-        "surface_points_sample": 1234,
-        "geom_points_sample": 2345,
+        "volume_points_sample": volume_points_sample,
+        "surface_points_sample": surface_points_sample,
+        "geom_points_sample": 500,
         "num_surface_neighbors": 5,
         "bounding_box_dims": bounding_box["volume"],
         "bounding_box_dims_surf": bounding_box["surface"],
-        "normalize_coordinates": True,
-        "sampling": False,
-        "sample_in_bbox": False,
-        "positional_encoding": False,
-        "scaling_type": None,
-        "volume_factors": None,
-        "surface_factors": None,
-        "caching": False,
-        "compute_scaling_factors": False,
-        "gpu_preprocessing": True,
-        "gpu_output": True,
+        "normalize_coordinates": normalize_coordinates,
+        "sampling": sampling,
+        "sample_in_bbox": sample_in_bbox,
+        "scaling_type": scaling_type,
+        "volume_factors": volume_factors,
+        "surface_factors": surface_factors,
+        "caching": caching,
+        "gpu_preprocessing": gpu_preprocessing,
+        "gpu_output": gpu_output,
+        "surface_sampling_algorithm": surface_sampling_algorithm,
     }
 
-    default_kwargs.update(kwargs)
-
-    print(f"kwargs: {default_kwargs}")
-
-    return DoMINODataPipe(
+    pipe = DoMINODataPipe(
         input_path=input_path, model_type=model_type, **default_kwargs
     )
+
+    pipe.set_dataset(dataset)
+    return pipe
 
 
 def validate_sample_structure(sample, model_type, gpu_output):
@@ -287,7 +340,7 @@ def validate_sample_structure(sample, model_type, gpu_output):
     assert isinstance(sample, dict)
 
     # Common keys that should always be present
-    expected_keys = ["geometry_coordinates", "length_scale", "surface_min_max"]
+    expected_keys = ["geometry_coordinates"]
 
     # Model-specific keys
     volume_keys = [
@@ -310,6 +363,9 @@ def validate_sample_structure(sample, model_type, gpu_output):
         expected_keys.extend(surface_keys)
 
     # Check that required keys are present and are torch tensors on correct device
+    for key in expected_keys:
+        print(f"Got key: {key} on device: {sample[key].device.type}")
+
     for key in expected_keys:
         if key in sample:  # Some keys may be None if compute_scaling_factors=True
             if sample[key] is not None:
@@ -335,7 +391,13 @@ def test_domino_datapipe_core(
 
     data_dir = request.getfixturevalue(data_dir)
     dataset = create_basic_dataset(
-        data_dir, model_type, gpu_preprocessing=gpu_preprocessing, gpu_output=gpu_output
+        data_dir,
+        model_type,
+        gpu_preprocessing=gpu_preprocessing,
+        gpu_output=gpu_output,
+        normalize_coordinates=False,
+        sample_in_bbox=False,
+        sampling=False,
     )
 
     assert len(dataset) > 0
@@ -356,8 +418,10 @@ def test_domino_datapipe_coordinate_normalization(
         zarr_dataset,
         model_type,
         gpu_preprocessing=True,
+        gpu_output=True,
         normalize_coordinates=normalize_coordinates,
         sample_in_bbox=sample_in_bbox,
+        sampling=False,
     )
 
     sample = dataset[0]
@@ -457,17 +521,26 @@ def test_domino_datapipe_coordinate_normalization(
 def test_domino_datapipe_sampling(zarr_dataset, model_type, sampling, pytestconfig):
     """Test point sampling functionality."""
     sample_points = 4321
+
+    use_cuda = torch.cuda.is_available()
+
     dataset = create_basic_dataset(
         zarr_dataset,
         model_type,
-        gpu_preprocessing=False,
+        gpu_preprocessing=use_cuda,
+        gpu_output=use_cuda,
+        normalize_coordinates=False,
+        sample_in_bbox=False,
         sampling=sampling,
         volume_points_sample=sample_points,
         surface_points_sample=sample_points,
     )
 
     sample = dataset[0]
-    validate_sample_structure(sample, model_type, gpu_output=True)
+    validate_sample_structure(sample, model_type, gpu_output=use_cuda)
+
+    for key in sample:
+        print(f"sample[{key}].shape: {sample[key].shape}")
 
     if model_type in ["volume", "combined"]:
         for key in ["volume_mesh_centers", "volume_fields"]:
@@ -502,40 +575,12 @@ def test_domino_datapipe_sampling(zarr_dataset, model_type, sampling, pytestconf
 
 
 @import_or_fail(["warp", "cupy", "cuml"])
-@pytest.mark.parametrize("model_type", ["combined"])
-@pytest.mark.parametrize(
-    "positional_encoding",
-    [
-        True,
-    ],
-)
-def test_domino_datapipe_positional_encoding(
-    zarr_dataset, model_type, positional_encoding, pytestconfig
-):
-    """Test positional encoding functionality."""
-    dataset = create_basic_dataset(
-        zarr_dataset,
-        model_type,
-        gpu_preprocessing=False,
-        positional_encoding=positional_encoding,
-    )
-
-    sample = dataset[0]
-    validate_sample_structure(sample, model_type, gpu_output=True)
-
-    # Check for positional encoding keys
-    if positional_encoding:
-        pos_keys = ["pos_volume_closest", "pos_volume_center_of_mass"]
-        for key in pos_keys:
-            if key in sample:
-                assert sample[key] is not None
-
-
-@import_or_fail(["warp", "cupy", "cuml"])
 @pytest.mark.parametrize("model_type", ["volume"])
 @pytest.mark.parametrize("scaling_type", [None, "min_max_scaling", "mean_std_scaling"])
 def test_domino_datapipe_scaling(zarr_dataset, model_type, scaling_type, pytestconfig):
     """Test field scaling functionality."""
+    use_cuda = torch.cuda.is_available()
+
     if scaling_type == "min_max_scaling":
         volume_factors = [10.0, -10.0]  # [max, min]
     elif scaling_type == "mean_std_scaling":
@@ -546,13 +591,14 @@ def test_domino_datapipe_scaling(zarr_dataset, model_type, scaling_type, pytestc
     dataset = create_basic_dataset(
         zarr_dataset,
         model_type,
-        gpu_preprocessing=False,
+        gpu_preprocessing=use_cuda,
+        gpu_output=use_cuda,
         scaling_type=scaling_type,
         volume_factors=volume_factors,
     )
 
     sample = dataset[0]
-    validate_sample_structure(sample, model_type, gpu_output=True)
+    validate_sample_structure(sample, model_type, gpu_output=use_cuda)
 
 
 # Caching tests
@@ -560,18 +606,18 @@ def test_domino_datapipe_scaling(zarr_dataset, model_type, scaling_type, pytestc
 @pytest.mark.parametrize("model_type", ["volume"])
 def test_domino_datapipe_caching_config(zarr_dataset, model_type, pytestconfig):
     """Test DoMINODataPipe with caching=True configuration."""
+    use_cuda = torch.cuda.is_available()
     dataset = create_basic_dataset(
         zarr_dataset,
         model_type,
-        gpu_preprocessing=False,
+        gpu_preprocessing=use_cuda,
+        gpu_output=use_cuda,
         caching=True,
         sampling=False,  # Required for caching
-        compute_scaling_factors=False,  # Required for caching
-        resample_surfaces=False,  # Required for caching
     )
 
     sample = dataset[0]
-    validate_sample_structure(sample, model_type, gpu_output=True)
+    validate_sample_structure(sample, model_type, gpu_output=use_cuda)
 
 
 @import_or_fail(["warp", "cupy", "cuml"])
@@ -617,24 +663,16 @@ def test_cached_domino_dataset(zarr_dataset, tmp_path, pytestconfig):
 def test_domino_datapipe_invalid_caching_config(zarr_dataset, pytestconfig):
     """Test that invalid caching configurations raise appropriate errors."""
 
+    use_cuda = torch.cuda.is_available()
     # Test: caching=True with sampling=True should fail
     with pytest.raises(ValueError, match="Sampling should be False for caching"):
-        create_basic_dataset(zarr_dataset, "volume", caching=True, sampling=True)
-
-    # Test: caching=True with compute_scaling_factors=True should fail
-    with pytest.raises(
-        ValueError, match="Compute scaling factors should be False for caching"
-    ):
         create_basic_dataset(
-            zarr_dataset, "volume", caching=True, compute_scaling_factors=True
-        )
-
-    # Test: caching=True with resample_surfaces=True should fail
-    with pytest.raises(
-        ValueError, match="Resample surface should be False for caching"
-    ):
-        create_basic_dataset(
-            zarr_dataset, "volume", caching=True, resample_surfaces=True
+            zarr_dataset,
+            "volume",
+            caching=True,
+            sampling=True,
+            gpu_preprocessing=use_cuda,
+            gpu_output=use_cuda,
         )
 
 
@@ -661,12 +699,15 @@ def test_domino_datapipe_file_format_support(zarr_dataset, pytestconfig):
     """Test support for different file formats (.zarr, .npz, .npy)."""
     # This test assumes the data directory has files in these formats
     # If not available, we can mock the file reading
-    dataset = create_basic_dataset(zarr_dataset, "volume", gpu_preprocessing=False)
+    use_cuda = torch.cuda.is_available()
+    dataset = create_basic_dataset(
+        zarr_dataset, "volume", gpu_preprocessing=use_cuda, gpu_output=use_cuda
+    )
 
     # Just verify we can load at least one sample
     assert len(dataset) > 0
     sample = dataset[0]
-    validate_sample_structure(sample, "volume", gpu_output=True)
+    validate_sample_structure(sample, "volume", gpu_output=use_cuda)
 
 
 # Surface-specific tests (when GPU preprocessing issues are resolved)
@@ -676,10 +717,14 @@ def test_domino_datapipe_surface_sampling(
     zarr_dataset, surface_sampling_algorithm, pytestconfig
 ):
     """Test surface sampling algorithms."""
+
+    gpu = torch.cuda.is_available()
+
     dataset = create_basic_dataset(
         zarr_dataset,
         "surface",
-        gpu_preprocessing=False,  # Avoid known GPU issues
+        gpu_preprocessing=gpu,
+        gpu_output=gpu,
         sampling=True,
         surface_sampling_algorithm=surface_sampling_algorithm,
     )
