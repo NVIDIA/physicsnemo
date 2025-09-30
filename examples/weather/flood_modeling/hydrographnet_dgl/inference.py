@@ -43,7 +43,7 @@ from hydra.utils import to_absolute_path
 from physicsnemo.launch.utils import load_checkpoint
 
 # Import the dataset and model.
-from physicsnemo.datapipes.gnn.hydrographnet_dataset import HydroGraphDataset
+from physicsnemo.datapipes.gnn.hydrographnet_dataset_dgl import HydroGraphDataset
 from physicsnemo.models.meshgraphnet.meshgraphkan import MeshGraphKAN
 
 # For converting DGLGraph to networkx.
