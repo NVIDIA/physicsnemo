@@ -793,6 +793,9 @@ class DrivaerMLDataset:
 
         with torch.cuda.stream(self._data_loader_stream):
             for key in data.keys():
+                if data[key].device == self.output_device:
+                    result[key] = data[key]
+                    continue
                 if self.pin_memory:
                     result[key] = (
                         data[key].pin_memory().to(self.output_device, non_blocking=True)

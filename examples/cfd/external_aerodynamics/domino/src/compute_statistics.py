@@ -37,7 +37,7 @@ from omegaconf import DictConfig, OmegaConf
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
-from physicsnemo.datapipes.cae.domino_datapipe2 import compute_scaling_factors
+from physicsnemo.datapipes.cae.domino_datapipe import compute_scaling_factors
 from utils import ScalingFactors
 
 

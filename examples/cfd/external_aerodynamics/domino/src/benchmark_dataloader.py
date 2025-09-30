@@ -64,7 +64,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
-from physicsnemo.datapipes.cae.domino_datapipe2 import (
+from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
     compute_scaling_factors,
     create_domino_dataset,

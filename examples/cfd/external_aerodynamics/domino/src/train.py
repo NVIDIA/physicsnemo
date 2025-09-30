@@ -75,7 +75,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
-from physicsnemo.datapipes.cae.domino_datapipe2 import (
+from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
     create_domino_dataset,
 )
@@ -122,7 +122,7 @@ def validation_step(
         for i_batch, sample_batched in enumerate(dataloader):
             sampled_batched = dict_to_device(sample_batched, device)
 
-            with autocast("cuda", enabled=True):
+            with autocast("cuda", enabled=True, cache_enabled=False):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(
                         sampled_batched, return_volume_neighbors=True
@@ -184,12 +184,16 @@ def train_epoch(
     with Profiler():
         io_start_time = time.perf_counter()
         for i_batch, sampled_batched in enumerate(dataloader):
+            for key in sampled_batched.keys():
+                print(
+                    f"{key} has shape {sampled_batched[key].shape} and autograd fn {sampled_batched[key].autograd_fn if hasattr(sampled_batched[key], 'autograd_fn') else None}"
+                )
             io_end_time = time.perf_counter()
             if add_physics_loss:
                 autocast_enabled = False
             else:
                 autocast_enabled = True
-            with autocast("cuda", enabled=autocast_enabled):
+            with autocast("cuda", enabled=autocast_enabled, cache_enabled=False):
                 with nvtx.range("Model Forward Pass"):
                     if add_physics_loss:
                         prediction_vol, prediction_surf = model(
@@ -478,14 +482,15 @@ def main(cfg: DictConfig) -> None:
     # Load checkpoint if available
     ######################################################
 
-    init_epoch = load_checkpoint(
-        to_absolute_path(cfg.resume_dir),
-        models=model,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        scaler=scaler,
-        device=dist.device,
-    )
+    # init_epoch = load_checkpoint(
+    #     to_absolute_path(cfg.resume_dir),
+    #     models=model,
+    #     optimizer=optimizer,
+    #     scheduler=scheduler,
+    #     scaler=scaler,
+    #     device=dist.device,
+    # )
+    init_epoch = 0
 
     if init_epoch != 0:
         init_epoch += 1  # Start with the next epoch
@@ -529,7 +534,7 @@ def main(cfg: DictConfig) -> None:
         else:
             surface_scaling_loss = cfg.model.surf_loss_scaling
 
-        model.train(True)
+        # model.train(True)
         epoch_start_time = time.perf_counter()
         avg_loss = train_epoch(
             dataloader=train_dataloader,
