@@ -68,7 +68,8 @@ def process_directory(data_path, num_workers=16):
     tasks = []
     for root, _, files in os.walk(data_path):
         stl_files = [
-            f for f in files
+            f
+            for f in files
             if f.endswith(".stl") and not f.lower().endswith("_single_solid.stl")
         ]
         for stl_file in stl_files:
@@ -86,8 +87,6 @@ def process_directory(data_path, num_workers=16):
             unit="file",
         ):
             pass
-
-    
 
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
