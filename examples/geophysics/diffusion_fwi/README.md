@@ -49,19 +49,22 @@ hydro-carbon exploration:
 
 The goal of FWI is to reconstruct the velocity model $\mathbf{x}(r)$ from the
 entire set of seismic observations $\mathbf{y}$. To do so, standard FWI uses classical
-optimization techniques combined with the elastic wave equation, defined below.
+optimization techniques combined with the elastic wave equation, defined in
+Equation (1) below.
+
+$$
+\mathcal{A}_{\mathbf{x}} \lbrace \mathbf{u} \rbrace (r,t)=\dot{S}(t)\delta(r-r_s)
+$$
+
 
 ![Introduction to FWI](../../../docs/img/diffusion_fwi_intro.png)
 
-$$
-\mathcal{A}_{\mathbf{x}} \{\mathbf{u}\} (r, t) = \dot{S}(t)\,\delta(r-r_s)  \tag{1}
-$$
- where $\dot{S}(t)\,\delta(r-r_s)$ is the source at location $r_s$ with time
+ where $\dot{S}(t)\delta(r-r_s)$ is the source at location $r_s$ with time
  signal $\dot{S}(t)$, and $\mathcal{A}_{\mathbf{x}}$ is the elastic wave
  operator defined by:
 
  $$
-\mathcal{A}_{\mathbf{x}} \{\mathbf{u}\} = \rho\ \frac{\partial^{2}
+\mathcal{A}_{\mathbf{x}} \lbrace  \mathbf{u} \rbrace = \rho\ \frac{\partial^{2}
 \mathbf{u}}{\partial t^{2}} - \nabla \bigl[  \rho \bigl( V^2_P - 2
 V^2_S (\nabla \cdot \mathbf{u})  \bigr) \bigr] - \nabla \cdot \bigl[ \rho
 V^2_S \bigl( \nabla \mathbf{u} + \nabla \mathbf{u}^T \bigr) \bigr]
@@ -69,7 +72,7 @@ $$
 
 We denote $\mathcal{R} (\mathbf{x}, s)$ the solution operator associated to the
 wave equation $(1)$. This operator maps a velocity model $\mathbf{x}$ and a
-source $\dot{S}(t)\,\delta(r-r_s)$ to the solution of the PDE at the receiver
+source $\dot{S}(t)\delta(r-r_s)$ to the solution of the PDE at the receiver
 locations: it therefore provides a simulated seismic observation $\hat{y}_s$.
 
 FWI seeks to solve an inverse problem of finding the velocity model $\mathbf{x}$
@@ -78,8 +81,8 @@ uses classical optimization techniques to solve the following minimization
 problem:
 
 $$
-\mathbf{x}^* = \arg \min_{\mathbf{x}} \Phi(\mathbf{x}) = \sum_{s=1}^{S} \bigl\|
-\mathcal{R} (\mathbf{x}, s) - y_s \bigr\|_2^{2}
+\mathbf{x}^* = \arg \min_{\mathbf{x}} \Phi(\mathbf{x}) = \sum_{s=1}^{S} \lVert
+\mathcal{R} (\mathbf{x}, s) - y_s \rVert_2^{2}
 $$
 
 In realistic conditions (limited number of observations, limited resolution,
@@ -295,9 +298,9 @@ d \mathbf{x}_t = \left[ \mathbf{f} (\mathbf{x}_t, t) - g^2 (\mathbf{x}_t, t)
 (\mathbf{x}_t, t) d \mathbf{w}_t
 $$
 
-In this equation, $t$ is the diffusion time, and $\mathbf{f} (\mathbf{x}_t, t)$
-and $g (\mathbf{x}_t, t)$ are the drift and diffusion terms, respectively.
-$\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t | \mathbf{y})$ is the conditional
+In this equation, $t$ is the diffusion time, and $\mathbf{f}$
+and $g$ are the drift and diffusion terms, respectively.
+$\nabla_x \log p_t(\mathbf{x}_t | \mathbf{y})$ is the conditional
 score function previously learned during training, and $\mathbf{w}_t$ is a
 standard Wiener process. In this example, we adopt the [EDM
 framework](https://arxiv.org/abs/2206.00364) to solve this SDE and generate
@@ -355,10 +358,7 @@ reverse diffusion SDE is modified to account for a physics-informed guidance
 term:
 
 $$
-d \mathbf{x}_t = \left[ \mathbf{f} (\mathbf{x}_t, t) - g^2
-(\mathbf{x}_t, t) \left( \nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t | \mathbf{y})
-+ S_c \phi(\mathbf{x}_t, t) \right)\right] dt +
-g (\mathbf{x}_t, t) d \mathbf{w}_t
+d\mathbf{x}_t=\left[ \mathbf{f}(\mathbf{x}_t, t)-g^2(\mathbf{x}_t, t) \left( \nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t | \mathbf{y})+S_c \phi(\mathbf{x}_t, t) \right)\right] dt+g(\mathbf{x}_t, t) d\mathbf{w}_t
 $$
 
 In this equation, $\phi(\mathbf{x}_t, t)$ is the physics-informed guidance
@@ -366,10 +366,7 @@ term and $S_c$ is its strength, which can be used to modulate its influence.
 The guidance term $\phi(\mathbf{x}_t, t)$ is defined as the likelihood score:
 
 $$
-\phi(\mathbf{x}_t, t) = - \nabla_{\mathbf{x}_t} \log p_t(\mathbf{y} |
-\mathbf{x}_t) , \textrm{with } \mathbf{y} |
-\mathbf{x}_t \sim \mathcal{N} \left( \mathcal{R}( \hat{\mathbf{x}}_0
-(\mathbf{x}_t)), \Sigma \right)
+\phi(\mathbf{x}_t, t)=-\nabla_{\mathbf{x}_t} \log p_t(\mathbf{y} | \mathbf{x}_t),\textrm{with } \mathbf{y}|\mathbf{x}_t \sim \mathcal{N}\left(\mathcal{R}(\hat{\mathbf{x}}_0(\mathbf{x}_t)), \Sigma \right)
 $$
 
 where $\mathcal{R}$ is the solution operator associated to the wave equation
@@ -381,12 +378,12 @@ version](https://arxiv.org/abs/2506.22780) of the method introduced in
 [Score-based data assimilation
 (SDA)](https://proceedings.neurips.cc/paper_files/paper/2023/hash/7f7fa581cc8a1970a4332920cdf87395-Abstract-Conference.html).
 
->**Note:** The present approach is not true DPS, as the latter is usually based
->on an unconditional prior score $\nabla_{\mathbf{x}_t} \log p(\mathbf{x}_t)$,
->trained in an unsupervised manner.
->Instead we use an ad-hoc modification of DPS where we replace the unconditional
->prior score with a conditional score $\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t | \mathbf{y})$,
->trained in a supervised manner.
+**Note:** The present approach is not true DPS, as the latter is usually based
+on an unconditional prior score $\nabla_x \log p(\mathbf{x}_t)$,
+trained in an unsupervised manner.
+Instead we use an ad-hoc modification of DPS where we replace the unconditional
+prior score with a conditional score $\nabla_x \log p_t(\mathbf{x}_t | \mathbf{y})$,
+trained in a supervised manner.
 
 The `generate.py` script implements this sampling procedure by enabling it in
 the `conf/config_generate.yaml` file, or by using the following hydra overrides:
