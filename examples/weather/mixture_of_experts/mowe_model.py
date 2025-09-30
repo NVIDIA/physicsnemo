@@ -49,10 +49,10 @@ class MoWE(DiT):
         The number of attention heads. Defaults to 8.
     mlp_ratio (float, optional):
         The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-    attention_backbone (str, optional):
-        If 'timm' uses Attention from timm. If 'transformer_engine', uses MultiheadAttention from transformer_engine. Defaults to 'transformer_engine'.
-    layernorm_backbone (str, optional):
-        If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
+    attention_backend (str, optional):
+        Backend for the attention module in underlying DiT model. See physicsnemo.experimental.models.dit.DiT for more details.
+    layernorm_backend (str, optional):
+        Backend for the layer norm module in underlying DiT model. See physicsnemo.experimental.models.dit.DiT for more details.
     noise_dim (int, optional):
         Dimensionality of noise. If None, the model is deterministic. Defaults to None.
     return_probabilities (bool, optional):
@@ -120,10 +120,10 @@ class MoWE(DiT):
         depth: int = 12,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        attention_backbone: Literal[
-            "timm", "transformer_engine"
+        attention_backend: Literal[
+            "timm", "transformer_engine", "natten2d"
         ] = "transformer_engine",
-        layernorm_backbone: Literal["apex", "torch"] = "torch",
+        layernorm_backend: Literal["apex", "torch"] = "torch",
         noise_dim: Optional[int] = None,
         return_probabilities: bool = True,
         bias: bool = True,
@@ -151,8 +151,8 @@ class MoWE(DiT):
             depth=depth,
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
-            attention_backbone=attention_backbone,
-            layernorm_backbone=layernorm_backbone,
+            attention_backend=attention_backend,
+            layernorm_backend=layernorm_backend,
             condition_dim=noise_dim,
         )
         self.return_probabilities = return_probabilities
