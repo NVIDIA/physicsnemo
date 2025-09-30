@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Set `skip_scale` to Python float in U-Net to ensure compilation works.
 - Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
+- Fixed the `RuntimeError: Worker data receiving interrupted` error in the datacenter example.
 
 ### Security
 

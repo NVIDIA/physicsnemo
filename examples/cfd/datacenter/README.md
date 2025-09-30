@@ -46,6 +46,8 @@ it using their own geometries and boundary conditions.
 
 ## Training
 
+**Note:** A minimum GPU memory of 80GB is required for this example.
+
 A UNet model is used in this problem. The hex-dominant mesh used in this problem
 makes this model an attractive choice offering good speed and accuracy. Since
 the model is primarily trained to capture the changes in geometry, we use the
