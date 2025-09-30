@@ -38,27 +38,8 @@ import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
-
-def srt2bool(val: str):
-    if isinstance(val, bool):
-        return val
-    if val.lower() in ["true", "1", "yes", "y"]:
-        return True
-    elif val.lower() in ["false", "0", "no", "n"]:
-        return False
-    else:
-        raise ValueError(f"Invalid boolean value: {val}")
-
-
-DISABLE_RMM = srt2bool(os.environ.get("DOMINO_DISABLE_RMM", False))
-
-if not DISABLE_RMM:
-    import rmm
-    from rmm.allocators.torch import rmm_torch_allocator
-    import torch
-
-    rmm.reinitialize(pool_allocator=True)
-    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+# This will set up the cupy-ecosystem and pytorch to share memory pools
+from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
 import torch.distributed as dist
@@ -477,16 +458,14 @@ def main(cfg: DictConfig) -> None:
     ######################################################
     # Load checkpoint if available
     ######################################################
-
-    # init_epoch = load_checkpoint(
-    #     to_absolute_path(cfg.resume_dir),
-    #     models=model,
-    #     optimizer=optimizer,
-    #     scheduler=scheduler,
-    #     scaler=scaler,
-    #     device=dist.device,
-    # )
-    init_epoch = 0
+    init_epoch = load_checkpoint(
+        to_absolute_path(cfg.resume_dir),
+        models=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        scaler=scaler,
+        device=dist.device,
+    )
 
     if init_epoch != 0:
         init_epoch += 1  # Start with the next epoch

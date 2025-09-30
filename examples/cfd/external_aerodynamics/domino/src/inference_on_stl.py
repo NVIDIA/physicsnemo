@@ -42,13 +42,8 @@ from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 import torch
 
-DISABLE_RMM = os.environ.get("DISABLE_RMM", False)
-if not DISABLE_RMM:
-    import rmm
-    from rmm.allocators.torch import rmm_torch_allocator
-
-    rmm.reinitialize(pool_allocator=True)
-    torch.cuda.memory.change_current_allocator(rmm_torch_allocator)
+# This will set up the cupy-ecosystem and pytorch to share memory pools
+from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
 import torch.distributed as dist

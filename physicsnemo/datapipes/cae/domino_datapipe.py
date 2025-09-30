@@ -1173,7 +1173,7 @@ def create_domino_dataset(
             preload_depth = dataloader_cfg.preload_depth
             pin_memory = dataloader_cfg.pin_memory
         else:
-            preload_depth = 2
+            preload_depth = 1
             pin_memory = False
 
         dataset = DrivaerMLDataset(
