@@ -14,15 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass
-from types import NoneType
-from typing import Iterable, List, Optional, TypeAlias
+from typing import Iterable, List, Optional
 
 from torch import Tensor
 
 from physicsnemo.models.gnn_layers.bsms import BistrideGraphMessagePassing
-from physicsnemo.models.gnn_layers.utils import GraphType, DGLGraph, PyGData
+from physicsnemo.models.gnn_layers.utils import DGLGraph, GraphType, PyGData
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.models.meta import ModelMetaData
 

@@ -220,10 +220,9 @@ from typing import Optional
 import numpy as np
 import scipy.sparse
 import torch
-
 from torch.utils.data import Dataset
 
-from physicsnemo.models.gnn_layers.utils import GraphType, DGLGraph, PyGData
+from physicsnemo.models.gnn_layers.utils import DGLGraph, GraphType, PyGData
 
 try:
     from sparse_dot_mkl import dot_product_mkl

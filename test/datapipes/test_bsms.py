@@ -16,9 +16,8 @@
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
-
 import torch_geometric as pyg
+from pytest_utils import import_or_fail
 
 
 @pytest.fixture

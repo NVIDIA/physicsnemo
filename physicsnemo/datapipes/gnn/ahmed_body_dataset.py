@@ -23,11 +23,10 @@ from typing import Any, Iterable, Optional
 
 import numpy as np
 import torch
+import torch_geometric as pyg
 import yaml
 from torch import Tensor
 from torch.utils.data import Dataset
-
-import torch_geometric as pyg
 from torch_geometric.data import Data as PyGData
 
 from physicsnemo.datapipes.meta import DatapipeMetaData
@@ -245,9 +244,7 @@ class AhmedBodyDataset(Dataset):
         for v in vars(info):
             if v not in self.input_keys:
                 continue
-            graph[v] = getattr(info, v) * torch.ones_like(
-                graph.pos[:, [0]]
-            )
+            graph[v] = getattr(info, v) * torch.ones_like(graph.pos[:, [0]])
 
         coeff = None
         normal = None
@@ -465,8 +462,7 @@ class AhmedBodyDataset(Dataset):
                     torch.mean(self.graphs[i][key], dim=0) / self.length
                 )
                 stats[key + "_meansqr"] += (
-                    torch.mean(torch.square(self.graphs[i][key]), dim=0)
-                    / self.length
+                    torch.mean(torch.square(self.graphs[i][key]), dim=0) / self.length
                 )
 
         for key in keys:
