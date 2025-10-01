@@ -71,8 +71,8 @@ variables:
 # │         Data Configs                      │
 # └───────────────────────────────────────────┘  
 data: # Input directory for training and validation data
-  input_dir: /user/data/aws_data_all/
-  input_dir_val: /user/data/aws_data_all_val/
+  input_dir: /lustre/rranade/modulus_dev/data/aws_data_all/
+  input_dir_val: /lustre/rranade/modulus_dev/data/aws_data_all_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25, -0.32]
     max: [8.5, 2.25, 3.00]
@@ -84,7 +84,7 @@ data: # Input directory for training and validation data
   normalize_coordinates: true
   sample_in_bbox: true
   sampling: true
-  scaling_factors: outputs/AWS_Dataset/1/scaling_factors/scaling_factors.pkl
+  scaling_factors: ${project_dir}/scaling_factors/scaling_factors.pkl
 
 # ┌───────────────────────────────────────────┐
 # │          Domain Parallelism Settings      │
@@ -174,10 +174,10 @@ model:
 # └───────────────────────────────────────────┘  
 train: # Training configurable parameters
   epochs: 1000
-  checkpoint_interval: 1
+  checkpoint_interval: 50
   dataloader:
     batch_size: 1
-    preload_depth: 2
+    preload_depth: 1
     pin_memory: True # if the preprocessing is outputing GPU data, set this to false
   sampler:
     shuffle: true

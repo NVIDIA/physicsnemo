@@ -152,6 +152,7 @@ def train_epoch(
     eqn: Any = None,
     bounding_box: torch.Tensor | None = None,
     vol_factors: torch.Tensor | None = None,
+    surf_factors: torch.Tensor | None = None,
     add_physics_loss=False,
 ):
     dist = DistributedManager()
@@ -284,8 +285,8 @@ def main(cfg: DictConfig) -> None:
             f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
         )
 
-    vol_factors = scaling_factors.mean["volume_fields"]
-    surf_factors = scaling_factors.mean["surface_fields"]
+    vol_factors = np.asarray([scaling_factors.max_val["volume_fields"], scaling_factors.min_val["volume_fields"]])
+    surf_factors = np.asarray([scaling_factors.max_val["surface_fields"], scaling_factors.min_val["surface_fields"]])
     vol_factors_tensor = torch.from_numpy(vol_factors).to(dist.device)
 
     ######################################################
@@ -509,7 +510,7 @@ def main(cfg: DictConfig) -> None:
         else:
             surface_scaling_loss = cfg.model.surf_loss_scaling
 
-        # model.train(True)
+        model.train(True)
         epoch_start_time = time.perf_counter()
         avg_loss = train_epoch(
             dataloader=train_dataloader,
@@ -536,8 +537,6 @@ def main(cfg: DictConfig) -> None:
             f"Device {dist.device}, Epoch {epoch_number} took {epoch_end_time - epoch_start_time:.3f} seconds"
         )
         epoch_end_time = time.perf_counter()
-
-        return
 
         model.eval()
         avg_vloss = validation_step(

@@ -820,12 +820,12 @@ class DoMINODataPipe(Dataset):
         Scale the model targets based on the configured scaling factors.
         """
         if self.config.scaling_type == "mean_std_scaling":
-            field_mean = self.config.volume_factors[0]
-            field_std = self.config.volume_factors[1]
+            field_mean = factors[0]
+            field_std = factors[1]
             return standardize(fields, field_mean, field_std)
         elif self.config.scaling_type == "min_max_scaling":
-            field_min = self.config.volume_factors[1]
-            field_max = self.config.volume_factors[0]
+            field_min = factors[1]
+            field_max = factors[0]
             return normalize(fields, field_max, field_min)
 
     def unscale_model_outputs(
