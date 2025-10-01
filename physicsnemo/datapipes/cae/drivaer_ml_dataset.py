@@ -934,15 +934,23 @@ class DrivaerMLDataset:
     def __next__(self):
         N = len(self.indices) if hasattr(self, "indices") else len(self._filenames)
 
+        # Iteration bounds are based on the counter, not the random-access index
         if self.i >= N:
             self.i = 0
             raise StopIteration
 
-        for i in range(self.preload_depth):
-            if N > i + 1:
-                self.preload(self.i + i)
+        # This is the file random access index
+        target_index = self.idx_to_index(self.i)
 
-        data = self.__getitem__(self.i)
+        # Before returning, put the next two target indexes into the queue:
+        for preload_i in range(self.preload_depth):
+            next_iteration_index = self.i + preload_i + 1
+            if N > next_iteration_index:
+                preload_idx = self.idx_to_index(next_iteration_index)
+                self.preload(preload_idx)
+
+        # Send up the random-access data:
+        data = self.__getitem__(target_index)
 
         self.i += 1
 
