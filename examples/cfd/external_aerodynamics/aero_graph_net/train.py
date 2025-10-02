@@ -152,9 +152,7 @@ class MGNTrainer:
         batch = dict(batch)
         graph = batch.pop("graph")
         with self.autocast():
-            pred = batch_as_dict(
-                self.model(graph.x, graph.edge_attr, graph, **batch)
-            )
+            pred = batch_as_dict(self.model(graph.x, graph.edge_attr, graph, **batch))
             # Graph data (e.g. p and WSS) loss.
             graph_loss = self.loss.graph(pred["graph"], graph.y)
             losses = {"graph": graph_loss}
@@ -182,9 +180,7 @@ class MGNTrainer:
         for batch in self.validation_dataloader:
             batch = batch_as_dict(batch, self.dist.device)
             graph = batch.pop("graph")
-            pred = batch_as_dict(
-                self.model(graph.x, graph.edge_attr, graph, **batch)
-            )
+            pred = batch_as_dict(self.model(graph.x, graph.edge_attr, graph, **batch))
             pred_g, gt_g = self.dataset.denormalize(
                 pred["graph"], graph.y, self.dist.device
             )

@@ -21,6 +21,7 @@ from torch import Tensor
 
 from torch_geometric.data import Data as PyGData
 
+
 class RRMSELoss(torch.nn.Module):
     """Relative RMSE loss."""
 
