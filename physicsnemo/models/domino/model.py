@@ -308,6 +308,7 @@ class DoMINO(nn.Module):
             hops=model_parameters.geometry_rep.geo_conv.surface_hops,
             model_parameters=model_parameters,
         )
+        
         # Basis functions for surface and volume
         base_layer_nn = model_parameters.nn_basis_functions.base_layer
         if self.output_features_surf is not None:

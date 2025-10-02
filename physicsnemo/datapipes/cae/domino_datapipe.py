@@ -449,11 +449,7 @@ class DoMINODataPipe(Dataset):
             )
 
             if surface_coordinates_sampled.shape[0] < self.config.surface_points_sample:
-                surface_coordinates_sampled = pad(
-                    surface_coordinates_sampled,
-                    self.config.surface_points_sample,
-                    pad_value=-10.0,
-                )
+                raise ValueError("Sampled points is more than points in the surface mesh")
 
             # Select out the sampled points for non-neighbor arrays:
             if surface_fields is not None:
@@ -485,7 +481,7 @@ class DoMINODataPipe(Dataset):
 
         # Better to normalize everything after the kNN and sampling
         if self.config.normalize_coordinates:
-            surf_grid = normalize(surf_grid, s_max, s_min)
+            # surf_grid = normalize(surf_grid, s_max, s_min)
             surface_coordinates = normalize(surface_coordinates, s_max, s_min)
             surface_neighbors = normalize(surface_neighbors, s_max, s_min)
             # Make sure to normalize the center of mass for the normals_com_surface calc
@@ -567,17 +563,7 @@ class DoMINODataPipe(Dataset):
             # In case too few points are in the sampled data (because the
             # inputs were too few), pad the outputs:
             if volume_coordinates_sampled.shape[0] < self.config.volume_points_sample:
-                padding_size = (
-                    self.config.volume_points_sample
-                    - volume_coordinates_sampled.shape[0]
-                )
-
-                volume_coordinates_sampled = torch.nn.functional.pad(
-                    volume_coordinates_sampled,
-                    (0, 0, 0, 0, 0, padding_size),
-                    mode="constant",
-                    value=-10.0,
-                )
+                raise ValueError("Sampled points is more than points in the volume mesh")
 
             # Apply the same sampling to the targets, too:
             if volume_fields is not None:
@@ -594,6 +580,7 @@ class DoMINODataPipe(Dataset):
             # This is used later in the SDF, apply the same scaling to the mesh
             # coordinates:
             normed_vertices = normalize(stl_vertices, c_max, c_min)
+            center_of_mass = normalize(center_of_mass, c_max, c_min)
         else:
             grid = volume_grid
             normed_vertices = stl_vertices
@@ -658,9 +645,9 @@ class DoMINODataPipe(Dataset):
         center_of_mass: torch.Tensor,
     ):
         if self.config.normalize_coordinates:
-            volume_coordinates = normalize(volume_coordinates, c_max, c_min)
+            # volume_coordinates = normalize(volume_coordinates, c_max, c_min)
             sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
-            center_of_mass = normalize(center_of_mass, c_max, c_min)
+            # center_of_mass = normalize(center_of_mass, c_max, c_min)
 
         pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
         pos_normals_com_vol = volume_coordinates - center_of_mass
@@ -731,6 +718,7 @@ class DoMINODataPipe(Dataset):
         # This is for the SDF Later:
         if self.config.normalize_coordinates:
             normed_vertices = normalize(data_dict["stl_coordinates"], s_max, s_min)
+            surf_grid = normalize(surf_grid, s_max, s_min)
         else:
             normed_vertices = data_dict["stl_coordinates"]
 
