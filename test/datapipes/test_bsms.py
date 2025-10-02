@@ -27,6 +27,7 @@ def ahmed_data_dir(nfs_data_dir):
 @import_or_fail(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 def test_bsms_init(pytestconfig):
     import torch_geometric as pyg
+
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraph
 
     torch.manual_seed(1)
