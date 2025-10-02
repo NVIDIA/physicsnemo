@@ -20,17 +20,17 @@ import torch
 from models.common import validate_forward_accuracy
 from pytest_utils import import_or_fail
 
-dgl = pytest.importorskip("dgl")
-
 
 @pytest.fixture
 def ahmed_data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/ahmed_body")
 
 
-@import_or_fail(["sparse_dot_mkl", "dgl"])
+@import_or_fail(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
+    import torch_geometric as pyg
+
     torch.manual_seed(1)
 
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
@@ -42,19 +42,20 @@ def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
         torch.arange(num_nodes - 1),
         torch.arange(num_nodes - 1) + 1,
     )
+    edges = torch.stack(edges, dim=0).long()
+    edges = pyg.utils.to_undirected(edges)
     pos = torch.randn((num_nodes, 3))
 
-    graph = dgl.graph(edges)
-    graph = dgl.to_bidirected(graph)
+    graph = pyg.data.Data(edge_index=edges)
 
     num_layers = 2
     input_dim_nodes = 10
     input_dim_edges = 4
     output_dim = 4
 
-    graph.ndata["pos"] = pos
-    graph.ndata["x"] = torch.randn(num_nodes, input_dim_nodes)
-    graph.edata["x"] = torch.randn(graph.num_edges(), input_dim_edges)
+    graph.pos = pos
+    graph.x = torch.randn(num_nodes, input_dim_nodes)
+    graph.edge_attr = torch.randn(graph.num_edges, input_dim_edges)
 
     dataset = BistrideMultiLayerGraphDataset([graph], num_layers)
     assert len(dataset) == 1
@@ -76,12 +77,12 @@ def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
     g0 = s0["graph"].to(device)
     ms_edges0 = s0["ms_edges"]
     ms_ids0 = s0["ms_ids"]
-    node_features = g0.ndata["x"]
-    edge_features = g0.edata["x"]
+    node_features = g0.x
+    edge_features = g0.edge_attr
     pred = model(node_features, edge_features, g0, ms_edges0, ms_ids0)
 
     # Check output shape.
-    assert pred.shape == (g0.num_nodes(), output_dim)
+    assert pred.shape == (g0.num_nodes, output_dim)
 
     assert validate_forward_accuracy(
         model,
@@ -89,7 +90,7 @@ def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
     )
 
 
-@import_or_fail(["sparse_dot_mkl", "dgl"])
+@import_or_fail(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset
     from physicsnemo.datapipes.gnn.bsms import BistrideMultiLayerGraphDataset
@@ -125,7 +126,7 @@ def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
     g0 = s0["graph"].to(device)
     ms_edges0 = s0["ms_edges"]
     ms_ids0 = s0["ms_ids"]
-    pred = model(g0.ndata["x"], g0.edata["x"], g0, ms_edges0, ms_ids0)
+    pred = model(g0.x, g0.edge_attr, g0, ms_edges0, ms_ids0)
 
     # Check output shape.
-    assert pred.shape == (g0.num_nodes(), output_dim)
+    assert pred.shape == (g0.num_nodes, output_dim)
