@@ -214,11 +214,12 @@ class DrivAerNetDataset(Dataset, Datapipe):
             # Caching is disabled - create the graph.
             graph = self._create_graph(gname)
         else:
-            cached_graph_filename = self.cache_dir / (gname + ".bin")
+            cached_graph_filename = self.cache_dir / (gname + ".pt")
             if not self.force_reload and cached_graph_filename.is_file():
                 graph = torch.load(cached_graph_filename, weights_only=False)
             else:
                 graph = self._create_graph(gname)
+                Path.mkdir(self.cache_dir, parents=True, exist_ok=True)
                 torch.save(graph, cached_graph_filename)
 
         # Set graph inputs/outputs.
