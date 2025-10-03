@@ -33,7 +33,6 @@ SOFTWARE.
 from abc import ABC, abstractmethod
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import transformer_engine.pytorch as te  # noqa: F401
 from einops import rearrange
@@ -41,24 +40,6 @@ from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.distributed import ShardTensor
-
-
-def print_dist_tensor_info(name, tensor):
-    if not isinstance(tensor, ShardTensor):
-        return
-    spec = tensor._spec
-    rank = spec.mesh.get_local_rank(0)
-    local_tensor = tensor._local_tensor
-
-    _str = f"Tensor {name}"
-    _str += f" on rank {rank} info:\n"
-    _str += f"  - global shape {tensor.shape}\n"
-    _str += f"  - Local  shape {local_tensor.shape}\n"
-    _str += f"  - Spec {spec}\n"
-
-    if rank == 0:
-        print(_str, flush=True)
-    dist.barrier()
 
 
 class PhysicsAttentionBase(nn.Module, ABC):
@@ -191,7 +172,6 @@ class PhysicsAttentionBase(nn.Module, ABC):
                 normed_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)
             )
 
-            # print_dist_tensor_info("token_2", token_2)
             # Return the original weights, not the normed weights:
 
             return slice_weights, slice_token
@@ -282,13 +262,6 @@ class PhysicsAttentionBase(nn.Module, ABC):
             # Condense the last two dimensions:
             out_x = rearrange(out_x, "b t h d -> b t (h d)")
 
-            # take2 = torch.matmul(
-            #     rearrange(slice_weights, "b t h s -> b t (h s)"),
-            #     rearrange(out_slice_token, "b h s d -> b (h s) d")
-            # )
-            # print(f"take2 shape: {take2.shape}")
-            # print(f"Agreement? {torch.allclose(out_x._local_tensor, take2._local_tensor)}")
-
             out_x = self.out_linear(out_x)
             return self.out_dropout(out_x)
 
@@ -372,6 +345,8 @@ class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
 class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
     """
     Specialization for 2d image-like meshes
+
+    Only implements the projection onto the slice space.
     """
 
     def __init__(
@@ -396,24 +371,26 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
 
     def project_input_onto_slices(self, x) -> tuple[torch.Tensor, torch.Tensor]:
         # Rearrange the input tokens back to an image shape:
-        x = rearrange(x, "b (h w) c -> b c h w", h=self.H, w=self.W)
+        b = x.shape[0]
+        c = x.shape[-1]
+
+        x = x.view(b, self.H, self.W, c)
+        x = x.permute(0, 3, 1, 2)
 
         # Apply the projections, here they are convolutions in 2D:
         input_projected_fx = self.in_project_fx(x)
         input_projected_x = self.in_project_x(x)
 
-        raise Exception("This function needs to fix the shape of outputs!")
-
         # Next, re-reshape the projections into token-like shapes:
         input_projected_fx = rearrange(
             input_projected_fx,
-            "b (n_heads head_dim) h w -> b n_heads (h w) head_dim",
+            "b (n_heads head_dim) h w -> b (h w) n_heads head_dim",
             head_dim=self.dim_head,
             n_heads=self.heads,
         )
         input_projected_x = rearrange(
             input_projected_x,
-            "b (n_heads head_dim) h w -> b n_heads (h w) head_dim",
+            "b (n_heads head_dim) h w -> b (h w) n_heads head_dim",
             head_dim=self.dim_head,
             n_heads=self.heads,
         )
@@ -425,6 +402,8 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
 class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
     """
     Specialization for 3D-image like meshes
+
+    Only implements the projection onto the slice space.
     """
 
     def __init__(
@@ -451,25 +430,31 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
     def project_input_onto_slices(self, x) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Project the input onto the slice space.
+
+        Input tensor has shape [Batch, N_tokens, N_Channels]
         """
 
-        x = rearrange(x, "b (h w) c -> b c h w", h=self.H, w=self.W)
+        b = x.shape[0]
+        c = x.shape[-1]
+
+        # x = rearrange(x, "b (h w d) c -> b c h w d", h=self.H, w=self.W, d=self.D)
+        x = x.view(b, self.H, self.W, self.D, c)
+        x = x.permute(0, 4, 1, 2, 3)
 
         # Apply the projections, here they are convolutions:
         input_projected_fx = self.in_project_fx(x)
         input_projected_x = self.in_project_x(x)
-        raise Exception("This function needs to fix the shape of outputs!")
 
         # Next, re-reshape the projections into token-like shapes:
         input_projected_fx = rearrange(
             input_projected_fx,
-            "b (n_heads head_dim) h w -> b n_heads (h w) head_dim",
+            "b (n_heads head_dim) h w d-> b (h w d) n_heads head_dim",
             head_dim=self.dim_head,
             n_heads=self.heads,
         )
         input_projected_x = rearrange(
             input_projected_x,
-            "b (n_heads head_dim) h w -> b n_heads (h w) head_dim",
+            "b (n_heads head_dim) h w d -> b (h w d) n_heads head_dim",
             head_dim=self.dim_head,
             n_heads=self.heads,
         )
