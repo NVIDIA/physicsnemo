@@ -642,7 +642,35 @@ def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> Shard
     if q._spec.mesh.ndim != 1:
         raise MissingShardPatch("q must be on a 1D mesh")
 
-    return ring_sdpa(q, k, v, attn_mask, **kwargs)
+    # This is to implement sequence-parallel attention.
+    # Make sure the shardings are all the same:
+    if not (q._spec.placements[0] == k._spec.placements[0] == v._spec.placements[0]):
+        raise MissingShardPatch("q, k, and v must all be on the same placement")
+
+    # if the placements are replicatd (which is what we expect in transolver's Physics Attention)
+    # then just run locally and convert the output back to a replicated tensor:
+
+    if v._spec.placements[0].is_replicate():
+        local_q = q.to_local()
+        local_k = k.to_local()
+        local_v = v.to_local()
+        if attn_mask is not None:
+            local_attn_mask = attn_mask.to_local()
+        else:
+            local_attn_mask = None
+        local_output = torch.nn.functional.scaled_dot_product_attention(
+            local_q, local_k, local_v, attn_mask=local_attn_mask, **kwargs
+        )
+
+        output = ShardTensor.from_local(
+            local_output,
+            q._spec.mesh,
+            q._spec.placements,
+            # We don't have to worry about sharding shapes here since it's not sharded ...
+        )
+        return output
+    else:
+        return ring_sdpa(q, k, v, attn_mask, **kwargs)
 
 
 def repackage_sdpa_args(
