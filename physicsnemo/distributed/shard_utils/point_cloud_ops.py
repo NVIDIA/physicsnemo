@@ -502,7 +502,7 @@ class RingBallQuery(torch.autograd.Function):
 
 class GradReducer(torch.autograd.Function):
     """
-    A custom autograd function that performs an allreduce on the gradients if they are sharded
+    A custom autograd function that performs an allreduce on the gradients if they are replicated
     """
 
     @staticmethod

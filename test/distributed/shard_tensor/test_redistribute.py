@@ -118,7 +118,7 @@ def shard_tensor_factory(mesh, requires_grad=False, uneven=True):
     ],
 )
 def test_shard_tensor_redistribute1d(
-    distributed_mesh, redistribution_case, verbose=True
+    distributed_mesh, redistribution_case, verbose=False
 ):
     """Test redistribution between different sharding schemes"""
     run_shard_tensor_redistribute(
@@ -160,7 +160,7 @@ def test_shard_tensor_redistribute1d(
     ],
 )
 def test_shard_tensor_redistribute2d(
-    distributed_mesh_2d, redistribution_case, verbose=True
+    distributed_mesh_2d, redistribution_case, verbose=False
 ):
     run_shard_tensor_redistribute(
         distributed_mesh_2d, redistribution_case, verbose=verbose
