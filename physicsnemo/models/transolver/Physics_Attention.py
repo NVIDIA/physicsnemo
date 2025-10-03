@@ -277,6 +277,7 @@ class PhysicsAttentionBase(nn.Module, ABC):
             x_mid, fx_mid = self.project_input_onto_slices(x)
 
             # Perform the linear projection of learned latent space onto slices:
+            print(f"x_mid shape: {x_mid.shape}")
             slice_projections = self.in_project_slice(x_mid)
 
             # Slice projections has shape [B, N_tokens, N_head, Head_dim], but head_dim may have changed!

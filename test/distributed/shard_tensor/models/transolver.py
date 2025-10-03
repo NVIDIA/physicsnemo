@@ -92,7 +92,7 @@ def test_transolver_irregular_distributed(
 
     dm = DistributedManager()
 
-    spatial_dims = (12822,)
+    spatial_dims = (16384,)
 
     # Construct transolver model
     model = Transolver(
