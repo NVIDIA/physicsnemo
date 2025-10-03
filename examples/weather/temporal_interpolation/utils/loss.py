@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import torch
+from torch import nn
+
+
+class GeometricL2Loss(nn.Module):
+    """Latitude weighted L2 (MSE) loss.
+
+    Args:
+        lat_range: range of latitudes to cover
+        num_lats: number of latitudes in lat_range
+        num_lats_cropped: use the first num_lats_cropped latitudes
+        input_dims: number of dimensions in the input tensors passed to `forward`
+    """
+
+    def __init__(
+        self,
+        lat_range: tuple[float, float] = (-90.0, 90.0),
+        num_lats: int = 721,
+        num_lats_cropped: int = 720,
+        input_dims: int = 4,
+    ):
+        super().__init__()
+
+        lats = torch.linspace(lat_range[0], lat_range[1], num_lats)
+        if lat_range[0] == -90:  # special handling for poles
+            lats[0] = 0.5 * (lats[0] + lats[1])
+        if lat_range[1] == 90:
+            lats[-1] = 0.5 * (lats[-2] + lats[-1])
+        lats = torch.deg2rad(lats[:num_lats_cropped])
+        weights = torch.cos(lats)
+        weights = weights / torch.sum(weights)
+        weights = torch.reshape(
+            weights, (1,) * (input_dims - 2) + (num_lats_cropped, 1)
+        )
+        self.register_buffer("weights", weights)
+
+    def forward(self, pred: torch.Tensor, true: torch.Tensor) -> torch.Tensor:
+        """Compute loss."""
+        err = torch.square(pred - true)
+        err = torch.sum(err * self.weights, dim=-2)
+        return torch.mean(err)
