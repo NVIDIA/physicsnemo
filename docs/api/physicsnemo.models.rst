@@ -313,15 +313,161 @@ model from the ``.mdlus`` file.
 
 
 .. note::
-   In order to make use of this functionality, the model must have ``.json`` serializable
-   inputs to the ``__init__`` function. It is highly recommended that all PhysicsNeMo
-   models be developed with this requirement in mind.
+   In order to make use of this functionality, the model must have ``.json``
+   serializable inputs to the ``__init__`` function. The only exception to this
+   rule is when the argument passed to the ``__init__`` function is itself a
+   ``physicsnemo.Module`` instance. In this case, it is possible to construct,
+   save and load nested Modules, with multiple levels of nesting and/or multiple
+   ``physicsnemo.Module`` instances at each level. See the section
+   :ref:`constructing-nested-modules` for more details. It is highly recommended
+   that all PhysicsNeMo models be developed with this requirement in mind.
 
 .. note::
    Using ``Module.from_checkpoint`` will not work if the model has any buffers or
    parameters that are registered outside of the model's ``__init__`` function due to
-   the above requirement. In that case, one should use ``Module.load``, or ensure 
+   the above requirement. In that case, one should use ``Module.load``, or ensure
    that all model parameters and buffers are registered inside ``__init__``.
+
+
+.. _constructing-nested-modules:
+
+Constructing Nested Modules
+----------------------------
+
+PhysicsNeMo supports constructing nested modules where one ``physicsnemo.Module``
+can accept another ``physicsnemo.Module`` as an argument to its ``__init__``
+function. This allows you to build complex, modular architectures while still
+benefiting from PhysicsNeMo's checkpointing and model management features.
+
+**Simple Nesting with PhysicsNeMo Modules**
+
+The simplest case is nesting ``physicsnemo.Module`` instances directly:
+
+.. code:: python
+
+    import physicsnemo
+    from physicsnemo.models.meta import ModelMetaData
+
+    class EncoderModule(physicsnemo.Module):
+        def __init__(self, input_size, hidden_size):
+            super().__init__(meta=ModelMetaData())
+            self.encoder = torch.nn.Linear(input_size, hidden_size)
+            self.input_size = input_size
+            self.hidden_size = hidden_size
+
+        def forward(self, x):
+            return self.encoder(x)
+
+    class DecoderModule(physicsnemo.Module):
+        def __init__(self, hidden_size, output_size):
+            super().__init__(meta=ModelMetaData())
+            self.decoder = torch.nn.Linear(hidden_size, output_size)
+            self.hidden_size = hidden_size
+            self.output_size = output_size
+
+        def forward(self, x):
+            return self.decoder(x)
+
+    class AutoEncoder(physicsnemo.Module):
+        def __init__(self, encoder, decoder):
+            super().__init__(meta=ModelMetaData())
+            self.encoder = encoder
+            self.decoder = decoder
+
+        def forward(self, x):
+            encoded = self.encoder(x)
+            return self.decoder(encoded)
+
+    # Create nested model
+    encoder = EncoderModule(input_size=64, hidden_size=32)
+    decoder = DecoderModule(hidden_size=32, output_size=64)
+    model = AutoEncoder(encoder=encoder, decoder=decoder)
+
+    # Save and load with full structure preserved
+    model.save("autoencoder.mdlus")
+    loaded_model = physicsnemo.Module.from_checkpoint("autoencoder.mdlus")
+
+**Nesting Converted PyTorch Modules**
+
+You can also nest PyTorch ``nn.Module`` instances, but they must first be
+converted to ``physicsnemo.Module`` using ``Module.from_torch``. All nested
+PyTorch modules must be converted:
+
+.. code:: python
+
+    import torch.nn as nn
+    import physicsnemo
+    from physicsnemo.models.meta import ModelMetaData
+
+    # Define PyTorch modules
+    class TorchEncoder(nn.Module):
+        def __init__(self, input_size, hidden_size):
+            super().__init__()
+            self.encoder = nn.Linear(input_size, hidden_size)
+            self.input_size = input_size
+            self.hidden_size = hidden_size
+
+        def forward(self, x):
+            return self.encoder(x)
+
+    class TorchDecoder(nn.Module):
+        def __init__(self, hidden_size, output_size):
+            super().__init__()
+            self.decoder = nn.Linear(hidden_size, output_size)
+            self.hidden_size = hidden_size
+            self.output_size = output_size
+
+        def forward(self, x):
+            return self.decoder(x)
+
+    # Convert to PhysicsNeMo modules
+    PNMEncoder = physicsnemo.Module.from_torch(
+        TorchEncoder, meta=ModelMetaData()
+    )
+    PNMDecoder = physicsnemo.Module.from_torch(
+        TorchDecoder, meta=ModelMetaData()
+    )
+
+    # Define top-level model
+    class AutoEncoder(physicsnemo.Module):
+        def __init__(self, encoder, decoder):
+            super().__init__(meta=ModelMetaData())
+            self.encoder = encoder
+            self.decoder = decoder
+
+        def forward(self, x):
+            encoded = self.encoder(x)
+            return self.decoder(encoded)
+
+    # Create nested model with converted modules
+    encoder = PNMEncoder(input_size=64, hidden_size=32)
+    decoder = PNMDecoder(hidden_size=32, output_size=64)
+    model = AutoEncoder(encoder=encoder, decoder=decoder)
+
+    # Save and load
+    model.save("autoencoder.mdlus")
+    loaded_model = physicsnemo.Module.from_checkpoint("autoencoder.mdlus")
+
+**What Does NOT Work**
+
+You cannot directly pass a ``torch.nn.Module`` instance to a
+``physicsnemo.Module``'s ``__init__`` without converting it first:
+
+.. code:: python
+
+    # This will NOT work and raise an error during save/load:
+    class AutoEncoder(physicsnemo.Module):
+        def __init__(self, encoder):
+            super().__init__(meta=ModelMetaData())
+            self.encoder = encoder  # encoder is a torch.nn.Module
+
+    torch_encoder = TorchEncoder(input_size=64, hidden_size=32)
+    model = AutoEncoder(encoder=torch_encoder)  # This creates the model
+
+    # But this will fail:
+    model.save("autoencoder.mdlus")
+    # Error: Cannot serialize torch.nn.Module arguments.
+    # You must use Module.from_torch() to convert it first.
 
 
 PhysicsNeMo Model Registry and Entry Points
