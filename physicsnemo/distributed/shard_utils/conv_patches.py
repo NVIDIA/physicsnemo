@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 
-from physicsnemo.utils.profiling import annotate, profile
+from physicsnemo.utils.profiling import profile
 from physicsnemo.utils.version_check import check_module_requirements
 
 check_module_requirements("physicsnemo.distributed.shard_tensor")
@@ -36,8 +36,6 @@ from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
 
 from .halo import HaloConfig, halo_padding  # noqa: E402
 from .patch_core import promote_to_iterable  # noqa: E402
-
-aten = torch.ops.aten
 
 
 @profile
@@ -158,6 +156,7 @@ def compute_halo_configs_from_conv_args(
     input: ShardTensor,
     kernel_size: Tuple[int, ...],
     conv_kwargs: Dict[str, Any],
+    transposed: bool = False,
 ) -> List[HaloConfig]:
     """Compute halo configurations for a sharded tensor based on convolution arguments.
 
@@ -216,7 +215,7 @@ def compute_halo_configs_from_conv_args(
             stride[kernel_dim],
             dilation[kernel_dim],
             padding[kernel_dim],
-            conv_kwargs["transposed"],
+            transposed,
         )
 
         if halo_size > 0:
@@ -246,6 +245,7 @@ def compute_output_shape(
     sharding_shape: Tuple[int, ...],
     conv_kwargs: Dict[str, Any],
     kernel_size: Tuple[int, ...],
+    transposed: bool = False,
 ) -> Tuple[int, ...]:
     """
     For a specified input shape, determine the output shape after a convolution.
@@ -254,7 +254,7 @@ def compute_output_shape(
     output_shape = []
     tensor_rank = len(sharding_shape[2:])
     for tensor_dim in range(tensor_rank):
-        if not conv_kwargs["transposed"]:
+        if not transposed:
             # Regular convolution
             num = (
                 sharding_shape[tensor_dim + 2]
@@ -278,12 +278,100 @@ def compute_output_shape(
     return tuple(output_shape)
 
 
+def compute_haloed_and_padded_input_shape(
+    input_shape: Tuple[int, ...],
+    target_mesh_dim: int,
+    mesh_coords: Tuple[int, ...],
+    mesh_sizes: Tuple[int, ...],
+    halo_config_map: Dict[int, HaloConfig],
+) -> Dict[int, Tuple[int, ...]]:
+    """
+    Given an input shape, a list of halo configs, and the rank of this
+    input in the input tensor, determine the output shape for this input
+    after the halo and edge padding is applied.
+
+    Args:
+        input_shape: The shape of the input tensor
+        target_mesh_dim: The dimension of the mesh that this input is along
+        mesh_coords: The coordinates of this input in the mesh
+        mesh_sizes: The sizes of the mesh
+        mesh_rank: The rank of this input in the mesh
+        halo_config_map: A map from halo mesh dim to HaloConfig
+
+    Returns:
+        The shape of the input tensor after the halo and edge padding is applied
+    """
+    output_shape = list(input_shape)
+    # Loop over the halo configs:
+    for halo_config in halo_config_map.values():
+        # This function must be careful.
+        # We have two concepts of mesh dim, here
+        # First, the tensor itself
+
+        # What is the mesh size and rank along this mesh dim?
+
+        # Always apply the halo padding at least one time:
+        padding = halo_config.halo_size
+
+        # Determine if this tensor is on the edge for this halo:
+        halo_mesh_dim = halo_config.mesh_dim
+        if (
+            mesh_coords[halo_mesh_dim] == 0
+            or mesh_coords[halo_mesh_dim] == mesh_sizes[halo_mesh_dim] - 1
+        ):
+            # apply edge padding instead:
+            padding += halo_config.edge_padding_size
+        else:
+            # apply halo padding twice:
+            padding += halo_config.halo_size
+
+        output_shape[halo_config.tensor_dim] += padding
+
+    return tuple(output_shape)
+
+
+class ConvGradReducer(torch.autograd.Function):
+    """
+    A custom autograd function that performs an allreduce on the gradients in
+    the backward pass.  This makes defining a forward-only shard patch easier.
+
+    If you need to allreduce weight grads in the backward pass, call this on the
+    weight in the forward pass.
+    """
+
+    @staticmethod
+    def forward(
+        ctx: torch.autograd.function.FunctionCtx,
+        weight_or_bias: torch.Tensor,
+        spec: ShardTensorSpec,
+    ) -> torch.Tensor:
+        # Input represents the weight or bias.  Spec is the shard spec
+        # of the convolutional input (not the _input here!)
+        ctx.spec = spec
+        return weight_or_bias
+
+    @staticmethod
+    def backward(
+        ctx: torch.autograd.function.FunctionCtx,
+        grad_weight_or_bias: torch.Tensor,
+    ) -> torch.Tensor:
+        # Now, loop over the mesh dims and make sure we sync gradients
+        for mesh_dim in range(ctx.spec.mesh.ndim):
+            if ctx.spec.placements[mesh_dim].is_shard():
+                group = ctx.spec.mesh.get_group(mesh_dim)
+                dist.all_reduce(grad_weight_or_bias, group=group)
+
+        return grad_weight_or_bias, None
+
+
 @profile
 def partial_conv_nd(
-    input: ShardTensor,
+    func: callable,
+    conv_input: ShardTensor,
     weight: torch.nn.Parameter,
     bias: Optional[torch.nn.Parameter],
     conv_kwargs: Dict[str, Any],
+    transposed: bool = False,
 ) -> ShardTensor:
     """Perform a convolution on a sharded tensor with halo exchange.
 
@@ -295,7 +383,8 @@ def partial_conv_nd(
     4. Return the result as a ShardTensor
 
     Args:
-        input: The sharded input tensor
+        func: The function to be called (conv1d, conv2d, etc.)
+        conv_input: The sharded conv_input tensor
         weight: Convolution filter weights
         bias: Optional bias parameter
         conv_kwargs: Dictionary of convolution parameters (stride, padding, etc.)
@@ -303,200 +392,115 @@ def partial_conv_nd(
     Returns:
         Resulting ShardTensor after convolution operation
     """
-    with annotate("partial_conv_nd"):
-        kernel_size = weight.shape[2:]
 
-        # This will produce one config per sharded dim
-        # It also *updates* conv_kwargs in place to set padding to 0 on the sharded dims
-        halo_configs = compute_halo_configs_from_conv_args(
-            input, kernel_size, conv_kwargs
-        )
+    input_spec = conv_input._spec
 
-        # We get one halo_config per sharded dim.
-        sharding_shapes = input._spec.sharding_shapes()
-        # # First, update the shapes to take into account the halo and edge paddings:
+    # Get the spatial size of the kernel, which excludes conv_input/output channel sizes
+    kernel_size = weight.shape[2:]
 
-        # Create a mapping from mesh_dim to halo_config for easy lookup
-        halo_config_map = {config.mesh_dim: config for config in halo_configs}
+    #####################################################################
+    # Halo computations and metad data
+    #####################################################################
 
-        real_input_shapes = {}
-        for mesh_dim, sharing_tuple in sharding_shapes.items():
-            # If this mesh_dim doesn't need halos, just copy the original shapes
-            if mesh_dim not in halo_config_map:
-                real_input_shapes[mesh_dim] = sharing_tuple
-                continue
+    # Compute the halo configs, one per sharded dim
+    # It also *updates* conv_kwargs in place to set padding to 0 on the sharded dims
+    halo_configs = compute_halo_configs_from_conv_args(
+        conv_input, kernel_size, conv_kwargs, transposed
+    )
 
-            tensor_dim = halo_config_map[mesh_dim].tensor_dim
-            real_input_shapes[mesh_dim] = []
-            for i, s in enumerate(sharing_tuple):
-                padding = halo_config_map[mesh_dim].halo_size
+    # We need to know not just the local shape after the halo,
+    # but EVERY sharded shape after the halo
 
-                if i == 0 or i == len(sharing_tuple) - 1:
-                    # On the edge of the split, the additional size is halo + edge padding
-                    padding += halo_config_map[mesh_dim].edge_padding_size
-                else:
-                    # Otherwise, its 2xhalo size added on.
-                    padding += halo_config_map[mesh_dim].halo_size
+    # Get the shapes:
+    sharding_shapes = input_spec.sharding_shapes()
 
-                updated_shape = list(s)
-                updated_shape[tensor_dim] += padding
+    # Create a mapping from mesh_dim to halo_config for easy lookup
+    halo_config_map = {config.mesh_dim: config for config in halo_configs}
 
-                real_input_shapes[mesh_dim].append(tuple(updated_shape))
+    # This will be the sharded shapes after the halo:
+    haloed_and_padded_input_shapes = {}
 
-        input_spec = input._spec
-        local_input = input.to_local()
+    # This loop will compute, for every shard of the input, what it's shape will
+    # be after the halo layer.  This includes potential edge paddings.
 
-        with annotate("halo_padding"):
-            # Apply the halo padding to the input tensor
-            for halo_config in halo_configs:
-                local_input = halo_padding(local_input, input._spec.mesh, halo_config)
+    # We loop over the mesh and then each shard shape along that mesh dim
 
-        with annotate("perform_convolution"):
-            # Perform the convolution on the padded tensor
-            local_output = perform_convolution(
-                local_input, weight, bias, input_spec, conv_kwargs
+    # A subroutine will compute, given the halo configs, how a tensor will
+    # be updated given it's mesh dimension and location on the mesh:
+
+    haloed_and_padded_input_shapes = {}
+
+    # The indexing here can get really tricky if you're not careful.
+    # Sharding shapes are only stored for tensors shards that are along
+    # the same dimension as our local tensor.
+    # So, when computing edge/not edge for halo sizes,
+    # all indexing starts with the mesh index of our local tensor:
+    mesh_sizes = [len(sharding_tuple) for sharding_tuple in sharding_shapes.values()]
+
+    self_mesh_coords = tuple(
+        input_spec.mesh.get_local_rank(m) for m in range(input_spec.mesh.ndim)
+    )
+
+    for mesh_dim, sharding_tuple in sharding_shapes.items():
+        haloed_and_padded_input_shapes[mesh_dim] = []
+
+        for i, shard_shape in enumerate(sharding_tuple):
+            # For this function to evaluate correctly, we need to pass
+            # for each tensor it's coordinates in the mesh and the mesh_sizes
+            # Starting from the local tensor's index, update the index
+            # along the mesh dimension we're currently investigating:
+            mesh_coords = list(self_mesh_coords)
+            mesh_coords[mesh_dim] = i
+            output_shape = compute_haloed_and_padded_input_shape(
+                shard_shape,
+                mesh_dim,
+                mesh_coords,
+                mesh_sizes,
+                halo_config_map,
             )
+            haloed_and_padded_input_shapes[mesh_dim].append(output_shape)
 
-        batch_channel_shape = tuple(local_output.shape[:2])
-        # Update the output shapes to take into account the batch anc channel dims:
-        real_output_shapes = {
-            dim: tuple(
-                batch_channel_shape + compute_output_shape(s, conv_kwargs, kernel_size)
-                for s in real_input_shapes[dim]
-            )
-            for dim in real_input_shapes
-        }
+    local_input = conv_input.to_local()
 
-        # Convert the local output to a ShardTensor
-        with annotate("partial_conv_nd.from_local"):
-            output = ShardTensor.from_local(
-                local_output,
-                input_spec.mesh,
-                input_spec.placements,
-                sharding_shapes=real_output_shapes,
-            )
+    # Finally, Actually APPLY the halo padding to the conv_input tensor
+    for halo_config in halo_configs:
+        local_input = halo_padding(local_input, input_spec.mesh, halo_config)
 
-        return output
+    #####################################################################
+    # Apply the convolution locally
+    #####################################################################
+    # For the backward pass: on input sharded dimensions, we need to to reduce the
+    # the grads for weight and bias:
+    weight = ConvGradReducer.apply(weight, input_spec)
+    if bias is not None:
+        bias = ConvGradReducer.apply(bias, input_spec)
 
+    # Perform the convolution on the padded tensor
+    local_output = func(local_input, weight, bias, **conv_kwargs)
 
-@profile
-def perform_convolution(
-    inputs: torch.Tensor,
-    weights: torch.nn.Parameter,
-    bias: Optional[torch.nn.Parameter],
-    input_spec: "ShardTensorSpec",
-    conv_kwargs: Dict[str, Any],
-) -> torch.Tensor:
-    """Apply a convolution operation using the PartialConvND autograd function.
-
-    Args:
-        inputs: Input tensor to convolve
-        weights: Convolution filter weights
-        bias: Optional bias tensor
-        input_spec: Specification for output ShardTensor
-        conv_kwargs: Dictionary of convolution parameters
-
-    Returns:
-        ShardTensor containing the convolution result
-    """
-    return PartialConvND.apply(inputs, weights, bias, input_spec, conv_kwargs)
-
-
-class PartialConvND(torch.autograd.Function):
-    """Sharded convolution operation that uses halo message passing for distributed computation.
-
-    This class implements a distributed convolution primitive that operates on sharded tensors.
-    It handles both forward and backward passes while managing communication between shards.
-
-    Leverages torch.ops.aten.convolution.default for generic convolutions.
-    """
-
-    @staticmethod
-    @profile
-    def forward(
-        ctx,
-        inputs: torch.Tensor,
-        weights: torch.nn.Parameter,
-        bias: Optional[torch.nn.Parameter],
-        input_spec: "ShardTensorSpec",
-        conv_kwargs: Dict[str, Any],
-    ) -> torch.Tensor:
-        """Forward pass of the distributed convolution.
-
-        Args:
-            ctx: Context object for saving tensors needed in backward pass
-            inputs: Input tensor to convolve
-            weights: Convolution filter weights
-            bias: Optional bias tensor
-            input_spec: Specification for output ShardTensor
-            conv_kwargs: Dictionary of convolution parameters (stride, padding, etc.)
-
-        Returns:
-            ShardTensor containing the convolution result
-        """
-        # Save spec for backward pass
-        ctx.spec = input_spec
-
-        # Save local tensors to avoid distributed dispatch in backward pass
-        ctx.save_for_backward(inputs, weights, bias)
-
-        # print type of inputs
-        ctx.conv_kwargs = conv_kwargs
-        # Perform local convolution on this shard
-        local_chunk = aten.convolution.default(inputs, weights, bias, **conv_kwargs)
-
-        ctx.requires_input_grad = inputs.requires_grad
-        # return output
-        return local_chunk
-
-    @staticmethod
-    @profile
-    def backward(
-        ctx, grad_output: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], None, None]:
-        """Backward pass for distributed convolution.
-
-        Args:
-            ctx: Context object containing saved tensors
-            grad_output: Gradient of the loss with respect to convolution output
-
-        Returns:
-            Tuple containing gradients for inputs, weights, and bias (plus None values for other args)
-        """
-        conv_kwargs = ctx.conv_kwargs
-        local_chunk, weight, bias = ctx.saved_tensors
-
-        # Specify which inputs need gradients
-        output_mask = (
-            ctx.requires_input_grad,  # input gradient
-            True,  # weight gradient always needed
-            bias is not None,  # bias gradient if bias exists
+    #####################################################################
+    # Create the output shard tensor
+    #####################################################################
+    batch_channel_shape = tuple(local_output.shape[:2])
+    # Update the output shapes to take into account the batch anc channel dims:
+    real_output_shapes = {
+        dim: tuple(
+            batch_channel_shape
+            + compute_output_shape(s, conv_kwargs, kernel_size, transposed)
+            for s in haloed_and_padded_input_shapes[dim]
         )
+        for dim in haloed_and_padded_input_shapes
+    }
 
-        # Cast, in case the precision is off:
-        weight = weight.to(dtype=grad_output.dtype)
-        bias = bias.to(dtype=grad_output.dtype) if bias is not None else None
-        local_chunk = local_chunk.to(dtype=grad_output.dtype)
-        # Compute local gradients
-        # local_grad_output = grad_output._local_tensor
-        grad_input, grad_weight, grad_bias = aten.convolution_backward(
-            grad_output,
-            local_chunk,
-            weight,
-            bias,
-            output_mask=output_mask,
-            **conv_kwargs,
-        )
+    # Convert the local output to a ShardTensor
+    output = ShardTensor.from_local(
+        local_output,
+        input_spec.mesh,
+        input_spec.placements,
+        sharding_shapes=real_output_shapes,
+    )
 
-        # Now, loop over the mesh dims and make sure we sync gradients
-        for mesh_dim in range(ctx.spec.mesh.ndim):
-            if ctx.spec.placements[mesh_dim].is_shard():
-                group = ctx.spec.mesh.get_group(mesh_dim)
-                dist.all_reduce(grad_weight, group=group)
-                if grad_bias is not None:
-                    dist.all_reduce(grad_bias, group=group)
-
-        return grad_input, grad_weight, grad_bias, None, None
+    return output
 
 
 def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: dict):
@@ -517,11 +521,13 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
     """
 
     if "transpose" in func.__name__:
-        input, weight, bias, conv_kwargs = repackage_conv_transposed_args(
+        inputs, weight, bias, conv_kwargs = repackage_conv_transposed_args(
             *args, **kwargs
         )
+        transposed = True
     else:
-        input, weight, bias, conv_kwargs = repackage_conv_args(*args, **kwargs)
+        inputs, weight, bias, conv_kwargs = repackage_conv_args(*args, **kwargs)
+        transposed = False
 
     # Gather any distributed weights/bias
     if isinstance(weight, (ShardTensor, DTensor)):
@@ -540,7 +546,7 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
     }
 
     # Use the convolution args to compute the sharded halo
-    return partial_conv_nd(input, weight, bias, conv_kwargs)
+    return partial_conv_nd(func, inputs, weight, bias, conv_kwargs, transposed)
 
 
 @profile
@@ -592,9 +598,9 @@ def repackage_conv_args(
         "stride": stride,
         "padding": padding,
         "dilation": dilation,
-        "transposed": False,
+        # "transposed": False,
         "groups": groups,
-        "output_padding": output_padding,
+        # "output_padding": output_padding,
     }
 
     return input, weight, bias, return_kwargs
@@ -651,7 +657,7 @@ def repackage_conv_transposed_args(
         "dilation": dilation,
         "output_padding": output_padding,
         "groups": groups,
-        "transposed": True,
+        # "transposed": True,
     }
 
     return input, weight, bias, return_kwargs
