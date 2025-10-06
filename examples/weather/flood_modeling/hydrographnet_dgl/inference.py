@@ -43,11 +43,11 @@ from hydra.utils import to_absolute_path
 from physicsnemo.launch.utils import load_checkpoint
 
 # Import the dataset and model.
-from physicsnemo.datapipes.gnn.hydrographnet_dataset import HydroGraphDataset
+from physicsnemo.datapipes.gnn.hydrographnet_dataset_dgl import HydroGraphDataset
 from physicsnemo.models.meshgraphnet.meshgraphkan import MeshGraphKAN
 
 # For converting DGLGraph to networkx.
-from torch_geometric.utils import to_networkx
+from dgl import to_networkx
 
 
 def create_animation(
@@ -81,7 +81,7 @@ def create_animation(
 
     num_frames = len(rollout_predictions)
     # Use the first two columns of node features for positions.
-    init_node_feats = initial_graph.x
+    init_node_feats = initial_graph.ndata["x"]
     pos = {
         i: (init_node_feats[i, 0].item(), init_node_feats[i, 1].item())
         for i in range(init_node_feats.shape[0])
@@ -100,7 +100,7 @@ def create_animation(
         # Panel 1: Prediction.
         pred_vals = rollout_predictions[frame].cpu().numpy()
         # Ensure the graph is on CPU before converting.
-        g_pred = to_networkx(initial_graph)
+        g_pred = to_networkx(initial_graph.cpu())
         g_pred = g_pred.to_undirected()
         nodes_pred = nx.draw_networkx_nodes(
             g_pred,
@@ -119,7 +119,7 @@ def create_animation(
 
         # Panel 2: Ground Truth.
         gt_vals = ground_truth[frame].cpu().numpy()
-        g_gt = to_networkx(initial_graph)
+        g_gt = to_networkx(initial_graph.cpu())
         g_gt = g_gt.to_undirected()
         nodes_gt = nx.draw_networkx_nodes(
             g_gt,
@@ -211,6 +211,8 @@ def main(cfg: DictConfig):
         hydrograph_ids_file=test_ids_file,
         split="test",
         rollout_length=rollout_length,
+        force_reload=False,
+        verbose=True,
         return_physics=False,
     )
     print(f"Loaded test dataset with {len(test_dataset)} hydrographs.")
@@ -240,8 +242,8 @@ def main(cfg: DictConfig):
     for idx in range(len(test_dataset)):
         g, rollout_data = test_dataset[idx]
         g = g.to(device)
-        edge_features = g.edge_attr.to(device)
-        X_current = g.x.to(device)  # Expected shape: [num_nodes, 16]
+        edge_features = g.edata["x"].to(device)
+        X_current = g.ndata["x"].to(device)  # Expected shape: [num_nodes, 16]
         num_nodes = X_current.size(0)
 
         rollout_preds = []  # To store predicted actual water depth values for each step.

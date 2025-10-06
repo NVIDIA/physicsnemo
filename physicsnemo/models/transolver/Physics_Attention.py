@@ -179,7 +179,7 @@ class PhysicsAttentionBase(nn.Module, ABC):
         q_slice_token, k_slice_token, v_slice_token = qkv.unbind(0)
 
         out_slice_token3 = torch.nn.functional.scaled_dot_product_attention(
-            q_slice_token, k_slice_token, v_slice_token, is_causal=True
+            q_slice_token, k_slice_token, v_slice_token, is_causal=False
         )
 
         return out_slice_token3

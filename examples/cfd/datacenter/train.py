@@ -188,6 +188,7 @@ def main(cfg: DictConfig) -> None:
         process_rank=dist.rank,
         world_size=dist.world_size,
         shuffle=True,
+        parallel=False,
     )
 
     # Initialize the validation dataset
@@ -211,6 +212,7 @@ def main(cfg: DictConfig) -> None:
             process_rank=dist.rank,
             world_size=dist.world_size,
             shuffle=False,
+            parallel=False,
         )
 
         train_dataset_plotting = MeshDatapipe(
@@ -220,11 +222,12 @@ def main(cfg: DictConfig) -> None:
             num_variables=7,
             num_samples=16,
             batch_size=cfg.val_batch_size,
-            num_workers=1,
+            num_workers=0,
             device=dist.device,
             process_rank=dist.rank,
             world_size=dist.world_size,
             shuffle=False,
+            parallel=False,
         )
 
     optimizer = optimizers.FusedAdam(

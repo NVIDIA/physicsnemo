@@ -136,7 +136,9 @@ For PhysicsNeMo development, [pre-commit](https://pre-commit.com/) is **required
 This will not only help developers pass the CI pipeline, but also accelerate reviews.
 Contributions that have not used pre-commit will *not be reviewed*.
 
-To install `pre-commit` follow the below steps inside the PhysicsNeMo repository folder:
+`pre-commit` is installed as part of the `dev` optional dependencies defined in `pyproject.toml`.
+To install `pre-commit` in an existing environment, follow the below steps inside the PhysicsNeMo
+repository folder:
 
 ```bash
 pip install pre-commit

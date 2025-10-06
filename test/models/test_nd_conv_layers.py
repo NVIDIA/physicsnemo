@@ -232,7 +232,7 @@ def test_conv_nd(device, dimension):
     bsize = 2
     in_channels = 4
     out_channels = 2
-    tens_size = 8
+    tens_size = 128
 
     conv_nd = layers.ConvNdKernel1Layer(in_channels, out_channels).to(device)
 
@@ -272,7 +272,7 @@ def test_conv_ndfc(device, dimension):
     bsize = 2
     in_channels = 4
     out_channels = 2
-    tens_size = 8
+    tens_size = 128
 
     conv_nd = layers.ConvNdFCLayer(in_channels, out_channels).to(device)
 
