@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Tuple, Union, Optional, Literal, Dict, Any
+from typing import Tuple, Union, Optional, Literal, Dict, Any, Callable, Type
 import torch
 import torch.nn as nn
 
@@ -61,14 +61,16 @@ class DiT(Module):
     patch_size (Union[int, Tuple[int]], optional):
         The size of each image patch. Defaults to (8,8). If an integer is provided, the patch_size is assumed to be a square 2D patch.
         If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
-    tokenizer (str, optional):
-        The tokenizer to use. Defaults to 'patch_embed_2d'.
-        Options:
+    tokenizer (Union[str, Module], optional):
+        The tokenizer to use. Defaults to 'patch_embed_2d'. You may provide:
+        - A string in {"patch_embed_2d"} to select a built-in tokenizer. Built-in tokenizers include:
             - 'patch_embed_2d': Uses a standard PatchEmbed2D to project the input image to a sequence of tokens.
-    detokenizer (str, optional):
-        The detokenizer to use. Defaults to 'proj_reshape_2d'.
-        Options:
-            - 'proj_reshape_2d': Uses a standard ProjLayer to project the transformer output to a multi-dimensional image.
+        - An instantiated PhysicsNeMo `Module` implementing the tokenizer interface defined in physicsnemo.experimental.models.dit.layers.TokenizerModuleBase.
+    detokenizer (Union[str, Module], optional):
+        The detokenizer to use. Defaults to 'proj_reshape_2d'. You may provide:
+        - A string in {"proj_reshape_2d"} to select a built-in detokenizer. Built-in tokenizers include:
+            - 'proj_reshape_2d': Uses a standard project and reshape operation to convert the token sequence back to an image.
+        - An instantiated PhysicsNeMo `Module` implementing the detokenizer interface defined in physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase.
     out_channels (Union[None, int], optional):
         The number of output channels. If None, it is `in_channels`. Defaults to None,
         which means the output will have the same number of channels as the input.
@@ -80,14 +82,12 @@ class DiT(Module):
         The number of attention heads. Defaults to 8.
     mlp_ratio (float, optional):
         The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-    attention_backend (str, optional):
-        The attention backend to use. Defaults to 'transformer_engine'.
-        Options:
-            - 'timm' uses the self-attention module from timm. For timm version 1.0.16 and higher, passing an attention mask to the forward method is supported.
-              Under the hood, timm uses torch.nn.functional.scaled_dot_product_attention. See physicsnemo.experimental.models.dit.layers.TimmSelfAttention for more details.
-            - 'transformer_engine' uses the MultiheadAttention module from transformer_engine. This performs the same operation as timm, but uses an efficient fused implementation.
-              See physicsnemo.experimental.models.dit.layers.TESelfAttention for more details.
-            - 'natten2d' uses an attention module performing 2D neighborhood attention using NATTEN. See physicsnemo.experimental.models.dit.layers.Natten2DSelfAttention for more details.
+    attention_backend (Union[str, type[Module], optional):
+        The attention backend to use. Defaults to 'transformer_engine'. You may provide:
+        - A string in {"timm", "transformer_engine", "natten2d"} to select a built-in backend.
+          See physicsnemo.experimental.models.dit.layers.DiTBlock for a description of each built-in backend.
+        - A `type[Module]` (class) that will be constructed per block with `hidden_size`, `num_heads`, and any `attn_kwargs`.
+        All custom modules must implement a forward mapping (B, L, D) -> (B, L, D), as defined in physicsnemo.experimental.models.dit.layers.AttentionModuleBase.
     layernorm_backend (str, optional):
         If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
     condition_dim (int, optional):
@@ -100,10 +100,12 @@ class DiT(Module):
         Additional keyword arguments for the detokenizer module.
     block_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the DiTBlock modules.
-    force_tokenization_fp32 (bool, optional):
-        If True, forces the tokenization and de-tokenization operations to be run in fp32. Defaults to False.
     timestep_embed_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the timestep embedding module constructor.
+    attn_kwargs (Dict[str, Any], optional):
+        Additional keyword arguments for the attention module constructor, if using a custom attention backend.
+    force_tokenization_fp32 (bool, optional):
+        If True, forces the tokenization and de-tokenization operations to be run in fp32. Defaults to False.
     
     Forward
     -------
@@ -150,22 +152,26 @@ class DiT(Module):
         input_size: Union[int, Tuple[int]],
         in_channels: int,
         patch_size: Union[int, Tuple[int]] = (8, 8),
-        tokenizer: str = "patch_embed_2d",
-        detokenizer: str = "proj_reshape_2d",
+        tokenizer: Union[str, Module] = "patch_embed_2d",
+        detokenizer: Union[str, Module] = "proj_reshape_2d",
         out_channels: Optional[int] = None,
         hidden_size: int = 384,
         depth: int = 12,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        attention_backend: Literal["timm", "transformer_engine", "natten2d"] = "transformer_engine",
+        attention_backend: Union[
+            Literal["timm", "transformer_engine", "natten2d"],
+            Type[Module],
+        ] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
         dit_initialization: Optional[int] = True,
         tokenizer_kwargs: Dict[str, Any] = {},
         detokenizer_kwargs: Dict[str, Any] = {},
         block_kwargs: Dict[str, Any] = {},
-        force_tokenization_fp32: bool = False,
         timestep_embed_kwargs: Dict[str, Any] = {},
+        attn_kwargs: Dict[str, Any] = {},
+        force_tokenization_fp32: bool = False,
     ):
         super().__init__(meta=MetaData())
         self.input_size = input_size if isinstance(input_size, (tuple, list)) else (input_size, input_size)
@@ -178,15 +184,24 @@ class DiT(Module):
         self.num_heads = num_heads
         self.condition_dim = condition_dim
 
-        # Tokenizer module
-        self.tokenizer = get_tokenizer(
-            input_size=self.input_size,
-            patch_size=self.patch_size,
-            in_channels=in_channels,
-            hidden_size=hidden_size,
-            tokenizer=tokenizer,
-            **tokenizer_kwargs,
-        )
+        if not isinstance(attention_backend, str):
+            if not (isinstance(attention_backend, type) and issubclass(attention_backend, Module)):
+                raise ValueError("attention_backend must be a string, or a physicsnemo Module that can be instantiated per block")
+
+        # Tokenizer module: accept string or pre-instantiated PhysicsNeMo Module
+        if isinstance(tokenizer, str):
+            self.tokenizer = get_tokenizer(
+                input_size=self.input_size,
+                patch_size=self.patch_size,
+                in_channels=in_channels,
+                hidden_size=hidden_size,
+                tokenizer=tokenizer,
+                **tokenizer_kwargs,
+            )
+        else:
+            if not isinstance(tokenizer, Module):
+                raise TypeError("tokenizer must be a string or a physicsnemo.models.Module instance")
+            self.tokenizer = tokenizer
 
         self.t_embedder = PositionalEmbedding(hidden_size, amp_mode=self.meta.amp_gpu, learnable=True, **timestep_embed_kwargs)
         self.cond_embedder = (
@@ -203,31 +218,43 @@ class DiT(Module):
             else None
         )
 
-        # Detokenizer module
-        self.detokenizer = get_detokenizer(
-            input_size=self.input_size,
-            patch_size=self.patch_size,
-            out_channels=self.out_channels,
-            hidden_size=hidden_size,
-            layernorm_backend=layernorm_backend,
-            detokenizer=detokenizer,
-            **detokenizer_kwargs,
-        )
+        # Detokenizer module: accept string or pre-instantiated PhysicsNeMo Module
+        if isinstance(detokenizer, str):
+            self.detokenizer = get_detokenizer(
+                input_size=self.input_size,
+                patch_size=self.patch_size,
+                out_channels=self.out_channels,
+                hidden_size=hidden_size,
+                layernorm_backend=layernorm_backend,
+                detokenizer=detokenizer,
+                **detokenizer_kwargs,
+            )
+        else:
+            if not isinstance(detokenizer, Module):
+                raise TypeError("detokenizer must be a string or a physicsnemo.models.Module instance")
+            self.detokenizer = detokenizer
 
-        self.blocks = nn.ModuleList(
-            [
+
+        blocks = []
+        for _ in range(depth):
+            if isinstance(attention_backend, str):
+                attn_module = attention_backend
+            else:
+                attn_module = attention_backend(hidden_size=hidden_size, num_heads=num_heads, **attn_kwargs)
+            
+            blocks.append(
                 DiTBlock(
                     hidden_size,
                     num_heads,
-                    attention_backend,
+                    attn_module,
                     layernorm_backend,
                     mlp_ratio=mlp_ratio,
                     **block_kwargs,
+                    **attn_kwargs,
                 )
-                for _ in range(depth)
-            ]
-        )
-        
+            )
+        self.blocks = nn.ModuleList(blocks)
+
         if dit_initialization:
             self.initialize_weights()
 
@@ -254,6 +281,7 @@ class DiT(Module):
         t: torch.Tensor,
         condition: Optional[torch.Tensor] = None,
         p_dropout: Optional[float | torch.Tensor] = None,
+        attn_kwargs: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         # Tokenize: (B, C, H, W) -> (B, L, D)
         if self.force_tokenization_fp32:
@@ -281,7 +309,7 @@ class DiT(Module):
             c = t  # (B, D)
         
         for block in self.blocks:
-            x = block(x, c, p_dropout=p_dropout)  # (B, L, D)
+            x = block(x, c, p_dropout=p_dropout, attn_kwargs=attn_kwargs)  # (B, L, D)
 
         # De-tokenize: (B, L, D) -> (B, C, H, W)
         if self.force_tokenization_fp32:

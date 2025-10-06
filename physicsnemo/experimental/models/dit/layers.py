@@ -54,6 +54,7 @@ try:
 except ImportError:
     NATTEN_AVAILABLE = False
 
+from physicsnemo.models import Module
 from physicsnemo.models.layers import Mlp
 from physicsnemo.distributed import ShardTensor
 from physicsnemo.distributed.shard_utils.natten_patches import partial_na2d
@@ -103,7 +104,7 @@ def get_attention(
     attn_drop_rate: float = 0.0,
     proj_drop_rate: float = 0.0,
     **attn_kwargs: Any,
-) -> nn.Module:
+) -> Module:
     """Construct a pre-defined attention module for DiT.
 
     Parameters
@@ -123,7 +124,7 @@ def get_attention(
 
     Returns
     -------
-    nn.Module
+    Module
         A module whose forward accepts (B, L, D) and returns (B, L, D).
     """
     if attention_backend == "timm":
@@ -135,7 +136,7 @@ def get_attention(
     raise ValueError("attention_backend must be one of 'timm', 'transformer_engine', 'natten2d' if using pre-defined attention modules.")
 
 
-class AttentionModuleBase(nn.Module, ABC):
+class AttentionModuleBase(Module, ABC):
     """Abstract base class for attention modules used in DiTBlock
 
     Implementations must define a forward method that accepts a single tensor of shape
@@ -448,9 +449,9 @@ class DiTBlock(nn.Module):
         The dimensionality of the input and output.
     num_heads (int):
         The number of attention heads.
-    attention_backend (Union[str, nn.Module]):
+    attention_backend (Union[str, Module]):
         Either the name of a pre-defined attention implementation ('timm', 'transformer_engine', or 'natten2d'),
-        or a user-provided nn.Module implementing the same (B, L, D)->(B, L, D) interface for self-attention.
+        or a user-provided Module implementing the same (B, L, D)->(B, L, D) interface for self-attention.
         Options:
             - 'timm' uses the self-attention module from timm. For timm version 1.0.16 and higher, passing an attention mask to the forward method is supported.
               Under the hood, timm uses torch.nn.functional.scaled_dot_product_attention. See physicsnemo.experimental.models.dit.layers.TimmSelfAttention for more details.
@@ -504,7 +505,7 @@ class DiTBlock(nn.Module):
         self,
         hidden_size: int,
         num_heads: int,
-        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], nn.Module] = "transformer_engine",
+        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], Module] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         mlp_ratio: float = 4.0,
         intermediate_dropout: bool = False,
@@ -515,7 +516,7 @@ class DiTBlock(nn.Module):
     ):
         super().__init__()
 
-        if isinstance(attention_backend, nn.Module):
+        if isinstance(attention_backend, Module):
             self.attention = attention_backend
         else:
             self.attention = get_attention(
@@ -664,7 +665,7 @@ class ProjLayer(nn.Module):
 # -------------------------------------------------------------------------------------
 
 
-class TokenizerModuleBase(nn.Module, ABC):
+class TokenizerModuleBase(Module, ABC):
     """Abstract base class for tokenizers used by DiT. Must implement a forward method and an initialize_weights method.
 
     Forward
@@ -675,7 +676,7 @@ class TokenizerModuleBase(nn.Module, ABC):
     Returns
     -------
     torch.Tensor
-        Token sequence of shape (B, L, D), where L = (H // patch[0]) * (W // patch[1]).
+        Token sequence of shape (B, L, D), where L is the length of the token sequence (number of patches for a standard 2D DiT).
     """
 
     @abstractmethod
@@ -820,7 +821,7 @@ def get_tokenizer(
     raise ValueError("tokenizer must be 'patch_embed_2d', no other supported tokenizers are available yet.")
 
 
-class DetokenizerModuleBase(nn.Module, ABC):
+class DetokenizerModuleBase(Module, ABC):
     """Abstract base class for detokenizers used by DiT.
 
     Must implement a forward method and an initialize_weights method.
