@@ -1,27 +1,6 @@
 <!-- markdownlint-disable -->
 # Generative Correction Diffusion Model (CorrDiff) for Km-scale Atmospheric Downscaling
 
-## Table of Contents
-- [Generative Correction Diffusion Model (CorrDiff) for Km-scale Atmospheric Downscaling](#generative-correction-diffusion-model-corrdiff-for-km-scale-atmospheric-downscaling)
-  - [Table of Contents](#table-of-contents)
-  - [Problem overview](#problem-overview)
-  - [Getting started with the HRRR-Mini example](#getting-started-with-the-hrrr-mini-example)
-    - [Preliminaries](#preliminaries)
-    - [Configuration basics](#configuration-basics)
-    - [Training the regression model](#training-the-regression-model)
-    - [Training the diffusion model](#training-the-diffusion-model)
-    - [Generation](#generation)
-  - [Another example: Taiwan dataset](#another-example-taiwan-dataset)
-    - [Dataset \& Datapipe](#dataset--datapipe)
-    - [Training the models](#training-the-models)
-    - [Sampling and Model Evaluation](#sampling-and-model-evaluation)
-    - [Logging and Monitoring](#logging-and-monitoring)
-  - [Training CorrDiff on a Custom Dataset](#training-corrdiff-on-a-custom-dataset)
-    - [Defining a Custom Dataset](#defining-a-custom-dataset)
-    - [Training configuration](#training-configuration)
-    - [Generation configuration](#generation-configuration)
-    - [FAQs](#faqs)
-  - [References](#references)
 
 ## Problem overview
 
@@ -34,9 +13,7 @@ extremes and accurately capturing multivariate relationships like intense rainfa
 typhoon dynamics, suggesting a promising future for global-to-km-scale machine learning
 weather forecasts.
 
-<p align="center">
-<img src="../../../docs/img/corrdiff_cold_front.png"/>
-</p>
+![CorrDiff-based downscaling over Taiwan](../../../docs/img/corrdiff_cold_front.png)
 
 ## Getting started with the HRRR-Mini example
 
@@ -51,6 +28,11 @@ Together, these modifications reduce training time from thousands of GPU hours t
 
 ### Preliminaries
 Start by installing PhysicsNeMo (if not already installed) and copying this folder (`examples/weather/corrdiff`) to a system with a GPU available. Also download the CorrDiff-Mini dataset from [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/resources/modulus_datasets-hrrr_mini).
+
+It is also required to install the dependencies by running below:
+```bash
+pip install -r requirements.txt
+```
 
 ### Configuration basics
 
@@ -109,29 +91,45 @@ CorrDiff uses a two-step training process:
 
 For the CorrDiff-Mini regression model, we use the following configuration components:
 
-The top-level configuration file `config_training_hrrr_mini_regression.yaml` contains the most commonly modified parameters:
+The top-level configuration file `config_training_hrrr_mini_regression.yaml`
+contains the most commonly modified parameters:
+
 - `dataset`: Dataset type and paths (`hrrr_mini`, `gefs_hrrr`, `cwb`, or `custom`)
+
 - `model`: Model architecture type (`regression`, `diffusion`, etc.)
+
 - `model_size`: Model capacity (`normal` or `mini` for faster experiments)
-- `training`: High-level training parameters (duration, batch size, IO settings)
+
+- `training`: High-level training parameters (duration, batch size, IO
+  settings)
+
 - `wandb`: Weights & Biases logging settings (`mode`, `results_dir`, `watch_model`)
 
 This configuration automatically loads these specific files from `conf/base`:
-- `dataset/hrrr_mini.yaml`: HRRR-Mini dataset parameters (data paths, variables)
+
+- `dataset/hrrr_mini.yaml`: HRRR-Mini dataset parameters (data paths,
+  variables)
+
 - `model/regression.yaml`: Regression UNet architecture settings
+
 - `model_size/mini.yaml`: Reduced model capacity settings for faster training
+
 - `training/regression.yaml`: Training loop parameters specific to regression model
 
-These base configuration files contain more detailed settings that are less commonly modified but give fine-grained control over the training process.
+These base configuration files contain more detailed settings that are less
+commonly modified but give fine-grained control over the training process.
 
-To begin training, execute the following command using [train.py](train.py):
+To begin training, execute the following command using `train.py`:
 ```bash
 python train.py --config-name=config_training_hrrr_mini_regression.yaml
 ```
 
 **Training Details:**
+
 - Duration: A few hours on a single A100 GPU
+
 - Checkpointing: Automatically resumes from latest checkpoint if interrupted
+
 - Multi-GPU Support: Compatible with `torchrun` or MPI for distributed training
 
 > **💡 Memory Management**  
@@ -142,8 +140,10 @@ python train.py --config-name=config_training_hrrr_mini_regression.yaml
 After successfully training the regression model, you can proceed with training the diffusion model. The process requires:
 
 - A pre-trained regression model checkpoint
+
 - The same dataset used for regression training
-- Configuration file [conf/config_training_hrrr_mini_diffusion.yaml](conf/config_training_hrrr_mini_diffusion.yaml)
+
+- Configuration file [conf/config_training_hrrr_mini_diffusion.yaml](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/conf/config_training_hrrr_mini_diffusion.yaml)
 
 To start the diffusion model training, execute:
 ```bash
@@ -156,12 +156,15 @@ The training will generate checkpoints in the `checkpoints_diffusion` directory.
 
 ### Generation
 
-Once both models are trained, you can use [generate.py](generate.py) to create new predictions. The generation process requires:
+Once both models are trained, you can use `generate.py` to create new predictions. The generation process requires:
 
 **Required Files:**
+
 - Trained regression model checkpoint
+
 - Trained diffusion model checkpoint
-- Configuration file [conf/config_generate_hrrr_mini.yaml](conf/config_generate_hrrr_mini.yaml)
+
+- Configuration file [conf/config_generate_hrrr_mini.yaml](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/conf/config_generate_hrrr_mini.yaml)
 
 Execute the generation command:
 ```bash
@@ -171,8 +174,11 @@ python generate.py --config-name="config_generate_hrrr_mini.yaml" \
 ```
 
 The output is saved as a NetCDF4 file containing three groups:
+
 - `input`: The original input data
+
 - `truth`: The ground truth data for comparison
+
 - `prediction`: The CorrDiff model predictions
 
 You can analyze the results using the Python NetCDF4 library or visualization tools of your choice.
@@ -184,7 +190,10 @@ You can analyze the results using the Python NetCDF4 library or visualization to
 The Taiwan example demonstrates CorrDiff training on a high-resolution weather dataset conditioned on the low-resolution [ERA5 dataset](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5). This dataset is available for non-commercial use under the [CC BY-NC-ND 4.0 license](https://creativecommons.org/licenses/by-nc-nd/4.0/legalcode.en).
 
 **Dataset Access:**
-- Location: [NGC Catalog - CWA Dataset](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/resources/modulus_datasets_cwa)
+
+- Location: [NGC Catalog - CWA
+  Dataset](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/modulus/resources/modulus_datasets_cwa)
+
 - Download Command:
   ```bash
   ngc registry resource download-version "nvidia/modulus/modulus_datasets_cwa:v1"
@@ -204,16 +213,26 @@ The patch-based approach divides the target region into smaller subsets during b
 
 **Configuration Structure:**
 
-The top-level configuration file `config_training_taiwan_regression.yaml` contains commonly modified parameters:
+The top-level configuration file `config_training_taiwan_regression.yaml`
+contains commonly modified parameters:
+
 - `dataset`: Set to `cwb` for the Taiwan Central Weather Bureau dataset
+
 - `model`: Model type (`regression`, `diffusion`, or `patched_diffusion`)
+
 - `model_size`: Model capacity (`normal` recommended for Taiwan dataset)
+
 - `training.hp`: Training duration and batch size settings
+
 - `wandb`: Experiment tracking configuration
 
 This configuration automatically loads these specific files from `conf/base`:
+
 - `dataset/cwb.yaml`: Taiwan dataset parameters
-- `model/regression.yaml` or `model/diffusion.yaml`: Model architecture settings
+
+- `model/regression.yaml` or `model/diffusion.yaml`: Model architecture
+  settings
+
 - `training/regression.yaml` or `training/diffusion.yaml`: Training parameters
 
 When training the diffusion variants, you'll need to specify the path to your pre-trained regression checkpoint in `training.io.regression_checkpoint_path`. This is essential as the diffusion model learns to predict residuals on top of the regression model's predictions.
@@ -225,10 +244,14 @@ For single-GPU training:
 python train.py --config-name=config_training_taiwan_regression.yaml
 ```
 
-For multi-GPU or multi-node training:
+For multi-GPU (single node) training:
 ```bash
 torchrun --standalone --nnodes=<NUM_NODES> --nproc_per_node=<NUM_GPUS_PER_NODE> train.py
 ```
+
+For multi-GPU multi-node training, the `torchrun` command needs to be modified
+and it is recommended to refer to the [torchrun
+documentation](https://docs.pytorch.org/docs/stable/elastic/run.html).
 
 To switch between model types, simply change the configuration name in the training command (e.g., `config_training_taiwan_diffusion.yaml` for the diffusion model).
 
@@ -236,21 +259,28 @@ To switch between model types, simply change the configuration name in the train
 
 The evaluation pipeline for CorrDiff models consists of two main components:
 
-1. **Sample Generation** ([generate.py](generate.py)):
-   Generates predictions and saves them in a netCDF file format. The process uses configuration settings from [conf/config_generate.yaml](conf/config_generate.yaml).
+1. **Sample Generation** (`generate.py`):
+   Generates predictions and saves them in a netCDF file format. The process
+   uses configuration settings from
+   [conf/config_generate_taiwan.yaml](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/conf/config_generate_taiwan.yaml).
    ```bash
    python generate.py --config-name=config_generate_taiwan.yaml
    ```
 
-2. **Performance Scoring** ([score_samples.py](score_samples.py)):
+2. **Performance Scoring** (`score_samples.py`):
    Computes both deterministic metrics (like MSE, MAE) and probabilistic scores for the generated samples.
    ```bash
    python score_samples.py path=<PATH_TO_NC_FILE> output=<OUTPUT_FILE>
    ```
 
 For visualization and analysis, you have several options:
-- Use the plotting scripts in the [inference](inference/) directory
+
+- Use the plotting scripts in the
+  [inference](https://github.com/NVIDIA/physicsnemo/tree/main/examples/weather/corrdiff/inference)
+  directory
+
 - Visualize results with [Earth2Studio](https://github.com/NVIDIA/earth2studio)
+
 - Create custom visualizations using the NetCDF4 output structure
 
 ### Logging and Monitoring
@@ -281,8 +311,11 @@ TensorBoard provides real-time monitoring of training metrics when running in a 
 CorrDiff includes integration with Weights & Biases for experiment tracking. The following parameters are hardcoded in the code:
 
 - Project name: "Modulus-Launch"
-- Entity: "Modulus" 
+
+- Entity: "Modulus"
+
 - Run name: Generated based on configuration job name
+
 - Group: "CorrDiff-DDP-Group"
 
 You can configure the following wandb parameters in the configuration files:
@@ -302,9 +335,13 @@ To use wandb:
    ```
 
 2. Training runs will automatically log to the wandb project, tracking:
+
    - Training and validation metrics
+
    - Model architecture details
+
    - System resource usage
+
    - Hyperparameters
 
 You can access your experiment dashboard at Weights & Biases website.
@@ -315,17 +352,23 @@ This repository includes examples of **CorrDiff** training on specific datasets,
 
 ### Defining a Custom Dataset
 
-To train CorrDiff on a custom dataset, you need to implement a custom dataset class that inherits from `DownscalingDataset` defined in [datasets/base.py](./datasets/base.py). This base class defines the interface that all dataset implementations must follow.
+To train CorrDiff on a custom dataset, you need to implement a custom dataset class that inherits from `DownscalingDataset` defined in [datasets/base.py](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/datasets/base.py). This base class defines the interface that all dataset implementations must follow.
 
 **Required Implementation:**
 
 1. Your dataset class must inherit from `DownscalingDataset` and implement its
-   abstract methods, for example:
+   abstract methods, which include:
+
    - `longitude()` and `latitude()`: Return coordinate arrays
+
    - `input_channels()` and `output_channels()`: Define metadata for input/output variables
+
    - `time()`: Return time values
+
    - `image_shape()`: Return spatial dimensions
+
    - `__len__()`: Return total number of samples
+
    - `__getitem__()`: Return data for a given index
 
 The most important method is `__getitem__`, which must return a tuple of tensors:
@@ -369,13 +412,17 @@ def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, Optional[to
   3. Pass all other fields in the `dataset` section as kwargs to your class constructor
 
 - All tensors should be properly normalized (use `normalize_input`/`normalize_output` methods if needed)
+
 - Ensure consistent dimensions across all samples
+
 - Channel metadata should accurately describe your data variables
 
 
 For reference implementations of dataset classes, look at:
-- [datasets/hrrrmini.py](./datasets/hrrrmini.py) - Simple example using NetCDF format
-- [datasets/cwb.py](./datasets/cwb.py) - More complex example
+
+- [datasets/hrrrmini.py](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/datasets/hrrrmini.py) - Simple example using NetCDF format
+
+- [datasets/cwb.py](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/datasets/cwb.py) - More complex example
 
 
 ### Training configuration
@@ -385,16 +432,25 @@ After implementing your custom dataset, you can proceed with the two-step traini
 **Top-level Configuration** (`config_training_custom.yaml`):
 This file serves as your primary interface for configuring the training process. It contains commonly modified parameters that can be set either directly in the file or through command-line overrides:
 
-- `dataset`: Configuration for your custom dataset implementation, including paths and variables
-- `model`: Core model settings, including type selection (`regression` or `diffusion`)
+- `dataset`: Configuration for your custom dataset implementation, including
+  paths and variables
+
+- `model`: Core model settings, including type selection (`regression` or
+  `diffusion`)
+
 - `training`: High-level training parameters like batch size and duration
+
 - `wandb`: Weights & Biases logging settings (`mode`, `results_dir`, `watch_model`)
 
 **Fine-grained Control**:
 The base configuration files in `conf/base/` provide detailed control over specific components. These files are automatically loaded based on your top-level choices:
 
-- `model/*.yaml`: Contains architecture-specific settings for network depth, attention mechanisms, and embedding configurations
-- `training/*.yaml`: Defines training loop behavior, including optimizer settings and checkpoint frequency
+- `model/*.yaml`: Contains architecture-specific settings for network depth,
+  attention mechanisms, and embedding configurations
+
+- `training/*.yaml`: Defines training loop behavior, including optimizer
+  settings and checkpoint frequency
+
 - `model_size/*.yaml`: Provides preset configurations for different model capacities
 
 While direct modification of these base files is typically unnecessary, any
@@ -413,9 +469,13 @@ them. Once the regression model is trained, proceed with training the diffusion
 model. During training, you can fine-tune various parameters. The most commonly adjusted parameters include:
 
 - `training.hp.total_batch_size`: Controls the total batch size across all GPUs
+
 - `training.hp.batch_size_per_gpu`: Adjusts per-GPU memory usage
+
 - `training.hp.patch_shape_x/y`: Sets dimensions for patch-based training
+
 - `training.hp.training_duration`: Defines total training steps
+
 - `training.hp.lr_rampup`: Controls learning rate warmup period
 
 > **Starting with a Small Model**  
@@ -436,7 +496,7 @@ model. During training, you can fine-tune various parameters. The most commonly 
 > 2. Compute the residuals `x_res = x_data - regression_model(x_data)` on
 >    multiple samples, where `x_data` are ground truth samples.
 >
-> 3. Calculate the auto-correlation function of your residuals using the provided utilities in [inference/power_spectra.py](./inference/power_spectra.py):
+> 3. Calculate the auto-correlation function of your residuals using the provided utilities in [inference/power_spectra.py](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/corrdiff/inference/power_spectra.py):
 >    - `average_power_spectrum()`
 >    - `power_spectra_to_acf()`
 >
@@ -476,8 +536,11 @@ Key generation parameters that can be adjusted include for example:
 - `generation.patch_shape_x/y`: Patch dimensions for patch-based generation
 
 The generated samples are saved in a NetCDF file with three main components:
+
 - Input data: The original low-resolution inputs
+
 - Ground truth: The actual high-resolution data (if available)
+
 - Predictions: The model-generated high-resolution outputs
 
 ### FAQs
@@ -526,10 +589,10 @@ The generated samples are saved in a NetCDF file with three main components:
    achieve. For a purely spatial super-resolution task (where input and output variables are the same), CorrDiff can reliably achieve a maximum resolution scaling of ×16. If the task involves inferring new output variables, the maximum reliable spatial super-resolution is ×11.
 
 6. **What does a successful training look like?**  
-   In a successful training run, the loss function should decrease monotonically, as shown below:  
-  <p align="center">
-<img src="../../../docs/img/corrdiff_training_loss.png"/>
-</p>
+   In a successful training run, the loss function should decrease
+   monotonically, as shown below:
+
+   ![CorrDiff training loss](../../../docs/img/corrdiff_training_loss.png)
 
 7. **Which hyperparameters are most important?**  
    One of the most crucial hyperparameters is the patch size for a patch-based
@@ -543,13 +606,16 @@ The generated samples are saved in a NetCDF file with three main components:
      samples to process during training. Values between 1M and 30M samples are
      typical, depending on the size of the dataset and on the type of model
      (regression or diffusion).
+
    - Learning rate ramp-up (`training.hp.lr_rampup`): Number of samples over
      which learning rate gradually increases. In some cases, `lr_rampup=0` is
      sufficient, but if training is unstable, it may be necessary to increase
      it. Values between 0 and 200M samples are typical.
+
    - Learning rate (`training.hp.lr`): Base learning rate that controls how
      quickly model parameters are updated. It may be decreased if training is
      unstable, and increased if training is slow.
+
    - Batch size per GPU (`training.hp.batch_size_per_gpu`): Number of samples
      processed in parallel on each GPU. It needs to be reduced if you encounter
      an out-of-memory error.
@@ -573,8 +639,11 @@ The generated samples are saved in a NetCDF file with three main components:
    ```
 
    You only need to specify the parameters you want to override in the `validation` section. All other parameters will be inherited from the main `dataset` configuration. Common overrides include:
+
    - Different data path for a separate validation set
+
    - Smaller subset of variables to validate on
+
    - Different time periods or spatial regions
 
    **Implementation Note**: When a `validation` section is present in the
@@ -588,5 +657,8 @@ The generated samples are saved in a NetCDF file with three main components:
 ## References
 
 - [Residual Diffusion Modeling for Km-scale Atmospheric Downscaling](https://arxiv.org/pdf/2309.15214.pdf)
-- [Elucidating the design space of diffusion-based generative models](https://openreview.net/pdf?id=k7FuTOWMOc7)
+
+- [Elucidating the design space of diffusion-based generative
+  models](https://openreview.net/pdf?id=k7FuTOWMOc7)
+
 - [Score-Based Generative Modeling through Stochastic Differential Equations](https://arxiv.org/pdf/2011.13456.pdf)
