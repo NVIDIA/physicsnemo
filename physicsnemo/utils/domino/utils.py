@@ -679,7 +679,7 @@ def create_grid(
     ]
 
     # Combine them with meshgrid:
-    xv, yv, zv = torch.meshgrid(*dd)
+    xv, yv, zv = torch.meshgrid(*dd, indexing="ij")
 
     xv = xv.unsqueeze(-1)
     yv = yv.unsqueeze(-1)

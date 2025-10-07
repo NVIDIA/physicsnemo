@@ -87,6 +87,9 @@ class DoMINODataConfig:
             attributes that are arraylike.
         volume_variables: (Volume specific) Names of volume variables.
         volume_points_sample: (Volume specific) Number of volume points to sample per batch.
+        volume_sample_from_disk: (Volume specific) If the volume data is in a shuffled state on disk,
+            read contiguous chunks of the data rather than the entire volume data.  This greatly
+            accelerates IO in bandwidth limited systems or when the volumetric data is very large.
         volume_factors: (Volume specific) Non-dimensionalization factors for volume variables scaling.
             If set, and scaling_type is:
             - min_max_scaling -> rescale volume_fields to the min/max set here
@@ -138,6 +141,7 @@ class DoMINODataConfig:
     # Volume specific variables:
     volume_variables: Optional[Sequence] = ("UMean", "pMean")
     volume_points_sample: int = 1024
+    volume_sample_from_disk: bool = False
     volume_factors: Optional[Sequence] = None
     bounding_box_dims: Optional[Union[BoundingBox, Sequence]] = None
 
@@ -282,16 +286,20 @@ class DoMINODataPipe(Dataset):
         # Ensure the volume and surface scaling factors are torch tensors
         # and on the right device:
         if self.config.volume_factors is not None:
-            self.config.volume_factors = torch.tensor(
-                self.config.volume_factors,
-                device=self.preproc_device,
-                dtype=torch.float32,
+            if not isinstance(self.config.volume_factors, torch.Tensor):
+                self.config.volume_factors = torch.from_numpy(
+                    self.config.volume_factors
+                )
+            self.config.volume_factors = self.config.volume_factors.to(
+                self.preproc_device, dtype=torch.float32
             )
         if self.config.surface_factors is not None:
-            self.config.surface_factors = torch.tensor(
-                self.config.surface_factors,
-                device=self.preproc_device,
-                dtype=torch.float32,
+            if not isinstance(self.config.surface_factors, torch.Tensor):
+                self.config.surface_factors = torch.from_numpy(
+                    self.config.surface_factors
+                )
+            self.config.surface_factors = self.config.surface_factors.to(
+                self.preproc_device, dtype=torch.float32
             )
 
         self.dataset = None
@@ -449,7 +457,9 @@ class DoMINODataPipe(Dataset):
             )
 
             if surface_coordinates_sampled.shape[0] < self.config.surface_points_sample:
-                raise ValueError("Sampled points is more than points in the surface mesh")
+                raise ValueError(
+                    "Sampled points is more than points in the surface mesh"
+                )
 
             # Select out the sampled points for non-neighbor arrays:
             if surface_fields is not None:
@@ -557,6 +567,8 @@ class DoMINODataPipe(Dataset):
         # Apply sampling to the volume coordinates and fields
         ########################################################################
 
+        # If the volume data has been sampled from disk, directly, then
+        # still apply sampling.  We over-pull from disk deliberately.
         if self.config.sampling:
             # Generate a series of idx to sample the volume
             # without replacement
@@ -567,7 +579,9 @@ class DoMINODataPipe(Dataset):
             # In case too few points are in the sampled data (because the
             # inputs were too few), pad the outputs:
             if volume_coordinates_sampled.shape[0] < self.config.volume_points_sample:
-                raise ValueError("Sampled points is more than points in the volume mesh")
+                raise ValueError(
+                    "Sampled points is more than points in the volume mesh"
+                )
 
             # Apply the same sampling to the targets, too:
             if volume_fields is not None:
@@ -859,6 +873,10 @@ class DoMINODataPipe(Dataset):
         Pass a dataset to the datapipe to enable iterating over both in one pass.
         """
         self.dataset = dataset
+
+        if self.config.volume_sample_from_disk:
+            # We deliberately double the data to read compared to the sampling size:
+            self.dataset.set_volume_sampling_size(2 * self.config.volume_points_sample)
 
     def __len__(self):
         if self.dataset is not None:
@@ -1198,6 +1216,7 @@ def create_domino_dataset(
             model_type=model_type,
             bounding_box_dims=cfg.data.bounding_box,
             bounding_box_dims_surf=cfg.data.bounding_box_surface,
+            volume_sample_from_disk=cfg.data.volume_sample_from_disk,
             num_surface_neighbors=cfg.model.num_neighbors_surface,
             surface_sampling_algorithm=cfg.model.surface_sampling_algorithm,
             **overrides,

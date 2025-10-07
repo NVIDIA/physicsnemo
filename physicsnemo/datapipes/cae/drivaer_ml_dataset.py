@@ -78,6 +78,8 @@ class BackendReader(ABC):
         self.keys_to_read = keys_to_read
         self.keys_to_read_if_available = keys_to_read_if_available
 
+        self.volume_sampling_size = None
+
     @abstractmethod
     def read_file(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
         """
@@ -145,6 +147,45 @@ class BackendReader(ABC):
 
         return global_chunk_start, global_chunk_stop, chunk_sizes
 
+    def set_volume_sampling_size(self, volume_sampling_size: int):
+        """
+        Set the volume sampling size.  When set, the readers will
+        assume the volumetric data is shuffled on disk and read only
+        contiguous chunks of the data up to the sampling size.
+
+
+        Args:
+            volume_sampling_size: The total size of the volume sampling.
+
+        """
+        self.volume_sampling_size = volume_sampling_size
+
+    def select_random_sections_from_slice(
+        self,
+        slice_start: int,
+        slice_stop: int,
+        n_points: int,
+    ) -> slice:
+        """
+
+        select the contiguous chunks of the volume data to read.
+
+        Args:
+            n_volume_points: The number of points to sample from the volume.
+
+        Returns:
+            A tuple of the start and stop indices of the contiguous chunks.
+        """
+
+        if slice_stop - slice_start < n_points:
+            raise ValueError(
+                f"Slice size {slice_stop - slice_start} is less than the number of points {n_points}"
+            )
+
+        # Choose a random start point that will fit the entire n_points region:
+        start = np.random.randint(slice_start, slice_stop - n_points)
+        return slice(start, start + n_points)
+
 
 class NpyFileReader(BackendReader):
     """
@@ -178,6 +219,14 @@ class NpyFileReader(BackendReader):
     ) -> dict[str, ShardTensor]:
         pass
 
+    def set_volume_sampling_size(self, volume_sampling_size: int):
+        """
+        This is not supported for npy files.
+        """
+        raise NotImplementedError(
+            "volume sampling directly from disk is not supported for npy files."
+        )
+
 
 class NpzFileReader(BackendReader):
     """
@@ -202,7 +251,25 @@ class NpzFileReader(BackendReader):
         if len(keys_missing) > 0:
             raise ValueError(f"Keys {keys_missing} not found in file {filename}")
 
-        data = {key: torch.from_numpy(in_data[key][:]) for key in self.keys_to_read}
+        # Make sure to select the slice outside of the loop.
+        if self.volume_sampling_size is not None:
+            volume_slice = self.select_random_sections_from_slice(
+                0,
+                in_data["volume_mesh_centers"].shape[0],
+                self.volume_sampling_size,
+            )
+        else:
+            volume_slice = slice(0, in_data["volume_mesh_centers"].shape[0])
+
+        # This is a slower basic way to do this, to be improved:
+        data = {}
+        for key in self.keys_to_read:
+            if "volume" not in key:
+                data[key] = torch.from_numpy(in_data[key][:])
+            else:
+                data[key] = torch.from_numpy(in_data[key][volume_slice])
+
+        # data = {key: torch.from_numpy(in_data[key][:]) for key in self.keys_to_read}
 
         return self.fill_optional_keys(data)
 
@@ -210,6 +277,14 @@ class NpzFileReader(BackendReader):
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
         pass
+
+    def set_volume_sampling_size(self, volume_sampling_size: int):
+        """
+        This is not supported for npz files.
+        """
+        raise NotImplementedError(
+            "volume sampling directly from disk is not supported for npz files."
+        )
 
 
 class ZarrFileReader(BackendReader):
@@ -235,8 +310,23 @@ class ZarrFileReader(BackendReader):
         if len(missing_keys) > 0:
             raise ValueError(f"Keys {missing_keys} not found in file {filename}")
 
+        # Make sure to select the slice outside of the loop.
+        if self.volume_sampling_size is not None:
+            volume_slice = self.select_random_sections_from_slice(
+                0,
+                group["volume_mesh_centers"].shape[0],
+                self.volume_sampling_size,
+            )
+        else:
+            volume_slice = slice(0, group["volume_mesh_centers"].shape[0])
+
         # This is a slower basic way to do this, to be improved:
-        data = {key: torch.from_numpy(group[key][:]) for key in self.keys_to_read}
+        data = {}
+        for key in self.keys_to_read:
+            if "volume" not in key:
+                data[key] = torch.from_numpy(group[key][:])
+            else:
+                data[key] = torch.from_numpy(group[key][volume_slice])
 
         return self.fill_optional_keys(data)
 
@@ -436,6 +526,14 @@ if PV_AVAILABLE:
 
             raise NotImplementedError("Not implemented yet.")
 
+        def set_volume_sampling_size(self, volume_sampling_size: int):
+            """
+            This is not supported for vtk files.
+            """
+            raise NotImplementedError(
+                "volume sampling directly from disk is not supported for vtk files."
+            )
+
 
 if TENSORSTORE_AVAILABLE:
 
@@ -452,7 +550,7 @@ if TENSORSTORE_AVAILABLE:
             super().__init__(keys_to_read, keys_to_read_if_available)
 
             self.spec_template = {
-                "driver": "zarr2",
+                "driver": "auto",
                 "kvstore": {
                     "driver": "file",
                     "path": None,
@@ -463,6 +561,7 @@ if TENSORSTORE_AVAILABLE:
                 {
                     "cache_pool": {"total_bytes_limit": 10_000_000},
                     "data_copy_concurrency": {"limit": 72},
+                    "file_io_concurrency": {"limit": 72},
                 }
             )
 
@@ -486,16 +585,31 @@ if TENSORSTORE_AVAILABLE:
                 key: read_futures[key].result() for key in read_futures.keys()
             }
 
+            # Make sure to select the slice outside of the loop.
+            # We need
+            if self.volume_sampling_size is not None:
+                volume_slice = self.select_random_sections_from_slice(
+                    0,
+                    read_futures["volume_mesh_centers"].shape[0],
+                    self.volume_sampling_size,
+                )
+            else:
+                volume_slice = slice(0, read_futures["volume_mesh_centers"].shape[0])
+
             # Trigger an async read of each data item:
             # (Each item will be a numpy ndarray after this:)
-            read_futures = {
-                key: read_futures[key].read() for key in read_futures.keys()
-            }
+            tensor_futures = {}
+            for key in self.keys_to_read:
+                if "volume" not in key:
+                    tensor_futures[key] = read_futures[key].read()
+                # For the volume data, read the slice:
+                else:
+                    tensor_futures[key] = read_futures[key][volume_slice].read()
 
             # Convert them to torch tensors:
             # (make sure to block for the result)
             data = {
-                key: torch.as_tensor(read_futures[key].result(), dtype=torch.float32)
+                key: torch.as_tensor(tensor_futures[key].result(), dtype=torch.float32)
                 for key in self.keys_to_read
             }
 
@@ -844,35 +958,6 @@ class DrivaerMLDataset:
 
         return result
 
-        # result = {}
-
-        # for key, tensor in tensors.items():
-        #     # Create a ShardTensor with whatever layout the data is actually in:
-        #     st = ShardTensor.__new__(
-        #         ShardTensor,
-        #         local_tensor=tensor,
-        #         spec=self.tensor_specs[key],
-        #         requires_grad=False,  # By default, the data pipe output doesn't need a grad.
-        #     )
-
-        #     # Find out the desired placement:
-        #     if tensor.numel() > 1:
-        #         if isinstance(self.placements, dict):
-        #             target_placement = self.placements[key]
-        #         else:
-        #             target_placement = self.placements
-        #     else:
-        #         target_placement = (Replicate(),)
-
-        #     # Redistribute if necessary:
-        #     # (Recall that this is one dimensional mesh only)
-        #     if st._spec.placements[0] != target_placement[0]:
-        #         st = st.redistribute(placements=target_placement)
-
-        #     result[key] = st
-
-        # return result
-
     def preload(self, idx: int) -> None:
         """
         Asynchronously preload the data for the given index (up to CPU, not GPU).
@@ -1012,6 +1097,17 @@ class DrivaerMLDataset:
             data = self._convert_to_shard_tensors(data, self._filenames[idx])
 
         return data
+
+    def set_volume_sampling_size(self, volume_sampling_size: int):
+        """
+        Set the volume sampling size.  When set, the readers will
+        assume the volumetric data is shuffled on disk and read only
+        contiguous chunks of the data up to the sampling size.
+
+        Args:
+            volume_sampling_size: The total size of the volume sampling.
+        """
+        self.file_reader.set_volume_sampling_size(volume_sampling_size)
 
 
 def compute_mean_std_min_max(
