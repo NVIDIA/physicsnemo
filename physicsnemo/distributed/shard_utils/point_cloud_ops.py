@@ -464,45 +464,10 @@ class RingBallQuery(torch.autograd.Function):
 
         raise MissingShardPatch("Backward pass for ring ball query not implemented.")
 
-        # (
-        #     points,
-        #     queries,
-        #     current_indices,
-        #     current_num_neighbors,
-        #     current_outputs,
-        # ) = ctx.saved_tensors
-
-        # # We need to do a ring again in the backward direction.
-        # # The backward pass is computed locally, and then the gradients
-        # # and p2 are moved along the ring together.
-        # # for i in range(world_size):
-        # # Calculate which source rank this data is from
-
-        # local_p2_grad = _ball_query_backward_primitive_(
-        #     points[0],
-        #     queries[0],
-        #     current_indices,
-        #     current_num_neighbors,
-        #     current_outputs,
-        #     mapping_grad,
-        #     num_neighbors_grad,
-        #     outputs_grad,
-        # )
-        # local_points_grad = torch.zeros_like(points)
-
-        # return (
-        #     local_points_grad,
-        #     local_p2_grad,
-        #     None,
-        #     None,
-        #     None,
-        #     None,
-        # )
-
 
 class GradReducer(torch.autograd.Function):
     """
-    A custom autograd function that performs an allreduce on the gradients if they are sharded
+    A custom autograd function that performs an allreduce on the gradients if they are replicated
     """
 
     @staticmethod
