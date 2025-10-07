@@ -70,10 +70,12 @@ from physicsnemo.utils.domino.utils import *
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
 import time
 
-from utils import ScalingFactors, get_keys_to_read, coordinate_distributed_environment
-
-# Initialize NVML
-nvmlInit()
+from utils import (
+    ScalingFactors,
+    get_keys_to_read,
+    coordinate_distributed_environment,
+    load_scaling_factors,
+)
 
 
 from physicsnemo.utils.profiling import profile, Profiler
@@ -96,7 +98,7 @@ def benchmark_io_epoch(
     start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
         # for key in sample_batched.keys():
-        #     print(f"{key}: {sample_batched[key].shape}")
+        #     print(f"Key {key} shape: {sample_batched[key].shape} with mean {sample_batched[key].mean()} and std {sample_batched[key].std()} ")
 
         # Gather data and report
         elapsed_time = time.perf_counter() - start_time
@@ -136,19 +138,7 @@ def main(cfg: DictConfig) -> None:
     ################################
     # Get scaling factors
     ################################
-    pickle_path = os.path.join(cfg.output) + "/scaling_factors/scaling_factors.pkl"
-
-    try:
-        scaling_factors = ScalingFactors.load(pickle_path)
-        logger.info(f"Scaling factors loaded from: {pickle_path}")
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
-        )
-
-    vol_factors = scaling_factors.mean["volume_fields"]
-    surf_factors = scaling_factors.mean["surface_fields"]
-    vol_factors_tensor = torch.from_numpy(vol_factors).to(dist.device)
+    vol_factors, surf_factors = load_scaling_factors(cfg)
 
     keys_to_read, keys_to_read_if_available = get_keys_to_read(
         cfg, model_type, get_ground_truth=True
@@ -170,18 +160,12 @@ def main(cfg: DictConfig) -> None:
         train_dataset, num_replicas=data_mesh.size(), rank=data_mesh.get_local_rank()
     )
 
-    # train_dataloader = DataLoader(
-    #     train_dataset,
-    #     sampler=train_sampler,
-    #     **cfg.train.dataloader,
-    # )
-
     for epoch in range(0, cfg.train.epochs):
         start_time = time.perf_counter()
         logger.info(f"Device {dist.device}, epoch {epoch}:")
 
         train_sampler.set_epoch(epoch)
-        print(f"indices: {list(train_sampler)}")
+
         train_dataset.dataset.set_indices(list(train_sampler))
 
         epoch_start_time = time.perf_counter()

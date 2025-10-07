@@ -78,7 +78,7 @@ from physicsnemo.utils.profiling import profile, Profiler
 
 
 from loss import compute_loss_dict
-from utils import get_num_vars
+from utils import get_num_vars, load_scaling_factors
 
 
 def validation_step(
@@ -275,19 +275,7 @@ def main(cfg: DictConfig) -> None:
     ######################################################
     # Get scaling factors - precompute them if this fails!
     ######################################################
-    pickle_path = os.path.join(cfg.data.scaling_factors)
-
-    try:
-        scaling_factors = ScalingFactors.load(pickle_path)
-        logger.info(f"Scaling factors loaded from: {pickle_path}")
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
-        )
-
-    vol_factors = np.asarray([scaling_factors.max_val["volume_fields"], scaling_factors.min_val["volume_fields"]])
-    surf_factors = np.asarray([scaling_factors.max_val["surface_fields"], scaling_factors.min_val["surface_fields"]])
-    vol_factors_tensor = torch.from_numpy(vol_factors).to(dist.device)
+    vol_factors, surf_factors = load_scaling_factors(cfg)
 
     ######################################################
     # Configure the model
@@ -334,7 +322,7 @@ def main(cfg: DictConfig) -> None:
             torch.from_numpy(
                 np.stack([bounding_box["max"], bounding_box["min"]], axis=0)
             )
-            .to(vol_factors_tensor.dtype)
+            .to(vol_factors.dtype)
             .to(dist.device)
         )
 
@@ -529,7 +517,7 @@ def main(cfg: DictConfig) -> None:
             first_deriv=first_deriv,
             eqn=eqn,
             bounding_box=bounding_box,
-            vol_factors=vol_factors_tensor,
+            vol_factors=vol_factors,
             add_physics_loss=add_physics_loss,
         )
         epoch_end_time = time.perf_counter()
@@ -553,7 +541,7 @@ def main(cfg: DictConfig) -> None:
             first_deriv=first_deriv,
             eqn=eqn,
             bounding_box=bounding_box,
-            vol_factors=vol_factors_tensor,
+            vol_factors=vol_factors,
             add_physics_loss=add_physics_loss,
         )
 

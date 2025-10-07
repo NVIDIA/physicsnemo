@@ -486,18 +486,7 @@ def main(cfg: DictConfig) -> None:
     # Get scaling factors
     # Likely, you want to reuse the scaling factors from training.
     ######################################################
-    pickle_path = os.path.join(cfg.data.scaling_factors)
-
-    try:
-        scaling_factors = ScalingFactors.load(pickle_path)
-        logger.info(f"Scaling factors loaded from: {pickle_path}")
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
-        )
-
-    vol_factors = scaling_factors.mean["volume_fields"]
-    surf_factors = scaling_factors.mean["surface_fields"]
+    vol_factors, surf_factors = load_scaling_factors(cfg)
 
     ######################################################
     # Configure the model

@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from dataclasses import dataclass
 from typing import Dict, Optional, Any
 import numpy as np
@@ -160,7 +162,8 @@ def coordinate_distributed_environment(cfg: DictConfig):
         placements: dict[str, torch.distributed.tensor.Placement]: The placements for the data set
     """
 
-    DistributedManager.initialize()
+    if not DistributedManager.is_initialized():
+        DistributedManager.initialize()
     dist = DistributedManager()
 
     # Default to no domain parallelism:
@@ -287,3 +290,57 @@ class ScalingFactors:
             summary.append(f"  Max: {max_val}")
 
         return "\n".join(summary)
+
+
+def load_scaling_factors(
+    cfg: DictConfig, logger=None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Load scaling factors from the configuration."""
+    pickle_path = os.path.join(cfg.data.scaling_factors)
+
+    try:
+        scaling_factors = ScalingFactors.load(pickle_path)
+        if logger is not None:
+            logger.info(f"Scaling factors loaded from: {pickle_path}")
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
+        )
+
+    if cfg.model.normalization == "min_max_scaling":
+        vol_factors = np.asarray(
+            [
+                scaling_factors.max_val["volume_fields"],
+                scaling_factors.min_val["volume_fields"],
+            ]
+        )
+        surf_factors = np.asarray(
+            [
+                scaling_factors.max_val["surface_fields"],
+                scaling_factors.min_val["surface_fields"],
+            ]
+        )
+    elif cfg.model.normalization == "mean_std_scaling":
+        vol_factors = np.asarray(
+            [
+                scaling_factors.mean["volume_fields"],
+                scaling_factors.std["volume_fields"],
+            ]
+        )
+        surf_factors = np.asarray(
+            [
+                scaling_factors.mean["surface_fields"],
+                scaling_factors.std["surface_fields"],
+            ]
+        )
+    else:
+        raise ValueError(f"Invalid normalization mode: {cfg.model.normalization}")
+
+    vol_factors_tensor = torch.from_numpy(vol_factors)
+    surf_factors_tensor = torch.from_numpy(surf_factors)
+
+    dm = DistributedManager()
+    vol_factors_tensor = vol_factors_tensor.to(dm.device, dtype=torch.float32)
+    surf_factors_tensor = surf_factors_tensor.to(dm.device, dtype=torch.float32)
+
+    return vol_factors_tensor, surf_factors_tensor
