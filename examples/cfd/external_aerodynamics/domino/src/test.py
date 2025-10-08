@@ -430,7 +430,8 @@ def main(cfg: DictConfig):
             :, 1:
         ]  # Assuming triangular elements
         mesh_indices_flattened = stl_faces.flatten()
-        length_scale = np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0))
+        length_scale = np.array(np.amax(np.amax(stl_vertices, 0) - np.amin(stl_vertices, 0)), dtype=np.float32)
+        length_scale = torch.from_numpy(length_scale).to(torch.float32).to(dist.device)
         stl_sizes = mesh_stl.compute_cell_sizes(length=False, area=True, volume=False)
         stl_sizes = np.array(stl_sizes.cell_data["Area"], dtype=np.float32)
         stl_centers = np.array(mesh_stl.cell_centers().points, dtype=np.float32)
@@ -552,6 +553,7 @@ def main(cfg: DictConfig):
             surface_coordinates = torch.from_numpy(surface_coordinates).to(torch.float32).to(dist.device)
             surface_normals = torch.from_numpy(surface_normals).to(torch.float32).to(dist.device)
             surface_sizes = torch.from_numpy(surface_sizes).to(torch.float32).to(dist.device)
+            surface_fields = torch.from_numpy(surface_fields).to(torch.float32).to(dist.device)
 
             if cfg.model.num_neighbors_surface > 1:
 
@@ -651,7 +653,7 @@ def main(cfg: DictConfig):
                 use_sign_winding_number=True,
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
-            vol_grid_max_min = np.asarray([c_min, c_max])
+            vol_grid_max_min = torch.stack([c_min, c_max])
 
             if cfg.data.normalize_coordinates:
                 sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
@@ -844,7 +846,7 @@ def main(cfg: DictConfig):
             surfParam_vtk.SetName(f"{surface_variable_names[1]}Pred")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
-            # write_to_vtp(celldata_all, vtp_pred_save_path)
+            write_to_vtp(celldata_all, vtp_pred_save_path)
 
         if prediction_vol is not None:
             volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3].cpu().numpy())
@@ -859,7 +861,7 @@ def main(cfg: DictConfig):
             volParam_vtk.SetName(f"{volume_variable_names[2]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-            # write_to_vtu(polydata_vol, vtu_pred_save_path)
+            write_to_vtu(polydata_vol, vtu_pred_save_path)
 
     l2_surface_all = np.asarray(l2_surface_all)  # num_files, 4
     l2_volume_all = np.asarray(l2_volume_all)  # num_files, 4
