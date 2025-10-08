@@ -204,7 +204,7 @@ def train_epoch(
                 optimizer.zero_grad()
 
             # Gather data and report
-            running_loss += loss.item()
+            running_loss += loss.detach().item()
             elapsed_time = time.perf_counter() - start_time
             io_time = io_end_time - io_start_time
             start_time = time.perf_counter()
@@ -223,7 +223,9 @@ def train_epoch(
             )
             loss_string += (
                 "  "
-                + f"\t".join([f"{l.item():<10.3e}" for l in loss_dict.values()])
+                + f"\t".join(
+                    [f"{l.detach().item():<10.3e}" for l in loss_dict.values()]
+                )
                 + "\n"
             )
 
@@ -237,7 +239,7 @@ def train_epoch(
     last_loss = running_loss / (i_batch + 1)  # loss per batch
     if dist.rank == 0:
         logger.info(
-            f" Device {device},  batch: {i_batch + 1}, loss norm: {loss.item():.5f}"
+            f" Device {device},  batch: {i_batch + 1}, loss norm: {loss.detach().item():.5f}"
         )
         tb_x = epoch_index * len(dataloader) + i_batch + 1
         tb_writer.add_scalar("Loss/train", last_loss, tb_x)
