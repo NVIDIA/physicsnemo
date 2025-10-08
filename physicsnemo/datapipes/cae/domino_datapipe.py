@@ -637,7 +637,7 @@ class DoMINODataPipe(Dataset):
 
         # Use the closest point from the mesh to compute the volume encodings:
         pos_normals_closest_vol, pos_normals_com_vol = self.calculate_volume_encoding(
-            c_min, c_max, volume_coordinates, sdf_node_closest_point, center_of_mass
+            volume_coordinates, sdf_node_closest_point, center_of_mass
         )
 
         return_dict = {
@@ -656,17 +656,10 @@ class DoMINODataPipe(Dataset):
 
     def calculate_volume_encoding(
         self,
-        c_min: torch.Tensor,
-        c_max: torch.Tensor,
         volume_coordinates: torch.Tensor,
         sdf_node_closest_point: torch.Tensor,
         center_of_mass: torch.Tensor,
     ):
-        if self.config.normalize_coordinates:
-            # volume_coordinates = normalize(volume_coordinates, c_max, c_min)
-            sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
-            # center_of_mass = normalize(center_of_mass, c_max, c_min)
-
         pos_normals_closest_vol = volume_coordinates - sdf_node_closest_point
         pos_normals_com_vol = volume_coordinates - center_of_mass
 
@@ -730,8 +723,6 @@ class DoMINODataPipe(Dataset):
                 requires_grad=False,
             )
 
-        return_dict["surf_grid"] = surf_grid
-
         # We always need to calculate the SDF on the surface grid:
         # This is for the SDF Later:
         if self.config.normalize_coordinates:
@@ -739,6 +730,8 @@ class DoMINODataPipe(Dataset):
             surf_grid = normalize(surf_grid, s_max, s_min)
         else:
             normed_vertices = data_dict["stl_coordinates"]
+
+        return_dict["surf_grid"] = surf_grid
 
         # For SDF calculations, make sure the mesh_indices_flattened is an integer array:
         mesh_indices_flattened = data_dict["stl_faces"].to(torch.int32)
