@@ -54,7 +54,10 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
+from physicsnemo.utils.domino.vtk_file_utils import *
 from physicsnemo.utils.sdf import signed_distance_field
+from physicsnemo.utils.neighbors import knn
+from utils import ScalingFactors
 
 # AIR_DENSITY = 1.205
 # STREAM_VELOCITY = 30.00
@@ -84,7 +87,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
 
     with torch.no_grad():
         point_batch_size = 256000
-        data_dict = dict_to_device(data_dict, device)
+        # data_dict = dict_to_device(data_dict, device)
 
         # Non-dimensionalization factors
         length_scale = data_dict["length_scale"]
@@ -110,11 +113,14 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             p_grid = data_dict["grid"]
             sdf_grid = data_dict["sdf_grid"]
             # Scaling factors
-            vol_max = data_dict["volume_min_max"][:, 1]
-            vol_min = data_dict["volume_min_max"][:, 0]
+            if "volume_min_max" in data_dict.keys():
+                vol_max = data_dict["volume_min_max"][:, 1]
+                vol_min = data_dict["volume_min_max"][:, 0]
+                geo_centers_vol = 2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
+            else:
+                geo_centers_vol = geo_centers
 
             # Normalize based on computational domain
-            geo_centers_vol = 2.0 * (geo_centers - vol_min) / (vol_max - vol_min) - 1
             encoding_g_vol = model.geo_rep_volume(geo_centers_vol, p_grid, sdf_grid)
 
         if output_features_surf is not None:
@@ -147,7 +153,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             pos_volume_center_of_mass = data_dict["pos_volume_center_of_mass"]
             p_grid = data_dict["grid"]
 
-            prediction_vol = np.zeros_like(target_vol.cpu().numpy())
+            prediction_vol = torch.zeros_like(target_vol)
             num_points = volume_mesh_centers.shape[1]
             subdomain_points = int(np.floor(num_points / point_batch_size))
 
@@ -166,14 +172,13 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     pos_normals_com_batch = pos_volume_center_of_mass[
                         :, start_idx:end_idx
                     ]
-                    geo_encoding_local = model.geo_encoding_local(
+                    geo_encoding_local = model.volume_local_geo_encodings(
                         0.5 * encoding_g_vol,
                         volume_mesh_centers_batch,
                         p_grid,
-                        mode="volume",
                     )
                     if cfg.model.use_sdf_in_basis_func:
-                        pos_encoding = torch.cat(
+                        pos_encoding_all = torch.cat(
                             (
                                 sdf_nodes_batch,
                                 pos_volume_closest_batch,
@@ -182,38 +187,36 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                             axis=-1,
                         )
                     else:
-                        pos_encoding = pos_normals_com_batch
-                    pos_encoding = model.position_encoder(
-                        pos_encoding, eval_mode="volume"
+                        pos_encoding_all = pos_normals_com_batch
+
+                    pos_encoding = model.fc_p_vol(
+                        pos_encoding_all
                     )
-                    tpredictions_batch = model.calculate_solution(
+                    tpredictions_batch = model.solution_calculator_vol(
                         volume_mesh_centers_batch,
                         geo_encoding_local,
                         pos_encoding,
                         global_params_values,
                         global_params_reference,
-                        num_sample_points=cfg.model.num_neighbors_volume,
-                        eval_mode="volume",
                     )
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
-                    prediction_vol[:, start_idx:end_idx] = (
-                        tpredictions_batch.cpu().numpy()
-                    )
+                    prediction_vol[:, start_idx:end_idx] = tpredictions_batch
 
             prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
+            # print(np.amax(prediction_vol, axis=(0, 1)), np.amin(prediction_vol, axis=(0, 1)))
 
             prediction_vol[:, :, :3] = (
-                prediction_vol[:, :, :3] * stream_velocity[0, 0].cpu().numpy()
+                prediction_vol[:, :, :3] * stream_velocity[0, 0]
             )
             prediction_vol[:, :, 3] = (
                 prediction_vol[:, :, 3]
-                * stream_velocity[0, 0].cpu().numpy() ** 2.0
-                * air_density[0, 0].cpu().numpy()
+                * stream_velocity[0, 0] ** 2.0
+                * air_density[0, 0]
             )
             prediction_vol[:, :, 4] = (
                 prediction_vol[:, :, 4]
-                * stream_velocity[0, 0].cpu().numpy()
-                * length_scale[0].cpu().numpy()
+                * stream_velocity[0, 0]
+                * length_scale[0]
             )
         else:
             prediction_vol = None
@@ -236,7 +239,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             subdomain_points = int(np.floor(num_points / point_batch_size))
 
             target_surf = data_dict["surface_fields"]
-            prediction_surf = np.zeros_like(target_surf.cpu().numpy())
+            prediction_surf = torch.zeros_like(target_surf)
 
             start_time = time.time()
 
@@ -262,18 +265,16 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     pos_surface_center_of_mass_batch = pos_surface_center_of_mass[
                         :, start_idx:end_idx
                     ]
-                    geo_encoding_local = model.geo_encoding_local(
+                    geo_encoding_local = model.surface_local_geo_encodings(
                         0.5 * encoding_g_surf,
                         surface_mesh_centers_batch,
                         s_grid,
-                        mode="surface",
                     )
-                    pos_encoding = pos_surface_center_of_mass_batch
-                    pos_encoding = model.position_encoder(
-                        pos_encoding, eval_mode="surface"
+                    pos_encoding = model.fc_p_surf(
+                        pos_surface_center_of_mass_batch
                     )
 
-                    tpredictions_batch = model.calculate_solution_with_neighbors(
+                    tpredictions_batch = model.solution_calculator_surf(
                         surface_mesh_centers_batch,
                         geo_encoding_local,
                         pos_encoding,
@@ -284,20 +285,16 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         surface_neighbors_areas_batch,
                         global_params_values,
                         global_params_reference,
-                        num_sample_points=cfg.model.num_neighbors_surface,
                     )
 
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
-                    prediction_surf[:, start_idx:end_idx] = (
-                        tpredictions_batch.cpu().numpy()
-                    )
+                    prediction_surf[:, start_idx:end_idx] = tpredictions_batch
 
             prediction_surf = (
                 unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
-                * stream_velocity[0, 0].cpu().numpy() ** 2.0
-                * air_density[0, 0].cpu().numpy()
+                * stream_velocity[0, 0] ** 2.0
+                * air_density[0, 0]
             )
-
         else:
             prediction_surf = None
 
@@ -346,22 +343,26 @@ def main(cfg: DictConfig):
         else:
             global_features += 1
 
-    vol_save_path = os.path.join(
-        cfg.eval.scaling_param_path, "volume_scaling_factors.npy"
-    )
-    surf_save_path = os.path.join(
-        cfg.eval.scaling_param_path, "surface_scaling_factors.npy"
-    )
-    if os.path.exists(vol_save_path):
-        vol_factors = np.load(vol_save_path)
-    else:
-        vol_factors = None
+    ######################################################
+    # Get scaling factors - precompute them if this fails!
+    ######################################################
+    pickle_path = os.path.join(cfg.data.scaling_factors)
 
-    if os.path.exists(surf_save_path):
-        surf_factors = np.load(surf_save_path)
-    else:
-        surf_factors = None
+    try:
+        scaling_factors = ScalingFactors.load(pickle_path)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
+        )
 
+    # vol_factors = np.asarray([scaling_factors.max_val["volume_fields"], scaling_factors.min_val["volume_fields"]])
+    # surf_factors = np.asarray([scaling_factors.max_val["surface_fields"], scaling_factors.min_val["surface_fields"]])
+    
+    vol_factors = np.asarray([[ 2.9064691e+00, 1.3743978e+00,1.2992665e+00, 1.0714761e+00, 3.2597079e-03], [-2.9988267e+00, -1.3753892e+00, -1.2892706e+00, -1.1400493e+00, 1.0002602e-11]])
+    surf_factors = np.asarray([[ 1.8464564, 0.09996139, 0.07988136, 0.05437989], [-2.0476909, -0.10289095, -0.07811281, -0.05411612]])
+
+    vol_factors = torch.from_numpy(vol_factors).to(dist.device)
+    surf_factors = torch.from_numpy(surf_factors).to(dist.device)
     print("Vol factors:", vol_factors)
     print("Surf factors:", surf_factors)
 
@@ -434,6 +435,12 @@ def main(cfg: DictConfig):
         stl_sizes = np.array(stl_sizes.cell_data["Area"], dtype=np.float32)
         stl_centers = np.array(mesh_stl.cell_centers().points, dtype=np.float32)
 
+        # Convert to torch tensors and load on device
+        stl_vertices = torch.from_numpy(stl_vertices).to(torch.float32).to(dist.device)
+        stl_sizes = torch.from_numpy(stl_sizes).to(torch.float32).to(dist.device)
+        stl_centers = torch.from_numpy(stl_centers).to(torch.float32).to(dist.device)
+        mesh_indices_flattened = torch.from_numpy(mesh_indices_flattened).to(torch.int32).to(dist.device)
+
         # Center of mass calculation
         center_of_mass = calculate_center_of_mass(stl_centers, stl_sizes)
 
@@ -446,27 +453,28 @@ def main(cfg: DictConfig):
             bounding_box_dims_surf.append(np.asarray(cfg.data.bounding_box_surface.min))
             s_max = np.float32(bounding_box_dims_surf[0])
             s_min = np.float32(bounding_box_dims_surf[1])
+            s_max = torch.from_numpy(s_max).to(torch.float32).to(dist.device)
+            s_min = torch.from_numpy(s_min).to(torch.float32).to(dist.device)
 
         nx, ny, nz = cfg.model.interp_res
 
-        surf_grid = create_grid(s_max, s_min, [nx, ny, nz])
-        surf_grid_reshaped = surf_grid.reshape(nx * ny * nz, 3)
+        surf_grid = create_grid(s_max, s_min, torch.from_numpy(np.asarray([nx, ny, nz])).to(dist.device))
+
+        normed_stl_vertices_cp = normalize(stl_vertices, s_max, s_min)
+        surf_grid_normed = normalize(surf_grid, s_max, s_min)
 
         # SDF calculation on the grid using WARP
+        time_start = time.time()
         sdf_surf_grid = signed_distance_field(
-            cp.asarray(stl_vertices).astype(cp.float32),
-            cp.asarray(mesh_indices_flattened).astype(cp.int32),
-            cp.asarray(surf_grid_reshaped).astype(cp.float32),
+            normed_stl_vertices_cp,
+            mesh_indices_flattened,
+            surf_grid_normed,
             use_sign_winding_number=True,
-            return_cupy=False,
-        ).reshape(nx, ny, nz)
-
-        surf_grid = np.float32(surf_grid)
-        sdf_surf_grid = np.float32(sdf_surf_grid)
-        surf_grid_max_min = np.float32(np.asarray([s_min, s_max]))
-        if cfg.model.normalize_coordinates:
-            sdf_surf_grid = normalize(sdf_surf_grid, xp.amax(surf_grid), xp.amin(surf_grid))
-
+        )
+        sdf_surf_grid = sdf_surf_grid[0]
+        
+        surf_grid_max_min = torch.stack([s_min, s_max])
+        
         # Get global parameters and global parameters scaling from config.yaml
         global_params_names = list(cfg.variables.global_parameters.keys())
         global_params_reference = {
@@ -494,6 +502,7 @@ def main(cfg: DictConfig):
         global_params_reference = np.array(
             global_params_reference_list, dtype=np.float32
         )
+        global_params_reference = torch.from_numpy(global_params_reference).to(dist.device)
 
         # Define the list of global parameter values for each simulation.
         # Note: The user must ensure that the values provided here correspond to the
@@ -509,7 +518,10 @@ def main(cfg: DictConfig):
                 raise ValueError(
                     f"Global parameter {key} not supported for  this dataset"
                 )
-        global_params_values = np.array(global_params_values_list, dtype=np.float32)
+        global_params_values_list = np.array(
+            global_params_values_list, dtype=np.float32
+        )
+        global_params_values = torch.from_numpy(global_params_values_list).to(dist.device)
 
         # Read VTP
         if model_type == "surface" or model_type == "combined":
@@ -537,18 +549,17 @@ def main(cfg: DictConfig):
             surface_normals = (
                 surface_normals / np.linalg.norm(surface_normals, axis=1)[:, np.newaxis]
             )
-
-            if cfg.model.normalize_coordinates:
-                surface_coordinates = normalize(surface_coordinates, s_max, s_min)
-                surf_grid = normalize(surf_grid, s_max, s_min)
-                center_of_mass_normalized = normalize(center_of_mass, s_max, s_min)
-            else:
-                center_of_mass_normalized = center_of_mass
+            surface_coordinates = torch.from_numpy(surface_coordinates).to(torch.float32).to(dist.device)
+            surface_normals = torch.from_numpy(surface_normals).to(torch.float32).to(dist.device)
+            surface_sizes = torch.from_numpy(surface_sizes).to(torch.float32).to(dist.device)
 
             if cfg.model.num_neighbors_surface > 1:
-                interp_func = KDTree(surface_coordinates)
-                dd, ii = interp_func.query(
-                    surface_coordinates, k=cfg.model.num_neighbors_surface
+
+                time_start = time.time()
+                ii, dd = knn(
+                    points=surface_coordinates,
+                    queries=surface_coordinates,
+                    k=cfg.model.num_neighbors_surface,
                 )
 
                 surface_neighbors = surface_coordinates[ii]
@@ -563,11 +574,14 @@ def main(cfg: DictConfig):
                 surface_neighbors_normals = surface_normals
                 surface_neighbors_sizes = surface_sizes
 
-            
+            if cfg.data.normalize_coordinates:
+                surface_coordinates = normalize(surface_coordinates, s_max, s_min)
+                surf_grid = normalize(surf_grid, s_max, s_min)
+                center_of_mass_normalized = normalize(center_of_mass, s_max, s_min)
+                surface_neighbors = normalize(surface_neighbors, s_max, s_min)
+            else:
+                center_of_mass_normalized = center_of_mass
             pos_surface_center_of_mass = surface_coordinates - center_of_mass_normalized
-
-            # surface_coordinates = normalize(surface_coordinates, s_max, s_min)
-            # surface_neighbors = normalize(surface_neighbors, s_max, s_min)
 
         else:
             surface_coordinates = None
@@ -589,13 +603,13 @@ def main(cfg: DictConfig):
                 polydata_vol, volume_variable_names
             )
             volume_fields = np.concatenate(volume_fields, axis=-1)
+            volume_coordinates = torch.from_numpy(volume_coordinates).to(torch.float32).to(dist.device)
+            volume_fields = torch.from_numpy(volume_fields).to(torch.float32).to(dist.device)
 
             bounding_box_dims = []
             bounding_box_dims.append(np.asarray(cfg.data.bounding_box.max))
             bounding_box_dims.append(np.asarray(cfg.data.bounding_box.min))
 
-            v_max = np.amax(volume_coordinates, 0)
-            v_min = np.amin(volume_coordinates, 0)
             if bounding_box_dims is None:
                 c_max = s_max + (s_max - s_min) / 2
                 c_min = s_min - (s_max - s_min) / 2
@@ -603,46 +617,50 @@ def main(cfg: DictConfig):
             else:
                 c_max = np.float32(bounding_box_dims[0])
                 c_min = np.float32(bounding_box_dims[1])
+                c_max = torch.from_numpy(c_max).to(dist.device)
+                c_min = torch.from_numpy(c_min).to(dist.device)
 
             # Generate a grid of specified resolution to map the bounding box
             # The grid is used for capturing structured geometry features and SDF representation of geometry
-            grid = create_grid(c_max, c_min, [nx, ny, nz])
-            grid_reshaped = grid.reshape(nx * ny * nz, 3)
+            grid = create_grid(c_max, c_min, torch.from_numpy(np.asarray([nx, ny, nz])).to(dist.device))
+
+            if cfg.data.normalize_coordinates:
+                volume_coordinates = normalize(volume_coordinates, c_max, c_min)
+                grid = normalize(grid, c_max, c_min)
+                center_of_mass_normalized = normalize(center_of_mass, c_max, c_min)
+                normed_stl_vertices_vol = normalize(stl_vertices, c_max, c_min)
+            else:
+                center_of_mass_normalized = center_of_mass
 
             # SDF calculation on the grid using WARP
+            time_start = time.time()
             sdf_grid = signed_distance_field(
-                cp.asarray(stl_vertices).astype(cp.float32),
-                cp.asarray(mesh_indices_flattened).astype(cp.int32),
-                cp.asarray(grid_reshaped).astype(cp.float32),
+                normed_stl_vertices_vol,
+                mesh_indices_flattened,
+                grid,
                 use_sign_winding_number=True,
-                return_cupy=False,
-            ).reshape(nx, ny, nz)
-
+            )
+            sdf_grid = sdf_grid[0]
+            
             # SDF calculation
+            time_start = time.time()
             sdf_nodes, sdf_node_closest_point = signed_distance_field(
-                cp.asarray(stl_vertices).astype(cp.float32),
-                cp.asarray(mesh_indices_flattened).astype(cp.int32),
-                cp.asarray(volume_coordinates).astype(cp.float32),
-                include_hit_points=True,
+                normed_stl_vertices_vol,
+                mesh_indices_flattened,
+                volume_coordinates,
                 use_sign_winding_number=True,
-                return_cupy=False,
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
             vol_grid_max_min = np.asarray([c_min, c_max])
 
-            if cfg.model.normalize_coordinates:
-                volume_coordinates = normalize(volume_coordinates, c_max, c_min)
-                grid = normalize(grid, c_max, c_min)
-                center_of_mass_normalized = normalize(center_of_mass, c_max, c_min)
-                sdf_grid = normalize(sdf_grid, xp.amax(grid), xp.amin(grid))
-                sdf_nodes = normalize(sdf_nodes, xp.amax(grid), xp.amin(grid))
+            if cfg.data.normalize_coordinates:
                 sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
             else:
-                center_of_mass_normalized = center_of_mass
+                sdf_node_closest_point = sdf_node_closest_point
 
             pos_volume_closest = volume_coordinates - sdf_node_closest_point
             pos_volume_center_of_mass = volume_coordinates - center_of_mass_normalized
-
+            
         else:
             volume_coordinates = None
             volume_fields = None
@@ -651,7 +669,8 @@ def main(cfg: DictConfig):
 
         # print(f"Processed sdf and normalized")
 
-        geom_centers = np.float32(stl_vertices)
+        geom_centers = stl_vertices
+        # print(f"Geom centers max: {np.amax(geom_centers, axis=0)}, min: {np.amin(geom_centers, axis=0)}")
 
         if model_type == "combined":
             # Add the parameters to the dictionary
@@ -676,35 +695,27 @@ def main(cfg: DictConfig):
                 "surface_fields": surface_fields,
                 "volume_min_max": vol_grid_max_min,
                 "surface_min_max": surf_grid_max_min,
-                "length_scale": np.array(length_scale, dtype=np.float32),
-                "global_params_values": np.expand_dims(
-                    np.array(global_params_values, dtype=np.float32), -1
-                ),
-                "global_params_reference": np.expand_dims(
-                    np.array(global_params_reference, dtype=np.float32), -1
-                ),
+                "length_scale": length_scale,
+                "global_params_values": torch.unsqueeze(global_params_values, -1),
+                "global_params_reference": torch.unsqueeze(global_params_reference, -1),
             }
         elif model_type == "surface":
             data_dict = {
-                "pos_surface_center_of_mass": np.float32(pos_surface_center_of_mass),
-                "geometry_coordinates": np.float32(geom_centers),
-                "surf_grid": np.float32(surf_grid),
-                "sdf_surf_grid": np.float32(sdf_surf_grid),
-                "surface_mesh_centers": np.float32(surface_coordinates),
-                "surface_mesh_neighbors": np.float32(surface_neighbors),
-                "surface_normals": np.float32(surface_normals),
-                "surface_neighbors_normals": np.float32(surface_neighbors_normals),
-                "surface_areas": np.float32(surface_sizes),
-                "surface_neighbors_areas": np.float32(surface_neighbors_sizes),
-                "surface_fields": np.float32(surface_fields),
-                "surface_min_max": np.float32(surf_grid_max_min),
-                "length_scale": np.array(length_scale, dtype=np.float32),
-                "global_params_values": np.expand_dims(
-                    np.array(global_params_values, dtype=np.float32), -1
-                ),
-                "global_params_reference": np.expand_dims(
-                    np.array(global_params_reference, dtype=np.float32), -1
-                ),
+                "pos_surface_center_of_mass": pos_surface_center_of_mass,
+                "geometry_coordinates": geom_centers,
+                "surf_grid": surf_grid,
+                "sdf_surf_grid": sdf_surf_grid,
+                "surface_mesh_centers": surface_coordinates,
+                "surface_mesh_neighbors": surface_neighbors,
+                "surface_normals": surface_normals,
+                "surface_neighbors_normals": surface_neighbors_normals,
+                "surface_areas": surface_sizes,
+                "surface_neighbors_areas": surface_neighbors_sizes,
+                "surface_fields": surface_fields,
+                "surface_min_max": surf_grid_max_min,
+                "length_scale": length_scale,
+                "global_params_values": torch.unsqueeze(global_params_values, -1),
+                "global_params_reference": torch.unsqueeze(global_params_reference, -1),
             }
         elif model_type == "volume":
             data_dict = {
@@ -720,17 +731,13 @@ def main(cfg: DictConfig):
                 "volume_mesh_centers": volume_coordinates,
                 "volume_min_max": vol_grid_max_min,
                 "surface_min_max": surf_grid_max_min,
-                "length_scale": np.array(length_scale, dtype=np.float32),
-                "global_params_values": np.expand_dims(
-                    np.array(global_params_values, dtype=np.float32), -1
-                ),
-                "global_params_reference": np.expand_dims(
-                    np.array(global_params_reference, dtype=np.float32), -1
-                ),
+                "length_scale": length_scale,
+                "global_params_values": torch.unsqueeze(global_params_values, -1),
+                "global_params_reference": torch.unsqueeze(global_params_reference, -1),
             }
 
         data_dict = {
-            key: torch.from_numpy(np.expand_dims(np.float32(value), 0))
+            key: torch.unsqueeze(value, 0)
             for key, value in data_dict.items()
         }
 
@@ -807,7 +814,7 @@ def main(cfg: DictConfig):
             prediction_vol = prediction_vol[0]
             c_min = vol_grid_max_min[0]
             c_max = vol_grid_max_min[1]
-            volume_coordinates = unnormalize(volume_coordinates, c_max, c_min)
+            volume_coordinates = unnormalize_np(volume_coordinates, c_max, c_min)
             ids_in_bbox = np.where(
                 (volume_coordinates[:, 0] < c_min[0])
                 | (volume_coordinates[:, 0] > c_max[0])
@@ -827,31 +834,32 @@ def main(cfg: DictConfig):
             )
             l2_volume_all.append(np.sqrt(l2_error) / np.sqrt(l2_gt))
 
+        # import pdb; pdb.set_trace()
         if prediction_surf is not None:
-            surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 0:1])
+            surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 0:1].cpu().numpy())
             surfParam_vtk.SetName(f"{surface_variable_names[0]}Pred")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
-            surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 1:])
+            surfParam_vtk = numpy_support.numpy_to_vtk(prediction_surf[0, :, 1:].cpu().numpy())
             surfParam_vtk.SetName(f"{surface_variable_names[1]}Pred")
             celldata_all.GetCellData().AddArray(surfParam_vtk)
 
-            write_to_vtp(celldata_all, vtp_pred_save_path)
+            # write_to_vtp(celldata_all, vtp_pred_save_path)
 
         if prediction_vol is not None:
-            volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3])
+            volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 0:3].cpu().numpy())
             volParam_vtk.SetName(f"{volume_variable_names[0]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-            volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 3:4])
+            volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 3:4].cpu().numpy())
             volParam_vtk.SetName(f"{volume_variable_names[1]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-            volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 4:5])
+            volParam_vtk = numpy_support.numpy_to_vtk(prediction_vol[:, 4:5].cpu().numpy())
             volParam_vtk.SetName(f"{volume_variable_names[2]}Pred")
             polydata_vol.GetPointData().AddArray(volParam_vtk)
 
-            write_to_vtu(polydata_vol, vtu_pred_save_path)
+            # write_to_vtu(polydata_vol, vtu_pred_save_path)
 
     l2_surface_all = np.asarray(l2_surface_all)  # num_files, 4
     l2_volume_all = np.asarray(l2_volume_all)  # num_files, 4

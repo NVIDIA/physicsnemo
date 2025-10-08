@@ -62,10 +62,10 @@ variables:
   global_parameters:
     inlet_velocity:
       type: vector
-      reference: [38.89] # vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
+      reference: [30.00] # vector [30, 0, 0] should be specified as [30], while [30, 30, 0] should be [30, 30].
     air_density:
       type: scalar
-      reference: 1.0
+      reference: 1.205
 
 # ┌───────────────────────────────────────────┐
 # │         Data Configs                      │
@@ -86,6 +86,7 @@ data: # Input directory for training and validation data
   sampling: true
   scaling_factors: ${project_dir}/scaling_factors/scaling_factors.pkl
   volume_sample_from_disk: true
+  max_samples_for_statistics: 200
 
 # ┌───────────────────────────────────────────┐
 # │          Domain Parallelism Settings      │
@@ -175,7 +176,7 @@ model:
 # └───────────────────────────────────────────┘  
 train: # Training configurable parameters
   epochs: 1000
-  checkpoint_interval: 50
+  checkpoint_interval: 2
   dataloader:
     batch_size: 1
     preload_depth: 1
@@ -206,7 +207,7 @@ eval: # Testing configurable parameters
   test_path: /user/testing_data # Dir for testing data in raw format (vtp, vtu ,stls)
   save_path: /user/predicted_data # Dir to save predicted results in raw format (vtp, vtu)
   checkpoint_name: DoMINO.0.455.pt # Name of checkpoint to select from saved checkpoints
-  scaling_param_path: /user/scaling_params
+  scaling_param_path: /lustre/rranade/modulus_dev/corey_fork/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/DrivAerML_Dataset/
   refine_stl: False # Automatically refine STL during inference
   #TODO -  This was hardcoded anyways, remove it.
   # stencil_size: 7 # Stencil size for evaluating surface and volume model

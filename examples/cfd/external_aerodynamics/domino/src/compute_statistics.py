@@ -104,6 +104,7 @@ def main(cfg: DictConfig) -> None:
             cfg=cfg,
             input_path=cfg.data.input_dir,
             target_keys=target_keys,
+            max_samples=cfg.data.max_samples_for_statistics,
         )
         mean = {k: m.cpu().numpy() for k, m in mean.items()}
         std = {k: s.cpu().numpy() for k, s in std.items()}

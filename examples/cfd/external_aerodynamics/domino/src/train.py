@@ -276,6 +276,10 @@ def main(cfg: DictConfig) -> None:
     # Get scaling factors - precompute them if this fails!
     ######################################################
     vol_factors, surf_factors = load_scaling_factors(cfg)
+    
+    vol_factors = np.asarray([[ 2.9064691e+00, 1.3743978e+00,1.2992665e+00, 1.0714761e+00, 3.2597079e-03], [-2.9988267e+00, -1.3753892e+00, -1.2892706e+00, -1.1400493e+00, 1.0002602e-11]])
+    surf_factors = np.asarray([[ 1.8464564, 0.09996139, 0.07988136, 0.05437989], [-2.0476909, -0.10289095, -0.07811281, -0.05411612]])
+    vol_factors_tensor = torch.from_numpy(vol_factors).to(dist.device)
 
     ######################################################
     # Configure the model

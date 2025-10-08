@@ -1177,9 +1177,11 @@ def compute_mean_std_min_max(
             # Update min/max
             batch_min = field_data.amin(dim=(0))
             batch_max = field_data.amax(dim=(0))
+            
             min_val[field_key] = torch.minimum(min_val[field_key], batch_min)
-            max_val[field_key] = torch.maximum(max_val[field_key], batch_max)
 
+            max_val[field_key] = torch.maximum(max_val[field_key], batch_max)   
+                     
             # Update running mean and M2 (Welford's algorithm)
             delta = batch_mean - mean[field_key]
             N[field_key] += batch_n  # batch_n should also be torch.int64

@@ -481,7 +481,7 @@ class DoMINODataPipe(Dataset):
                 queries=surface_coordinates,
                 k=self.config.num_surface_neighbors,
             )
-
+            # print(f"Full surface coordinates shape: {full_surface_coordinates.shape}")
             # Pull out the neighbor elements.
             # Note that `neighbor_indices` is the index into the original,
             # full sized tensors (full_surface_coordinates, etc).
@@ -495,10 +495,8 @@ class DoMINODataPipe(Dataset):
 
         # Better to normalize everything after the kNN and sampling
         if self.config.normalize_coordinates:
-            # surf_grid = normalize(surf_grid, s_max, s_min)
             surface_coordinates = normalize(surface_coordinates, s_max, s_min)
             surface_neighbors = normalize(surface_neighbors, s_max, s_min)
-            # Make sure to normalize the center of mass for the normals_com_surface calc
             center_of_mass = normalize(center_of_mass, s_max, s_min)
 
         pos_normals_com_surface = surface_coordinates - center_of_mass
@@ -595,13 +593,12 @@ class DoMINODataPipe(Dataset):
         if self.config.normalize_coordinates:
             volume_coordinates = normalize(volume_coordinates, c_max, c_min)
             grid = normalize(volume_grid, c_max, c_min)
-            # This is used later in the SDF, apply the same scaling to the mesh
-            # coordinates:
             normed_vertices = normalize(stl_vertices, c_max, c_min)
             center_of_mass = normalize(center_of_mass, c_max, c_min)
         else:
             grid = volume_grid
             normed_vertices = stl_vertices
+            center_of_mass = center_of_mass
 
         ########################################################################
         # Apply scaling to the targets, if desired:
@@ -744,7 +741,8 @@ class DoMINODataPipe(Dataset):
             use_sign_winding_number=True,
         )
         return_dict["sdf_surf_grid"] = sdf_surf_grid
-
+        return_dict["surf_grid"] = surf_grid
+        
         # Store this only if normalization is active:
         if self.config.normalize_coordinates:
             return_dict["surface_min_max"] = torch.stack([s_min, s_max])
@@ -810,6 +808,9 @@ class DoMINODataPipe(Dataset):
 
             return_dict.update(surface_dict)
 
+        for key, value in return_dict.items():
+            print(f"Key: {key}, Max: {torch.amax(value)}, Min: {torch.amin(value)}")
+        exit()
         return return_dict
 
     def scale_model_targets(
@@ -932,7 +933,7 @@ class DoMINODataPipe(Dataset):
 
 
 def compute_scaling_factors(
-    cfg: DictConfig, input_path: str, target_keys: list[str], use_cache=None
+    cfg: DictConfig, input_path: str, target_keys: list[str], use_cache=None, max_samples=20,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Using the dataset at the path, compute the mean, std, min, and max of the target keys.
@@ -956,6 +957,7 @@ def compute_scaling_factors(
     mean, std, min_val, max_val = compute_mean_std_min_max(
         dataset,
         field_keys=target_keys,
+        max_samples=max_samples,
     )
 
     return mean, std, min_val, max_val
