@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import warnings
 from importlib.metadata import EntryPoint, entry_points
 from typing import List, Union
@@ -73,17 +75,17 @@ class ModelRegistry:
         return registry
 
     def register(
-        self, model: "physicsnemo.Module", name: Union[str, None] = None
+        self, model: type[physicsnemo.Module], name: Union[str, None] = None
     ) -> None:
         """
-        Registers a physicsnemo model in the model registry under the provided name. If no name
+        Registers a physicsnemo model class in the model registry under the provided name. If no name
         is provided, the model's name (from its `__name__` attribute) is used. If the
         name is already in use, raises a ValueError.
 
         Parameters
         ----------
         model : physicsnemo.Module
-            The model to be registered. Can be an instance of any class.
+            The model class to be registered.
         name : str, optional
             The name to register the model under. If None, the model's name is used.
 

@@ -220,8 +220,9 @@ from typing import Optional
 import numpy as np
 import scipy.sparse
 import torch
-from dgl import DGLGraph
 from torch.utils.data import Dataset
+
+from physicsnemo.models.gnn_layers.utils import DGLGraph, GraphType, PyGData
 
 try:
     from sparse_dot_mkl import dot_product_mkl
@@ -306,24 +307,32 @@ class BistrideMultiLayerGraphDataset(Dataset):
 class BistrideMultiLayerGraph:
     """Multi-layer graph."""
 
-    def __init__(self, graph: DGLGraph, num_layers: int):
+    def __init__(self, graph: GraphType, num_layers: int):
         """
         Initializes the BistrideMultiLayerGraph object.
 
         Parameters
         ----------
-        graph: DGLGraph
+        graph: GraphType
             The source graph.
         num_layers: int:
             The number of layers to generate.
         """
-        self.num_nodes = graph.num_nodes()
         self.num_layers = num_layers
-        self.pos_mesh = graph.ndata["pos"].numpy()
+        # (DGL2PYG): keep only PyG version once DGL is removed.
+        if isinstance(graph, DGLGraph):
+            self.num_nodes = graph.num_nodes()
+            self.pos_mesh = graph.ndata["pos"].numpy()
+            edges = graph.edges()
+        elif isinstance(graph, PyGData):
+            self.num_nodes = graph.num_nodes
+            self.pos_mesh = graph.pos.numpy()
+            edges = graph.edge_index
+        else:
+            raise ValueError(f"Unsupported graph type: {type(graph)}")
 
         # Initialize the first layer graph
         # Flatten edges to [2, num_edges].
-        edges = graph.edges()
         flattened_edges = torch.cat(
             (edges[0].view(1, -1), edges[1].view(1, -1)), dim=0
         ).numpy()
