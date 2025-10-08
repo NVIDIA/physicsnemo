@@ -73,7 +73,7 @@ class Trainer:
         scheduler: type[torch.optim.lr_scheduler.LRScheduler] | None = None,
         scheduler_params: dict[str, Any] | None = None,
         max_epoch: int = 1,
-        load_epoch: int | Literal["latest"] = None,
+        load_epoch: int | Literal["latest"] | None = "latest",
         checkpoint_every: int = 1,
         checkpoint_dir: str | None = None,
         validation_callbacks: Sequence[Callable] = (),
