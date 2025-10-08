@@ -748,41 +748,41 @@ def main(cfg: DictConfig):
         )
 
         if prediction_surf is not None:
-            surface_sizes = np.expand_dims(surface_sizes, -1)
+            surface_sizes = torch.unsqueeze(surface_sizes, -1)
 
-            pres_x_pred = np.sum(
+            pres_x_pred = torch.sum(
                 prediction_surf[0, :, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
             )
-            shear_x_pred = np.sum(prediction_surf[0, :, 1] * surface_sizes[:, 0])
+            shear_x_pred = torch.sum(prediction_surf[0, :, 1] * surface_sizes[:, 0])
 
-            pres_x_true = np.sum(
+            pres_x_true = torch.sum(
                 surface_fields[:, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
             )
-            shear_x_true = np.sum(surface_fields[:, 1] * surface_sizes[:, 0])
+            shear_x_true = torch.sum(surface_fields[:, 1] * surface_sizes[:, 0])
 
-            force_x_pred = np.sum(
+            force_x_pred = torch.sum(
                 prediction_surf[0, :, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
                 - prediction_surf[0, :, 1] * surface_sizes[:, 0]
             )
-            force_x_true = np.sum(
+            force_x_true = torch.sum(
                 surface_fields[:, 0] * surface_normals[:, 0] * surface_sizes[:, 0]
                 - surface_fields[:, 1] * surface_sizes[:, 0]
             )
 
-            force_y_pred = np.sum(
+            force_y_pred = torch.sum(
                 prediction_surf[0, :, 0] * surface_normals[:, 1] * surface_sizes[:, 0]
                 - prediction_surf[0, :, 2] * surface_sizes[:, 0]
             )
-            force_y_true = np.sum(
+            force_y_true = torch.sum(
                 surface_fields[:, 0] * surface_normals[:, 1] * surface_sizes[:, 0]
                 - surface_fields[:, 2] * surface_sizes[:, 0]
             )
 
-            force_z_pred = np.sum(
+            force_z_pred = torch.sum(
                 prediction_surf[0, :, 0] * surface_normals[:, 2] * surface_sizes[:, 0]
                 - prediction_surf[0, :, 3] * surface_sizes[:, 0]
             )
-            force_z_true = np.sum(
+            force_z_true = torch.sum(
                 surface_fields[:, 0] * surface_normals[:, 2] * surface_sizes[:, 0]
                 - surface_fields[:, 3] * surface_sizes[:, 0]
             )
@@ -801,14 +801,14 @@ def main(cfg: DictConfig):
                 ]
             )
 
-            l2_gt = np.mean(np.square(surface_fields), (0))
-            l2_error = np.mean(np.square(prediction_surf[0] - surface_fields), (0))
-            l2_surface_all.append(np.sqrt(l2_error / l2_gt))
+            l2_gt = torch.mean(torch.square(surface_fields), (0))
+            l2_error = torch.mean(torch.square(prediction_surf[0] - surface_fields), (0))
+            l2_surface_all.append(torch.sqrt(l2_error / l2_gt))
 
             print(
                 "Surface L-2 norm:",
                 dirname,
-                np.sqrt(l2_error) / np.sqrt(l2_gt),
+                torch.sqrt(l2_error) / torch.sqrt(l2_gt),
             )
 
         if prediction_vol is not None:
@@ -816,8 +816,8 @@ def main(cfg: DictConfig):
             prediction_vol = prediction_vol[0]
             c_min = vol_grid_max_min[0]
             c_max = vol_grid_max_min[1]
-            volume_coordinates = unnormalize_np(volume_coordinates, c_max, c_min)
-            ids_in_bbox = np.where(
+            volume_coordinates = unnormalize(volume_coordinates, c_max, c_min)
+            ids_in_bbox = torch.where(
                 (volume_coordinates[:, 0] < c_min[0])
                 | (volume_coordinates[:, 0] > c_max[0])
                 | (volume_coordinates[:, 1] < c_min[1])
@@ -827,14 +827,14 @@ def main(cfg: DictConfig):
             )
             target_vol[ids_in_bbox] = 0.0
             prediction_vol[ids_in_bbox] = 0.0
-            l2_gt = np.mean(np.square(target_vol), (0))
-            l2_error = np.mean(np.square(prediction_vol - target_vol), (0))
+            l2_gt = torch.mean(torch.square(target_vol), (0))
+            l2_error = torch.mean(torch.square(prediction_vol - target_vol), (0))
             print(
                 "Volume L-2 norm:",
                 dirname,
-                np.sqrt(l2_error) / np.sqrt(l2_gt),
+                torch.sqrt(l2_error) / torch.sqrt(l2_gt),
             )
-            l2_volume_all.append(np.sqrt(l2_error) / np.sqrt(l2_gt))
+            l2_volume_all.append(torch.sqrt(l2_error) / torch.sqrt(l2_gt))
 
         # import pdb; pdb.set_trace()
         if prediction_surf is not None:
