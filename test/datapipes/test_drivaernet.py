@@ -28,7 +28,7 @@ def data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/drivaernet/")
 
 
-@import_or_fail(["vtk", "pyvista", "dgl"])
+@import_or_fail(["vtk", "pyvista", "torch_geometric", "torch_scatter"])
 @pytest.mark.parametrize("cache_graph", [True, False])
 def test_drivaernet_init(data_dir, cache_graph, tmp_path, pytestconfig):
     from physicsnemo.datapipes.gnn.drivaernet_dataset import DrivAerNetDataset
@@ -54,6 +54,6 @@ def test_drivaernet_init(data_dir, cache_graph, tmp_path, pytestconfig):
     c_d_0 = sample["c_d"].item()
 
     # Some simple checks.
-    assert g0.ndata["x"].shape[0] == g0.ndata["y"].shape[0]
+    assert g0.x.shape[0] == g0.y.shape[0]
 
     torch.testing.assert_close(c_d_0, 0.346311)
