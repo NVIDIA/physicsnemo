@@ -808,9 +808,6 @@ class DoMINODataPipe(Dataset):
 
             return_dict.update(surface_dict)
 
-        for key, value in return_dict.items():
-            print(f"Key: {key}, Max: {torch.amax(value)}, Min: {torch.amin(value)}")
-        exit()
         return return_dict
 
     def scale_model_targets(
