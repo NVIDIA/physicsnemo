@@ -45,12 +45,12 @@ from ..test_redistribute import shard_tensor_factory
 
 
 @pytest.mark.multigpu_static
-def test_shard_tensor_unsqueeze(distributed_mesh, verbose=True):
+def test_shard_tensor_unsqueeze(distributed_mesh, verbose=False):
     run_shard_tensor_unsqueeze(distributed_mesh, verbose=verbose)
 
 
 @pytest.mark.multigpu_static
-def test_shard_tensor_unsqueeze_2d(distributed_mesh_2d, verbose=True):
+def test_shard_tensor_unsqueeze_2d(distributed_mesh_2d, verbose=False):
     run_shard_tensor_unsqueeze(distributed_mesh_2d, verbose=verbose)
 
 

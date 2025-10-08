@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Tuple
@@ -182,7 +183,7 @@ def check_mlflow_logged_in(client: MlflowClient):
     try:
         # Adjust http timeout to 5 seconds
         os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = str(max(int(t0), 5)) if t0 else "5"
-        experiment = client.create_experiment("test")
+        experiment = client.create_experiment(f"test-{int(time.time())}")
         client.delete_experiment(experiment)
 
     except Exception as e:

@@ -22,29 +22,6 @@ import torch
 import torch.nn.functional as F
 
 
-def get_batch_vector(graph):
-    """
-    Build a batch vector from node counts for a batched DGL graph.
-
-    Args:
-        graph (DGLGraph): A batched DGL graph.
-
-    Returns:
-        torch.Tensor: A tensor where each node is assigned the index of its graph in the batch.
-    """
-    node_counts = graph.batch_num_nodes()
-    if not isinstance(node_counts, torch.Tensor):
-        node_counts = torch.tensor(node_counts, device=graph.device)
-    # Create a batch vector where each node receives the corresponding graph index.
-    batch_vec = torch.cat(
-        [
-            torch.full((int(n),), i, device=graph.device)
-            for i, n in enumerate(node_counts)
-        ]
-    )
-    return batch_vec
-
-
 def compute_physics_loss(pred, physics_data, graph, delta_t=1200.0):
     """
     Compute a physics-based continuity loss in the denormalized domain.
@@ -69,19 +46,18 @@ def compute_physics_loss(pred, physics_data, graph, delta_t=1200.0):
     Args:
         pred (torch.Tensor): Model predictions (expected volume difference).
         physics_data (dict): Dictionary containing various denormalized physics parameters.
-        graph (DGLGraph): Batched DGL graph.
+        graph (PyGData): Batched PyG graph.
         delta_t (float): Time delta over which the continuity is enforced.
 
     Returns:
         torch.Tensor: Mean physics loss across all graph samples.
     """
-    batch = get_batch_vector(graph)
-    unique_ids = torch.unique(batch)
+    unique_ids = torch.unique(graph.batch)
     predicted_diff = pred[:, 1]  # Predicted volume difference (normalized)
     physics_losses = []
 
     for uid in unique_ids:
-        mask = batch == uid
+        mask = graph.batch == uid
         pred_diff_sum = predicted_diff[mask].sum()
 
         idx = (unique_ids == uid).nonzero(as_tuple=False).item()

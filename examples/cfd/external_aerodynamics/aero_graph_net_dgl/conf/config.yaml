@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+  - /visualizer@visualizers.mesh_p: mesh
+  - /visualizer@visualizers.mesh_wss: mesh
+
+  - /logging/python: default
+  - override hydra/job_logging: disabled  # We use rank-aware logger configuration instead.
+  - _self_
+
+hydra:
+  run:
+    dir: ${output}
+  output_subdir: hydra  # Default is .hydra which causes files not being uploaded in W&B.
+
+# Main output directory.
+output: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# The directory to search for checkpoints to continue training.
+resume_dir: ${output}
+
+# The dataset directory must be set either in command line or config.
+data:
+  data_dir: ???
+
+# The loss should be set in the experiment.
+loss: ???
+
+# The optimizer should be set in the experiment.
+optimizer: ???
+
+# The scheduler should be set in the experiment.
+lr_scheduler: ???
+
+train:
+  batch_size: 1
+  epochs: 50
+  checkpoint_save_freq: 10
+  dataloader:
+    shuffle: true
+    num_workers: 1
+    pin_memory: true
+    drop_last: true
+
+val:
+  batch_size: 1
+  dataloader:
+    shuffle: false
+    num_workers: 1
+    pin_memory: true
+    drop_last: false
+
+test:
+  batch_size: 1
+  dataloader:
+    shuffle: false
+    num_workers: 1
+    pin_memory: true
+    drop_last: false
+
+compile:
+  enabled: false
+  args:
+    backend: inductor
+
+amp:
+  enabled: false
+  autocast:
+    dtype: torch.float16
+  scaler:
+    _target_: torch.cuda.amp.GradScaler
+    enabled: ${..enabled}
+
+loggers:
+  wandb:
+    _target_: loggers.WandBLogger
+    project: car-cfd # aero-graph-net
+    entity: physicsnemo
+    name: agn
+    group:
+    mode: disabled
+    dir: ${output}

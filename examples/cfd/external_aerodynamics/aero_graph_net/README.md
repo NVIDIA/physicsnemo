@@ -97,7 +97,7 @@ ground truth for surface pressure, wall shear stresses, and the drag coefficient
 of the samples from the test dataset.](../../../../docs/img/ahmed_body_results.png)
 
 The input to the model is in form of a `.vtp` file and is then converted to
-bi-directional DGL graphs in the dataloader. The final results are also written in the
+bi-directional graphs in the dataloader. The final results are also written in the
 form of `.vtp` files in the inference code. A hidden dimensionality of 256 is used in
 the encoder, processor, and decoder. The encoder and decoder consist of two hidden
 layers, and the processor includes 15 message passing layers. Batch size per GPU is

@@ -19,7 +19,7 @@
 """
 HydroGraphDataset module
 
-This module defines a DGLDataset for hydrograph-based graphs. It includes utility functions
+This module defines a Dataset for hydrograph-based graphs. It includes utility functions
 for downloading data, computing normalization statistics, and processing both static and dynamic
 data required to build a graph for each hydrograph sample.
 
@@ -43,12 +43,12 @@ import zipfile
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
-import dgl
 import numpy as np
 import requests
 import torch
-from dgl.data import DGLDataset
+import torch_geometric as pyg
 from scipy.spatial import KDTree
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
 # Setup logging
@@ -270,9 +270,9 @@ DYNAMIC_NORM_STATS_FILE = "dynamic_norm_stats.json"
 # ---------------------------
 # HydroGraphDataset Class
 # ---------------------------
-class HydroGraphDataset(DGLDataset):
+class HydroGraphDataset(Dataset):
     """
-    DGL Dataset for hydrograph-based graphs.
+    Dataset for hydrograph-based graphs.
 
     This dataset processes both static and dynamic data to construct graphs for each hydrograph.
     It supports two modes:
@@ -306,8 +306,6 @@ class HydroGraphDataset(DGLDataset):
         hydrograph_ids_file: Optional[str] = None,
         split: str = "train",
         rollout_length: Optional[int] = None,
-        force_reload: bool = False,
-        verbose: bool = False,
         return_physics: bool = False,
     ):
         if split not in {"train", "test"}:
@@ -336,8 +334,7 @@ class HydroGraphDataset(DGLDataset):
         self.static_stats = {}
         self.dynamic_stats = {}
 
-        # Call the parent class constructor.
-        super().__init__(name=name, force_reload=force_reload, verbose=verbose)
+        self.process()
 
     def process(self) -> None:
         """
@@ -539,7 +536,7 @@ class HydroGraphDataset(DGLDataset):
 
         Returns:
             Depending on the split:
-                - Training: A DGL graph with node features, edge features, and target values, optionally
+                - Training: A graph with node features, edge features, and target values, optionally
                   along with a dictionary of physics data.
                 - Testing: A tuple (graph, rollout_data) where rollout_data contains future hydrograph data.
         """
@@ -583,12 +580,13 @@ class HydroGraphDataset(DGLDataset):
             target_volume = dyn["volume"][target_time, :] - dyn["volume"][prev_time, :]
             target = np.stack([target_depth, target_volume], axis=1)
 
-            # Create the graph with DGL.
+            # Create the graph with PyG.
             src, dst = sd["edge_index"]
-            g = dgl.graph((src, dst))
-            g.edata["x"] = torch.tensor(sd["edge_features"], dtype=torch.float)
-            g.ndata["x"] = torch.tensor(node_features, dtype=torch.float)
-            g.ndata["y"] = torch.tensor(target, dtype=torch.float)
+            edges = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0).long()
+            g = pyg.data.Data(edge_index=edges)
+            g.edge_attr = torch.tensor(sd["edge_features"], dtype=torch.float)
+            g.x = torch.tensor(node_features, dtype=torch.float)
+            g.y = torch.tensor(target, dtype=torch.float)
 
             # Determine if physics data should be returned.
             need_physics = self.return_physics or (self.noise_type == "pushforward")
@@ -711,9 +709,10 @@ class HydroGraphDataset(DGLDataset):
                 dyn["inflow_hydrograph"],
             )
             src, dst = sd["edge_index"]
-            g = dgl.graph((src, dst))
-            g.edata["x"] = torch.tensor(sd["edge_features"], dtype=torch.float)
-            g.ndata["x"] = torch.tensor(node_features, dtype=torch.float)
+            edges = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0).long()
+            g = pyg.data.Data(edge_index=edges)
+            g.edge_attr = torch.tensor(sd["edge_features"], dtype=torch.float)
+            g.x = torch.tensor(node_features, dtype=torch.float)
             rollout_data = {
                 "inflow": torch.tensor(
                     dyn["inflow_hydrograph"][

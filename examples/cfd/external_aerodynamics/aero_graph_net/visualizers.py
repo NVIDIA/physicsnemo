@@ -18,8 +18,8 @@ import pyvista as pv
 
 import numpy as np
 
-from dgl import DGLGraph
 from torch import Tensor
+from torch_geometric.data import Data as PyGData
 
 from loggers import ExperimentLogger
 
@@ -42,13 +42,13 @@ class MeshVisualizer:
 
     def __call__(
         self,
-        graph: DGLGraph,
+        graph: PyGData,
         pred: Tensor,
         gt: Tensor,
         step: int,
         elogger: ExperimentLogger,
     ) -> None:
-        vertices = graph.ndata["pos"][:, :3].cpu().numpy()
+        vertices = graph.pos[:, :3].cpu().numpy()
 
         assert self.scalar in ["p", "wallShearStress"]
         if self.scalar == "p":
@@ -72,7 +72,7 @@ class MeshVisualizer:
         plotter = pv.Plotter(shape=(3, 3), off_screen=True)
 
         # TODO(akamenev): this is currently plotting point clouds as
-        # opposed to meshes. This limitation is due to DGLGraph not storing faces.
+        # opposed to meshes. This limitation is due to PyG graph not storing faces.
         def plot_point_cloud(
             scalar, pc, cam_pos, cmap, clim, show_bar=False, text=None
         ):

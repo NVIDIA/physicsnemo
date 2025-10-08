@@ -101,7 +101,7 @@ To perform autoregressive rollout and generate evaluation animations:
 
 The dataset is handled via a custom `HydroGraphDataset` class,
 defined in `hydrographnet_dataset.py`. This class inherits
-from `DGLDataset` and performs the following:
+from `Dataset` and performs the following:
 
 - **Automatic downloading**: If data is not available in the `data_dir`,\
 it will automatically be downloaded from [Zenodo](https://zenodo.org/record/14969507).
@@ -164,5 +164,5 @@ If you use HydroGraphNet in your research, please cite:
 
 For questions, feedback, or collaborations:
 
-- **Mehdi Taghizadeh** – <jrj6wm@virginia.edu>  
+- **Mehdi Taghizadeh** – <jrj6wm@virginia.edu>
 - **Negin Alemazkoor** – <na7fp@virginia.edu>

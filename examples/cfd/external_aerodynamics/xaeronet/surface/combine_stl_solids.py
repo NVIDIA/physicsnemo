@@ -33,6 +33,10 @@ from omegaconf import DictConfig
 def process_stl_file(task):
     stl_path = task
 
+    # Check if the STL file is already a single solid
+    if stl_path.lower().endswith("_single_solid.stl"):
+        return f"Skipped (already single solid): {stl_path}"
+
     # Load the STL file using trimesh
     mesh = trimesh.load_mesh(stl_path)
 
@@ -51,17 +55,23 @@ def process_stl_file(task):
     base_name, ext = os.path.splitext(stl_path)
     output_file_path = to_absolute_path(f"{base_name}_single_solid{ext}")
 
+    # Check if the output file already exists
+    if os.path.exists(output_file_path):
+        return f"Skipped (exists): {output_file_path}"
+
     # Save the new combined mesh as an STL file
     combined_mesh.export(output_file_path)
-
     return f"Processed: {stl_path} -> {output_file_path}"
 
 
 def process_directory(data_path, num_workers=16):
-    """Process all STL files in the given directory using multiprocessing with progress tracking."""
     tasks = []
     for root, _, files in os.walk(data_path):
-        stl_files = [f for f in files if f.endswith(".stl")]
+        stl_files = [
+            f
+            for f in files
+            if f.endswith(".stl") and not f.lower().endswith("_single_solid.stl")
+        ]
         for stl_file in stl_files:
             stl_path = os.path.join(root, stl_file)
 

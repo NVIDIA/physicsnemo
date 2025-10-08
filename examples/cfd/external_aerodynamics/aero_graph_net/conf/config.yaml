@@ -82,7 +82,7 @@ amp:
   autocast:
     dtype: torch.float16
   scaler:
-    _target_: torch.cuda.amp.GradScaler
+    _target_: torch.amp.GradScaler
     enabled: ${..enabled}
 
 loggers:

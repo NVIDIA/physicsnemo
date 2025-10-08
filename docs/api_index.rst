@@ -6,7 +6,8 @@ API Reference
    :caption: API Reference
    :name: API Reference
 
-   api/physicsnemo.models.rst
+   api_models
+
    api/physicsnemo.datapipes.rst
    api/physicsnemo.metrics.rst
    api/physicsnemo.deploy.rst
