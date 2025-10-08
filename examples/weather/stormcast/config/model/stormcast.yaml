@@ -24,7 +24,6 @@ diffusion_conditions: ["state", "regression", "invariant"] # list consisting of 
 
 # Model hyperparameters
 spatial_pos_embed: False # Whether or not to add an additive position embed after the first conv in the U-Net
-P_mean: -1.2 # Center of the EDM lognormal noise sampling distribution
 attn_resolutions: [] # Internal resolutions within the U-Net to apply self-attention (empty list == no self-attention)
 
 # Pretrained regression model

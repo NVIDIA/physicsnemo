@@ -28,12 +28,21 @@ if CUML_AVAILABLE:
     def knn_impl(
         points: torch.Tensor, queries: torch.Tensor, k: int = 3
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Create a cuml handle to ensure we use the right stream:
+        torch_stream = torch.cuda.current_stream()
+
+        # Get the raw CUDA stream pointer (as an integer)
+        ptr = torch_stream.cuda_stream
+
+        # Build a cuML handle with that stream
+        handle = cuml.Handle(stream=ptr)
+
         # Use dlpack to move the data without copying between pytorch and cuml:
         points = cp.from_dlpack(points)
         queries = cp.from_dlpack(queries)
 
         # Construct the knn:
-        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k)
+        knn = cuml.neighbors.NearestNeighbors(n_neighbors=k, handle=handle)
         # First pass partitions everything in points to make lookups fast
         knn.fit(points)
 

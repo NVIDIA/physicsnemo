@@ -16,6 +16,7 @@
 
 """Main training loop."""
 
+from collections.abc import Sequence
 import os
 import time
 import numpy as np
@@ -23,7 +24,7 @@ import torch
 import psutil
 from physicsnemo.models import Module
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.metrics.diffusion import EDMLoss
+from physicsnemo.metrics.diffusion import EDMLoss, EDMLossLogUniform
 from physicsnemo.utils.diffusion import InfiniteSampler
 
 from physicsnemo.launch.utils import save_checkpoint, load_checkpoint
@@ -66,7 +67,7 @@ def training_loop(cfg):
 
     log_to_wandb = cfg.training.log_to_wandb
 
-    loss_type = cfg.training.loss
+    loss_type = cfg.training.loss.type
     if loss_type == "regression":
         net_name = "regression"
     elif loss_type == "edm":
@@ -183,14 +184,43 @@ def training_loop(cfg):
 
     net.train().requires_grad_(True).to(device)
 
-    # Setup optimizer.
-    logger0.info("Setting up optimizer...")
-    if cfg.training.loss == "regression":
+    # Setup loss function.
+    logger0.info("Setting up loss function...")
+
+    if loss_type == "regression":
         loss_fn = regression_loss_fn
-    elif cfg.training.loss == "edm":
-        loss_fn = EDMLoss(P_mean=cfg.model.P_mean)
+
+    elif loss_type == "edm":
+        loss_params = cfg.training.loss
+        sigma_data = loss_params.get("sigma_data", 0.5)
+        if isinstance(sigma_data, Sequence):
+            sigma_data = torch.as_tensor(
+                list(sigma_data), dtype=torch.float32, device=device
+            )[None, :, None, None]
+
+        # Select sigma distribution. Add option to the if/else below to add your own.
+        sigma_distribution = loss_params.get("sigma_distribution", "lognormal")
+        if sigma_distribution == "lognormal":
+            loss_cls = EDMLoss
+            loss_param_names = ["P_mean", "P_std"]
+        elif sigma_distribution == "loguniform":
+            loss_cls = EDMLossLogUniform
+            loss_param_names = ["sigma_min", "sigma_max"]
+        else:
+            raise ValueError("Unknown sigma distribution.")
+        loss_params = {k: v for (k, v) in loss_params.items() if k in loss_param_names}
+        loss_param_str = str(loss_params) if loss_params else "default"
+        logger0.info(
+            f"Using loss function '{sigma_distribution}', parameters {loss_param_str}"
+        )
+
+        loss_fn = loss_cls(sigma_data=sigma_data, **loss_params)
+
     if cfg.training.compile_model:
         loss_fn = torch.compile(loss_fn)
+
+    # Setup optimizer
+    logger0.info("Setting up optimizer...")
     optimizer = torch.optim.Adam(net.parameters(), lr=cfg.training.lr)
     augment_pipe = None
     ddp = torch.nn.parallel.DistributedDataParallel(

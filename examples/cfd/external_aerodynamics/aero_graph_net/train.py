@@ -22,14 +22,14 @@ from typing import Mapping
 
 import hydra
 from hydra.utils import instantiate, to_absolute_path
-
-from dgl.dataloading import GraphDataLoader
-
 from omegaconf import DictConfig, OmegaConf
 
 import torch
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data.distributed import DistributedSampler
+
+from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
@@ -61,14 +61,23 @@ class MGNTrainer:
 
         logger.info("Creating the dataloaders...")
         # instantiate training dataloader
-        self.dataloader = GraphDataLoader(
+        train_dataloader_cfg = dict(cfg.train.dataloader)
+        sampler = DistributedSampler(
             self.dataset,
-            **cfg.train.dataloader,
-            use_ddp=self.dist.world_size > 1,
+            shuffle=train_dataloader_cfg.pop("shuffle", True),
+            drop_last=train_dataloader_cfg.pop("drop_last", True),
+            num_replicas=self.dist.world_size,
+            rank=self.dist.rank,
+        )
+
+        self.dataloader = PyGDataLoader(
+            self.dataset,
+            sampler=sampler,
+            **train_dataloader_cfg,
         )
 
         # instantiate validation dataloader
-        self.validation_dataloader = GraphDataLoader(
+        self.validation_dataloader = PyGDataLoader(
             self.validation_dataset,
             **cfg.val.dataloader,
         )
@@ -111,7 +120,8 @@ class MGNTrainer:
 
         self.scaler = instantiate(cfg.amp.scaler)
         self.autocast = partial(
-            torch.cuda.amp.autocast,
+            torch.amp.autocast,
+            "cuda",
             enabled=cfg.amp.enabled,
             dtype=hydra.utils.get_object(cfg.amp.autocast.dtype),
         )
@@ -142,11 +152,9 @@ class MGNTrainer:
         batch = dict(batch)
         graph = batch.pop("graph")
         with self.autocast():
-            pred = batch_as_dict(
-                self.model(graph.ndata["x"], graph.edata["x"], graph, **batch)
-            )
+            pred = batch_as_dict(self.model(graph.x, graph.edge_attr, graph, **batch))
             # Graph data (e.g. p and WSS) loss.
-            graph_loss = self.loss.graph(pred["graph"], graph.ndata["y"])
+            graph_loss = self.loss.graph(pred["graph"], graph.y)
             losses = {"graph": graph_loss}
             # Compute C_d loss, if requested.
             if (pred_c_d := pred.get("c_d")) is not None:
@@ -172,11 +180,9 @@ class MGNTrainer:
         for batch in self.validation_dataloader:
             batch = batch_as_dict(batch, self.dist.device)
             graph = batch.pop("graph")
-            pred = batch_as_dict(
-                self.model(graph.ndata["x"], graph.edata["x"], graph, **batch)
-            )
+            pred = batch_as_dict(self.model(graph.x, graph.edge_attr, graph, **batch))
             pred_g, gt_g = self.dataset.denormalize(
-                pred["graph"], graph.ndata["y"], self.dist.device
+                pred["graph"], graph.y, self.dist.device
             )
             losses_agg["graph"] += self.loss.graph(pred_g, gt_g)
             if (pred_c_d := pred.get("c_d")) is not None:

@@ -84,6 +84,8 @@ class MeshDatapipe(Datapipe):
         Number of training processes, by default 1
     cache_data : False, optional
         Whether to cache the data in memory for faster access in subsequent epochs, by default False
+    Parallel: True, optional
+        Setting parallel=True for an external_source node indicates to the pipeline to run the source in Python worker processes started by DALI.
     """
 
     def __init__(
@@ -101,6 +103,7 @@ class MeshDatapipe(Datapipe):
         process_rank: int = 0,
         world_size: int = 1,
         cache_data: bool = False,
+        parallel: bool = True,
     ):
         super().__init__(meta=MetaData())
         self.file_format = file_format
@@ -115,6 +118,7 @@ class MeshDatapipe(Datapipe):
         self.process_rank = process_rank
         self.world_size = world_size
         self.cache_data = cache_data
+        self.parallel = parallel
 
         # if self.batch_size > 1:
         #     raise NotImplementedError("Batch size greater than 1 is not supported yet")
@@ -243,7 +247,7 @@ class MeshDatapipe(Datapipe):
             vertices, attributes, edges = dali.fn.external_source(
                 source,
                 num_outputs=3,
-                parallel=True,
+                parallel=self.parallel,
                 batch=False,
             )
 

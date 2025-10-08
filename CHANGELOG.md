@@ -18,17 +18,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
   by dispatching to the proper optimized library, and torch.compile compatible.
 - Added additional testing of the DoMINO datapipe.
+- Examples: added a new example for full-waveform inversion using diffusion
+  models. Accessible in `examples/geophysics/diffusion_fwi`.
 
 ### Changed
 
 - Migrated Stokes MGN example to PyTorch Geometric.
 - Migrated Lennard Jones example to PyTorch Geometric.
+- Migrated physicsnemo.utils.sdf.signed_distance_field to a static return,
+  torch-only interface.  It also now works on distributed meshes and input fields.
+- Refactored DiTBlock to be more modular
+- Added NATTEN 2D neighborhood attention backend for DiTBlock
+- Migrated blood flow example to PyTorch Geometric.
+- Migrated HydroGraphNet example to PyTorch Geometric.
+- Support for saving and loading nested `physicsnemo.Module`s. It is now
+  possible to create nested modules with `m = Module(submodule, ...)`, and save
+  and load them with `Module.save` and `Module.from_checkpoint`.
+  **⚠️Warning:** - The modules have to be `physicsnemo.Module`s, and not
+  `torch.nn.Module`s.
 
 ### Deprecated
 
 ### Removed
 
 ### Fixed
+
+- Set `skip_scale` to Python float in U-Net to ensure compilation works.
+- Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
+- Fixed the issue with incorrect handling of files with consecutive runs of
+  `combine_stl_solids.py` in the X-MGN recipe.
+- Fixed the `RuntimeError: Worker data receiving interrupted` error in the datacenter example.
 
 ### Security
 
