@@ -80,6 +80,8 @@ class BackendReader(ABC):
 
         self.volume_sampling_size = None
 
+        self.is_volumetric = any(["volume" in key for key in self.keys_to_read])
+
     @abstractmethod
     def read_file(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
         """
@@ -252,14 +254,15 @@ class NpzFileReader(BackendReader):
             raise ValueError(f"Keys {keys_missing} not found in file {filename}")
 
         # Make sure to select the slice outside of the loop.
-        if self.volume_sampling_size is not None:
-            volume_slice = self.select_random_sections_from_slice(
-                0,
-                in_data["volume_mesh_centers"].shape[0],
-                self.volume_sampling_size,
-            )
-        else:
-            volume_slice = slice(0, in_data["volume_mesh_centers"].shape[0])
+        if self.is_volumetric:
+            if self.volume_sampling_size is not None:
+                volume_slice = self.select_random_sections_from_slice(
+                    0,
+                    in_data["volume_mesh_centers"].shape[0],
+                    self.volume_sampling_size,
+                )
+            else:
+                volume_slice = slice(0, in_data["volume_mesh_centers"].shape[0])
 
         # This is a slower basic way to do this, to be improved:
         data = {}
@@ -311,14 +314,15 @@ class ZarrFileReader(BackendReader):
             raise ValueError(f"Keys {missing_keys} not found in file {filename}")
 
         # Make sure to select the slice outside of the loop.
-        if self.volume_sampling_size is not None:
-            volume_slice = self.select_random_sections_from_slice(
-                0,
-                group["volume_mesh_centers"].shape[0],
-                self.volume_sampling_size,
-            )
-        else:
-            volume_slice = slice(0, group["volume_mesh_centers"].shape[0])
+        if self.is_volumetric:
+            if self.volume_sampling_size is not None:
+                volume_slice = self.select_random_sections_from_slice(
+                    0,
+                    group["volume_mesh_centers"].shape[0],
+                    self.volume_sampling_size,
+                )
+            else:
+                volume_slice = slice(0, group["volume_mesh_centers"].shape[0])
 
         # This is a slower basic way to do this, to be improved:
         data = {}
@@ -587,14 +591,17 @@ if TENSORSTORE_AVAILABLE:
 
             # Make sure to select the slice outside of the loop.
             # We need
-            if self.volume_sampling_size is not None:
-                volume_slice = self.select_random_sections_from_slice(
-                    0,
-                    read_futures["volume_mesh_centers"].shape[0],
-                    self.volume_sampling_size,
-                )
-            else:
-                volume_slice = slice(0, read_futures["volume_mesh_centers"].shape[0])
+            if self.is_volumetric:
+                if self.volume_sampling_size is not None:
+                    volume_slice = self.select_random_sections_from_slice(
+                        0,
+                        read_futures["volume_mesh_centers"].shape[0],
+                        self.volume_sampling_size,
+                    )
+                else:
+                    volume_slice = slice(
+                        0, read_futures["volume_mesh_centers"].shape[0]
+                    )
 
             # Trigger an async read of each data item:
             # (Each item will be a numpy ndarray after this:)
