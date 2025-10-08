@@ -18,16 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import dgl
 import pandas as pd
 import torch
-import torch_geometric as pyg
 import yaml
+from dgl.data import DGLDataset
 from torch import Tensor
-from torch.utils.data import Dataset
 
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from physicsnemo.models.gnn_layers.utils import PyGData
 
 try:
     import pyvista as pv
@@ -49,12 +48,15 @@ class MetaData(DatapipeMetaData):
     ddp_sharding: bool = True
 
 
-class DrivAerNetDataset(Dataset, Datapipe):
+class DrivAerNetDataset(DGLDataset, Datapipe):
     """
     DrivAerNet dataset.
 
-    Note: DrivAerNetDataset caches graphs in __getitem__ call which
-    helps to avoid long initialization delay but increases first epoch time.
+    Note: DrivAerNetDataset does not use default DGLDataset caching
+    functionality such as `has_cache`, `download` etc,
+    as it is invoked during the __init__ call so takes a lot of time.
+    Instead, DrivAerNetDataset caches graphs in __getitem__ call thus
+    avoiding long initialization delay.
 
     Parameters
     ----------
@@ -73,12 +75,14 @@ class DrivAerNetDataset(Dataset, Datapipe):
     normalize_keys Iterable[str], optional
         The features to normalize. Default includes 'p' and 'wallShearStress'.
     cache_dir: str, optional
-        Path to the cache directory to store graphs in PyG format for fast loading.
+        Path to the cache directory to store graphs in DGL format for fast loading.
         Default is ./cache/.
+    force_reload: bool, optional
+        If True, forces a reload of the data, by default False.
     name: str, optional
         The name of the dataset, by default 'dataset'.
-    force_reload: bool, optional
-        If True, forces a reload of the cached data, by default False.
+    verbose: bool, optional
+        If True, enables verbose mode, by default False.
     """
 
     def __init__(
@@ -91,13 +95,14 @@ class DrivAerNetDataset(Dataset, Datapipe):
         outvar_keys: Iterable[str] = ("p", "wallShearStress"),
         normalize_keys: Iterable[str] = ("p", "wallShearStress"),
         cache_dir: str | Path = "./cache/",
-        name: str = "dataset",
         force_reload: bool = False,
+        name: str = "dataset",
+        verbose: bool = False,
         **kwargs,
     ) -> None:
+        DGLDataset.__init__(self, name=name, force_reload=force_reload, verbose=verbose)
         Datapipe.__init__(self, meta=MetaData())
 
-        self.name = name
         self.data_dir = Path(data_dir)
         if not self.data_dir.is_dir():
             raise ValueError(
@@ -110,7 +115,6 @@ class DrivAerNetDataset(Dataset, Datapipe):
         if split not in (splits := ["train", "val", "test"]):
             raise ValueError(f"{split = } is not supported, must be one of {splits}.")
 
-        self.force_reload = force_reload
         self.num_samples = num_samples
         self.input_keys = list(invar_keys)
         self.output_keys = list(outvar_keys)
@@ -203,7 +207,7 @@ class DrivAerNetDataset(Dataset, Datapipe):
     def __len__(self) -> int:
         return len(self.coeffs)
 
-    def __getitem__(self, idx: int) -> PyGData:
+    def __getitem__(self, idx: int) -> dgl.DGLGraph:
         if not 0 <= idx < len(self):
             raise IndexError(f"Invalid {idx = }, must be in [0, {len(self)})")
 
@@ -212,19 +216,21 @@ class DrivAerNetDataset(Dataset, Datapipe):
 
         if self.cache_dir is None:
             # Caching is disabled - create the graph.
-            graph = self._create_graph(gname)
+            graph = self._create_dgl_graph(gname)
         else:
-            cached_graph_filename = self.cache_dir / (gname + ".pt")
-            if not self.force_reload and cached_graph_filename.is_file():
-                graph = torch.load(cached_graph_filename, weights_only=False)
+            cached_graph_filename = self.cache_dir / (gname + ".bin")
+            if not self._force_reload and cached_graph_filename.is_file():
+                gs, _ = dgl.load_graphs(str(cached_graph_filename))
+                if len(gs) != 1:
+                    raise ValueError(f"Expected to load 1 graph but got {len(gs)}.")
+                graph = gs[0]
             else:
-                graph = self._create_graph(gname)
-                Path.mkdir(self.cache_dir, parents=True, exist_ok=True)
-                torch.save(graph, cached_graph_filename)
+                graph = self._create_dgl_graph(gname)
+                dgl.save_graphs(str(cached_graph_filename), [graph])
 
         # Set graph inputs/outputs.
-        graph.x = torch.cat([graph[k] for k in self.input_keys], dim=-1)
-        graph.y = torch.cat([graph[k] for k in self.output_keys], dim=-1)
+        graph.ndata["x"] = torch.cat([graph.ndata[k] for k in self.input_keys], dim=-1)
+        graph.ndata["y"] = torch.cat([graph.ndata[k] for k in self.output_keys], dim=-1)
 
         return {
             "name": gname,
@@ -238,12 +244,13 @@ class DrivAerNetDataset(Dataset, Datapipe):
             cache_dir = data_dir / cache_dir
         return cache_dir.resolve()
 
-    def _create_graph(
+    def _create_dgl_graph(
         self,
         name: str,
         to_bidirected: bool = True,
-    ) -> PyGData:
-        """Creates a PyG graph from DrivAerNet VTK data.
+        dtype: torch.dtype | str = torch.int32,
+    ) -> dgl.DGLGraph:
+        """Creates a DGL graph from DrivAerNet VTK data.
 
         Parameters
         ----------
@@ -251,11 +258,13 @@ class DrivAerNetDataset(Dataset, Datapipe):
             Name of the graph in DrivAerNet.
         to_bidirected : bool, optional
             Whether to make the graph bidirected. Default is True.
+        dtype : torch.dtype or str, optional
+            Data type for the graph. Default is torch.int32.
 
         Returns
         -------
-        PyGData
-            The PyG graph.
+        dgl.DGLGraph
+            The DGL graph.
         """
 
         def extract_edges(mesh: pv.PolyData) -> list[tuple[int, int]]:
@@ -325,41 +334,40 @@ class DrivAerNetDataset(Dataset, Datapipe):
 
         edge_list = extract_edges(p_mesh)
 
-        # Create PyG graph using the connectivity information
-        edges = torch.tensor(edge_list).t()
+        # Create DGL graph using the connectivity information
+        graph = dgl.graph(edge_list, idtype=dtype)
         if to_bidirected:
-            edges = pyg.utils.to_undirected(edges)
-        graph = pyg.data.Data(edge_index=edges)
+            graph = dgl.to_bidirected(graph)
 
         # Assign node features using the vertex data
-        graph.pos = torch.tensor(p_mesh.points, dtype=torch.float32)
+        graph.ndata["pos"] = torch.tensor(p_mesh.points, dtype=torch.float32)
 
         if (k := "p") in self.output_keys:
-            graph[k] = torch.tensor(p_mesh.point_data[k], dtype=torch.float32)
+            graph.ndata[k] = torch.tensor(p_mesh.point_data[k], dtype=torch.float32)
 
         if (k := "wallShearStress") in self.output_keys:
             wss_vtk_path = self.wss_vtk_dir / (name + ".vtk")
-            graph[k] = permute_mesh(p_vtk_path, wss_vtk_path)
+            graph.ndata[k] = permute_mesh(p_vtk_path, wss_vtk_path)
 
         # Normalize nodes.
         for k in self.input_keys + self.output_keys:
             if k not in self.normalize_keys:
                 continue
-            v = (graph[k] - self.nstats[k]["mean"]) / self.nstats[k]["std"]
-            graph[k] = v.unsqueeze(-1) if v.ndim == 1 else v
+            v = (graph.ndata[k] - self.nstats[k]["mean"]) / self.nstats[k]["std"]
+            graph.ndata[k] = v.unsqueeze(-1) if v.ndim == 1 else v
 
         # Add edge features which contain relative edge nodes displacement and
         # displacement norm. Stored as `x` in the graph edge data.
-        u, v = graph.edge_index
-        pos = graph.pos
+        u, v = graph.edges()
+        pos = graph.ndata["pos"]
         disp = pos[u] - pos[v]
         disp_norm = torch.linalg.norm(disp, dim=-1, keepdim=True)
-        graph.edge_attr = torch.cat((disp, disp_norm), dim=-1)
+        graph.edata["x"] = torch.cat((disp, disp_norm), dim=-1)
 
         # Normalize edges.
-        graph.edge_attr = (graph.edge_attr - self.estats["x"]["mean"]) / self.estats[
-            "x"
-        ]["std"]
+        for k, v in graph.edata.items():
+            v = (v - self.estats[k]["mean"]) / self.estats[k]["std"]
+            graph.edata[k] = v.unsqueeze(-1) if v.ndim == 1 else v
 
         return graph
 
