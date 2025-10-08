@@ -97,9 +97,6 @@ def benchmark_io_epoch(
     gpu_start_info = nvmlDeviceGetMemoryInfo(gpu_handle)
     start_time = time.perf_counter()
     for i_batch, sample_batched in enumerate(dataloader):
-        # for key in sample_batched.keys():
-        #     print(f"Key {key} shape: {sample_batched[key].shape} with mean {sample_batched[key].mean()} and std {sample_batched[key].std()} ")
-
         # Gather data and report
         elapsed_time = time.perf_counter() - start_time
         start_time = time.perf_counter()
