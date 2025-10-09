@@ -580,10 +580,10 @@ def ring_sdpa(
         v (physicsnemo.distributed.ShardTensor): The attention values
         attn_mask (physicsnemo.distributed.ShardTensor, optional): The attention mask
         kwargs (dict): key-word arguments to pass to the attention call
-      
+
     Returns:
     -------
-        physicsnemo.distributed.ShardTensor: A distributed tensor representing the 
+        physicsnemo.distributed.ShardTensor: A distributed tensor representing the
            attention computed on the global context.
 
     """
@@ -636,7 +636,7 @@ def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> Shard
     Raises:
         MissingShardPatch: If Sharding of inputs is not on the same mesh,
             or is not on a 1D mesh.
-        
+
     """
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
