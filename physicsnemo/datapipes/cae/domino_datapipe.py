@@ -742,7 +742,7 @@ class DoMINODataPipe(Dataset):
         )
         return_dict["sdf_surf_grid"] = sdf_surf_grid
         return_dict["surf_grid"] = surf_grid
-        
+
         # Store this only if normalization is active:
         if self.config.normalize_coordinates:
             return_dict["surface_min_max"] = torch.stack([s_min, s_max])
@@ -867,7 +867,7 @@ class DoMINODataPipe(Dataset):
 
         if self.config.volume_sample_from_disk:
             # We deliberately double the data to read compared to the sampling size:
-            self.dataset.set_volume_sampling_size(2 * self.config.volume_points_sample)
+            self.dataset.set_volume_sampling_size(10 * self.config.volume_points_sample)
 
     def __len__(self):
         if self.dataset is not None:
@@ -930,7 +930,11 @@ class DoMINODataPipe(Dataset):
 
 
 def compute_scaling_factors(
-    cfg: DictConfig, input_path: str, target_keys: list[str], use_cache=None, max_samples=20,
+    cfg: DictConfig,
+    input_path: str,
+    target_keys: list[str],
+    use_cache=None,
+    max_samples=20,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Using the dataset at the path, compute the mean, std, min, and max of the target keys.
