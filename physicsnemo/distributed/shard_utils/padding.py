@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Tuple, Union
-
 import torch
 
 from physicsnemo.utils.profiling import profile
@@ -34,12 +32,12 @@ from physicsnemo.distributed.shard_utils.patch_core import (  # noqa: E402
 
 
 def compute_local_padding_and_output_shape(
-    input_tensor_shape: Tuple[int, ...],
-    pad: Tuple[int, ...],
-    mesh_coords: Tuple[int, ...],
-    mesh_sizes: Tuple[int, ...],
+    input_tensor_shape: tuple[int, ...],
+    pad: tuple[int, ...],
+    mesh_coords: tuple[int, ...],
+    mesh_sizes: tuple[int, ...],
     tensor_sharding_map: dict[int, int],
-) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """
     Compute the local padding and output shape for a given input tensor shape, pad, mode, and value.
 
@@ -113,7 +111,7 @@ def generic_pad_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: di
 
     Args:
         func: The padding function to be wrapped
-        types: Tuple of input types (unused)
+        types: tuple of input types (unused)
         args: Positional arguments to the padding function
         kwargs: Keyword arguments to the padding function
 
@@ -148,12 +146,14 @@ def generic_pad_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: di
 
     # Sanity checks
     if len(pad) % 2 != 0:
-        raise ValueError("Sharded Padding requires len(pag) to be divisible by 2.")
+        raise ValueError("Sharded Padding requires len(pad) to be divisible by 2.")
 
     pad_dims = len(pad) // 2
 
     if pad_dims > len(inputs.shape):
-        raise ValueError("Sharded Padding specified for {pad_dim}")
+        raise ValueError(
+            f"Sharded Padding specified for {pad_dims} but tensor has only {len(inputs.shape)} dimensions."
+        )
 
     # By default, all output tensors are unsharded
     # This maps tensor dim to mesh dim but ONLY if it's sharded
@@ -208,14 +208,14 @@ def generic_pad_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: di
 @profile
 def repackage_pad_args(
     inputs: ShardTensor,
-    pad: Union[int, Tuple[int, ...]] = 0,
+    pad: int | tuple[int, ...] = 0,
     mode: str = "constant",
     value: float | None = None,
     *args,
     **kwargs,
-) -> Tuple[
+) -> tuple[
     ShardTensor,
-    Tuple[int, ...],
+    tuple[int, ...],
     str,
     float,
     dict,
@@ -235,7 +235,7 @@ def repackage_pad_args(
         *args: Additional positional args (unused)
         **kwargs: Additional keyword args (unused)
     Returns:
-        Tuple containing:
+        tuple containing:
         - Input tensor
         - Padding size(s)
         - Padding mode
