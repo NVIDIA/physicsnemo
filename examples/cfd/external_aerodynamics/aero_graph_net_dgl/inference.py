@@ -17,8 +17,8 @@
 import logging
 from pathlib import Path
 
-from torch_geometric.data import Data as PyGData
-from torch_geometric.loader import DataLoader as PyGDataLoader
+from dgl import DGLGraph
+from dgl.dataloading import GraphDataLoader
 
 import hydra
 from hydra.utils import instantiate, to_absolute_path
@@ -39,14 +39,14 @@ from utils import batch_as_dict
 logger = logging.getLogger("agnet")
 
 
-def pyg_to_pyvista(graph: PyGData):
+def dgl_to_pyvista(graph: DGLGraph):
     """
-    Converts a PyG graph to a PyVista graph.
+    Converts a DGL graph to a PyVista graph.
 
     Parameters:
     -----------
-    graph: PyGData
-        The input graph.
+    graph: DGLGraph
+        The input DGL graph.
 
     Returns:
     --------
@@ -57,20 +57,22 @@ def pyg_to_pyvista(graph: PyGData):
     pv_graph = pv.PolyData()
 
     # Assuming "pos" is in the source graph node data.
-    assert "pos" in graph, f"pos data does not exist"
-    pv_graph.points = graph.pos.numpy()
+    assert "pos" in graph.ndata, f"pos data does not exist, {graph.ndata.keys()=}"
+    pv_graph.points = graph.ndata["pos"].numpy()
 
     # Create lines from edges.
-    edges = np.column_stack(graph.edge_index)
+    edges = np.column_stack(graph.edges())
     lines = np.empty((edges.shape[0], 3), dtype=np.int64)
     lines[:, 0] = 2
     lines[:, 1:] = edges
 
     pv_graph.lines = lines.flatten()
-    pv_graph.point_data["p_pred"] = graph.p_pred.numpy()
-    pv_graph.point_data["p"] = graph.p.numpy()
-    pv_graph.point_data["wallShearStress_pred"] = graph.wallShearStress_pred.numpy()
-    pv_graph.point_data["wallShearStress"] = graph.wallShearStress.numpy()
+    pv_graph.point_data["p_pred"] = graph.ndata["p_pred"].numpy()
+    pv_graph.point_data["p"] = graph.ndata["p"].numpy()
+    pv_graph.point_data["wallShearStress_pred"] = graph.ndata[
+        "wallShearStress_pred"
+    ].numpy()
+    pv_graph.point_data["wallShearStress"] = graph.ndata["wallShearStress"].numpy()
 
     return pv_graph
 
@@ -92,7 +94,7 @@ class EvalRollout:
 
         # instantiate dataloader
         logger.info("Creating the dataloader...")
-        self.dataloader = PyGDataLoader(
+        self.dataloader = GraphDataLoader(
             self.dataset,
             **cfg.test.dataloader,
         )
@@ -141,24 +143,24 @@ class EvalRollout:
             coeff = coeff.to(self.device)[0]
 
             logger.info(f"Processing case id {case_id}")
-            pred = self.model(graph.x, graph.edge_attr, graph)
-            gt = graph.y
+            pred = self.model(graph.ndata["x"], graph.edata["x"], graph)
+            gt = graph.ndata["y"]
             pred, gt = self.dataset.denormalize(pred, gt, pred.device)
 
             num_out_c = gt.shape[1]
             if num_out_c in [1, 4]:
-                graph.p_pred = pred[:, 0]
-                graph.p = gt[:, 0]
+                graph.ndata["p_pred"] = pred[:, 0]
+                graph.ndata["p"] = gt[:, 0]
             if num_out_c in [3, 4]:
-                graph.wallShearStress_pred = pred[:, num_out_c - 3 :]
-                graph.wallShearStress = gt[:, num_out_c - 3 :]
+                graph.ndata["wallShearStress_pred"] = pred[:, num_out_c - 3 :]
+                graph.ndata["wallShearStress"] = gt[:, num_out_c - 3 :]
 
             error = self.loss.graph(pred, gt)
             logger.info(f"Error (%): {error * 100:.4f}")
 
             if save_results:
-                # Convert graph to PyVista graph and save it
-                pv_graph = pyg_to_pyvista(graph.cpu())
+                # Convert DGL graph to PyVista graph and save it
+                pv_graph = dgl_to_pyvista(graph.cpu())
                 pv_graph.save(self.output_dir / f"{case_id}.vtp")
 
 

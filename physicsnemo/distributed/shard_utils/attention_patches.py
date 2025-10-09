@@ -401,9 +401,7 @@ class RingSDPABlocking(torch.autograd.Function):
     ) -> torch.Tensor:
         """
         Forward pass for the ring attention implementation.  This implementation
-        will overlap the communication with the computation.  Note that there is an
-        explicit sync in each iteration to prevent the communication stream from getting
-        ahead of the computation stream, by waiting on the all_to_all operation to complete.
+        will NOT overlap the communication with the computation.
         """
 
         ctx.attn_args = attn_args
@@ -569,14 +567,24 @@ def ring_sdpa(
     **kwargs: dict,
 ) -> ShardTensor:
     """
-    High Level, differentiable function to compute neighborhood attention on a sharded tensor.
+    High Level, differentiable function to compute global attention on a sharded tensor.
 
-    Operation works like so:
-    - Figure out the size of halos needed.
-    - Apply the halo padding (differentiable)
-    - Perform the neighborhood attention on the padded tensor. (differentiable)
-    - "UnHalo" the output tensor (different from, say, convolutions)
-    - Return the updated tensor as a ShardTensor.
+    The implementation is a ring communication pattern.  Each rank computes attention
+    locally on it's tensors, and then kv is passed to the next rank while receiving from
+    the previous rank.
+
+    Parameters:
+    ----------
+        q (physicsnemo.distributed.ShardTensor): The attention queries
+        k (physicsnemo.distributed.ShardTensor): The attention keys
+        v (physicsnemo.distributed.ShardTensor): The attention values
+        attn_mask (physicsnemo.distributed.ShardTensor, optional): The attention mask
+        kwargs (dict): key-word arguments to pass to the attention call
+
+    Returns:
+    -------
+        physicsnemo.distributed.ShardTensor: A distributed tensor representing the
+           attention computed on the global context.
 
     """
 
@@ -613,23 +621,22 @@ def ring_sdpa(
 
 
 def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> ShardTensor:
-    """Wrapper for natten.functional.na2d to support sharded tensors.
+    """Wrapper for torch.nn.functional.scaled_dot_product_attention to support sharded tensors.
 
-    Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
-    For regular tensors, passes through to the wrapped na2d function.
-    For ShardTensor inputs, handles adding halos and applying distributed na2d.
 
     Args:
-        wrapped: Original na2d function being wrapped
-        instance: Instance the wrapped function is bound to
+        func: Will be torch.nn.functional.scaled_dot_product_attention
+        types: The object types of the inputs
         args: Positional arguments containing query, key, value tensors
-        kwargs: Keyword arguments including kernel_size and dilation
+        kwargs: Keyword arguments
 
     Returns:
-        Result tensor as either torch.Tensor or ShardTensor depending on input types
+        ShardTensor with global attention computed.
 
     Raises:
-        UndeterminedShardingError: If input tensor types are mismatched
+        MissingShardPatch: If Sharding of inputs is not on the same mesh,
+            or is not on a 1D mesh.
+
     """
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
