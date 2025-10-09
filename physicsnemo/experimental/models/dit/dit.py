@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 from physicsnemo.experimental.models.dit import DiTBlock
-from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer
+from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer, AttentionModuleBase
 
 @dataclass
 class MetaData(ModelMetaData):
@@ -82,12 +82,13 @@ class DiT(Module):
         The number of attention heads. Defaults to 8.
     mlp_ratio (float, optional):
         The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-    attention_backend (Union[str, type[Module], optional):
+    attention_backend (Union[str, Module, optional):
         The attention backend to use. Defaults to 'transformer_engine'. You may provide:
         - A string in {"timm", "transformer_engine", "natten2d"} to select a built-in backend.
           See physicsnemo.experimental.models.dit.layers.DiTBlock for a description of each built-in backend.
-        - A `type[Module]` (class) that will be constructed per block with `hidden_size`, `num_heads`, and any `attn_kwargs`.
-        All custom modules must implement a forward mapping (B, L, D) -> (B, L, D), as defined in physicsnemo.experimental.models.dit.layers.AttentionModuleBase.
+        - A reference custom `Module` that will perform the self-attention operation. This must be a`physiscsnemo.models.Module` instance that implements the 
+          (B, L, D) -> (B, L, D) mapping, as defined in physicsnemo.experimental.models.dit.layers.AttentionModuleBase. A new instance of this module will be
+          constructed within each DiTBlock.
     layernorm_backend (str, optional):
         If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
     condition_dim (int, optional):
@@ -161,7 +162,7 @@ class DiT(Module):
         mlp_ratio: float = 4.0,
         attention_backend: Union[
             Literal["timm", "transformer_engine", "natten2d"],
-            Type[Module],
+            Module,
         ] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
@@ -185,8 +186,8 @@ class DiT(Module):
         self.condition_dim = condition_dim
 
         if not isinstance(attention_backend, str):
-            if not (isinstance(attention_backend, type) and issubclass(attention_backend, Module)):
-                raise ValueError("attention_backend must be a string, or a physicsnemo Module that can be instantiated per block")
+            if not isinstance(attention_backend, AttentionModuleBase):
+                raise ValueError("attention_backend must be a string, or an instance of a custom subclass of physicsnemo.experimental.models.dit.layers.AttentionModuleBase")
 
         # Tokenizer module: accept string or pre-instantiated PhysicsNeMo Module
         if isinstance(tokenizer, str):
@@ -240,14 +241,15 @@ class DiT(Module):
             if isinstance(attention_backend, str):
                 attn_module = attention_backend
             else:
-                attn_module = attention_backend(hidden_size=hidden_size, num_heads=num_heads, **attn_kwargs)
+                custom_attn_module_constructor = attention_backend.__class__
+                attn_module = custom_attn_module_constructor(hidden_size=hidden_size, num_heads=num_heads, **attn_kwargs)
             
             blocks.append(
                 DiTBlock(
                     hidden_size,
                     num_heads,
-                    attn_module,
-                    layernorm_backend,
+                    attention_backend=attn_module,
+                    layernorm_backend=layernorm_backend,
                     mlp_ratio=mlp_ratio,
                     **block_kwargs,
                     **attn_kwargs,
