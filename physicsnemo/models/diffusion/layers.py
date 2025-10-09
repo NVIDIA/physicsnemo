@@ -1090,7 +1090,7 @@ class PositionalEmbedding(torch.nn.Module):
             pow = np.arange(half_embed_dim, dtype=np.float32) / half_embed_dim
             w = np.exp(-np.log(self.max_positions) * pow)
             self.register_buffer("freqs", torch.from_numpy(w).float())
-        
+
     def cos_sin_embedding(self, x):
         freqs = torch.arange(
             start=0, end=self.freq_embed_dim // 2, dtype=torch.float32, device=x.device
