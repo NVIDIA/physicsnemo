@@ -728,8 +728,6 @@ class DoMINODataPipe(Dataset):
         else:
             normed_vertices = data_dict["stl_coordinates"]
 
-        return_dict["surf_grid"] = surf_grid
-
         # For SDF calculations, make sure the mesh_indices_flattened is an integer array:
         mesh_indices_flattened = data_dict["stl_faces"].to(torch.int32)
 
