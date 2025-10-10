@@ -27,12 +27,12 @@ import zarr
 from pytest_utils import import_or_fail
 from scipy.spatial import ConvexHull
 
+from physicsnemo.datapipes.cae.cae_dataset import CAEDataset
 from physicsnemo.datapipes.cae.domino_datapipe import (
     CachedDoMINODataset,
     DoMINODataConfig,
     DoMINODataPipe,
 )
-from physicsnemo.datapipes.cae.drivaer_ml_dataset import DrivaerMLDataset
 
 Tensor = torch.Tensor
 
@@ -293,7 +293,7 @@ def create_basic_dataset(
         "global_params_reference": torch.tensor([1.225, 10.0]),
     }
 
-    dataset = DrivaerMLDataset(
+    dataset = CAEDataset(
         data_dir=input_path,
         keys_to_read=keys_to_read,
         keys_to_read_if_available=keys_to_read_if_available,

@@ -37,8 +37,8 @@ from omegaconf import DictConfig
 from torch.distributed.tensor.placement_types import Replicate
 from torch.utils.data import Dataset
 
-from physicsnemo.datapipes.cae.drivaer_ml_dataset import (
-    DrivaerMLDataset,
+from physicsnemo.datapipes.cae.cae_dataset import (
+    CAEDataset,
     compute_mean_std_min_max,
 )
 from physicsnemo.distributed import DistributedManager
@@ -229,7 +229,7 @@ class DoMINODataPipe(Dataset):
         self.preproc_device = (
             dist.device if self.config.gpu_preprocessing else torch.device("cpu")
         )
-        # The drivaer_ml_dataset will automatically target this device
+        # The cae_dataset will automatically target this device
         # In an async transfer.
         self.output_device = (
             dist.device if self.config.gpu_output else torch.device("cpu")
@@ -946,7 +946,7 @@ def compute_scaling_factors(
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    dataset = DrivaerMLDataset(
+    dataset = CAEDataset(
         data_dir=input_path,
         keys_to_read=target_keys,
         keys_to_read_if_available={},
@@ -1182,7 +1182,7 @@ def create_domino_dataset(
             preload_depth = 1
             pin_memory = False
 
-        dataset = DrivaerMLDataset(
+        dataset = CAEDataset(
             data_dir=input_path,
             keys_to_read=keys_to_read,
             keys_to_read_if_available=keys_to_read_if_available,

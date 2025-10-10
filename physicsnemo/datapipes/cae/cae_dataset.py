@@ -734,7 +734,7 @@ def is_vtk_directory(file: pathlib.Path) -> bool:
     )
 
 
-class DrivaerMLDataset:
+class CAEDataset:
     """
     Dataset reader for DrivaerML and similar datasets.  In general, this
     dataset supports reading dictionary-like data, and returning a
@@ -1118,7 +1118,7 @@ class DrivaerMLDataset:
 
 
 def compute_mean_std_min_max(
-    dataset: DrivaerMLDataset, field_keys: list[str], max_samples: int = 20
+    dataset: CAEDataset, field_keys: list[str], max_samples: int = 20
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute the mean, standard deviation, minimum, and maximum for a specified field
@@ -1127,7 +1127,7 @@ def compute_mean_std_min_max(
     Uses a numerically stable online algorithm for mean and variance.
 
     Args:
-        dataset (DrivaerMLDataset): The dataset to process.
+        dataset (CAEDataset): The dataset to process.
         field_key (str): The key for the field to normalize.
 
     Returns:
@@ -1184,11 +1184,11 @@ def compute_mean_std_min_max(
             # Update min/max
             batch_min = field_data.amin(dim=(0))
             batch_max = field_data.amax(dim=(0))
-            
+
             min_val[field_key] = torch.minimum(min_val[field_key], batch_min)
 
-            max_val[field_key] = torch.maximum(max_val[field_key], batch_max)   
-                     
+            max_val[field_key] = torch.maximum(max_val[field_key], batch_max)
+
             # Update running mean and M2 (Welford's algorithm)
             delta = batch_mean - mean[field_key]
             N[field_key] += batch_n  # batch_n should also be torch.int64
