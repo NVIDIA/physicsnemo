@@ -193,6 +193,8 @@ def stochastic_sampler(
     # Safety check on type of patching
     if patching is not None and not isinstance(patching, GridPatching2D):
         raise ValueError("patching must be an instance of GridPatching2D.")
+    if patching:
+            optional_args["embedding_selector"] = patch_embedding_selector
 
     # Safety check: if patching is used then img_lr and latents must have same
     # height and width, otherwise there is mismatch in the number
