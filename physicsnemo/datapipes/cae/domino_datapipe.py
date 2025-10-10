@@ -304,15 +304,12 @@ class DoMINODataPipe(Dataset):
 
         self.dataset = None
 
-    def compute_stl_scaling_and_surface_grids(
-        self,
-        stl_vertices: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def compute_stl_scaling_and_surface_grids(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the min and max for the defining mesh.
 
         If the user supplies a bounding box, we use that.  Otherwise,
-        it's created dynamically from the min/max of the stl vertices.
+        it raises an error.
 
         The returned min/max and grid are used for surface data.
         """
@@ -324,23 +321,17 @@ class DoMINODataPipe(Dataset):
             s_min = self.config.bounding_box_dims_surf[1]
             surf_grid = self.default_surface_grid
         else:
-            # Create the grid dynamically
-            s_min = torch.amin(stl_vertices, 0)
-            s_max = torch.amax(stl_vertices, 0)
-            surf_grid = create_grid(s_max, s_min, self.config.grid_resolution)
+            raise ValueError("Bounding box dimensions are not set in config")
 
         return s_min, s_max, surf_grid
 
-    def compute_volume_scaling_and_grids(
-        self, s_min: torch.Tensor, s_max: torch.Tensor
-    ):
+    def compute_volume_scaling_and_grids(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the min and max and grid for volume data.
 
         If the user supplies a bounding box, we use that.  Otherwise,
-        it's created dynamically from the surface min/max.
+        it raises an error.
 
-        This will be 2x longer in x and y and the same in z as the surface bounding box.
         """
 
         # Determine the volume min / max locations
@@ -348,13 +339,8 @@ class DoMINODataPipe(Dataset):
             c_max = self.config.bounding_box_dims[0]
             c_min = self.config.bounding_box_dims[1]
             volume_grid = self.default_volume_grid
-
         else:
-            # Create the grid based on the surface grid
-            c_max = s_max + (s_max - s_min) / 2
-            c_min = s_min - (s_max - s_min) / 2
-            c_min[2] = s_min[2]
-            volume_grid = create_grid(c_max, c_min, self.config.grid_resolution)
+            raise ValueError("Bounding box dimensions are not set in config")
 
         return c_min, c_max, volume_grid
 
@@ -377,9 +363,7 @@ class DoMINODataPipe(Dataset):
                 stl_vertices, geometry_points
             )
             if geometry_coordinates_sampled.shape[0] < geometry_points:
-                geometry_coordinates_sampled = pad(
-                    geometry_coordinates_sampled, geometry_points, pad_value=-100.0
-                )
+                raise ValueError("Sampled points is more than points in the surface mesh")
             geom_centers = geometry_coordinates_sampled
         else:
             geom_centers = stl_vertices
@@ -432,6 +416,8 @@ class DoMINODataPipe(Dataset):
             surface_sizes = surface_sizes[ids_in_bbox]
             if surface_fields is not None:
                 surface_fields = surface_fields[ids_in_bbox]
+            else:
+                raise ValueError("Surface fields are not present")
 
         ########################################################################
         # Perform Down sampling of the surface fields.
@@ -464,6 +450,8 @@ class DoMINODataPipe(Dataset):
             # Select out the sampled points for non-neighbor arrays:
             if surface_fields is not None:
                 surface_fields = surface_fields[idx_surface]
+            else:
+                raise ValueError("Surface fields are not present")
 
             # Subsample the normals and sizes:
             surface_normals = surface_normals[idx_surface]
@@ -560,6 +548,8 @@ class DoMINODataPipe(Dataset):
             volume_coordinates = volume_coordinates[ids_in_bbox]
             if volume_fields is not None:
                 volume_fields = volume_fields[ids_in_bbox]
+            else:
+                raise ValueError("Volume fields are not present")
 
         ########################################################################
         # Apply sampling to the volume coordinates and fields
@@ -584,6 +574,8 @@ class DoMINODataPipe(Dataset):
             # Apply the same sampling to the targets, too:
             if volume_fields is not None:
                 volume_fields = volume_fields[idx_volume]
+            else:
+                raise ValueError("Volume fields are not present")
 
             volume_coordinates = volume_coordinates_sampled
 
@@ -679,9 +671,7 @@ class DoMINODataPipe(Dataset):
 
         stl_coordinates = data_dict["stl_coordinates"]
 
-        s_min, s_max, surf_grid = self.compute_stl_scaling_and_surface_grids(
-            stl_coordinates
-        )
+        s_min, s_max, surf_grid = self.compute_stl_scaling_and_surface_grids()
 
         if isinstance(stl_coordinates, ShardTensor):
             mesh = stl_coordinates._spec.mesh
@@ -739,8 +729,7 @@ class DoMINODataPipe(Dataset):
             use_sign_winding_number=True,
         )
         return_dict["sdf_surf_grid"] = sdf_surf_grid
-        return_dict["surf_grid"] = surf_grid
-
+        
         # Store this only if normalization is active:
         if self.config.normalize_coordinates:
             return_dict["surface_min_max"] = torch.stack([s_min, s_max])
@@ -761,30 +750,11 @@ class DoMINODataPipe(Dataset):
         # Determine the volumetric bounds of the data:
         ########################################################################
         # Compute the min/max for volume an the unnomralized grid:
-        c_min, c_max, volume_grid = self.compute_volume_scaling_and_grids(s_min, s_max)
+        c_min, c_max, volume_grid = self.compute_volume_scaling_and_grids()
 
-        # For volume data, we store this only if normalizing coordinates:
-        if self.model_type == "volume" or self.model_type == "combined":
-            if self.config.normalize_coordinates:
-                return_dict["volume_min_max"] = torch.stack([c_min, c_max])
-
-        if self.model_type == "volume" or self.model_type == "combined":
-            volume_fields_raw = (
-                data_dict["volume_fields"] if "volume_fields" in data_dict else None
-            )
-            volume_dict = self.process_volume(
-                c_min,
-                c_max,
-                volume_coordinates=data_dict["volume_mesh_centers"],
-                volume_grid=volume_grid,
-                center_of_mass=center_of_mass,
-                stl_vertices=data_dict["stl_coordinates"],
-                stl_indices=mesh_indices_flattened,
-                volume_fields=volume_fields_raw,
-            )
-
-            return_dict.update(volume_dict)
-
+        ########################################################################
+        # Process the surface data
+        ########################################################################
         if self.model_type == "surface" or self.model_type == "combined":
             surface_fields_raw = (
                 data_dict["surface_fields"] if "surface_fields" in data_dict else None
@@ -805,6 +775,30 @@ class DoMINODataPipe(Dataset):
             )
 
             return_dict.update(surface_dict)
+
+        ########################################################################
+        # Process the volume data
+        ########################################################################
+        # For volume data, we store this only if normalizing coordinates:
+        if self.model_type == "volume" or self.model_type == "combined":
+            return_dict["volume_min_max"] = torch.stack([c_min, c_max])
+
+        if self.model_type == "volume" or self.model_type == "combined":
+            volume_fields_raw = (
+                data_dict["volume_fields"] if "volume_fields" in data_dict else None
+            )
+            volume_dict = self.process_volume(
+                c_min,
+                c_max,
+                volume_coordinates=data_dict["volume_mesh_centers"],
+                volume_grid=volume_grid,
+                center_of_mass=center_of_mass,
+                stl_vertices=data_dict["stl_coordinates"],
+                stl_indices=mesh_indices_flattened,
+                volume_fields=volume_fields_raw,
+            )
+
+            return_dict.update(volume_dict)
 
         return return_dict
 

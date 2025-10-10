@@ -445,17 +445,8 @@ def main(cfg: DictConfig):
         # Center of mass calculation
         center_of_mass = calculate_center_of_mass(stl_centers, stl_sizes)
 
-        if cfg.data.bounding_box_surface is None:
-            s_max = np.amax(stl_vertices, 0)
-            s_min = np.amin(stl_vertices, 0)
-        else:
-            bounding_box_dims_surf = []
-            bounding_box_dims_surf.append(np.asarray(cfg.data.bounding_box_surface.max))
-            bounding_box_dims_surf.append(np.asarray(cfg.data.bounding_box_surface.min))
-            s_max = np.float32(bounding_box_dims_surf[0])
-            s_min = np.float32(bounding_box_dims_surf[1])
-            s_max = torch.from_numpy(s_max).to(torch.float32).to(dist.device)
-            s_min = torch.from_numpy(s_min).to(torch.float32).to(dist.device)
+        s_max = torch.from_numpy(np.asarray(cfg.data.bounding_box_surface.max)).to(torch.float32).to(dist.device)
+        s_min = torch.from_numpy(np.asarray(cfg.data.bounding_box_surface.min)).to(torch.float32).to(dist.device)
 
         nx, ny, nz = cfg.model.interp_res
 
@@ -608,19 +599,8 @@ def main(cfg: DictConfig):
             volume_coordinates = torch.from_numpy(volume_coordinates).to(torch.float32).to(dist.device)
             volume_fields = torch.from_numpy(volume_fields).to(torch.float32).to(dist.device)
 
-            bounding_box_dims = []
-            bounding_box_dims.append(np.asarray(cfg.data.bounding_box.max))
-            bounding_box_dims.append(np.asarray(cfg.data.bounding_box.min))
-
-            if bounding_box_dims is None:
-                c_max = s_max + (s_max - s_min) / 2
-                c_min = s_min - (s_max - s_min) / 2
-                c_min[2] = s_min[2]
-            else:
-                c_max = np.float32(bounding_box_dims[0])
-                c_min = np.float32(bounding_box_dims[1])
-                c_max = torch.from_numpy(c_max).to(dist.device)
-                c_min = torch.from_numpy(c_min).to(dist.device)
+            c_max = torch.from_numpy(np.asarray(cfg.data.bounding_box.max)).to(torch.float32).to(dist.device)
+            c_min = torch.from_numpy(np.asarray(cfg.data.bounding_box.min)).to(torch.float32).to(dist.device)
 
             # Generate a grid of specified resolution to map the bounding box
             # The grid is used for capturing structured geometry features and SDF representation of geometry
@@ -654,11 +634,6 @@ def main(cfg: DictConfig):
             )
             sdf_nodes = sdf_nodes.reshape(-1, 1)
             vol_grid_max_min = torch.stack([c_min, c_max])
-
-            if cfg.data.normalize_coordinates:
-                sdf_node_closest_point = normalize(sdf_node_closest_point, c_max, c_min)
-            else:
-                sdf_node_closest_point = sdf_node_closest_point
 
             pos_volume_closest = volume_coordinates - sdf_node_closest_point
             pos_volume_center_of_mass = volume_coordinates - center_of_mass_normalized
@@ -786,9 +761,9 @@ def main(cfg: DictConfig):
                 surface_fields[:, 0] * surface_normals[:, 2] * surface_sizes[:, 0]
                 - surface_fields[:, 3] * surface_sizes[:, 0]
             )
-            print("Drag=", dirname, force_x_pred, force_x_true)
-            print("Lift=", dirname, force_z_pred, force_z_true)
-            print("Side=", dirname, force_y_pred, force_y_true)
+            print("Drag=", dirname, force_x_pred.cpu().numpy(), force_x_true.cpu().numpy())
+            print("Lift=", dirname, force_z_pred.cpu().numpy(), force_z_true.cpu().numpy())
+            print("Side=", dirname, force_y_pred.cpu().numpy(), force_y_true.cpu().numpy())
             aero_forces_all.append(
                 [
                     dirname,
@@ -808,7 +783,7 @@ def main(cfg: DictConfig):
             print(
                 "Surface L-2 norm:",
                 dirname,
-                torch.sqrt(l2_error) / torch.sqrt(l2_gt),
+                np.sqrt(l2_error.cpu().numpy()) / np.sqrt(l2_gt.cpu().numpy()),
             )
 
         if prediction_vol is not None:
@@ -832,7 +807,7 @@ def main(cfg: DictConfig):
             print(
                 "Volume L-2 norm:",
                 dirname,
-                torch.sqrt(l2_error) / torch.sqrt(l2_gt),
+                np.sqrt(l2_error.cpu().numpy()) / np.sqrt(l2_gt.cpu().numpy()),
             )
             l2_volume_all.append(torch.sqrt(l2_error) / torch.sqrt(l2_gt))
 

@@ -82,10 +82,10 @@ data: # Input directory for training and validation data
   gpu_preprocessing: true
   gpu_output: true
   normalize_coordinates: true
-  sample_in_bbox: True
+  sample_in_bbox: true
   sampling: true
   scaling_factors: ${project_dir}/scaling_factors/scaling_factors.pkl
-  volume_sample_from_disk: true
+  volume_sample_from_disk: false
   max_samples_for_statistics: 200
 
 # ┌───────────────────────────────────────────┐
