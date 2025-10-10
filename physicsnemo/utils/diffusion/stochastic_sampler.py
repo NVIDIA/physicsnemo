@@ -20,6 +20,7 @@ from typing import Callable, Optional
 import torch
 from torch import Tensor
 
+from physicsnemo.models.diffusion import EDMPrecond
 from physicsnemo.utils.patching import GridPatching2D
 
 
@@ -274,14 +275,23 @@ def stochastic_sampler(
 
         x_lr = x_lr.to(latents.device)
 
-        denoised = net(
-            x_hat_batch,
-            x_lr,
-            t_hat,
-            class_labels,
-            embedding_selector=patch_embedding_selector,
-            **optional_args,
-        )
+        if isinstance(net, EDMPrecond):
+            # Conditioning info is passed as keyword arg
+            denoised = net(
+                x_hat_batch,
+                t_hat,
+                condition=x_lr,
+                class_labels=class_labels,
+                **optional_args,
+            )
+        else:
+            denoised = net(
+                x_hat_batch,
+                x_lr,
+                t_hat,
+                class_labels,
+                **optional_args,
+            )
 
         if patching:
             # Un-patch the denoised image
@@ -301,14 +311,23 @@ def stochastic_sampler(
                 patching=patching, input=x_next
             ).to(latents.device)
 
-            denoised = net(
-                x_next_batch,
-                x_lr,
-                t_next,
-                class_labels,
-                embedding_selector=patch_embedding_selector,
-                **optional_args,
-            )
+            if isinstance(net, EDMPrecond):
+                # Conditioning info is passed as keyword arg
+                denoised = net(
+                    x_next_batch,
+                    t_next,
+                    condition=x_lr,
+                    class_labels=class_labels,
+                    **optional_args,
+                )
+            else:
+                denoised = net(
+                    x_next_batch,
+                    x_lr,
+                    t_next,
+                    class_labels,
+                    **optional_args,
+                )
 
             if patching:
                 # Un-patch the denoised image
