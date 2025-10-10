@@ -31,6 +31,7 @@ import time
 import os
 import re
 from typing import Literal, Any
+from tabulate import tabulate
 
 import apex
 import numpy as np
@@ -78,7 +79,7 @@ from physicsnemo.utils.profiling import profile, Profiler
 
 
 from loss import compute_loss_dict
-from utils import get_num_vars, load_scaling_factors
+from utils import get_num_vars, load_scaling_factors, compute_l2, all_reduce_dict
 
 
 def validation_step(
@@ -86,6 +87,8 @@ def validation_step(
     model,
     device,
     logger,
+    tb_writer,
+    epoch_index,
     use_sdf_basis=False,
     use_surface_normals=False,
     integral_scaling_factor=1.0,
@@ -98,8 +101,11 @@ def validation_step(
     vol_factors: torch.Tensor | None = None,
     add_physics_loss=False,
 ):
+    dm = DistributedManager()
     running_vloss = 0.0
     with torch.no_grad():
+        metrics = None
+
         for i_batch, sample_batched in enumerate(dataloader):
             sampled_batched = dict_to_device(sample_batched, device)
 
@@ -127,8 +133,37 @@ def validation_step(
                 )
 
             running_vloss += loss.item()
+            local_metrics = compute_l2(
+                prediction_surf, prediction_vol, sampled_batched, dataloader
+            )
+            if metrics is None:
+                metrics = local_metrics
+            else:
+                metrics = {
+                    key: metrics[key] + local_metrics[key] for key in metrics.keys()
+                }
 
     avg_vloss = running_vloss / (i_batch + 1)
+    metrics = {key: metrics[key] / (i_batch + 1) for key in metrics.keys()}
+
+    metrics = all_reduce_dict(metrics, dm)
+
+    if dm.rank == 0:
+        logger.info(
+            f" Device {device},  batch: {i_batch + 1}, VAL loss norm: {loss.detach().item():.5f}"
+        )
+        tb_x = epoch_index
+        for key in metrics.keys():
+            tb_writer.add_scalar(f"L2 Metrics/val/{key}", metrics[key], tb_x)
+
+        metrics_table = tabulate(
+            [[k, v] for k, v in metrics.items()],
+            headers=["Metric", "Average Value"],
+            tablefmt="pretty",
+        )
+        logger.info(
+            f"\nEpoch {epoch_index} VALIDATION Average Metrics:\n{metrics_table}\n"
+        )
 
     return avg_vloss
 
@@ -155,7 +190,7 @@ def train_epoch(
     surf_factors: torch.Tensor | None = None,
     add_physics_loss=False,
 ):
-    dist = DistributedManager()
+    dm = DistributedManager()
 
     running_loss = 0.0
     last_loss = 0.0
@@ -165,6 +200,7 @@ def train_epoch(
     start_time = time.perf_counter()
     with Profiler():
         io_start_time = time.perf_counter()
+        metrics = None
         for i_batch, sampled_batched in enumerate(dataloader):
             io_end_time = time.perf_counter()
             if add_physics_loss:
@@ -194,6 +230,22 @@ def train_epoch(
                     vol_factors,
                     add_physics_loss,
                 )
+
+                # Compute metrics:
+                if isinstance(prediction_vol, tuple):
+                    # This is if return_neighbors is on for volume:
+                    prediction_vol = prediction_vol[0]
+
+                local_metrics = compute_l2(
+                    prediction_surf, prediction_vol, sampled_batched, dataloader
+                )
+                if metrics is None:
+                    metrics = local_metrics
+                else:
+                    # Sum the running total:
+                    metrics = {
+                        key: metrics[key] + local_metrics[key] for key in metrics.keys()
+                    }
 
             loss = loss / loss_interval
             scaler.scale(loss).backward()
@@ -237,12 +289,25 @@ def train_epoch(
             io_start_time = time.perf_counter()
 
     last_loss = running_loss / (i_batch + 1)  # loss per batch
-    if dist.rank == 0:
+    # Normalize metrics:
+    metrics = {key: metrics[key] / (i_batch + 1) for key in metrics.keys()}
+    # reduce metrics across batch:
+    metrics = all_reduce_dict(metrics, dm)
+    if dm.rank == 0:
         logger.info(
             f" Device {device},  batch: {i_batch + 1}, loss norm: {loss.detach().item():.5f}"
         )
         tb_x = epoch_index * len(dataloader) + i_batch + 1
         tb_writer.add_scalar("Loss/train", last_loss, tb_x)
+        for key in metrics.keys():
+            tb_writer.add_scalar(f"L2 Metrics/train/{key}", metrics[key], epoch_index)
+
+        metrics_table = tabulate(
+            [[k, v] for k, v in metrics.items()],
+            headers=["Metric", "Average Value"],
+            tablefmt="pretty",
+        )
+        logger.info(f"\nEpoch {epoch_index} Average Metrics:\n{metrics_table}\n")
 
     return last_loss
 
@@ -278,10 +343,9 @@ def main(cfg: DictConfig) -> None:
     # Get scaling factors - precompute them if this fails!
     ######################################################
     vol_factors, surf_factors = load_scaling_factors(cfg)
-    
-    vol_factors = np.asarray([[ 2.9064691e+00, 1.3743978e+00,1.2992665e+00, 1.0714761e+00, 3.2597079e-03], [-2.9988267e+00, -1.3753892e+00, -1.2892706e+00, -1.1400493e+00, 1.0002602e-11]])
-    surf_factors = np.asarray([[ 1.8464564, 0.09996139, 0.07988136, 0.05437989], [-2.0476909, -0.10289095, -0.07811281, -0.05411612]])
-    vol_factors_tensor = torch.from_numpy(vol_factors).to(dist.device)
+
+    # vol_factors = np.asarray([[ 2.9064691e+00, 1.3743978e+00,1.2992665e+00, 1.0714761e+00, 3.2597079e-03], [-2.9988267e+00, -1.3753892e+00, -1.2892706e+00, -1.1400493e+00, 1.0002602e-11]])
+    # surf_factors = np.asarray([[ 1.8464564, 0.09996139, 0.07988136, 0.05437989], [-2.0476909, -0.10289095, -0.07811281, -0.05411612]])
 
     ######################################################
     # Configure the model
@@ -538,6 +602,8 @@ def main(cfg: DictConfig) -> None:
             model=model,
             device=dist.device,
             logger=logger,
+            tb_writer=writer,
+            epoch_index=epoch,
             use_sdf_basis=cfg.model.use_sdf_in_basis_func,
             use_surface_normals=cfg.model.use_surface_normals,
             integral_scaling_factor=initial_integral_factor,

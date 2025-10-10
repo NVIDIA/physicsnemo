@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Any
 import numpy as np
 import torch
+import torch.distributed as dist
 import pickle
 from pathlib import Path
 from typing import Literal
@@ -344,3 +345,124 @@ def load_scaling_factors(
     surf_factors_tensor = surf_factors_tensor.to(dm.device, dtype=torch.float32)
 
     return vol_factors_tensor, surf_factors_tensor
+
+
+def compute_l2(
+    pred_surface: torch.Tensor | None,
+    pred_volume: torch.Tensor | None,
+    batch,
+    dataloader,
+) -> dict[str, torch.Tensor]:
+    """
+    Compute the L2 norm between prediction and target.
+
+    Requires the dataloader to unscale back to original values
+    """
+
+    l2_dict = {}
+
+    if pred_surface is not None:
+        _, target_surface = dataloader.unscale_model_outputs(
+            surface_fields=batch["surface_fields"]
+        )
+        _, pred_surface = dataloader.unscale_model_outputs(surface_fields=pred_surface)
+        l2_surface = metrics_fn_surface(pred_surface, target_surface)
+        l2_dict.update(l2_surface)
+    if pred_volume is not None:
+        target_volume, _ = dataloader.unscale_model_outputs(
+            volume_fields=batch["volume_fields"]
+        )
+        pred_volume, _ = dataloader.unscale_model_outputs(volume_fields=pred_volume)
+        l2_volume = metrics_fn_volume(pred_volume, target_volume)
+        l2_dict.update(l2_volume)
+
+    return l2_dict
+
+
+def metrics_fn_surface(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """
+    Computes L2 surface metrics between prediction and target.
+
+    Args:
+        pred: Predicted values (normalized).
+        target: Target values (normalized).
+
+    Returns:
+        Dictionary of L2 surface metrics for pressure and shear components.
+    """
+
+    l2_num = (pred - target) ** 2
+    l2_num = torch.sum(l2_num, dim=1)
+    l2_num = torch.sqrt(l2_num)
+
+    l2_denom = target**2
+    l2_denom = torch.sum(l2_denom, dim=1)
+    l2_denom = torch.sqrt(l2_denom)
+
+    l2 = l2_num / l2_denom
+
+    metrics = {
+        "l2_surf_pressure": torch.mean(l2[:, 0]),
+        "l2_shear_x": torch.mean(l2[:, 1]),
+        "l2_shear_y": torch.mean(l2[:, 2]),
+        "l2_shear_z": torch.mean(l2[:, 3]),
+    }
+
+    return metrics
+
+
+def metrics_fn_volume(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """
+    Computes L2 volume metrics between prediction and target.
+    """
+    l2_num = (pred - target) ** 2
+    l2_num = torch.sum(l2_num, dim=1)
+    l2_num = torch.sqrt(l2_num)
+
+    l2_denom = target**2
+    l2_denom = torch.sum(l2_denom, dim=1)
+    l2_denom = torch.sqrt(l2_denom)
+
+    l2 = l2_num / l2_denom
+
+    metrics = {
+        "l2_vol_pressure": torch.mean(l2[:, 0]),
+        "l2_velocity_x": torch.mean(l2[:, 1]),
+        "l2_velocity_y": torch.mean(l2[:, 2]),
+        "l2_velocity_z": torch.mean(l2[:, 3]),
+        "l2_nut": torch.mean(l2[:, 4]),
+    }
+
+    return metrics
+
+
+def all_reduce_dict(
+    metrics: dict[str, torch.Tensor], dm: DistributedManager
+) -> dict[str, torch.Tensor]:
+    """
+    Reduces a dictionary of metrics across all distributed processes.
+
+    Args:
+        metrics: Dictionary of metric names to torch.Tensor values.
+        dm: DistributedManager instance for distributed context.
+
+    Returns:
+        Dictionary of reduced metrics.
+    """
+    # TODO - update this to use domains and not the full world
+
+    if dm.world_size == 1:
+        return metrics
+
+    for key, value in metrics.items():
+        dist.all_reduce(value)
+        value = value / dm.world_size
+        metrics[key] = value
+
+    return metrics
