@@ -22,11 +22,10 @@ Using the [PhysicsNeMo
 container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo)
 is recommended.
 
-This example uses MLFlow to manage data logging. MLFlow is not installed by default;
-install it by running
+Install additional packages (MLFlow) needed by this example:
 
 ```bash
-pip install mlflow
+pip install -r requirements.txt
 ```
 
 ### Data

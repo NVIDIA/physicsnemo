@@ -29,12 +29,11 @@ model:
   mlp_ratio: 2.0 # multiplier for MLP hidden layer size
   num_blocks: 2 # number of AFNO blocks
 
-  scale_shift_mode: complex # "real" or "complex"
+  scale_shift_mode: complex # type of numbers used for the ModAFNO modulation, "real" or "complex"
   embed_model:
     dim: 64 # width of time embedding net
     depth: 1 # depth of time embedding net
-    method: sinusoidal # embedding type used in time embedding net
-
+    method: sinusoidal # embedding type used in time embedding net, "sinusoidal" or "learned"
 datapipe:
   data_dir: "/data/era5-73varQ-hourly" # directory where data files are located
   metadata_path: "/data/era5-73varQ-hourly/metadata/data.json" # directory to metadata json file
