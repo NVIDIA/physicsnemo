@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added additional testing of the DoMINO datapipe.
 - Examples: added a new example for full-waveform inversion using diffusion
   models. Accessible in `examples/geophysics/diffusion_fwi`.
+- Domain Parallelism: Domain Parallelism is now available for kNN, radius_search,
+  and torch.nn.functional.pad.
 
 ### Changed
 
