@@ -35,10 +35,7 @@ from physicsnemo.launch.logging import (
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
 
-
 import os
-
-os.makedirs(os.path.expanduser("~/.dgl"), exist_ok=True)
 
 from torch.utils.tensorboard import SummaryWriter
 
