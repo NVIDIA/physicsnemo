@@ -169,7 +169,7 @@ def create_edges(node_positions, threshold, box_size):
                 np.append(relative_pos_periodic[i], relative_pos_norm[i] / threshold)
             )
 
-    # Convert the edges to a format that DGL can use
+    # Convert the edges to a format that PyG can use
     src, dst = tuple(zip(*edges))
 
     return src, dst, edge_features
