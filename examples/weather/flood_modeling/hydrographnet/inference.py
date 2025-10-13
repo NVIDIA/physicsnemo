@@ -46,7 +46,7 @@ from physicsnemo.launch.utils import load_checkpoint
 from physicsnemo.datapipes.gnn.hydrographnet_dataset import HydroGraphDataset
 from physicsnemo.models.meshgraphnet.meshgraphkan import MeshGraphKAN
 
-# For converting DGLGraph to networkx.
+# For converting PyG graph to networkx.
 from torch_geometric.utils import to_networkx
 
 
@@ -64,7 +64,7 @@ def create_animation(
     Parameters:
       rollout_predictions: list of predicted actual water depth tensors (each shape: [num_nodes])
       ground_truth: list of ground truth water depth tensors (each shape: [num_nodes])
-      initial_graph: the initial DGL graph sample (used for node positions and edges)
+      initial_graph: the initial PyG graph sample (used for node positions and edges)
       rmse_list: list of RMSE values computed at each rollout step
       output_path: file path to save the animation (e.g. a GIF file)
       time_per_step: simulation time (in hours) corresponding to each rollout step.
