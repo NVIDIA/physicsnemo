@@ -25,7 +25,6 @@ from pytest_utils import import_or_fail
 
 from physicsnemo.experimental.models.dit import DiT
 from physicsnemo.experimental.models.dit.layers import (
-    AttentionModuleBase,
     DetokenizerModuleBase,
     DiTBlock,
     TokenizerModuleBase,
@@ -176,21 +175,6 @@ class CustomDetokenizer(DetokenizerModuleBase):
         pass
 
 
-class CustomAttention(AttentionModuleBase):
-    """Simple N L D -> N L D mapping."""
-
-    def __init__(self, hidden_size: int, num_heads: int):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x
-
-    def initialize_weights(self):
-        pass
-
-
 @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize(
     "tokenizer",
@@ -205,11 +189,8 @@ class CustomAttention(AttentionModuleBase):
         "proj_reshape_2d",
     ],
 )
-@pytest.mark.parametrize(
-    "attention_backend", [CustomAttention(hidden_size=64, num_heads=2), "timm"]
-)
-def test_dit_checkpoint(device, tokenizer, detokenizer, attention_backend):
-    """Test DiT checkpoint save/load."""
+def test_dit_checkpoint(device, tokenizer, detokenizer):
+    """Test DiT checkpoint save/load with custom Modules"""
     model_1 = (
         DiT(
             input_size=(16, 16),
@@ -222,7 +203,6 @@ def test_dit_checkpoint(device, tokenizer, detokenizer, attention_backend):
             layernorm_backend="torch",
             tokenizer=tokenizer,
             detokenizer=detokenizer,
-            attention_backend=attention_backend,
         )
         .to(device)
         .eval()
@@ -238,7 +218,6 @@ def test_dit_checkpoint(device, tokenizer, detokenizer, attention_backend):
             num_heads=2,
             tokenizer=tokenizer,
             detokenizer=detokenizer,
-            attention_backend=attention_backend,
             layernorm_backend="torch",
         )
         .to(device)

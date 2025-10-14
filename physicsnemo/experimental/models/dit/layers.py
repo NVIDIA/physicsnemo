@@ -689,7 +689,7 @@ class TokenizerModuleBase(Module, ABC):
 
 
 class PatchEmbed2DTokenizer(TokenizerModuleBase):
-    """Default tokenizer using `PatchEmbed2D` followed by a learnable positional embedding.
+    """Standard ViT-style tokenizer using `PatchEmbed2D` followed by a learnable positional embedding.
 
     Produces tokens of shape (B, L, D) from images (B, C, H, W), where L is the number of
     patches and D is `hidden_size`.
@@ -776,11 +776,11 @@ class PatchEmbed2DTokenizer(TokenizerModuleBase):
 
 
 def get_tokenizer(
-    input_size: Tuple[int, int],
-    patch_size: Tuple[int, int],
+    input_size: Tuple[int],
+    patch_size: Tuple[int],
     in_channels: int,
     hidden_size: int,
-    tokenizer: str = "patch_embed_2d",
+    tokenizer: Literal["patch_embed_2d"] = "patch_embed_2d",
     **tokenizer_kwargs: Any,
 ) -> TokenizerModuleBase:
     """Construct a tokenizer module.
@@ -790,16 +790,19 @@ def get_tokenizer(
 
     Parameters
     ----------
-    input_size: Tuple[int, int]
-        The size of the input image.
-    patch_size: Tuple[int, int]
-        The size of the patch.
+    input_size: Tuple[int]
+        The size of the input image. If an integer is provided, the input is assumed to be on a square 2D domain.
+        If a tuple is provided, the input is assumed to be on a multi-dimensional domain.
+    patch_size: Tuple[int]
+        The size of the patch. If an integer is provided, the patch_size is assumed to be a square 2D patch.
+        If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
     in_channels: int
         The number of input channels.
     hidden_size: int
         The size of the transformer latent space to project to.
-    tokenizer: str
-        The tokenizer to use. Defaults to 'patch_embed_2d'.
+    tokenizer: Literal["patch_embed_2d"]
+        The tokenizer to use. Defaults to 'patch_embed_2d'. Note tokenizers are dimensionality-specific; 
+        your choice of `tokenizer` must match the dimensionality of your input data (i.e., the `input_size` and `patch_size`).
         Options:
             - 'patch_embed_2d': Uses a standard PatchEmbed2D to project the input image to a sequence of tokens.
     **tokenizer_kwargs: Any
@@ -849,7 +852,7 @@ class DetokenizerModuleBase(Module, ABC):
 
 
 class ProjReshape2DDetokenizer(DetokenizerModuleBase):
-    """Default detokenizer that applies the DiT `ProjLayer` and reshapes the sequence back
+    """Standard DiT-style detokenizer that applies the DiT `ProjLayer` and reshapes the sequence back
     to an image of shape (B, C_out, H, W).
 
     Parameters
@@ -938,17 +941,37 @@ class ProjReshape2DDetokenizer(DetokenizerModuleBase):
 
 
 def get_detokenizer(
-    input_size: Tuple[int, int],
-    patch_size: Tuple[int, int],
+    input_size: Union[int, Tuple[int]],
+    patch_size: Union[int, Tuple[int]],
     out_channels: int,
     hidden_size: int,
-    detokenizer: str = "proj_reshape_2d",
+    detokenizer: Literal["proj_reshape_2d"] = "proj_reshape_2d",
     **detokenizer_kwargs: Any,
 ) -> DetokenizerModuleBase:
     """Construct a detokenizer module.
 
     Returns a module whose forward accepts (B, L, D) and (B, D) and returns (B, C_out, *spatial_dims). 
     `spatial_dims` is determined by the input_size/dimensionality.
+
+    Parameters
+    ----------
+    input_size: Union[int, Tuple[int]]
+        The size of the input image. If an integer is provided, the input is assumed to be on a square 2D domain.
+        If a tuple is provided, the input is assumed to be on a multi-dimensional domain.
+    patch_size: Union[int, Tuple[int]]
+        The size of the patch. If an integer is provided, the patch_size is assumed to be a square 2D patch.
+        If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
+    out_channels: int
+        The number of output channels.
+    hidden_size: int
+        The size of the transformer latent space to project to.
+    detokenizer: Literal["proj_reshape_2d"]
+        The detokenizer to use. Defaults to 'proj_reshape_2d'. Note detokenizers are dimensionality-specific; 
+        your choice of `detokenizer` must match the dimensionality of your input data (i.e., the `input_size` and `patch_size`).
+        Options:
+            - 'proj_reshape_2d': Uses a standard DiT `ProjLayer` and reshapes the sequence back to an image.
+    **detokenizer_kwargs: Any
+        Additional keyword arguments for the detokenizer module.
     """
     if detokenizer == "proj_reshape_2d":
         return ProjReshape2DDetokenizer(

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 from physicsnemo.experimental.models.dit import DiTBlock
-from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer, AttentionModuleBase
+from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer, TokenizerModuleBase, DetokenizerModuleBase
 
 @dataclass
 class MetaData(ModelMetaData):
@@ -61,16 +61,20 @@ class DiT(Module):
     patch_size (Union[int, Tuple[int]], optional):
         The size of each image patch. Defaults to (8,8). If an integer is provided, the patch_size is assumed to be a square 2D patch.
         If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
-    tokenizer (Union[str, Module], optional):
+    tokenizer (Union[Literal["patch_embed_2d"], Module], optional):
         The tokenizer to use. Defaults to 'patch_embed_2d'. You may provide:
         - A string in {"patch_embed_2d"} to select a built-in tokenizer. Built-in tokenizers include:
             - 'patch_embed_2d': Uses a standard PatchEmbed2D to project the input image to a sequence of tokens.
-        - An instantiated PhysicsNeMo `Module` implementing the tokenizer interface defined in physicsnemo.experimental.models.dit.layers.TokenizerModuleBase.
-    detokenizer (Union[str, Module], optional):
+        - An instantiated PhysicsNeMo `Module` implementing the tokenizer interface defined in :class:`physicsnemo.experimental.models.dit.layers.TokenizerModuleBase`.
+          The tokenizer module must be a subclass of :class:`physicsnemo.experimental.models.dit.layers.TokenizerModuleBase`, and
+          define a forward method and an initialize_weights method, with the forward method accepting an input Tensor of shape (B, C, *spatial_dims) and returning (B, L, D).
+    detokenizer (Union[Literal["proj_reshape_2d"], Module], optional):
         The detokenizer to use. Defaults to 'proj_reshape_2d'. You may provide:
         - A string in {"proj_reshape_2d"} to select a built-in detokenizer. Built-in tokenizers include:
             - 'proj_reshape_2d': Uses a standard project and reshape operation to convert the token sequence back to an image.
-        - An instantiated PhysicsNeMo `Module` implementing the detokenizer interface defined in physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase.
+        - An instantiated PhysicsNeMo `Module` implementing the detokenizer interface defined in :class:`physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase`.
+          The detokenizer module must be a subclass of :class:`physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase`, and
+          define a forward method and an initialize_weights method, with the forward method accepting an input Tensor of shape (B, L, D) and (B, D) and returning (B, C, *spatial_dims).
     out_channels (Union[None, int], optional):
         The number of output channels. If None, it is `in_channels`. Defaults to None,
         which means the output will have the same number of channels as the input.
@@ -82,14 +86,11 @@ class DiT(Module):
         The number of attention heads. Defaults to 8.
     mlp_ratio (float, optional):
         The ratio of the MLP hidden dimension to the embedding dimension. Defaults to 4.0.
-    attention_backend (Union[str, Module, optional):
+    attention_backend (Literal["timm", "transformer_engine", "natten2d"], optional):
         The attention backend to use. Defaults to 'transformer_engine'. You may provide:
         - A string in {"timm", "transformer_engine", "natten2d"} to select a built-in backend.
-          See physicsnemo.experimental.models.dit.layers.DiTBlock for a description of each built-in backend.
-        - A reference custom `Module` that will perform the self-attention operation. This must be a`physiscsnemo.models.Module` instance that implements the 
-          (B, L, D) -> (B, L, D) mapping, as defined in physicsnemo.experimental.models.dit.layers.AttentionModuleBase. A new instance of this module will be
-          constructed within each DiTBlock.
-    layernorm_backend (str, optional):
+          See :class:`physicsnemo.experimental.models.dit.layers.DiTBlock` for a description of each built-in backend.
+    layernorm_backend (Literal["apex", "torch"], optional):
         If 'apex', uses FusedLayerNorm from apex. If 'torch', uses LayerNorm from torch.nn. Defaults to 'apex'.
     condition_dim (int, optional):
         Dimensionality of conditioning. If None, the model is unconditional. Defaults to None.
@@ -102,7 +103,7 @@ class DiT(Module):
     block_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the DiTBlock modules.
     timestep_embed_kwargs (Dict[str, Any], optional):
-        Additional keyword arguments for the timestep embedding module constructor.
+        Additional keyword arguments to be passed to :class:`physicsnemo.models.diffusion.PositionalEmbedding`.
     attn_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the attention module constructor, if using a custom attention backend.
     force_tokenization_fp32 (bool, optional):
@@ -153,17 +154,14 @@ class DiT(Module):
         input_size: Union[int, Tuple[int]],
         in_channels: int,
         patch_size: Union[int, Tuple[int]] = (8, 8),
-        tokenizer: Union[str, Module] = "patch_embed_2d",
-        detokenizer: Union[str, Module] = "proj_reshape_2d",
+        tokenizer: Union[Literal["patch_embed_2d"], Module] = "patch_embed_2d",
+        detokenizer: Union[Literal["proj_reshape_2d"], Module] = "proj_reshape_2d",
         out_channels: Optional[int] = None,
         hidden_size: int = 384,
         depth: int = 12,
         num_heads: int = 8,
         mlp_ratio: float = 4.0,
-        attention_backend: Union[
-            Literal["timm", "transformer_engine", "natten2d"],
-            Module,
-        ] = "transformer_engine",
+        attention_backend: Literal["timm", "transformer_engine", "natten2d"] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
         dit_initialization: Optional[int] = True,
@@ -185,9 +183,18 @@ class DiT(Module):
         self.num_heads = num_heads
         self.condition_dim = condition_dim
 
-        if not isinstance(attention_backend, str):
-            if not isinstance(attention_backend, AttentionModuleBase):
-                raise ValueError("attention_backend must be a string, or an instance of a custom subclass of physicsnemo.experimental.models.dit.layers.AttentionModuleBase")
+        # Input validation
+        if not isinstance(attention_backend, str) and attention_backend not in ["timm", "transformer_engine", "natten2d"]:
+            raise ValueError("attention_backend must be one of 'timm', 'transformer_engine', 'natten2d'")
+
+        if layernorm_backend not in ["apex", "torch"]:
+            raise ValueError("layernorm_backend must be one of 'apex', 'torch'")
+
+        if isinstance(tokenizer, str) and tokenizer not in ["patch_embed_2d"]:
+            raise ValueError("tokenizer must be 'patch_embed_2d'")
+
+        if isinstance(detokenizer, str) and detokenizer not in ["proj_reshape_2d"]:
+            raise ValueError("detokenizer must be 'proj_reshape_2d'")
 
         # Tokenizer module: accept string or pre-instantiated PhysicsNeMo Module
         if isinstance(tokenizer, str):
@@ -200,8 +207,8 @@ class DiT(Module):
                 **tokenizer_kwargs,
             )
         else:
-            if not isinstance(tokenizer, Module):
-                raise TypeError("tokenizer must be a string or a physicsnemo.models.Module instance")
+            if not isinstance(tokenizer, TokenizerModuleBase):
+                raise TypeError("tokenizer must be a string or a physicsnemo.models.Module instance subclassing physicsnemo.experimental.models.dit.layers.TokenizerModuleBase")
             self.tokenizer = tokenizer
 
         self.t_embedder = PositionalEmbedding(hidden_size, amp_mode=self.meta.amp_gpu, learnable=True, **timestep_embed_kwargs)
@@ -231,8 +238,8 @@ class DiT(Module):
                 **detokenizer_kwargs,
             )
         else:
-            if not isinstance(detokenizer, Module):
-                raise TypeError("detokenizer must be a string or a physicsnemo.models.Module instance")
+            if not isinstance(detokenizer, DetokenizerModuleBase):
+                raise TypeError("detokenizer must be a string or a physicsnemo.models.Module instance subclassing physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase")
             self.detokenizer = detokenizer
 
 

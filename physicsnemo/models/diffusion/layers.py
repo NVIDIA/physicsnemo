@@ -22,7 +22,7 @@ Diffusion-Based Generative Models".
 import contextlib
 import importlib
 import math
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Literal, Set
 
 import numpy as np
 import nvtx
@@ -1041,16 +1041,15 @@ class PositionalEmbedding(torch.nn.Module):
     learnable : bool, optional
         A boolean flag indicating whether learnable positional embedding is enabled. Defaults to False.
     freq_embed_dim: int, optional
-        The dimension of the frequency embedding. Defaults to None, in which case it will be set to num_channels // 2.
+        The dimension of the frequency embedding. Defaults to None, in which case it will be set to num_channels.
     mlp_hidden_dim: int, optional
         The dimension of the hidden layer in the MLP. Defaults to None, in which case it will be set to 2 * num_channels.
-        Only applicable if learnable is True.
-    embed_fn: str, optional
-        The function to use for embedding into sin/cos features (allows for swapping the order of sin/cos).
+        Only applicable if learnable is True; if learnable is False, this parameter is ignored.
+    embed_fn: Literal["cos_sin", "np_sin_cos"], optional
+        The function to use for embedding into sin/cos features (allows for swapping the order of sin/cos). Defaults to 'cos_sin'.
         Options:
-        - "cos_sin": Uses torch to compute frequency embeddings and returns in order (cos, sin)
-        - "np_sin_cos": Uses numpy to compute frequency embeddings and returns in order (sin, cos)
-        Defaults to "cos_sin".
+            - 'cos_sin': Uses torch to compute frequency embeddings and returns in order (cos, sin)
+            - 'np_sin_cos': Uses numpy to compute frequency embeddings and returns in order (sin, cos)
     """
 
     def __init__(
@@ -1062,7 +1061,7 @@ class PositionalEmbedding(torch.nn.Module):
         learnable: bool = False,
         freq_embed_dim: int | None = None,
         mlp_hidden_dim: int | None = None,
-        embed_fn: str = "cos_sin",
+        embed_fn: Literal["cos_sin", "np_sin_cos"] = "cos_sin",
     ):
         super().__init__()
         self.num_channels = num_channels
@@ -1091,7 +1090,7 @@ class PositionalEmbedding(torch.nn.Module):
             w = np.exp(-np.log(self.max_positions) * pow)
             self.register_buffer("freqs", torch.from_numpy(w).float())
 
-    def cos_sin_embedding(self, x):
+    def _cos_sin_embedding(self, x):
         freqs = torch.arange(
             start=0, end=self.freq_embed_dim // 2, dtype=torch.float32, device=x.device
         )
@@ -1105,16 +1104,16 @@ class PositionalEmbedding(torch.nn.Module):
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x
 
-    def sin_cos_embedding_np(self, x):
+    def _sin_cos_embedding_np(self, x):
         x = torch.outer(x, self.freqs)
         x = torch.cat([x.sin(), x.cos()], dim=1)
         return x
 
     def forward(self, x):
         if self.embed_fn == "cos_sin":
-            x = self.cos_sin_embedding(x)
+            x = self._cos_sin_embedding(x)
         elif self.embed_fn == "np_sin_cos":
-            x = self.sin_cos_embedding_np(x)
+            x = self._sin_cos_embedding_np(x)
 
         if self.learnable:
             x = self.mlp(x)
