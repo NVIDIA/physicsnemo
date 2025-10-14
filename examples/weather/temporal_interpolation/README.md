@@ -22,6 +22,8 @@ A technical description of the model can be found in the paper ["Modulated Adapt
 Fourier Neural Operators for Temporal Interpolation of Weather
 Forecasts"](https://arxiv.org/abs/2410.18904).
 
+![CorrDiff-based downscaling over Taiwan](../../../docs/img/temporal_interpolation.png)
+
 ## Requirements
 
 ### Environment
