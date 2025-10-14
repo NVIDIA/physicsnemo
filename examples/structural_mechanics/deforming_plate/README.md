@@ -42,7 +42,7 @@ The datapipe from the vortex shedding example has been adapted to load this data
 The model is free-running and auto-regressive. It takes the prediction at
 the previous time step to predict the solution at the next step.
 
-The model uses the input mesh to construct a bi-directional DGL graph for each sample.
+The model uses the input mesh to construct a bi-directional graph for each sample.
 
 The output of the model is the mesh deformation between two consecutive steps.
 
@@ -65,7 +65,6 @@ Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
-pip install dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html --no-deps
 ```
 
 ## Getting Started
