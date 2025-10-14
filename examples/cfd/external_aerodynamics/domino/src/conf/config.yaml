@@ -85,8 +85,8 @@ data: # Input directory for training and validation data
   sample_in_bbox: true
   sampling: true
   scaling_factors: ${project_dir}/scaling_factors/scaling_factors.pkl
-  volume_sample_from_disk: false
-  max_samples_for_statistics: 200
+  volume_sample_from_disk: true
+  max_samples_for_statistics: 100
 
 # ┌───────────────────────────────────────────┐
 # │          Domain Parallelism Settings      │
@@ -118,7 +118,7 @@ model:
   use_surface_normals: true # Use surface normals and surface areas for surface computation?
   use_surface_area: true # Use only surface normals and not surface area
   integral_loss_scaling_factor: 100 # Scale integral loss by this factor
-  normalization: min_max_scaling # or mean_std_scaling
+  normalization: mean_std_scaling # or min_max_scaling
   encode_parameters: false # encode inlet velocity and air density in the model
   surf_loss_scaling: 5.0 # scale surface loss with this factor in combined mode
   vol_loss_scaling: 1.0 # scale volume loss with this factor in combined mode
@@ -144,6 +144,8 @@ model:
       processor_type: conv # conv or unet (conv is better; fno, fignet to be added)
       self_attention: false # can be used only with unet
       cross_attention: false # can be used only with unet
+      surface_sdf_scaling_factor: [0.01, 0.02, 0.04] # Scaling factor for SDF, smaller is more emphasis on surface
+      volume_sdf_scaling_factor: [0.04] # Scaling factor for SDF, smaller is more emphasis on surface
   nn_basis_functions: # Hyperparameters for basis function network
     base_layer: 512
     fourier_features: true

@@ -33,6 +33,9 @@ import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 
+# This will set up the cupy-ecosystem and pytorch to share memory pools
+from physicsnemo.utils.memory import unified_gpu_memory
+
 import numpy as np
 import cupy as cp
 
@@ -57,7 +60,7 @@ from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.domino.vtk_file_utils import *
 from physicsnemo.utils.sdf import signed_distance_field
 from physicsnemo.utils.neighbors import knn
-from utils import ScalingFactors
+from utils import ScalingFactors, load_scaling_factors
 
 # AIR_DENSITY = 1.205
 # STREAM_VELOCITY = 30.00
@@ -202,7 +205,10 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     running_tloss_vol += loss_fn(tpredictions_batch, target_batch)
                     prediction_vol[:, start_idx:end_idx] = tpredictions_batch
 
-            prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
+            if cfg.model.normalization == "min_max_scaling":
+                prediction_vol = unnormalize(prediction_vol, vol_factors[0], vol_factors[1])
+            elif cfg.model.normalization == "mean_std_scaling":
+                prediction_vol = unstandardize(prediction_vol, vol_factors[0], vol_factors[1])
             # print(np.amax(prediction_vol, axis=(0, 1)), np.amin(prediction_vol, axis=(0, 1)))
 
             prediction_vol[:, :, :3] = (
@@ -290,8 +296,12 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                     running_tloss_surf += loss_fn(tpredictions_batch, target_batch)
                     prediction_surf[:, start_idx:end_idx] = tpredictions_batch
 
+            if cfg.model.normalization == "min_max_scaling":
+                prediction_surf = unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
+            elif cfg.model.normalization == "mean_std_scaling":
+                prediction_surf = unstandardize(prediction_surf, surf_factors[0], surf_factors[1])
             prediction_surf = (
-                unnormalize(prediction_surf, surf_factors[0], surf_factors[1])
+                prediction_surf
                 * stream_velocity[0, 0] ** 2.0
                 * air_density[0, 0]
             )
@@ -348,21 +358,7 @@ def main(cfg: DictConfig):
     ######################################################
     pickle_path = os.path.join(cfg.data.scaling_factors)
 
-    try:
-        scaling_factors = ScalingFactors.load(pickle_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(
-            f"Scaling factors not found at: {pickle_path}; please run compute_statistics.py to compute them."
-        )
-
-    # vol_factors = np.asarray([scaling_factors.max_val["volume_fields"], scaling_factors.min_val["volume_fields"]])
-    # surf_factors = np.asarray([scaling_factors.max_val["surface_fields"], scaling_factors.min_val["surface_fields"]])
-    
-    vol_factors = np.asarray([[ 2.9064691e+00, 1.3743978e+00,1.2992665e+00, 1.0714761e+00, 3.2597079e-03], [-2.9988267e+00, -1.3753892e+00, -1.2892706e+00, -1.1400493e+00, 1.0002602e-11]])
-    surf_factors = np.asarray([[ 1.8464564, 0.09996139, 0.07988136, 0.05437989], [-2.0476909, -0.10289095, -0.07811281, -0.05411612]])
-
-    vol_factors = torch.from_numpy(vol_factors).to(dist.device)
-    surf_factors = torch.from_numpy(surf_factors).to(dist.device)
+    vol_factors, surf_factors = load_scaling_factors(cfg)
     print("Vol factors:", vol_factors)
     print("Surf factors:", surf_factors)
 
@@ -457,14 +453,13 @@ def main(cfg: DictConfig):
 
         # SDF calculation on the grid using WARP
         time_start = time.time()
-        sdf_surf_grid = signed_distance_field(
+        sdf_surf_grid, _ = signed_distance_field(
             normed_stl_vertices_cp,
             mesh_indices_flattened,
             surf_grid_normed,
             use_sign_winding_number=True,
         )
-        sdf_surf_grid = sdf_surf_grid[0]
-        
+
         surf_grid_max_min = torch.stack([s_min, s_max])
         
         # Get global parameters and global parameters scaling from config.yaml
@@ -549,6 +544,8 @@ def main(cfg: DictConfig):
             if cfg.model.num_neighbors_surface > 1:
 
                 time_start = time.time()
+                # print(f"file: {dirname}, surface coordinates shape: {surface_coordinates.shape}")
+                # try:
                 ii, dd = knn(
                     points=surface_coordinates,
                     queries=surface_coordinates,
@@ -562,6 +559,13 @@ def main(cfg: DictConfig):
                 surface_neighbors_normals = surface_neighbors_normals[:, 1:]
                 surface_neighbors_sizes = surface_sizes[ii]
                 surface_neighbors_sizes = surface_neighbors_sizes[:, 1:]
+                # except:
+                #     print(f"file: {dirname}, memory error in knn")
+                #     print("setting surface neighbors to 0")
+                #     surface_neighbors = surface_coordinates
+                #     surface_neighbors_normals = surface_normals
+                #     surface_neighbors_sizes = surface_sizes
+                #     cfg.model.num_neighbors_surface = 1
             else:
                 surface_neighbors = surface_coordinates
                 surface_neighbors_normals = surface_normals
@@ -616,13 +620,12 @@ def main(cfg: DictConfig):
 
             # SDF calculation on the grid using WARP
             time_start = time.time()
-            sdf_grid = signed_distance_field(
+            sdf_grid, _ = signed_distance_field(
                 normed_stl_vertices_vol,
                 mesh_indices_flattened,
                 grid,
                 use_sign_winding_number=True,
             )
-            sdf_grid = sdf_grid[0]
             
             # SDF calculation
             time_start = time.time()
@@ -778,7 +781,7 @@ def main(cfg: DictConfig):
 
             l2_gt = torch.mean(torch.square(surface_fields), (0))
             l2_error = torch.mean(torch.square(prediction_surf[0] - surface_fields), (0))
-            l2_surface_all.append(torch.sqrt(l2_error / l2_gt))
+            l2_surface_all.append(np.sqrt(l2_error.cpu().numpy()) / np.sqrt(l2_gt.cpu().numpy()))
 
             print(
                 "Surface L-2 norm:",
@@ -809,7 +812,7 @@ def main(cfg: DictConfig):
                 dirname,
                 np.sqrt(l2_error.cpu().numpy()) / np.sqrt(l2_gt.cpu().numpy()),
             )
-            l2_volume_all.append(torch.sqrt(l2_error) / torch.sqrt(l2_gt))
+            l2_volume_all.append(np.sqrt(l2_error.cpu().numpy()) / np.sqrt(l2_gt.cpu().numpy()))
 
         # import pdb; pdb.set_trace()
         if prediction_surf is not None:

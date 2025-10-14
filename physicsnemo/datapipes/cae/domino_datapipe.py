@@ -859,7 +859,7 @@ class DoMINODataPipe(Dataset):
 
         if self.config.volume_sample_from_disk:
             # We deliberately double the data to read compared to the sampling size:
-            self.dataset.set_volume_sampling_size(10 * self.config.volume_points_sample)
+            self.dataset.set_volume_sampling_size(100 * self.config.volume_points_sample)
 
     def __len__(self):
         if self.dataset is not None:

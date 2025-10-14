@@ -1180,15 +1180,7 @@ def compute_mean_std_min_max(
             batch_mean = field_data.mean(axis=(0))
             batch_M2 = ((field_data - batch_mean) ** 2).sum(axis=(0))
             batch_n = field_data.shape[0]
-
-            # Update min/max
-            batch_min = field_data.amin(dim=(0))
-            batch_max = field_data.amax(dim=(0))
-
-            min_val[field_key] = torch.minimum(min_val[field_key], batch_min)
-
-            max_val[field_key] = torch.maximum(max_val[field_key], batch_max)
-
+                     
             # Update running mean and M2 (Welford's algorithm)
             delta = batch_mean - mean[field_key]
             N[field_key] += batch_n  # batch_n should also be torch.int64
@@ -1204,11 +1196,6 @@ def compute_mean_std_min_max(
         print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds")
         start = time.perf_counter()
 
-    global_end = time.perf_counter()
-    global_time = global_end - global_start
-
-    print(f"Total time: {global_time:.2f} seconds for {max_samples} samples")
-
     var = {}
     std = {}
     for field_key in field_keys:
@@ -1216,5 +1203,48 @@ def compute_mean_std_min_max(
             N[field_key].item() - 1
         )  # Convert N to Python int for division
         std[field_key] = torch.sqrt(var[field_key])
+
+    start = time.perf_counter()
+    for i, data in enumerate(dataset):
+        if i >= max_samples:
+            break
+
+        for field_key in field_keys:
+            field_data = data[field_key]
+
+            batch_n = field_data.shape[0]
+
+            # # Update min/max
+            
+            mean_sample = mean[field_key]
+            std_sample = std[field_key]
+            # import pdb; pdb.set_trace()
+            mask = torch.ones_like(field_data, dtype=torch.bool)
+            for v in range(field_data.shape[-1]):
+                idx = (field_data[:, v] < mean_sample[v] - 12 * std_sample[v]) | (field_data[:, v] > mean_sample[v] + 12 * std_sample[v])
+                idx = torch.where(idx)
+                mask[idx] = False
+            
+            batch_min = []
+            batch_max = []
+            for v in range(field_data.shape[-1]):
+                batch_min.append(field_data[mask[:, v], v].min())
+                batch_max.append(field_data[mask[:, v], v].max())
+            
+            batch_min = torch.stack(batch_min)
+            batch_max = torch.stack(batch_max)
+
+            min_val[field_key] = torch.minimum(min_val[field_key], batch_min)
+            max_val[field_key] = torch.maximum(max_val[field_key], batch_max)
+                     
+        end = time.perf_counter()
+        iteration_time = end - start
+        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds")
+        start = time.perf_counter()
+
+    global_end = time.perf_counter()
+    global_time = global_end - global_start
+
+    print(f"Total time: {global_time:.2f} seconds for {max_samples} samples")
 
     return mean, std, min_val, max_val

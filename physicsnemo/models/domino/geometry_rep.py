@@ -28,7 +28,7 @@ from physicsnemo.models.unet import UNet
 # from .encodings import fourier_encode
 
 
-def scale_sdf(sdf: torch.Tensor) -> torch.Tensor:
+def scale_sdf(sdf: torch.Tensor, scaling_factor: float = 0.04) -> torch.Tensor:
     """
     Scale a signed distance function (SDF) to emphasize surface regions.
 
@@ -42,7 +42,7 @@ def scale_sdf(sdf: torch.Tensor) -> torch.Tensor:
     Returns:
         Tensor with scaled SDF values in range [-1, 1]
     """
-    return sdf / (0.4 + torch.abs(sdf))
+    return sdf / (scaling_factor + torch.abs(sdf))
 
 
 class GeoConvOut(nn.Module):
@@ -263,6 +263,7 @@ class GeometryRep(nn.Module):
         radii: Sequence[float],
         neighbors_in_radius,
         hops=1,
+        sdf_scaling_factor: Sequence[float] = [0.04],
         model_parameters=None,
         # activation_conv: nn.Module,
         # activation_processor: nn.Module,
@@ -281,6 +282,7 @@ class GeometryRep(nn.Module):
         self.self_attention = geometry_rep.geo_processor.self_attention
         self.activation_conv = get_activation(geometry_rep.geo_conv.activation)
         self.activation_processor = geometry_rep.geo_processor.activation
+        self.sdf_scaling_factor = sdf_scaling_factor
 
         self.bq_warp = nn.ModuleList()
         self.geo_processors = nn.ModuleList()
@@ -389,7 +391,7 @@ class GeometryRep(nn.Module):
         elif geometry_rep.geo_processor.processor_type == "conv":
             self.geo_processor_sdf = nn.Sequential(
                 GeoProcessor(
-                    input_filters=6,
+                    input_filters=5+len(self.sdf_scaling_factor),
                     output_filters=geometry_rep.geo_conv.base_neurons_out,
                     model_parameters=geometry_rep.geo_processor,
                 ),
@@ -465,15 +467,22 @@ class GeometryRep(nn.Module):
         if self.geo_encoding_type == "both" or self.geo_encoding_type == "sdf":
             # Expand SDF
             sdf = torch.unsqueeze(sdf, 1)
-            # Scaled sdf to emphasize near surface
-            scaled_sdf = scale_sdf(sdf)
             # Binary sdf
             binary_sdf = torch.where(sdf >= 0, 0.0, 1.0)
             # Gradients of SDF
             sdf_x, sdf_y, sdf_z = torch.gradient(sdf, dim=[2, 3, 4])
 
+            scaled_sdf = []
+            # Scaled sdf to emphasize near surface
+            for s in range(len(self.sdf_scaling_factor)):
+                s_sdf = scale_sdf(sdf, self.sdf_scaling_factor[s])
+                scaled_sdf.append(s_sdf)
+                
+            scaled_sdf = torch.cat(scaled_sdf, dim=1)
+
             # Process SDF and its computed features
             sdf = torch.cat((sdf, scaled_sdf, binary_sdf, sdf_x, sdf_y, sdf_z), 1)
+
             sdf_encoding = self.geo_processor_sdf(sdf)
             sdf_encoding = self.geo_processor_sdf_out(sdf_encoding)
 
