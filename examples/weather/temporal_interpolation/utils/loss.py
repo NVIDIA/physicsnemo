@@ -71,6 +71,12 @@ class GeometricL2Loss(nn.Module):
         torch.Tensor
             The computed loss
         """
+        if not (pred.ndim == true.ndim == self.weights.ndim):
+            raise ValueError(
+                "Shape mismatch: pred, true and weights must have the same number of dimensions."
+            )
+        if pred.shape != true.shape:
+            raise ValueError("Shape mismatch: pred and true must have the same shape")
         err = torch.square(pred - true)
         err = torch.sum(err * self.weights, dim=-2)
         return torch.mean(err)
