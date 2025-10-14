@@ -71,8 +71,8 @@ variables:
 # │         Data Configs                      │
 # └───────────────────────────────────────────┘  
 data: # Input directory for training and validation data
-  input_dir: /lustre/rranade/modulus_dev/data/aws_data_all/
-  input_dir_val: /lustre/rranade/modulus_dev/data/aws_data_all_val/
+  input_dir: /user/data/aws_data_all/
+  input_dir_val: /user/data/aws_data_all_val/
   bounding_box: # Bounding box dimensions for computational domain
     min: [-3.5, -2.25, -0.32]
     max: [8.5, 2.25, 3.00]
@@ -209,7 +209,7 @@ eval: # Testing configurable parameters
   test_path: /user/testing_data # Dir for testing data in raw format (vtp, vtu ,stls)
   save_path: /user/predicted_data # Dir to save predicted results in raw format (vtp, vtu)
   checkpoint_name: DoMINO.0.455.pt # Name of checkpoint to select from saved checkpoints
-  scaling_param_path: /lustre/rranade/modulus_dev/corey_fork/physicsnemo/examples/cfd/external_aerodynamics/domino/outputs/DrivAerML_Dataset/
+  scaling_param_path: /user/scaling_params
   refine_stl: False # Automatically refine STL during inference
   #TODO -  This was hardcoded anyways, remove it.
   # stencil_size: 7 # Stencil size for evaluating surface and volume model

@@ -729,6 +729,7 @@ class DoMINODataPipe(Dataset):
             use_sign_winding_number=True,
         )
         return_dict["sdf_surf_grid"] = sdf_surf_grid
+        return_dict["surf_grid"] = surf_grid
         
         # Store this only if normalization is active:
         if self.config.normalize_coordinates:
