@@ -127,7 +127,7 @@ knowledge of the dataset:
 
 To facilitate setting reasonable values of these, you can use the
 `compute_statistics.py` script.  This will load the core dataset as defined
-in your `config.yaml` file, loop over several events (20, by default), and
+in your `config.yaml` file, loop over several events (200, by default), and
 both print and store the surface/volume field statistics as well as the
 coordinate statistics.  
 
@@ -211,9 +211,6 @@ The `domain_size` represents the number of GPUs used for each batch - setting
 but with extra overhead.  `shard_grid` and `shard_points` will enable domain
 parallelism over the latent space and input/output points, respectively.
 
-Please see `src/train_sharded.py` for more details regarding the changes
-from the standard training script required for domain parallel DoMINO training.
-
 As one last note regarding domain-parallel training: in the phase of the DoMINO
 where the output solutions are calculated, the model can used two different
 techniques (numerically identical) to calculate the output.  Due to the
@@ -245,13 +242,63 @@ To mitigate this, by default in DoMINO we use the Rapids Memory Manager
 to disable this you can do so with an environment variable:
 
 ```bash
-export DOMINO_DISABLE_RMM=True
+export PHYSICSNEMO_DISABLE_RMM=True
+```
+
+Or remove this line from the training script:
+
+```python
+from physicsnemo.utils.memory import unified_gpu_memory
 ```
 
 > Note - why not make it configurable?  We have to set up the shared memory
 > pool allocation very early in the program, before the config has even
 > been read.  So, we enable by default and the opt-out path is via the
 > environment.
+
+#### Reduced Volume Reads
+
+The dataset size for volumetric data can be quite substantial - DrivAerML, for
+example, has mesh sizes of 160M points per example.  Even though the models
+do not process all 160M points, in order to down sample dynamically they all
+must be read from disk - which can exceed bandwidth and CPU decoding capacity
+on nodes with multiple GPUs.
+
+As a performance enhancement, DoMINO's data pipeline offers a mitigation: instead
+of reading an entire volumetric mesh, during preprocessing we _shuffle_ the
+volumetric inputs and outputs (in tandem) and subsequent reads choose random
+slices of the volumetric data.  By default, DoMINO will read about 100x more data
+than necessary for the sampling size.  This allows the pipeline to still apply
+cuts for data inside of the bounding box, and further random sampling to improve
+training stability.  To enable/disable this parameter, set
+`data.volume_sample_from_disk=True` (enable) or `False` (disable)
+
+> Note - if you volumetric data is not larger than a few million mesh points,
+> pre-shuffling and sampling from disk is likely not necessary for you.
+
+`physicsnemo-curator` supports shuffling the volumetric data during preprocessing.
+If, however, you've already preprocessed your data and just want to apply
+shuffling, use the script at `src/shuffle_volumetric_curator_output.py`
+
+The shuffling script will also apply sharding to the output files, which
+improves IO performance.  So, `zarr>=3.0` is required to use the outputs from
+curator.  `src/shuffle_volumetric_curator_output.py` is meant to be an example of how
+to apply shuffling, so modify and update as you need for your dataset.
+
+> If you have tensorstore installed (it's in `requirements.txt`), the data reader
+> will work equally well with Zarr 2 or Zarr 3 files.
+
+#### Overall Performance
+
+DoMINO is a computationally complex and challenging workload.  Over the course
+of several releases, we have chipped away at performance bottlenecks to speed
+up the training and inference time (with `inference_on_stl.py`).  Overall
+training performance has decreased from about 5 days to just over 4 hours, with
+eight H100 GPUs.  We hope these optimizations enable you to explore more
+parameters and surrogate models; if there is a performance issue you see,
+please open an issue on GitHub.
+
+![Results from DoMINO for RTWT SC demo](../../../../docs/img/domino_perf.png)
 
 ### Training with Physics Losses
 
