@@ -21,11 +21,16 @@ from torch import nn
 class GeometricL2Loss(nn.Module):
     """Latitude weighted L2 (MSE) loss.
 
-    Args:
-        lat_range: range of latitudes to cover
-        num_lats: number of latitudes in lat_range
-        num_lats_cropped: use the first num_lats_cropped latitudes
-        input_dims: number of dimensions in the input tensors passed to `forward`
+    Parameters
+    ----------
+    lat_range : tuple[float, float], optional
+        Range of latitudes to cover, by default (-90.0, 90.0)
+    num_lats : int, optional
+        Number of latitudes in lat_range, by default 721
+    num_lats_cropped : int, optional
+        Use the first num_lats_cropped latitudes, by default 720
+    input_dims : int, optional
+        Number of dimensions in the input tensors passed to `forward`, by default 4
     """
 
     def __init__(
@@ -51,7 +56,21 @@ class GeometricL2Loss(nn.Module):
         self.register_buffer("weights", weights)
 
     def forward(self, pred: torch.Tensor, true: torch.Tensor) -> torch.Tensor:
-        """Compute loss."""
+        """Compute loss.
+
+        Parameters
+        ----------
+        pred : torch.Tensor
+            Predicted values, shape (..., num_lats_cropped, num_lons),
+            number of dimensions must equal ``input_dims``
+        true : torch.Tensor
+            True values, shape equal to pred
+
+        Returns
+        -------
+        torch.Tensor
+            The computed loss
+        """
         err = torch.square(pred - true)
         err = torch.sum(err * self.weights, dim=-2)
         return torch.mean(err)

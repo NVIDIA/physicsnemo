@@ -50,25 +50,47 @@ def setup_datapipes(
     valid_start_year: int = 2017,
     valid_shuffle: bool = False,
 ) -> tuple[InterpClimateDatapipe, InterpClimateDatapipe]:
-    """Setup datapipes for training.
+    """
+    Setup datapipes for training.
 
     The arguments passed to this function can be modified in the 'datapipe' section
     of the config.
 
-    Args:
-        data_dir: path to data directory
-        dist_manager: an initialized DistributedManager instance
-        geopotential_filename: path to NetCDF file with global geopotential on the 0.25 deg grid
-        geopotential_filename: path to NetCDF file with global land-sea mask on the 0.25 deg grid
-        use_latlon: if True, will return latitude and longitude from the datapipe
-        num_samples_per_year_train: number of training samples per year
-        num_samples_per_year_valid: number of validation samples per year
-        batch_size_train: batch size per GPU for training
-        batch_size_valid: batch size per GPU for validation, when None equal to batch_size_train
-        num_workers: number of datapipe workers per training process
-        valid_subdir: subdirectory in data_dir where validation data is found
-        valid_shuffle: when True, shuffle order of validation set; recommend setting this to False for consistent validation results
-    Returns:
+    Parameters
+    ----------
+    data_dir : str
+        Path to data directory.
+    dist_manager : DistributedManager
+        An initialized DistributedManager instance.
+    metadata_path : str
+        Path to metadata file.
+    geopotential_filename : str or None, optional
+        Path to NetCDF file with global geopotential on the 0.25 deg grid.
+    lsm_filename : str or None, optional
+        Path to NetCDF file with global land-sea mask on the 0.25 deg grid.
+    use_latlon : bool, optional
+        If True, will return latitude and longitude from the datapipe.
+    num_samples_per_year_train : int, optional
+        Number of training samples per year.
+    num_samples_per_year_valid : int, optional
+        Number of validation samples per year.
+    batch_size_train : int, optional
+        Batch size per GPU for training.
+    batch_size_valid : int or None, optional
+        Batch size per GPU for validation, when None equal to batch_size_train.
+    num_workers : int, optional
+        Number of datapipe workers per training process.
+    valid_subdir : str, optional
+        Subdirectory in data_dir where validation data is found.
+    valid_start_year : int, optional
+        Starting year for validation data.
+    valid_shuffle : bool, optional
+        When True, shuffle order of validation set; recommend setting to False
+        for consistent validation results.
+
+    Returns
+    -------
+    tuple of (InterpClimateDatapipe, InterpClimateDatapipe)
         Tuple of training datapipe and validation datapipe.
     """
     if batch_size_valid is None:
@@ -128,7 +150,7 @@ def setup_datapipes(
     return (pipe_train, pipe_valid)
 
 
-# default parameters if not overridden by config
+# Default parameters if not overridden by config
 default_model_params = {
     "modafno": {
         "inp_shape": (720, 1440),
@@ -143,12 +165,18 @@ default_model_params = {
 
 
 def setup_model(model_cfg: dict | None = None) -> Module:
-    """Setup interpolation model.
+    """
+    Setup interpolation model.
 
-    Args:
-        model_cfg: model configuration dict
-    Returns:
-        Model object
+    Parameters
+    ----------
+    model_cfg : dict or None, optional
+        Model configuration dict.
+
+    Returns
+    -------
+    Module
+        Model object.
     """
     if model_cfg is None:
         model_cfg = {}
@@ -173,16 +201,23 @@ def setup_model(model_cfg: dict | None = None) -> Module:
 def input_output_from_batch_data(
     batch: dict[str, torch.Tensor], time_scale: float = 6 * 3600.0
 ) -> tuple[[tuple[torch.Tensor, torch.Tensor], torch.Tensor]]:
-    """Function to convert the datapipe output dict to model input and output batches.
+    """
+    Convert the datapipe output dict to model input and output batches.
 
-    Args:
-        batch: The data dict returned by the datapipe.
-        time_scale: Number of seconds between the interpolation endpoints (default 6 hours)
-    Returns:
-        Nested tuple in the form ((input, time), output)
+    Parameters
+    ----------
+    batch : dict[str, torch.Tensor]
+        The data dict returned by the datapipe.
+    time_scale : float, optional
+        Number of seconds between the interpolation endpoints (default 6 hours).
+
+    Returns
+    -------
+    tuple
+        Nested tuple in the form ((input, time), output).
     """
     batch = batch[0]
-    # concatenate all input variables to a single tensor
+    # Concatenate all input variables to a single tensor
     atmos_vars = batch["state_seq-atmos"]
     cos_zenith = batch["cos_zenith-atmos"].squeeze(dim=2)
 
@@ -198,26 +233,32 @@ def input_output_from_batch_data(
     atmos_vars_out = atmos_vars[:, 2]
 
     time = batch["timestamps-atmos"]
-    # normalize time coordinate
+    # Normalize time coordinate
     time = (time[:, -1:] - time[:, :1]).to(dtype=torch.float32) / time_scale
 
     return ((atmos_vars_in, time), atmos_vars_out)
 
 
 def setup_trainer(**cfg: dict) -> Trainer:
-    """Setup training environment.
+    """
+    Setup training environment.
 
-    Args:
-        cfg: The configuration dict passed from hydra.
-    Returns:
+    Parameters
+    ----------
+    **cfg : dict
+        The configuration dict passed from hydra.
+
+    Returns
+    -------
+    Trainer
         The Trainer object for training the interpolation model.
     """
 
-    # setup model
+    # Setup model
     model = setup_model(model_cfg=cfg["model"])
     (model, dist_manager) = distribute.distribute_model(model)
 
-    # setup datapipes
+    # Setup datapipes
     (train_datapipe, valid_datapipe) = setup_datapipes(
         **cfg["datapipe"],
         dist_manager=dist_manager,
@@ -228,7 +269,7 @@ def setup_trainer(**cfg: dict) -> Trainer:
         initialize_mlflow(**mlflow_cfg)
         LaunchLogger.initialize(use_mlflow=True)
 
-    # setup training loop
+    # Setup training loop
     loss_func = loss.GeometricL2Loss(num_lats_cropped=cfg["model"]["inp_shape"][0]).to(
         device=dist_manager.device
     )
@@ -247,7 +288,14 @@ def setup_trainer(**cfg: dict) -> Trainer:
 
 @hydra.main(version_base=None, config_path="config")
 def main(cfg):
-    """Main function."""
+    """
+    Main entry point for training the interpolation model.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra configuration object.
+    """
     trainer = setup_trainer(**OmegaConf.to_container(cfg))
     trainer.fit()
 

@@ -29,7 +29,18 @@ from physicsnemo.datapipes.climate.climate import (
 
 
 class InterpDaliExternalSource(ClimateDaliExternalSource):
-    """Data source specialized for interpolation training."""
+    """
+    Data source specialized for interpolation training.
+
+    Parameters
+    ----------
+    *args : tuple
+        Positional arguments passed to parent class.
+    all_steps : bool, optional
+        Whether to return all steps in the sequence. Default is False.
+    **kwargs : dict
+        Keyword arguments passed to parent class.
+    """
 
     def __init__(self, *args, all_steps: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
@@ -38,12 +49,20 @@ class InterpDaliExternalSource(ClimateDaliExternalSource):
     def __call__(
         self, sample_info: dali.types.SampleInfo
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Get data from source.
+        """
+        Get data from source.
 
-        Args:
-            sample_info: Information about the sample to retrieve.
-        Returns:
-            Sequence of training data along with the accompanying timestamps.
+        Parameters
+        ----------
+        sample_info : dali.types.SampleInfo
+            Information about the sample to retrieve.
+
+        Returns
+        -------
+        state_seq : np.ndarray
+            Sequence of training data.
+        timestamps : np.ndarray
+            Accompanying timestamps for the sequence.
         """
 
         if sample_info.iteration >= self.num_batches:
@@ -93,8 +112,17 @@ class InterpDaliExternalSource(ClimateDaliExternalSource):
 class InterpHDF5DaliExternalSource(
     ClimateHDF5DaliExternalSource, InterpDaliExternalSource
 ):
-    """DALI source for reading HDF5 formatted climate data files,
-    specialized for interpolation training.
+    """
+    DALI source for reading HDF5 formatted climate data files.
+
+    Specialized for interpolation training with HDF5 climate data.
+
+    Parameters
+    ----------
+    *args : tuple
+        Positional arguments passed to parent classes.
+    **kwargs : dict
+        Keyword arguments passed to parent classes.
     """
 
     def __init__(self, *args, **kwargs):
@@ -108,16 +136,24 @@ class InterpHDF5DaliExternalSource(
     def _load_sequence(
         self, year_idx: int, idx: int, steps: np.ndarray, num_retries: int = 10
     ) -> np.ndarray:
-        """Load sequence of data for interpolation training.
+        """
+        Load sequence of data for interpolation training.
 
-        Args:
-            year_idx: The index of the yearly data file.
-            idx: The starting index of the data sequence in the yearly file.
-            steps: A, array of index offsets relative to idx (e.g. [0, 6, 2])
-            num_retries: number of times to retry in case of IO failure
+        Parameters
+        ----------
+        year_idx : int
+            The index of the yearly data file.
+        idx : int
+            The starting index of the data sequence in the yearly file.
+        steps : np.ndarray
+            Array of index offsets relative to idx (e.g. [0, 6, 2]).
+        num_retries : int, optional
+            Number of times to retry in case of IO failure. Default is 10.
 
-        Returns:
-            Data of shape (len(steps), num_channels, height, width)
+        Returns
+        -------
+        np.ndarray
+            Data of shape (len(steps), num_channels, height, width).
         """
 
         # the data is returned in a (time, channels, height, width) shape
@@ -150,10 +186,24 @@ class InterpHDF5DaliExternalSource(
 
 
 class InterpClimateDatapipe(ClimateDatapipe):
-    """Extends ClimateDatapipe to use interpolation source."""
+    """
+    Extends ClimateDatapipe to use interpolation source.
+    """
 
     def _source_cls_from_type(self, source_type: str) -> type[InterpDaliExternalSource]:
-        """Get the external source class based on a string descriptor."""
+        """
+        Get the external source class based on a string descriptor.
+
+        Parameters
+        ----------
+        source_type : str
+            String identifier for the source type (e.g., 'hdf5').
+
+        Returns
+        -------
+        type[InterpDaliExternalSource]
+            The appropriate external source class for the given type.
+        """
         return {
             "hdf5": InterpHDF5DaliExternalSource,
         }[source_type]

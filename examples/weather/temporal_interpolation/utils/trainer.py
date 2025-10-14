@@ -35,28 +35,46 @@ except ImportError:
 class Trainer:
     """Training loop.
 
-    Args:
-        model: model to train
-        dist_manager: initialized DistributedManager
-        loss: loss function
-        train_datapipe: ClimateDatapipe providing training data
-        valid_datapipe: ClimateDatapipe providing validation data
-        samples_per_epoch: number of samples to draw from the datapipe per 'epoch'
-        input_output_from_batch_data: function that converts datapipe outputs to training
-            batches, if not provided will try to use outputs as-is
-        optimizer: optimizer class used for training, when None will setup
-            apex.optimizers.FusedAdam if available, otherwise PyTorch Adam
-        optimizer_params: dict of parameters (e.g. learning rate) to pass to optimizer
-        scheduler: learning rate scheduler class, when None will setup CosineAnnealingLR
-        scheduler_params: dict of parameters to pass to LR scheduler
-        max_epoch: the last training epoch
-        load_epoch: which epoch to load; one of:
-            - "latest" (to continue from latest checkpoint in checkpoint_dir)
-            - int (to continue from the specified epoch)
-            - None (to start from scratch)
-        checkpoint_dir: the directory where checkpoints are saved
-        validation_callbacks: optional callables to execute on validation, signature
-            callback(outvar_true, outvar_pred, epoch=epoch, batch_idx=batch_idx)
+    Parameters
+    ----------
+    model : Module
+        Model to train.
+    dist_manager : DistributedManager
+        Initialized DistributedManager.
+    loss : torch.nn.Module
+        Loss function.
+    train_datapipe : ClimateDatapipe
+        ClimateDatapipe providing training data.
+    valid_datapipe : ClimateDatapipe
+        ClimateDatapipe providing validation data.
+    samples_per_epoch : int
+        Number of samples to draw from the datapipe per 'epoch'.
+    input_output_from_batch_data : Callable, optional
+        Function that converts datapipe outputs to training batches.
+        If not provided, will try to use outputs as-is.
+    optimizer : type[torch.optim.Optimizer] or None, optional
+        Optimizer class used for training. When None, will setup
+        apex.optimizers.FusedAdam if available, otherwise PyTorch Adam.
+    optimizer_params : dict[str, Any] or None, optional
+        Dict of parameters (e.g. learning rate) to pass to optimizer.
+    scheduler : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
+        Learning rate scheduler class. When None, will setup CosineAnnealingLR.
+    scheduler_params : dict[str, Any] or None, optional
+        Dict of parameters to pass to LR scheduler.
+    max_epoch : int, optional
+        The last training epoch.
+    load_epoch : int, "latest", or None, optional
+        Which epoch to load. Options:
+        - "latest": continue from latest checkpoint in checkpoint_dir
+        - int: continue from the specified epoch
+        - None: start from scratch
+    checkpoint_every : int, optional
+        Save checkpoint every N epochs.
+    checkpoint_dir : str or None, optional
+        The directory where checkpoints are saved.
+    validation_callbacks : Sequence[Callable], optional
+        Optional callables to execute on validation. Signature:
+        callback(outvar_true, outvar_pred, epoch=epoch, batch_idx=batch_idx).
     """
 
     def __init__(
@@ -124,10 +142,14 @@ class Trainer:
     def eval_step(self, invar: tuple) -> torch.Tensor:
         """Evaluate model for one step.
 
-        Args:
-            invar: The inputs to the model, packed into a tuple.
+        Parameters
+        ----------
+        invar : tuple
+            The inputs to the model, packed into a tuple.
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             The output of the model.
         """
         return self.model(*invar)
@@ -137,10 +159,16 @@ class Trainer:
     ) -> torch.Tensor:
         """Training step.
 
-        Args:
-            invar: model inputs packed into a tuple
-            outvar_true: correct output value
-        Returns:
+        Parameters
+        ----------
+        invar : tuple
+            Model inputs packed into a tuple.
+        outvar_true : torch.Tensor
+            Correct output value.
+
+        Returns
+        -------
+        torch.Tensor
             Model loss on the given data.
         """
         outvar_pred = self.model(*invar)
@@ -202,7 +230,9 @@ class Trainer:
     def validate_on_epoch(self) -> torch.Tensor:
         """Compute loss and metrics over one validation epoch.
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Validation loss as a tensor.
         """
         loss_epoch = 0
@@ -238,13 +268,19 @@ class Trainer:
     ) -> torch.optim.Optimizer:
         """Setup optimizer.
 
-        Args:
-            model: model that optimizer is applied to
-            opt_cls: optimizer class; when None will setup
-                apex.optimizers.FusedAdam if available, otherwise PyTorch Adam
-            opt_params: dict of parameters (e.g. learning rate) to pass to optimizer
+        Parameters
+        ----------
+        model : torch.nn.Module
+            Model that optimizer is applied to.
+        opt_cls : type[torch.optim.Optimizer] or None, optional
+            Optimizer class. When None, will setup apex.optimizers.FusedAdam
+            if available, otherwise PyTorch Adam.
+        opt_params : dict or None, optional
+            Dict of parameters (e.g. learning rate) to pass to optimizer.
 
-        Returns:
+        Returns
+        -------
+        torch.optim.Optimizer
             Initialized optimizer.
         """
 
@@ -268,14 +304,19 @@ class Trainer:
     ) -> torch.optim.lr_scheduler.LRScheduler:
         """Setup learning rate scheduler.
 
-        Args:
-            optimizer: optimizer to which the scheduling is applied
-            scheduler_cls: scheduler class; when None will setup
-                apex.optimizers.FusedAdam if available, otherwise PyTorch Adam
-            scheduler_params: dict of parameters to pass to scheduler
+        Parameters
+        ----------
+        optimizer : torch.optim.Optimizer
+            Optimizer to which the scheduling is applied.
+        scheduler_cls : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
+            Scheduler class. When None, will setup CosineAnnealingLR.
+        scheduler_params : dict[str, Any] or None, optional
+            Dict of parameters to pass to scheduler.
 
-        Returns:
-            Initialized optimizer.
+        Returns
+        -------
+        torch.optim.lr_scheduler.LRScheduler
+            Initialized scheduler.
         """
 
         scheduler_kwargs = {}
@@ -288,12 +329,18 @@ class Trainer:
         return scheduler_cls(optimizer, **scheduler_kwargs)
 
     def load_checkpoint(self, epoch: int | None = None) -> int:
-        """Try to load model state from a checkpoint. Do nothing if a checkpoint
-        is not found in self.checkpoint_dir.
+        """Try to load model state from a checkpoint.
 
-        Args:
-            epoch: The number of epoch to load. When None, the latest epoch is loaded.
-        Returns:
+        Do nothing if a checkpoint is not found in self.checkpoint_dir.
+
+        Parameters
+        ----------
+        epoch : int or None, optional
+            The number of epoch to load. When None, the latest epoch is loaded.
+
+        Returns
+        -------
+        int
             The epoch of the loaded checkpoint, or 0 if no checkpoint was found.
         """
         if self.checkpoint_dir is None:

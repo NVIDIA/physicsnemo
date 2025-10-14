@@ -21,7 +21,23 @@ import torch
 def distribute_model(
     model: torch.nn.Module,
 ) -> tuple[torch.nn.Module, DistributedManager]:
-    """Initialize DistributedManager and distribute model to multiple processes with DDP."""
+    """
+    Initialize DistributedManager and distribute model to multiple processes with DDP.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        The PyTorch model to be distributed across multiple processes.
+
+    Returns
+    -------
+    tuple[torch.nn.Module, DistributedManager]
+        A tuple containing:
+        - model : torch.nn.Module
+            The model, wrapped with DistributedDataParallel if needed.
+        - dist : DistributedManager
+            The initialized DistributedManager instance.
+    """
     if not DistributedManager.is_initialized():
         DistributedManager.initialize()
 
