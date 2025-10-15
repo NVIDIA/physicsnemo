@@ -304,7 +304,9 @@ class DoMINODataPipe(Dataset):
 
         self.dataset = None
 
-    def compute_stl_scaling_and_surface_grids(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def compute_stl_scaling_and_surface_grids(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the min and max for the defining mesh.
 
@@ -325,7 +327,9 @@ class DoMINODataPipe(Dataset):
 
         return s_min, s_max, surf_grid
 
-    def compute_volume_scaling_and_grids(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def compute_volume_scaling_and_grids(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the min and max and grid for volume data.
 
@@ -363,7 +367,9 @@ class DoMINODataPipe(Dataset):
                 stl_vertices, geometry_points
             )
             if geometry_coordinates_sampled.shape[0] < geometry_points:
-                raise ValueError("Sampled points is more than points in the surface mesh")
+                raise ValueError(
+                    "Surface mesh has fewer points than requested sample size"
+                )
             geom_centers = geometry_coordinates_sampled
         else:
             geom_centers = stl_vertices
@@ -444,14 +450,12 @@ class DoMINODataPipe(Dataset):
 
             if surface_coordinates_sampled.shape[0] < self.config.surface_points_sample:
                 raise ValueError(
-                    "Sampled points is more than points in the surface mesh"
+                    "Surface mesh has fewer points than requested sample size"
                 )
 
             # Select out the sampled points for non-neighbor arrays:
             if surface_fields is not None:
                 surface_fields = surface_fields[idx_surface]
-            else:
-                raise ValueError("Surface fields are not present")
 
             # Subsample the normals and sizes:
             surface_normals = surface_normals[idx_surface]
@@ -548,8 +552,6 @@ class DoMINODataPipe(Dataset):
             volume_coordinates = volume_coordinates[ids_in_bbox]
             if volume_fields is not None:
                 volume_fields = volume_fields[ids_in_bbox]
-            else:
-                raise ValueError("Volume fields are not present")
 
         ########################################################################
         # Apply sampling to the volume coordinates and fields
@@ -568,14 +570,12 @@ class DoMINODataPipe(Dataset):
             # inputs were too few), pad the outputs:
             if volume_coordinates_sampled.shape[0] < self.config.volume_points_sample:
                 raise ValueError(
-                    "Sampled points is more than points in the volume mesh"
+                    "Volume mesh has fewer points than requested sample size"
                 )
 
             # Apply the same sampling to the targets, too:
             if volume_fields is not None:
                 volume_fields = volume_fields[idx_volume]
-            else:
-                raise ValueError("Volume fields are not present")
 
             volume_coordinates = volume_coordinates_sampled
 
@@ -656,6 +656,22 @@ class DoMINODataPipe(Dataset):
 
     @torch.no_grad()
     def process_data(self, data_dict):
+        # Validate that all required keys are present in data_dict
+        required_keys = [
+            "global_params_values",
+            "global_params_reference",
+            "stl_coordinates",
+            "stl_faces",
+            "stl_centers",
+            "stl_areas",
+        ]
+        missing_keys = [key for key in required_keys if key not in data_dict]
+        if missing_keys:
+            raise ValueError(
+                f"Missing required keys in data_dict: {missing_keys}. "
+                f"Required keys are: {required_keys}"
+            )
+
         # Start building the preprocessed return dict:
         return_dict = {
             "global_params_values": data_dict["global_params_values"],
@@ -730,7 +746,7 @@ class DoMINODataPipe(Dataset):
         )
         return_dict["sdf_surf_grid"] = sdf_surf_grid
         return_dict["surf_grid"] = surf_grid
-        
+
         # Store this only if normalization is active:
         if self.config.normalize_coordinates:
             return_dict["surface_min_max"] = torch.stack([s_min, s_max])
@@ -860,7 +876,9 @@ class DoMINODataPipe(Dataset):
 
         if self.config.volume_sample_from_disk:
             # We deliberately double the data to read compared to the sampling size:
-            self.dataset.set_volume_sampling_size(100 * self.config.volume_points_sample)
+            self.dataset.set_volume_sampling_size(
+                100 * self.config.volume_points_sample
+            )
 
     def __len__(self):
         if self.dataset is not None:
@@ -926,7 +944,6 @@ def compute_scaling_factors(
     cfg: DictConfig,
     input_path: str,
     target_keys: list[str],
-    use_cache=None,
     max_samples=20,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """

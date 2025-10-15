@@ -469,7 +469,7 @@ def shuffle_array(
         for g in range(gap):
             points_per_chunk[g] += 1
     elif gap < 0:
-        for g in range(gap):
+        for g in range(-gap):
             points_per_chunk[g] -= 1
 
     # Create a list of indexes per chunk:

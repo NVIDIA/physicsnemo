@@ -550,6 +550,9 @@ if TENSORSTORE_AVAILABLE:
             self,
             keys_to_read: list[str] | None,
             keys_to_read_if_available: dict[str, torch.Tensor] | None,
+            cache_bytes_limit: int = 10_000_000,
+            data_copy_concurrency: int = 72,
+            file_io_concurrency: int = 72,
         ) -> None:
             super().__init__(keys_to_read, keys_to_read_if_available)
 
@@ -563,9 +566,9 @@ if TENSORSTORE_AVAILABLE:
 
             self.context = ts.Context(
                 {
-                    "cache_pool": {"total_bytes_limit": 10_000_000},
-                    "data_copy_concurrency": {"limit": 72},
-                    "file_io_concurrency": {"limit": 72},
+                    "cache_pool": {"total_bytes_limit": cache_bytes_limit},
+                    "data_copy_concurrency": {"limit": data_copy_concurrency},
+                    "file_io_concurrency": {"limit": file_io_concurrency},
                 }
             )
 
@@ -1116,6 +1119,20 @@ class CAEDataset:
         """
         self.file_reader.set_volume_sampling_size(volume_sampling_size)
 
+    def close(self):
+        """
+        Explicitly close the dataset and cleanup resources, including the ThreadPoolExecutor.
+        """
+        if hasattr(self, "preload_executor") and self.preload_executor is not None:
+            self.preload_executor.shutdown(wait=True)
+            self.preload_executor = None
+
+    def __del__(self):
+        """
+        Cleanup resources when the dataset is destroyed.
+        """
+        self.close()
+
 
 def compute_mean_std_min_max(
     dataset: CAEDataset, field_keys: list[str], max_samples: int = 20
@@ -1180,7 +1197,7 @@ def compute_mean_std_min_max(
             batch_mean = field_data.mean(axis=(0))
             batch_M2 = ((field_data - batch_mean) ** 2).sum(axis=(0))
             batch_n = field_data.shape[0]
-                     
+
             # Update running mean and M2 (Welford's algorithm)
             delta = batch_mean - mean[field_key]
             N[field_key] += batch_n  # batch_n should also be torch.int64
@@ -1215,28 +1232,30 @@ def compute_mean_std_min_max(
             batch_n = field_data.shape[0]
 
             # # Update min/max
-            
+
             mean_sample = mean[field_key]
             std_sample = std[field_key]
             # import pdb; pdb.set_trace()
             mask = torch.ones_like(field_data, dtype=torch.bool)
             for v in range(field_data.shape[-1]):
-                idx = (field_data[:, v] < mean_sample[v] - 12 * std_sample[v]) | (field_data[:, v] > mean_sample[v] + 12 * std_sample[v])
+                idx = (field_data[:, v] < mean_sample[v] - 12 * std_sample[v]) | (
+                    field_data[:, v] > mean_sample[v] + 12 * std_sample[v]
+                )
                 idx = torch.where(idx)
                 mask[idx] = False
-            
+
             batch_min = []
             batch_max = []
             for v in range(field_data.shape[-1]):
                 batch_min.append(field_data[mask[:, v], v].min())
                 batch_max.append(field_data[mask[:, v], v].max())
-            
+
             batch_min = torch.stack(batch_min)
             batch_max = torch.stack(batch_max)
 
             min_val[field_key] = torch.minimum(min_val[field_key], batch_min)
             max_val[field_key] = torch.maximum(max_val[field_key], batch_max)
-                     
+
         end = time.perf_counter()
         iteration_time = end - start
         print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds")

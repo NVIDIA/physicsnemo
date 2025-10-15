@@ -147,7 +147,7 @@ class MultiGeometryEncoding(nn.Module):
 
     def calculate_total_neighbors_in_radius(
         self, geo_encoding_type: str, neighbors_in_radius: int, n_upstream_radii: int
-    ) -> list[int]:
+    ) -> int:
         if geo_encoding_type == "both":
             total_neighbors_in_radius = neighbors_in_radius * (n_upstream_radii + 1)
         elif geo_encoding_type == "stl":

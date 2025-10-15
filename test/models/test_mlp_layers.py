@@ -50,7 +50,7 @@ def test_mlp_forward_accuracy(device):
 
 def test_mlp_activation_and_dropout():
     model = Mlp(in_features=10, hidden_features=20, out_features=5, drop=0.5)
-    input_tensor = torch.randn(2, 10)  # Assuming a batch size of 1 for simplicity
+    input_tensor = torch.randn(2, 10)  # Batch size of 2
 
     output_tensor = model(input_tensor)
 
@@ -61,7 +61,7 @@ def test_mlp_different_activation():
     model = Mlp(
         in_features=10, hidden_features=20, out_features=7, act_layer=torch.nn.ReLU
     )
-    input_tensor = torch.randn(3, 10)  # Assuming a batch size of 1 for simplicity
+    input_tensor = torch.randn(3, 10)  # Batch size of 3
 
     output_tensor = model(input_tensor)
     assert output_tensor.shape == torch.Size([3, 7])
@@ -69,7 +69,7 @@ def test_mlp_different_activation():
 
 def test_multiple_hidden_layers():
     model = Mlp(in_features=10, hidden_features=[20, 30], out_features=5)
-    input_tensor = torch.randn(4, 10)  # Assuming a batch size of 1 for simplicity
+    input_tensor = torch.randn(4, 10)  # Batch size of 4
 
     output_tensor = model(input_tensor)
     assert output_tensor.shape == torch.Size([4, 5])

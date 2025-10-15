@@ -113,7 +113,7 @@ def get_keys_to_read(
     cfg_params_vec = []
     for key in cfg.variables.global_parameters:
         if cfg.variables.global_parameters[key].type == "vector":
-            cfg_params_vec.append(*cfg.variables.global_parameters[key].reference)
+            cfg_params_vec.extend(cfg.variables.global_parameters[key].reference)
         else:
             cfg_params_vec.append(cfg.variables.global_parameters[key].reference)
     keys_to_read_if_available = {
@@ -204,7 +204,6 @@ def coordinate_distributed_environment(cfg: DictConfig):
             "surface_mesh_centers": point_like_placement,
             "surface_normals": point_like_placement,
             "surface_areas": point_like_placement,
-            "surface_fields": point_like_placement,
         }
     else:
         domain_mesh = None

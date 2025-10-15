@@ -82,7 +82,9 @@ def store_array(store, name: str, data: np.ndarray):
     )
 
 
-def copy_file_with_shuffled_volume_data(input_file: str, output_file: str):
+def copy_file_with_shuffled_volume_data(
+    input_file: str, output_file: str, random_seed: int | None = None
+):
     """
     Copy a file with shuffled volume data, using Zarr v3 sharding for efficient storage.
     Only processes if the output file doesn't exist or is incomplete.
@@ -127,6 +129,9 @@ def copy_file_with_shuffled_volume_data(input_file: str, output_file: str):
     volume_fields = in_file["volume_fields"][:]
     volume_mesh_centers = in_file["volume_mesh_centers"][:]
 
+    if random_seed is not None:
+        np.random.seed(random_seed)
+
     # Generate a permutation
     permutation = np.random.permutation(volume_fields.shape[0])
 
@@ -152,18 +157,26 @@ def process_file(file: str, top_dir: str, out_dir: str):
 
 
 def main():
-    top_dir = "/lustre/fsw/coreai_modulus_cae/coreya/datasets/domino/val/"
-    out_dir = "/lustre/fsw/coreai_modulus_cae/coreya/datasets/domino/val_shuffled2/"
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Shuffle volumetric curator output")
+    parser.add_argument("--input-dir", required=True, help="Input directory path")
+    parser.add_argument("--output-dir", required=True, help="Output directory path")
+    parser.add_argument(
+        "--num-cores", type=int, default=64, help="Number of cores to use"
+    )
+    args = parser.parse_args()
 
     # Get list of files to process
-    files = os.listdir(top_dir)
-    files = files[0:2]
+    files = os.listdir(args.input_dir)
 
     # Create a partial function with fixed directories
-    process_func = partial(process_file, top_dir=top_dir, out_dir=out_dir)
+    process_func = partial(
+        process_file, top_dir=args.input_dir, out_dir=args.output_dir
+    )
 
     # Use multiprocessing to process files in parallel
-    num_cores = max(1, 64)  # Leave one core free
+    num_cores = max(1, args.num_cores)  # Leave one core free
     print(f"Processing {len(files)} files using {num_cores} cores")
 
     with mp.Pool(num_cores) as pool:

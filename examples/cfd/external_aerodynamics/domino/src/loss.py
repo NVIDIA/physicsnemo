@@ -19,46 +19,11 @@ from typing import Literal, Any
 
 from physicsnemo.utils.domino.utils import unnormalize
 
-import time
-import os
-import re
-import torch
-import torchinfo
-
 from typing import Literal, Any
 
-import apex
-import numpy as np
-import hydra
-from hydra.utils import to_absolute_path
-from omegaconf import DictConfig, OmegaConf
-import torch.distributed as dist
-from torch.amp import GradScaler, autocast
-from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
-from torch.utils.tensorboard import SummaryWriter
-from nvtx import annotate as nvtx_annotate
 import torch.cuda.nvtx as nvtx
 
-
-from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
-
-
-from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import *
-
-# This is included for GPU memory tracking:
-from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
-import time
-
-# Initialize NVML
-nvmlInit()
-
-
-from physicsnemo.utils.profiling import profile, Profiler
 
 
 def compute_physics_loss(

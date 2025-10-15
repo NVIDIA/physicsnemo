@@ -343,8 +343,6 @@ def main(cfg: DictConfig) -> None:
     # Get scaling factors - precompute them if this fails!
     ######################################################
     vol_factors, surf_factors = load_scaling_factors(cfg)
-    
-    vol_factors_tensor = vol_factors
 
     ######################################################
     # Configure the model
@@ -661,7 +659,4 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    # Profiler().enable("torch")
-    # Profiler().initialize()
     main()
-    # Profiler().finalize()

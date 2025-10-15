@@ -614,7 +614,6 @@ def main(cfg: DictConfig) -> None:
         global_features=num_global_features,
         model_parameters=cfg.model,
     ).to(dist.device)
-    # model = torch.compile(model, fullgraph=True, dynamic=True)  # TODO make this configurable
 
     # Print model summary (structure and parmeter count).
     logger.info(f"Model summary:\n{torchinfo.summary(model, verbose=0, depth=2)}\n")

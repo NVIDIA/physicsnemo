@@ -363,8 +363,6 @@ def validate_sample_structure(sample, model_type, gpu_output):
         expected_keys.extend(surface_keys)
 
     # Check that required keys are present and are torch tensors on correct device
-    for key in expected_keys:
-        print(f"Got key: {key} on device: {sample[key].device.type}")
 
     for key in expected_keys:
         if key in sample:  # Some keys may be None if compute_scaling_factors=True
@@ -747,9 +745,6 @@ def test_domino_datapipe_sampling(zarr_dataset, model_type, sampling, pytestconf
 
     sample = dataset[0]
     validate_sample_structure(sample, model_type, gpu_output=use_cuda)
-
-    for key in sample:
-        print(f"sample[{key}].shape: {sample[key].shape}")
 
     if model_type in ["volume", "combined"]:
         for key in ["volume_mesh_centers", "volume_fields"]:

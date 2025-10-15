@@ -113,7 +113,7 @@ knowledge of the dataset:
 
 - The output fields (the labels) are normalized during training to a mean
   of zero and a standard deviation of one, averaged over the dataset.
-  The scaling is controlled by passing the `volume_factors` andg
+  The scaling is controlled by passing the `volume_factors` and
   `surface_factors` values to the datapipe.
 - The input locations are scaled by, and optionally cropped to, used defined
   bounding boxes for both surface and volume.  Whether cropping occurs, or not,

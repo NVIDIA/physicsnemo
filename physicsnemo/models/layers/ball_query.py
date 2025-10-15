@@ -82,6 +82,9 @@ class BQWarp(nn.Module):
                 - outputs: Tensor containing coordinates of the neighboring points
         """
 
+        if x.shape[0] != 1 or p_grid.shape[0] != 1:
+            raise ValueError("BQWarp only supports batch size 1")
+
         if p_grid.shape[-1] != x.shape[-1] or x.shape[-1] != 3:
             raise ValueError("The last dimension of p_grid and x must be 3")
 

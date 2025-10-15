@@ -181,7 +181,4 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    # Profiler().enable("torch")
-    # Profiler().initialize()
     main()
-    # Profiler().finalize()

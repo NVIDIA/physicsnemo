@@ -19,29 +19,6 @@ import torch
 
 from .utils import validate_output_shape_and_values
 
-# @pytest.mark.parametrize("device", ["cuda:0"])
-# @pytest.mark.parametrize("activation", ["relu", "gelu"])
-# @pytest.mark.parametrize("n_layers", [1, 2, 3, 5])
-# def test_mlp(device, activation, n_layers):
-#     """Test basic MLP functionality"""
-#     from physicsnemo.models.domino.mlps import MLP
-#     from physicsnemo.models.domino.model import get_activation
-
-#     torch.manual_seed(0)
-
-#     mlp = MLP(
-#         input_features=10,
-#         output_features=5,
-#         base_layer=32,
-#         activation=get_activation(activation),
-#         n_layers=n_layers,
-#     ).to(device)
-
-#     x = torch.randn(4, 50, 10).to(device)
-#     output = mlp(x)
-
-#     validate_output_shape_and_values(output, (4, 50, 5))
-
 
 @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["relu", "gelu"])
