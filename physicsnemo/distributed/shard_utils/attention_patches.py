@@ -654,6 +654,13 @@ def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> Shard
     if not (q._spec.placements[0] == k._spec.placements[0] == v._spec.placements[0]):
         raise MissingShardPatch("q, k, and v must all be on the same placement")
 
+    # Make sure the attention mask, if provided, has the same placement as q, k, and v
+    if attn_mask is not None and hasattr(attn_mask, "_spec"):
+        if attn_mask._spec.placements[0] != q._spec.placements[0]:
+            raise MissingShardPatch(
+                "attn_mask must have the same placement as q, k, and v"
+            )
+
     # if the placements are replicatd (which is what we expect in transolver's Physics Attention)
     # then just run locally and convert the output back to a replicated tensor:
 

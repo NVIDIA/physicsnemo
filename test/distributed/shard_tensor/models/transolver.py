@@ -30,7 +30,7 @@ def test_transolver_nd_distributed(
     distributed_mesh,
     n_dims,
 ):
-    """Test transolver 2D distributed forward pass"""
+    """Test transolver 2D and 3D distributed forward pass"""
 
     dm = DistributedManager()
 
@@ -88,7 +88,7 @@ def test_transolver_nd_distributed(
 def test_transolver_irregular_distributed(
     distributed_mesh,
 ):
-    """Test transolver 2D distributed forward pass"""
+    """Test transolver irregular distributed forward pass"""
 
     dm = DistributedManager()
 
