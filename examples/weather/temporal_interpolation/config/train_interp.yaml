@@ -42,7 +42,7 @@ datapipe:
   batch_size_train: 1 # batch size per GPU
 
 training:
-  max_epoch: 120 # number of data "epochs"
+  max_epoch: 120 # number of data "epochs" (each epoch we save a checkpoint, run validation, update LR)
   samples_per_epoch: 50000 # number of samples per "epoch"
   load_epoch: "latest" # int, null or "latest"; "latest" loads the most recent checkpoint in checkpoint_dir
   checkpoint_dir: "/checkpoints/fcinterp/" # location where checkpoints are saved
