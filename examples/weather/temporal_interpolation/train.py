@@ -41,7 +41,7 @@ def setup_datapipes(
     geopotential_filename: str | None = None,
     lsm_filename: str | None = None,
     use_latlon: bool = True,
-    num_samples_per_year_train: int = 365 * 24 - 6,
+    num_samples_per_year_train: int | None = None,
     num_samples_per_year_valid: int = 4,
     batch_size_train: int = 4,
     batch_size_valid: int | None = None,
@@ -70,8 +70,8 @@ def setup_datapipes(
         Path to NetCDF file with global land-sea mask on the 0.25 deg grid.
     use_latlon : bool, optional
         If True, will return latitude and longitude from the datapipe.
-    num_samples_per_year_train : int, optional
-        Number of training samples per year.
+    num_samples_per_year_train : int or None, optional
+        Number of training samples per year, if None will use all available samples.
     num_samples_per_year_valid : int, optional
         Number of validation samples per year.
     batch_size_train : int, optional
@@ -110,16 +110,19 @@ def setup_datapipes(
     )
 
     spec_train = ClimateDataSourceSpec(data_dir=train_dir, **spec_kwargs)
-
     spec_valid = ClimateDataSourceSpec(data_dir=valid_dir, **spec_kwargs)
 
     invariants = {}
+    num_aux_channels = 3  #  3 channels for cos_zenith
     if use_latlon:
         invariants["latlon"] = invariant.LatLon()
+        num_aux_channels += 4
     if geopotential_filename is not None:
         invariants["geopotential"] = invariant.FileInvariant(geopotential_filename, "Z")
+        num_aux_channels += 1
     if lsm_filename is not None:
         invariants["land_sea_mask"] = invariant.FileInvariant(lsm_filename, "LSM")
+        num_aux_channels += 1
 
     pipe_kwargs = dict(
         invariants=invariants,
@@ -128,6 +131,9 @@ def setup_datapipes(
         device=dist_manager.device,
         dt=1.0,
     )
+
+    if num_samples_per_year_train is None:
+        num_samples_per_year_train = 365 * 24 - 12  #  -12 to prevent overflow
 
     pipe_train = InterpClimateDatapipe(
         [spec_train],
@@ -147,7 +153,7 @@ def setup_datapipes(
         **pipe_kwargs,
     )
 
-    return (pipe_train, pipe_valid)
+    return (pipe_train, pipe_valid, num_aux_channels)
 
 
 # Default parameters if not overridden by config
@@ -164,7 +170,9 @@ default_model_params = {
 }
 
 
-def setup_model(model_cfg: dict | None = None) -> Module:
+def setup_model(
+    num_variables: int, num_auxiliaries: int, model_cfg: dict | None = None
+) -> Module:
     """
     Setup interpolation model.
 
@@ -185,6 +193,10 @@ def setup_model(model_cfg: dict | None = None) -> Module:
         raise ValueError(
             "Model types other than 'modafno' are not currently supported."
         )
+    if model_cfg.get("in_channels") is None:
+        model_cfg["in_channels"] = 2 * num_variables + num_auxiliaries
+    if model_cfg.get("out_channels") is None:
+        model_cfg["out_channels"] = num_variables
     model_name = model_cfg.pop("model_name")
     model_kwargs = default_model_params[model_type].copy()
     model_kwargs.update(model_cfg)
@@ -254,15 +266,21 @@ def setup_trainer(**cfg: dict) -> Trainer:
         The Trainer object for training the interpolation model.
     """
 
-    # Setup model
-    model = setup_model(model_cfg=cfg["model"])
-    (model, dist_manager) = distribute.distribute_model(model)
+    DistributedManager.initialize()
 
     # Setup datapipes
-    (train_datapipe, valid_datapipe) = setup_datapipes(
+    (train_datapipe, valid_datapipe, num_aux_channels) = setup_datapipes(
         **cfg["datapipe"],
-        dist_manager=dist_manager,
+        dist_manager=DistributedManager(),
     )
+
+    # Setup model
+    model = setup_model(
+        num_variables=len(train_datapipe.sources[0].variables),
+        num_auxiliaries=num_aux_channels,
+        model_cfg=cfg["model"],
+    )
+    (model, dist_manager) = distribute.distribute_model(model)
 
     mlflow_cfg = cfg.get("logging", {}).get("mlflow", {})
     if mlflow_cfg.pop("use_mlflow", False):

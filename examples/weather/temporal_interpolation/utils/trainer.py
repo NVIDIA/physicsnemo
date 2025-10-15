@@ -100,14 +100,16 @@ class Trainer:
         self.dist_manager = dist_manager
         self.loss = loss
         self.train_datapipe = train_datapipe
+        self.train_iterator = iter(self.train_datapipe)
         self.valid_datapipe = valid_datapipe
         self.max_epoch = max_epoch
         self.input_output_from_batch_data = input_output_from_batch_data
-        self.optimizer = self.setup_optimizer(
-            model, opt_cls=optimizer, opt_params=optimizer_params
-        )
-        self.lr_scheduler = self.setup_lr_scheduler(
-            self.optimizer, scheduler_cls=scheduler, scheduler_params=scheduler_params
+        self.optimizer, self.lr_scheduler = self.setup_optimizer(
+            model,
+            opt_cls=optimizer,
+            opt_params=optimizer_params,
+            scheduler_cls=scheduler,
+            scheduler_params=scheduler_params,
         )
         self.validation_callbacks = validation_callbacks
         self.device = self.dist_manager.device
@@ -134,7 +136,6 @@ class Trainer:
             model=self.model, logger=self.logger, use_graphs=False
         )(self.eval_step)
 
-        self.train_iter = self._train_iter()
         self.local_batches_per_epoch = samples_per_epoch // (
             train_datapipe.world_size * train_datapipe.batch_size
         )
@@ -177,54 +178,46 @@ class Trainer:
     def fit(self):
         """Main function for training loop."""
         for self.epoch in range(self.epoch, self.max_epoch + 1):
-            self.train_on_epoch()
+            with LaunchLogger(
+                "train",
+                epoch=self.epoch,
+                num_mini_batch=self.local_batches_per_epoch,
+                epoch_alert_freq=10,
+            ) as log:
+                for _ in range(self.local_batches_per_epoch):
+                    try:
+                        batch = next(self.train_iterator)
+                    except StopIteration:
+                        self.train_iterator = iter(self.train_datapipe)
+                        batch = next(self.train_iterator)
+                    loss = self.train_step_forward(
+                        *self.input_output_from_batch_data(batch)
+                    )
+                    log.log_minibatch({"loss": loss.detach()})
+
+                log.log_epoch({"Learning Rate": self.optimizer.param_groups[0]["lr"]})
+
+            # Validation
+            if self.dist_manager.rank == 0:
+                with LaunchLogger("valid", epoch=self.epoch) as log:
+                    error = self.validate_on_epoch()
+                    log.log_epoch({"Validation error": error})
+
+            if self.dist_manager.world_size > 1:
+                torch.distributed.barrier()
+
+            self.lr_scheduler.step()
+
+            checkpoint_epoch = (self.checkpoint_dir is not None) and (
+                (self.epoch % self.checkpoint_every == 0)
+                or (self.epoch == self.max_epoch)
+            )
+            if checkpoint_epoch and self.dist_manager.rank == 0:
+                # Save Modulus Launch checkpoint
+                self.save_checkpoint()
 
         if self.dist_manager.rank == 0:
             self.logger.info("Finished training!")
-
-    def _train_iter(self):
-        """Iterate training items."""
-        while True:
-            yield from self.train_datapipe
-
-    def _iter_n_train_batches(self, n):
-        """Iterate over n training items."""
-        for _ in range(n):
-            yield next(self.train_iter)
-
-    def train_on_epoch(self):
-        """Train for one epoch."""
-        with LaunchLogger(
-            "train",
-            epoch=self.epoch,
-            num_mini_batch=self.local_batches_per_epoch,
-            epoch_alert_freq=10,
-        ) as log:
-            for batch in self._iter_n_train_batches(self.local_batches_per_epoch):
-                loss = self.train_step_forward(
-                    *self.input_output_from_batch_data(batch)
-                )
-                log.log_minibatch({"loss": loss.detach()})
-
-            log.log_epoch({"Learning Rate": self.optimizer.param_groups[0]["lr"]})
-
-        # Validation
-        if self.dist_manager.rank == 0:
-            with LaunchLogger("valid", epoch=self.epoch) as log:
-                error = self.validate_on_epoch()
-                log.log_epoch({"Validation error": error})
-
-        if self.dist_manager.world_size > 1:
-            torch.distributed.barrier()
-
-        self.lr_scheduler.step()
-
-        checkpoint_epoch = (self.checkpoint_dir is not None) and (
-            (self.epoch % self.checkpoint_every == 0) or (self.epoch == self.max_epoch)
-        )
-        if checkpoint_epoch and self.dist_manager.rank == 0:
-            # Save Modulus Launch checkpoint
-            self.save_checkpoint()
 
     @torch.no_grad()
     def validate_on_epoch(self) -> torch.Tensor:
@@ -265,7 +258,9 @@ class Trainer:
         model: torch.nn.Module,
         opt_cls: type[torch.optim.Optimizer] | None = None,
         opt_params: dict | None = None,
-    ) -> torch.optim.Optimizer:
+        scheduler_cls: type[torch.optim.lr_scheduler.LRScheduler] | None = None,
+        scheduler_params: dict[str, Any] | None = None,
+    ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]:
         """Setup optimizer.
 
         Parameters
@@ -277,11 +272,15 @@ class Trainer:
             if available, otherwise PyTorch Adam.
         opt_params : dict or None, optional
             Dict of parameters (e.g. learning rate) to pass to optimizer.
+        scheduler_cls : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
+            Scheduler class. When None, will setup CosineAnnealingLR.
+        scheduler_params : dict[str, Any] or None, optional
+            Dict of parameters to pass to scheduler.
 
         Returns
         -------
-        torch.optim.Optimizer
-            Initialized optimizer.
+        tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]
+            The initialized optimizer and learning rate scheduler.
         """
 
         opt_kwargs = {"lr": 0.0005}
@@ -294,31 +293,6 @@ class Trainer:
             except NameError:  # in case we don't have apex
                 opt_cls = torch.optim.Adam
 
-        return opt_cls(model.parameters(), **opt_kwargs)
-
-    def setup_lr_scheduler(
-        self,
-        optimizer: torch.optim.Optimizer,
-        scheduler_cls: type[torch.optim.lr_scheduler.LRScheduler] | None = None,
-        scheduler_params: dict[str, Any] | None = None,
-    ) -> torch.optim.lr_scheduler.LRScheduler:
-        """Setup learning rate scheduler.
-
-        Parameters
-        ----------
-        optimizer : torch.optim.Optimizer
-            Optimizer to which the scheduling is applied.
-        scheduler_cls : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
-            Scheduler class. When None, will setup CosineAnnealingLR.
-        scheduler_params : dict[str, Any] or None, optional
-            Dict of parameters to pass to scheduler.
-
-        Returns
-        -------
-        torch.optim.lr_scheduler.LRScheduler
-            Initialized scheduler.
-        """
-
         scheduler_kwargs = {}
         if scheduler_cls is None:
             scheduler_cls = torch.optim.lr_scheduler.CosineAnnealingLR
@@ -326,7 +300,9 @@ class Trainer:
         if scheduler_params is not None:
             scheduler_kwargs.update(scheduler_params)
 
-        return scheduler_cls(optimizer, **scheduler_kwargs)
+        optimizer = opt_cls(model.parameters(), **opt_kwargs)
+        scheduler = scheduler_cls(optimizer, **scheduler_kwargs)
+        return (optimizer, scheduler)
 
     def load_checkpoint(self, epoch: int | None = None) -> int:
         """Try to load model state from a checkpoint.

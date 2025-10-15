@@ -18,8 +18,8 @@ model:
   model_type: "modafno" # should always be "modafno"
   model_name: "modafno-cplxscale-smallpatch" # name for the model
   inp_shape: [720, 1440] # should be [720, 1440], must be divisible by patch_size
-  in_channels: 155 # number of input channels to the model, use 155 for 73-var ERA5
-  out_channels: 73 # number of output channels from the model, use 73 for 73-var ERA5
+  in_channels: null # number of input channels to the model, null determines it from datapipe
+  out_channels: null # number of output channels from the model, null determines it from datapipe
   patch_size: [2,2] # size of AFNO patches
   embed_dim: 512 # embedding dimension
   mlp_ratio: 2.0 # multiplier for MLP hidden layer size
@@ -37,13 +37,14 @@ datapipe:
   geopotential_filename: "/data/era5-wind_gust/invariants/orography.nc" # location of orography file
   lsm_filename: "/data/era5-wind_gust/invariants/land_sea_mask.nc" # location of lsm file
   use_latlon: True # when True, return latitude and longitude from datapipe
-  num_samples_per_year_train: 8748 # number of training samples per year (8748 == 365 * 24 - 12)
+  num_samples_per_year_train: null # number of training samples per year, null uses all available
   num_samples_per_year_valid: 64 # number of validation samples per year
   batch_size_train: 1 # batch size per GPU
 
 training:
   max_epoch: 120 # number of data "epochs"
   samples_per_epoch: 50000 # number of samples per "epoch"
+  load_epoch: "latest" # int, null or "latest"; "latest" loads the most recent checkpoint in checkpoint_dir
   checkpoint_dir: "/checkpoints/fcinterp/" # location where checkpoints are saved
   optimizer_params:
     lr: 5e-4 # learning rate
