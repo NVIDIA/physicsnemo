@@ -16,6 +16,7 @@
 
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 import torch
 
@@ -36,19 +37,27 @@ def test_geo_conv_out(device, act, fourier_features):
         base_neurons: int = 32
         base_neurons_in: int = 8
         fourier_features: bool = False
+        neighbors_in_radius: int = 8
         num_modes: int = 5
         activation: str = act
 
     params = TestParams()
     params.fourier_features = fourier_features
 
+    input_features = 3
+
     grid_resolution = [32, 32, 32]
 
     layer = GeoConvOut(
-        input_features=3, model_parameters=params, grid_resolution=grid_resolution
+        input_features=input_features,
+        neighbors_in_radius=params.neighbors_in_radius,
+        model_parameters=params,
+        grid_resolution=grid_resolution,
     ).to(device)
 
-    x = torch.randn(1, 32 * 32 * 32, 10, 3).to(device)
+    x = torch.randn(1, np.prod(grid_resolution), params.neighbors_in_radius, 3).to(
+        device
+    )
     grid = torch.randn(1, *grid_resolution, 3).to(device)
 
     output = layer(x, grid)

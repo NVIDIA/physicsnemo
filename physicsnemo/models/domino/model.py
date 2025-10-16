@@ -171,7 +171,7 @@ class DoMINO(nn.Module):
             ValueError: If both output_features_vol and output_features_surf are None
         """
         super().__init__()
-        self.input_features = input_features
+
         self.output_features_vol = output_features_vol
         self.output_features_surf = output_features_surf
         self.num_sample_points_surface = model_parameters.num_neighbors_surface
@@ -267,11 +267,6 @@ class DoMINO(nn.Module):
         self.encode_parameters = model_parameters.encode_parameters
         self.geo_encoding_type = model_parameters.geometry_encoding_type
 
-        if hasattr(model_parameters, "num_volume_neighbors"):
-            self.num_volume_neighbors = model_parameters.num_volume_neighbors
-        else:
-            self.num_volume_neighbors = 50
-
         if self.use_surface_normals:
             if not self.use_surface_area:
                 input_features_surface = input_features + 3
@@ -310,7 +305,7 @@ class DoMINO(nn.Module):
             sdf_scaling_factor=model_parameters.geometry_rep.geo_processor.surface_sdf_scaling_factor,
             model_parameters=model_parameters,
         )
-        
+
         # Basis functions for surface and volume
         base_layer_nn = model_parameters.nn_basis_functions.base_layer
         if self.output_features_surf is not None:
@@ -353,9 +348,15 @@ class DoMINO(nn.Module):
         position_encoder_base_neurons = model_parameters.position_encoder.base_neurons
         self.activation = get_activation(model_parameters.activation)
         self.use_sdf_in_basis_func = model_parameters.use_sdf_in_basis_func
-        self.sdf_scaling_factor = model_parameters.geometry_rep.geo_processor.volume_sdf_scaling_factor
+        self.sdf_scaling_factor = (
+            model_parameters.geometry_rep.geo_processor.volume_sdf_scaling_factor
+        )
         if self.output_features_vol is not None:
-            inp_pos_vol = 7 + len(self.sdf_scaling_factor) if model_parameters.use_sdf_in_basis_func else 3
+            inp_pos_vol = (
+                7 + len(self.sdf_scaling_factor)
+                if model_parameters.use_sdf_in_basis_func
+                else 3
+            )
 
             self.fc_p_vol = FourierMLP(
                 input_features=inp_pos_vol,
@@ -396,20 +397,6 @@ class DoMINO(nn.Module):
             base_layer=512,
             activation=get_activation(model_parameters.local_point_conv.activation),
             grid_resolution=self.grid_resolution,
-        )
-
-        # Transmitting surface to volume
-        self.surf_to_vol_conv1 = nn.Conv3d(
-            len(model_parameters.geometry_rep.geo_conv.volume_radii) + 1,
-            16,
-            kernel_size=3,
-            padding="same",
-        )
-        self.surf_to_vol_conv2 = nn.Conv3d(
-            16,
-            len(model_parameters.geometry_rep.geo_conv.volume_radii) + 1,
-            kernel_size=3,
-            padding="same",
         )
 
         # Aggregation model
@@ -522,9 +509,12 @@ class DoMINO(nn.Module):
 
             # SDF on volume mesh nodes
             sdf_nodes = data_dict["sdf_nodes"]
-            scaled_sdf_nodes = []
-            for i in range(len(self.sdf_scaling_factor)):
-                scaled_sdf_nodes.append(scale_sdf(sdf_nodes, self.sdf_scaling_factor[i]))
+            # scaled_sdf_nodes = []
+            # for i in range(len(self.sdf_scaling_factor)):
+            # scaled_sdf_nodes.append(scale_sdf(sdf_nodes, self.sdf_scaling_factor[i]))
+            scaled_sdf_nodes = [
+                scale_sdf(sdf_nodes, scaling) for scaling in self.sdf_scaling_factor
+            ]
             scaled_sdf_nodes = torch.cat(scaled_sdf_nodes, dim=-1)
 
             # Positional encoding based on closest point on surface to a volume node
@@ -533,7 +523,13 @@ class DoMINO(nn.Module):
             pos_volume_center_of_mass = data_dict["pos_volume_center_of_mass"]
             if self.use_sdf_in_basis_func:
                 encoding_node_vol = torch.cat(
-                    (sdf_nodes, scaled_sdf_nodes, pos_volume_closest, pos_volume_center_of_mass), dim=-1
+                    (
+                        sdf_nodes,
+                        scaled_sdf_nodes,
+                        pos_volume_closest,
+                        pos_volume_center_of_mass,
+                    ),
+                    dim=-1,
                 )
             else:
                 encoding_node_vol = pos_volume_center_of_mass

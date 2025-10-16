@@ -74,7 +74,9 @@ class GeoConvOut(nn.Module):
         self.num_modes = model_parameters.num_modes
 
         if self.fourier_features:
-            input_features_calculated = input_features * (1 + 2 * self.num_modes) * neighbors_in_radius
+            input_features_calculated = (
+                input_features * (1 + 2 * self.num_modes) * neighbors_in_radius
+            )
         else:
             input_features_calculated = input_features * neighbors_in_radius
 
@@ -85,10 +87,6 @@ class GeoConvOut(nn.Module):
             act_layer=get_activation(model_parameters.activation),
             drop=0.0,
         )
-
-        # self.fc1 = nn.Linear(input_features_calculated, base_neurons)
-        # self.fc2 = nn.Linear(base_neurons, base_neurons // 2)
-        # self.fc3 = nn.Linear(base_neurons // 2, model_parameters.base_neurons_in)
 
         self.grid_resolution = grid_resolution
 
@@ -128,14 +126,14 @@ class GeoConvOut(nn.Module):
         )
         grid = grid.reshape(1, nx * ny * nz, 3, 1)
 
-        x = rearrange(x, "b x y z -> b x (y z)", x=nx*ny*nz, y=self.neighbors_in_radius, z=3)
+        x = rearrange(
+            x, "b x y z -> b x (y z)", x=nx * ny * nz, y=self.neighbors_in_radius, z=3
+        )
         if self.fourier_features:
             facets = torch.cat((x, fourier_encode(x, self.freqs)), axis=-1)
         else:
             facets = x
-        # x = self.activation(self.fc1(facets))
-        # x = self.activation(self.fc2(x))
-        # x = F.tanh(self.fc3(x))
+
         x = F.tanh(self.mlp(facets))
 
         x = rearrange(x, "b (x y z) c -> b c x y z", x=nx, y=ny, z=nz)
@@ -364,8 +362,9 @@ class GeometryRep(nn.Module):
                 normalization_in_unet = "layernorm"
             else:
                 normalization_in_unet = None
+
             self.geo_processor_sdf = UNet(
-                in_channels=6,
+                in_channels=5 + len(self.sdf_scaling_factor),
                 out_channels=geometry_rep.geo_conv.base_neurons_out,
                 model_depth=3,
                 feature_map_channels=[
@@ -391,7 +390,7 @@ class GeometryRep(nn.Module):
         elif geometry_rep.geo_processor.processor_type == "conv":
             self.geo_processor_sdf = nn.Sequential(
                 GeoProcessor(
-                    input_filters=5+len(self.sdf_scaling_factor),
+                    input_filters=5 + len(self.sdf_scaling_factor),
                     output_filters=geometry_rep.geo_conv.base_neurons_out,
                     model_parameters=geometry_rep.geo_processor,
                 ),
@@ -477,7 +476,7 @@ class GeometryRep(nn.Module):
             for s in range(len(self.sdf_scaling_factor)):
                 s_sdf = scale_sdf(sdf, self.sdf_scaling_factor[s])
                 scaled_sdf.append(s_sdf)
-                
+
             scaled_sdf = torch.cat(scaled_sdf, dim=1)
 
             # Process SDF and its computed features
