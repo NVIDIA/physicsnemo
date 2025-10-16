@@ -22,7 +22,7 @@ Diffusion-Based Generative Models".
 import contextlib
 import importlib
 import math
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Literal, Set
 
 import numpy as np
 import nvtx
@@ -1040,6 +1040,16 @@ class PositionalEmbedding(torch.nn.Module):
         A boolean flag indicating whether mixed-precision (AMP) training is enabled. Defaults to False.
     learnable : bool, optional
         A boolean flag indicating whether learnable positional embedding is enabled. Defaults to False.
+    freq_embed_dim: int, optional
+        The dimension of the frequency embedding. Defaults to None, in which case it will be set to num_channels.
+    mlp_hidden_dim: int, optional
+        The dimension of the hidden layer in the MLP. Defaults to None, in which case it will be set to 2 * num_channels.
+        Only applicable if learnable is True; if learnable is False, this parameter is ignored.
+    embed_fn: Literal["cos_sin", "np_sin_cos"], optional
+        The function to use for embedding into sin/cos features (allows for swapping the order of sin/cos). Defaults to 'cos_sin'.
+        Options:
+            - 'cos_sin': Uses torch to compute frequency embeddings and returns in order (cos, sin)
+            - 'np_sin_cos': Uses numpy to compute frequency embeddings and returns in order (sin, cos)
     """
 
     def __init__(
@@ -1049,6 +1059,9 @@ class PositionalEmbedding(torch.nn.Module):
         endpoint: bool = False,
         amp_mode: bool = False,
         learnable: bool = False,
+        freq_embed_dim: int | None = None,
+        mlp_hidden_dim: int | None = None,
+        embed_fn: Literal["cos_sin", "np_sin_cos"] = "cos_sin",
     ):
         super().__init__()
         self.num_channels = num_channels
@@ -1056,18 +1069,32 @@ class PositionalEmbedding(torch.nn.Module):
         self.endpoint = endpoint
         self.amp_mode = amp_mode
         self.learnable = learnable
+        self.embed_fn = embed_fn
+
+        if freq_embed_dim is None:
+            freq_embed_dim = num_channels
+        self.freq_embed_dim = freq_embed_dim
+
         if learnable:
+            if mlp_hidden_dim is None:
+                mlp_hidden_dim = 2 * num_channels
             self.mlp = torch.nn.Sequential(
-                torch.nn.Linear(num_channels, 2 * num_channels, bias=True),
+                torch.nn.Linear(freq_embed_dim, mlp_hidden_dim, bias=True),
                 torch.nn.SiLU(),
-                torch.nn.Linear(2 * num_channels, num_channels, bias=True),
+                torch.nn.Linear(mlp_hidden_dim, num_channels, bias=True),
             )
 
-    def forward(self, x):
+        if self.embed_fn == "np_sin_cos":
+            half_embed_dim = freq_embed_dim // 2
+            pow = np.arange(half_embed_dim, dtype=np.float32) / half_embed_dim
+            w = np.exp(-np.log(self.max_positions) * pow)
+            self.register_buffer("freqs", torch.from_numpy(w).float())
+
+    def _cos_sin_embedding(self, x):
         freqs = torch.arange(
-            start=0, end=self.num_channels // 2, dtype=torch.float32, device=x.device
+            start=0, end=self.freq_embed_dim // 2, dtype=torch.float32, device=x.device
         )
-        freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
+        freqs = freqs / (self.freq_embed_dim // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
         _validate_amp(self.amp_mode)
         if not self.amp_mode:
@@ -1075,6 +1102,19 @@ class PositionalEmbedding(torch.nn.Module):
                 freqs = freqs.to(x.dtype)
         x = x.ger(freqs)
         x = torch.cat([x.cos(), x.sin()], dim=1)
+        return x
+
+    def _sin_cos_embedding_np(self, x):
+        x = torch.outer(x, self.freqs)
+        x = torch.cat([x.sin(), x.cos()], dim=1)
+        return x
+
+    def forward(self, x):
+        if self.embed_fn == "cos_sin":
+            x = self._cos_sin_embedding(x)
+        elif self.embed_fn == "np_sin_cos":
+            x = self._sin_cos_embedding_np(x)
+
         if self.learnable:
             x = self.mlp(x)
         return x

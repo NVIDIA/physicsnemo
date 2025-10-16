@@ -15,13 +15,20 @@
 # limitations under the License.
 # ruff: noqa: E402
 
+from typing import Tuple
+
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from pytest_utils import import_or_fail
 
 from physicsnemo.experimental.models.dit import DiT
-from physicsnemo.experimental.models.dit.layers import DiTBlock
+from physicsnemo.experimental.models.dit.layers import (
+    DetokenizerModuleBase,
+    DiTBlock,
+    TokenizerModuleBase,
+)
 
 from . import common
 
@@ -117,9 +124,73 @@ def test_dit_constructor(device):
     assert output.shape == (batch_size, out_channels, *input_size)
 
 
+class CustomTokenizer(TokenizerModuleBase):
+    """Simple N C H W -> N L D mapping."""
+
+    def __init__(self, in_channels, hidden_size, patch_size: int):
+        super().__init__()
+        self.proj = nn.Linear(in_channels, hidden_size)
+        self.patch_size = patch_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = F.avg_pool2d(x, kernel_size=self.patch_size, stride=self.patch_size)
+        x = x.flatten(2).permute(0, 2, 1)
+        x = self.proj(x)
+        print(x.shape)
+        return x
+
+    def initialize_weights(self):
+        pass
+
+
+class CustomDetokenizer(DetokenizerModuleBase):
+    """Simple N L D -> N C H W mapping."""
+
+    def __init__(
+        self,
+        out_channels: int,
+        input_size: Tuple[int, int],
+        hidden_size: int,
+        patch_size: int,
+    ):
+        super().__init__()
+        self.out_channels = out_channels
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.patch_size = patch_size
+        self.proj = nn.Conv2d(hidden_size, out_channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        x = x.transpose(1, 2).reshape(
+            -1,
+            self.hidden_size,
+            self.input_size[0] // self.patch_size,
+            self.input_size[1] // self.patch_size,
+        )
+        x = F.interpolate(x, size=self.input_size, mode="nearest")
+        x = self.proj(x)
+        return x
+
+    def initialize_weights(self):
+        pass
+
+
 @pytest.mark.parametrize("device", ["cuda:0"])
-def test_dit_checkpoint(device):
-    """Test DiT checkpoint save/load."""
+@pytest.mark.parametrize(
+    "tokenizer",
+    [CustomTokenizer(in_channels=3, hidden_size=64, patch_size=4), "patch_embed_2d"],
+)
+@pytest.mark.parametrize(
+    "detokenizer",
+    [
+        CustomDetokenizer(
+            out_channels=4, input_size=(16, 16), hidden_size=64, patch_size=4
+        ),
+        "proj_reshape_2d",
+    ],
+)
+def test_dit_checkpoint(device, tokenizer, detokenizer):
+    """Test DiT checkpoint save/load with custom Modules"""
     model_1 = (
         DiT(
             input_size=(16, 16),
@@ -129,8 +200,9 @@ def test_dit_checkpoint(device):
             hidden_size=64,
             depth=1,
             num_heads=2,
-            attention_backend="timm",
             layernorm_backend="torch",
+            tokenizer=tokenizer,
+            detokenizer=detokenizer,
         )
         .to(device)
         .eval()
@@ -144,7 +216,8 @@ def test_dit_checkpoint(device):
             hidden_size=64,
             depth=1,
             num_heads=2,
-            attention_backend="timm",
+            tokenizer=tokenizer,
+            detokenizer=detokenizer,
             layernorm_backend="torch",
         )
         .to(device)

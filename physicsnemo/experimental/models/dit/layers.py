@@ -54,9 +54,11 @@ try:
 except ImportError:
     NATTEN_AVAILABLE = False
 
+from physicsnemo.models import Module
 from physicsnemo.models.layers import Mlp
 from physicsnemo.distributed import ShardTensor
 from physicsnemo.distributed.shard_utils.natten_patches import partial_na2d
+from physicsnemo.models.utils import PatchEmbed2D
 
 
 def get_layer_norm(
@@ -65,8 +67,7 @@ def get_layer_norm(
     elementwise_affine: bool = False,
     eps: float = 1e-6,
 ) -> nn.Module:
-    """
-    Construct a LayerNorm module based on the selected backend.
+    """Construct a LayerNorm module based on the selected backend.
 
     Parameters
     ----------
@@ -103,9 +104,8 @@ def get_attention(
     attn_drop_rate: float = 0.0,
     proj_drop_rate: float = 0.0,
     **attn_kwargs: Any,
-) -> nn.Module:
-    """
-    Construct a pre-defined attention module for DiT.
+) -> Module:
+    """Construct a pre-defined attention module for DiT.
 
     Parameters
     ----------
@@ -124,7 +124,7 @@ def get_attention(
 
     Returns
     -------
-    nn.Module
+    Module
         A module whose forward accepts (B, L, D) and returns (B, L, D).
     """
     if attention_backend == "timm":
@@ -136,9 +136,8 @@ def get_attention(
     raise ValueError("attention_backend must be one of 'timm', 'transformer_engine', 'natten2d' if using pre-defined attention modules.")
 
 
-class AttentionModuleBase(nn.Module, ABC):
-    """
-    Abstract base class for attention modules used in DiTBlock
+class AttentionModuleBase(Module, ABC):
+    """Abstract base class for attention modules used in DiTBlock
 
     Implementations must define a forward method that accepts a single tensor of shape
     (batch, sequence_length, hidden_size) and returns a tensor of the same shape.
@@ -442,12 +441,7 @@ class PerSampleDropout(nn.Module):
 
 
 class DiTBlock(nn.Module):
-    """
-    Warning
-    -----------
-    This feature is experimental and subject to future API changes.
-
-    A Diffusion Transformer (DiT) block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    """A Diffusion Transformer (DiT) block with adaptive layer norm zero (adaLN-Zero) conditioning.
 
     Parameters
     -----------
@@ -455,9 +449,9 @@ class DiTBlock(nn.Module):
         The dimensionality of the input and output.
     num_heads (int):
         The number of attention heads.
-    attention_backend (Union[str, nn.Module]):
+    attention_backend (Union[str, Module]):
         Either the name of a pre-defined attention implementation ('timm', 'transformer_engine', or 'natten2d'),
-        or a user-provided nn.Module implementing the same (B, L, D)->(B, L, D) interface for self-attention.
+        or a user-provided Module implementing the same (B, L, D)->(B, L, D) interface for self-attention.
         Options:
             - 'timm' uses the self-attention module from timm. For timm version 1.0.16 and higher, passing an attention mask to the forward method is supported.
               Under the hood, timm uses torch.nn.functional.scaled_dot_product_attention. See physicsnemo.experimental.models.dit.layers.TimmSelfAttention for more details.
@@ -511,7 +505,7 @@ class DiTBlock(nn.Module):
         self,
         hidden_size: int,
         num_heads: int,
-        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], nn.Module] = "transformer_engine",
+        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], Module] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         mlp_ratio: float = 4.0,
         intermediate_dropout: bool = False,
@@ -522,7 +516,7 @@ class DiTBlock(nn.Module):
     ):
         super().__init__()
 
-        if isinstance(attention_backend, nn.Module):
+        if isinstance(attention_backend, Module):
             self.attention = attention_backend
         else:
             self.attention = get_attention(
@@ -560,6 +554,11 @@ class DiTBlock(nn.Module):
         self.modulation = lambda x, scale, shift: x * (
             1 + scale.unsqueeze(1)
         ) + shift.unsqueeze(1)
+
+    def initialize_weights(self):
+        # Zero out the adaptive modulation weights
+        nn.init.constant_(self.adaptive_modulation[-1].weight, 0)
+        nn.init.constant_(self.adaptive_modulation[-1].bias, 0)
 
     def forward(
         self,
@@ -606,12 +605,7 @@ class DiTBlock(nn.Module):
 
 
 class ProjLayer(nn.Module):
-    """
-    Warning
-    -----------
-    This feature is experimental and there may be changes in the future.
-    
-    The penultimate layer of the DiT model, which projects the transformer output
+    """The penultimate layer of the DiT model, which projects the transformer output
     to a final embedding space.
 
     Parameters
@@ -664,3 +658,327 @@ class ProjLayer(nn.Module):
         )
         projected_output = self.output_projection(modulated_output)
         return projected_output
+
+
+# -------------------------------------------------------------------------------------
+# Tokenization / De-tokenization interfaces
+# -------------------------------------------------------------------------------------
+
+
+class TokenizerModuleBase(Module, ABC):
+    """Abstract base class for tokenizers used by DiT. Must implement a forward method and an initialize_weights method.
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, C, *spatial_dims). `spatial_dims` is determined by the input_size/dimensionality.
+
+    Returns
+    -------
+    torch.Tensor
+        Token sequence of shape (B, L, D), where L is the length of the token sequence (number of patches for a standard 2D DiT).
+    """
+
+    @abstractmethod
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pass
+
+    @abstractmethod
+    def initialize_weights(self):
+        pass
+
+
+class PatchEmbed2DTokenizer(TokenizerModuleBase):
+    """Standard ViT-style tokenizer using `PatchEmbed2D` followed by a learnable positional embedding.
+
+    Produces tokens of shape (B, L, D) from images (B, C, H, W), where L is the number of
+    patches and D is `hidden_size`.
+
+    Parameters
+    ----------
+    input_size: Tuple[int, int]
+        The size of the input image.
+    patch_size: Tuple[int, int]
+        The size of the patch.
+    in_channels: int
+        The number of input channels.
+    hidden_size: int
+        The size of the transformer latent space to project to.
+    pos_embed: str = "learnable",
+        The type of positional embedding to use. Defaults to 'learnable'.
+        Options:
+            - 'learnable': Uses a learnable positional embedding.
+            - Otherwise, uses no positional embedding.
+    **tokenizer_kwargs: Any
+        Additional keyword arguments for the tokenizer module.
+
+    Forward
+    -------
+    x: torch.Tensor
+        Input tensor of shape (B, C, H, W).
+
+    Returns
+    -------
+    torch.Tensor
+        Token sequence of shape (B, L, D), where L = (H // patch[0]) * (W // patch[1]).
+    """
+
+    def __init__(
+        self,
+        input_size: Tuple[int, int],
+        patch_size: Tuple[int, int],
+        in_channels: int,
+        hidden_size: int,
+        pos_embed: str = "learnable",
+        **tokenizer_kwargs: Any,
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.hidden_size = hidden_size
+
+        self.h_patches = self.input_size[0] // self.patch_size[0]
+        self.w_patches = self.input_size[1] // self.patch_size[1]
+        self.num_patches = self.h_patches * self.w_patches
+
+        self.x_embedder = PatchEmbed2D(
+            self.input_size,
+            self.patch_size,
+            self.in_channels,
+            self.hidden_size,
+            **tokenizer_kwargs,
+        )
+        # Learnable positional embedding per token
+        if pos_embed == "learnable":
+            self.pos_embed = nn.Parameter(
+                torch.zeros(1, self.num_patches, self.hidden_size), requires_grad=True
+            )
+        else:
+            self.pos_embed = 0.
+
+    def initialize_weights(self):
+        # Initialize the tokenizer patch embedding projection (a Conv2D layer).
+        w = self.x_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        if self.x_embedder.proj.bias is not None:
+            nn.init.constant_(self.x_embedder.proj.bias, 0)
+        
+        # Initialize the learnable positional embedding with a normal distribution.
+        nn.init.normal_(self.pos_embed, std=0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, D, Hp, Wp)
+        x_emb = self.x_embedder(x)
+        # (B, L, D) + positional embedding
+        tokens = x_emb.flatten(2).transpose(1, 2) + self.pos_embed
+        return tokens
+
+
+def get_tokenizer(
+    input_size: Tuple[int],
+    patch_size: Tuple[int],
+    in_channels: int,
+    hidden_size: int,
+    tokenizer: Literal["patch_embed_2d"] = "patch_embed_2d",
+    **tokenizer_kwargs: Any,
+) -> TokenizerModuleBase:
+    """Construct a tokenizer module.
+
+    Returns a module whose forward accepts (B, C, *spatial_dims) and returns (B, L, D). 
+    `spatial_dims` is determined by the input_size/dimensionality.
+
+    Parameters
+    ----------
+    input_size: Tuple[int]
+        The size of the input image. If an integer is provided, the input is assumed to be on a square 2D domain.
+        If a tuple is provided, the input is assumed to be on a multi-dimensional domain.
+    patch_size: Tuple[int]
+        The size of the patch. If an integer is provided, the patch_size is assumed to be a square 2D patch.
+        If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
+    in_channels: int
+        The number of input channels.
+    hidden_size: int
+        The size of the transformer latent space to project to.
+    tokenizer: Literal["patch_embed_2d"]
+        The tokenizer to use. Defaults to 'patch_embed_2d'. Note tokenizers are dimensionality-specific; 
+        your choice of `tokenizer` must match the dimensionality of your input data (i.e., the `input_size` and `patch_size`).
+        Options:
+            - 'patch_embed_2d': Uses a standard PatchEmbed2D to project the input image to a sequence of tokens.
+    **tokenizer_kwargs: Any
+        Additional keyword arguments for the tokenizer module.
+    
+    Returns
+    -------
+    TokenizerModuleBase
+        The tokenizer module.
+    """
+    if tokenizer == "patch_embed_2d":
+        return PatchEmbed2DTokenizer(
+            input_size=input_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            hidden_size=hidden_size,
+            **tokenizer_kwargs,
+        )
+    raise ValueError("tokenizer must be 'patch_embed_2d', no other supported tokenizers are available yet.")
+
+
+class DetokenizerModuleBase(Module, ABC):
+    """Abstract base class for detokenizers used by DiT.
+
+    Must implement a forward method and an initialize_weights method.
+
+    Forward
+    -------
+    x_tokens: torch.Tensor
+        Token sequence of shape (B, L, D_in).
+    c: torch.Tensor
+        Conditioning tensor of shape (B, D).
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, C_out, *spatial_dims). `spatial_dims` is determined by the input_size/dimensionality.
+    """
+
+    @abstractmethod
+    def forward(self, x_tokens: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        pass
+
+    @abstractmethod
+    def initialize_weights(self):
+        pass
+
+
+class ProjReshape2DDetokenizer(DetokenizerModuleBase):
+    """Standard DiT-style detokenizer that applies the DiT `ProjLayer` and reshapes the sequence back
+    to an image of shape (B, C_out, H, W).
+
+    Parameters
+    ----------
+    input_size: Tuple[int, int]
+        The size of the input image.
+    patch_size: Tuple[int, int]
+        The size of the patch.
+    out_channels: int
+        The number of output channels.
+    hidden_size: int
+        The size of the transformer latent space to project to.
+    layernorm_backend: Literal["apex", "torch"]
+        The layer normalization implementation ('apex' or 'torch'). Defaults to 'apex'.
+
+    Forward
+    -------
+    x_tokens: torch.Tensor
+        Token sequence of shape (B, L, D_in).
+    c: torch.Tensor
+        Conditioning tensor of shape (B, D).
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape (B, C_out, *spatial_dims). `spatial_dims` is determined by the input_size/dimensionality.
+    """
+
+    def __init__(
+        self,
+        input_size: Tuple[int, int],
+        patch_size: Tuple[int, int],
+        out_channels: int,
+        hidden_size: int,
+        layernorm_backend: Literal["apex", "torch"] = "torch",
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.patch_size = patch_size
+        self.out_channels = out_channels
+        self.hidden_size = hidden_size
+
+        self.h_patches = self.input_size[0] // self.patch_size[0]
+        self.w_patches = self.input_size[1] // self.patch_size[1]
+
+        self.proj_layer = ProjLayer(
+            hidden_size=self.hidden_size,
+            emb_channels=self.patch_size[0] * self.patch_size[1] * self.out_channels,
+            layernorm_backend=layernorm_backend,
+        )
+
+    def initialize_weights(self):
+        # Zero out the adaptive modulation and output projection weights
+        nn.init.constant_(self.proj_layer.adaptive_modulation[-1].weight, 0)
+        nn.init.constant_(self.proj_layer.adaptive_modulation[-1].bias, 0)
+        nn.init.constant_(self.proj_layer.output_projection.weight, 0)
+        nn.init.constant_(self.proj_layer.output_projection.bias, 0)
+        
+
+    def forward(self, x_tokens: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        # Project tokens to per-patch pixel embeddings
+        x = self.proj_layer(x_tokens, c)  # (B, L, p0*p1*C_out)
+
+        # Reshape back to image
+        x = x.reshape(
+            shape=(
+                x.shape[0],
+                self.h_patches,
+                self.w_patches,
+                self.patch_size[0],
+                self.patch_size[1],
+                self.out_channels,
+            )
+        )
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        x = x.reshape(
+            shape=(
+                x.shape[0],
+                self.out_channels,
+                self.h_patches * self.patch_size[0],
+                self.w_patches * self.patch_size[1],
+            )
+        )
+        return x
+
+
+
+def get_detokenizer(
+    input_size: Union[int, Tuple[int]],
+    patch_size: Union[int, Tuple[int]],
+    out_channels: int,
+    hidden_size: int,
+    detokenizer: Literal["proj_reshape_2d"] = "proj_reshape_2d",
+    **detokenizer_kwargs: Any,
+) -> DetokenizerModuleBase:
+    """Construct a detokenizer module.
+
+    Returns a module whose forward accepts (B, L, D) and (B, D) and returns (B, C_out, *spatial_dims). 
+    `spatial_dims` is determined by the input_size/dimensionality.
+
+    Parameters
+    ----------
+    input_size: Union[int, Tuple[int]]
+        The size of the input image. If an integer is provided, the input is assumed to be on a square 2D domain.
+        If a tuple is provided, the input is assumed to be on a multi-dimensional domain.
+    patch_size: Union[int, Tuple[int]]
+        The size of the patch. If an integer is provided, the patch_size is assumed to be a square 2D patch.
+        If a tuple is provided, the patch_size is assumed to be a multi-dimensional patch.
+    out_channels: int
+        The number of output channels.
+    hidden_size: int
+        The size of the transformer latent space to project to.
+    detokenizer: Literal["proj_reshape_2d"]
+        The detokenizer to use. Defaults to 'proj_reshape_2d'. Note detokenizers are dimensionality-specific; 
+        your choice of `detokenizer` must match the dimensionality of your input data (i.e., the `input_size` and `patch_size`).
+        Options:
+            - 'proj_reshape_2d': Uses a standard DiT `ProjLayer` and reshapes the sequence back to an image.
+    **detokenizer_kwargs: Any
+        Additional keyword arguments for the detokenizer module.
+    """
+    if detokenizer == "proj_reshape_2d":
+        return ProjReshape2DDetokenizer(
+            input_size=input_size,
+            patch_size=patch_size,
+            out_channels=out_channels,
+            hidden_size=hidden_size,
+            **detokenizer_kwargs,
+        )
+    raise ValueError("detokenizer must be 'proj_reshape_2d', no other supported detokenizers are available yet.")
