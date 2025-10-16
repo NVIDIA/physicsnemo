@@ -256,8 +256,8 @@ def stochastic_sampler(
     if lead_time_label is not None:
         optional_args["lead_time_label"] = lead_time_label
     if patching:
-            optional_args["embedding_selector"] = patch_embedding_selector
-            
+        optional_args["embedding_selector"] = patch_embedding_selector
+
     # Main sampling loop.
     x_next = latents * t_steps[0]
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):  # 0, ..., N-1
