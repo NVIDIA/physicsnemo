@@ -422,8 +422,6 @@ class DoMINODataPipe(Dataset):
             surface_sizes = surface_sizes[ids_in_bbox]
             if surface_fields is not None:
                 surface_fields = surface_fields[ids_in_bbox]
-            else:
-                raise ValueError("Surface fields are not present")
 
         ########################################################################
         # Perform Down sampling of the surface fields.
