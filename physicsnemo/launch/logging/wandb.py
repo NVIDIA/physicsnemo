@@ -47,6 +47,7 @@ def initialize_wandb(
     config=None,
     mode: Literal["offline", "online", "disabled"] = "offline",
     results_dir: str = None,
+    init_timeout: int = 90,
 ):
     """Function to initialize wandb client with the weights and biases server.
 
@@ -81,6 +82,8 @@ def initialize_wandb(
         Can be "offline", "online" or "disabled", by default "offline"
     results_dir : str, optional
         Output directory of the experiment, by default "/<run directory>/wandb"
+    init_timeout : int, optional
+        Timeout for wandb initialization, by default 90 seconds.
     """
 
     # Set default value here for Hydra
@@ -114,6 +117,7 @@ def initialize_wandb(
         group=group,
         save_code=save_code,
         id=wandb_id,
+        settings=wandb.Settings(init_timeout=init_timeout),
     )
 
 

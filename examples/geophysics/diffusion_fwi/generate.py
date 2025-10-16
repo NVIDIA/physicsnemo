@@ -152,7 +152,7 @@ def main(cfg: DictConfig) -> None:
     )
     model = DiffusionAdapter(
         model=diffusion_net,
-        args_map=("x", "t", {"y": "y"}),
+        args_map=("x", "sigma", {"y": "y"}),
     )
     # EDM preconditioning wrapper
     model_fn = partial(edm_precond, model, sigma_data=0.5)
