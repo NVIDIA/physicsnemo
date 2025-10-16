@@ -52,7 +52,7 @@ provides you with an optimized stack that will enable you to train your models a
 - [Contributing](#contributing-to-physicsnemo)
 - [Communication](#communication)
 - [License](#license)
-  
+
 <!-- tocstop -->
 
 ## More About PhysicsNeMo
@@ -211,9 +211,9 @@ from physicsnemo.models.mlp.fully_connected import FullyConnected
 def main():
     DistributedManager.initialize()
     dist = DistributedManager()
-    
+
     arch = FullyConnected(in_features=32, out_features=64).to(dist.device)
-    
+
     if dist.distributed:
         ddps = torch.cuda.Stream()
         with torch.cuda.stream(ddps):
@@ -323,7 +323,7 @@ way is to start with a reference sample and then update it for your own use case
 - [Deep Learning for Science and Engineering Lecture Series with PhysicsNeMo](https://www.nvidia.com/en-us/on-demand/deep-learning-for-science-and-engineering/)
   - [PhysicsNeMo: Purpose and Usage](https://www.nvidia.com/en-us/on-demand/session/dliteachingkit-setk5002/)
 - [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=physicsnemo&sort=relevance&sortDir=desc)
-  
+
 ## Installation
 
 The following instructions help you install the base PhysicsNeMo modules to get started.
@@ -431,6 +431,14 @@ and will not receive any bug fixes/updates. The old checkpoints will remain
 compatible with these updates.
 
 More details to follow soon.
+
+## DGL to PyTorch Geometric Migration Guide
+
+PhysicsNeMo supports a wide range of Graph Neural Networks (GNNs),
+including MeshGraphNet and others.
+Currently, PhysicsNeMo uses the DGL library as its GNN backend,
+with plans to completely transition to PyTorch Geometric (PyG) in a future release.
+For more details, please refer to the [DGL-to-PyG migration guide](https://github.com/NVIDIA/physicsnemo/blob/main/examples/dgl_to_pyg_migration.md).
 
 ## Contributing to PhysicsNeMo
 
