@@ -184,7 +184,7 @@ class DiT(Module):
         self.condition_dim = condition_dim
 
         # Input validation
-        if not isinstance(attention_backend, str) and attention_backend not in ["timm", "transformer_engine", "natten2d"]:
+        if attention_backend not in ["timm", "transformer_engine", "natten2d"]:
             raise ValueError("attention_backend must be one of 'timm', 'transformer_engine', 'natten2d'")
 
         if layernorm_backend not in ["apex", "torch"]:
