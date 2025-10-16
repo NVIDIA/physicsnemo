@@ -343,6 +343,9 @@ class DiffusionFWINet(Module):
         Multipliers for the number of channels at each level in the UNet.
     num_blocks: int, optional, default=4
         Number of blocks at each level in the UNet.
+    unconditional: bool, optional, default=False
+        If True, the model will be unconditional and ignore the conditioning
+        input y. The `time_signal_encoder` will be set to None.
 
     Forward
     -------
@@ -380,6 +383,7 @@ class DiffusionFWINet(Module):
         model_channels: int = 128,
         channel_mult: List[int] = [1, 2, 2, 2, 2],
         num_blocks: int = 4,
+        unconditional: bool = False,
         **unet_kwargs: Any,
     ):
         super().__init__()
@@ -388,19 +392,25 @@ class DiffusionFWINet(Module):
         self.x_channels = x_channels
         self.y_resolution = tuple(y_resolution)
         self.y_channels = y_channels
+        self.unconditional = unconditional
+        self.encoder_hidden_channels = encoder_hidden_channels
         self._grid_to_receivers_channels_ratio = 4
 
         # Seismic data encoder
-        self.time_signal_encoder = TimeSignalEncoder(
-            in_channels=(
-                y_channels + self._grid_to_receivers_channels_ratio * N_grid_channels
-            ),
-            out_channels=encoder_hidden_channels // 2,
-            hidden_channels=encoder_hidden_channels,
-            in_length=self.y_resolution[0],
-            out_length=self.x_resolution[0],
-            num_encoder_blocks=num_encoder_blocks,
-        )
+        if self.unconditional:
+            self.time_signal_encoder = None
+        else:
+            self.time_signal_encoder = TimeSignalEncoder(
+                in_channels=(
+                    y_channels
+                    + self._grid_to_receivers_channels_ratio * N_grid_channels
+                ),
+                out_channels=encoder_hidden_channels // 2,
+                hidden_channels=encoder_hidden_channels,
+                in_length=self.y_resolution[0],
+                out_length=self.x_resolution[0],
+                num_encoder_blocks=num_encoder_blocks,
+            )
 
         # Default settings for attention in the UNet
         self._attn_default_threshold = 16
@@ -413,11 +423,10 @@ class DiffusionFWINet(Module):
         )
 
         # Denoising UNet
+        # Note: encoder output channels is always encoder_hidden_channels // 2
         self.unet = SongUNetPosEmbd(
             img_resolution=self.x_resolution,
-            in_channels=(
-                x_channels + self.time_signal_encoder.out_channels + N_grid_channels
-            ),
+            in_channels=(x_channels + encoder_hidden_channels // 2 + N_grid_channels),
             out_channels=x_channels,
             label_dim=0,
             augment_dim=0,
@@ -429,11 +438,14 @@ class DiffusionFWINet(Module):
             **unet_kwargs,
         )
 
-        # Grid to receivers transform
-        self.grid_to_receivers = AttentionPool(
-            num_channels=N_grid_channels,
-            out_length=4,
-        )
+        # Grid to receivers transform (only needed for conditional models)
+        if self.unconditional:
+            self.grid_to_receivers = None
+        else:
+            self.grid_to_receivers = AttentionPool(
+                num_channels=N_grid_channels,
+                out_length=4,
+            )
 
     def forward(
         self,
@@ -456,25 +468,49 @@ class DiffusionFWINet(Module):
                 f"{(B, self.x_channels) + self.x_resolution}, but got {x.shape}"
             )
         if sigma.shape != (B,):
-            raise ValueError(f"t shape mismatch: expected {(B,)}, but got {t.shape}")
+            raise ValueError(
+                f"sigma shape mismatch: expected {(B,)}, but got {sigma.shape}"
+            )
 
-        # Embed grid coordinates and concatenate to seismic data
-        pos_embd = self.unet.pos_embd  # (N_grid, H, W)
-        if x.dtype != pos_embd.dtype:
-            pos_embd = pos_embd.to(x.dtype)
-        pos_emb = pos_embd.permute(2, 1, 0)  # (W, H, N_grid)
-        grid_embed = self.grid_to_receivers(pos_emb)  # (W, Cg, N_grid)
-        grid_embed = rearrange(grid_embed, "w g n -> (g n) w")  # (Cg * N_grid, W)
-        grid_embed = grid_embed[None, :, None, :].expand(
-            B, -1, T, -1
-        )  # (B, Cg * N_grid, T, W)
-        y = torch.cat((y, grid_embed), dim=1)  # (B, C_y + Cg * N_grid, T, W)
+        if self.unconditional:
+            # Unconditional model: create zero tensor instead of encoding y
+            # Shape: (B, C_hidden//2, H, W)
+            y_encoded = torch.zeros(
+                B,
+                self.encoder_hidden_channels // 2,
+                H,
+                W,
+                dtype=x.dtype,
+                device=x.device,
+            )
+        else:
+            # Conditional model: process y through time signal encoder
+            _, C_y, T, _ = y.shape
 
-        # Encode seismic data
-        y = self.time_signal_encoder(y)  # (B, C_hidden//2, H, W)
+            # Validate y inputs
+            if y.shape != (B, self.y_channels) + self.y_resolution:
+                raise ValueError(
+                    f"y shape mismatch: expected "
+                    f"{(B, self.y_channels) + self.y_resolution}, but got {y.shape}"
+                )
 
-        # Concatenate latent state vector and seismic data
-        x = torch.cat((x, y), dim=1)  # (B, C_x + C_hidden//2, H, W)
+            # Embed grid coordinates and concatenate to seismic data
+            pos_embd = self.unet.pos_embd  # (N_grid, H, W)
+            if x.dtype != pos_embd.dtype:
+                pos_embd = pos_embd.to(x.dtype)
+            pos_emb = pos_embd.permute(2, 1, 0)  # (W, H, N_grid)
+            grid_embed = self.grid_to_receivers(pos_emb)  # (W, Cg, N_grid)
+            grid_embed = rearrange(grid_embed, "w g n -> (g n) w")  # (Cg * N_grid, W)
+            grid_embed = grid_embed[None, :, None, :].expand(
+                B, -1, T, -1
+            )  # (B, Cg * N_grid, T, W)
+            y = torch.cat((y, grid_embed), dim=1)  # (B, C_y + Cg * N_grid, T, W)
+
+            # Encode seismic data
+            y_encoded = self.time_signal_encoder(y)  # (B, C_hidden//2, H, W)
+
+        # Concatenate latent state vector and encoded seismic data (or zeros)
+        x = torch.cat((x, y_encoded), dim=1)  # (B, C_x + C_hidden//2, H, W)
 
         # Denoise
         x = self.unet(x=x, noise_labels=sigma, class_labels=None)  # (B, C_x, H, W)
