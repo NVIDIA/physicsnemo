@@ -305,8 +305,6 @@ please open an issue on GitHub.
 To provide an example of what a successful training should look like, we include here
 some example results.  Training curves may look similar to this:
 
-![Surface Training Curve](../../../../docs/img/domino/surface-training-curve.png)
-
 ![Combined Training Curve](../../../../docs/img/domino/combined-training-curve.png)
 
 And, when evaluating the results on the validation dataset, this particular
@@ -327,11 +325,9 @@ run had the following L2 and R2 Metrics:
 |             Lift R2 |     0.971    |          |
 
 With the PhysicsNeMo CFD tool, you can create plots of the lift and drag
-forces computed by domino vs. the CFD Solver:
+forces computed by domino vs. the CFD Solver.  For example, here is the drag force:
 
 ![Draf Force R^2](../../../../docs/img/domino/drag-r2.jpg)
-
-![Lift Force R^2](../../../../docs/img/domino/lift-r2.png)
 
 ### Training with Physics Losses
 
