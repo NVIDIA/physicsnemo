@@ -122,7 +122,7 @@ def test_nd_interpolator():
     coords = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
     field_vals = torch.tensor([[1.0], [2.0], [3.0], [4.0]])
     grid_points = torch.tensor([[0.5, 0.5]])
-    result = nd_interpolator([coords], field_vals, grid_points)
+    result = nd_interpolator(coords, field_vals, grid_points)
     assert result.shape[0] == 1  # One grid point
 
 
