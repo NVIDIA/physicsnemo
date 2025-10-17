@@ -796,7 +796,8 @@ class DoMINODataPipe(Dataset):
         ########################################################################
         # For volume data, we store this only if normalizing coordinates:
         if self.model_type == "volume" or self.model_type == "combined":
-            return_dict["volume_min_max"] = torch.stack([c_min, c_max])
+            if self.config.normalize_coordinates:
+                return_dict["volume_min_max"] = torch.stack([c_min, c_max])
 
         if self.model_type == "volume" or self.model_type == "combined":
             volume_fields_raw = (
