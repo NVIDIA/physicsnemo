@@ -1213,7 +1213,9 @@ def compute_mean_std_min_max(
 
         end = time.perf_counter()
         iteration_time = end - start
-        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds for file: {j}")
+        print(
+            f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds for file: {j}"
+        )
         start = time.perf_counter()
 
     var = {}
@@ -1241,9 +1243,11 @@ def compute_mean_std_min_max(
             std_sample = std[field_key]
             mask = torch.ones_like(field_data, dtype=torch.bool)
             for v in range(field_data.shape[-1]):
-                outliers = (field_data[:, v] < mean_sample[v] - 9.0 * std_sample[v]) | (field_data[:, v] > mean_sample[v] + 9.0 * std_sample[v])
+                outliers = (field_data[:, v] < mean_sample[v] - 9.0 * std_sample[v]) | (
+                    field_data[:, v] > mean_sample[v] + 9.0 * std_sample[v]
+                )
                 mask[:, v] = ~outliers
-            
+
             batch_min = []
             batch_max = []
             for v in range(field_data.shape[-1]):
@@ -1258,7 +1262,9 @@ def compute_mean_std_min_max(
 
         end = time.perf_counter()
         iteration_time = end - start
-        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds for file: {j}")
+        print(
+            f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds for file: {j}"
+        )
         start = time.perf_counter()
 
     global_end = time.perf_counter()

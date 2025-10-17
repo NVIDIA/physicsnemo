@@ -227,7 +227,7 @@ def loss_fn(
 
     num = torch.sum(mask * (output - target) ** 2.0, dims)
     if loss_type == "rmse":
-        denom = torch.sum(mask * (target - torch.mean(target, (0, 1)))**2.0, dims)
+        denom = torch.sum(mask * (target - torch.mean(target, (0, 1))) ** 2.0, dims)
         loss = torch.mean(num / denom)
     elif loss_type == "mse":
         denom = torch.sum(mask)
@@ -311,7 +311,9 @@ def loss_fn_surface(
 
         # Compute the mean diff**2 of the vector component, leave the last dimension:
         masked_loss_ws_num = vector_diff_sq
-        masked_loss_ws_denom = torch.mean((target_vector - torch.mean(target_vector, (0, 1))) ** 2.0, (0, 1))
+        masked_loss_ws_denom = torch.mean(
+            (target_vector - torch.mean(target_vector, (0, 1))) ** 2.0, (0, 1)
+        )
         masked_loss_ws = torch.sum(masked_loss_ws_num / masked_loss_ws_denom)
 
     loss = masked_loss_pres + masked_loss_ws
@@ -359,12 +361,16 @@ def loss_fn_area(
     # Compute the mean diff**2 of the scalar component:
     masked_loss_pres = torch.mean(((output_scalar - target_scalar) ** 2.0), dim=(0, 1))
     if loss_type == "rmse":
-        masked_loss_pres /= torch.mean((target_scalar-torch.mean(target_scalar, (0, 1)))**2.0, dim=(0, 1))
+        masked_loss_pres /= torch.mean(
+            (target_scalar - torch.mean(target_scalar, (0, 1))) ** 2.0, dim=(0, 1)
+        )
 
     # Compute the mean diff**2 of the vector component, leave the last dimension:
     masked_loss_ws = torch.mean((target_vector - output_vector) ** 2.0, (0, 1))
     if loss_type == "rmse":
-        masked_loss_ws /= torch.mean((target_vector - torch.mean(target_vector, (0, 1))) ** 2.0, (0, 1))
+        masked_loss_ws /= torch.mean(
+            (target_vector - torch.mean(target_vector, (0, 1))) ** 2.0, (0, 1)
+        )
 
     # Combine the scalar and vector components:
     loss = 0.25 * (masked_loss_pres + torch.sum(masked_loss_ws))

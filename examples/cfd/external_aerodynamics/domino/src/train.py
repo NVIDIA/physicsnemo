@@ -209,7 +209,7 @@ def train_epoch(
             io_end_time = time.perf_counter()
             if add_physics_loss:
                 autocast_enabled = False
-        
+
             with autocast("cuda", enabled=autocast_enabled, cache_enabled=False):
                 with nvtx.range("Model Forward Pass"):
                     if add_physics_loss:
@@ -259,9 +259,7 @@ def train_epoch(
                     scaler.unscale_(optimizer)
 
                     # Since the gradients of optimizer's assigned params are unscaled, clips as usual.
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), grad_max_norm
-                    )
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_max_norm)
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -501,14 +499,22 @@ def main(cfg: DictConfig) -> None:
         optimizer_class = torch.optim.AdamW
     else:
         raise ValueError(f"Unsupported optimizer: {cfg.train.optimizer.name}")
-    optimizer = optimizer_class(model.parameters(), lr=cfg.train.optimizer.lr, weight_decay=cfg.train.optimizer.weight_decay)
+    optimizer = optimizer_class(
+        model.parameters(),
+        lr=cfg.train.optimizer.lr,
+        weight_decay=cfg.train.optimizer.weight_decay,
+    )
     if cfg.train.lr_scheduler.name == "MultiStepLR":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=cfg.train.lr_scheduler.milestones, gamma=cfg.train.lr_scheduler.gamma
-    )
+            optimizer,
+            milestones=cfg.train.lr_scheduler.milestones,
+            gamma=cfg.train.lr_scheduler.gamma,
+        )
     elif cfg.train.lr_scheduler.name == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=cfg.train.lr_scheduler.T_max, eta_min=cfg.train.lr_scheduler.eta_min
+            optimizer,
+            T_max=cfg.train.lr_scheduler.T_max,
+            eta_min=cfg.train.lr_scheduler.eta_min,
         )
     else:
         raise ValueError(f"Unsupported scheduler: {cfg.train.lr_scheduler.name}")
