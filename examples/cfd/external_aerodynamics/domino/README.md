@@ -321,8 +321,8 @@ run had the following L2 and R2 Metrics:
 |       X-Tau (Shear) |     0.138    |   0.145  |
 |       Y-Tau (Shear) |     0.174    |   0.185  |
 |       Z-Tau (Shear) |     0.198    |   0.207  |
-|             Drag R2 |     0.983    |          |
-|             Lift R2 |     0.971    |          |
+|             Drag R2 |     0.983    |   0.975  |
+|             Lift R2 |     0.971    |   0.968  |
 
 With the PhysicsNeMo CFD tool, you can create plots of the lift and drag
 forces computed by domino vs. the CFD Solver.  For example, here is the drag force:
