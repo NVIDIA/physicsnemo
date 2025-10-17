@@ -56,6 +56,7 @@ from vtk.util import numpy_support
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
 from physicsnemo.models.domino.model import DoMINO
+from physicsnemo.models.domino.geometry_rep import scale_sdf
 from physicsnemo.utils.domino.utils import *
 from physicsnemo.utils.domino.vtk_file_utils import *
 from physicsnemo.utils.sdf import signed_distance_field
@@ -159,7 +160,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
             prediction_vol = torch.zeros_like(target_vol)
             num_points = volume_mesh_centers.shape[1]
             subdomain_points = int(np.floor(num_points / point_batch_size))
-
+            sdf_scaling_factor = cfg.model.geometry_rep.geo_processor.volume_sdf_scaling_factor
             start_time = time.time()
 
             for p in range(subdomain_points + 1):
@@ -171,6 +172,11 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         :, start_idx:end_idx
                     ]
                     sdf_nodes_batch = sdf_nodes[:, start_idx:end_idx]
+                    scaled_sdf_nodes_batch = []
+                    for p in range(len(sdf_scaling_factor)):
+                        scaled_sdf_nodes_batch.append(scale_sdf(sdf_nodes_batch, sdf_scaling_factor[p]))
+                    scaled_sdf_nodes_batch = torch.cat(scaled_sdf_nodes_batch, dim=-1)
+
                     pos_volume_closest_batch = pos_volume_closest[:, start_idx:end_idx]
                     pos_normals_com_batch = pos_volume_center_of_mass[
                         :, start_idx:end_idx
@@ -184,6 +190,7 @@ def test_step(data_dict, model, device, cfg, vol_factors, surf_factors):
                         pos_encoding_all = torch.cat(
                             (
                                 sdf_nodes_batch,
+                                scaled_sdf_nodes_batch,
                                 pos_volume_closest_batch,
                                 pos_normals_com_batch,
                             ),

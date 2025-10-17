@@ -1186,7 +1186,10 @@ def compute_mean_std_min_max(
 
     global_start = time.perf_counter()
     start = time.perf_counter()
-    for i, data in enumerate(dataset):
+    data_list = np.arange(len(dataset))
+    np.random.shuffle(data_list)
+    for i, j in enumerate(data_list):
+        data = dataset[j]
         if i >= max_samples:
             break
 
@@ -1210,7 +1213,7 @@ def compute_mean_std_min_max(
 
         end = time.perf_counter()
         iteration_time = end - start
-        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds")
+        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds for file: {j}")
         start = time.perf_counter()
 
     var = {}
@@ -1222,7 +1225,8 @@ def compute_mean_std_min_max(
         std[field_key] = torch.sqrt(var[field_key])
 
     start = time.perf_counter()
-    for i, data in enumerate(dataset):
+    for i, j in enumerate(data_list):
+        data = dataset[j]
         if i >= max_samples:
             break
 
@@ -1235,15 +1239,11 @@ def compute_mean_std_min_max(
 
             mean_sample = mean[field_key]
             std_sample = std[field_key]
-            # import pdb; pdb.set_trace()
             mask = torch.ones_like(field_data, dtype=torch.bool)
             for v in range(field_data.shape[-1]):
-                idx = (field_data[:, v] < mean_sample[v] - 12 * std_sample[v]) | (
-                    field_data[:, v] > mean_sample[v] + 12 * std_sample[v]
-                )
-                idx = torch.where(idx)
-                mask[idx] = False
-
+                outliers = (field_data[:, v] < mean_sample[v] - 9.0 * std_sample[v]) | (field_data[:, v] > mean_sample[v] + 9.0 * std_sample[v])
+                mask[:, v] = ~outliers
+            
             batch_min = []
             batch_max = []
             for v in range(field_data.shape[-1]):
@@ -1258,7 +1258,7 @@ def compute_mean_std_min_max(
 
         end = time.perf_counter()
         iteration_time = end - start
-        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds")
+        print(f"on iteration {i} of {max_samples}, time: {iteration_time:.2f} seconds for file: {j}")
         start = time.perf_counter()
 
     global_end = time.perf_counter()

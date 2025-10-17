@@ -431,10 +431,10 @@ def metrics_fn_volume(
     l2 = l2_num / l2_denom
 
     metrics = {
-        "l2_vol_pressure": torch.mean(l2[:, 0]),
-        "l2_velocity_x": torch.mean(l2[:, 1]),
-        "l2_velocity_y": torch.mean(l2[:, 2]),
-        "l2_velocity_z": torch.mean(l2[:, 3]),
+        "l2_vol_pressure": torch.mean(l2[:, 3]),
+        "l2_velocity_x": torch.mean(l2[:, 0]),
+        "l2_velocity_y": torch.mean(l2[:, 1]),
+        "l2_velocity_z": torch.mean(l2[:, 2]),
         "l2_nut": torch.mean(l2[:, 4]),
     }
 

@@ -100,6 +100,7 @@ def validation_step(
     bounding_box: torch.Tensor | None = None,
     vol_factors: torch.Tensor | None = None,
     add_physics_loss=False,
+    autocast_enabled=None,
 ):
     dm = DistributedManager()
     running_vloss = 0.0
@@ -109,7 +110,7 @@ def validation_step(
         for i_batch, sample_batched in enumerate(dataloader):
             sampled_batched = dict_to_device(sample_batched, device)
 
-            with autocast("cuda", enabled=True, cache_enabled=False):
+            with autocast("cuda", enabled=autocast_enabled, cache_enabled=False):
                 if add_physics_loss:
                     prediction_vol, prediction_surf = model(
                         sampled_batched, return_volume_neighbors=True
@@ -189,6 +190,9 @@ def train_epoch(
     vol_factors: torch.Tensor | None = None,
     surf_factors: torch.Tensor | None = None,
     add_physics_loss=False,
+    autocast_enabled=None,
+    grad_clip_enabled=None,
+    grad_max_norm=None,
 ):
     dm = DistributedManager()
 
@@ -205,8 +209,7 @@ def train_epoch(
             io_end_time = time.perf_counter()
             if add_physics_loss:
                 autocast_enabled = False
-            else:
-                autocast_enabled = True
+        
             with autocast("cuda", enabled=autocast_enabled, cache_enabled=False):
                 with nvtx.range("Model Forward Pass"):
                     if add_physics_loss:
@@ -251,6 +254,14 @@ def train_epoch(
             scaler.scale(loss).backward()
 
             if ((i_batch + 1) % loss_interval == 0) or (i_batch + 1 == len(dataloader)):
+                if grad_clip_enabled:
+                    # Unscales the gradients of optimizer's assigned params in-place.
+                    scaler.unscale_(optimizer)
+
+                    # Since the gradients of optimizer's assigned params are unscaled, clips as usual.
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), grad_max_norm
+                    )
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -483,10 +494,24 @@ def main(cfg: DictConfig) -> None:
     # Initialize optimzer and gradient scaler
     ######################################################
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=[50, 100, 200, 250, 300, 350, 400, 450], gamma=0.5
+    optimizer_class = None
+    if cfg.train.optimizer.name == "Adam":
+        optimizer_class = torch.optim.Adam
+    elif cfg.train.optimizer.name == "AdamW":
+        optimizer_class = torch.optim.AdamW
+    else:
+        raise ValueError(f"Unsupported optimizer: {cfg.train.optimizer.name}")
+    optimizer = optimizer_class(model.parameters(), lr=cfg.train.optimizer.lr, weight_decay=cfg.train.optimizer.weight_decay)
+    if cfg.train.lr_scheduler.name == "MultiStepLR":
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer, milestones=cfg.train.lr_scheduler.milestones, gamma=cfg.train.lr_scheduler.gamma
     )
+    elif cfg.train.lr_scheduler.name == "CosineAnnealingLR":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cfg.train.lr_scheduler.T_max, eta_min=cfg.train.lr_scheduler.eta_min
+        )
+    else:
+        raise ValueError(f"Unsupported scheduler: {cfg.train.lr_scheduler.name}")
 
     # Initialize the scaler for mixed precision
     scaler = GradScaler()
@@ -586,6 +611,9 @@ def main(cfg: DictConfig) -> None:
             bounding_box=bounding_box,
             vol_factors=vol_factors,
             add_physics_loss=add_physics_loss,
+            autocast_enabled=cfg.train.amp.enabled,
+            grad_clip_enabled=cfg.train.amp.clip_grad,
+            grad_max_norm=cfg.train.amp.grad_max_norm,
         )
         epoch_end_time = time.perf_counter()
         logger.info(
@@ -612,6 +640,7 @@ def main(cfg: DictConfig) -> None:
             bounding_box=bounding_box,
             vol_factors=vol_factors,
             add_physics_loss=add_physics_loss,
+            autocast_enabled=cfg.train.amp.enabled,
         )
 
         scheduler.step()

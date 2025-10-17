@@ -851,8 +851,8 @@ class DoMINODataPipe(Dataset):
                 vol_std = self.config.volume_factors[1]
                 volume_fields = unstandardize(volume_fields, vol_mean, vol_std)
             elif self.config.scaling_type == "min_max_scaling":
-                vol_min = self.config.volume_factors[0]
-                vol_max = self.config.volume_factors[1]
+                vol_min = self.config.volume_factors[1]
+                vol_max = self.config.volume_factors[0]
                 volume_fields = unnormalize(volume_fields, vol_max, vol_min)
         if surface_fields is not None:
             if self.config.scaling_type == "mean_std_scaling":
@@ -860,8 +860,8 @@ class DoMINODataPipe(Dataset):
                 surf_std = self.config.surface_factors[1]
                 surface_fields = unstandardize(surface_fields, surf_mean, surf_std)
             elif self.config.scaling_type == "min_max_scaling":
-                surf_min = self.config.surface_factors[0]
-                surf_max = self.config.surface_factors[1]
+                surf_min = self.config.surface_factors[1]
+                surf_max = self.config.surface_factors[0]
                 surface_fields = unnormalize(surface_fields, surf_max, surf_min)
 
         return volume_fields, surface_fields
