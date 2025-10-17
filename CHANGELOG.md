@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   models. Accessible in `examples/geophysics/diffusion_fwi`.
 - Domain Parallelism: Domain Parallelism is now available for kNN, radius_search,
   and torch.nn.functional.pad.
+- Added a check to `stochastic_sampler` that helps handle the `EDMPrecond` model,
+  which has a specific `.forward()` signature
 
 ### Changed
 
@@ -39,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and load them with `Module.save` and `Module.from_checkpoint`.
   **⚠️Warning:** - The modules have to be `physicsnemo.Module`s, and not
   `torch.nn.Module`s.
+- Support passing custom tokenizer, detokenizer, and attention `Module`s in
+  experimental DiT architecture
 
 ### Deprecated
 
