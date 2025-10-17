@@ -19,8 +19,8 @@
 ./*.md @ram-cherukuri @megnvidia
 
 # All changes to documentation, except images:
-docs/img/
 docs/ @megnvidia @ktangsali
+docs/img/
 
 
 # Core release files
