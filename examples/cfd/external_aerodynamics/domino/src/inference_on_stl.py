@@ -63,9 +63,7 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
     create_domino_dataset,
 )
-from physicsnemo.datapipes.cae.drivaer_ml_dataset import (
-    DrivaerMLDataset,
-)
+
 
 from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.utils.domino.utils import sample_points_on_mesh
@@ -378,7 +376,7 @@ def inference_on_single_stl(
 
 
 def inference_epoch(
-    dataloader: DrivaerMLDataset,
+    dataloader: DoMINODataPipe,
     sampler: DistributedSampler,
     model: DoMINO,
     gpu_handle: int,
