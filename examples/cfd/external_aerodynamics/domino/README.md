@@ -300,6 +300,39 @@ please open an issue on GitHub.
 
 ![Results from DoMINO for RTWT SC demo](../../../../docs/img/domino_perf.png)
 
+### Example Training Results
+
+To provide an example of what a successful training should look like, we include here
+some example results.  Training curves may look similar to this:
+
+![Surface Training Curve](../../../../docs/img/domino/surface-training-curve.png)
+
+![Combined Training Curve](../../../../docs/img/domino/combined-training-curve.png)
+
+And, when evaluating the results on the validation dataset, this particular
+run had the following L2 and R2 Metrics:
+
+|              Metric | Surface Only | Combined |
+|--------------------:|:------------:|:--------:|
+|          X Velocity |      N/A     |   0.086  |
+|          Y Velocity |      N/A     |   0.185  |
+|          Z Velocity |      N/A     |   0.197  |
+| Volumetric Pressure |      N/A     |   0.106  |
+|             Turb. V |      N/A     |   0.134  |
+|    Surface Pressure |     0.101    |   0.105  |
+|       X-Tau (Shear) |     0.138    |   0.145  |
+|       Y-Tau (Shear) |     0.174    |   0.185  |
+|       Z-Tau (Shear) |     0.198    |   0.207  |
+|             Drag R2 |     0.983    |          |
+|             Lift R2 |     0.971    |          |
+
+With the PhysicsNeMo CFD tool, you can create plots of the lift and drag
+forces computed by domino vs. the CFD Solver:
+
+![Draf Force R^2](../../../../docs/img/domino/drag-r2.jpg)
+
+![Lift Force R^2](../../../../docs/img/domino/lift-r2.png)
+
 ### Training with Physics Losses
 
 DoMINO supports enforcing of PDE residuals as soft constraints. This can be used
