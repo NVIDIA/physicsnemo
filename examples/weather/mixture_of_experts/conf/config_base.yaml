@@ -55,12 +55,12 @@ model_params:
   noise_dim:                           # Dimension of noise input (optional, left blank here)
   return_probabilities: True           # Whether to output expert probabilities (for MoE gating)
   bias: True                           # Whether to include bias in MoE gating
-  attention_backbone: "transformer_engine"           # Backend for attention implementation (timm/transformer_engine)
-  layernorm_backbone: "apex"           # Backend for layer normalization (torch/apex)
+  attention_backend: "transformer_engine"           # Backend for attention implementation (timm/transformer_engine)
+  layernorm_backend: "apex"           # Backend for layer normalization (torch/apex)
 
 # WandB configuration
 wandb:
-  entity: "dib43"                      # WandB user/entity name
+  entity: "modulus"                      # WandB user/entity name
   project: "MoWE"                      # WandB project name
   name: "Base"                         # Run name
   group: "Base"                        # Group name (to cluster runs)

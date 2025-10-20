@@ -22,9 +22,8 @@ import pytest
 import torch
 from pytest_utils import import_or_fail
 
-# from . import common
-from .common.fwdaccuracy import save_output
-from .common.utils import compare_output
+from ..common.fwdaccuracy import save_output
+from ..common.utils import compare_output
 
 
 def validate_domino(
@@ -44,7 +43,7 @@ def validate_domino(
     if file_name is None:
         file_name = model.meta.name + "_output.pth"
     file_name = (
-        Path(__file__).parents[0].resolve() / Path("data") / Path(file_name.lower())
+        Path(__file__).parents[1].resolve() / Path("data") / Path(file_name.lower())
     )
     # If file does not exist, we will create it then error
     # Model should then reproduce it on next pytest run
@@ -60,110 +59,118 @@ def validate_domino(
         return compare_output(output, output_target, rtol, atol)
 
 
+@dataclass
+class model_params:
+    @dataclass
+    class geometry_rep:
+        @dataclass
+        class geo_conv:
+            base_neurons: int = 32
+            base_neurons_in: int = 1
+            base_neurons_out: int = 1
+            surface_hops: int = 1
+            volume_hops: int = 1
+            volume_radii: Sequence = (0.1, 0.5, 1.0, 2.5)
+            volume_neighbors_in_radius: Sequence = (32, 64, 128, 256)
+            surface_radii: Sequence = (0.01, 0.05, 1.0)
+            surface_neighbors_in_radius: Sequence = (8, 16, 128)
+            activation: str = "gelu"
+            fourier_features: bool = False
+            num_modes: int = 5
+
+        @dataclass
+        class geo_processor:
+            base_filters: int = 8
+            activation: str = "gelu"
+            processor_type: str = "unet"
+            self_attention: bool = False
+            cross_attention: bool = False
+            volume_sdf_scaling_factor: Sequence = (0.04,)
+            surface_sdf_scaling_factor: Sequence = (0.01, 0.02, 0.04)
+
+        base_filters: int = 8
+        geo_conv = geo_conv
+        geo_processor = geo_processor
+
+    @dataclass
+    class geometry_local:
+        base_layer: int = 512
+        volume_neighbors_in_radius: Sequence = (64, 128)
+        surface_neighbors_in_radius: Sequence = (32, 128)
+        volume_radii: Sequence = (0.1, 0.25)
+        surface_radii: Sequence = (0.05, 0.25)
+
+    @dataclass
+    class nn_basis_functions:
+        base_layer: int = 512
+        fourier_features: bool = True
+        num_modes: int = 5
+        activation: str = "gelu"
+
+    @dataclass
+    class local_point_conv:
+        activation: str = "gelu"
+
+    @dataclass
+    class aggregation_model:
+        base_layer: int = 512
+        activation: str = "gelu"
+
+    @dataclass
+    class position_encoder:
+        base_neurons: int = 512
+        activation: str = "gelu"
+        fourier_features: bool = True
+        num_modes: int = 5
+
+    @dataclass
+    class parameter_model:
+        base_layer: int = 512
+        fourier_features: bool = False
+        num_modes: int = 5
+        activation: str = "gelu"
+
+    model_type: str = "combined"
+    activation: str = "gelu"
+    interp_res: Sequence = (128, 64, 64)
+    use_sdf_in_basis_func: bool = True
+    positional_encoding: bool = False
+    surface_neighbors: bool = True
+    num_neighbors_surface: int = 7
+    num_neighbors_volume: int = 10
+    use_surface_normals: bool = True
+    use_surface_area: bool = True
+    encode_parameters: bool = False
+    combine_volume_surface: bool = False
+    geometry_encoding_type: str = "both"
+    solution_calculation_mode: str = "two-loop"
+    geometry_rep = geometry_rep
+    nn_basis_functions = nn_basis_functions
+    aggregation_model = aggregation_model
+    position_encoder = position_encoder
+    geometry_local = geometry_local
+
+
 @import_or_fail("warp")
 @pytest.mark.parametrize("device", ["cuda:0"])
-def test_domino_forward(device, pytestconfig):
+@pytest.mark.parametrize("processor_type", ["unet", "conv"])
+def test_domino_forward(device, processor_type, pytestconfig):
     """Test domino forward pass"""
 
     from physicsnemo.models.domino.model import DoMINO
 
     torch.manual_seed(0)
 
-    @dataclass
-    class model_params:
-        @dataclass
-        class geometry_rep:
-            @dataclass
-            class geo_conv:
-                base_neurons: int = 32
-                base_neurons_in: int = 8
-                base_neurons_out: int = 8
-                surface_hops: int = 1
-                volume_hops: int = 1
-                volume_radii: Sequence = (0.1, 0.5)
-                volume_neighbors_in_radius: Sequence = (10, 10)
-                surface_radii: Sequence = (0.05,)
-                surface_neighbors_in_radius: Sequence = (10,)
-                activation: str = "relu"
-                fourier_features: bool = False
-                num_modes: int = 5
+    params = model_params()
 
-            @dataclass
-            class geo_processor:
-                base_filters: int = 8
-                activation: str = "relu"
-                processor_type: str = "unet"
-                self_attention: bool = True
-                cross_attention: bool = False
-
-            base_filters: int = 8
-            geo_conv = geo_conv
-            geo_processor = geo_processor
-
-        @dataclass
-        class geometry_local:
-            base_layer: int = 512
-            volume_neighbors_in_radius: Sequence = (128, 128)
-            surface_neighbors_in_radius: Sequence = (128,)
-            volume_radii: Sequence = (0.05, 0.1)
-            surface_radii: Sequence = (0.05,)
-
-        @dataclass
-        class nn_basis_functions:
-            base_layer: int = 512
-            fourier_features: bool = False
-            num_modes: int = 5
-            activation: str = "relu"
-
-        @dataclass
-        class local_point_conv:
-            activation: str = "relu"
-
-        @dataclass
-        class aggregation_model:
-            base_layer: int = 512
-            activation: str = "relu"
-
-        @dataclass
-        class position_encoder:
-            base_neurons: int = 512
-            activation: str = "relu"
-            fourier_features: bool = False
-            num_modes: int = 5
-
-        @dataclass
-        class parameter_model:
-            base_layer: int = 512
-            fourier_features: bool = True
-            num_modes: int = 5
-            activation: str = "relu"
-
-        model_type: str = "combined"
-        activation: str = "relu"
-        interp_res: Sequence = (128, 128, 128)
-        use_sdf_in_basis_func: bool = True
-        positional_encoding: bool = False
-        surface_neighbors: bool = True
-        num_neighbors_surface: int = 7
-        num_neighbors_volume: int = 7
-        use_surface_normals: bool = True
-        use_surface_area: bool = True
-        encode_parameters: bool = False
-        combine_volume_surface: bool = False
-        geometry_encoding_type: str = "both"
-        solution_calculation_mode: str = "two-loop"
-        geometry_rep = geometry_rep
-        nn_basis_functions = nn_basis_functions
-        aggregation_model = aggregation_model
-        position_encoder = position_encoder
-        geometry_local = geometry_local
+    params.geometry_rep.geo_processor.processor_type = processor_type
 
     model = DoMINO(
         input_features=3,
         output_features_vol=4,
         output_features_surf=5,
         global_features=2,
-        model_parameters=model_params,
+        model_parameters=params,
     ).to(device)
 
     bsize = 1
@@ -214,5 +221,8 @@ def test_domino_forward(device, pytestconfig):
     }
 
     assert validate_domino(
-        model, input_dict, file_name="domino_output.pth", device=device
+        model,
+        input_dict,
+        file_name=f"domino_output-{processor_type}.pth",
+        device=device,
     )

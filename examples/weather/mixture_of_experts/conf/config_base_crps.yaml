@@ -56,8 +56,8 @@ model_params:
   noise_dim: 32                       # Dimension of noise input (for ensemble prediction)
   return_probabilities: True          # Whether to output expert probabilities (for MoE gating)
   bias: True                          # Whether to output a bias for MoE gating
-  attention_backbone: "transformer_engine"  # Backend for attention implementation (timm/transformer_engine)
-  layernorm_backbone: "torch"         # Backend for layer normalization (apex/torch)
+  attention_backend: "transformer_engine"  # Backend for attention implementation (timm/transformer_engine)
+  layernorm_backend: "torch"         # Backend for layer normalization (apex/torch)
 
 
 # WandB configuration

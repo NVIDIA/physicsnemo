@@ -43,6 +43,9 @@ model:
   channel_mult: [1, 2, 2, 2, 2]
   # Number of blocks in the UNet.
   num_blocks: 4
+  # Whether to train an unconditional model. If true, the model will ignore
+  # the seismic data y and generate velocity models without conditioning.
+  unconditional: false
   # Additional keyword arguments for the UNet. Should be a dictionary. Set to
   # null to use default parameters.
   unet_kwargs: null
