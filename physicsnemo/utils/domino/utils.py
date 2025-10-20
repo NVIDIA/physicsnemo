@@ -67,8 +67,8 @@ def calculate_center_of_mass(
 
 def normalize(
     field: torch.Tensor,
-    max_val: torch.Tensor | None = None,
-    min_val: torch.Tensor | None = None,
+    max_val: float | torch.Tensor | None = None,
+    min_val: float | torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Normalize field values to the range [-1, 1].
 
@@ -93,11 +93,11 @@ def normalize(
         >>> import torch
         >>> field = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
         >>> normalized = normalize(field, 5.0, 1.0)
-        >>> torch.allclose(normalized, [-1.0, -0.5, 0.0, 0.5, 1.0])
+        >>> torch.allclose(normalized, torch.tensor([-1.0, -0.5, 0.0, 0.5, 1.0]))
         True
         >>> # Auto-compute min/max
         >>> normalized_auto = normalize(field)
-        >>> torch.allclose(normalized_auto, [-1.0, -0.5, 0.0, 0.5, 1.0])
+        >>> torch.allclose(normalized_auto, torch.tensor([-1.0, -0.5, 0.0, 0.5, 1.0]))
         True
     """
 
@@ -111,7 +111,9 @@ def normalize(
 
 
 def unnormalize(
-    normalized_field: torch.Tensor, max_val: torch.Tensor, min_val: torch.Tensor
+    normalized_field: torch.Tensor,
+    max_val: float | torch.Tensor,
+    min_val: float | torch.Tensor,
 ) -> torch.Tensor:
     """Reverse the normalization process to recover original field values.
 
@@ -129,8 +131,10 @@ def unnormalize(
     Examples:
         >>> import torch
         >>> normalized = torch.tensor([-1.0, -0.5, 0.0, 0.5, 1.0])
-        >>> original = unnormalize(normalized, 5.0, 1.0)
-        >>> torch.allclose(original, [1.0, 2.0, 3.0, 4.0, 5.0])
+        >>> max_val = torch.tensor(5.0)
+        >>> min_val = torch.tensor(1.0)
+        >>> original = unnormalize(normalized, max_val, min_val)
+        >>> torch.allclose(original, torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]))
         True
     """
     field_range = max_val - min_val
@@ -139,8 +143,8 @@ def unnormalize(
 
 def standardize(
     field: torch.Tensor,
-    mean: torch.Tensor | None = None,
-    std: torch.Tensor | None = None,
+    mean: float | torch.Tensor | None = None,
+    std: float | torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Standardize field values to have zero mean and unit variance.
 
@@ -162,14 +166,16 @@ def standardize(
     Examples:
         >>> import torch
         >>> field = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
-        >>> standardized = standardize(field, 3.0, torch.sqrt(2.5))
-        >>> torch.allclose(standardized, [-1.265, -0.632, 0.0, 0.632, 1.265], atol=1e-3)
+        >>> mean = torch.tensor(3.0)
+        >>> std = torch.sqrt(torch.tensor(2.5))
+        >>> standardized = standardize(field, mean, std)
+        >>> torch.allclose(standardized, torch.tensor([-1.265, -0.632, 0.0, 0.632, 1.265]), atol=1e-3)
         True
         >>> # Auto-compute mean/std
         >>> standardized_auto = standardize(field)
-        >>> torch.allclose(torch.mean(standardized_auto), 0.0)
+        >>> torch.allclose(torch.mean(standardized_auto), torch.tensor(0.0))
         True
-        >>> torch.allclose(torch.std(standardized_auto, ddof=0), 1.0)
+        >>> torch.allclose(torch.std(standardized_auto), torch.tensor(1.0))
         True
     """
 
@@ -182,7 +188,9 @@ def standardize(
 
 
 def unstandardize(
-    standardized_field: torch.Tensor, mean: torch.Tensor, std: torch.Tensor
+    standardized_field: torch.Tensor,
+    mean: float | torch.Tensor,
+    std: float | torch.Tensor,
 ) -> torch.Tensor:
     """Reverse the standardization process to recover original field values.
 
@@ -200,8 +208,10 @@ def unstandardize(
     Examples:
         >>> import torch
         >>> standardized = torch.tensor([-1.265, -0.632, 0.0, 0.632, 1.265])
-        >>> original = unstandardize(standardized, 3.0, torch.sqrt(2.5))
-        >>> torch.allclose(original, [1.0, 2.0, 3.0, 4.0, 5.0], atol=1e-3)
+        >>> mean = torch.tensor(3.0)
+        >>> std = torch.sqrt(torch.tensor(2.5))
+        >>> original = unstandardize(standardized, mean, std)
+        >>> torch.allclose(original, torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), atol=1e-3)
         True
     """
     return standardized_field * std + mean
@@ -236,12 +246,12 @@ def calculate_normal_positional_encoding(
         >>> cell_size = [0.1, 0.1, 0.1]
         >>> encoding = calculate_normal_positional_encoding(coords, cell_dimensions=cell_size)
         >>> encoding.shape
-        (2, 12)
+        torch.Size([2, 12])
         >>> # Relative positioning example
         >>> coords_b = torch.tensor([[0.5, 0.5, 0.5], [0.5, 0.5, 0.5]])
         >>> encoding_rel = calculate_normal_positional_encoding(coords, coords_b, cell_size)
         >>> encoding_rel.shape
-        (2, 12)
+        torch.Size([2, 12])
     """
     dx, dy, dz = cell_dimensions[0], cell_dimensions[1], cell_dimensions[2]
 
@@ -318,7 +328,7 @@ def pad(arr: torch.Tensor, n_points: int, pad_value: float = 0.0) -> torch.Tenso
         >>> arr = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
         >>> padded = pad(arr, 4, -1.0)
         >>> padded.shape
-        (4, 2)
+        torch.Size([4, 2])
         >>> torch.allclose(padded[:2], arr)
         True
         >>> bool(torch.all(padded[2:] == -1.0))
@@ -368,7 +378,7 @@ def pad_inp(arr: torch.Tensor, n_points: int, pad_value: float = 0.0) -> torch.T
         >>> arr = torch.tensor([[[1.0, 2.0]], [[3.0, 4.0]]])
         >>> padded = pad_inp(arr, 4, 0.0)
         >>> padded.shape
-        (4, 1, 2)
+        torch.Size([4, 1, 2])
         >>> torch.allclose(padded[:2], arr)
         True
         >>> bool(torch.all(padded[2:] == 0.0))
@@ -424,13 +434,13 @@ def shuffle_array(
 
     Examples:
         >>> import torch
-        >>> torch.manual_seed(42)  # For reproducible results
+        >>> _ = torch.manual_seed(42)  # For reproducible results
         >>> data = torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]])
         >>> subset, indices = shuffle_array(data, 2)
         >>> subset.shape
-        (2, 2)
+        torch.Size([2, 2])
         >>> indices.shape
-        (2,)
+        torch.Size([2])
         >>> len(torch.unique(indices)) == 2  # No duplicates
         True
     """
@@ -510,14 +520,14 @@ def shuffle_array_without_sampling(
 
     Examples:
         >>> import torch
-        >>> torch.manual_seed(42)  # For reproducible results
+        >>> _ = torch.manual_seed(42)  # For reproducible results
         >>> data = torch.tensor([[1], [2], [3], [4]])
         >>> shuffled, indices = shuffle_array_without_sampling(data)
         >>> shuffled.shape
-        (4, 1)
+        torch.Size([4, 1])
         >>> indices.shape
-        (4,)
-        >>> set(indices) == set(range(4))  # All original indices present
+        torch.Size([4])
+        >>> set(indices.tolist()) == set(range(4))  # All original indices present
         True
     """
     idx = torch.randperm(arr.shape[0])
@@ -660,7 +670,7 @@ def create_grid(
         >>> grid_res = torch.tensor([2, 2, 2])
         >>> grid = create_grid(max_bounds, min_bounds, grid_res)
         >>> grid.shape
-        (2, 2, 2, 3)
+        torch.Size([2, 2, 2, 3])
         >>> torch.allclose(grid[0, 0, 0], torch.tensor([0.0, 0.0, 0.0]))
         True
         >>> torch.allclose(grid[1, 1, 1], torch.tensor([1.0, 1.0, 1.0]))
@@ -794,14 +804,14 @@ def area_weighted_shuffle_array(
 
     Examples:
         >>> import torch
-        >>> torch.manual_seed(42)  # For reproducible results
+        >>> _ = torch.manual_seed(42)  # For reproducible results
         >>> mesh_data = torch.tensor([[1.0], [2.0], [3.0], [4.0]])
         >>> cell_areas = torch.tensor([0.1, 0.1, 0.1, 10.0])  # Last point has much larger area
         >>> subset, indices = area_weighted_shuffle_array(mesh_data, 2, cell_areas)
         >>> subset.shape
-        (2, 1)
+        torch.Size([2, 1])
         >>> indices.shape
-        (2,)
+        torch.Size([2])
         >>> # The point with large area (index 3) should likely be selected
         >>> len(set(indices)) <= 2  # At most 2 unique indices
         True
@@ -849,14 +859,14 @@ def solution_weighted_shuffle_array(
 
     Examples:
         >>> import torch
-        >>> torch.manual_seed(42)  # For reproducible results
+        >>> _ = torch.manual_seed(42)  # For reproducible results
         >>> mesh_data = torch.tensor([[1.0], [2.0], [3.0], [4.0]])
         >>> solution = torch.tensor([0.1, 0.1, 0.1, 10.0])  # Last point has much larger solution field
         >>> subset, indices = solution_weighted_shuffle_array(mesh_data, 2, solution)
         >>> subset.shape
-        (2, 1)
+        torch.Size([2, 1])
         >>> indices.shape
-        (2,)
+        torch.Size([2])
         >>> # The point with large area (index 3) should likely be selected
         >>> len(set(indices)) <= 2  # At most 2 unique indices
         True
