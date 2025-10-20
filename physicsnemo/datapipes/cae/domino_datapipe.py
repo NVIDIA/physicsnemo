@@ -33,8 +33,9 @@ from typing import Iterable, Literal, Optional, Protocol, Sequence, Union
 import numpy as np
 import torch
 import torch.cuda.nvtx as nvtx
+import torch.distributed as dist
 from omegaconf import DictConfig
-from torch.distributed.tensor.placement_types import Replicate
+from torch.distributed.tensor.placement_types import Replicate, Shard
 from torch.utils.data import Dataset
 
 from physicsnemo.datapipes.cae.cae_dataset import (
@@ -125,6 +126,10 @@ class DoMINODataConfig:
         gpu_output: Whether to return output on the GPU as cupy arrays.
             If False, returns numpy arrays.
             You might choose gpu_preprocessing=True and gpu_output=False if caching.
+        shard_grid: Whether to shard the grid across GPUs for domain parallelism.
+            Applies to the surf_grid and similiar tensors.
+        shard_points: Whether to shard the points across GPUs for domain parallelism.
+            Applies to the volume_fields/surface_fields and similiar tensors.
     """
 
     data_path: Path | None
@@ -156,6 +161,9 @@ class DoMINODataConfig:
     deterministic: bool = False
     gpu_preprocessing: bool = True
     gpu_output: bool = True
+
+    shard_grid: bool = False
+    shard_points: bool = False
 
     def __post_init__(self):
         if self.data_path is not None:
@@ -676,6 +684,21 @@ class DoMINODataPipe(Dataset):
             "global_params_reference": data_dict["global_params_reference"],
         }
 
+        # DoMINO's sharded datapipe can be tricky - output shapes are not always
+        # so simple to calculate, since much of the datapipe is dynamic.
+        # The datset will read in sharded data, to minimize IO.
+        # We collect it all locally, here, and then scatter
+        # Appropriately for the outputs
+
+        if self.config.shard_grid or self.config.shard_points:
+            # Get the mesh:
+            mesh = data_dict["stl_coordinates"]._spec.mesh
+            local_data_dict = {}
+            for key, value in data_dict.items():
+                local_data_dict[key] = value.full_tensor()
+
+            data_dict = local_data_dict
+
         ########################################################################
         # Process the core STL information
         ########################################################################
@@ -683,46 +706,7 @@ class DoMINODataPipe(Dataset):
         # This function gets information about the surface scale,
         # and decides what the surface grid will be:
 
-        stl_coordinates = data_dict["stl_coordinates"]
-
         s_min, s_max, surf_grid = self.compute_stl_scaling_and_surface_grids()
-
-        if isinstance(stl_coordinates, ShardTensor):
-            mesh = stl_coordinates._spec.mesh
-            # Then, replicate the bounding box along the mesh if present.
-            s_max = scatter_tensor(
-                s_max,
-                0,
-                mesh=mesh,
-                placements=[
-                    Replicate(),
-                ],
-                global_shape=s_max.shape,
-                dtype=s_max.dtype,
-                requires_grad=False,
-            )
-            s_min = scatter_tensor(
-                s_min,
-                0,
-                mesh=mesh,
-                placements=[
-                    Replicate(),
-                ],
-                global_shape=s_min.shape,
-                dtype=s_min.dtype,
-                requires_grad=False,
-            )
-            surf_grid = scatter_tensor(
-                surf_grid,
-                0,
-                mesh=mesh,
-                placements=[
-                    Replicate(),
-                ],
-                global_shape=surf_grid.shape,
-                dtype=surf_grid.dtype,
-                requires_grad=False,
-            )
 
         # We always need to calculate the SDF on the surface grid:
         # This is for the SDF Later:
@@ -816,6 +800,74 @@ class DoMINODataPipe(Dataset):
 
             return_dict.update(volume_dict)
 
+        # For domain parallelism, shard everything appropriately:
+        if self.config.shard_grid or self.config.shard_points:
+            # Mesh was defined above!
+            output_dict = {}
+
+            # For scattering, we need to know the _global_ index of rank
+            # 0 on this mesh:
+            global_index = dist.get_global_rank(mesh.get_group(), 0)
+
+            for key, value in return_dict.items():
+                grid_placements = (
+                    [
+                        Shard(0),
+                    ]
+                    if self.config.shard_grid
+                    else [
+                        Replicate(),
+                    ]
+                )
+                point_placements = (
+                    [
+                        Shard(0),
+                    ]
+                    if self.config.shard_points
+                    else [
+                        Replicate(),
+                    ]
+                )
+                if key == "volume_min_max":
+                    output_dict[key] = ShardTensor.from_local(
+                        value,
+                        mesh,
+                        [
+                            Replicate(),
+                        ],
+                    )
+                elif key == "surface_min_max":
+                    output_dict[key] = ShardTensor.from_local(
+                        value,
+                        mesh,
+                        [
+                            Replicate(),
+                        ],
+                    )
+                elif not isinstance(value, ShardTensor):
+                    if "grid" in key:
+                        output_dict[key] = scatter_tensor(
+                            value.contiguous(),
+                            global_index,
+                            mesh,
+                            grid_placements,
+                            global_shape=value.shape,
+                            dtype=value.dtype,
+                        )
+                    else:
+                        output_dict[key] = scatter_tensor(
+                            value.contiguous(),
+                            global_index,
+                            mesh,
+                            point_placements,
+                            global_shape=value.shape,
+                            dtype=value.dtype,
+                        )
+                else:
+                    output_dict[key] = value
+
+            return_dict = output_dict
+
         return return_dict
 
     def scale_model_targets(
@@ -846,6 +898,19 @@ class DoMINODataPipe(Dataset):
 
         """
 
+        # This is a step to make sure we can apply to sharded outputs:
+        if volume_fields is not None and isinstance(volume_fields, ShardTensor):
+            volume_spec = volume_fields._spec
+            volume_fields = ShardTensor.to_local(volume_fields)
+        else:
+            volume_spec = None
+
+        if surface_fields is not None and isinstance(surface_fields, ShardTensor):
+            surface_spec = surface_fields._spec
+            surface_fields = ShardTensor.to_local(surface_fields)
+        else:
+            surface_spec = None
+
         if volume_fields is not None:
             if self.config.scaling_type == "mean_std_scaling":
                 vol_mean = self.config.volume_factors[0]
@@ -864,6 +929,21 @@ class DoMINODataPipe(Dataset):
                 surf_min = self.config.surface_factors[1]
                 surf_max = self.config.surface_factors[0]
                 surface_fields = unnormalize(surface_fields, surf_max, surf_min)
+
+        if volume_spec is not None:
+            volume_fields = ShardTensor.from_local(
+                volume_fields,
+                device_mesh=volume_spec.mesh,
+                placements=volume_spec.placements,
+                sharding_shapes=volume_spec.sharding_shapes(),
+            )
+        if surface_spec is not None:
+            surface_fields = ShardTensor.from_local(
+                surface_fields,
+                device_mesh=surface_spec.mesh,
+                placements=surface_spec.placements,
+                sharding_shapes=surface_spec.sharding_shapes(),
+            )
 
         return volume_fields, surface_fields
 
@@ -1204,6 +1284,19 @@ def create_domino_dataset(
             placements=placements,
             consumer_stream=consumer_stream,
         )
+
+        # Domain parallelism configuration:
+        # (By default, the dataset will shard as aggressively as possible,
+        # to improve IO speed and prevent bottlenecks - the datapipe
+        # has to reshard to the final shape.)
+
+        # NOTE: we can always capture the mesh and placements from the dataset
+        # outputs, so no need to pass them here.
+        if cfg.get("domain_parallelism", {}).get("domain_size", 1) > 1:
+            shard_grid = cfg.get("domain_parallelism", {}).get("shard_grid", False)
+            shard_points = cfg.get("domain_parallelism", {}).get("shard_points", False)
+            overrides["shard_grid"] = shard_grid
+            overrides["shard_points"] = shard_points
 
         datapipe = DoMINODataPipe(
             input_path,

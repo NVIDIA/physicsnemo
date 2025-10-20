@@ -44,6 +44,9 @@ from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
 import torch.distributed as dist
+from torch.distributed.fsdp import fully_shard
+from torch.distributed.tensor import distribute_module
+
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -478,15 +481,22 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Model summary:\n{torchinfo.summary(model, verbose=0, depth=2)}\n")
 
     if dist.world_size > 1:
-        model = DistributedDataParallel(
-            model,
-            device_ids=[dist.local_rank],
-            output_device=dist.device,
-            broadcast_buffers=dist.broadcast_buffers,
-            find_unused_parameters=dist.find_unused_parameters,
-            gradient_as_bucket_view=True,
-            static_graph=True,
-        )
+        if domain_mesh is None:
+            model = DistributedDataParallel(
+                model,
+                device_ids=[dist.local_rank],
+                output_device=dist.device,
+                broadcast_buffers=dist.broadcast_buffers,
+                find_unused_parameters=dist.find_unused_parameters,
+                gradient_as_bucket_view=True,
+                static_graph=True,
+            )
+        else:
+            model = distribute_module(
+                model,
+                device_mesh=domain_mesh,
+            )
+            model = fully_shard(model, mesh=data_mesh)
 
     ######################################################
     # Initialize optimzer and gradient scaler

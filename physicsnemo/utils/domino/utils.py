@@ -27,6 +27,8 @@ from typing import Any, Sequence
 
 import torch
 
+from physicsnemo.distributed import ShardTensor
+from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.utils.neighbors import knn
 
 
@@ -445,6 +447,11 @@ def shuffle_array(
         True
     """
 
+    if isinstance(points, ShardTensor):
+        # This is actually going to call right back into this function
+        # But, the types will be torch.Tensor this time.
+        return shuffle_sharded_array(points, n_points, weights)
+
     N_input_points = points.shape[0]
 
     if N_input_points < n_points:
@@ -499,6 +506,56 @@ def shuffle_array(
     points_selected = points[idx]
 
     return points_selected, idx
+
+
+def shuffle_sharded_array(
+    points: ShardTensor,
+    n_points: int,
+    weights: ShardTensor = None,
+):
+    """
+    This is a wrapper to enable the downsampling, via torch.multinomial,
+    on sharded arrays.  We do all the sampling locally.
+
+    # NOTE that the n_points is reduced by the size of the mesh!
+    """
+    spec = points._spec
+    n_gpus = spec.mesh.size()
+    local_n_points = compute_split_shapes(n_points, n_gpus)
+
+    this_local_n_points = local_n_points[spec.mesh.get_local_rank()]
+
+    local_points = points.to_local()
+    if weights is not None:
+        local_weights = weights.to_local()
+        local_points, local_indices = shuffle_array(
+            local_points, this_local_n_points, local_weights
+        )
+    else:
+        local_points, local_indices = shuffle_array(local_points, this_local_n_points)
+
+    # Convert back to shard tensor.
+    sharding_sizes = {
+        0: [torch.Size([i] + list(local_points.shape[1:])) for i in local_n_points]
+    }
+
+    # Points is easy:
+    points = ShardTensor.from_local(
+        local_points, spec.mesh, spec.placements, sharding_shapes=sharding_sizes
+    )
+
+    # For the indices, we have to add whatever the offset would be to this rank.
+    offset = sum(local_n_points[: spec.mesh.get_local_rank()])
+    local_indices = local_indices + offset
+
+    indices_shard_shapes = {
+        0: [torch.Size([i]) for i in local_n_points],
+    }
+    indices = ShardTensor.from_local(
+        local_indices, spec.mesh, spec.placements, sharding_shapes=indices_shard_shapes
+    )
+
+    return points, indices
 
 
 def shuffle_array_without_sampling(

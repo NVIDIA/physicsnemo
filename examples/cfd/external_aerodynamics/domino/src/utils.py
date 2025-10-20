@@ -184,15 +184,36 @@ def coordinate_distributed_environment(cfg: DictConfig):
 
         # Note that placements are defined for pre-batched data, no batch index!
 
-        grid_like_placement = [
-            Shard(0),
-        ]
-        point_like_placement = [
-            Shard(0),
-        ]
-        replicate_placement = [
-            Replicate(),
-        ]
+        shard_grid = cfg.get("domain_parallelism", {}).get("shard_grid", False)
+        shard_points = cfg.get("domain_parallelism", {}).get("shard_points", False)
+
+        if not shard_grid and not shard_points:
+            raise ValueError(
+                "Either shard_grid or shard_points must be True if domain_size > 1"
+            )
+
+        # Not supported with physics loss:
+        if cfg.train.add_physics_loss:
+            raise ValueError("Domain parallelism is not supported with physics loss")
+
+        if shard_grid:
+            grid_like_placement = [
+                Shard(0),
+            ]
+        else:
+            grid_like_placement = [
+                Replicate(),
+            ]
+
+        if shard_points:
+            point_like_placement = [
+                Shard(0),
+            ]
+        else:
+            point_like_placement = [
+                Replicate(),
+            ]
+
         placements = {
             "stl_coordinates": point_like_placement,
             "stl_centers": point_like_placement,
