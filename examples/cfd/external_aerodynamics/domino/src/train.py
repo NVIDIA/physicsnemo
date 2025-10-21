@@ -333,6 +333,13 @@ def main(cfg: DictConfig) -> None:
     # how to set that up, if needed.
     domain_mesh, data_mesh, placements = coordinate_distributed_environment(cfg)
 
+    if data_mesh is not None:
+        data_replica_size = data_mesh.size()
+        data_rank = data_mesh.get_local_rank()
+    else:
+        data_replica_size = dist.world_size
+        data_rank = dist.rank
+
     ################################
     # Initialize NVML
     ################################
@@ -438,8 +445,8 @@ def main(cfg: DictConfig) -> None:
     )
     train_sampler = DistributedSampler(
         train_dataloader,
-        num_replicas=data_mesh.size(),
-        rank=data_mesh.get_local_rank(),
+        num_replicas=data_replica_size,
+        rank=data_rank,
         **cfg.train.sampler,
     )
 
@@ -458,8 +465,8 @@ def main(cfg: DictConfig) -> None:
     )
     val_sampler = DistributedSampler(
         val_dataloader,
-        num_replicas=data_mesh.size(),
-        rank=data_mesh.get_local_rank(),
+        num_replicas=data_replica_size,
+        rank=data_rank,
         **cfg.val.sampler,
     )
 
