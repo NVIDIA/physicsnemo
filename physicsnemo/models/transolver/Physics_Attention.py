@@ -113,7 +113,7 @@ class PhysicsAttentionBase(nn.Module, ABC):
         Compute slice weights and slice tokens from input projections and latent features.
 
         In a domain-parallel setting, this function will do an implicit allreduce.
-        When we sum over the slice_weights over a sharded dimension 
+        When we sum over the slice_weights over a sharded dimension
         and use the output, it will resolve Partial->Replicated placement (aka
         allreduce) implicitly.
 
