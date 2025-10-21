@@ -175,18 +175,14 @@ def coordinate_distributed_environment(cfg: DictConfig):
         data_mesh = None
         placements = None
     else:
-
         # Initialize the device mesh:
         mesh = dist.initialize_mesh(
             mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
         )
         domain_mesh = mesh["domain"]
         data_mesh = mesh["ddp"]
-        
 
         if domain_size > 1:
-            
-
             # Define the default placements for each tensor that might show up in
             # the data.  Note that we'll define placements for all keys, even if
             # they aren't actually used.
