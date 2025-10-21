@@ -112,17 +112,22 @@ class PhysicsAttentionBase(nn.Module, ABC):
         """
         Compute slice weights and slice tokens from input projections and latent features.
 
+        In a domain-parallel setting, this function will do an implicit allreduce.
+        When we sum over the slice_weights over a sharded dimension 
+        and use the output, it will resolve Partial->Replicated placement (aka
+        allreduce) implicitly.
+
         Args:
             slice_projections (torch.Tensor):
-                The projected input tensor of shape [Batch, N_heads, N_tokens, Slice_num],
+                The projected input tensor of shape [Batch, N_tokens, N_heads, Slice_num],
                 representing the projection of each token onto each slice for each attention head.
             fx (torch.Tensor):
-                The latent feature tensor of shape [Batch, N_heads, N_tokens, Head_dim],
+                The latent feature tensor of shape [Batch, N_tokens, N_heads, Head_dim],
                 representing the learned states to be aggregated by the slice weights.
 
         Returns:
             tuple[torch.Tensor, torch.Tensor]:
-                - slice_weights: Tensor of shape [Batch, N_heads, N_tokens, Slice_num],
+                - slice_weights: Tensor of shape [Batch, N_tokens, N_heads, Slice_num],
                 representing the normalized weights for each slice per token and head.
                 - slice_token: Tensor of shape [Batch, N_heads, Slice_num, Head_dim],
                 representing the aggregated latent features for each slice, head, and batch.

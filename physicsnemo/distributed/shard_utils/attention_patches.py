@@ -661,7 +661,8 @@ def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> Shard
                 "attn_mask must have the same placement as q, k, and v"
             )
 
-    # if the placements are replicatd (which is what we expect in transolver's Physics Attention)
+    # if the placements are replicated (which is what we expect in transolver's
+    # Physics Attention)
     # then just run locally and convert the output back to a replicated tensor:
 
     if v._spec.placements[0].is_replicate():
