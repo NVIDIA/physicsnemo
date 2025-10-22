@@ -32,6 +32,7 @@ defaults:
     #   `gefs_hrrr`: full GEFS-HRRR dataset for continental US.
     #   `hrrr_mini`: smaller HRRR dataset (continental US), for fast experiments.
     #   `cwb`: full CWB dataset for Taiwan.
+    #   `xarray`: Generic Xarray-formatted dataset.
     #   `custom`: user-defined dataset. Parameters need to be specified below.
 
     - model: diffusion
