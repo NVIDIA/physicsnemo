@@ -16,12 +16,14 @@ interpolation is deterministic and trained with a latitude-weighted L2 loss. How
 can still be used to produce probabilistic forecasts, if used to interpolate results of
 probabilistic forecast models. More formally, the ModAFNO $f_{\theta}$ is a conditional
 expected-value model that approximates:
+
 $$
 f_{\theta} (x_{t}, x_{t+T}, \Delta t) \approx
 \mathbb{E} \left[ x_{t + \Delta t} | x_{t}, x_{t+T}, \Delta t \right]
 $$
+
 $0 \leq \Delta t \leq T$. In the pre-trained model, $T = 6$ hours and
-$\Delta t \in {0, 1, 2, 3, 4, 5, 6}$ hours.
+$\Delta t \in \{0, 1, 2, 3, 4, 5, 6\}$ hours.
 
 For access to the pre-trained model, refer to the [wrapper in
 Earth2Studio](https://nvidia.github.io/earth2studio/modules/generated/models/px/earth2studio.models.px.InterpModAFNO.html#earth2studio.models.px.InterpModAFNO).
