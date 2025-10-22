@@ -17,6 +17,10 @@
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
 import warnings
+import time
+
+import torch
+import wandb
 
 from physicsnemo import Module
 from physicsnemo.datapipes.climate.climate import ClimateDatapipe
@@ -24,7 +28,6 @@ from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from physicsnemo.launch.logging import LaunchLogger, PythonLogger
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-import torch
 
 try:
     from apex.optimizers import FusedAdam
@@ -75,6 +78,8 @@ class Trainer:
     validation_callbacks : Sequence[Callable], optional
         Optional callables to execute on validation. Signature:
         callback(outvar_true, outvar_pred, epoch=epoch, batch_idx=batch_idx).
+    use_wandb : bool, optional
+        When True, log metrics to Weights & Biases.
     """
 
     def __init__(
@@ -95,6 +100,7 @@ class Trainer:
         checkpoint_every: int = 1,
         checkpoint_dir: str | None = None,
         validation_callbacks: Sequence[Callable] = (),
+        use_wandb: bool = False,
     ):
         self.model = model
         self.dist_manager = dist_manager
@@ -114,10 +120,12 @@ class Trainer:
         self.validation_callbacks = validation_callbacks
         self.device = self.dist_manager.device
         self.logger = PythonLogger()
+        self.use_wandb = use_wandb
 
         self.checkpoint_every = checkpoint_every
         self.checkpoint_dir = checkpoint_dir
         self.epoch = 1
+        self.total_samples_trained = 0
         if load_epoch is not None:
             epoch = None if load_epoch == "latest" else load_epoch
             self.load_checkpoint(epoch=epoch)
@@ -177,7 +185,17 @@ class Trainer:
 
     def fit(self):
         """Main function for training loop."""
+        # Log initial learning rate to wandb
+        use_wandb_log = self.use_wandb and self.dist_manager.rank == 0
+        if use_wandb_log:
+            current_lr = self.optimizer.param_groups[0]["lr"]
+            wandb.log({"lr": current_lr, "epoch": self.epoch - 1})
+
         for self.epoch in range(self.epoch, self.max_epoch + 1):
+            epoch_loss = 0.0
+            epoch_samples = 0
+            time_start = time.time()
+
             with LaunchLogger(
                 "train",
                 epoch=self.epoch,
@@ -195,13 +213,51 @@ class Trainer:
                     )
                     log.log_minibatch({"loss": loss.detach()})
 
+                    # Track loss for epoch average
+                    batch_size = self.train_datapipe.batch_size
+                    epoch_loss += loss.item() * batch_size
+                    epoch_samples += batch_size
+
+                    # Log batch-level metrics to wandb
+                    if use_wandb_log:
+                        current_lr = self.optimizer.param_groups[0]["lr"]
+                        wandb.log({"batch_loss": loss.item(), "lr": current_lr})
+
                 log.log_epoch({"Learning Rate": self.optimizer.param_groups[0]["lr"]})
+
+            # Compute epoch statistics
+            time_end = time.time()
+            mean_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0.0
+            self.total_samples_trained += epoch_samples
+
+            # Log epoch-level metrics to wandb
+            if use_wandb_log:
+                current_lr = self.optimizer.param_groups[0]["lr"]
+                metrics = {
+                    "epoch": self.epoch,
+                    "mean_loss": mean_loss,
+                    "time_per_epoch": time_end - time_start,
+                    "lr": current_lr,
+                    "total_samples_trained": self.total_samples_trained,
+                    "epoch_samples": epoch_samples,
+                }
+                wandb.log(metrics)
 
             # Validation
             if self.dist_manager.rank == 0:
                 with LaunchLogger("valid", epoch=self.epoch) as log:
                     error = self.validate_on_epoch()
                     log.log_epoch({"Validation error": error})
+
+                    # Log validation metrics to wandb
+                    if use_wandb_log:
+                        val_loss = error.item() if torch.is_tensor(error) else error
+                        val_metrics = {
+                            "val_loss": val_loss,
+                            "epoch": self.epoch,
+                            "total_samples_trained": (self.total_samples_trained),
+                        }
+                        wandb.log(val_metrics)
 
             if self.dist_manager.world_size > 1:
                 torch.distributed.barrier()
@@ -321,6 +377,7 @@ class Trainer:
         """
         if self.checkpoint_dir is None:
             raise ValueError("checkpoint_dir must be set in order to load checkpoints.")
+        metadata = {"total_samples_trained": self.total_samples_trained}
         self.epoch = load_checkpoint(
             self.checkpoint_dir,
             models=self.model,
@@ -328,17 +385,23 @@ class Trainer:
             scheduler=self.lr_scheduler,
             device=self.device,
             epoch=epoch,
+            metadata_dict=metadata,
         )
+        self.total_samples_trained = metadata.get("total_samples_trained", 0)
         return self.epoch
 
     def save_checkpoint(self):
         """Save current model state as a checkpoint."""
         if self.checkpoint_dir is None:
             raise ValueError("checkpoint_dir must be set in order to save checkpoints.")
+        metadata = {"total_samples_trained": self.total_samples_trained}
+        if self.use_wandb and wandb.run is not None:
+            metadata["wandb_id"] = wandb.run.id
         save_checkpoint(
             self.checkpoint_dir,
             models=self.model,
             optimizer=self.optimizer,
             scheduler=self.lr_scheduler,
             epoch=self.epoch,
+            metadata=metadata,
         )

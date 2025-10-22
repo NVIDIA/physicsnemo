@@ -30,7 +30,21 @@ class GeometricL2Loss(nn.Module):
     num_lats_cropped : int, optional
         Use the first num_lats_cropped latitudes, by default 720
     input_dims : int, optional
-        Number of dimensions in the input tensors passed to `forward`, by default 4
+        Number of dimensions in the input tensors passed to `forward`, by
+        default 4.
+
+    Forward
+    -------
+    pred : torch.Tensor
+        Predicted values, shape (..., num_lats_cropped, num_lons),
+        number of dimensions must equal ``input_dims``
+    true : torch.Tensor
+        True values, shape equal to pred
+
+    Outputs
+    -------
+    torch.Tensor
+        The computed loss
     """
 
     def __init__(
@@ -56,21 +70,6 @@ class GeometricL2Loss(nn.Module):
         self.register_buffer("weights", weights)
 
     def forward(self, pred: torch.Tensor, true: torch.Tensor) -> torch.Tensor:
-        """Compute loss.
-
-        Parameters
-        ----------
-        pred : torch.Tensor
-            Predicted values, shape (..., num_lats_cropped, num_lons),
-            number of dimensions must equal ``input_dims``
-        true : torch.Tensor
-            True values, shape equal to pred
-
-        Returns
-        -------
-        torch.Tensor
-            The computed loss
-        """
         if not (pred.ndim == true.ndim == self.weights.ndim):
             raise ValueError(
                 "Shape mismatch: pred, true and weights must have the same number of dimensions."

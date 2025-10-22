@@ -59,3 +59,9 @@ logging:
     use_mlflow: True # when True, produce logs with mlflow
     experiment_name: "Forecast interpolation model" # experiment name, can be set freely
     user_name: "PhysicsNeMo User" # user name, can be set freely
+  wandb:
+    use_wandb: False # when True, produce logs with wandb
+    mode: "offline" # "online", "offline", or "disabled"
+    project: "Temporal-Interpolation-Training" # project name for wandb
+    entity: null # entity (username or team) for Weights & Biases
+    results_dir: "./wandb/" # directory to save wandb logs

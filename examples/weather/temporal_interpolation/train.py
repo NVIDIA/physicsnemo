@@ -15,10 +15,12 @@
 # limitations under the License.
 
 import os
+import datetime
 
 import hydra
 from omegaconf import OmegaConf
 import torch
+import wandb
 
 from physicsnemo import Module
 from physicsnemo.datapipes.climate.climate import ClimateDataSourceSpec
@@ -26,7 +28,9 @@ from physicsnemo.datapipes.climate.utils import invariant
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import LaunchLogger
 from physicsnemo.launch.logging.mlflow import initialize_mlflow
+from physicsnemo.launch.logging.wandb import initialize_wandb
 from physicsnemo.models.afno import ModAFNO
+from physicsnemo.launch.utils import load_checkpoint
 
 from datapipe.climate_interp import InterpClimateDatapipe
 from utils import distribute, loss
@@ -287,6 +291,38 @@ def setup_trainer(**cfg: dict) -> Trainer:
         initialize_mlflow(**mlflow_cfg)
         LaunchLogger.initialize(use_mlflow=True)
 
+    # Initialize wandb
+    use_wandb = False
+    wandb_cfg = cfg.get("logging", {}).get("wandb", {})
+    if wandb_cfg.get("use_wandb", False):
+        use_wandb = True
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        # Get checkpoint directory
+        checkpoint_dir = cfg.get("training", {}).get("checkpoint_dir")
+        # Check if we need to resume from checkpoint
+        wandb_id = None
+        resume = None
+        load_epoch = cfg.get("training", {}).get("load_epoch")
+        if checkpoint_dir is not None and load_epoch is not None:
+            metadata = {"wandb_id": None}
+            load_checkpoint(checkpoint_dir, metadata_dict=metadata)
+            wandb_id = metadata.get("wandb_id")
+            if wandb_id is not None:
+                resume = "must"
+
+        initialize_wandb(
+            project=wandb_cfg.get("project", "Temporal-Interpolation-Training"),
+            entity=wandb_cfg.get("entity"),
+            mode=wandb_cfg.get("mode", "offline"),
+            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=False),
+            results_dir=wandb_cfg.get("results_dir", "./wandb/"),
+            wandb_id=wandb_id,
+            resume=resume,
+            save_code=True,
+            name=f"train-{timestamp}",
+            init_timeout=600,
+        )
+
     # Setup training loop
     loss_func = loss.GeometricL2Loss(num_lats_cropped=cfg["model"]["inp_shape"][0]).to(
         device=dist_manager.device
@@ -298,6 +334,7 @@ def setup_trainer(**cfg: dict) -> Trainer:
         train_datapipe=train_datapipe,
         valid_datapipe=valid_datapipe,
         input_output_from_batch_data=input_output_from_batch_data,
+        use_wandb=use_wandb,
         **cfg["training"],
     )
 
@@ -316,6 +353,11 @@ def main(cfg):
     """
     trainer = setup_trainer(**OmegaConf.to_container(cfg))
     trainer.fit()
+
+    # Finish wandb logging if it was used
+    use_wandb = cfg.get("logging", {}).get("wandb", {}).get("use_wandb", False)
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":

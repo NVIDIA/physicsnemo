@@ -61,11 +61,6 @@ def test_transolver2d_forward(device):
     fx = torch.randn(bsize, 85 * 85, 1).to(device)
     embedding = torch.randn(bsize, 85, 85).to(device)
 
-    print(f"fx: {fx.shape}")
-    print(f"embedding: {embedding.shape}")
-
-    print(f"output shape: {model(fx, embedding).shape}")
-
     assert validate_forward_accuracy(
         model,
         (
