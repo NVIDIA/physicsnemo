@@ -53,7 +53,7 @@ def setup_datapipes(
     valid_subdir: str = "test",
     valid_start_year: int = 2017,
     valid_shuffle: bool = False,
-) -> tuple[InterpClimateDatapipe, InterpClimateDatapipe]:
+) -> tuple[InterpClimateDatapipe, InterpClimateDatapipe, int]:
     """
     Setup datapipes for training.
 
@@ -94,8 +94,8 @@ def setup_datapipes(
 
     Returns
     -------
-    tuple of (InterpClimateDatapipe, InterpClimateDatapipe)
-        Tuple of training datapipe and validation datapipe.
+    tuple of (InterpClimateDatapipe, InterpClimateDatapipe, int)
+        Tuple of training datapipe and validation datapipe, and the number of auxiliary channels.
     """
     if batch_size_valid is None:
         batch_size_valid = batch_size_train
@@ -216,7 +216,7 @@ def setup_model(
 @torch.no_grad()
 def input_output_from_batch_data(
     batch: dict[str, torch.Tensor], time_scale: float = 6 * 3600.0
-) -> tuple[[tuple[torch.Tensor, torch.Tensor], torch.Tensor]]:
+) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
     """
     Convert the datapipe output dict to model input and output batches.
 
