@@ -22,7 +22,7 @@ model:
   out_channels: null # number of output channels from the model, null determines it from datapipe
   patch_size: [2,2] # size of AFNO patches
   embed_dim: 512 # embedding dimension
-  mlp_ratio: 2.0 # multiplier for MLP hidden layer size
+  mlp_ratio: 2.0 # multiplier for MLP hidden layer size (may be a non-integer value, e.g. 2.5)
   num_blocks: 12 # number of AFNO blocks
 
   scale_shift_mode: complex # type of numbers used for the ModAFNO modulation, "real" or "complex"
