@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# See dataset.xarray_generic.XarrayDataset docstring for more information
+# about the parameters.
+
+# Dataset type
+type: xarray
+# Path to .nc data file. Must be overridden.
+data_paths: ???
+# Path to json stats file. Must be overriden.
+stats_path: ???
+# Names of input channels. List of variable names, or null to use all in data file.
+input_variables: null
+# Names of output channels. List of variable names, or null to use all in data file.
+output_variables: null
+# Names of invariant channels. List of variable names, or null to use all in data file.
+invariant_variables: null
+# If true, preload data to memory.
+load_to_memory: false
+# Keyword arguments passed to xarray.open_dataset
+open_dataset_kwargs: {}
+# Range of times to use, null for all data or list of [start_time, end_time] in "2025-10-26T03:00:00" format.
+time_range: null
+# List of times to exclude, in the same format
+exclude_times: []
+# Use a separate subset of data for each daatloader worker
+shard: true
