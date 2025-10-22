@@ -16,6 +16,8 @@
 
 import os
 import time
+from pathlib import Path
+
 import torch
 import hydra
 import omegaconf
@@ -463,8 +465,15 @@ def main(cfg: DictConfig):
 
     # Set up logging
     logger = RankZeroLoggingWrapper(PythonLogger(name="training"), dist_manager)
+
+    # Set checkpoint directory - defaults to output_dir if not specified
+    checkpoint_dir = getattr(cfg, "checkpoint_dir", None)
+    if checkpoint_dir is None:
+        checkpoint_dir = cfg.output_dir
+
     if dist_manager.rank == 0:
         os.makedirs(cfg.output_dir, exist_ok=True)
+        os.makedirs(checkpoint_dir, exist_ok=True)
         writer = SummaryWriter(
             log_dir=os.path.join(
                 cfg.output_dir + "/" + cfg.run_id + "/train",
@@ -480,6 +489,8 @@ def main(cfg: DictConfig):
         val_writer = None
 
     logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+    logger.info(f"Output directory: {cfg.output_dir}/{cfg.run_id}")
+    logger.info(f"Checkpoint directory: {checkpoint_dir}/{cfg.run_id}/checkpoints")
 
     cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)
 
@@ -538,9 +549,10 @@ def main(cfg: DictConfig):
         drop_last=True,
     )
 
-    # Load the normalization file:
+    # Load the normalization file from configured directory (defaults to current dir)
+    norm_dir = getattr(cfg.data, "normalization_dir", ".")
     if cfg.data.mode == "surface":
-        norm_file = "surface_fields_normalization.npz"
+        norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
     elif cfg.data.mode == "volume":
         raise Exception("Volume training not yet supported.")
 
@@ -577,7 +589,7 @@ def main(cfg: DictConfig):
     scaler = GradScaler() if precision == "float16" else None
 
     ckpt_args = {
-        "path": f"{cfg.output_dir}/{cfg.run_id}/checkpoints",
+        "path": f"{checkpoint_dir}/{cfg.run_id}/checkpoints",
         "optimizer": optimizer,
         "scheduler": scheduler,
         "models": model,
