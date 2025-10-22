@@ -20,17 +20,19 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import os
-import numpy as np
-import torch
-from omegaconf import OmegaConf
-
-from datapipe import DomainParallelZarrDataset
-
 """
 This file provides utilities to compute normalization statistics (mean, std, min, max)
 for a given field in a dataset, typically used for preprocessing in CFD workflows.
 """
+
+from pathlib import Path
+
+import numpy as np
+import torch
+import hydra
+from omegaconf import DictConfig
+
+from datapipe import DomainParallelZarrDataset
 
 
 def compute_mean_std_min_max(
@@ -90,19 +92,23 @@ def compute_mean_std_min_max(
     return mean, std, min_val, max_val
 
 
-if __name__ == "__main__":
+@hydra.main(version_base="1.3", config_path="conf", config_name="train_surface")
+def main(cfg: DictConfig) -> None:
     """
     Script entry point for computing normalization statistics for a specified field
     in a dataset, using configuration from a YAML file.
 
     The computed statistics are printed and saved to a .npz file.
     """
-    # Edit this path to your config file or hardcode the config as needed
-    config_path: str = "conf/train_surface.yaml"
-    cfg = OmegaConf.load(config_path)
+    # Choose which field to normalize (can be overridden via command line)
+    field_key: str = cfg.get("field_key", "surface_fields")
+    # Normalization directory can be configured (backward compatible: defaults to current directory)
+    normalization_dir: str = getattr(cfg.data, "normalization_dir", ".")
 
-    # Choose which field to normalize
-    field_key: str = "surface_fields"
+    # Construct full path using pathlib (cross-platform, concise)
+    workspace_path: str = str(
+        Path(normalization_dir) / f"{field_key}_normalization.npz"
+    )
 
     # Create the dataset using configuration parameters
     dataset = DomainParallelZarrDataset(
@@ -122,11 +128,17 @@ if __name__ == "__main__":
     print(f"Min for {field_key}: {min_val}")
     print(f"Max for {field_key}: {max_val}")
 
-    # Save statistics to a .npz file for later use
+    # Save statistics to configured workspace path
+    print(f"Saving normalization statistics to: {workspace_path}")
     np.savez(
-        f"{field_key}_normalization.npz",
+        workspace_path,
         mean=mean.cpu().numpy(),
         std=std.cpu().numpy(),
         min=min_val.cpu().numpy(),
         max=max_val.cpu().numpy(),
     )
+    print(f"Successfully saved normalization file: {workspace_path}")
+
+
+if __name__ == "__main__":
+    main()
