@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torch.nn.Module`s.
 - Support passing custom tokenizer, detokenizer, and attention `Module`s in
   experimental DiT architecture
+- Improved Transolver training recipe's configuration for checkpointing and normalization.
 
 ### Deprecated
 

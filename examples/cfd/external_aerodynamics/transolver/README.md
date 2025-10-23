@@ -57,12 +57,12 @@ recipe.
 ## Model Training
 
 To train the model, first we compute normalization factors on the dataset to
-make the predictive quantities output in a well defined range.  The include
-script, `compute_normalizations.py`, will compute either the normalization
+make the predictive quantities output in a well-defined range. The included
+script, `compute_normalizations.py`, will compute the normalization
 factors.  Once run, it should save to an output file similar to
 "surface_fields_normalization.npz".  This will get loaded during training.
-Check the training script to ensure the right path is used for your normalization
-factors - it's not a configuration parameter but directly encoded in the script.
+The normalization file location can be configured via `data.normalization_dir`
+in the training configuration (defaults to current directory).
 
 > By default, the normalization sets the mean to 0.0 and std to 1.0 of all labels
 > in the dataset, computing the mean across the train dataset.  You could adapt
@@ -120,6 +120,8 @@ respectively, to use the fp8 hardware correctly.
 
 Several other important configuration settings are available:
 
+- `checkpoint_dir` sets the directory for saving model checkpoints (defaults to `output_dir`
+if not specified), allowing separation of checkpoints from other outputs.
 - `training.compile` will use `torch.compile` for optimized performance.  It is not
 compatible with `transformer_engine` (`model.use_te=True`).  If TransformerEngine is
 not used, and half precision is, `torch.compile` is recommended for improved performance.
