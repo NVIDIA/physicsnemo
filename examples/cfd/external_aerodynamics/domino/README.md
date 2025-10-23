@@ -194,7 +194,7 @@ and surface points can be sharded to accomodate higher resolution point sampling
 Second, the latent space of the model - typically a regularlized grid - can be
 sharded to reduce computational complexity of the latent processing.  When training
 with sharded models in DoMINO, the primary objective is to enable higher
-resolution inputs and larger latent spaces without sacrificing 
+resolution inputs and larger latent spaces without sacrificing
 substantial compute time.
 
 When configuring DoMINO for sharded training, adjust the following parameters

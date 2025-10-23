@@ -170,8 +170,6 @@ def coordinate_distributed_environment(cfg: DictConfig):
     # Default to no domain parallelism:
     domain_size = cfg.get("domain_parallelism", {}).get("domain_size", 1)
 
-
-
     if dist.world_size == 1:
         domain_mesh = None
         data_mesh = None
@@ -183,7 +181,7 @@ def coordinate_distributed_environment(cfg: DictConfig):
         )
         domain_mesh = mesh["domain"]
         data_mesh = mesh["ddp"]
-        
+
         if domain_size > 1:
             # Define the default placements for each tensor that might show up in
             # the data.  Note that we'll define placements for all keys, even if
@@ -201,7 +199,9 @@ def coordinate_distributed_environment(cfg: DictConfig):
 
             # Not supported with physics loss:
             if cfg.train.add_physics_loss:
-                raise ValueError("Domain parallelism is not supported with physics loss")
+                raise ValueError(
+                    "Domain parallelism is not supported with physics loss"
+                )
 
             if shard_grid:
                 grid_like_placement = [
@@ -236,7 +236,6 @@ def coordinate_distributed_environment(cfg: DictConfig):
         else:
             domain_mesh = None
             placements = None
-    
 
     return domain_mesh, data_mesh, placements
 
