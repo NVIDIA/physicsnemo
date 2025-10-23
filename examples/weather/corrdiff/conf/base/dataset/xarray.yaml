@@ -37,5 +37,5 @@ open_dataset_kwargs: {}
 time_range: null
 # List of times to exclude, in the same format
 exclude_times: []
-# Use a separate subset of data for each daatloader worker
+# Use a separate subset of data for each dataloader worker
 shard: true

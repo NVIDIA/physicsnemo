@@ -309,7 +309,8 @@ class XarrayDataset(DownscalingDataset):
             Time values.
         """
         datetimes = (
-            datetime.datetime.utcfromtimestamp(t.tolist() / 1e9) for t in self.times
+            datetime.datetime.fromtimestamp(t.tolist() / 1e9, tz=datetime.timezone.utc)
+            for t in self.times
         )
         return [convert_datetime_to_cftime(t) for t in datetimes]
 
