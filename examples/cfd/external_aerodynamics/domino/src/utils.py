@@ -170,65 +170,73 @@ def coordinate_distributed_environment(cfg: DictConfig):
     # Default to no domain parallelism:
     domain_size = cfg.get("domain_parallelism", {}).get("domain_size", 1)
 
-    # Initialize the device mesh:
-    mesh = dist.initialize_mesh(
-        mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
-    )
-    domain_mesh = mesh["domain"]
-    data_mesh = mesh["ddp"]
 
-    if domain_size > 1:
-        # Define the default placements for each tensor that might show up in
-        # the data.  Note that we'll define placements for all keys, even if
-        # they aren't actually used.
 
-        # Note that placements are defined for pre-batched data, no batch index!
-
-        shard_grid = cfg.get("domain_parallelism", {}).get("shard_grid", False)
-        shard_points = cfg.get("domain_parallelism", {}).get("shard_points", False)
-
-        if not shard_grid and not shard_points:
-            raise ValueError(
-                "Either shard_grid or shard_points must be True if domain_size > 1"
-            )
-
-        # Not supported with physics loss:
-        if cfg.train.add_physics_loss:
-            raise ValueError("Domain parallelism is not supported with physics loss")
-
-        if shard_grid:
-            grid_like_placement = [
-                Shard(0),
-            ]
-        else:
-            grid_like_placement = [
-                Replicate(),
-            ]
-
-        if shard_points:
-            point_like_placement = [
-                Shard(0),
-            ]
-        else:
-            point_like_placement = [
-                Replicate(),
-            ]
-
-        placements = {
-            "stl_coordinates": point_like_placement,
-            "stl_centers": point_like_placement,
-            "stl_faces": point_like_placement,
-            "stl_areas": point_like_placement,
-            "surface_fields": point_like_placement,
-            "volume_mesh_centers": point_like_placement,
-            "volume_fields": point_like_placement,
-            "surface_mesh_centers": point_like_placement,
-            "surface_normals": point_like_placement,
-            "surface_areas": point_like_placement,
-        }
-    else:
+    if dist.world_size == 1:
         domain_mesh = None
+        data_mesh = None
         placements = None
+    else:
+        # Initialize the device mesh:
+        mesh = dist.initialize_mesh(
+            mesh_shape=(-1, domain_size), mesh_dim_names=("ddp", "domain")
+        )
+        domain_mesh = mesh["domain"]
+        data_mesh = mesh["ddp"]
+        
+        if domain_size > 1:
+            # Define the default placements for each tensor that might show up in
+            # the data.  Note that we'll define placements for all keys, even if
+            # they aren't actually used.
+
+            # Note that placements are defined for pre-batched data, no batch index!
+
+            shard_grid = cfg.get("domain_parallelism", {}).get("shard_grid", False)
+            shard_points = cfg.get("domain_parallelism", {}).get("shard_points", False)
+
+            if not shard_grid and not shard_points:
+                raise ValueError(
+                    "Either shard_grid or shard_points must be True if domain_size > 1"
+                )
+
+            # Not supported with physics loss:
+            if cfg.train.add_physics_loss:
+                raise ValueError("Domain parallelism is not supported with physics loss")
+
+            if shard_grid:
+                grid_like_placement = [
+                    Shard(0),
+                ]
+            else:
+                grid_like_placement = [
+                    Replicate(),
+                ]
+
+            if shard_points:
+                point_like_placement = [
+                    Shard(0),
+                ]
+            else:
+                point_like_placement = [
+                    Replicate(),
+                ]
+
+            placements = {
+                "stl_coordinates": point_like_placement,
+                "stl_centers": point_like_placement,
+                "stl_faces": point_like_placement,
+                "stl_areas": point_like_placement,
+                "surface_fields": point_like_placement,
+                "volume_mesh_centers": point_like_placement,
+                "volume_fields": point_like_placement,
+                "surface_mesh_centers": point_like_placement,
+                "surface_normals": point_like_placement,
+                "surface_areas": point_like_placement,
+            }
+        else:
+            domain_mesh = None
+            placements = None
+    
 
     return domain_mesh, data_mesh, placements
 
