@@ -16,7 +16,6 @@
 
 from collections.abc import Callable, Sequence
 from typing import Any, Literal
-import warnings
 import time
 
 import torch
@@ -28,11 +27,6 @@ from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from physicsnemo.launch.logging import LaunchLogger, PythonLogger
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-
-try:
-    from apex.optimizers import FusedAdam
-except ImportError:
-    warnings.warn("Apex is not installed, defaulting to PyTorch optimizers.")
 
 
 class Trainer:
@@ -52,18 +46,13 @@ class Trainer:
         ClimateDatapipe providing validation data.
     samples_per_epoch : int
         Number of samples to draw from the datapipe per 'epoch'.
+    optimizer : torch.optim.Optimizer
+        Optimizer used for training.
+    scheduler : torch.optim.lr_scheduler.LRScheduler
+        Learning rate scheduler.
     input_output_from_batch_data : Callable, optional
         Function that converts datapipe outputs to training batches.
         If not provided, will try to use outputs as-is.
-    optimizer : type[torch.optim.Optimizer] or None, optional
-        Optimizer class used for training. When None, will setup
-        apex.optimizers.FusedAdam if available, otherwise PyTorch Adam.
-    optimizer_params : dict[str, Any] or None, optional
-        Dict of parameters (e.g. learning rate) to pass to optimizer.
-    scheduler : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
-        Learning rate scheduler class. When None, will setup CosineAnnealingLR.
-    scheduler_params : dict[str, Any] or None, optional
-        Dict of parameters to pass to LR scheduler.
     max_epoch : int, optional
         The last training epoch.
     load_epoch : int, "latest", or None, optional
@@ -90,11 +79,9 @@ class Trainer:
         train_datapipe: ClimateDatapipe,
         valid_datapipe: ClimateDatapipe,
         samples_per_epoch: int,
+        optimizer: torch.optim.Optimizer,
+        scheduler: torch.optim.lr_scheduler.LRScheduler,
         input_output_from_batch_data: Callable = lambda x: x,
-        optimizer: type[torch.optim.Optimizer] | None = None,
-        optimizer_params: dict[str, Any] | None = None,
-        scheduler: type[torch.optim.lr_scheduler.LRScheduler] | None = None,
-        scheduler_params: dict[str, Any] | None = None,
         max_epoch: int = 1,
         load_epoch: int | Literal["latest"] | None = "latest",
         checkpoint_every: int = 1,
@@ -110,13 +97,8 @@ class Trainer:
         self.valid_datapipe = valid_datapipe
         self.max_epoch = max_epoch
         self.input_output_from_batch_data = input_output_from_batch_data
-        self.optimizer, self.lr_scheduler = self.setup_optimizer(
-            model,
-            opt_cls=optimizer,
-            opt_params=optimizer_params,
-            scheduler_cls=scheduler,
-            scheduler_params=scheduler_params,
-        )
+        self.optimizer = optimizer
+        self.lr_scheduler = scheduler
         self.validation_callbacks = validation_callbacks
         self.device = self.dist_manager.device
         self.logger = PythonLogger()
@@ -309,57 +291,6 @@ class Trainer:
             model.train()
         return loss_epoch / num_examples
 
-    def setup_optimizer(
-        self,
-        model: torch.nn.Module,
-        opt_cls: type[torch.optim.Optimizer] | None = None,
-        opt_params: dict | None = None,
-        scheduler_cls: type[torch.optim.lr_scheduler.LRScheduler] | None = None,
-        scheduler_params: dict[str, Any] | None = None,
-    ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]:
-        """Setup optimizer.
-
-        Parameters
-        ----------
-        model : torch.nn.Module
-            Model that optimizer is applied to.
-        opt_cls : type[torch.optim.Optimizer] or None, optional
-            Optimizer class. When None, will setup apex.optimizers.FusedAdam
-            if available, otherwise PyTorch Adam.
-        opt_params : dict or None, optional
-            Dict of parameters (e.g. learning rate) to pass to optimizer.
-        scheduler_cls : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
-            Scheduler class. When None, will setup CosineAnnealingLR.
-        scheduler_params : dict[str, Any] or None, optional
-            Dict of parameters to pass to scheduler.
-
-        Returns
-        -------
-        tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]
-            The initialized optimizer and learning rate scheduler.
-        """
-
-        opt_kwargs = {"lr": 0.0005}
-        if opt_params is not None:
-            opt_kwargs.update(opt_params)
-
-        if opt_cls is None:
-            try:
-                opt_cls = FusedAdam
-            except NameError:  # in case we don't have apex
-                opt_cls = torch.optim.Adam
-
-        scheduler_kwargs = {}
-        if scheduler_cls is None:
-            scheduler_cls = torch.optim.lr_scheduler.CosineAnnealingLR
-            scheduler_kwargs["T_max"] = self.max_epoch
-        if scheduler_params is not None:
-            scheduler_kwargs.update(scheduler_params)
-
-        optimizer = opt_cls(model.parameters(), **opt_kwargs)
-        scheduler = scheduler_cls(optimizer, **scheduler_kwargs)
-        return (optimizer, scheduler)
-
     def load_checkpoint(self, epoch: int | None = None) -> int:
         """Try to load model state from a checkpoint.
 
@@ -377,7 +308,7 @@ class Trainer:
         """
         if self.checkpoint_dir is None:
             raise ValueError("checkpoint_dir must be set in order to load checkpoints.")
-        metadata = {"total_samples_trained": self.total_samples_trained}
+        metadata = {}
         self.epoch = load_checkpoint(
             self.checkpoint_dir,
             models=self.model,

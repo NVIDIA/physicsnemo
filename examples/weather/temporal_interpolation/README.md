@@ -69,7 +69,8 @@ To train a temporal interpolation model, ensure you have the following:
   containing a 1D array with length equal to the number of variables in the dataset,
   with each value giving the mean (for `global_means.npy`) or standard deviation (for
   `global_stds.npy`) of the corresponding variable.
-* A JSON file with metadata about the contents of the HDF5 files. Refer to [data sample](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/temporal_interpolation/data.json)
+* A JSON file with metadata about the contents of the HDF5 files. Refer to the [data
+  sample](https://github.com/NVIDIA/physicsnemo/blob/main/examples/weather/temporal_interpolation/data/data.json)
   for an example describing the dataset used to train the original model.
 * Optional: NetCDF4 files containing the orography and land-sea mask for the grid
   contained in the data. These should contain a variable of the same shape as the data.

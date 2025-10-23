@@ -16,6 +16,8 @@
 
 import os
 import datetime
+from typing import Any
+import warnings
 
 import hydra
 from omegaconf import OmegaConf
@@ -35,6 +37,11 @@ from physicsnemo.launch.utils import load_checkpoint
 from datapipe.climate_interp import InterpClimateDatapipe
 from utils import distribute, loss
 from utils.trainer import Trainer
+
+try:
+    from apex.optimizers import FusedAdam
+except ImportError:
+    warnings.warn("Apex is not installed, defaulting to PyTorch optimizers.")
 
 
 def setup_datapipes(
@@ -182,6 +189,10 @@ def setup_model(
 
     Parameters
     ----------
+    num_variables : int
+        Number of atmospheric variables in the model.
+    num_auxiliaries : int
+        Number of auxiliary input channels.
     model_cfg : dict or None, optional
         Model configuration dict.
 
@@ -213,17 +224,70 @@ def setup_model(
     return model
 
 
+def setup_optimizer(
+    model: torch.nn.Module,
+    max_epoch: int,
+    opt_cls: type[torch.optim.Optimizer] | None = None,
+    opt_params: dict | None = None,
+    scheduler_cls: type[torch.optim.lr_scheduler.LRScheduler] | None = None,
+    scheduler_params: dict[str, Any] | None = None,
+) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]:
+    """Setup optimizer.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model that optimizer is applied to.
+    max_epoch : int
+        Maximum number of training epochs (used for scheduler setup).
+    opt_cls : type[torch.optim.Optimizer] or None, optional
+        Optimizer class. When None, will setup apex.optimizers.FusedAdam
+        if available, otherwise PyTorch Adam.
+    opt_params : dict or None, optional
+        Dict of parameters (e.g. learning rate) to pass to optimizer.
+    scheduler_cls : type[torch.optim.lr_scheduler.LRScheduler] or None, optional
+        Scheduler class. When None, will setup CosineAnnealingLR.
+    scheduler_params : dict[str, Any] or None, optional
+        Dict of parameters to pass to scheduler.
+
+    Returns
+    -------
+    tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LRScheduler]
+        The initialized optimizer and learning rate scheduler.
+    """
+
+    opt_kwargs = {"lr": 0.0005}
+    if opt_params is not None:
+        opt_kwargs.update(opt_params)
+    if opt_cls is None:
+        try:
+            opt_cls = FusedAdam
+        except NameError:  # in case we don't have apex
+            opt_cls = torch.optim.Adam
+
+    scheduler_kwargs = {}
+    if scheduler_cls is None:
+        scheduler_cls = torch.optim.lr_scheduler.CosineAnnealingLR
+        scheduler_kwargs["T_max"] = max_epoch
+    if scheduler_params is not None:
+        scheduler_kwargs.update(scheduler_params)
+
+    optimizer = opt_cls(model.parameters(), **opt_kwargs)
+    scheduler = scheduler_cls(optimizer, **scheduler_kwargs)
+    return (optimizer, scheduler)
+
+
 @torch.no_grad()
 def input_output_from_batch_data(
-    batch: dict[str, torch.Tensor], time_scale: float = 6 * 3600.0
+    batch: list[dict[str, torch.Tensor]], time_scale: float = 6 * 3600.0
 ) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
     """
     Convert the datapipe output dict to model input and output batches.
 
     Parameters
     ----------
-    batch : dict[str, torch.Tensor]
-        The data dict returned by the datapipe.
+    batch : list[dict[str, torch.Tensor]]
+        The list data dicts returned by the datapipe.
     time_scale : float, optional
         Number of seconds between the interpolation endpoints (default 6 hours).
 
@@ -235,16 +299,17 @@ def input_output_from_batch_data(
     batch = batch[0]
     # Concatenate all input variables to a single tensor
     atmos_vars = batch["state_seq-atmos"]
-    cos_zenith = batch["cos_zenith-atmos"].squeeze(dim=2)
 
-    sincos_latlon = batch["latlon"]
-    geop = batch["geopotential"]
-    lsm = batch["land_sea_mask"]
-
-    atmos_vars_in = torch.cat(
-        [atmos_vars[:, 0], atmos_vars[:, 1], cos_zenith, sincos_latlon, geop, lsm],
-        dim=1,
-    )
+    atmos_vars_in = [atmos_vars[:, 0], atmos_vars[:, 1]]
+    if "cos_zenith-atmos" in batch:
+        atmos_vars_in = atmos_vars_in + [batch["cos_zenith-atmos"].squeeze(dim=2)]
+    if "latlon" in batch:
+        atmos_vars_in = atmos_vars_in + [batch["latlon"]]
+    if "geopotential" in batch:
+        atmos_vars_in = atmos_vars_in + [batch["geopotential"]]
+    if "land_sea_mask" in batch:
+        atmos_vars_in = atmos_vars_in + [batch["land_sea_mask"]]
+    atmos_vars_in = torch.cat(atmos_vars_in, dim=1)
 
     atmos_vars_out = atmos_vars[:, 2]
 
@@ -286,6 +351,15 @@ def setup_trainer(**cfg: dict) -> Trainer:
     )
     (model, dist_manager) = distribute.distribute_model(model)
 
+    # Setup optimizer and learning rate scheduler
+    (optimizer, scheduler) = setup_optimizer(
+        model,
+        cfg["training"].get("max_epoch", 1),
+        opt_params=cfg.get("optimizer_params", {}),
+        scheduler_params=cfg.get("scheduler_params", {}),
+    )
+
+    # Initialize mlflow
     mlflow_cfg = cfg.get("logging", {}).get("mlflow", {})
     if mlflow_cfg.pop("use_mlflow", False):
         initialize_mlflow(**mlflow_cfg)
@@ -334,6 +408,8 @@ def setup_trainer(**cfg: dict) -> Trainer:
         train_datapipe=train_datapipe,
         valid_datapipe=valid_datapipe,
         input_output_from_batch_data=input_output_from_batch_data,
+        optimizer=optimizer,
+        scheduler=scheduler,
         use_wandb=use_wandb,
         **cfg["training"],
     )

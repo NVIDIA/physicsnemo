@@ -50,9 +50,10 @@ training:
   samples_per_epoch: 50 # number of samples per "epoch"
   load_epoch: "latest" # int, null or "latest"; "latest" loads the most recent checkpoint in checkpoint_dir
   checkpoint_dir: "/checkpoints/fcinterp/" # location where checkpoints are saved
-  optimizer_params:
-    lr: 5e-4 # learning rate
-    betas: [0.9, 0.95] # beta parameters for Adam
+
+optimizer_params:
+  lr: 5e-4 # learning rate
+  betas: [0.9, 0.95] # beta parameters for Adam
 
 logging:
   mlflow:
