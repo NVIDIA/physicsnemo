@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -173,7 +173,7 @@ def test_write_time(mock_ncfile, pytestconfig):
 
     # Mock time write
     time_index = 0
-    time = datetime.datetime(2025, 1, 1, 0, 0, 0)
+    time = datetime.datetime(2024, 1, 1, 0, 0, 0)
 
     with patch("cftime.date2num") as mock_date2num:
         mock_date2num.return_value = 0  # Mocked value

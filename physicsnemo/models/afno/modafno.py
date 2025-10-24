@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -519,7 +519,7 @@ class ModAFNO(Module):
     Note
     ----
     Reference: Leinonen et al. "Modulated Adaptive Fourier Neural Operators
-    for Temporal Interpolation of Weather Forecasts." arXiv preprint arXiv:TODO (2025).
+    for Temporal Interpolation of Weather Forecasts." arXiv preprint arXiv:TODO (2024).
     """
 
     def __init__(
