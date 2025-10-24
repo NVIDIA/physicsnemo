@@ -49,7 +49,7 @@ def check_min_version(
         package_name: Name of the package to check
         min_version: Minimum required version string (e.g. '2.6.0')
         error_msg: Optional custom error message
-
+        hard_fail: Whether to raise an ImportError if the version requirement is not met
     Returns:
         True if version requirement is met
 

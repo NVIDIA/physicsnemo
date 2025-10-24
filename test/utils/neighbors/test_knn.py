@@ -168,6 +168,9 @@ def test_knn_comparison(device):
     if not check_min_version("cuml", "24.0.0", hard_fail=False):
         if device == "cuda":
             pytest.skip("cuml not available")
+    if not check_min_version("scipy", "1.7.0", hard_fail=False):
+        if device == "cuda":
+            pytest.skip("scipy not available")
 
     if device == "cuda":
         indices_cuml, distances_A = knn(points, queries, k, backend="cuml")
