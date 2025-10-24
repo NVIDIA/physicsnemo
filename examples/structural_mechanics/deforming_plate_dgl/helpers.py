@@ -64,8 +64,8 @@ def add_world_edges(graph, world_edge_radius=0.03, edge_stats_path="edge_stats.j
         device=graph.device,
     ).T  # shape: (2, num_world_edges)
 
-    if world_edges.numel() == 0:
-        raise ValueError("No world edges to add")
+    if world_edges.size(0) == 0:
+        raise ValueError("No world edges to add. Try increasing the world edge radius.")
 
     # Compute edge features for new edges
     world_src, world_dst = world_edges[0], world_edges[1]
