@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -34,7 +34,7 @@ train: False
 # Years to train the model.
 train_years: [2020, 2021, 2022, 2023]
 # Years to validate the model.
-valid_years: [2024]
+valid_years: [2025]
 # Whether to normalize the data.
 normalize: True
 # Whether to shard the data.

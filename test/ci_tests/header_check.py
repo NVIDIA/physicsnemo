@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -159,7 +159,7 @@ def main():
     print(json.dumps(config, sort_keys=True, indent=4))
 
     current_year = int(datetime.today().year)
-    starting_year = 2024
+    starting_year = 2025
     python_header_path = Path(__file__).parent.resolve() / Path(
         config["copyright_file"]
     )

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -36,7 +36,7 @@ logging.basicConfig(filename="data_analysis.log", level=logging.DEBUG)
 def main(cfg: DictConfig):
     """The function to visualize and check the acceleration profile, builds to be analyzed are read from config"""
     raw_data_dir = cfg.data_options.raw_data_dir
-    # build_name = "2024-02-27-Overhangs_t3_theta0_V3-deformation"
+    # build_name = "2025-02-27-Overhangs_t3_theta0_V3-deformation"
 
     for build_name in cfg.data_options.builds_train:
         solution_list = read_raw_folder(os.path.join(raw_data_dir, build_name))

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,7 @@ dataset_filename: "unified_recipe_datasets/arco_era5.zarr"
 
 dt: 6
 
-years: ["1979-01-01", "2024-01-01"]
+years: ["1979-01-01", "2025-01-01"]
 
 chunking: [1, 1, 721, 1440]
 

@@ -2,7 +2,7 @@
 # ruff: noqa: E402
 
 # © Copyright 2023 HP Development Company, L.P.
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,14 +20,14 @@
 
 
 data_options:
-  raw_data_dir: "/mnt/archive/pablo/2024-02-28-rachel"
-  metadata_json_path: "../data/2024-3-absnorm"
+  raw_data_dir: "/mnt/archive/pablo/2025-02-28-rachel"
+  metadata_json_path: "../data/2025-3-absnorm"
   mode: "stats" # options: ["train", "test", "stats"]
-  builds_train: ["2024-02-26-bridge3-4x27-36_3up-deformation",
-                "2024-02-27-incomplete-table-deformation", "2024-02-26-DoubleCantilever3X17-deformation",
-                "2024-02-26-I_3mm-deformation", "2024-02-27-TBar-deformation", "2024-02-27-HandAkaFingers-deformation"
+  builds_train: ["2025-02-26-bridge3-4x27-36_3up-deformation",
+                "2025-02-27-incomplete-table-deformation", "2025-02-26-DoubleCantilever3X17-deformation",
+                "2025-02-26-I_3mm-deformation", "2025-02-27-TBar-deformation", "2025-02-27-HandAkaFingers-deformation"
                 ]
-  builds_test: ["2024-02-26-Circle-10mmThickness-with-base-deformation", "2024-02-27-Overhangs_t3_theta0_V3-deformation"]
+  builds_test: ["2025-02-26-Circle-10mmThickness-with-base-deformation", "2025-02-27-Overhangs_t3_theta0_V3-deformation"]
   f_basename: "volumn-deformation"  # other options before: ["solution", "volumn-deformation"]
   add_anchor: True
   step_size: 5

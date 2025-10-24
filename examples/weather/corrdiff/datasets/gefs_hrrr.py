@@ -1,7 +1,7 @@
 # Data loader for TWC MVP: GEFS and HRRR forecasts
 # adapted from https://gitlab-master.nvidia.com/earth-2/corrdiff-internal/-/blob/dpruitt/hrrr/explore/dpruitt/hrrr/datasets/hrrr.py
 
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -139,7 +139,7 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         train: bool = True,
         normalize: bool = True,
         train_years: Iterable[int] = (2020, 2021, 2022, 2023),
-        valid_years: Iterable[int] = (2024,),
+        valid_years: Iterable[int] = (2025,),
         hrrr_window: Union[Tuple[Tuple[int, int], Tuple[int, int]], None] = None,
         sample_shape: Tuple[int, int] = [-1, -1],
         ds_factor: int = 1,
@@ -328,9 +328,9 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
             first_sample = datetime(
                 year=first_year, month=1, day=1, hour=0, minute=0, second=0
             )
-        if last_year == 2024:
+        if last_year == 2025:
             last_sample = datetime(
-                year=2024, month=7, day=29, hour=18, minute=0, second=0
+                year=2025, month=7, day=29, hour=18, minute=0, second=0
             )
         else:
             last_sample = datetime(
@@ -514,8 +514,8 @@ class HrrrForecastGEFSDataset(DownscalingDataset):
         """
         if ts[:4] == "2020":
             name = "2020_12_12"
-        elif ts[:4] == "2024":
-            name = "2024_01_07"
+        elif ts[:4] == "2025":
+            name = "2025_01_07"
         elif "01" <= ts[4:6] <= "06":
             name = ts[:4] + "_01_06"
         elif "07" <= ts[4:6] <= "12":

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -62,15 +62,15 @@ generation:
     # int, patch size. Only used for `generation: patched`. For custom dataset,
     # this should be determined based on an autocorrelation plot.
     times:
-        - "2024011212f00"
-        - "2024011212f03"
-        - "2024011212f06"
-        - "2024011212f09"
-        - "2024011212f12"
-        - "2024011212f15"
-        - "2024011212f18"
-        - "2024011212f21"
-        - "2024011212f24"
+        - "2025011212f00"
+        - "2025011212f03"
+        - "2025011212f06"
+        - "2025011212f09"
+        - "2025011212f12"
+        - "2025011212f15"
+        - "2025011212f18"
+        - "2025011212f21"
+        - "2025011212f24"
     # List[str], time stamps in ISO 8601 format. Replace and list desired target
     # time stamps.
     has_lead_time: True

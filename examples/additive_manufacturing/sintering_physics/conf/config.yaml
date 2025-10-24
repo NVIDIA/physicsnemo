@@ -3,7 +3,7 @@
 # ruff: noqa: E402
 
 # © Copyright 2023 HP Development Company, L.P.
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -40,7 +40,7 @@ train_options:
     l_me: 3
 
 data_options:
-  data_path: "./data/2024-3-absnorm"
+  data_path: "./data/2025-3-absnorm"
   noise_std: 0
   ckpt_path_vfgn: "models/new24-gpus-mean_me_final/model_loss-6.42E-04_step-350.pt"
   output_path: "rollouts/test2404"
@@ -52,7 +52,7 @@ data_options:
 test_options:
   rollout_refine: False  # Set False for: rollout the predictions, True for: single-step prediction for all steps
   rollout_path: "rollouts/test24/rollout_test_0.json"
-  metadata_path: "./data/2024-3-absnorm"
+  metadata_path: "./data/2025-3-absnorm"
   step_stride: 3
   block_on_show: True
   ds_type: str = "standard"  # test data type: ['standard', 'train', 'test']
