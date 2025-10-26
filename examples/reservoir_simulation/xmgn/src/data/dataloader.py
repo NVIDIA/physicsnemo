@@ -121,7 +121,7 @@ def compute_global_statistics(graph_files, stats_file=None):
     print(f"Computing statistics from {len(graph_files)} graphs...")
     for i, file_path in enumerate(graph_files, 1):
         try:
-            graph = torch.load(file_path)
+            graph = torch.load(file_path, weights_only=False)
 
             # Collect node features
             if hasattr(graph, "x") and graph.x is not None:

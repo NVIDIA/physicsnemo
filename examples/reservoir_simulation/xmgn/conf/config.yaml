@@ -36,7 +36,7 @@ runspec:
 dataset:
   simulator: OPM                                # Simulator type (OPM, ECLIPSE, IX)
   sim_dir: ../dataset/2D_OW/CASE_2D.sim         # Directory containing simulation cases and results
-  num_samples: 50                               # Number of samples to process (default = all, else for small size testing)
+  num_samples: 20                               # Number of samples to process (default = all, else for small size testing)
   uniform_geometry: true                        # Flag (uniform geometry across samples) for skipping egrid reading repeatedly. Use false for non-uniform geometry (e.g., DFN)
   
   # Graph configuration
@@ -44,7 +44,7 @@ dataset:
     node_features:
       static: ["PERMX", "PORV", "X", "Y", "Z"]                # Static node features (ECL standard + some custom keys supported)
       dynamic: 
-        variables: ["PRESSURE", "SWAT", "WCID", "WCCF"]       # Dynamic node features (current timestep) 
+        variables: ["PRESSURE", "SWAT", "WCID"]               # Dynamic node features (current timestep) 
         prev_timesteps: 0                                     # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
       # time_series: ["WWIR"]                                 # Time series variables #TODO: implement later (currently not used)
     

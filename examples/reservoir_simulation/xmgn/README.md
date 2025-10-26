@@ -8,6 +8,8 @@ dataset.
 
 ### Prerequisites
 
+**Python Version**: Python 3.10 or higher (tested with Python 3.10 and 3.11)
+
 **Install Dependencies**:
 
 ```bash
