@@ -1,0 +1,894 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import re
+import glob
+import h5py
+import pickle
+import numpy as np
+import torch
+from torch_geometric.data import Data
+from collections.abc import Mapping
+from hydra.utils import to_absolute_path
+from sim_utils import EclReader, Well, Grid
+
+
+class ReservoirGraphBuilder:
+    """Builds graph structures from reservoir simulation data.
+
+    This class processes reservoir simulation output files and creates
+    PyTorch Geometric graph structures for machine learning tasks.
+    """
+
+    ECL_SIMULATORS = ["OPM", "ECLIPSE", "IX"]
+
+    # CMG_SIMULATORS = ["IMEX", "GEM", "STARS"] # TODO: implement
+    # NEXUS_SIMULATORS = [""] # TODO: implement
+    def __init__(self, cfg):
+        self.sim_dir = to_absolute_path(cfg.dataset.sim_dir)
+        self.simulator = cfg.dataset.get("simulator", "").upper()
+        self.num_samples = cfg.dataset.get(
+            "num_samples", None
+        )  # Limit number of samples to process
+
+        # Get graph configuration
+        self.graph_config = cfg.dataset.get("graph", None)
+        if self.graph_config is None:
+            raise ValueError(
+                "'dataset.graph' section is required in configuration. Please provide graph configuration."
+            )
+
+        # Set prev_timestep_idx based on prev_timesteps
+        self.prev_timestep_idx = (
+            self.graph_config.node_features.dynamic.get("prev_timesteps", 0) + 1
+        )
+
+        # Create vars config for reading simulation data and graph creation
+        # Check which coordinate components are requested as static features
+        self.requested_coordinates = [
+            coord
+            for coord in ["X", "Y", "Z"]
+            if coord in self.graph_config.node_features.static
+        ]
+        self.include_coordinates_as_features = len(self.requested_coordinates) == 3
+
+        # Don't filter out X, Y, Z - let them be handled as regular static variables if requested
+        static_vars = list(self.graph_config.node_features.static)
+
+        self.vars = {
+            "grid": {
+                "uniform_geometry": cfg.dataset.uniform_geometry,
+                "static": static_vars,
+                "dynamic": list(self.graph_config.node_features.dynamic.variables),
+            }
+        }
+        self.output_vars = list(self.graph_config.target_vars.node_features)
+
+        # Get nonlinear scaling configuration
+        self.nonlinear_scaling = getattr(self.graph_config, "nonlinear_scaling", [])
+        self.global_vars = self.graph_config.global_features
+
+        # Add edge features to static vars if specified
+        if hasattr(self.graph_config, "edge_features"):
+            edge_vars = self.graph_config.edge_features
+            if isinstance(edge_vars, list):
+                self.vars["grid"]["static"].extend(list(edge_vars))
+
+        # Add nonlinear scaling if specified
+        if hasattr(self.graph_config, "nonlinear_scaling"):
+            self.vars["nonlinear_scaling"] = list(self.graph_config.nonlinear_scaling)
+
+        self._validate_config()
+        self._parse_dist()
+        self._set_output_path()
+
+    def _validate_config(self) -> None:
+        if self.simulator not in self.ECL_SIMULATORS:
+            raise NotImplementedError(
+                f"Unsupported simulator '{self.simulator}'. Supported simulators are: {self.ECL_SIMULATORS}"
+            )
+        if self.vars is None:
+            raise ValueError("'vars' cannot be empty.")
+        if self.output_vars is None:
+            raise ValueError("'output_vars' must be specified in config.")
+
+        # Validate output_vars
+        if not hasattr(self.output_vars, "__iter__"):
+            raise ValueError("'output_vars' must be iterable.")
+
+    def _parse_dist(self):
+        self._dist_map = {}
+        entries = self.vars.get("nonlinear_scaling", [])
+        for entry in entries:
+            key, method = entry.split(":")
+            self._dist_map[key.upper()] = method.upper()
+
+    def _find_primary_input_files(self):
+        """Find simulation primary input files based on simulator type.
+
+        Returns:
+            list: Sorted list of primary input file paths
+
+        Note:
+            - ECLIPSE/OPM: *.DATA files
+            - IX: *.AFI files
+            - CMG, NEXUS: TODO - implement support
+        """
+        # Determine file extension based on simulator type
+        if self.simulator == "IX":
+            extension = "*.AFI"
+            pattern_regex = r"_(\d+)\.AFI$"
+        else:  # ECLIPSE, OPM
+            extension = "*.DATA"
+            pattern_regex = r"_(\d+)\.DATA$"
+
+        pattern = os.path.join(self.sim_dir, "**", extension)
+        return sorted(
+            glob.glob(pattern, recursive=True),
+            key=lambda fp: int(
+                re.search(pattern_regex, os.path.basename(fp), re.IGNORECASE).group(1)
+            )
+            if re.search(pattern_regex, os.path.basename(fp), re.IGNORECASE)
+            else float("inf"),
+        )
+
+    def _set_output_path(self):
+        out_dir = os.path.join(
+            os.path.dirname(self.sim_dir), f"{os.path.basename(self.sim_dir)}.dataset"
+        )
+        self._output_path_graph = os.path.join(out_dir, "graphs")
+        self._output_path_well = os.path.join(out_dir, "well.pkl")
+        # Note: Directory creation is handled by preprocessor to ensure correct job-specific paths
+
+    def get_completion_info(self, grid, well_info) -> list:
+        """Extract well completion information from simulation data.
+
+        Args:
+            grid: Grid object containing grid information.
+            well_info: Dictionary containing well data from restart files.
+
+        Returns:
+            list: List of Well objects with completion data for each timestep.
+        """
+        wells_lst = []
+        for i in range(len(well_info["ZWEL"])):
+            INTEHEAD = well_info["INTEHEAD"][i]
+            ZWEL = well_info["ZWEL"][i]
+            IWEL = well_info["IWEL"][i]
+            ICON = well_info["ICON"][i]
+            SCON = well_info["SCON"][i]
+
+            NWELLS, NCWMAX, NICONZ, NSCONZ = (
+                INTEHEAD[16],
+                INTEHEAD[17],
+                INTEHEAD[32],
+                INTEHEAD[33],
+            )
+            if NWELLS == 0:
+                wells_lst.append([])  # no wells operating
+                continue
+
+            IWEL = IWEL.reshape((-1, NWELLS), order="F")
+            ICON = ICON.reshape((NICONZ, NCWMAX, NWELLS), order="F")
+            SCON = SCON.reshape((NSCONZ, NCWMAX, NWELLS), order="F")
+
+            well_names = ["".join(row).strip() for row in ZWEL if "".join(row).strip()]
+            wells = {
+                name: Well(name=name, type_id=IWEL[6, i], stat=IWEL[10, i])
+                for i, name in enumerate(well_names)
+            }
+
+            for iwell, name in enumerate(well_names):
+                for id, icon in enumerate(ICON[:, :, iwell].T):
+                    scon = SCON[:, id, iwell]
+                    if icon[0] == 0:
+                        break
+                    I, J, K = icon[1:4]
+                    well = wells[name]
+                    well.add_completion(
+                        I=I, J=J, K=K, dir=icon[13], stat=icon[5], conx_factor=scon[0]
+                    )
+                    well.completions[-1].set_ijk(grid.ijk_from_I_J_K(I, J, K))
+
+            wells_lst.append(wells)
+
+        return wells_lst
+
+    def _apply_nonlinear_scaling(self, data, var_name):
+        """
+        Apply nonlinear scaling to data based on configuration.
+
+        Parameters:
+        -----------
+        data : np.ndarray
+            Input data array
+        var_name : str
+            Variable name to check for scaling configuration
+
+        Returns:
+        --------
+        np.ndarray
+            Scaled data array
+        """
+        # Check if this variable has nonlinear scaling configured
+        for scaling_config in self.nonlinear_scaling:
+            if ":" in scaling_config:
+                var, scaling_type = scaling_config.split(":", 1)
+                if var == var_name:
+                    if scaling_type.upper() == "LOG10":
+                        # Apply log10 scaling: log10(max(data, 1e-10))
+                        # Use 1e-10 as minimum to avoid log(0)
+                        data_scaled = np.log10(np.maximum(data, 1e-10))
+                        print(f"Applied LOG10 scaling to variable '{var_name}'")
+                        return data_scaled
+                    elif scaling_type.upper() == "LOG":
+                        # Apply natural log scaling: log(max(data, 1e-10))
+                        data_scaled = np.log(np.maximum(data, 1e-10))
+                        print(f"Applied LOG scaling to variable '{var_name}'")
+                        return data_scaled
+                    elif scaling_type.upper() == "SQRT":
+                        # Apply square root scaling: sqrt(max(data, 0))
+                        data_scaled = np.sqrt(np.maximum(data, 0))
+                        print(f"Applied SQRT scaling to variable '{var_name}'")
+                        return data_scaled
+                    else:
+                        print(
+                            f"Warning: Unknown scaling type '{scaling_type}' for variable '{var_name}'. Skipping scaling."
+                        )
+
+        # No scaling configured for this variable
+        return data
+
+    def build_graph_from_simulation_data(
+        self, grid, wells_data, data, sample_idx, timestep_idx=0, case_name=None
+    ):
+        """
+        Build a reservoir simulation graph from processed data.
+
+        Parameters:
+        -----------
+        grid : Grid object
+            Grid object with all grid information
+        wells_data : list
+            List of Well objects for this sample
+        data : dict
+            Combined data dictionary containing both static and dynamic properties
+        sample_idx : int
+            Index of the sample
+        timestep_idx : int
+            Current timestep index
+
+        Returns:
+        --------
+        graph : pyg.data.Data
+            Graph with node and edge features
+        """
+
+        # Get connections and transmissibility
+        conx, tran = grid.get_conx_tran()
+        edge_index = conx.T  # (2, E)
+        tran = self._apply_nonlinear_scaling(tran, var_name="TRAN")
+        edge_features = tran.reshape(-1, 1)  # (E, 1)
+
+        # Create coordinates array for the graph (optional - only if coordinates are not in node features)
+        coordinates = (
+            None
+            if self.include_coordinates_as_features
+            else np.column_stack([grid.X, grid.Y, grid.Z])
+        )  # (N_active, 3)
+
+        # Extract input variables (current timestep)
+        input_tensors = []
+        input_var_names = []
+
+        # Add static variables (including X, Y, Z if requested as node features in config)
+        for var in self.vars["grid"]["static"]:
+            try:
+                var_data = np.asarray(data[var], dtype=np.float32)
+                var_data = self._apply_nonlinear_scaling(var_data, var)
+
+                input_tensors.append(
+                    torch.tensor(var_data, dtype=torch.float32).unsqueeze(1)
+                )
+                input_var_names.append(var)
+            except Exception as e:
+                print(
+                    f"Error: Failed to process static variable '{var}' - {type(e).__name__}: {e}"
+                )
+                return None
+
+        # Add dynamic variables (multiple previous timesteps) - including completion
+        dynamic_vars = list(self.vars["grid"]["dynamic"])
+
+        for var in dynamic_vars:
+            if var in data:
+                # Check if we have enough timesteps for the required history
+                if timestep_idx + 1 < self.prev_timestep_idx:
+                    print(
+                        f"Error: Not enough timesteps for variable '{var}' (need {self.prev_timestep_idx}, have {timestep_idx + 1}) - skipping graph"
+                    )
+                    return None
+
+                try:
+                    # Extract data from multiple previous timesteps
+                    var_data_list = []
+                    for t in range(self.prev_timestep_idx):
+                        prev_timestep = timestep_idx - t  # Go backwards in time
+                        if prev_timestep < 0 or prev_timestep >= len(data[var]):
+                            print(
+                                f"Error: Variable '{var}' not available at timestep {prev_timestep} - skipping graph"
+                            )
+                            return None
+                        var_data_list.append(data[var][prev_timestep])
+
+                    # Stack the historical data: [prev_timestep_idx, n_active]
+                    var_data_stacked = np.stack(var_data_list, axis=0)
+                    # Reshape to [n_active, prev_timestep_idx] to match static features
+                    var_data_reshaped = (
+                        var_data_stacked.T
+                    )  # Transpose to [n_active, prev_timestep_idx]
+
+                    # Apply nonlinear scaling if specified in config
+                    var_data_reshaped = self._apply_nonlinear_scaling(
+                        var_data_reshaped, var
+                    )
+
+                    input_tensors.append(
+                        torch.tensor(var_data_reshaped, dtype=torch.float32)
+                    )
+                    input_var_names.append(f"{var}_history")
+                except Exception as e:
+                    print(
+                        f"Error: Failed to process variable '{var}' - {type(e).__name__}: {e}"
+                    )
+                    return None
+            else:
+                print(f"Error: Variable '{var}' not available - skipping graph")
+                return None
+
+        # Concatenate all input features (will add temporal features if enabled)
+        node_features = torch.cat(input_tensors, dim=1)
+
+        # Extract target variables (next timestep)
+        target_timestep = timestep_idx + 1
+        target_tensors = []
+        target_var_names = []
+
+        for var in self.output_vars:
+            if var in data and target_timestep < len(data[var]):
+                try:
+                    target_data = np.asarray(
+                        data[var][target_timestep], dtype=np.float32
+                    )
+                    target_data = self._apply_nonlinear_scaling(target_data, var)
+
+                    target_tensors.append(
+                        torch.tensor(target_data, dtype=torch.float32).unsqueeze(1)
+                    )
+                    target_var_names.append(var)
+                except Exception as e:
+                    print(
+                        f"Error: Failed to process target variable '{var}' at timestep {target_timestep} for sample {sample_idx} - {type(e).__name__}: {e}"
+                    )
+                    return None
+            else:
+                print(
+                    f"Error: Target variable '{var}' not available at timestep {target_timestep} for sample {sample_idx}"
+                )
+                # If target is not available, return None to skip this graph
+                return None
+
+        # Concatenate target features
+        target = torch.cat(target_tensors, dim=1)
+
+        # Add temporal features to node features if enabled in config
+        # This is the standard approach for incorporating time info in autoregressive GNNs
+        n_nodes = node_features.shape[0]
+        temporal_feature_names = []
+
+        if self.global_vars.get("delta_t", False) or self.global_vars.get(
+            "time", False
+        ):
+            # Validate that we have TIME data available
+            if "TIME" not in data or len(data["TIME"]) == 0:
+                print(
+                    f"Error: No TIME data available in restart file for sample {sample_idx}"
+                )
+                return None
+
+            if target_timestep >= len(data["TIME"]):
+                print(
+                    f"Error: Target timestep {target_timestep} >= available timesteps {len(data['TIME'])} for sample {sample_idx}"
+                )
+                return None
+
+            if timestep_idx >= len(data["TIME"]):
+                print(
+                    f"Error: Current timestep {timestep_idx} >= available timesteps {len(data['TIME'])} for sample {sample_idx}"
+                )
+                return None
+
+            try:
+                # Calculate actual delta_t from TIME array
+                delta_t = data["TIME"][target_timestep] - data["TIME"][timestep_idx]
+            except Exception as e:
+                print(
+                    f"Error: Failed to calculate delta_t for sample {sample_idx} - {type(e).__name__}: {e}"
+                )
+                return None
+
+            # Add delta_t as node feature (broadcast to all nodes)
+            if self.global_vars.get("delta_t", False):
+                delta_t_feature = torch.full((n_nodes, 1), delta_t, dtype=torch.float32)
+                node_features = torch.cat([node_features, delta_t_feature], dim=1)
+                temporal_feature_names.append("delta_t")
+                input_var_names.append("delta_t")
+
+            # Add normalized time as node feature (broadcast to all nodes)
+            if self.global_vars.get("time", False):
+                total_time = data["TIME"][-1] if len(data["TIME"]) > 0 else 1.0
+                time_normalized = data["TIME"][timestep_idx] / max(total_time, 1.0)
+                time_feature = torch.full(
+                    (n_nodes, 1), time_normalized, dtype=torch.float32
+                )
+                node_features = torch.cat([node_features, time_feature], dim=1)
+                temporal_feature_names.append("time")
+                input_var_names.append("time")
+
+            if temporal_feature_names:
+                print(
+                    f"  Added temporal features as node features: {', '.join(temporal_feature_names)}"
+                )
+
+        # Keep global_features for backward compatibility and metadata (not used by model)
+        global_features = None
+
+        try:
+            # Build graph data dictionary dynamically
+            graph_data = {
+                "x": node_features,
+                "edge_index": torch.tensor(edge_index, dtype=torch.long),
+                "edge_attr": torch.tensor(edge_features, dtype=torch.float32),
+                "y": target,
+                "grid_info": {
+                    "nx": grid.nx,
+                    "ny": grid.ny,
+                    "nz": grid.nz,
+                    "total_cells": grid.nn,
+                    "active_cells": grid.nact,
+                    "sample_idx": sample_idx,
+                    "timestep_idx": timestep_idx,
+                    "target_timestep": target_timestep,
+                    "input_vars": input_var_names,
+                    "target_vars": target_var_names,
+                },
+                "case_name": case_name or f"sample_{sample_idx:03d}",
+                "timestep_id": timestep_idx,
+            }
+
+            # Add global_features only if populated (for backward compatibility)
+            if global_features is not None:
+                graph_data["global_features"] = global_features
+
+            # Add coordinates only if they're not already in node features
+            if coordinates is not None:
+                graph_data["coordinates"] = torch.tensor(
+                    coordinates, dtype=torch.float32
+                )
+        except Exception as e:
+            print(
+                f"Error: Failed to create graph data dictionary for sample {sample_idx} - {type(e).__name__}: {e}"
+            )
+            return None
+
+        try:
+            # Create graph
+            graph = Data(**graph_data)
+            return graph
+        except Exception as e:
+            print(
+                f"Error: Failed to create PyTorch Geometric Data object for sample {sample_idx} - {type(e).__name__}: {e}"
+            )
+            return None
+
+    def _prepare_data_keys(self):
+        """Prepare the keys needed for reading simulation data."""
+        init_keys = list(
+            dict.fromkeys(
+                self.vars["grid"]["static"]
+                + ["INTEHEAD", "PORV", "TRANX", "TRANY", "TRANZ", "TRANNNC"]
+            )
+        )
+
+        # EGRID keys (skip expensive ones if coordinates aren't needed)
+        egrid_keys_geometry = ["COORD", "ZCORN", "FILEHEAD"]
+        if not self.include_coordinates_as_features:
+            egrid_keys_geometry = [
+                k for k in egrid_keys_geometry if k not in ("COORD", "ZCORN")
+            ]
+        egrid_keys_nnc = ["NNC1", "NNC2"]
+
+        rst_well_keys = ["INTEHEAD", "ZWEL", "IWEL", "ICON", "SCON"]
+
+        return init_keys, (egrid_keys_geometry, egrid_keys_nnc), rst_well_keys
+
+    def _prepare_dynamic_variables(self):
+        """Prepare dynamic variables and completion requirements."""
+        dyn_vars = self.vars.get("grid", {}).get("dynamic", []) or []
+        include_well_completion_ids = "WCID" in dyn_vars
+        include_well_completion_cf = "WCCF" in dyn_vars
+        if include_well_completion_ids:
+            dyn_vars.remove("WCID")
+        if include_well_completion_cf:
+            dyn_vars.remove("WCCF")
+        include_well_completions = (
+            include_well_completion_ids or include_well_completion_cf
+        )
+        return (
+            dyn_vars,
+            include_well_completion_ids,
+            include_well_completion_cf,
+            include_well_completions,
+        )
+
+    def _process_static_data(self, reader, init_keys, egrid_data, sample_idx_1based):
+        """Process static grid data and validate it."""
+        init_data = reader.read_init(init_keys)
+
+        # Add coordinates if requested
+        if self.include_coordinates_as_features:
+            grid = Grid(init_data, egrid_data)
+            for key in self.requested_coordinates:
+                init_data[key] = getattr(grid, key)
+        else:
+            grid = Grid(init_data, egrid_data)
+
+        # Filter full-grid keys to active cells only
+        for key in Grid.FULL_GRID_KEYS:
+            if key in init_data and len(init_data[key]) == grid.nn:
+                init_data[key] = init_data[key][grid.actnum_bool]
+
+        # Validate static data
+        for key in self.vars["grid"]["static"]:
+            if len(init_data[key]) == 0:
+                raise ValueError(
+                    f"  Error: Failed to read {key} from init/egrid file for sample {sample_idx_1based}"
+                )
+
+        return init_data, grid
+
+    def _process_dynamic_data(
+        self,
+        reader,
+        grid,
+        dynamic_variables,
+        rst_well_keys,
+        include_well_completions,
+        include_well_completion_cf,
+        sample_idx_1based,
+    ):
+        """Process dynamic data including wells and completion arrays."""
+        wells_data = []
+        rst_data = {}
+
+        if not dynamic_variables:
+            return wells_data, rst_data
+
+        try:
+            rst_well_data = reader.read_restart(rst_well_keys)
+            wells_data = self.get_completion_info(grid, rst_well_data)
+            rst_data = reader.read_restart(dynamic_variables)
+
+            # Handle completion arrays if needed
+            if wells_data and include_well_completions:
+                try:
+                    completion_arrays_inj, completion_arrays_prd = [], []
+                    for wells in wells_data:
+                        cmpl_inj, cmpl_prd = grid.create_completion_array(
+                            wells, include_well_completion_cf
+                        )
+                        completion_arrays_inj.append(cmpl_inj)
+                        completion_arrays_prd.append(cmpl_prd)
+                    # use states from next time step
+                    rst_data["WCID_INJ"] = completion_arrays_inj[1:]
+                    rst_data["WCID_PRD"] = completion_arrays_prd[1:]
+                except Exception as e:
+                    self._log_error_and_continue(
+                        f"Failed to create completion arrays for sample {sample_idx_1based} - {type(e).__name__}: {e}"
+                    )
+                    return None, None
+
+            # Validate dynamic data
+            for key in dynamic_variables:
+                if key not in rst_data or not rst_data[key]:
+                    print(
+                        f"  ⚠️ Warning: Failed to read {key} from restart file for sample {sample_idx_1based}"
+                    )
+                    rst_data[key] = []
+
+        except Exception as e:
+            self._log_error_and_continue(
+                f"Failed to read restart data for sample {sample_idx_1based} - {type(e).__name__}: {e}"
+            )
+            return None, None
+
+        return wells_data, rst_data
+
+    def _validate_timesteps(self, combined_data, dynamic_variables, sample_idx_1based):
+        """Validate timesteps and return valid ones."""
+        times = combined_data.get("TIME") or []
+        if len(times) < 2:
+            self._log_error_and_continue(
+                f"Sample {sample_idx_1based} has only {len(times)} timestep(s), need at least 2 for current->target prediction"
+            )
+            return []
+
+        # Find valid timesteps
+        valid_timesteps = []
+        max_t = len(times) - 1  # because we use t+1 as target
+
+        for t in range(max_t):
+            if self._is_timestep_valid(combined_data, dynamic_variables, t):
+                valid_timesteps.append(t)
+
+        if not valid_timesteps:
+            self._log_error_and_continue(
+                f"No valid timesteps found for sample {sample_idx_1based} (simulation may have died early)"
+            )
+            return []
+
+        return valid_timesteps
+
+    def _is_timestep_valid(self, combined_data, dynamic_variables, t):
+        """Check if a timestep has all required data."""
+        # Check inputs (t)
+        for var in dynamic_variables:
+            if var not in combined_data or len(combined_data[var]) <= t:
+                return False
+
+        # Check targets (t+1)
+        for var in self.output_vars:
+            if var not in combined_data or len(combined_data[var]) <= (t + 1):
+                return False
+
+        return True
+
+    def _log_error_and_continue(self, message, context=""):
+        """Log error message and return indication to continue."""
+        print(f"  {context}Error: {message}")
+        print("  → Skipping and continuing with the next one...")
+        return True
+
+    def _build_graphs_for_sample(
+        self,
+        grid,
+        wells_data,
+        combined_data,
+        valid_timesteps,
+        sample_idx_1based,
+        case_name,
+    ):
+        """Build graphs for all valid timesteps of a sample."""
+        graphs = []
+        total_possible = len(combined_data.get("TIME", [])) - 1
+
+        print(
+            f"  → Creating {len(valid_timesteps)} graphs for {len(valid_timesteps)} valid timesteps (out of {total_possible} possible)"
+        )
+
+        for t in valid_timesteps:
+            try:
+                graph = self.build_graph_from_simulation_data(
+                    grid,
+                    wells_data,
+                    combined_data,
+                    sample_idx=sample_idx_1based - 1,
+                    timestep_idx=t,
+                    case_name=case_name,
+                )
+                if graph is None:
+                    self._log_error_and_continue(
+                        f"Graph creation returned None for timestep {t} (missing data or simulation died)",
+                        "  ",
+                    )
+                    continue
+
+                graphs.append(graph)
+                print(
+                    f"    → Graph {t + 1}: {graph.x.shape[0]} nodes, {graph.edge_index.shape[1]} edges"
+                )
+
+            except Exception as e:
+                self._log_error_and_continue(
+                    f"Graph creation failed for timestep {t} - {type(e).__name__}: {e}",
+                    "  ",
+                )
+                continue
+
+        return graphs
+
+    def _parse_results_from_samples(self) -> dict:
+        """
+        Parse simulation results and create graphs from all samples.
+
+        This is the main orchestration method that:
+        1. Finds and validates input files
+        2. Processes each sample's static and dynamic data
+        3. Validates timesteps and builds graphs
+        4. Returns all successfully created graphs
+        """
+        # === INITIALIZATION ===
+        sim_input_files = self._find_primary_input_files()
+        if not sim_input_files:
+            file_type = ".AFI" if self.simulator == "IX" else ".DATA"
+            raise RuntimeError(
+                f"No {file_type} files found in {self.sim_dir}. Check the path and file naming."
+            )
+
+        # Prepare data keys and variables for reading simulation files
+        init_keys, egrid_keys, rst_well_keys = self._prepare_data_keys()
+        egrid_keys_geometry, egrid_keys_nnc = egrid_keys
+
+        (
+            dynamic_variables,
+            include_well_completion_ids,
+            include_well_completion_cf,
+            include_well_completions,
+        ) = self._prepare_dynamic_variables()
+
+        all_graphs = []
+        egrid_data_geometry = None  # Will be reused if geometry is uniform
+        failed_sample_count = 0
+
+        # Limit samples if specified
+        if self.num_samples is not None:
+            sim_input_files = sim_input_files[: self.num_samples]
+            print(f"\n🛠 Processing {len(sim_input_files)} simulation results...")
+
+        # === PROCESS EACH SAMPLE ===
+        for sample_idx_1based, file_path in enumerate(sim_input_files, start=1):
+            case_name = os.path.splitext(os.path.basename(file_path))[0]
+            try:
+                print(
+                    f"→ Sample {sample_idx_1based}/{len(sim_input_files)}: {case_name}"
+                )
+                reader = EclReader(file_path)
+
+                # Only read/refresh EGRID if needed (first sample or non-uniform geometry)
+                if (
+                    egrid_data_geometry is None
+                    or not self.vars["grid"]["uniform_geometry"]
+                ):
+                    egrid_data_geometry = reader.read_egrid(egrid_keys_geometry)
+                egrid_data_nnc = reader.read_egrid(
+                    (egrid_keys_nnc)
+                )  # read NNCs separately (NNCs can vary across samples)
+                egrid_data = {**egrid_data_geometry, **egrid_data_nnc}
+
+                # Process static grid data (porosity, permeability, etc.)
+                init_data, grid = self._process_static_data(
+                    reader, init_keys, egrid_data, sample_idx_1based
+                )
+
+                # Process dynamic data (pressure, saturation, wells, etc.)
+                wells_data, restart_data = self._process_dynamic_data(
+                    reader,
+                    grid,
+                    dynamic_variables,
+                    rst_well_keys,
+                    include_well_completions,
+                    include_well_completion_cf,
+                    sample_idx_1based,
+                )
+                if wells_data is None:  # Error occurred in processing
+                    continue
+
+                # Combine static + dynamic data for graph creation
+                combined_data = {**init_data, **restart_data}
+
+                # Validate timesteps and find valid ones for graph creation
+                valid_timesteps = self._validate_timesteps(
+                    combined_data, dynamic_variables, sample_idx_1based
+                )
+                if not valid_timesteps:
+                    continue
+
+                # Build graphs for all valid timesteps of this sample
+                sample_graphs = self._build_graphs_for_sample(
+                    grid,
+                    wells_data,
+                    combined_data,
+                    valid_timesteps,
+                    sample_idx_1based,
+                    case_name,
+                )
+                all_graphs.extend(sample_graphs)
+
+            except Exception as e:
+                failed_sample_count += 1
+                self._log_error_and_continue(
+                    f"Processing sample {sample_idx_1based} ({os.path.basename(file_path)}): {type(e).__name__}: {e}"
+                )
+                if failed_sample_count > 0.2 * len(sim_input_files):
+                    raise RuntimeError(f"Failed to process too many samples.")
+                continue
+
+        # === FINAL SUMMARY ===
+        total_samples = len(sim_input_files)
+        avg_graphs_per_sample = (
+            (len(all_graphs) / total_samples) if total_samples else 0.0
+        )
+        print(f"\n📊 Processing Summary:")
+        print(f"  → Total samples processed: {total_samples}")
+        print(f"  → Total graphs created: {len(all_graphs)}")
+        print(f"  → Average graphs per sample: {avg_graphs_per_sample:.1f}")
+
+        return all_graphs
+
+    def _save_graphs(self, all_graphs):
+        """
+        Save all graphs to individual files.
+
+        Parameters:
+        -----------
+        all_graphs : list
+            List of PyTorch Geometric Data objects
+
+        Returns:
+        --------
+        list: List of generated graph file names
+        """
+        print(f"\n💾 Saving {len(all_graphs)} graphs...")
+
+        generated_files = []
+        for i, graph in enumerate(all_graphs):
+            # Extract case name and timestep from the graph's metadata or filename
+            case_name = getattr(
+                graph, "case_name", f"sample_{i // 10:03d}"
+            )  # Default to sample if not available
+            timestep_id = getattr(
+                graph, "timestep_id", i % 10
+            )  # Default to modulo if not available
+
+            # Create filename: case_name_timestep_id.pt
+            filename = f"{case_name}_{timestep_id:03d}.pt"
+            graph_path = os.path.join(self._output_path_graph, filename)
+            torch.save(graph, graph_path)
+            generated_files.append(filename)
+            print(f"  → Saved: {graph_path}")
+
+        print(f"✅ All graphs saved to {self._output_path_graph}")
+        return generated_files
+
+    def _save_well_list_pickle(self, wells_data):
+        """
+        Save wells_data (list of lists of dicts of Well objects) to a pickle file.
+        """
+        with open(self._output_path_well, "wb") as f:
+            pickle.dump(wells_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"\nWell data saved to {self._output_path_well}")
+
+    def execute(self):
+        all_graphs = self._parse_results_from_samples()
+
+        # Save graphs directly
+        generated_files = self._save_graphs(all_graphs)
+
+        print(f"\n✅ Processed {len(all_graphs)} graphs successfully!")
+        print(f"📁 Graphs saved to: {self._output_path_graph}")
+
+        return generated_files

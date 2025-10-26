@@ -1,0 +1,29 @@
+# XMeshGraphNet Standalone Training Requirements
+# Tested with Python 3.10 and CUDA 12.1
+
+# Core dependencies
+torch==2.1.0
+torchaudio==2.1.0
+torchvision==0.16.0
+numpy>=1.26.0,<2.0
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+
+# PyTorch Geometric and extensions
+# IMPORTANT: Install these with the correct build for PyTorch 2.1.0+cu121
+torch-geometric>=2.6.0
+# Install PyG extensions from the PyG wheel repository:
+# pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+
+# Data handling
+h5py>=3.14.0
+
+# Experiment tracking
+mlflow>=3.4.0
+
+# NVIDIA PhysicsNeMo
+nvidia-physicsnemo==1.2.0
+
+# Notes:
+# - scipy is automatically installed as a dependency of torch-sparse
+# - tqdm removed (using simple print statements for progress)
