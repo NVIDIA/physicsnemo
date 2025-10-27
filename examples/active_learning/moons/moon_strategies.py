@@ -229,7 +229,14 @@ class F1Metrology(MetrologyStrategy):
         """Attach the driver to the metrology strategy."""
         self.driver = driver
 
+    @property
+    def is_attached(self) -> bool:
+        """Check if the metrology strategy is attached to a driver."""
+        return hasattr(self, "driver")
+
     def serialize_records(self, *args: Any, **kwargs: Any) -> None:
         """Serialize the records of the metrology strategy."""
-        with open(self.driver.log_dir / "f1_metrology.json", "w") as f:
+        output_path = self.strategy_dir / f"step_{self.driver.active_learning_step_idx}"
+        output_path.mkdir(parents=True, exist_ok=True)
+        with open(output_path / "f1_metrology.json", "w") as f:
             json.dump(self.records, f, indent=2)
