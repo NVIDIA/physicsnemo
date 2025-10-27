@@ -742,9 +742,12 @@ class Trainer:
 
                 for partition in partitions:
                     loss, _, _, _ = self._process_partition(partition, is_training=True)
-                    # Scale by both num_partitions and num_samples for proper gradient accumulation
+
+                    # For logging: accumulate loss scaled only by num_partitions (consistent with validation)
+                    sample_loss += loss.item() / num_partitions
+
+                    # For gradient computation: scale by total number of forward passes in the batch
                     loss = loss / (num_partitions * num_samples)
-                    sample_loss += loss.item()
 
                     # Backward pass
                     if self.device.type == "cuda":
