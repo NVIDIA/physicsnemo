@@ -169,6 +169,7 @@ import inspect
 import logging
 from enum import StrEnum
 from logging import Logger
+from pathlib import Path
 from typing import Any, Iterator, Protocol, TypeVar
 
 import torch
@@ -386,6 +387,7 @@ class ActiveLearningProtocol(Protocol):
     """
 
     __protocol_name__: str
+    __protocol_type__: ActiveLearningPhase
     _args: dict[str, Any]
 
     def __new__(cls, *args: Any, **kwargs: Any) -> ActiveLearningProtocol:
@@ -523,6 +525,36 @@ class ActiveLearningProtocol(Protocol):
         # This prevents duplicate console output
         self.logger.setLevel(logging.WARNING)
 
+    @property
+    def strategy_dir(self) -> Path:
+        """
+        Returns the directory where the underlying strategy can use
+        to persist data.
+
+        Depending on the strategy abstraction, further nesting may be
+        required (e.g active learning step index, phase, etc.).
+
+        Returns
+        -------
+        Path
+            The directory where the metrology strategy will persist
+            its records.
+
+        Raises
+        ------
+        RuntimeError
+            If the metrology strategy is not attached to a driver yet.
+        """
+        if not self.is_attached:
+            raise RuntimeError(
+                f"{self.__class__.__name__} is not attached to a driver yet."
+            )
+        path = (
+            self.driver.log_dir / str(self.__protocol_type__) / self.__class__.__name__
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 class QueryStrategy(ActiveLearningProtocol):
     """
@@ -542,6 +574,7 @@ class QueryStrategy(ActiveLearningProtocol):
     """
 
     max_samples: int
+    __protocol_type__ = ActiveLearningPhase.QUERY
 
     def sample(self, query_queue: AbstractQueue[T], *args: Any, **kwargs: Any) -> None:
         """
@@ -608,6 +641,7 @@ class LabelStrategy(ActiveLearningProtocol):
 
     __is_external_process__: bool
     __provides_fields__: set[str] | None = None
+    __protocol_type__ = ActiveLearningPhase.LABELING
 
     def label(
         self,
@@ -681,6 +715,7 @@ class MetrologyStrategy(ActiveLearningProtocol):
     """
 
     records: list[S]
+    __protocol_type__ = ActiveLearningPhase.METROLOGY
 
     def append(self, record: S) -> None:
         """
@@ -710,6 +745,9 @@ class MetrologyStrategy(ActiveLearningProtocol):
 
         This should be defined by a concrete implementation, which dictates
         how the records are persisted, e.g. to a JSON file, database, etc.
+
+        The `strategy_dir` property can be used to determine the directory where
+        the records should be persisted.
 
         Parameters
         ----------
