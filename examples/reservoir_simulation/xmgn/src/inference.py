@@ -142,7 +142,7 @@ class InferenceRunner:
                         loaded_epoch = int(parts[2])
                     else:
                         loaded_epoch = 0
-                except:
+                except Exception:
                     loaded_epoch = 0
 
                 self.logger.info(
