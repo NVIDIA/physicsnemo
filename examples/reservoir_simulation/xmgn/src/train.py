@@ -752,7 +752,8 @@ class Trainer:
                     else:
                         loss.backward()
 
-            total_batch_loss += sample_loss
+                # Accumulate loss from this sample
+                total_batch_loss += sample_loss
 
             # Update optimizer after processing all samples and partitions
             if self.device.type == "cuda":
