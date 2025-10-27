@@ -97,7 +97,7 @@ print(f"Cell coordinates: X={grid.X}, Y={grid.Y}, Z={grid.Z}")
 ### `well.py`
 
 **Well** and **Completion** - Well and completion data structures. Typically,
-use results from `UNRST` (well name, type, status, I, J, K, etc.) to
+use results from `UNRST` (including well name, type, status, I, J, K) to
 instantiate the object.
 
 **Usage**:
