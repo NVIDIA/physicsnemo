@@ -77,19 +77,24 @@ please refer to their [paper](https://arxiv.org/pdf/2408.11969).
 
 #### Data Preprocessing
 
-`PhysicsNeMo` has a related project to help with data processing, called [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
+`PhysicsNeMo` has a related project to help with data processing, called
+[PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
 Using `PhysicsNeMo-Curator`, the data needed to train a DoMINO model can be setup easily.
-Please refer to [these instructions on getting started](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#what-is-physicsnemo-curator)
+Please refer to
+[these instructions on getting started](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#what-is-physicsnemo-curator)
 with `PhysicsNeMo-Curator`.
 
-Download the DrivAer ML dataset using the [provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md#download-drivaerml-dataset).
+Download the DrivAer ML dataset using the
+[provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md#download-drivaerml-dataset).
 The first step for running the DoMINO pipeline requires processing the raw data
 (vtp, vtu and stl) into either Zarr or NumPy format for training.
 Each of the raw simulations files are downloaded in `vtp`, `vtu` and `stl` formats.
 For instructions on running data processing to produce a DoMINO training ready dataset,
-please refer to [How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md).
+please refer to
+[How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md).
 
-Caching is implemented in [`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1250).
+Caching is implemented in
+[`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1250).
 Optionally, users can run `cache_data.py` to save outputs
 of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate
 Signed Distance Field and Nearest Neighbor interpolations on-the-fly during
@@ -100,6 +105,36 @@ processed files.
 
 The final processed dataset should be divided and saved into 2 directories,
 for training and validation.
+
+#### Data Scaling factors
+
+DoMINO has several data-specific configuration tools that rely on some
+knowledge of the dataset:
+
+- The output fields (the labels) are normalized during training to a mean
+  of zero and a standard deviation of one, averaged over the dataset.
+  The scaling is controlled by passing the `volume_factors` and
+  `surface_factors` values to the datapipe.
+- The input locations are scaled by, and optionally cropped to, used defined
+  bounding boxes for both surface and volume.  Whether cropping occurs, or not,
+  is controlled by the `sample_in_bbox` value of the datapipe.  Normalization
+  to the bounding box is enabled with `normalize_coordinates`.  By default,
+  both are set to true.  The value of the boxes are configured in the
+  `config.yaml` file, and are configured separately for surface and volume.
+
+> Note: The datapipe module has a helper function `create_domino_dataset`
+> with sensible defaults to help create a Domino Datapipe.
+
+To facilitate setting reasonable values of these, you can use the
+`compute_statistics.py` script.  This will load the core dataset as defined
+in your `config.yaml` file, loop over several events (200, by default), and
+both print and store the surface/volume field statistics as well as the
+coordinate statistics.  
+
+> Note that, for volumetric fields especially, the min/max found may be
+> significantly outside the surface region.  Many simulations extend volumetric
+> sampling to far field, and you may instead want to crop significant amounts
+> of volumetric distance.
 
 #### Training
 
@@ -153,13 +188,14 @@ GPUs and perform operations in a numerically consistent way.  For more informati
 about the techniques of domain parallelism and `ShardTensor`, refer to PhysicsNeMo
 tutorials such as [`ShardTensor`](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.shardtensor.html).
 
-In DoMINO specifically, domain parallelism has been abled in two ways, which
+In DoMINO specifically, domain parallelism has been enabled in two ways, which
 can be used concurrently or separately.  First, the input sampled volumetric
 and surface points can be sharded to accomodate higher resolution point sampling
 Second, the latent space of the model - typically a regularlized grid - can be
 sharded to reduce computational complexity of the latent processing.  When training
 with sharded models in DoMINO, the primary objective is to enable higher
-resolution inputs and larger latent spaces without sacrificing substantial compute time.
+resolution inputs and larger latent spaces without sacrificing
+substantial compute time.
 
 When configuring DoMINO for sharded training, adjust the following parameters
 from `src/conf/config.yaml`:
@@ -172,22 +208,121 @@ domain_parallelism:
 ```
 
 The `domain_size` represents the number of GPUs used for each batch - setting
-`domain_size: 1` is not advised since that is the standard training regime,
-but with extra overhead.  `shard_grid` and `shard_points` will enable domain
+`domain_size: 1` is the standard training regime, and domain_parallelism
+will be ignored.  `shard_grid` and `shard_points` will enable domain
 parallelism over the latent space and input/output points, respectively.
 
-Please see `src/train_sharded.py` for more details regarding the changes
-from the standard training script required for domain parallel DoMINO training.
+Setting domain_size > 1 without specifying `shard_points=True` or `shard_grid=True`
+will result in a runtime error during configuration - if you do not want to use
+domain_parallelism, leave `domain_size=1`.
 
-As one last note regarding domain-parallel training: in the phase of the DoMINO
-where the output solutions are calculated, the model can used two different
-techniques (numerically identical) to calculate the output.  Due to the
-overhead of potential communication at each operation, it's recommended to
-use the `one-loop` mode with `model.solution_calculation_mode` when doing
-sharded training.  This technique launches vectorized kernels with less
-launch overhead at the cost of more memory use.  For non-sharded
-training, the `two-loop` setting is more optimal. The difference in `one-loop`
-or `two-loop` is purely computational, not algorithmic.
+### Performance Optimizations
+
+The training and inference scripts for DoMINO contain several performance
+enhancements to accelerate the training and usage of the model. In this
+section we'll highlight several of them, as well as how to customize them
+if needed.
+
+#### Memory Pool Optimizations
+
+The preprocessor of DoMINO requires a computation of k Nearest Neighbors,
+which is accelerated via the `cuml` Neighbors tool.  By default, `cuml` and
+`torch` both use memory allocation pools to speed up allocating tensors, but
+they do not use the same pool.  This means that during preprocessing, it's
+possible for the kNN operation to spend a significant amount of time in
+memory allocations - and further, it limits the available memory to `torch`.
+
+To mitigate this, by default in DoMINO we use the Rapids Memory Manager
+([`rmm`](https://github.com/rapidsai/rmm)).  If, for some reason, you wish
+to disable this you can do so with an environment variable:
+
+```bash
+export PHYSICSNEMO_DISABLE_RMM=True
+```
+
+Or remove this line from the training script:
+
+```python
+from physicsnemo.utils.memory import unified_gpu_memory
+```
+
+> Note - why not make it configurable?  We have to set up the shared memory
+> pool allocation very early in the program, before the config has even
+> been read.  So, we enable by default and the opt-out path is via the
+> environment.
+
+#### Reduced Volume Reads
+
+The dataset size for volumetric data can be quite substantial - DrivAerML, for
+example, has mesh sizes of 160M points per example.  Even though the models
+do not process all 160M points, in order to down sample dynamically they all
+must be read from disk - which can exceed bandwidth and CPU decoding capacity
+on nodes with multiple GPUs.
+
+As a performance enhancement, DoMINO's data pipeline offers a mitigation: instead
+of reading an entire volumetric mesh, during preprocessing we _shuffle_ the
+volumetric inputs and outputs (in tandem) and subsequent reads choose random
+slices of the volumetric data.  By default, DoMINO will read about 100x more data
+than necessary for the sampling size.  This allows the pipeline to still apply
+cuts for data inside of the bounding box, and further random sampling to improve
+training stability.  To enable/disable this parameter, set
+`data.volume_sample_from_disk=True` (enable) or `False` (disable)
+
+> Note - if you volumetric data is not larger than a few million mesh points,
+> pre-shuffling and sampling from disk is likely not necessary for you.
+
+`physicsnemo-curator` supports shuffling the volumetric data during preprocessing.
+If, however, you've already preprocessed your data and just want to apply
+shuffling, use the script at `src/shuffle_volumetric_curator_output.py`
+
+The shuffling script will also apply sharding to the output files, which
+improves IO performance.  So, `zarr>=3.0` is required to use the outputs from
+curator.  `src/shuffle_volumetric_curator_output.py` is meant to be an example of how
+to apply shuffling, so modify and update as you need for your dataset.
+
+> If you have tensorstore installed (it's in `requirements.txt`), the data reader
+> will work equally well with Zarr 2 or Zarr 3 files.
+
+#### Overall Performance
+
+DoMINO is a computationally complex and challenging workload.  Over the course
+of several releases, we have chipped away at performance bottlenecks to speed
+up the training and inference time (with `inference_on_stl.py`).  Overall
+training performance has decreased from about 5 days to just over 4 hours, with
+eight H100 GPUs.  We hope these optimizations enable you to explore more
+parameters and surrogate models; if there is a performance issue you see,
+please open an issue on GitHub.
+
+![Results from DoMINO for RTWT SC demo](../../../../docs/img/domino_perf.png)
+
+### Example Training Results
+
+To provide an example of what a successful training should look like, we include here
+some example results.  Training curves may look similar to this:
+
+![Combined Training Curve](../../../../docs/img/domino/combined-training-curve.png)
+
+And, when evaluating the results on the validation dataset, this particular
+run had the following L2 and R2 Metrics:
+
+|              Metric | Surface Only | Combined |
+|--------------------:|:------------:|:--------:|
+|          X Velocity |      N/A     |   0.086  |
+|          Y Velocity |      N/A     |   0.185  |
+|          Z Velocity |      N/A     |   0.197  |
+| Volumetric Pressure |      N/A     |   0.106  |
+|             Turb. V |      N/A     |   0.134  |
+|    Surface Pressure |     0.101    |   0.105  |
+|       X-Tau (Shear) |     0.138    |   0.145  |
+|       Y-Tau (Shear) |     0.174    |   0.185  |
+|       Z-Tau (Shear) |     0.198    |   0.207  |
+|             Drag R2 |     0.983    |   0.975  |
+|             Lift R2 |     0.971    |   0.968  |
+
+With the PhysicsNeMo CFD tool, you can create plots of the lift and drag
+forces computed by domino vs. the CFD Solver.  For example, here is the drag force:
+
+![Draf Force R^2](../../../../docs/img/domino/drag-r2.jpg)
 
 ### Training with Physics Losses
 
@@ -299,7 +434,7 @@ predictions' ability to respect the governing laws better.
 <table><thead>
   <tr>
     <th></th>
-    <th colspan="2">Total Residual</th>
+    <th colspan="2">Residual L2 Error (Computed w.r.t true Residuals)</th>
     <th></th>
   </tr></thead>
 <tbody>
@@ -311,27 +446,27 @@ predictions' ability to respect the governing laws better.
   </tr>
   <tr>
     <td>continuity</td>
-    <td>3.14E+11</td>
-    <td>1.58E+11</td>
-    <td>49.69%</td>
+    <td>30.352072</td>
+    <td>2.11262</td>
+    <td>93.04%</td>
   </tr>
   <tr>
     <td>momentum_x</td>
-    <td>1.01E+16</td>
-    <td>1.08E+15</td>
-    <td>89.24%</td>
+    <td>19.109278</td>
+    <td>2.33800</td>
+    <td>87.77%</td>
   </tr>
   <tr>
     <td>momentum_y</td>
-    <td>2.89E+16</td>
-    <td>9.24E+14</td>
-    <td>96.81%</td>
+    <td>99.36662</td>
+    <td>3.18452</td>
+    <td>96.80%</td>
   </tr>
   <tr>
     <td>momentum_z</td>
-    <td>5.44E+15</td>
-    <td>3.58E+14</td>
-    <td>93.43%</td>
+    <td>45.73862</td>
+    <td>2.691725</td>
+    <td>94.11%</td>
   </tr>
 </tbody>
 </table>

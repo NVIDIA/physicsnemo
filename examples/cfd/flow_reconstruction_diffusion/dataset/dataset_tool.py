@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -576,7 +576,6 @@ args = parser.parse_args()
 # ----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-
     main(
         source=args.source,
         dest=args.dest,

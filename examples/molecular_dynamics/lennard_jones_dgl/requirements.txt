@@ -1,0 +1,6 @@
+gdown>=5.0.0
+psutil>=6.0.0
+termcolor>=2.1.1
+hydra-core>=1.2.0
+scipy>=1.15.0
+matplotlib>=3.8.0

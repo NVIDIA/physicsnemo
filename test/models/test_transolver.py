@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -60,11 +60,6 @@ def test_transolver2d_forward(device):
 
     fx = torch.randn(bsize, 85 * 85, 1).to(device)
     embedding = torch.randn(bsize, 85, 85).to(device)
-
-    print(f"fx: {fx.shape}")
-    print(f"embedding: {embedding.shape}")
-
-    print(f"output shape: {model(fx, embedding).shape}")
 
     assert validate_forward_accuracy(
         model,

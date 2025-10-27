@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -58,8 +58,7 @@ def prepare_data(
             start_idx : start_idx + num_samples,
         ]
         outvar = arrays["u"][
-            input_nr_tsteps
-            + predict_nr_tsteps : input_nr_tsteps
+            input_nr_tsteps + predict_nr_tsteps : input_nr_tsteps
             + 2 * predict_nr_tsteps,
             ...,
             start_idx : start_idx + num_samples,

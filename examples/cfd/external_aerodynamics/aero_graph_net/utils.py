@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,7 +19,7 @@ from typing import Any, Mapping, Optional
 import torch
 from torch import Tensor
 
-from dgl import DGLGraph
+from torch_geometric.data import Data as PyGData
 
 
 class RRMSELoss(torch.nn.Module):
@@ -43,7 +43,7 @@ def batch_as_dict(
     if device is None:
         return batch
     return {
-        k: v.to(device) if isinstance(v, (Tensor, DGLGraph)) else v
+        k: v.to(device) if isinstance(v, (Tensor, PyGData)) else v
         for k, v in batch.items()
     }
 

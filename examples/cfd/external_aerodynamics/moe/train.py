@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -135,9 +135,9 @@ def train_gating_networks(dataset, cfg):
         sampler.set_epoch(epoch)
         if rank == 0:
             logger.info(
-                f"\nEpoch {epoch+1}/{cfg.num_epochs} -----------------------------"
+                f"\nEpoch {epoch + 1}/{cfg.num_epochs} -----------------------------"
             )
-            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}", unit="batch")
+            pbar = tqdm(dataloader, desc=f"Epoch {epoch + 1}", unit="batch")
         else:
             pbar = dataloader
 
@@ -252,7 +252,7 @@ def train_gating_networks(dataset, cfg):
         if rank == 0:
             current_lr = optimizer.param_groups[0]["lr"]
             logger.info(
-                f"Epoch {epoch+1}/{cfg.num_epochs} | Mean Pressure Loss: {mean_pressure_loss:.6f} | Mean Shear Loss: {mean_shear_loss:.6f} | LR: {current_lr:.6e}"
+                f"Epoch {epoch + 1}/{cfg.num_epochs} | Mean Pressure Loss: {mean_pressure_loss:.6f} | Mean Shear Loss: {mean_shear_loss:.6f} | LR: {current_lr:.6e}"
             )
 
             # --- Save model after each epoch  ---
@@ -265,7 +265,7 @@ def train_gating_networks(dataset, cfg):
                 epoch=epoch + 1,
             )
             logger.info(
-                f"Saved model checkpoint for epoch {epoch+1} to {cfg.checkpoint_dir}"
+                f"Saved model checkpoint for epoch {epoch + 1} to {cfg.checkpoint_dir}"
             )
 
     if rank == 0:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -401,9 +401,7 @@ class RingSDPABlocking(torch.autograd.Function):
     ) -> torch.Tensor:
         """
         Forward pass for the ring attention implementation.  This implementation
-        will overlap the communication with the computation.  Note that there is an
-        explicit sync in each iteration to prevent the communication stream from getting
-        ahead of the computation stream, by waiting on the all_to_all operation to complete.
+        will NOT overlap the communication with the computation.
         """
 
         ctx.attn_args = attn_args
@@ -569,14 +567,24 @@ def ring_sdpa(
     **kwargs: dict,
 ) -> ShardTensor:
     """
-    High Level, differentiable function to compute neighborhood attention on a sharded tensor.
+    High Level, differentiable function to compute global attention on a sharded tensor.
 
-    Operation works like so:
-    - Figure out the size of halos needed.
-    - Apply the halo padding (differentiable)
-    - Perform the neighborhood attention on the padded tensor. (differentiable)
-    - "UnHalo" the output tensor (different from, say, convolutions)
-    - Return the updated tensor as a ShardTensor.
+    The implementation is a ring communication pattern.  Each rank computes attention
+    locally on it's tensors, and then kv is passed to the next rank while receiving from
+    the previous rank.
+
+    Parameters:
+    ----------
+        q (physicsnemo.distributed.ShardTensor): The attention queries
+        k (physicsnemo.distributed.ShardTensor): The attention keys
+        v (physicsnemo.distributed.ShardTensor): The attention values
+        attn_mask (physicsnemo.distributed.ShardTensor, optional): The attention mask
+        kwargs (dict): key-word arguments to pass to the attention call
+
+    Returns:
+    -------
+        physicsnemo.distributed.ShardTensor: A distributed tensor representing the
+           attention computed on the global context.
 
     """
 
@@ -613,23 +621,22 @@ def ring_sdpa(
 
 
 def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> ShardTensor:
-    """Wrapper for natten.functional.na2d to support sharded tensors.
+    """Wrapper for torch.nn.functional.scaled_dot_product_attention to support sharded tensors.
 
-    Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
-    For regular tensors, passes through to the wrapped na2d function.
-    For ShardTensor inputs, handles adding halos and applying distributed na2d.
 
     Args:
-        wrapped: Original na2d function being wrapped
-        instance: Instance the wrapped function is bound to
+        func: Will be torch.nn.functional.scaled_dot_product_attention
+        types: The object types of the inputs
         args: Positional arguments containing query, key, value tensors
-        kwargs: Keyword arguments including kernel_size and dilation
+        kwargs: Keyword arguments
 
     Returns:
-        Result tensor as either torch.Tensor or ShardTensor depending on input types
+        ShardTensor with global attention computed.
 
     Raises:
-        UndeterminedShardingError: If input tensor types are mismatched
+        MissingShardPatch: If Sharding of inputs is not on the same mesh,
+            or is not on a 1D mesh.
+
     """
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
@@ -642,7 +649,43 @@ def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> Shard
     if q._spec.mesh.ndim != 1:
         raise MissingShardPatch("q must be on a 1D mesh")
 
-    return ring_sdpa(q, k, v, attn_mask, **kwargs)
+    # This is to implement sequence-parallel attention.
+    # Make sure the shardings are all the same:
+    if not (q._spec.placements[0] == k._spec.placements[0] == v._spec.placements[0]):
+        raise MissingShardPatch("q, k, and v must all be on the same placement")
+
+    # Make sure the attention mask, if provided, has the same placement as q, k, and v
+    if attn_mask is not None and hasattr(attn_mask, "_spec"):
+        if attn_mask._spec.placements[0] != q._spec.placements[0]:
+            raise MissingShardPatch(
+                "attn_mask must have the same placement as q, k, and v"
+            )
+
+    # if the placements are replicated (which is what we expect in transolver's
+    # Physics Attention)
+    # then just run locally and convert the output back to a replicated tensor:
+
+    if v._spec.placements[0].is_replicate():
+        local_q = q.to_local()
+        local_k = k.to_local()
+        local_v = v.to_local()
+        if attn_mask is not None:
+            local_attn_mask = attn_mask.to_local()
+        else:
+            local_attn_mask = None
+        local_output = torch.nn.functional.scaled_dot_product_attention(
+            local_q, local_k, local_v, attn_mask=local_attn_mask, **kwargs
+        )
+
+        output = ShardTensor.from_local(
+            local_output,
+            q._spec.mesh,
+            q._spec.placements,
+            # We don't have to worry about sharding shapes here since it's not sharded ...
+        )
+        return output
+    else:
+        return ring_sdpa(q, k, v, attn_mask, **kwargs)
 
 
 def repackage_sdpa_args(

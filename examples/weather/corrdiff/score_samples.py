@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -40,6 +40,7 @@ variables:
 
 
 """
+
 # %%
 import multiprocessing
 from functools import partial
@@ -108,7 +109,6 @@ def process(i, path, n_ensemble):
 
 
 def main(path: str, output: str, n_ensemble: int == -1):
-
     truth, pred, root = open_samples(path)
 
     with multiprocessing.Pool(32) as pool:

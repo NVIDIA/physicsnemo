@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -61,7 +61,6 @@ from utils import (
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     # Enable cuDNN auto-tuner
     torch.backends.cudnn.benchmark = cfg.enable_cudnn_benchmark
 
@@ -366,7 +365,7 @@ def main(cfg: DictConfig) -> None:
 
             num_valid_mini_batches = len(validation_dataloader)
             print(
-                f"Epoch {epoch+1}, Validation Error: {valid_loss / num_valid_mini_batches}"
+                f"Epoch {epoch + 1}, Validation Error: {valid_loss / num_valid_mini_batches}"
             )
             writer.add_scalar(
                 "validation_loss", valid_loss / num_valid_mini_batches, epoch

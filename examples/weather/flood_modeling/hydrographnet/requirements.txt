@@ -2,3 +2,5 @@ mlflow>=2.1.1
 hydra-core
 wandb
 termcolor>=2.1.1
+torch_geometric>=2.6.1
+torch_scatter>=2.1.2

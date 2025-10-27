@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,7 +24,6 @@ class SWE_NL(PDE):
     name = "SWE_NL"
 
     def __init__(self, g=1.0, nu=1.0e-3):
-
         # x, y, time
         x, y, t = Symbol("x"), Symbol("y"), Symbol("t")
 

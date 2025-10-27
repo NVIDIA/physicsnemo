@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -297,7 +297,6 @@ def ddpm_steps(x, seq, model, b, **kwargs):
 
     for i, j in zip(reversed(seq), reversed(seq_next)):
         with torch.no_grad():
-
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
             at = compute_alpha(betas, t.long())
@@ -354,7 +353,6 @@ def guided_ddpm_steps(x, seq, model, b, **kwargs):
 
     for i, j in zip(reversed(seq), reversed(seq_next)):
         with torch.no_grad():
-
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
             at = compute_alpha(betas, t.long())
@@ -364,7 +362,6 @@ def guided_ddpm_steps(x, seq, model, b, **kwargs):
 
         dx = dx_func(x)
         with torch.no_grad():
-
             output = (w + 1) * model(x, t.float(), dx) - w * model(x, t.float())
             e = output
 

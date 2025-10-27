@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -219,8 +219,9 @@ def validation_and_plotting_step(
                     3, pred_outvar.shape[1], figsize=(4 * outvar.shape[1], 8)
                 )
                 for t in range(outvar.shape[1]):
-                    vmin, vmax = np.min(pred_outvar[0, t, chan]), np.max(
-                        pred_outvar[0, t, chan]
+                    vmin, vmax = (
+                        np.min(pred_outvar[0, t, chan]),
+                        np.max(pred_outvar[0, t, chan]),
                     )
                     im = ax[0, t].imshow(
                         cube_sphere_plotter(pred_outvar[0, t, chan]),

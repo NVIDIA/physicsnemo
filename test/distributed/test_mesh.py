@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -80,7 +80,7 @@ def run_mesh_creation(rank, num_gpus, mesh_names, mesh_sizes, verbose):
         DistributedManager.cleanup()
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("data_parallel_size", [-1])
 @pytest.mark.parametrize("domain_parallel_size", [2, 1])
 @pytest.mark.parametrize("model_parallel_size", [4, 2])

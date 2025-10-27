@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -46,8 +46,8 @@ from physicsnemo.launch.utils import load_checkpoint
 from physicsnemo.datapipes.gnn.hydrographnet_dataset import HydroGraphDataset
 from physicsnemo.models.meshgraphnet.meshgraphkan import MeshGraphKAN
 
-# For converting DGLGraph to networkx.
-from dgl import to_networkx
+# For converting PyG graph to networkx.
+from torch_geometric.utils import to_networkx
 
 
 def create_animation(
@@ -64,7 +64,7 @@ def create_animation(
     Parameters:
       rollout_predictions: list of predicted actual water depth tensors (each shape: [num_nodes])
       ground_truth: list of ground truth water depth tensors (each shape: [num_nodes])
-      initial_graph: the initial DGL graph sample (used for node positions and edges)
+      initial_graph: the initial PyG graph sample (used for node positions and edges)
       rmse_list: list of RMSE values computed at each rollout step
       output_path: file path to save the animation (e.g. a GIF file)
       time_per_step: simulation time (in hours) corresponding to each rollout step.
@@ -81,7 +81,7 @@ def create_animation(
 
     num_frames = len(rollout_predictions)
     # Use the first two columns of node features for positions.
-    init_node_feats = initial_graph.ndata["x"]
+    init_node_feats = initial_graph.x
     pos = {
         i: (init_node_feats[i, 0].item(), init_node_feats[i, 1].item())
         for i in range(init_node_feats.shape[0])
@@ -100,7 +100,7 @@ def create_animation(
         # Panel 1: Prediction.
         pred_vals = rollout_predictions[frame].cpu().numpy()
         # Ensure the graph is on CPU before converting.
-        g_pred = to_networkx(initial_graph.cpu())
+        g_pred = to_networkx(initial_graph)
         g_pred = g_pred.to_undirected()
         nodes_pred = nx.draw_networkx_nodes(
             g_pred,
@@ -119,7 +119,7 @@ def create_animation(
 
         # Panel 2: Ground Truth.
         gt_vals = ground_truth[frame].cpu().numpy()
-        g_gt = to_networkx(initial_graph.cpu())
+        g_gt = to_networkx(initial_graph)
         g_gt = g_gt.to_undirected()
         nodes_gt = nx.draw_networkx_nodes(
             g_gt,
@@ -211,8 +211,6 @@ def main(cfg: DictConfig):
         hydrograph_ids_file=test_ids_file,
         split="test",
         rollout_length=rollout_length,
-        force_reload=False,
-        verbose=True,
         return_physics=False,
     )
     print(f"Loaded test dataset with {len(test_dataset)} hydrographs.")
@@ -242,13 +240,11 @@ def main(cfg: DictConfig):
     for idx in range(len(test_dataset)):
         g, rollout_data = test_dataset[idx]
         g = g.to(device)
-        edge_features = g.edata["x"].to(device)
-        X_current = g.ndata["x"].to(device)  # Expected shape: [num_nodes, 16]
+        edge_features = g.edge_attr.to(device)
+        X_current = g.x.to(device)  # Expected shape: [num_nodes, 16]
         num_nodes = X_current.size(0)
 
-        rollout_preds = (
-            []
-        )  # To store predicted actual water depth values for each step.
+        rollout_preds = []  # To store predicted actual water depth values for each step.
         ground_truth_list = []  # To store ground truth water depth values.
         rmse_list = []  # RMSE at each rollout step.
 

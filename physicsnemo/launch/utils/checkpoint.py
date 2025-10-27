@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -172,7 +172,8 @@ def _unique_model_names(
         # Base name of model is meta.name unless pytorch model
         base_name = model0.__class__.__name__
         if isinstance(model0, physicsnemo.models.Module):
-            base_name = model0.meta.name
+            if model0.meta and getattr(model0.meta, "name", None):
+                base_name = model0.meta.name
         # Warning in case of attempt to load into a compiled model
         if is_compiled and loading:
             checkpoint_logging.warning(
@@ -205,11 +206,32 @@ def save_checkpoint(
     epoch: Union[int, None] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Training checkpoint saving utility
+    r"""Training checkpoint saving utility.
 
-    This will save a training checkpoint in the provided path following the file naming
-    convention "checkpoint.{model parallel id}.{epoch/index}.mdlus". The load checkpoint
-    method in PhysicsNeMo core can then be used to read this file.
+    This function saves training checkpoints to the provided path. Multiple
+    files may be created depending on what is being saved:
+
+    - Model checkpoints (when ``models`` are provided):
+      "{model_name}{model_id}.{model_parallel_rank}.{epoch}.{ext}"
+      where ext is ".mdlus" for instances of
+      :class:`~physicsnemo.models.Module` or ".pt" for PyTorch models.
+
+    - Training state (when optimizer/scheduler/scaler are provided):
+      "checkpoint.{model_parallel_rank}.{epoch}.pt"
+
+    For PhysicsNeMo models, the {model_name} is derived from the model's metadata through
+    ``model.meta.name``; if the model has no metadata, then the model's class name
+    ``model.__class__.__name__`` is used.
+    For PyTorch models, the model_name is always derived from the model's class name ``__class__.__name__``.
+    models).
+    If multiple models share the same {model_name}, they are indexed by {model_id}
+    (e.g., "MyModel0", "MyModel1").
+
+    The function :func:`~physicsnemo.launch.utils.checkpoint.load_checkpoint`
+    can be used to restore from these files with models that are **already instantiated**.
+    To load only the model checkpoint (even when the models are **not** already instantiated),
+    use the method :meth:`~physicsnemo.models.module.Module.from_checkpoint` to
+    instantiate and load the model from the checkpoint.
 
     Parameters
     ----------

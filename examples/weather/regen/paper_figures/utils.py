@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -59,7 +59,6 @@ def plot_obs_locations(ax, lat, lon, z, norm=None, cmap=None):
 
 
 def add_features(ax):
-
     reader = shapereader.Reader(COUNTY_SHAPE_FILE.as_posix())
 
     for k, i in enumerate(reader.records()):

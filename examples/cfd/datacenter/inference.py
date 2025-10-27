@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -193,7 +193,6 @@ def save_to_vtu(data_dict, bounds, output_file):
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config_inference")
 def main(cfg: DictConfig) -> None:
-
     print("Inference Started!")
 
     # initialize distributed manager

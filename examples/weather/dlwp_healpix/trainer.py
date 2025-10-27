@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -360,9 +360,7 @@ class Trainer:
                         if self.lr_scheduler is None
                         else self.lr_scheduler.get_last_lr()[0]
                     )
-                except (
-                    AttributeError
-                ):  # try loop required since LearnOnPlateau has no "get_last_lr" attribute
+                except AttributeError:  # try loop required since LearnOnPlateau has no "get_last_lr" attribute
                     curr_lr = (
                         self.optimizer.param_groups[-1]["lr"]
                         if self.lr_scheduler is None

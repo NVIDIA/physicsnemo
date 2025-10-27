@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,7 +22,6 @@ import os
 
 class DiffusionDataset_topodiff(Dataset):
     def __init__(self, topologies, vfs_stress_strain, load_im):
-
         image_size = topologies.shape[1]
 
         self.topologies = topologies
@@ -34,7 +33,6 @@ class DiffusionDataset_topodiff(Dataset):
         return self.topologies.shape[0]
 
     def __getitem__(self, idx):
-
         cons = np.zeros((5, self.image_size, self.image_size))
 
         cons[0] = self.vfs_stress_strain[idx][:, :, 0]
@@ -49,7 +47,6 @@ class DiffusionDataset_topodiff(Dataset):
 def load_data_topodiff(
     topologies, vfs_stress_strain, load_im, batch_size, deterministic=False
 ):
-
     dataset = DiffusionDataset_topodiff(topologies, vfs_stress_strain, load_im)
 
     if deterministic:
@@ -85,7 +82,6 @@ def load_data(root, prefix, file_format, num_file_start=0, num_file_end=30000):
 
 
 def load_data_regressor(root):
-
     file_list = os.listdir(root)
     idx_list = []
     for file in file_list:
@@ -96,7 +92,6 @@ def load_data_regressor(root):
 
     topology_array, load_array, pf_array = [], [], []
     for i in idx_list:
-
         topology_array.append(
             np.array(Image.open(root + "gt_topo_" + str(i) + ".png")) / 255
         )

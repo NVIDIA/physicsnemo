@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -121,7 +121,6 @@ def update(t, v, pred, obs, writer, counts_output):
 
 
 def main(input_path, output_path, prediction_group_name: str):
-
     if os.path.isdir(output_path):
         return
 
@@ -141,7 +140,6 @@ def main(input_path, output_path, prediction_group_name: str):
             raise ValueError(f"expected one of {list(f.groups)}")
         for t in tqdm.tqdm(times):
             for v in variables:
-
                 predv = predgroup.variables[v]
                 if len(predv.dimensions) == 3:
                     pred = predv[t].data[None]

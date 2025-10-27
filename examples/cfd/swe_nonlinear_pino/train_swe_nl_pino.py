@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -156,7 +156,6 @@ def test_step(model, dataloader, log, cfg, swe_nl_node, device, option):
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config_pino.yaml")
 def main(cfg: DictConfig):
-
     # CUDA support
     if torch.cuda.is_available():
         device = torch.device("cuda")

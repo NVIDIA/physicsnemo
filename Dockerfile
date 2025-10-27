@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.04-py3
-FROM ${BASE_CONTAINER} as builder
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.09-py3
+FROM ${BASE_CONTAINER} AS builder
 
 ARG TARGETPLATFORM
 
@@ -52,7 +52,7 @@ RUN FILE="/etc/pip/constraint.txt" && \
     else \
         echo "File not found: $FILE"; \
     fi
-RUN pip install --no-cache-dir "nvidia_dali_cuda120>=1.35.0"
+
 RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
 RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio" "moviepy" "tqdm>=4.60.0"
 
@@ -93,32 +93,6 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$VTK_ARM64_WHEEL" != "unknown
     fi
 RUN pip install --no-cache-dir "pyvista>=0.40.1"
 
-# Install DGL, below instructions only work for containers with CUDA >= 12.1
-# (https://www.dgl.ai/pages/start.html)
-ARG DGL_BACKEND=pytorch
-ENV DGL_BACKEND=$DGL_BACKEND
-ENV DGLBACKEND=$DGL_BACKEND
-
-ARG DGL_ARM64_WHEEL
-ENV DGL_ARM64_WHEEL=${DGL_ARM64_WHEEL:-unknown}
-
-# TODO: this is a workaround as dgl is not yet shipping arm compatible wheels for CUDA 12.x: https://github.com/NVIDIA/physicsnemo/issues/432
-RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$DGL_ARM64_WHEEL" != "unknown" ]; then \
-        echo "Custom DGL wheel $DGL_ARM64_WHEEL for $TARGETPLATFORM exists, installing!" && \
-        pip install --no-cache-dir --no-deps /physicsnemo/deps/${DGL_ARM64_WHEEL}; \
-    elif [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-        echo "Installing DGL for: $TARGETPLATFORM" && \
-        pip install --no-cache-dir --no-deps dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html; \
-    else \
-        echo "No custom wheel or wheel on PyPi found. Installing DGL for: $TARGETPLATFORM from source" && \
-        git clone https://github.com/dmlc/dgl.git && cd dgl/ && git checkout tags/v2.4.0 && git submodule update --init --recursive && \
-        DGL_HOME="/workspace/dgl" bash script/build_dgl.sh -g && \
-        cd python && \
-        python setup.py install && \
-        python setup.py build_ext --inplace && \
-        cd ../../ && rm -r /workspace/dgl; \
-    fi
-
 # Install onnx
 # Need to install Onnx from custom wheel as Onnx does not support ARM wheels
 ARG ONNXRUNTIME_ARM64_WHEEL
@@ -132,11 +106,60 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Skipping onnxruntime_gpu install."; \
     fi
 
+# Install torch-geometric and torch-scatter
+
+RUN pip install --no-cache-dir "torch_geometric>=2.6.1"
+
+ARG TORCH_SCATTER_ARM64_WHEEL
+ENV TORCH_SCATTER_ARM64_WHEEL=${TORCH_SCATTER_ARM64_WHEEL:-unknown}
+
+ARG TORCH_SCATTER_AMD64_WHEEL
+ENV TORCH_SCATTER_AMD64_WHEEL=${TORCH_SCATTER_AMD64_WHEEL:-unknown}
+
+ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 9.0 10.0 12.0+PTX"
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$TORCH_SCATTER_AMD64_WHEEL" != "unknown" ]; then \
+        echo "Installing torch_scatter for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${TORCH_SCATTER_AMD64_WHEEL}; \
+    elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$TORCH_SCATTER_ARM64_WHEEL" != "unknown" ]; then \
+        echo "Installing torch_scatter for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${TORCH_SCATTER_ARM64_WHEEL}; \
+    else \
+        echo "No custom wheel present for scatter, building from source"; \
+        mkdir -p /physicsnemo/deps/; \
+        cd /physicsnemo/deps/; \
+        git clone https://github.com/rusty1s/pytorch_scatter.git; \
+        cd pytorch_scatter; \
+        git checkout tags/2.1.2; \
+        FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
+        pip install dist/*.whl --force-reinstall --no-cache-dir && \
+        cd ../ && rm -r pytorch_scatter; \
+    fi
+
+# Install pyg-lib
+
+ARG PYGLIB_ARM64_WHEEL
+ENV PYGLIB_ARM64_WHEEL=${PYGLIB_ARM64_WHEEL:-unknown}
+
+ARG PYGLIB_AMD64_WHEEL
+ENV PYGLIB_AMD64_WHEEL=${PYGLIB_AMD64_WHEEL:-unknown}
+
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$PYGLIB_AMD64_WHEEL" != "unknown" ]; then \
+        echo "Installing pyg_lib for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${PYGLIB_AMD64_WHEEL}; \
+    elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$PYGLIB_ARM64_WHEEL" != "unknown" ]; then \
+        echo "Installing pyg_lib for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${PYGLIB_ARM64_WHEEL}; \
+    else \
+        echo "No custom wheel present for pyg_lib, building from source"; \
+        pip install ninja wheel && \
+        pip install --no-build-isolation git+https://github.com/pyg-team/pyg-lib.git@0.5.0; \
+    fi
+
 # cleanup of stage
 RUN rm -rf /physicsnemo/
 
 # CI image
-FROM builder as ci
+FROM builder AS ci
 
 ARG TARGETPLATFORM
 
@@ -150,25 +173,9 @@ RUN pip install --no-cache-dir "mlflow>=2.1.1"
 
 COPY . /physicsnemo/
 
-# Install torch-scatter, torch-cluster, and pyg
-ENV TORCH_CUDA_ARCH_LIST="7.5 8.0 8.6 9.0 10.0 12.0+PTX"
-RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl" ]; then \
-        echo "Installing torch_scatter and for: $TARGETPLATFORM" && \
-        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_scatter-2.1.2-cp312-cp312-linux_x86_64.whl; \
-    else \
-        echo "No custom wheel present for scatter, building from source"; \
-        mkdir -p /physicsnemo/deps/; \
-        cd /physicsnemo/deps/; \
-        git clone https://github.com/rusty1s/pytorch_scatter.git; \
-        cd pytorch_scatter; \
-        git checkout tags/2.1.2; \
-        FORCE_CUDA=1 MAX_JOBS=64 python setup.py bdist_wheel && \
-        pip install dist/*.whl --force-reinstall --no-cache-dir && \
-        cd ../ && rm -r pytorch_scatter; \
-    fi
-
+# Install torch_cluster
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl" ]; then \
-        echo "Installing torch_cluster and for: $TARGETPLATFORM" && \
+        echo "Installing torch_cluster for: $TARGETPLATFORM" && \
         pip install --force-reinstall --no-cache-dir /physicsnemo/deps/torch_cluster-1.6.3-cp312-cp312-linux_x86_64.whl; \
     else \
         echo "No custom wheel present for cluster, building from source"; \
@@ -207,7 +214,7 @@ RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.14.0"
 RUN rm -rf /physicsnemo/
 
 # Deployment image
-FROM builder as deploy
+FROM builder AS deploy
 COPY . /physicsnemo/
 RUN cd /physicsnemo/ && pip install .
 
@@ -219,7 +226,7 @@ ENV PHYSICSNEMO_GIT_HASH=${PHYSICSNEMO_GIT_HASH:-unknown}
 RUN rm -rf /physicsnemo/
 
 # Docs image
-FROM deploy as docs
+FROM deploy AS docs
 
 ARG TARGETPLATFORM
 

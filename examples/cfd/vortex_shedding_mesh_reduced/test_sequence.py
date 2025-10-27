@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     # avg_loss = loss_total/n_batch
     rank_zero_logger.info(
         f"relative_error_mean_u: {relative_error_mean_u:10.3e},relative_error_mean_v: {relative_error_mean_v:10.3e},relative_error_mean_p: {relative_error_mean_p:10.3e},\\\
-            time cost: {(time.time()-start):10.3e}"
+            time cost: {(time.time() - start):10.3e}"
     )
     # wb.log({"loss": loss.detach().cpu()})
 

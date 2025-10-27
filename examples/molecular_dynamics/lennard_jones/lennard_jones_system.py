@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,9 +17,9 @@
 import torch
 import os
 from torch.utils.data import DataLoader
+import torch_geometric as pyg
 from typing import Tuple
 import numpy as np
-import dgl
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from physicsnemo.models.meshgraphnet import MeshGraphNet
 import matplotlib.pyplot as plt
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import LaunchLogger, PythonLogger
+from physicsnemo.launch.logging import LaunchLogger
 from torch.nn.parallel import DistributedDataParallel
 from physicsnemo.distributed import DistributedManager
 
@@ -91,7 +91,6 @@ def prepare_input(
 
 @hydra.main(version_base="1.2", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     DistributedManager.initialize()
     dist = DistributedManager()
 
@@ -191,7 +190,8 @@ def main(cfg: DictConfig) -> None:
                 src, dst, edge_features = create_edges(
                     pos, distance_threshold, box_size
                 )
-                g = dgl.graph((src, dst)).to(dist.device)
+                edge_index = torch.stack([torch.tensor(src), torch.tensor(dst)], dim=0)
+                g = pyg.data.Data(edge_index=edge_index).to(dist.device)
 
                 node_fea = torch.ones(
                     size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
@@ -236,7 +236,6 @@ def main(cfg: DictConfig) -> None:
                     forces_pair = []
                     cosines = []
                     for data in test_dataloader:
-
                         pos = data[0][0]
                         forces = data[1][0]
                         pos, forces = prepare_input(
@@ -251,7 +250,10 @@ def main(cfg: DictConfig) -> None:
                         src, dst, edge_features = create_edges(
                             pos, distance_threshold, box_size
                         )
-                        g = dgl.graph((src, dst)).to(dist.device)
+                        edge_index = torch.stack(
+                            [torch.tensor(src), torch.tensor(dst)], dim=0
+                        )
+                        g = pyg.data.Data(edge_index=edge_index).to(dist.device)
                         node_fea = torch.ones(
                             size=(pos.shape[0], cfg.model.hidden_dim_edge_encoder)
                         ).to(dist.device)

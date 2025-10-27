@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -156,7 +156,7 @@ class Trainer:
 
         try:
             model.eval()
-            for (i, batch) in enumerate(self.valid_datapipe):
+            for i, batch in enumerate(self.valid_datapipe):
                 (invar, outvar_true) = self.input_output_from_batch_data(batch)
                 invar = invar.detach()
                 outvar_true = outvar_true.detach()

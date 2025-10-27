@@ -14,11 +14,12 @@
 # limitations under the License.
 
 import torch
-from dgl.dataloading import GraphDataLoader
 from torch.cuda.amp import GradScaler
 import time, os
 import numpy as np
 import hydra
+
+from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.models.meshgraphnet import MeshGraphNet
@@ -71,8 +72,8 @@ class MGNTrainer:
 
         graph = graphs[list(graphs)[0]]
 
-        infeat_nodes = graph.ndata["nfeatures"].shape[1] + 1
-        infeat_edges = graph.edata["efeatures"].shape[1]
+        infeat_nodes = graph.nfeatures.shape[1] + 1
+        infeat_edges = graph.efeatures.shape[1]
         nout = 2
 
         nodes_features = [
@@ -104,7 +105,7 @@ class MGNTrainer:
         traindataset = Bloodflow1DDataset(train_graphs, params, trainset)
 
         # instantiate dataloader
-        self.dataloader = GraphDataLoader(
+        self.dataloader = PyGDataLoader(
             traindataset,
             batch_size=cfg.training.batch_size,
             shuffle=True,
@@ -187,12 +188,12 @@ class MGNTrainer:
         graph = graph.to(self.device)
         self.optimizer.zero_grad()
         loss = 0
-        ns = graph.ndata["next_steps"]
+        ns = graph.next_steps
 
         # create mask to weight boundary nodes more in loss
         mask = torch.ones(ns[:, :, 0].shape, device=self.device)
-        imask = graph.ndata["inlet_mask"].bool()
-        outmask = graph.ndata["outlet_mask"].bool()
+        imask = graph.inlet_mask.bool()
+        outmask = graph.outlet_mask.bool()
 
         bcoeff = self.cfg.training.loss_weight_boundary_nodes
         mask[imask, 0] = mask[imask, 0] * bcoeff
@@ -200,7 +201,7 @@ class MGNTrainer:
         mask[outmask, 0] = mask[outmask, 0] * bcoeff
         mask[outmask, 1] = mask[outmask, 1] * bcoeff
 
-        states = [graph.ndata["nfeatures"].clone()]
+        states = [graph.nfeatures.clone()]
 
         nnodes = mask.shape[0]
         nf = torch.zeros((nnodes, 1), device=self.device)
@@ -208,7 +209,7 @@ class MGNTrainer:
             # impose boundary condition
             nf[imask, 0] = ns[imask, 1, istride]
             nfeatures = torch.cat((states[-1], nf), 1)
-            pred = self.model(nfeatures, graph.edata["efeatures"], graph)
+            pred = self.model(nfeatures, graph.efeatures, graph)
 
             # add prediction by MeshGraphNet to current state
             new_state = torch.clone(states[-1])
@@ -259,7 +260,7 @@ def do_training(cfg: DictConfig):
             loss = trainer.train(graph)
 
         logger.info(
-            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time()-start):10.3e}"
+            f"epoch: {epoch}, loss: {loss:10.3e}, time per epoch: {(time.time() - start):10.3e}"
         )
 
         # save checkpoint

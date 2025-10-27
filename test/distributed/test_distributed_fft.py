@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -196,7 +196,7 @@ def run_distributed_fft(rank, model_parallel_size, verbose):
         ), "Distributed FFT backward does not match single GPU version!"
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_distributed_fft():
     num_gpus = torch.cuda.device_count()
     assert num_gpus >= 2, "Not enough GPUs available for test"

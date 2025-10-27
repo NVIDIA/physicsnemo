@@ -6,10 +6,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0a0] - 2025-08-XX
+## [1.3.0a0] - 2025-XX-YY
 
 ### Added
 
+- Added mixture_of_experts for weather example in physicsnemo.examples.weather.
+  **⚠️Warning:** - It uses experimental DiT model subject to future API changes.
+  Added some modifications to DiT architecture in physicsnemo.experimental.models.dit.
+  Added learnable option to PositionalEmbedding in physicsnemo.models.diffusion.layers.
+- Added lead-time aware training support to the StormCast example.
+- Add a device aware kNN method to physicsnemo.utils.neighbors. Works with CPU or GPU
+  by dispatching to the proper optimized library, and torch.compile compatible.
+- Added additional testing of the DoMINO datapipe.
+- Examples: added a new example for full-waveform inversion using diffusion
+  models. Accessible in `examples/geophysics/diffusion_fwi`.
+- Domain Parallelism: Domain Parallelism is now available for kNN, radius_search,
+  and torch.nn.functional.pad.
+- Unified recipe for crash modeling, supporting Transolver and MeshGraphNet,
+  and three transient schemes.
+- Added a check to `stochastic_sampler` that helps handle the `EDMPrecond` model,
+  which has a specific `.forward()` signature
+
+### Changed
+
+- Migrated Stokes MGN example to PyTorch Geometric.
+- Migrated Lennard Jones example to PyTorch Geometric.
+- Migrated physicsnemo.utils.sdf.signed_distance_field to a static return,
+  torch-only interface.  It also now works on distributed meshes and input fields.
+- Refactored DiTBlock to be more modular
+- Added NATTEN 2D neighborhood attention backend for DiTBlock
+- Migrated blood flow example to PyTorch Geometric.
+- Refactored DoMINO model code and examples for performance optimizations and improved readability.
+- Migrated HydroGraphNet example to PyTorch Geometric.
+- Support for saving and loading nested `physicsnemo.Module`s. It is now
+  possible to create nested modules with `m = Module(submodule, ...)`, and save
+  and load them with `Module.save` and `Module.from_checkpoint`.
+  **⚠️Warning:** - The modules have to be `physicsnemo.Module`s, and not
+  `torch.nn.Module`s.
+- Support passing custom tokenizer, detokenizer, and attention `Module`s in
+  experimental DiT architecture
+- Improved Transolver training recipe's configuration for checkpointing and normalization.
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- Set `skip_scale` to Python float in U-Net to ensure compilation works.
+- Ensure stream dependencies are handled correctly in physicsnemo.utils.neighbors
+- Fixed the issue with incorrect handling of files with consecutive runs of
+  `combine_stl_solids.py` in the X-MGN recipe.
+- Fixed the `RuntimeError: Worker data receiving interrupted` error in the datacenter example.
+
+### Security
+
+### Dependencies
+
+## [1.2.0] - 2025-08-26
+
+### Added
+
+- Diffusion Transformer (DiT) model. The DiT model can be accessed in
+ `physicsnemo.experimental.models.dit.DiT`. **⚠️Warning:** - Experimental feature
+  subject to future API changes.
 - Improved documentation for diffusion models and diffusion utils.
 - Safe API to override `__init__`'s arguments saved in checkpoint file with
   `Module.from_checkpoint("chkpt.mdlus", override_args=set(...))`.
@@ -31,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Domino improvements with Unet attention module and user configs
 - Hybrid MeshGraphNet for modeling structural deformation
 - Enabled TransformerEngine backend in the `transolver` model.
+- Inference code for x-meshgraphnet example for external aerodynamics.
+- Added a new example for external_aerodynamics: training `transolver` on
+  irregular mesh data for DrivaerML surface data.
+- Added a new example for external aerodynamics for finetuning pretrained models.
 
 ### Changed
 
@@ -98,16 +162,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Module.from_checkpoint` that now exposes a `strict` parameter to raise error
   on missing/unexpected keys, similar to that used in
   `torch.nn.Module.load_state_dict`.
-  
-### Deprecated
-
-### Removed
+- Migrated Hybrid MGN and deforming plate example to PyTorch Geometric.
 
 ### Fixed
 
-### Security
-
-### Dependencies
+- Bug fixes in DoMINO model in sphere sampling and tensor reshaping
+- Bug fixes in DoMINO utils random sampling and test.py
+- Optimized DoMINO config params based on DrivAer ML
 
 ## [1.1.1] - 2025-06-16
 

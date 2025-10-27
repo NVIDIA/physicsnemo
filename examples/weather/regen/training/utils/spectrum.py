@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -84,7 +84,6 @@ def powerspect(x):
 
 
 def compute_ps1d(generated, target, fields, diffusion_channels):
-
     assert generated.shape == target.shape
 
     # Comppute PS1D, all channels

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -72,8 +72,9 @@ import matplotlib
 
 matplotlib.rcParams.update({"font.size": 14})
 
-means, stds = np.array([u10_mean, v10_mean, logtp_mean]), np.array(
-    [u10_std, v10_std, logtp_std]
+means, stds = (
+    np.array([u10_mean, v10_mean, logtp_mean]),
+    np.array([u10_std, v10_std, logtp_std]),
 )
 
 
@@ -206,9 +207,7 @@ lons = hr.sel(channel="10v").isel(time=234).longitude
 reader = shpreader.Reader("/home/pmanshausen/county_files/tl_2017_40_place.shp")
 
 for k, i in enumerate(reader.records()):
-
     if i.attributes["NAME"] == "Oklahoma City":
-
         ok = i.geometry
     if i.attributes["NAME"] == "Tulsa":
         t = i.geometry

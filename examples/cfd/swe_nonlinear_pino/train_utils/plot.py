@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,7 +31,6 @@ def plot_predictions(
     save_path=None,
     font_size=None,
 ):
-
     """Plot PINO predictions on dataset"""
     if font_size is not None:
         plt.rcParams.update({"font.size": font_size})

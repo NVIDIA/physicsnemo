@@ -2,7 +2,7 @@
 # ruff: noqa: E402
 
 # © Copyright 2023 HP Development Company, L.P.
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -272,7 +272,7 @@ def Inference(rank_zero_logger, dist, cfg):
                 json.dump(rollout_op, file_object)
 
             example_index += 1
-            rank_zero_logger.info(f"prediction time: {time.time()-start_time}\n")
+            rank_zero_logger.info(f"prediction time: {time.time() - start_time}\n")
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")

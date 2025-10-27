@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,7 @@ import pytest
 import torch
 
 
-@pytest.mark.multigpu
+@pytest.mark.multigpu_dynamic
 def test_multi_gpu():
     num_gpus = torch.cuda.device_count()
     assert num_gpus > 1, "Not enough GPUs available for test"

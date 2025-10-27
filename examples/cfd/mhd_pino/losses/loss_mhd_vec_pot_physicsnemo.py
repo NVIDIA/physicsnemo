@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -57,9 +57,8 @@ class LossMHDVecPot_PhysicsNeMo(LossMHD):
         Ly=1.0,
         tend=1.0,
         use_weighted_mean=False,
-        **kwargs
+        **kwargs,
     ):  # add **kwargs so that we ignore unexpected kwargs when passing a config dict):
-
         super().__init__(
             nu=nu,
             eta=eta,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -118,8 +118,8 @@ class VPSDE(nn.Module):
                 for _ in range(corrections):
                     z = torch.randn_like(x)
                     eps = self.eps(x, t - dt, c)
-                    delta = tau / eps.square().mean(
-                        dim=self.dims, keepdim=True
+                    delta = (
+                        tau / eps.square().mean(dim=self.dims, keepdim=True)
                     )  # here, for our trained network, we get very large eps, s.t. delta->nan
 
                     x = x - (delta * eps + torch.sqrt(2 * delta) * z) * self.sigma(

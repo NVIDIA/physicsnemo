@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,6 +16,7 @@
 
 """Main training loop."""
 
+from collections.abc import Sequence
 import os
 import time
 import numpy as np
@@ -23,7 +24,7 @@ import torch
 import psutil
 from physicsnemo.models import Module
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.metrics.diffusion import EDMLoss
+from physicsnemo.metrics.diffusion import EDMLoss, EDMLossLogUniform
 from physicsnemo.utils.diffusion import InfiniteSampler
 
 from physicsnemo.launch.utils import save_checkpoint, load_checkpoint
@@ -33,6 +34,7 @@ from utils.nn import (
     regression_loss_fn,
     get_preconditioned_architecture,
     build_network_condition_and_target,
+    unpack_batch,
 )
 from utils.plots import validation_plot
 from datasets import dataset_classes
@@ -47,7 +49,6 @@ logger = PythonLogger("train")
 
 
 def training_loop(cfg):
-
     # Initialize.
     start_time = time.time()
     dist = DistributedManager()
@@ -66,7 +67,7 @@ def training_loop(cfg):
 
     log_to_wandb = cfg.training.log_to_wandb
 
-    loss_type = cfg.training.loss
+    loss_type = cfg.training.loss.type
     if loss_type == "regression":
         net_name = "regression"
     elif loss_type == "edm":
@@ -102,6 +103,7 @@ def training_loop(cfg):
 
     background_channels = dataset_train.background_channels()
     state_channels = dataset_train.state_channels()
+    lead_time_steps = dataset_train.lead_time_steps
 
     sampler = InfiniteSampler(
         dataset=dataset_train,
@@ -141,7 +143,7 @@ def training_loop(cfg):
         regression_net = Module.from_checkpoint(cfg.model.regression_weights)
         if cfg.training.compile_model:
             regression_net = torch.compile(regression_net)
-        regression_net = regression_net.to(device)
+        regression_net = regression_net.eval().requires_grad_(False).to(device)
     else:
         regression_net = None
 
@@ -175,18 +177,50 @@ def training_loop(cfg):
         conditional_channels=num_condition_channels,
         spatial_embedding=cfg.model.spatial_pos_embed,
         attn_resolutions=list(cfg.model.attn_resolutions),
+        lead_time_steps=lead_time_steps,
+        amp_mode=enable_amp,
+        **cfg.model.get("hyperparameters", {}),
     )
 
     net.train().requires_grad_(True).to(device)
 
-    # Setup optimizer.
-    logger0.info("Setting up optimizer...")
-    if cfg.training.loss == "regression":
+    # Setup loss function.
+    logger0.info("Setting up loss function...")
+
+    if loss_type == "regression":
         loss_fn = regression_loss_fn
-    elif cfg.training.loss == "edm":
-        loss_fn = EDMLoss(P_mean=cfg.model.P_mean)
+
+    elif loss_type == "edm":
+        loss_params = cfg.training.loss
+        sigma_data = loss_params.get("sigma_data", 0.5)
+        if isinstance(sigma_data, Sequence):
+            sigma_data = torch.as_tensor(
+                list(sigma_data), dtype=torch.float32, device=device
+            )[None, :, None, None]
+
+        # Select sigma distribution. Add option to the if/else below to add your own.
+        sigma_distribution = loss_params.get("sigma_distribution", "lognormal")
+        if sigma_distribution == "lognormal":
+            loss_cls = EDMLoss
+            loss_param_names = ["P_mean", "P_std"]
+        elif sigma_distribution == "loguniform":
+            loss_cls = EDMLossLogUniform
+            loss_param_names = ["sigma_min", "sigma_max"]
+        else:
+            raise ValueError("Unknown sigma distribution.")
+        loss_params = {k: v for (k, v) in loss_params.items() if k in loss_param_names}
+        loss_param_str = str(loss_params) if loss_params else "default"
+        logger0.info(
+            f"Using loss function '{sigma_distribution}', parameters {loss_param_str}"
+        )
+
+        loss_fn = loss_cls(sigma_data=sigma_data, **loss_params)
+
     if cfg.training.compile_model:
         loss_fn = torch.compile(loss_fn)
+
+    # Setup optimizer
+    logger0.info("Setting up optimizer...")
     optimizer = torch.optim.Adam(net.parameters(), lr=cfg.training.lr)
     augment_pipe = None
     ddp = torch.nn.parallel.DistributedDataParallel(
@@ -237,14 +271,14 @@ def training_loop(cfg):
         for _ in range(num_accumulation_rounds):
             # Format input batch
             batch = next(dataset_iterator)
-            background = batch["background"].to(device=device, dtype=torch.float32)
-            state = [s.to(device=device, dtype=torch.float32) for s in batch["state"]]
+            (background, state, lead_time_label) = unpack_batch(batch, device)
 
             with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
                 (condition, target, reg_out) = build_network_condition_and_target(
                     background,
                     state,
                     invariant_tensor,
+                    lead_time_label=lead_time_label,
                     regression_net=regression_net,
                     condition_list=condition_list,
                     regression_condition_list=cfg.model.regression_conditions,
@@ -254,6 +288,7 @@ def training_loop(cfg):
                     images=target,
                     condition=condition,
                     augment_pipe=augment_pipe,
+                    lead_time_label=lead_time_label,
                 )
 
             if log_to_wandb:
@@ -304,15 +339,14 @@ def training_loop(cfg):
             batch = next(valid_dataset_iterator)
 
             with torch.no_grad():
-                background = batch["background"].to(device=device, dtype=torch.float32)
-                state = [
-                    s.to(device=device, dtype=torch.float32) for s in batch["state"]
-                ]
+                (background, state, lead_time_label) = unpack_batch(batch, device)
+
                 with torch.autocast("cuda", dtype=amp_dtype, enabled=enable_amp):
                     (condition, target, reg_out) = build_network_condition_and_target(
                         background,
                         state,
                         invariant_tensor,
+                        lead_time_label=lead_time_label,
                         regression_net=regression_net,
                         condition_list=condition_list,
                         regression_condition_list=cfg.model.regression_conditions,
@@ -329,6 +363,7 @@ def training_loop(cfg):
                         images=target,
                         condition=condition,
                         augment_pipe=augment_pipe,
+                        lead_time_label=lead_time_label,
                         **loss_kwargs,
                     )
 
@@ -338,6 +373,7 @@ def training_loop(cfg):
                             condition,
                             state[1].shape,
                             sampler_args=dict(cfg.sampler.args),
+                            lead_time_label=lead_time_label,
                         )
                         if "regression" in condition_list:
                             output_images += reg_out
@@ -355,9 +391,9 @@ def training_loop(cfg):
                                 ].item()
                                 for i in range(state_channels)
                             }
-                            wandb_logs[
-                                "channelwise_valid_loss"
-                            ] = channelwise_valid_loss_dict
+                            wandb_logs["channelwise_valid_loss"] = (
+                                channelwise_valid_loss_dict
+                            )
 
                 if dist.world_size > 1:
                     torch.distributed.barrier()
@@ -370,7 +406,6 @@ def training_loop(cfg):
 
             # Save plots locally (and optionally to wandb)
             if dist.rank == 0:
-
                 for i in range(output_images.shape[0]):
                     image = output_images[i].cpu().numpy()
                     fields = cfg.training.validation_plot_variables
@@ -416,11 +451,9 @@ def training_loop(cfg):
         if total_steps % cfg.training.print_progress_freq == 0:
             fields = []
             fields += [f"steps {total_steps:<5d}"]
-            fields += [f"samples {total_steps*batch_size}"]
+            fields += [f"samples {total_steps * batch_size}"]
             fields += [f"tot_time {current_time - start_time: .2f}"]
-            fields += [
-                f"step_time {(current_time - train_start - valid_time) / train_steps : .2f}"
-            ]
+            fields += [f"step_time {(current_time - train_start) / train_steps: .2f}"]
             fields += [f"valid_time {valid_time: .2f}"]
             fields += [
                 f"cpumem {psutil.Process(os.getpid()).memory_info().rss / 2**30:<6.2f}"
@@ -428,7 +461,7 @@ def training_loop(cfg):
             fields += [
                 f"gpumem {torch.cuda.max_memory_allocated(device) / 2**30:<6.2f}"
             ]
-            fields += [f"train_loss {avg_train_loss/train_steps:<6.3f}"]
+            fields += [f"train_loss {avg_train_loss / train_steps:<6.3f}"]
             fields += [f"val_loss {val_loss:<6.3f}"]
             logger0.info(" ".join(fields))
 
@@ -444,7 +477,6 @@ def training_loop(cfg):
             and total_steps != 0
             and dist.rank == 0
         ):
-
             save_checkpoint(
                 path=os.path.join(cfg.training.rundir, f"checkpoints_{net_name}"),
                 models=net,

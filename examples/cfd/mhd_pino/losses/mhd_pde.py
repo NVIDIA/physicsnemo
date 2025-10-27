@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -24,7 +24,6 @@ class MHD_PDE(PDE):
     name = "MHD_PDE"
 
     def __init__(self, nu=1e-4, eta=1e-4, rho0=1.0):
-
         # x, y, time
         x, y, t, lap = Symbol("x"), Symbol("y"), Symbol("t"), Symbol("lap")
 

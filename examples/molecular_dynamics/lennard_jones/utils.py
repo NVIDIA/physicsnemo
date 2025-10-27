@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -98,7 +98,7 @@ def _custom_collate(batch):
 
 def get_rotation_matrix():
     """
-    Randomly rotate the point clouds to augument the dataset
+    Randomly rotate the point clouds to augment the dataset
     rotation is per shape based along up direction
 
     Reference: https://github.com/BaratiLab/GAMD/blob/main/code/LJ/train_network_lj.py#L38
@@ -169,7 +169,7 @@ def create_edges(node_positions, threshold, box_size):
                 np.append(relative_pos_periodic[i], relative_pos_norm[i] / threshold)
             )
 
-    # Convert the edges to a format that DGL can use
+    # Convert the edges to a format that PyG can use
     src, dst = tuple(zip(*edges))
 
     return src, dst, edge_features

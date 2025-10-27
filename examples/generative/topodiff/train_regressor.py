@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -36,7 +36,6 @@ from utils import load_data_topodiff, load_data_regressor
 
 @hydra.main(version_base="1.3", config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-
     logger = PythonLogger("main")  # General Python Logger
     logger.log("Start running")
 
@@ -78,7 +77,6 @@ def main(cfg: DictConfig) -> None:
 
     loss_fn = nn.MSELoss()
     for i in range(cfg.regressor_iterations + 1):
-
         # get random batch from training data
         idx = np.random.choice(len(topologies), batch_size, replace=False)
         batch = (

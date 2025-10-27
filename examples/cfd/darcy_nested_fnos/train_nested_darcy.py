@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -302,7 +302,7 @@ def nested_darcy_trainer(cfg: DictConfig) -> None:
     if loaded_epoch == 0:
         logger.success("Training started...")
     else:
-        logger.warning(f"Resuming training from epoch {loaded_epoch+1}.")
+        logger.warning(f"Resuming training from epoch {loaded_epoch + 1}.")
 
     # train model
     TrainModel(cfg, base, loaded_epoch)

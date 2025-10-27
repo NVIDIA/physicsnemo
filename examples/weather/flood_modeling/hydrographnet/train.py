@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -15,16 +15,21 @@
 # limitations under the License.
 
 import time
+
 import hydra
-from hydra.utils import to_absolute_path
 import torch
-import wandb
-import dgl
-from dgl.dataloading import GraphDataLoader
-from omegaconf import DictConfig
-from torch.cuda.amp import GradScaler, autocast
-from torch.nn.parallel import DistributedDataParallel
 import torch.nn as nn
+import torch_geometric as pyg
+import wandb
+
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig
+
+from torch_geometric.loader import DataLoader as PyGDataLoader
+
+from torch.amp import GradScaler, autocast
+from torch.nn.parallel import DistributedDataParallel
+from torch.utils.data.distributed import DistributedSampler
 
 from physicsnemo.datapipes.gnn.hydrographnet_dataset import HydroGraphDataset
 from physicsnemo.distributed.manager import DistributedManager
@@ -32,13 +37,14 @@ from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.launch.logging.wandb import initialize_wandb
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.models.meshgraphnet.meshgraphkan import MeshGraphKAN
-from utils import custom_loss, compute_physics_loss
+from utils import compute_physics_loss
+
 
 # Custom collate function that checks if each item is a tuple (graph, physics_data) or a plain graph.
 def collate_fn(batch):
     if isinstance(batch[0], tuple):
         graphs, physics_list = zip(*batch)
-        batched_graph = dgl.batch(graphs)
+        batched_graph = pyg.data.from_data_list(graphs)
         physics_data = {}
         # For each key, build a tensor by stacking the scalar values from each sample.
         for key in physics_list[0].keys():
@@ -47,7 +53,7 @@ def collate_fn(batch):
             )
         return batched_graph, physics_data
     else:
-        return dgl.batch(batch)
+        return pyg.data.from_data_list(batch)
 
 
 class MGNTrainer:
@@ -84,17 +90,20 @@ class MGNTrainer:
             noise_std=0.01,
             hydrograph_ids_file="train.txt",
             split="train",
-            force_reload=False,
-            verbose=False,
             return_physics=self.use_physics_loss,
         )
-        self.dataloader = GraphDataLoader(
+        sampler = DistributedSampler(
             dataset,
-            batch_size=cfg.batch_size,
             shuffle=True,
             drop_last=True,
+            num_replicas=self.dist.world_size,
+            rank=self.dist.rank,
+        )
+        self.dataloader = PyGDataLoader(
+            dataset,
+            batch_size=cfg.batch_size,
+            sampler=sampler,
             pin_memory=True,
-            use_ddp=self.dist.world_size > 1,
             num_workers=cfg.num_dataloader_workers,
             collate_fn=collate_fn,
         )
@@ -186,8 +195,8 @@ class MGNTrainer:
 
     def forward(self, graph, physics_data):
         if self.noise_type == "pushforward":
-            with autocast(enabled=self.amp):
-                X = graph.ndata["x"]
+            with autocast(device_type=self.dist.device.type, enabled=self.amp):
+                X = graph.x
                 n_static = 12  # assumed static features dimension
                 n_time = (X.shape[1] - n_static) // 2
                 static_part = X[:, :n_static]
@@ -199,8 +208,8 @@ class MGNTrainer:
                 X_one = torch.cat(
                     [static_part, water_depth_window_one, volume_window_one], dim=1
                 )
-                pred_one = self.model(X_one, graph.edata["x"], graph)
-                one_step_loss = self.criterion(pred_one, graph.ndata["y"])
+                pred_one = self.model(X_one, graph.edge_attr, graph)
+                one_step_loss = self.criterion(pred_one, graph.y)
 
                 # Stability branch (example implementation)
                 water_depth_window_stab = water_depth_full[:, : n_time - 1]
@@ -208,7 +217,7 @@ class MGNTrainer:
                 X_stab = torch.cat(
                     [static_part, water_depth_window_stab, volume_window_stab], dim=1
                 )
-                pred_stab = self.model(X_stab, graph.edata["x"], graph)
+                pred_stab = self.model(X_stab, graph.edge_attr, graph)
                 pred_stab_detached = pred_stab.detach()
                 water_depth_updated = torch.cat(
                     [
@@ -227,8 +236,8 @@ class MGNTrainer:
                 X_stab_updated = torch.cat(
                     [static_part, water_depth_updated, volume_updated], dim=1
                 )
-                pred_stab2 = self.model(X_stab_updated, graph.edata["x"], graph)
-                stability_loss = self.criterion(pred_stab2, graph.ndata["y"])
+                pred_stab2 = self.model(X_stab_updated, graph.edge_attr, graph)
+                stability_loss = self.criterion(pred_stab2, graph.y)
 
                 loss = one_step_loss + stability_loss
                 loss_dict = {
@@ -244,9 +253,9 @@ class MGNTrainer:
                     loss_dict["physics_loss"] = phy_loss
             return loss, loss_dict
         else:
-            with autocast(enabled=self.amp):
-                pred = self.model(graph.ndata["x"], graph.edata["x"], graph)
-                mse_loss = self.criterion(pred, graph.ndata["y"])
+            with autocast(device_type=self.dist.device.type, enabled=self.amp):
+                pred = self.model(graph.x, graph.edge_attr, graph)
+                mse_loss = self.criterion(pred, graph.y)
                 loss = mse_loss
                 loss_dict = {"total_loss": loss, "mse_loss": mse_loss}
                 if self.use_physics_loss and physics_data is not None:
@@ -291,7 +300,7 @@ def main(cfg: DictConfig) -> None:
         num_batches = 0
         for batch in trainer.dataloader:
             loss, loss_dict = trainer.train(batch)
-            epoch_loss += loss.item()
+            epoch_loss += loss.detach().item()
             num_batches += 1
 
         avg_loss = epoch_loss / num_batches if num_batches > 0 else float("inf")

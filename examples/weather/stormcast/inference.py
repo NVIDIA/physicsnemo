@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -35,7 +35,6 @@ from utils.plots import inference_plot
 
 @hydra.main(version_base=None, config_path="config", config_name="stormcast_inference")
 def main(cfg: DictConfig):
-
     # Initialize
     DistributedManager.initialize()
     dist = DistributedManager()
@@ -50,6 +49,7 @@ def main(cfg: DictConfig):
 
     background_channels = dataset.background_channels()
     state_channels = dataset.state_channels()
+    lead_time_steps = dataset.lead_time_steps
 
     invariant_array = dataset.get_invariants()
     invariant_tensor = torch.from_numpy(invariant_array).to(device).repeat(1, 1, 1, 1)
@@ -92,7 +92,6 @@ def main(cfg: DictConfig):
     )
 
     with torch.no_grad():
-
         for i in range(n_steps):
             data = dataset[i + hours_since_jan_01]
 
@@ -104,6 +103,12 @@ def main(cfg: DictConfig):
                 state_pred = state_pred.unsqueeze(0)
                 state_pred_edm = state_pred.clone()
                 state_pred_noedm = state_pred.clone()
+                lead_time_label = data.get("lead_time_label")
+                if lead_time_label is not None:
+                    lead_time_label = lead_time_label.to(
+                        device=device, dtype=torch.int64
+                    )
+                    lead_time_label = lead_time_label.unsqueeze(0)
 
             assert (
                 state_pred_edm.shape == (1, len(state_channels)) + dataset.image_shape()
@@ -130,6 +135,7 @@ def main(cfg: DictConfig):
                 background,
                 [state_pred, state_pred],
                 invariant_tensor,
+                lead_time_label=lead_time_label,
                 regression_net=regression_model,
                 condition_list=cfg.model.diffusion_conditions,
                 regression_condition_list=cfg.model.regression_conditions,
@@ -145,6 +151,7 @@ def main(cfg: DictConfig):
                 condition,
                 state_pred.shape,
                 sampler_args=dict(cfg.sampler.args),
+                lead_time_label=lead_time_label,
             )
 
             state_pred[0, :] += edm_corrected_outputs[0].float()

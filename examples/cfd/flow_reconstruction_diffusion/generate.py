@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -313,7 +313,7 @@ def main(cfg: DictConfig) -> None:
         )
         for seed, image_np in zip(batch_seeds, images_np):
             image_dir = (
-                os.path.join(img_outdir, f"{seed-seed%1000:06d}")
+                os.path.join(img_outdir, f"{seed - seed % 1000:06d}")
                 if subdirs
                 else img_outdir
             )

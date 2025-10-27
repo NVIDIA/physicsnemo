@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,28 +17,58 @@
 import torch
 from torch import nn
 
+from .activations import get_activation
+
 
 class Mlp(nn.Module):
     def __init__(
         self,
-        in_features,
-        hidden_features=None,
-        out_features=None,
-        act_layer=nn.GELU,
-        drop=0.0,
+        in_features: int,
+        hidden_features: int | list[int] | None = None,
+        out_features: int | None = None,
+        act_layer: nn.Module | str = nn.GELU,
+        drop: float = 0.0,
     ):
         super().__init__()
         out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
+        if isinstance(hidden_features, int):
+            hidden_features = [
+                hidden_features,
+            ]
+        elif hidden_features is None:
+            hidden_features = [
+                in_features,
+            ]
+
+        # If the activation is a string, get it.
+        # If it's a type, instantiate it.
+        # If it's a module, leave it be.
+        if isinstance(act_layer, str):
+            act_layer = get_activation(act_layer)
+        elif isinstance(act_layer, nn.Module):
+            pass
+        else:
+            act_layer = act_layer()
+            if not isinstance(act_layer, nn.Module):
+                raise ValueError(
+                    f"Activation layer must be a string or a module, got {type(act_layer)}"
+                )
+
+        layers = []
+        input_dim = in_features
+        for hidden_dim in hidden_features:
+            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(act_layer)
+            if drop != 0:
+                layers.append(nn.Dropout(drop))
+            input_dim = hidden_dim
+
+        # Add the last layers:
+        layers.append(nn.Linear(input_dim, out_features))
+        if drop != 0:
+            layers.append(nn.Dropout(drop))
+
+        self.layers = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
+        return self.layers(x)
