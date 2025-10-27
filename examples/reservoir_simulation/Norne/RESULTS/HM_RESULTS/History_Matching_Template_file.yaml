@@ -1,0 +1,23 @@
+Covariance localisation: Covariance localisaion = No
+Covariance matrix generation: 'Covariance noise matrix generation = data percentage
+
+  '
+Data assimilation method: 'ADAPT_REKI (Vanilla Adaptive Ensemble Kalman Inversion)
+
+  '
+Domain parametrisation: domain parametrisation during inverse problem = No
+Ensemble decorrelation: ensemble decorrelation = No
+Ensemble size: 500
+'Ensemble size = ': 500
+'Execution in secs = ': !!python/object/apply:datetime.timedelta
+- 0
+- 2206
+- 0
+'Forward model surrogate =: ': PINO-FNO
+'Inverse problem solution used =: ': Adaptive Regularised Ensemble Kalman Inversion
+Iterations: 20
+Kalman update: Exotic
+Peaceman modelling inference: Inference peacemann = FNO
+Surrogate model: FNO
+Use pretrained model: 'Yes'
+weighting: Non Weighted innovation
