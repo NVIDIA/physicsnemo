@@ -738,7 +738,7 @@ class EclReader:
                         # Debug: show what we found
                         if (
                             timestep_idx < 3
-                            and logging.getEffectiveLevel() <= logging.INFO
+                            and logger.getEffectiveLevel() <= logging.INFO
                         ):  # Only for first few timesteps
                             logging.info(
                                 f"Timestep {timestep_idx}, Key {key}: intehead_pos={intehead_pos}, next_intehead_pos={next_intehead_pos}"
@@ -762,7 +762,7 @@ class EclReader:
                         if (
                             timestep_idx < 3
                             and key in ["IWEL", "ICON"]
-                            and logging.getEffectiveLevel() <= logging.INFO
+                            and logger.getEffectiveLevel() <= logging.INFO
                         ):
                             logging.info(
                                 f"  Reading {key} from position {key_pos} for timestep {timestep_idx}"
