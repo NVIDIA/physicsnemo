@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,6 +20,7 @@ import torch
 from physicsnemo.utils.neighbors import knn
 from physicsnemo.utils.neighbors.knn._cuml_impl import knn_impl as knn_cuml
 from physicsnemo.utils.neighbors.knn._scipy_impl import knn_impl as knn_scipy
+from physicsnemo.utils.version_check import check_min_version
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
@@ -33,6 +34,15 @@ def test_knn(device: str, k: int, backend: str, dtype: torch.dtype):
     Basic test for KNN functionality.
     We use a predictable grid of points to ensure the results are valid.
     """
+
+    if backend == "cuml":
+        if not check_min_version("cuml", "24.0.0", hard_fail=False):
+            pytest.skip("cuml not available")
+
+    elif backend == "scipy":
+        if not check_min_version("scipy", "1.7.0", hard_fail=False):
+            pytest.skip("scipy not available")
+
     # Skip cuml tests on CPU as it's not supported
     if backend == "cuml" and device == "cpu":
         pytest.skip("cuml backend not supported on CPU")
@@ -102,12 +112,17 @@ def test_knn_torch_compile_no_graph_break(device):
     queries = torch.randn(13, 3, device=device)
     k = 5
 
+    if not check_min_version("cuml", "24.0.0", hard_fail=False):
+        backend = "torch"
+    else:
+        backend = "auto"
+
     def search_fn(points, queries):
         return knn(
             points,
             queries,
             k=k,
-            backend="auto",
+            backend=backend,
         )
 
     # Run both and compare outputs
@@ -133,8 +148,12 @@ def test_opcheck(device):
     k = 5
 
     if device == "cuda":
+        if not check_min_version("cuml", "24.0.0", hard_fail=False):
+            pytest.skip("cuml not available")
         op = knn_cuml
     else:
+        if not check_min_version("scipy", "1.7.0", hard_fail=False):
+            pytest.skip("scipy not available")
         op = knn_scipy
 
     torch.library.opcheck(op, args=(points, queries, k))
@@ -145,6 +164,13 @@ def test_knn_comparison(device):
     points = torch.randn(53, 3, device=device)
     queries = torch.randn(21, 3, device=device)
     k = 5
+
+    if not check_min_version("cuml", "24.0.0", hard_fail=False):
+        if device == "cuda":
+            pytest.skip("cuml not available")
+    if not check_min_version("scipy", "1.7.0", hard_fail=False):
+        if device == "cuda":
+            pytest.skip("scipy not available")
 
     if device == "cuda":
         indices_cuml, distances_A = knn(points, queries, k, backend="cuml")
