@@ -739,7 +739,9 @@ class MetrologyStrategy(ActiveLearningProtocol):
         """
         return len(self.records)
 
-    def serialize_records(self, *args: Any, **kwargs: Any) -> None:
+    def serialize_records(
+        self, path: Path | None = None, *args: Any, **kwargs: Any
+    ) -> None:
         """
         Method to serialize the records of the metrology strategy.
 
@@ -751,6 +753,10 @@ class MetrologyStrategy(ActiveLearningProtocol):
 
         Parameters
         ----------
+        path: Path | None
+            The path to serialize the records to. If not provided, the strategy
+            should provide a reasonable default, such as with the checkpointing
+            or within the corresponding metrology directory via `strategy_dir`.
         args: Any
             Additional arguments to pass to the method.
         kwargs: Any
