@@ -247,8 +247,6 @@ class Grid:
 
             self._conx = remapped_conx
 
-        self._conx = conx[self._valid_conx_idx] - 1
-
         # Log detailed grid and connection information at debug level
         if self._conx.size > 0 and logging.getEffectiveLevel() <= logging.DEBUG:
             total_cells = self.nx * self.ny * self.nz
