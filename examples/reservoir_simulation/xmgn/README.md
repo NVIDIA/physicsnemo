@@ -49,7 +49,7 @@ your_dataset/
 
 ### 1. Data Preprocessing
 
-Prepare simulation results/ensembles under `dataset.sim_dir` in the
+Prepare simulation results and ensembles under `dataset.sim_dir` in the
 configuration file (`conf/config.yaml`), then run:
 
 ```bash
@@ -60,7 +60,7 @@ python src/preprocessor.py
 
 - Reads simulation binary files (`.INIT`, `.EGRID`, `.UNRST`) using
   `sim_utils`
-- Extracts variables specified in the configuration file e.g., `conf/config.yaml`
+- Extracts variables specified in the configuration file, for example, `conf/config.yaml`
 - Builds graph structures with nodes (grid cells) and edges (connections)
 - Creates autoregressive training sequences for next-timestep prediction
 - Saves processed graphs
