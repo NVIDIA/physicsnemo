@@ -46,6 +46,6 @@ perf:
     # Use Apex GroupNorm (optimized normalization for performance with channelslast layout)
   profile_mode: false
     # Enable NVTX annotations for performance profiling
-  io_syncronous: true
+  io_synchronous: true
     # Synchronize I/O operations for writing inference results
 

@@ -355,7 +355,7 @@ def main(cfg: DictConfig) -> None:
                     has_lead_time=has_lead_time,
                 )
 
-                if cfg.generation.perf.io_syncronous:
+                if cfg.generation.perf.io_synchronous:
                     writer_executor = ThreadPoolExecutor(
                         max_workers=cfg.generation.perf.num_writer_workers
                     )
@@ -381,8 +381,9 @@ def main(cfg: DictConfig) -> None:
                 start = end = DummyEvent()
 
             times = dataset.time()
-            for index, (image_tar, image_lr, *lead_time_label) in enumerate(
-                iter(data_loader)
+            for dataset_index, (image_tar, image_lr, *lead_time_label) in zip(
+                sampler,
+                iter(data_loader),
             ):
                 time_index += 1
                 if dist.rank == 0:
@@ -405,7 +406,7 @@ def main(cfg: DictConfig) -> None:
                 image_out = generate_fn()
                 if dist.rank == 0:
                     batch_size = image_out.shape[0]
-                    if cfg.generation.perf.io_syncronous:
+                    if cfg.generation.perf.io_synchronous:
                         # write out data in a seperate thread so we don't hold up inferencing
                         writer_threads.append(
                             writer_executor.submit(
@@ -417,8 +418,7 @@ def main(cfg: DictConfig) -> None:
                                 image_tar.cpu(),
                                 image_lr.cpu(),
                                 time_index,
-                                index,
-                                has_lead_time,
+                                dataset_index,
                             )
                         )
                     else:
@@ -430,8 +430,7 @@ def main(cfg: DictConfig) -> None:
                             image_tar.cpu(),
                             image_lr.cpu(),
                             time_index,
-                            index,
-                            has_lead_time,
+                            dataset_index,
                         )
             end.record()
             end.synchronize()
@@ -449,7 +448,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
             # make sure all the workers are done writing
-            if dist.rank == 0 and cfg.generation.perf.io_syncronous:
+            if dist.rank == 0 and cfg.generation.perf.io_synchronous:
                 for thread in list(writer_threads):
                     thread.result()
                     writer_threads.remove(thread)
