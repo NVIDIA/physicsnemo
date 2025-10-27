@@ -36,7 +36,7 @@ runspec:
 dataset:
   simulator: OPM                                # Simulator type (OPM, ECLIPSE, IX)
   sim_dir: ../dataset/2D_OW/CASE_2D.sim         # Directory containing simulation cases and results
-  num_samples: 20                               # Number of samples to process (default = all, else for small size testing)
+  # num_samples: 20                               # Number of samples to process (default = all, else for small size testing)
   uniform_geometry: true                        # Flag (uniform geometry across samples) for skipping egrid reading repeatedly. Use false for non-uniform geometry (e.g., DFN)
   
   # Graph configuration
@@ -45,7 +45,7 @@ dataset:
       static: ["PERMX", "PORV", "X", "Y", "Z"]                # Static node features (ECL standard + some custom keys supported)
       dynamic: 
         variables: ["PRESSURE", "SWAT", "WCID"]               # Dynamic node features (current timestep) 
-        prev_timesteps: 0                                     # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
+        prev_timesteps: 2                                     # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
       # time_series: ["WWIR"]                                 # Time series variables #TODO: implement later (currently not used)
     
     edge_features: ["TRANX", "TRANY", "TRANZ", "TRANNNC"]    # directional transmissibilities (including nnc). will be combined.
@@ -71,7 +71,7 @@ dataset:
 preprocessing:
   skip_graphs: false                            # Skip graph generation (use existing graphs to test partitioning parameters)
   num_partitions: 2                             # Number of partitions for each graph
-  halo_size: 1                                  # Size of halo region for partitions
+  halo_size: 3                                  # Size of halo region for partitions
   num_preprocess_workers: 4                     # Number of workers for data preprocessing
   data_split:
     train_ratio: 0.8                            # Ratio of samples for training
