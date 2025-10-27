@@ -98,14 +98,23 @@ def log_mlflow_tags_and_params(config: DictConfig, logger, mode: str = "training
     """
     import mlflow
 
+    # Initialize variables for fallback block
+    job_name = "unknown"
+    dataset_name = "unknown"
+
     try:
         # Get job name and dataset info
-        job_name = config.runspec.job_name if hasattr(config, "runspec") else "unknown"
-        dataset_name = (
-            os.path.basename(config.dataset.sim_dir)
-            if hasattr(config, "dataset")
+        job_name = (
+            getattr(config.runspec, "job_name", "unknown")
+            if hasattr(config, "runspec")
             else "unknown"
         )
+        sim_dir = (
+            getattr(config.dataset, "sim_dir", None)
+            if hasattr(config, "dataset")
+            else None
+        )
+        dataset_name = os.path.basename(sim_dir) if sim_dir else "unknown"
         description = (
             getattr(config.runspec, "description", "")
             if hasattr(config, "runspec")
