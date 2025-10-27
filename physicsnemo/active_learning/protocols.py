@@ -906,22 +906,11 @@ class TrainingProtocol(Protocol):
         Example
         -------
         Minimum viable implementation:
+        >>> import torch
         >>> def training_step(model, data):
         ...     output = model(data)
         ...     loss = torch.sum(torch.pow(output - data, 2))
         ...     return loss
-
-        With ``StaticCaptureTraining``:
-        >>> from torch import nn, optim
-        >>> from physicsnemo.utils.capture import StaticCaptureTraining
-        >>> model = nn.Linear(10, 1)
-        >>> optim = optim.SGD(model.parameters(), lr=0.01)
-        >>> @StaticCaptureTraining(model=model, optim=optim)
-        ... def training_step(model, data):
-        ...     output = model(data)
-        ...     loss = torch.sum(torch.pow(output - data, 2))
-        ...     return loss
-
         """
         ...
 
@@ -969,17 +958,8 @@ class ValidationProtocol(Protocol):
         Example
         -------
         Minimum viable implementation:
+        >>> import torch
         >>> def validation_step(model, data):
-        ...     output = model(data)
-        ...     loss = torch.sum(torch.pow(output - data, 2))
-        ...     return loss
-
-        With ``StaticCaptureEvaluateNoGrad``:
-        >>> from torch import nn
-        >>> from physicsnemo.utils.capture import StaticCaptureEvaluateNoGrad
-        >>> model = nn.Linear(10, 1)
-        >>> @StaticCaptureEvaluateNoGrad(model=model)
-        ... def validation_step(model, data):
         ...     output = model(data)
         ...     loss = torch.sum(torch.pow(output - data, 2))
         ...     return loss
@@ -1034,15 +1014,6 @@ class InferenceProtocol(Protocol):
         -------
         Minimum viable implementation:
         >>> def inference_step(model, data):
-        ...     output = model(data)
-        ...     return output
-
-        With ``StaticCaptureEvaluateNoGrad``:
-        >>> from torch import nn
-        >>> from physicsnemo.utils.capture import StaticCaptureEvaluateNoGrad
-        >>> model = nn.Linear(10, 1)
-        >>> @StaticCaptureEvaluateNoGrad(model=model)
-        ... def inference_step(model, data):
         ...     output = model(data)
         ...     return output
         """

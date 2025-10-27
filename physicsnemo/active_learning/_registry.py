@@ -106,7 +106,7 @@ class ActiveLearningRegistry:
 
         Examples
         --------
-        >>> @registry.register("my_strategy")
+        >>> @registry.register("my_new_strategy")
         ... class MyStrategy:
         ...     def __init__(self, param: int):
         ...         self.param = param
@@ -163,11 +163,11 @@ class ActiveLearningRegistry:
         Examples
         --------
         >>> from physicsnemo.active_learning._registry import registry
-        >>> @registry.register("my_strategy")
+        >>> @registry.register("my_latest_strategy")
         ... class MyStrategy:
         ...     def __init__(self, param: int):
         ...         self.param = param
-        >>> strategy = registry.construct("my_strategy", param=42)
+        >>> strategy = registry.construct("my_latest_strategy", param=42)
         """
         cls = self.get_class(cls_name, module_path)
 
