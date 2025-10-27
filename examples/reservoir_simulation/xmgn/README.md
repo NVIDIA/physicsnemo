@@ -60,7 +60,7 @@ python src/preprocessor.py
 
 - Reads simulation binary files (`.INIT`, `.EGRID`, `.UNRST`) using
   `sim_utils`
-- Extracts variables specified in the configuration file e.g., `config/config.yaml`
+- Extracts variables specified in the configuration file e.g., `conf/config.yaml`
 - Builds graph structures with nodes (grid cells) and edges (connections)
 - Creates autoregressive training sequences for next-timestep prediction
 - Saves processed graphs

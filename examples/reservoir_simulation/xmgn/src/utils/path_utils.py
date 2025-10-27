@@ -38,6 +38,10 @@ def get_dataset_dir(cfg: DictConfig) -> str:
 
     job_name = cfg.runspec.job_name
 
+    # Get simulation directory from dataset (required)
+    if not hasattr(cfg, "dataset") or not hasattr(cfg.dataset, "sim_dir"):
+        raise ValueError("dataset.sim_dir is required in configuration")
+
     # Create base dataset directory path
     base_dataset_dir = to_absolute_path(cfg.dataset.sim_dir + ".dataset")
 
