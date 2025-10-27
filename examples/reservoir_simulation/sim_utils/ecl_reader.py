@@ -661,7 +661,8 @@ class EclReader:
                 zip(intehead_positions, dates, times)
             ):
                 result = {"DATE": date, "TIME": time}
-                logging.info(f"Processing timestep {timestep_idx}")
+                if logging.getEffectiveLevel() <= logging.INFO:
+                    logging.info(f"Processing timestep {timestep_idx}")
 
                 # Read INTEHEAD data for this timestep
                 fid.seek(intehead_pos)
@@ -699,15 +700,17 @@ class EclReader:
                     result["INTEHEAD"] = np.array([])
 
                 # Read requested keys for this timestep
-                logging.info(
-                    f"  Processing {len(keys)} keys for timestep {timestep_idx}"
-                )
+                if logging.getEffectiveLevel() <= logging.INFO:
+                    logging.info(
+                        f"  Processing {len(keys)} keys for timestep {timestep_idx}"
+                    )
                 for key in keys:
                     if key == "INTEHEAD":
                         continue  # Already handled above
-                    logging.info(
-                        f"    Processing key {key} for timestep {timestep_idx}"
-                    )
+                    if logging.getEffectiveLevel() <= logging.INFO:
+                        logging.info(
+                            f"    Processing key {key} for timestep {timestep_idx}"
+                        )
 
                     # Find the key position that comes after this INTEHEAD position
                     # but before the next INTEHEAD position (or end of file)
@@ -719,9 +722,10 @@ class EclReader:
                     )
 
                     if key in key_positions:
-                        logging.info(
-                            f"      Found {len(key_positions[key])} positions for {key}"
-                        )
+                        if logging.getEffectiveLevel() <= logging.INFO:
+                            logging.info(
+                                f"      Found {len(key_positions[key])} positions for {key}"
+                            )
                         # Find the first key position that comes after this INTEHEAD
                         for pos in key_positions[key]:
                             if intehead_pos < pos < next_intehead_pos:
@@ -729,7 +733,10 @@ class EclReader:
                                 break
 
                         # Debug: show what we found
-                        if timestep_idx < 3:  # Only for first few timesteps
+                        if (
+                            timestep_idx < 3
+                            and logging.getEffectiveLevel() <= logging.INFO
+                        ):  # Only for first few timesteps
                             logging.info(
                                 f"Timestep {timestep_idx}, Key {key}: intehead_pos={intehead_pos}, next_intehead_pos={next_intehead_pos}"
                             )
@@ -749,15 +756,20 @@ class EclReader:
 
                     if key_pos is not None:
                         # Debug: check if we're reading from the same position
-                        if timestep_idx < 3 and key in ["IWEL", "ICON"]:
+                        if (
+                            timestep_idx < 3
+                            and key in ["IWEL", "ICON"]
+                            and logging.getEffectiveLevel() <= logging.INFO
+                        ):
                             logging.info(
                                 f"  Reading {key} from position {key_pos} for timestep {timestep_idx}"
                             )
 
                         fid.seek(key_pos)
-                        logging.info(
-                            f"  About to read {key} for timestep {timestep_idx}"
-                        )
+                        if logging.getEffectiveLevel() <= logging.INFO:
+                            logging.info(
+                                f"  About to read {key} for timestep {timestep_idx}"
+                            )
 
                         try:
                             # Read key data
@@ -818,9 +830,13 @@ class EclReader:
                                             )
                                             result[key] = string_data
                                         else:
-                                            logging.debug(
-                                                f"Insufficient CHAR data for {key}: expected {data_count * 8}, got {len(raw_data)}"
-                                            )
+                                            if (
+                                                logging.getEffectiveLevel()
+                                                <= logging.DEBUG
+                                            ):
+                                                logging.debug(
+                                                    f"Insufficient CHAR data for {key}: expected {data_count * 8}, got {len(raw_data)}"
+                                                )
                                     else:
                                         # Handle numeric data
                                         dtype_map = {
@@ -837,12 +853,18 @@ class EclReader:
                                         # For now, just use the data as-is without truncation
 
                                         result[key] = key_data
-                                        logging.info(
-                                            f"Added {key} to result for timestep {timestep_idx}"
-                                        )
+                                        if logging.getEffectiveLevel() <= logging.INFO:
+                                            logging.info(
+                                                f"Added {key} to result for timestep {timestep_idx}"
+                                            )
 
                                         # Debug: show what we read
-                                        if timestep_idx < 3 and key in ["IWEL", "ICON"]:
+                                        if (
+                                            timestep_idx < 3
+                                            and key in ["IWEL", "ICON"]
+                                            and logging.getEffectiveLevel()
+                                            <= logging.INFO
+                                        ):
                                             logging.info(
                                                 f"  Read {key} for timestep {timestep_idx}: size={len(key_data)}, first 5={key_data[:5]}"
                                             )
@@ -880,12 +902,13 @@ class EclReader:
                             result[key] = np.array([])  # Empty string array
                         else:
                             result[key] = np.array([])  # Empty numeric array
-                        logging.info(
-                            f"Key {key} not found for timestep {timestep_idx}, using empty array"
-                        )
-                        logging.info(
-                            f"Added {key} to result for timestep {timestep_idx} (empty)"
-                        )
+                        if logging.getEffectiveLevel() <= logging.INFO:
+                            logging.info(
+                                f"Key {key} not found for timestep {timestep_idx}, using empty array"
+                            )
+                            logging.info(
+                                f"Added {key} to result for timestep {timestep_idx} (empty)"
+                            )
 
                 all_results[timestep_idx] = result
 
