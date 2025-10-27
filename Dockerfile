@@ -56,6 +56,11 @@ RUN FILE="/etc/pip/constraint.txt" && \
 RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
 RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio" "moviepy" "tqdm>=4.60.0"
 
+# Install nvtx and dask separately
+# Earlier these used to be pre-packaged in the base pytorch image (transitive dependencies of cudf / rapids)
+# From 25.09 onwards, Rapids libs are no longer packaged in PyTorch containers: https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-09.html#rel-25-09
+RUN pip install --no-cache-dir "dask>=2025.10.0" "nvtx>=0.2.13"
+
 # Install Numcodecs (This needs a separate install because Numcodecs ARM pip install has issues)
 # A fix is being added here: https://github.com/zarr-developers/numcodecs/pull/315 but the public release is not ready yet.
 ARG NUMCODECS_ARM64_WHEEL
