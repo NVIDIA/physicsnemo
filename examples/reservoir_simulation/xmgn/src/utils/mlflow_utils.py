@@ -77,7 +77,7 @@ def flatten_config_section(config_section, prefix: str = "") -> dict:
                 # Handle Hydra interpolations and other complex values
                 try:
                     flattened[param_name] = str(value)
-                except:
+                except Exception:
                     flattened[param_name] = f"<unresolved:{key}>"
 
     return flattened
