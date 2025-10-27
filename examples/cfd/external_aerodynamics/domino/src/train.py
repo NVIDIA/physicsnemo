@@ -44,6 +44,9 @@ from physicsnemo.utils.memory import unified_gpu_memory
 
 import torchinfo
 import torch.distributed as dist
+from torch.distributed.fsdp import fully_shard
+from torch.distributed.tensor import distribute_module
+
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -333,6 +336,13 @@ def main(cfg: DictConfig) -> None:
     # how to set that up, if needed.
     domain_mesh, data_mesh, placements = coordinate_distributed_environment(cfg)
 
+    if data_mesh is not None:
+        data_replica_size = data_mesh.size()
+        data_rank = data_mesh.get_local_rank()
+    else:
+        data_replica_size = dist.world_size
+        data_rank = dist.rank
+
     ################################
     # Initialize NVML
     ################################
@@ -438,8 +448,8 @@ def main(cfg: DictConfig) -> None:
     )
     train_sampler = DistributedSampler(
         train_dataloader,
-        num_replicas=data_mesh.size(),
-        rank=data_mesh.get_local_rank(),
+        num_replicas=data_replica_size,
+        rank=data_rank,
         **cfg.train.sampler,
     )
 
@@ -458,8 +468,8 @@ def main(cfg: DictConfig) -> None:
     )
     val_sampler = DistributedSampler(
         val_dataloader,
-        num_replicas=data_mesh.size(),
-        rank=data_mesh.get_local_rank(),
+        num_replicas=data_replica_size,
+        rank=data_rank,
         **cfg.val.sampler,
     )
 
@@ -478,15 +488,22 @@ def main(cfg: DictConfig) -> None:
     logger.info(f"Model summary:\n{torchinfo.summary(model, verbose=0, depth=2)}\n")
 
     if dist.world_size > 1:
-        model = DistributedDataParallel(
-            model,
-            device_ids=[dist.local_rank],
-            output_device=dist.device,
-            broadcast_buffers=dist.broadcast_buffers,
-            find_unused_parameters=dist.find_unused_parameters,
-            gradient_as_bucket_view=True,
-            static_graph=True,
-        )
+        if domain_mesh is None:
+            model = DistributedDataParallel(
+                model,
+                device_ids=[dist.local_rank],
+                output_device=dist.device,
+                broadcast_buffers=dist.broadcast_buffers,
+                find_unused_parameters=dist.find_unused_parameters,
+                gradient_as_bucket_view=True,
+                static_graph=True,
+            )
+        else:
+            model = distribute_module(
+                model,
+                device_mesh=domain_mesh,
+            )
+            model = fully_shard(model, mesh=data_mesh)
 
     ######################################################
     # Initialize optimzer and gradient scaler

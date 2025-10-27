@@ -71,10 +71,15 @@ def _setup_unified_gpu_memory():
             "PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD", None
         )
         if PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD is None:
+            # default to 0:
+            local_rank = 0
+
+            # Update if a variable sets the local rank:
             for method in ["LOCAL_RANK", "OMPI_COMM_WORLD_LOCAL_RANK", "SLURM_LOCALID"]:
                 if os.environ.get(method) is not None:
                     local_rank = int(os.environ.get(method))
                     break
+
         else:
             if PHYSICSNEMO_DISTRIBUTED_INITIALIZATION_METHOD == "ENV":
                 local_rank = int(os.environ.get("LOCAL_RANK"))

@@ -188,13 +188,14 @@ GPUs and perform operations in a numerically consistent way.  For more informati
 about the techniques of domain parallelism and `ShardTensor`, refer to PhysicsNeMo
 tutorials such as [`ShardTensor`](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.distributed.shardtensor.html).
 
-In DoMINO specifically, domain parallelism has been abled in two ways, which
+In DoMINO specifically, domain parallelism has been enabled in two ways, which
 can be used concurrently or separately.  First, the input sampled volumetric
 and surface points can be sharded to accomodate higher resolution point sampling
 Second, the latent space of the model - typically a regularlized grid - can be
 sharded to reduce computational complexity of the latent processing.  When training
 with sharded models in DoMINO, the primary objective is to enable higher
-resolution inputs and larger latent spaces without sacrificing substantial compute time.
+resolution inputs and larger latent spaces without sacrificing
+substantial compute time.
 
 When configuring DoMINO for sharded training, adjust the following parameters
 from `src/conf/config.yaml`:
@@ -207,19 +208,13 @@ domain_parallelism:
 ```
 
 The `domain_size` represents the number of GPUs used for each batch - setting
-`domain_size: 1` is not advised since that is the standard training regime,
-but with extra overhead.  `shard_grid` and `shard_points` will enable domain
+`domain_size: 1` is the standard training regime, and domain_parallelism
+will be ignored.  `shard_grid` and `shard_points` will enable domain
 parallelism over the latent space and input/output points, respectively.
 
-As one last note regarding domain-parallel training: in the phase of the DoMINO
-where the output solutions are calculated, the model can used two different
-techniques (numerically identical) to calculate the output.  Due to the
-overhead of potential communication at each operation, it's recommended to
-use the `one-loop` mode with `model.solution_calculation_mode` when doing
-sharded training.  This technique launches vectorized kernels with less
-launch overhead at the cost of more memory use.  For non-sharded
-training, the `two-loop` setting is more optimal. The difference in `one-loop`
-or `two-loop` is purely computational, not algorithmic.
+Setting domain_size > 1 without specifying `shard_points=True` or `shard_grid=True`
+will result in a runtime error during configuration - if you do not want to use
+domain_parallelism, leave `domain_size=1`.
 
 ### Performance Optimizations
 
