@@ -20,7 +20,7 @@ Utility functions for MLflow logging in XMeshGraphNet.
 
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from omegaconf import DictConfig
 
 
@@ -128,7 +128,7 @@ def log_mlflow_tags_and_params(config: DictConfig, logger, mode: str = "training
             "simulator": getattr(config.dataset, "simulator", "unknown"),
             "model_type": "MeshGraphNet",
             "git_commit": get_git_commit(),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         # Add description as a tag if available
