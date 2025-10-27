@@ -449,10 +449,10 @@ class ReservoirPreprocessor:
 
                 # Create partitions with halo regions using PyG `k_hop_subgraph`
                 partitions = []
-                for i in range(self.cfg.preprocessing.num_partitions):
+                for part_idx in range(self.cfg.preprocessing.num_partitions):
                     # Get inner nodes of the partition
                     part_inner_node = part_meta.node_perm[
-                        part_meta.partptr[i] : part_meta.partptr[i + 1]
+                        part_meta.partptr[part_idx] : part_meta.partptr[part_idx + 1]
                     ]
                     # Partition the graph with halo regions
                     part_node, part_edge_index, inner_node_mapping, edge_mask = (
