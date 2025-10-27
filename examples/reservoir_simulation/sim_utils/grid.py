@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import numpy as np
+import logging
 
 NUM_MAX_DIMENS = 3
 
@@ -238,21 +239,25 @@ class Grid:
         # Note: This is a critical fix to ensure the connection matrix is 0-based and within the valid range
         self._conx = conx[self._valid_conx_idx] - 1
 
-        # Debug: Print detailed grid and connection information
-        if self._conx.size > 0:
+        # Log detailed grid and connection information at debug level
+        if self._conx.size > 0 and logging.getEffectiveLevel() <= logging.DEBUG:
             total_cells = self.nx * self.ny * self.nz
             active_percentage = (self.nact / total_cells) * 100
             nnc_count = self.num_NNCs if hasattr(self, "num_NNCs") else 0
 
-            print(
-                f"🔗 Grid dimensions: {self.nx} × {self.ny} × {self.nz} = {total_cells:,} total cells"
+            logging.debug(
+                f"Grid dimensions: {self.nx} × {self.ny} × {self.nz} = {total_cells:,} total cells"
             )
-            print(f"🔗 Active cells: {self.nact:,} ({active_percentage:.1f}% of total)")
-            print(f"🔗 Connections: {self._conx.shape[0]:,} edges")
-            print(f"🔗   - Regular connections: {self._conx.shape[0] - nnc_count:,}")
-            print(f"🔗   - NNC connections: {nnc_count:,}")
-            print(
-                f"🔗 Edge indices: min={np.min(self._conx)}, max={np.max(self._conx)}"
+            logging.debug(
+                f"Active cells: {self.nact:,} ({active_percentage:.1f}% of total)"
+            )
+            logging.debug(f"Connections: {self._conx.shape[0]:,} edges")
+            logging.debug(
+                f"  - Regular connections: {self._conx.shape[0] - nnc_count:,}"
+            )
+            logging.debug(f"  - NNC connections: {nnc_count:,}")
+            logging.debug(
+                f"Edge indices: min={np.min(self._conx)}, max={np.max(self._conx)}"
             )
 
     def _compute_total_tran(self, init_data: dict) -> None:
