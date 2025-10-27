@@ -176,5 +176,5 @@ def print_dataset_info(cfg: DictConfig) -> None:
     job_name = cfg.runspec.job_name
     dataset_dir = get_dataset_dir(cfg)
 
-    print(f"📁 Job name: {job_name}")
-    print(f"📁 Dataset directory: {dataset_dir}")
+    print(f"Job name: {job_name}")
+    print(f"Dataset directory: {dataset_dir}")
