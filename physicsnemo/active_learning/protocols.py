@@ -793,6 +793,30 @@ class MetrologyStrategy(ActiveLearningProtocol):
         """
         ...
 
+    def load_records(self, path: Path | None = None, *args: Any, **kwargs: Any) -> None:
+        """
+        Method to load the records of the metrology strategy, i.e.
+        the reverse of `serialize_records`.
+
+        This should be defined by a concrete implementation, which dictates
+        how the records are loaded, e.g. from a JSON file, database, etc.
+
+        If no path is provided, the strategy should load the latest records
+        as sensible defaults. The `records` attribute should then be overwritten
+        in-place.
+
+        Parameters
+        ----------
+        path: Path | None
+            The path to load the records from. If not provided, the strategy
+            should load the latest records as sensible defaults.
+        args: Any
+            Additional arguments to pass to the method.
+        kwargs: Any
+            Additional keyword arguments to pass to the method.
+        """
+        ...
+
     def compute(self, *args: Any, **kwargs: Any) -> None:
         """
         Method to compute the metrology strategy. No data is passed to
