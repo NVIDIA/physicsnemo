@@ -455,13 +455,17 @@ class Trainer:
         else:
             self.val_sampler = sampler
 
-        print(f"Using partitioned data loader with {len(dataloader)} batches")
+        self.logger.info(
+            f"Using partitioned data loader with {len(dataloader)} batches"
+        )
         return dataloader
 
     def denormalize_predictions(self, predictions):
         """Denormalize predictions using global statistics."""
         if "target_features" not in self.stats:
-            print("Warning: No target feature statistics found for denormalization")
+            self.logger.warning(
+                "No target feature statistics found for denormalization"
+            )
             return predictions
 
         target_mean = torch.tensor(
@@ -478,7 +482,9 @@ class Trainer:
     def denormalize_targets(self, targets):
         """Denormalize targets using global statistics."""
         if "target_features" not in self.stats:
-            print("Warning: No target feature statistics found for denormalization")
+            self.logger.warning(
+                "No target feature statistics found for denormalization"
+            )
             return targets
 
         target_mean = torch.tensor(
