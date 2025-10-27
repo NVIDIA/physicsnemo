@@ -85,7 +85,7 @@ preprocessing:
 model:
   num_message_passing_layers: 3                 # Number of message passing layers
   hidden_dim: 64                                # Hidden dimension of the model
-  activation: silu                               # Activation function
+  activation: silu                              # Activation function
 
 # ┌───────────────────────────────────────────┐
 # │          Training Configuration           │
