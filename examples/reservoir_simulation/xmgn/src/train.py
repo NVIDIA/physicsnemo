@@ -742,7 +742,8 @@ class Trainer:
 
                 for partition in partitions:
                     loss, _, _, _ = self._process_partition(partition, is_training=True)
-                    loss = loss / num_partitions  # Scale by number of partitions
+                    # Scale by both num_partitions and num_samples for proper gradient accumulation
+                    loss = loss / (num_partitions * num_samples)
                     sample_loss += loss.item()
 
                     # Backward pass
