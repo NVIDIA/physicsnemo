@@ -234,8 +234,9 @@ class Grid:
 
         # **Filter out boundary connections (connections involving inactive cells)**
         self._valid_conx_idx = ~np.any(conx == 0, axis=1)
+        self._conx = conx[self._valid_conx_idx]
 
-        # Filter boundary connections and convert to 0-based indexing
+        # Remap the connection indices to 0-based active-only indices
         if len(self.ijk_to_active) > 0:
             remapped_conx = np.zeros_like(self._conx)
 
