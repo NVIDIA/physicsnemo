@@ -31,7 +31,6 @@ class Completion:
     flow direction.
 
     Attributes:
-        id (int): Completion ID.
         I (int): I-index of the grid cell (1-based).
         J (int): J-index of the grid cell (1-based).
         K (int): K-index of the grid cell (1-based).
