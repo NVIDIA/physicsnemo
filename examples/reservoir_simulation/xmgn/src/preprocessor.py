@@ -430,54 +430,54 @@ class ReservoirPreprocessor:
 
                 # Create partitions directly without using PartitionedGraph class
                 # to avoid module path issues
-                with self.suppress_all_output():
-                    # Try to partition the graph using PyG METIS, with fallback to simple partitioning
-                    try:
+                # Try to partition the graph using PyG METIS, with fallback to simple partitioning
+                try:
+                    with self.suppress_all_output():
                         # Partition the graph using PyG METIS
                         cluster_data = pyg.loader.ClusterData(
                             graph, num_parts=self.cfg.preprocessing.num_partitions
                         )
                         part_meta = cluster_data.partition
-                    except Exception as e:
-                        print(
-                            f"     WARNING: METIS partitioning failed ({e}), using simple partitioning..."
-                        )
-                        # Fallback: simple sequential partitioning
-                        part_meta = self.create_simple_partition(
-                            graph.num_nodes, self.cfg.preprocessing.num_partitions
-                        )
+                except Exception as e:
+                    print(
+                        f"     WARNING: METIS partitioning failed ({e}), using simple partitioning..."
+                    )
+                    # Fallback: simple sequential partitioning
+                    part_meta = self.create_simple_partition(
+                        graph.num_nodes, self.cfg.preprocessing.num_partitions
+                    )
 
-                    # Create partitions with halo regions using PyG `k_hop_subgraph`
-                    partitions = []
-                    for i in range(self.cfg.preprocessing.num_partitions):
-                        # Get inner nodes of the partition
-                        part_inner_node = part_meta.node_perm[
-                            part_meta.partptr[i] : part_meta.partptr[i + 1]
-                        ]
-                        # Partition the graph with halo regions
-                        part_node, part_edge_index, inner_node_mapping, edge_mask = (
-                            pyg.utils.k_hop_subgraph(
-                                part_inner_node,
-                                num_hops=self.cfg.preprocessing.halo_size,
-                                edge_index=graph.edge_index,
-                                num_nodes=graph.num_nodes,
-                                relabel_nodes=True,
-                            )
+                # Create partitions with halo regions using PyG `k_hop_subgraph`
+                partitions = []
+                for i in range(self.cfg.preprocessing.num_partitions):
+                    # Get inner nodes of the partition
+                    part_inner_node = part_meta.node_perm[
+                        part_meta.partptr[i] : part_meta.partptr[i + 1]
+                    ]
+                    # Partition the graph with halo regions
+                    part_node, part_edge_index, inner_node_mapping, edge_mask = (
+                        pyg.utils.k_hop_subgraph(
+                            part_inner_node,
+                            num_hops=self.cfg.preprocessing.halo_size,
+                            edge_index=graph.edge_index,
+                            num_nodes=graph.num_nodes,
+                            relabel_nodes=True,
                         )
+                    )
 
-                        partition = pyg.data.Data(
-                            edge_index=part_edge_index,
-                            edge_attr=graph.edge_attr[edge_mask],
-                            num_nodes=part_node.size(0),
-                            part_node=part_node,
-                            inner_node=inner_node_mapping,
-                        )
-                        # Set partition node attributes
-                        for k, v in graph.items():
-                            if graph.is_node_attr(k):
-                                setattr(partition, k, v[part_node])
+                    partition = pyg.data.Data(
+                        edge_index=part_edge_index,
+                        edge_attr=graph.edge_attr[edge_mask],
+                        num_nodes=part_node.size(0),
+                        part_node=part_node,
+                        inner_node=inner_node_mapping,
+                    )
+                    # Set partition node attributes
+                    for k, v in graph.items():
+                        if graph.is_node_attr(k):
+                            setattr(partition, k, v[part_node])
 
-                        partitions.append(partition)
+                    partitions.append(partition)
 
                 # Save partitions as a list (following xaeronet pattern)
                 partition_file = os.path.join(
