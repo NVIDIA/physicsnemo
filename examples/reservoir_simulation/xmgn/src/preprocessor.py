@@ -25,6 +25,7 @@ import os
 import sys
 import json
 import random
+import re
 import shutil
 import contextlib
 import io
@@ -94,6 +95,41 @@ class ReservoirPreprocessor:
         job_name = os.path.basename(self.dataset_dir)
         print(f"Dataset directory: {self.dataset_dir}")
         print(f"Job name: {job_name}")
+
+    def _extract_case_name_from_filename(self, filename):
+        """
+        Extract case name from a graph filename by removing the timestep suffix.
+
+        Expected format: {case_name}_{timestep:03d}.pt
+        where timestep is typically 3 digits (e.g., 000, 001, 123).
+
+        Examples:
+            CASE_2D_1_000.pt -> CASE_2D_1
+            NORNE_ATW2013_DOE_0004_002.pt -> NORNE_ATW2013_DOE_0004
+            sample_005_123.pt -> sample_005
+
+        Parameters:
+        -----------
+        filename : str
+            Graph filename (with or without .pt extension)
+
+        Returns:
+        --------
+        str: Case name without timestep suffix
+        """
+        # Remove .pt extension if present
+        name = filename.replace(".pt", "")
+
+        # Pattern: match case_name followed by underscore and 3-digit timestep at end
+        # The timestep is formatted as {timestep_id:03d} in graph_builder.py
+        match = re.match(r"^(.+)_(\d{3})$", name)
+
+        if match:
+            return match.group(1)  # Return everything before the last _XXX
+        else:
+            # Fallback: if pattern doesn't match, assume entire name is the case
+            # (this handles edge cases or future format changes)
+            return name
 
     def save_graph_file_list(self, graph_files, list_file="generated_graphs.json"):
         """
@@ -221,8 +257,8 @@ class ReservoirPreprocessor:
         # Extract unique case names from file names
         case_names = set()
         for filename in self.graph_file_list:
-            # Extract case name (e.g., "CASE_2D_1" from "CASE_2D_1_000.pt")
-            case_name = "_".join(filename.split("_")[:-1])  # Remove the timestep part
+            # Extract case name using robust regex-based parsing
+            case_name = self._extract_case_name_from_filename(filename)
             case_names.add(case_name)
 
         case_names = sorted(list(case_names))
@@ -282,7 +318,7 @@ class ReservoirPreprocessor:
         splits = {"train": [], "val": [], "test": []}
 
         for filename in self.graph_file_list:
-            case_name = "_".join(filename.split("_")[:-1])
+            case_name = self._extract_case_name_from_filename(filename)
             if case_name in train_cases:
                 splits["train"].append(filename)
             elif case_name in val_cases:
