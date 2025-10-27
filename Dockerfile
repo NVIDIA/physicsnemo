@@ -24,7 +24,7 @@ RUN pip install "pip>=23.2.1" "setuptools>=77.0.3"
 
 # Setup git lfs, graphviz gl1(vtk dep)
 RUN apt-get update && \
-    apt-get install -y git-lfs graphviz libgl1 && \
+    apt-get install -y git-lfs graphviz libgl1 zip unzip && \
     git lfs install
 
 ENV _CUDA_COMPAT_TIMEOUT=90
