@@ -336,6 +336,9 @@ class SongUNet(Module):
             self.img_shape_y = img_resolution[0]
             self.img_shape_x = img_resolution[1]
 
+        self._num_levels = len(channel_mult)
+        self._input_shape_mult = 2**self._num_levels
+
         # set the threshold for checkpointing based on image resolution
         self.checkpoint_threshold = (
             math.floor(math.sqrt(self.img_shape_x * self.img_shape_y))
@@ -522,6 +525,55 @@ class SongUNet(Module):
             if self.profile_mode
             else contextlib.nullcontext()
         ):
+            # Validate input shapes
+            batch_size = x.shape[0]
+
+            if x.ndim != 4:
+                raise ValueError(
+                    f"Expected 'x' to be a 4D tensor, "
+                    f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+
+            # Check spatial dimensions are powers of 2 or multiples of 2^N
+            for d in x.shape[-2:]:
+                # Check if d is a power of 2
+                is_power_of_2 = (d & (d - 1)) == 0 and d > 0
+                # If not power of 2, must be multiple of self._input_shape_mult
+                if not (
+                    (is_power_of_2 and d < self._input_shape_mult)
+                    or (d % self._input_shape_mult == 0)
+                ):
+                    raise ValueError(
+                        f"Input spatial dimensions ({x.shape[-2:]}) must be "
+                        f"either powers of 2 or multiples of 2**N where "
+                        f"N (={self._num_levels}) is the number of levels "
+                        f"in the U-Net."
+                    )
+
+            # TODO: noise_labels of shape (1,) means that all inputs share the
+            # same noise level. This should be removed in the future, though.
+            if noise_labels.ndim != 1 or noise_labels.shape[0] not in (batch_size, 1):
+                raise ValueError(
+                    f"Expected 'noise_labels' shape ({batch_size},) or (1,), "
+                    f"got {tuple(noise_labels.shape)}"
+                )
+
+            if class_labels is not None and (
+                class_labels.ndim != 2 or class_labels.shape[0] != batch_size
+            ):
+                raise ValueError(
+                    f"Expected 'class_labels' shape ({batch_size}, C), "
+                    f"got {tuple(class_labels.shape)}"
+                )
+
+            if augment_labels is not None and (
+                augment_labels.ndim != 2 or augment_labels.shape[0] != batch_size
+            ):
+                raise ValueError(
+                    f"Expected 'augment_labels' shape ({batch_size}, C), "
+                    f"got {tuple(augment_labels.shape)}"
+                )
+
             if (
                 self.use_apex_gn
                 and (not x.is_contiguous(memory_format=torch.channels_last))
