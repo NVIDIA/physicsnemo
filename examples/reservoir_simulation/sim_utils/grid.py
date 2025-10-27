@@ -233,56 +233,27 @@ class Grid:
 
         # **Filter out boundary connections (connections involving inactive cells)**
         self._valid_conx_idx = ~np.any(conx == 0, axis=1)
-        self._conx = conx[self._valid_conx_idx]
 
-        # **CRITICAL FIX: Remap edge indices to be 0-based and within [0, nact-1] range**
-        # The current _conx contains active cell indices that are 1-based and can be > nact
-        # We need to create a proper mapping from active cell indices to 0-based indices
-        active_cell_mapping = {}
-        active_idx = 0
-        for ijk in range(self.nn):
-            if self.actnum[ijk] > 0:
-                # Find the active cell index for this global cell
-                active_cell_idx = cell_idx_cumsum[ijk]
-                if active_cell_idx > 0:  # This is an active cell
-                    active_cell_mapping[active_cell_idx] = active_idx
-                    active_idx += 1
+        # Filter boundary connections and convert to 0-based indexing
+        # Note: This is a critical fix to ensure the connection matrix is 0-based and within the valid range
+        self._conx = conx[self._valid_conx_idx] - 1
 
-        # Remap the connection indices to 0-based active-only indices
-        if len(active_cell_mapping) > 0:
-            remapped_conx = np.zeros_like(self._conx)
+        # Debug: Print detailed grid and connection information
+        if self._conx.size > 0:
+            total_cells = self.nx * self.ny * self.nz
+            active_percentage = (self.nact / total_cells) * 100
+            nnc_count = self.num_NNCs if hasattr(self, "num_NNCs") else 0
 
-            for i, (src, dst) in enumerate(self._conx):
-                if src in active_cell_mapping and dst in active_cell_mapping:
-                    remapped_conx[i, 0] = active_cell_mapping[src]
-                    remapped_conx[i, 1] = active_cell_mapping[dst]
-                else:
-                    # This shouldn't happen if filtering is correct, but just in case
-                    remapped_conx[i, 0] = 0
-                    remapped_conx[i, 1] = 0
-
-            self._conx = remapped_conx
-
-            # Debug: Print detailed grid and connection information
-            if self._conx.size > 0:
-                total_cells = self.nx * self.ny * self.nz
-                active_percentage = (self.nact / total_cells) * 100
-                nnc_count = self.num_NNCs if hasattr(self, "num_NNCs") else 0
-
-                print(
-                    f"🔗 Grid dimensions: {self.nx} × {self.ny} × {self.nz} = {total_cells:,} total cells"
-                )
-                print(
-                    f"🔗 Active cells: {self.nact:,} ({active_percentage:.1f}% of total)"
-                )
-                print(f"🔗 Connections: {self._conx.shape[0]:,} edges")
-                print(
-                    f"🔗   - Regular connections: {self._conx.shape[0] - nnc_count:,}"
-                )
-                print(f"🔗   - NNC connections: {nnc_count:,}")
-                print(
-                    f"🔗 Edge indices: min={np.min(self._conx)}, max={np.max(self._conx)}"
-                )
+            print(
+                f"🔗 Grid dimensions: {self.nx} × {self.ny} × {self.nz} = {total_cells:,} total cells"
+            )
+            print(f"🔗 Active cells: {self.nact:,} ({active_percentage:.1f}% of total)")
+            print(f"🔗 Connections: {self._conx.shape[0]:,} edges")
+            print(f"🔗   - Regular connections: {self._conx.shape[0] - nnc_count:,}")
+            print(f"🔗   - NNC connections: {nnc_count:,}")
+            print(
+                f"🔗 Edge indices: min={np.min(self._conx)}, max={np.max(self._conx)}"
+            )
 
     def _compute_total_tran(self, init_data: dict) -> None:
         """Computes and stores total transmissibility, including TRANNNC.
