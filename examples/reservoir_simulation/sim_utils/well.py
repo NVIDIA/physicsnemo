@@ -38,7 +38,7 @@ class Completion:
         IJK (int): Linear index of the grid cell (1-based).  This is set using the
             `set_ijk` method.
         flow_rate (float): Flow rate at the completion. Positive: injection,
-            negative: production. This is set using the `set_out_flow_rate` method.
+            negative: production. This is set using the `set_flow_rate` method.
     """
 
     def __init__(
@@ -106,6 +106,7 @@ class Well:
         Args:
             name (str): Name of the well.
             type_id (int): Well type ID.
+            stat (int): Well status ID (positive for open, other values for shut).
         """
         self.name = name
         self._set_type(type_id)
