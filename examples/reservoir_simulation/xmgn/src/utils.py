@@ -14,9 +14,98 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Utility functions and classes for XMeshGraphNet training and inference.
+"""
+
 import os
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
+
+
+def fix_layernorm_compatibility():
+    """
+    Fix LayerNorm compatibility issue for PyTorch.
+
+    This addresses a compatibility issue where LayerNorm may not have
+    the register_load_state_dict_pre_hook method in some PyTorch versions.
+    Should be called early in script initialization.
+    """
+    import torch.nn as nn
+
+    if not hasattr(nn.LayerNorm, "register_load_state_dict_pre_hook"):
+        nn.LayerNorm.register_load_state_dict_pre_hook = lambda self, hook: None
+
+
+class EarlyStopping:
+    """
+    Early stopping utility to stop training when validation metric stops improving.
+    Counts actual epochs, not validation checks.
+    """
+
+    def __init__(self, patience=20, min_delta=1e-6):
+        """
+        Initialize early stopping.
+
+        Parameters
+        ----------
+        patience : int
+            Number of epochs to wait for improvement
+        min_delta : float
+            Minimum change to qualify as improvement
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_score = None
+        self.epochs_since_improvement = 0
+        self.early_stop = False
+
+    def step(self):
+        """Increment epoch counter. Call this every epoch."""
+        self.epochs_since_improvement += 1
+
+    def check_improvement(self, current_score):
+        """
+        Check if validation score has improved.
+
+        Parameters
+        ----------
+        current_score : float
+            Current validation loss
+
+        Returns
+        -------
+        bool
+            True if there was improvement, False otherwise
+        """
+        if self.best_score is None:
+            self.best_score = current_score
+            self.epochs_since_improvement = 0
+            return True
+
+        # Always use "min" mode (lower is better for loss)
+        improved = current_score < (self.best_score - self.min_delta)
+
+        if improved:
+            self.best_score = current_score
+            self.epochs_since_improvement = 0
+            return True
+
+        return False
+
+    def should_stop(self):
+        """
+        Check if training should be stopped.
+
+        Returns
+        -------
+        bool
+            True if training should stop, False otherwise
+        """
+        if self.epochs_since_improvement >= self.patience:
+            self.early_stop = True
+
+        return self.early_stop
 
 
 def get_dataset_dir(cfg: DictConfig) -> str:

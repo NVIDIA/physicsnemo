@@ -38,10 +38,6 @@ import h5py
 import hydra
 from omegaconf import DictConfig
 
-# Fix LayerNorm compatibility issue
-if not hasattr(nn.LayerNorm, "register_load_state_dict_pre_hook"):
-    nn.LayerNorm.register_load_state_dict_pre_hook = lambda self, hook: None
-
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 
@@ -49,7 +45,10 @@ from physicsnemo.models.meshgraphnet import MeshGraphNet
 from physicsnemo.launch.utils import load_checkpoint
 from data.dataloader import GraphDataset, load_stats, find_pt_files
 from sim_utils import EclReader, Grid
-from utils.path_utils import get_dataset_paths
+from utils import get_dataset_paths, fix_layernorm_compatibility
+
+# Fix LayerNorm compatibility issue
+fix_layernorm_compatibility()
 
 
 def InitializeLoggers(cfg: DictConfig):

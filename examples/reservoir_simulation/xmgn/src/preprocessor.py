@@ -50,7 +50,7 @@ from omegaconf import DictConfig
 
 from data.graph_builder import ReservoirGraphBuilder
 from data.dataloader import PartitionedGraph, compute_global_statistics
-from utils.path_utils import get_dataset_dir
+from utils import get_dataset_dir
 
 
 class ReservoirPreprocessor:
