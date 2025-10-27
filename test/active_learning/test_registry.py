@@ -53,7 +53,7 @@ def test_missing_registration():
     with pytest.raises(KeyError):
         registry["missing_strategy"]
 
-    with pytest.raises(KeyError):
+    with pytest.raises(NameError):
         registry.construct("missing_strategy")
 
 
