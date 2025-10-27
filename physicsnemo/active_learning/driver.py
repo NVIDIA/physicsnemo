@@ -658,6 +658,23 @@ class Driver(p.DriverProtocol):
         """
         Load a Driver instance from a checkpoint.
 
+        Given a checkpoint directory, this method will attempt to reconstruct
+        the driver and its associated components from the checkpoint. The
+        checkpoint path must contain a ``checkpoint.pt`` file, which contains
+        the metadata associated with the experiment.
+
+        Additional parameters that might not be serialized with the checkpointing
+        mechanism can/need to be provided to this method; for example when
+        using non-`physicsnemo.Module` learners, and any data pools associated
+        with the workflow.
+
+        .. important::
+
+            Currently, the strategy states are not reloaded from the checkpoint.
+            This will be addressed in a future patch, but for now it is recommended
+            to back up your strategy states (e.g. metrology records) manually
+            before restarting experiments.
+
         Parameters
         ----------
         checkpoint_path: str | Path
@@ -697,6 +714,7 @@ class Driver(p.DriverProtocol):
             checkpoint.driver_config, **kwargs.get("driver_config_overrides", {})
         )
 
+        # TODO add strategy state loading from checkpoint
         strategies_config = StrategiesConfig.from_dict(
             checkpoint.strategies_config,
             unlabeled_datapool=unlabeled_datapool,
