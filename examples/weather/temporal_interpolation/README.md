@@ -120,3 +120,19 @@ can use:
 ```bash
 torchrun --nnodes=8 --nproc-per-node=8 train.py --config-name=train_interp.yaml ++training.optimizer_params.lr=0.0001
 ```
+
+## Validation
+
+To evaluate checkpoints, you can use the `validate.py` script. The script computes a
+histogram of squared errors as a function of the interpolation step (+0 h to +6 h),
+which can be used to produce a plot similar to Figure 3 of the paper. The validation
+uses the same configuration files as training, with validation-specific options passed
+through the `validation` configuration group. Refer to the docstring of `error_by_time`
+in `validate.py` for the recognized options.
+
+For example, to run the validation of a model trained with `train_interp.yaml` and save
+the resulting error histogram to `validation.nc`:
+
+```bash
+python validate.py --config-name="train_interp ++validation.output_path=validation.nc
+```

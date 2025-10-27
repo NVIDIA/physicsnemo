@@ -23,13 +23,14 @@ import numpy as np
 import torch
 import xarray as xr
 
-from train_interp import setup_trainer, Trainer
+from train import input_output_from_batch_data, setup_trainer, Trainer
 
 
 def setup_analysis(
     cfg: dict, checkpoint: str | None = None, shuffle: bool = False
 ) -> Trainer:
-    """Setup trainer for validation analysis.
+    """
+    Setup trainer for validation analysis.
 
     Parameters
     ----------
@@ -64,8 +65,9 @@ def inference_model(
     timesteps: int = 6,
     denorm: bool = True,
     method: Literal["fcinterp", "linear"] = "fcinterp",
-) -> Generator[tuple[torch.Tensor, torch.Tensor], None, None]:
-    """Run inference on validation data.
+) -> Generator[tuple[torch.Tensor, torch.Tensor, int], None, None]:
+    """
+    Run inference on validation data.
 
     Parameters
     ----------
@@ -80,21 +82,21 @@ def inference_model(
 
     Yields
     ------
-    tuple[torch.Tensor, torch.Tensor]
-        True and predicted values for each batch.
+    tuple[torch.Tensor, torch.Tensor, int]
+        True values, predicted values, and timestep index for each batch.
     """
     for batch in trainer.valid_datapipe:
         y_true_step = []
         y_pred_step = []
-        for step in range(timesteps + 1):
-            (invar, outvar_true) = input_output_from_batch_data_analysis(batch, step)
-            invar = tuple(v.detach() for v in invar)
-            outvar_true = outvar_true.detach()
-            y_true_step.append(outvar_true)
-            if method == "fcinterp":
-                y_pred_step.append(trainer.eval_step(invar))
-            elif method == "linear":
-                y_pred_step.append(linear_interp_batch_data(batch, step))
+        (invar, outvar_true) = input_output_from_batch_data(batch)
+        invar = tuple(v.detach() for v in invar)
+        outvar_true = outvar_true.detach()
+        y_true_step.append(outvar_true)
+        step = int(round(invar[1].item() * timesteps))
+        if method == "fcinterp":
+            y_pred_step.append(trainer.eval_step(invar))
+        elif method == "linear":
+            y_pred_step.append(linear_interp_batch_data(batch, step))
 
         y_true = torch.stack(y_true_step, dim=1)
         y_pred = torch.stack(y_pred_step, dim=1)
@@ -102,61 +104,19 @@ def inference_model(
             y_true = denormalize(trainer, y_true)
             y_pred = denormalize(trainer, y_pred)
 
-        yield (y_true, y_pred)
+        yield (y_true, y_pred, step)
 
 
-@torch.no_grad()
-def input_output_from_batch_data_analysis(
-    batch: list[dict[str, torch.Tensor]], step: int, time_scale: float = 6 * 3600.0
-) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-    """Convert batch data to model inputs and outputs for a specific timestep.
+def linear_interp_batch_data(
+    batch: list[dict[str, torch.Tensor]], step: int
+) -> torch.Tensor:
+    """
+    Perform linear interpolation on batch data.
 
     Parameters
     ----------
     batch : list[dict[str, torch.Tensor]]
-        Batch dictionary from datapipe.
-    step : int
-        Timestep index for output.
-    time_scale : float, optional
-        Length of the interpolation interval in seconds.
-
-    Returns
-    -------
-    tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]
-        Model inputs (atmospheric variables, time) and ground truth output.
-    """
-    batch = batch[0]
-
-    # concatenate all input variables to a single tensor
-    atmos_vars = batch["state_seq-atmos"]
-
-    atmos_vars_in = [atmos_vars[:, 0], atmos_vars[:, -1]]
-    if "cos_zenith-atmos" in batch:
-        atmos_vars_in = atmos_vars_in + [batch["cos_zenith-atmos"].squeeze(dim=2)]
-    if "latlon" in batch:
-        atmos_vars_in = atmos_vars_in + [batch["latlon"]]
-    if "geopotential" in batch:
-        atmos_vars_in = atmos_vars_in + [batch["geopotential"]]
-    if "land_sea_mask" in batch:
-        atmos_vars_in = atmos_vars_in + [batch["land_sea_mask"]]
-    atmos_vars_in = torch.cat(atmos_vars_in, dim=1)
-
-    atmos_vars_out = atmos_vars[:, step]
-
-    time = batch["timestamps-atmos"]
-    # normalize time coordinate
-    time = (time[:, step : step + 1] - time[:, :1]).to(dtype=torch.float32) / time_scale
-
-    return ((atmos_vars_in, time), atmos_vars_out)
-
-
-def linear_interp_batch_data(batch: dict[str, torch.Tensor], step: int) -> torch.Tensor:
-    """Perform linear interpolation on batch data.
-
-    Parameters
-    ----------
-    batch : dict[str, torch.Tensor]
-        Batch dictionary from datapipe.
+        Batch data from datapipe (list containing a dictionary).
     step : int
         Timestep index for interpolation.
 
@@ -173,7 +133,8 @@ def linear_interp_batch_data(batch: dict[str, torch.Tensor], step: int) -> torch
 
 
 def denormalize(trainer: Trainer, y: torch.Tensor) -> torch.Tensor:
-    """Denormalize predictions using dataset statistics.
+    """
+    Denormalize predictions using dataset statistics.
 
     Parameters
     ----------
@@ -205,7 +166,12 @@ def error_by_time(
     nbins: int = 10000,
     n_samples: int = 1000,
 ) -> tuple[list[torch.Tensor], torch.Tensor]:
-    """Compute error statistics for each interpolation step.
+    """
+    Compute error statistics for each interpolation step. The error
+    is computed as the squared difference of the prediction and truth
+    and is area-weighted (i.e. multiplied by the cosine of the latitude).
+    It is calculated on the values normalized to zero mean and unit variance,
+    so that errors of all variables are comparable.
 
     Parameters
     ----------
@@ -229,7 +195,7 @@ def error_by_time(
     tuple[list[torch.Tensor], torch.Tensor]
         Histogram counts for each timestep and bin edges.
     """
-    trainer = setup_analysis(cfg=cfg, checkpoint=checkpoint, shuffle=True)
+    trainer = setup_analysis(cfg=cfg, checkpoint=checkpoint)
 
     lat = torch.linspace(90, -90, 721)[:-1].to(device=trainer.model.device)
     lat[0] = 0.5 * (lat[0] + lat[1])
@@ -237,29 +203,27 @@ def error_by_time(
 
     bins = torch.linspace(0, max_error, nbins + 1)
 
-    def _hist(y_true, y_pred):
+    def _hist(y_true: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         err = (y_true - y_pred) ** 2
         weights = torch.ones_like(err) * cos_lat
         return torch.histogram(
             err.ravel().cpu(), bins=bins, weight=weights.ravel().cpu()
         )[0]
 
-    hist_counts = [None] * (timesteps + 1)
+    hist_counts = [
+        torch.zeros(nbins, dtype=torch.float64) for _ in range(timesteps + 1)
+    ]
 
-    for i_sample, (y_true, y_pred) in enumerate(
+    for i_sample, (y_true, y_pred, step) in enumerate(
         inference_model(trainer, timesteps=timesteps, denorm=False, method=method)
     ):
         if i_sample % 100 == 0:
             print(f"{i_sample}/{n_samples}")
 
-        for step in range(timesteps + 1):
-            hist_counts_step = _hist(y_true[:, step, ...], y_pred[:, step, ...])
-            if hist_counts[step] is None:
-                hist_counts[step] = hist_counts_step
-            else:
-                hist_counts[step] += hist_counts_step
+        hist_counts_step = _hist(y_true[:, -1, ...], y_pred[:, -1, ...])
+        hist_counts[step] += hist_counts_step
 
-        if i_sample >= n_samples:  # len(trainer.valid_datapipe):
+        if i_sample + 1 >= n_samples:
             break
 
     return (hist_counts, bins)
@@ -268,7 +232,8 @@ def error_by_time(
 def save_histogram(
     hist_counts: list[torch.Tensor], bins: torch.Tensor, output_path: str
 ) -> None:
-    """Save histogram data to netCDF4 file.
+    """
+    Save histogram data to netCDF4 file.
 
     Parameters
     ----------
@@ -310,7 +275,8 @@ def save_histogram(
 
 @hydra.main(version_base=None, config_path="config")
 def main(cfg: DictConfig):
-    """Main entry point for validation and error analysis.
+    """
+    Run validation for interpolation error as a function of step.
 
     Parameters
     ----------
