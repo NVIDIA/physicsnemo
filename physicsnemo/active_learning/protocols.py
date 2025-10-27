@@ -555,6 +555,35 @@ class ActiveLearningProtocol(Protocol):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @property
+    def checkpoint_dir(self) -> Path:
+        """
+        Utility property for strategies to conveniently access the checkpoint directory.
+
+        This is useful for (de)serializing data tied to checkpointing.
+
+        Returns
+        -------
+        Path
+            The checkpoint directory, which includes the active learning step index.
+
+        Raises
+        ------
+        RuntimeError
+            If the strategy is not attached to a driver yet.
+        """
+        if not self.is_attached:
+            raise RuntimeError(
+                f"{self.__class__.__name__} is not attached to a driver yet."
+            )
+        path = (
+            self.driver.log_dir
+            / "checkpoints"
+            / f"step_{self.driver.active_learning_step_idx}"
+        )
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 class QueryStrategy(ActiveLearningProtocol):
     """
