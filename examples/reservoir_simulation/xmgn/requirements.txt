@@ -14,7 +14,7 @@ torch-geometric>=2.6.0
 
 # PyG extensions (install from PyG wheel repository)
 # Note: These need to be installed separately with:
-# pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.9.0+cu128.html
+# pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.4.0+cu121.html
 torch-scatter
 torch-sparse
 torch-cluster  
