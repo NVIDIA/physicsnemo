@@ -30,6 +30,7 @@ to a random selection baseline.
 """
 
 import queue
+import time
 
 import torch
 from moon_data import MoonsDataset
@@ -142,7 +143,7 @@ def main():
         max_fine_tuning_epochs=30,
         # this configures the training loop
         train_loop_fn=DefaultTrainingLoop(
-            use_progress_bars=True,
+            use_progress_bars=False,
             enable_static_capture=False,
         ),
     )
@@ -181,9 +182,23 @@ def main():
             "Number of samples added to the training pool inconsistent with expected value."
         )
 
-    # save the model for later inference; can be loaded with `MLP.load(model_path)`
-    model_path = driver.log_dir / "model.mdlus"
-    uq_model.save(str(model_path))
+    # restart the driver from a checkpoint; in practice the path would be provided
+    # train_datapool must be provided since it's not serialized
+    # learner must nominally have the same architecture as the one used to create the checkpoint
+    new_driver = Driver.load_checkpoint(
+        driver.log_dir / "checkpoints" / "step_42" / "labeling",
+        learner=uq_model,
+        train_datapool=dataset,
+    )
+    assert new_driver.active_learning_step_idx == 42
+    # enable this to re-run the driver training: be aware that this will overwrite subsequent checkpoints!!
+    RERUN = True
+    if RERUN:
+        new_driver.logger.info(
+            f"Rerunning driver from checkpoint {new_driver.last_checkpoint}"
+        )
+        time.sleep(5)
+        new_driver(train_step_fn=training_step)
 
 
 if __name__ == "__main__":
