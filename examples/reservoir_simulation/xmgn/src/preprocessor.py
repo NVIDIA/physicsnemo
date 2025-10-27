@@ -456,6 +456,9 @@ class ReservoirPreprocessor:
             f"   → Processing {len(graph_files)} graphs with {self.cfg.preprocessing.num_partitions} partitions each..."
         )
 
+        # Track partition assignments by case (we'll save once per case, not per timestep)
+        partition_assignments_by_case = {}
+
         # Process each graph file
         successful_partitions = 0
         print(f"Creating partitions for {len(graph_files)} graphs...")
@@ -481,6 +484,27 @@ class ReservoirPreprocessor:
                     # Fallback: simple sequential partitioning
                     part_meta = self.create_simple_partition(
                         graph.num_nodes, self.cfg.preprocessing.num_partitions
+                    )
+
+                # Extract partition assignments (which node belongs to which partition)
+                # Create an array: partition_id[node_idx] = partition_number (1-indexed)
+                partition_assignment = torch.zeros(graph.num_nodes, dtype=torch.int32)
+                for part_idx in range(self.cfg.preprocessing.num_partitions):
+                    # Get inner nodes of this partition
+                    part_inner_nodes = part_meta.node_perm[
+                        part_meta.partptr[part_idx] : part_meta.partptr[part_idx + 1]
+                    ]
+                    # Assign partition ID (1-indexed for visualization)
+                    partition_assignment[part_inner_nodes] = part_idx + 1
+
+                # Save partition assignments per case (only once per case)
+                filename = os.path.basename(graph_file)
+                case_name = self._extract_case_name_from_filename(filename)
+
+                # Only save if we haven't saved for this case yet
+                if case_name not in partition_assignments_by_case:
+                    partition_assignments_by_case[case_name] = (
+                        partition_assignment.numpy().tolist()
                     )
 
                 # Create partitions with halo regions using PyG `k_hop_subgraph`
@@ -529,6 +553,27 @@ class ReservoirPreprocessor:
             except Exception as e:
                 print(f"ERROR: processing {os.path.basename(graph_file)}: {e}")
                 continue
+
+        # Save partition assignments to JSON files (one per case)
+        if partition_assignments_by_case:
+            print(
+                f"\nSaving partition assignments for {len(partition_assignments_by_case)} cases..."
+            )
+            for case_name, partition_array in partition_assignments_by_case.items():
+                partition_json_file = os.path.join(
+                    self.dataset_dir, f"{case_name}_partitions.json"
+                )
+                partition_data = {
+                    "case_name": case_name,
+                    "num_partitions": self.cfg.preprocessing.num_partitions,
+                    "num_nodes": len(partition_array),
+                    "partition_assignment": partition_array,  # 1-indexed partition IDs for each active cell
+                }
+                with open(partition_json_file, "w") as f:
+                    json.dump(partition_data, f, indent=2)
+            print(
+                f"  → Saved partition assignments to {self.dataset_dir}/*_partitions.json"
+            )
 
         print(
             f"Partitioning complete! {successful_partitions}/{len(graph_files)} graphs processed successfully"

@@ -271,7 +271,7 @@ class InferenceRunner:
         target_indices = self._get_target_feature_indices()
 
         # Get the number of dynamic variables to know the offset in node features
-        num_static_features = len(self.cfg.dataset.graph.node_features.static.variables)
+        num_static_features = len(self.cfg.dataset.graph.node_features.static)
         num_dynamic_features = len(
             self.cfg.dataset.graph.node_features.dynamic.variables
         )
@@ -310,9 +310,15 @@ class InferenceRunner:
                 )
 
             # Replace target features in node features with predictions
+            # Note: predictions are only for inner nodes (excluding halo nodes)
             for i, target_idx in enumerate(target_indices):
                 feature_idx = dynamic_offset + target_idx
-                partition.x[:, feature_idx] = pred_tensor[:, i]
+                if hasattr(partition, "inner_node"):
+                    # Update only inner nodes (predictions don't include halo nodes)
+                    partition.x[partition.inner_node, feature_idx] = pred_tensor[:, i]
+                else:
+                    # No halo nodes, update all nodes
+                    partition.x[:, feature_idx] = pred_tensor[:, i]
 
             updated_partitions.append(partition)
 
@@ -667,6 +673,134 @@ class InferenceRunner:
         )
         self.logger.info(f"Saved metadata: {self.inference_metadata_file}")
 
+    def _load_partition_and_halo_info(self, case_name):
+        """
+        Load partition assignments and halo information for a given case.
+        First tries to read from partition .pt files (preferred), then falls back to JSON.
+
+        Args:
+            case_name: Name of the simulation case
+
+        Returns:
+            tuple: (partition_assignment, halo_info)
+                - partition_assignment: numpy array with partition IDs for active cells (1-indexed), or None
+                - halo_info: numpy array indicating which partition includes this cell as halo (0=none, partition_id if halo), or None
+        """
+        # First, try to find partition .pt file (from first timestep)
+        partitions_dir = os.path.join(self.dataset_dir, "partitions")
+
+        # Check in test/train/val subdirectories
+        for split in ["test", "train", "val"]:
+            partition_pt_file = os.path.join(
+                partitions_dir, split, f"partitions_{case_name}_000.pt"
+            )
+
+            if os.path.exists(partition_pt_file):
+                try:
+                    # Load partition data from .pt file
+                    partitions = torch.load(
+                        partition_pt_file, map_location="cpu", weights_only=False
+                    )
+
+                    num_partitions = len(partitions)
+
+                    # Build partition assignment and halo info
+                    partition_assignments_dict = {}
+                    halo_info_dict = {}  # Which partition includes this cell as halo
+
+                    for part_idx, partition in enumerate(partitions):
+                        if hasattr(partition, "part_node") and hasattr(
+                            partition, "inner_node"
+                        ):
+                            # Get inner nodes (these belong to this partition)
+                            inner_global_indices = (
+                                partition.part_node[partition.inner_node].cpu().numpy()
+                            )
+                            for global_idx in inner_global_indices:
+                                partition_assignments_dict[global_idx] = (
+                                    part_idx + 1
+                                )  # 1-indexed
+
+                            # Get halo nodes (all nodes NOT in inner_node)
+                            all_local_indices = torch.arange(partition.num_nodes)
+                            halo_mask = torch.ones(
+                                partition.num_nodes, dtype=torch.bool
+                            )
+                            halo_mask[partition.inner_node] = False
+                            halo_local_indices = all_local_indices[halo_mask]
+                            halo_global_indices = (
+                                partition.part_node[halo_local_indices].cpu().numpy()
+                            )
+
+                            # Mark these cells as being halo in this partition
+                            for global_idx in halo_global_indices:
+                                halo_info_dict[global_idx] = (
+                                    part_idx + 1
+                                )  # Which partition includes this as halo
+
+                    # Sort by node index and create assignment lists
+                    sorted_indices = sorted(partition_assignments_dict.keys())
+                    partition_assignment = np.array(
+                        [partition_assignments_dict[idx] for idx in sorted_indices],
+                        dtype=int,
+                    )
+
+                    # Create halo info array (0 = not halo, partition_id = included as halo in that partition)
+                    halo_info = np.array(
+                        [halo_info_dict.get(idx, 0) for idx in sorted_indices],
+                        dtype=int,
+                    )
+
+                    num_halo_cells = np.count_nonzero(halo_info)
+                    self.logger.info(
+                        f"Loaded partition assignments from {split}/{os.path.basename(partition_pt_file)}: "
+                        f"{num_partitions} partitions, {len(partition_assignment)} active cells, "
+                        f"{num_halo_cells} cells included as halo"
+                    )
+
+                    return partition_assignment, halo_info
+
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to load partitions from {partition_pt_file}: {e}"
+                    )
+                    continue
+
+        # Fall back to JSON file if .pt file not found
+        partition_json_file = os.path.join(
+            self.dataset_dir, f"{case_name}_partitions.json"
+        )
+
+        if os.path.exists(partition_json_file):
+            try:
+                with open(partition_json_file, "r") as f:
+                    partition_data = json.load(f)
+
+                partition_assignment = np.array(
+                    partition_data["partition_assignment"], dtype=int
+                )
+
+                self.logger.info(
+                    f"Loaded partition assignments from JSON: "
+                    f"{partition_data['num_partitions']} partitions, "
+                    f"{partition_data['num_nodes']} active cells "
+                    f"(halo info not available from JSON)"
+                )
+
+                # JSON doesn't have halo info, return None for halo
+                return partition_assignment, None
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to load partition assignments from JSON: {e}"
+                )
+
+        # Neither .pt nor JSON found
+        self.logger.warning(
+            f"No partition data found for {case_name}. PARTITION block will be skipped."
+        )
+        return None, None
+
     def _extract_coordinates_from_grid(self, sample_idx):
         """Extract coordinates from grid files using the general Grid approach."""
         # Load dataset metadata from preprocessing
@@ -788,15 +922,61 @@ class InferenceRunner:
 
             try:
                 # Get grid information and actnum for this case
+                # Note: sample_idx is 1-based for display, convert to 0-based for indexing
                 X, Y, Z, grid_dims, nact, grid = self._extract_coordinates_from_grid(
-                    sample_idx
+                    sample_idx - 1
                 )
                 nx, ny, nz = grid_dims
                 total_cells = nx * ny * nz
                 actnum = grid.actnum_bool
 
+                # Load partition assignments and halo info for this case
+                partition_data_active, halo_data_active = (
+                    self._load_partition_and_halo_info(case_name)
+                )
+
                 with h5py.File(hdf5_file, "r") as f:
                     with open(grdecl_filepath, "w") as grdecl_file:
+                        # Write combined PARTITION block (if available)
+                        # Positive values = partition ID (inner nodes)
+                        # Negative values = -partition_id for halo nodes (e.g., -2 means halo in partition 2)
+                        if partition_data_active is not None:
+                            # Start with partition assignments for active cells
+                            combined_data_active = partition_data_active.copy()
+
+                            # Override with negative values for halo regions
+                            if halo_data_active is not None:
+                                # Where halo_data_active > 0, use negative value to indicate halo
+                                halo_mask = halo_data_active > 0
+                                combined_data_active[halo_mask] = -halo_data_active[
+                                    halo_mask
+                                ]
+
+                            # Initialize full array with zeros (for inactive cells)
+                            partition_data_full = np.zeros((total_cells,), dtype=int)
+                            # Populate only active cells with combined partition/halo info
+                            partition_data_full[actnum] = combined_data_active
+
+                            # Write PARTITION block
+                            grdecl_file.write("PARTITION\n")
+                            grdecl_file.write(
+                                "-- Positive values: partition ID (inner nodes)\n"
+                            )
+                            grdecl_file.write(
+                                "-- Negative values: halo nodes (e.g., -2 = halo in partition 2)\n"
+                            )
+                            for i, value in enumerate(partition_data_full):
+                                grdecl_file.write(f"{value} ")
+                                if (i + 1) % 10 == 0:  # 10 values per line for integers
+                                    grdecl_file.write("\n")
+
+                            # Ensure newline before '/'
+                            if len(partition_data_full) % 10 != 0:
+                                grdecl_file.write("\n")
+
+                            # Terminator
+                            grdecl_file.write("/\n\n")
+
                         # Get target variables
                         target_variables = f.attrs.get("target_variables", [])
 

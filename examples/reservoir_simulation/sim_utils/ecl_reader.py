@@ -22,6 +22,9 @@ import logging
 import glob
 from datetime import datetime
 
+# Module-level logger
+logger = logging.getLogger(__name__)
+
 
 class EclReader:
     """Reads SLB ECLIPSE style binary output files (.INIT, .EGRID, .UNRST, .X00xx).
@@ -661,7 +664,7 @@ class EclReader:
                 zip(intehead_positions, dates, times)
             ):
                 result = {"DATE": date, "TIME": time}
-                if logging.getEffectiveLevel() <= logging.INFO:
+                if logger.getEffectiveLevel() <= logging.INFO:
                     logging.info(f"Processing timestep {timestep_idx}")
 
                 # Read INTEHEAD data for this timestep
@@ -700,14 +703,14 @@ class EclReader:
                     result["INTEHEAD"] = np.array([])
 
                 # Read requested keys for this timestep
-                if logging.getEffectiveLevel() <= logging.INFO:
+                if logger.getEffectiveLevel() <= logging.INFO:
                     logging.info(
                         f"  Processing {len(keys)} keys for timestep {timestep_idx}"
                     )
                 for key in keys:
                     if key == "INTEHEAD":
                         continue  # Already handled above
-                    if logging.getEffectiveLevel() <= logging.INFO:
+                    if logger.getEffectiveLevel() <= logging.INFO:
                         logging.info(
                             f"    Processing key {key} for timestep {timestep_idx}"
                         )
@@ -722,7 +725,7 @@ class EclReader:
                     )
 
                     if key in key_positions:
-                        if logging.getEffectiveLevel() <= logging.INFO:
+                        if logger.getEffectiveLevel() <= logging.INFO:
                             logging.info(
                                 f"      Found {len(key_positions[key])} positions for {key}"
                             )
@@ -766,7 +769,7 @@ class EclReader:
                             )
 
                         fid.seek(key_pos)
-                        if logging.getEffectiveLevel() <= logging.INFO:
+                        if logger.getEffectiveLevel() <= logging.INFO:
                             logging.info(
                                 f"  About to read {key} for timestep {timestep_idx}"
                             )
@@ -831,7 +834,7 @@ class EclReader:
                                             result[key] = string_data
                                         else:
                                             if (
-                                                logging.getEffectiveLevel()
+                                                logger.getEffectiveLevel()
                                                 <= logging.DEBUG
                                             ):
                                                 logging.debug(
@@ -853,7 +856,7 @@ class EclReader:
                                         # For now, just use the data as-is without truncation
 
                                         result[key] = key_data
-                                        if logging.getEffectiveLevel() <= logging.INFO:
+                                        if logger.getEffectiveLevel() <= logging.INFO:
                                             logging.info(
                                                 f"Added {key} to result for timestep {timestep_idx}"
                                             )
@@ -862,7 +865,7 @@ class EclReader:
                                         if (
                                             timestep_idx < 3
                                             and key in ["IWEL", "ICON"]
-                                            and logging.getEffectiveLevel()
+                                            and logger.getEffectiveLevel()
                                             <= logging.INFO
                                         ):
                                             logging.info(
@@ -902,7 +905,7 @@ class EclReader:
                             result[key] = np.array([])  # Empty string array
                         else:
                             result[key] = np.array([])  # Empty numeric array
-                        if logging.getEffectiveLevel() <= logging.INFO:
+                        if logger.getEffectiveLevel() <= logging.INFO:
                             logging.info(
                                 f"Key {key} not found for timestep {timestep_idx}, using empty array"
                             )

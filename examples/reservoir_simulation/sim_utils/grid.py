@@ -19,6 +19,9 @@ import logging
 
 NUM_MAX_DIMENS = 3
 
+# Module-level logger
+logger = logging.getLogger(__name__)
+
 
 class Grid:
     """Handles reservoir grid structure and operations.
@@ -241,7 +244,7 @@ class Grid:
         self._conx = conx[self._valid_conx_idx] - 1
 
         # Log detailed grid and connection information at debug level
-        if self._conx.size > 0 and logging.getEffectiveLevel() <= logging.DEBUG:
+        if self._conx.size > 0 and logger.getEffectiveLevel() <= logging.DEBUG:
             total_cells = self.nx * self.ny * self.nz
             active_percentage = (self.nact / total_cells) * 100
             nnc_count = self.num_NNCs if hasattr(self, "num_NNCs") else 0
@@ -271,9 +274,6 @@ class Grid:
         available_tran_keys = [k for k in self._tran_keys if k in init_data]
         if not available_tran_keys:
             # Initialize transmissibility arrays as None if no tran data available
-            print(
-                "No transmissibility data available. Initializing transmissibility arrays as None."
-            )
             self._Txyz_flattened = None
             self._T_xyz = None
             return
