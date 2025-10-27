@@ -581,7 +581,7 @@ class EclReader:
                         )[0]
                         if 8 <= header_size <= 1000:  # Reasonable header size range
                             key_positions[key].append(pos - 4)
-                    except:
+                    except (struct.error, IndexError):
                         pass  # Skip if we can't unpack
 
                 pos += len(key)
