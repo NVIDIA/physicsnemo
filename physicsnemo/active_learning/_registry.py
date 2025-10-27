@@ -62,7 +62,7 @@ class ActiveLearningRegistry:
     --------
     Register a custom strategy:
 
-    >>> from physicsnemo.active_learning.registry import registry
+    >>> from physicsnemo.active_learning._registry import registry
     >>> @registry.register("my_custom_strategy")
     ... class MyCustomStrategy:
     ...     def __init__(self, param1: int, param2: str):
@@ -162,7 +162,12 @@ class ActiveLearningRegistry:
 
         Examples
         --------
-        >>> strategy = registry.construct("my_strategy", param1=42, param2="test")
+        >>> from physicsnemo.active_learning._registry import registry
+        >>> @registry.register("my_strategy")
+        ... class MyStrategy:
+        ...     def __init__(self, param: int):
+        ...         self.param = param
+        >>> strategy = registry.construct("my_strategy", param=42)
         """
         cls = self.get_class(cls_name, module_path)
 
@@ -241,8 +246,13 @@ class ActiveLearningRegistry:
 
         Examples
         --------
-        >>> MyClass = registry['my_strategy']
-        >>> instance = MyClass(param1=42)
+        >>> from physicsnemo.active_learning._registry import registry
+        >>> @registry.register("my_strategy")
+        ... class MyStrategy:
+        ...     def __init__(self, param: int):
+        ...         self.param = param
+        >>> RetrievedClass = registry['my_strategy']
+        >>> instance = RetrievedClass(param=42)
         """
         if cls_name not in self._registry:
             available = ", ".join(self._registry.keys()) if self._registry else "none"

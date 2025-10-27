@@ -308,6 +308,9 @@ def log_context(
 
     Example
     -------
+    >>> from logging import getLogger
+    >>> from physicsnemo.active_learning.logger import log_context
+    >>> logger = getLogger("my_logger")
     >>> with log_context(caller_object="Trainer", iteration=5, phase="training", epoch=2):
     ...     logger.info("Processing batch")
     """

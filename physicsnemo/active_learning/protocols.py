@@ -912,6 +912,10 @@ class TrainingProtocol(Protocol):
         ...     return loss
 
         With ``StaticCaptureTraining``:
+        >>> from torch import nn, optim
+        >>> from physicsnemo.utils.capture import StaticCaptureTraining
+        >>> model = nn.Linear(10, 1)
+        >>> optim = optim.SGD(model.parameters(), lr=0.01)
         >>> @StaticCaptureTraining(model=model, optim=optim)
         ... def training_step(model, data):
         ...     output = model(data)
@@ -971,6 +975,9 @@ class ValidationProtocol(Protocol):
         ...     return loss
 
         With ``StaticCaptureEvaluateNoGrad``:
+        >>> from torch import nn
+        >>> from physicsnemo.utils.capture import StaticCaptureEvaluateNoGrad
+        >>> model = nn.Linear(10, 1)
         >>> @StaticCaptureEvaluateNoGrad(model=model)
         ... def validation_step(model, data):
         ...     output = model(data)
@@ -1031,6 +1038,9 @@ class InferenceProtocol(Protocol):
         ...     return output
 
         With ``StaticCaptureEvaluateNoGrad``:
+        >>> from torch import nn
+        >>> from physicsnemo.utils.capture import StaticCaptureEvaluateNoGrad
+        >>> model = nn.Linear(10, 1)
         >>> @StaticCaptureEvaluateNoGrad(model=model)
         ... def inference_step(model, data):
         ...     output = model(data)
@@ -1091,31 +1101,38 @@ class TrainingLoop(Protocol):
         alongside ``validation_dataloader``.
 
         The pseudocode for training to ``max_epochs`` would look like this:
-        >>> for epoch in range(max_epochs):
-        ...     for train_idx, batch in enumerate(train_dataloader):
-        ...         optimizer.zero_grad()
-        ...         loss = train_step_fn(model, batch)
-        ...         loss.backward()
-        ...         optimizer.step()
-        ...         if train_idx + 1 == max_train_steps:
-        ...             break
-        ...     if validate_step_fn and validation_dataloader:
-        ...         for val_idx, batch in enumerate(validation_dataloader):
-        ...             validate_step_fn(model, batch)
-        ...             if val_idx + 1 == max_val_steps:
-        ...                 break
+
+        .. code-block:: python
+
+           max_epochs = 10
+           for epoch in range(max_epochs):
+               for train_idx, batch in enumerate(train_dataloader):
+                   optimizer.zero_grad()
+                   loss = train_step_fn(model, batch)
+                   loss.backward()
+                   optimizer.step()
+                   if train_idx + 1 == max_train_steps:
+                       break
+               if validate_step_fn and validation_dataloader:
+                   for val_idx, batch in enumerate(validation_dataloader):
+                       validate_step_fn(model, batch)
+                       if val_idx + 1 == max_val_steps:
+                           break
 
         The pseudocode for training with a ``LearnerProtocol`` would look like this:
-        >>> for epoch in range(max_epochs):
-        ...     for train_idx, batch in enumerate(train_dataloader):
-        ...         loss = model.training_step(batch)
-        ...         if train_idx + 1 == max_train_steps:
-        ...             break
-        ...     if validation_dataloader:
-        ...         for val_idx, batch in enumerate(validation_dataloader):
-        ...             model.validation_step(batch)
-        ...             if val_idx + 1 == max_val_steps:
-        ...                 break
+
+        .. code-block:: python
+
+           for epoch in range(max_epochs):
+               for train_idx, batch in enumerate(train_dataloader):
+                   loss = model.training_step(batch)
+                   if train_idx + 1 == max_train_steps:
+                       break
+               if validation_dataloader:
+                   for val_idx, batch in enumerate(validation_dataloader):
+                       model.validation_step(batch)
+                       if val_idx + 1 == max_val_steps:
+                           break
 
         The key difference between specifying ``train_step_fn`` and ``LearnerProtocol``
         is that the former excludes the backward pass and optimizer step logic,
