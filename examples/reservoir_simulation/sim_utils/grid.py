@@ -234,18 +234,11 @@ class Grid:
 
         # **Filter out boundary connections (connections involving inactive cells)**
         self._valid_conx_idx = ~np.any(conx == 0, axis=1)
-        self._conx = conx[self._valid_conx_idx]
 
-        # Remap the connection indices to 0-based active-only indices
-        if len(self.ijk_to_active) > 0:
-            remapped_conx = np.zeros_like(self._conx)
-
-            for i, (src, dst) in enumerate(self._conx):
-                if src in self.ijk_to_active and dst in self.ijk_to_active:
-                    remapped_conx[i, 0] = self.ijk_to_active[src]
-                    remapped_conx[i, 1] = self.ijk_to_active[dst]
-
-            self._conx = remapped_conx
+        # Filter boundary connections and convert to 0-based indexing
+        # Note: conx contains 1-based sequential active cell indices from cell_idx_cumsum,
+        # so we simply subtract 1 to get 0-based indices (vectorized, no dictionary needed)
+        self._conx = conx[self._valid_conx_idx] - 1
 
         # Log detailed grid and connection information at debug level
         if self._conx.size > 0 and logging.getEffectiveLevel() <= logging.DEBUG:
