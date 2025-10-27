@@ -252,7 +252,7 @@ class InferenceRunner:
                 idx = dynamic_vars.index(target_var)
                 target_indices.append(idx)
 
-        return target_indices, target_vars
+        return target_indices
 
     def _update_node_features_with_predictions(
         self, partitions_list, predictions_normalized
@@ -268,7 +268,7 @@ class InferenceRunner:
         Returns:
             Updated partitions_list with predictions in node features
         """
-        target_indices, _ = self._get_target_feature_indices()
+        target_indices = self._get_target_feature_indices()
 
         # Get the number of dynamic variables to know the offset in node features
         num_static_features = len(self.cfg.dataset.graph.node_features.static.variables)
@@ -736,7 +736,7 @@ class InferenceRunner:
         )
         self.logger.info(f"   Coordinates: {len(X)} active nodes")
 
-        return X, Y, Z, case_name, (nx, ny, nz), nact, grid
+        return X, Y, Z, (nx, ny, nz), nact, grid
 
     def run_post(self):
         """
@@ -788,7 +788,7 @@ class InferenceRunner:
 
             try:
                 # Get grid information and actnum for this case
-                X, Y, Z, _, grid_dims, nact, grid = self._extract_coordinates_from_grid(
+                X, Y, Z, grid_dims, nact, grid = self._extract_coordinates_from_grid(
                     sample_idx
                 )
                 nx, ny, nz = grid_dims
