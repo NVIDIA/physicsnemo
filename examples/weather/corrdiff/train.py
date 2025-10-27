@@ -832,7 +832,9 @@ def main(cfg: DictConfig) -> None:
                     if cfg.training.io.save_n_recent_checkpoints > 0:
                         for suffix in [".mdlus", ".pt"]:
                             ckpts = checkpoint_list(checkpoint_dir, suffix=suffix)
-                            while len(ckpts) > cfg.training.io.save_n_recent_checkpoints:
+                            while (
+                                len(ckpts) > cfg.training.io.save_n_recent_checkpoints
+                            ):
                                 os.remove(os.path.join(checkpoint_dir, ckpts[0]))
                                 ckpts = ckpts[1:]
 
