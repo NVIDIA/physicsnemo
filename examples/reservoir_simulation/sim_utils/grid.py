@@ -236,7 +236,16 @@ class Grid:
         self._valid_conx_idx = ~np.any(conx == 0, axis=1)
 
         # Filter boundary connections and convert to 0-based indexing
-        # Note: This is a critical fix to ensure the connection matrix is 0-based and within the valid range
+        if len(self.ijk_to_active) > 0:
+            remapped_conx = np.zeros_like(self._conx)
+
+            for i, (src, dst) in enumerate(self._conx):
+                if src in self.ijk_to_active and dst in self.ijk_to_active:
+                    remapped_conx[i, 0] = self.ijk_to_active[src]
+                    remapped_conx[i, 1] = self.ijk_to_active[dst]
+
+            self._conx = remapped_conx
+
         self._conx = conx[self._valid_conx_idx] - 1
 
         # Log detailed grid and connection information at debug level
