@@ -23,7 +23,8 @@ Generates GRDECL files with predictions for post-processing.
 import os
 import sys
 import json
-from datetime import datetime
+import glob
+from datetime import datetime, timezone
 
 # Add repository root to Python path for sim_utils import
 current_dir = os.path.dirname(os.path.abspath(__file__))  # This is src/
@@ -661,7 +662,7 @@ class InferenceRunner:
             "hdf5_files": hdf5_files,
             "num_cases": len(case_results),
             "target_variables": [str(name) for name in target_names],
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         with open(self.inference_metadata_file, "w") as f:
@@ -695,8 +696,6 @@ class InferenceRunner:
             # Find the first partition file for this case (any timestep)
             partition_pt_file = None
             if os.path.exists(split_dir):
-                import glob
-
                 pattern = os.path.join(split_dir, f"partitions_{case_name}_*.pt")
                 matching_files = sorted(glob.glob(pattern))
 
