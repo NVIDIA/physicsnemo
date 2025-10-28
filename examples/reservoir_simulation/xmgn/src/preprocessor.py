@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -51,6 +51,37 @@ from omegaconf import DictConfig
 from data.graph_builder import ReservoirGraphBuilder
 from data.dataloader import PartitionedGraph, compute_global_statistics
 from utils import get_dataset_dir
+
+
+class SimplePartition:
+    """Simple sequential partition as fallback when METIS is not available.
+
+    Mimics the METIS partition structure for compatibility.
+    """
+
+    def __init__(self, num_nodes, num_parts):
+        """
+        Initialize a simple sequential partition.
+
+        Parameters:
+        -----------
+        num_nodes : int
+            Total number of nodes to partition
+        num_parts : int
+            Number of partitions to create
+        """
+        self.node_perm = torch.arange(num_nodes)
+
+        # Calculate partition boundaries
+        part_size = num_nodes // num_parts
+        remainder = num_nodes % num_parts
+
+        # Create partition pointers
+        self.partptr = [0]
+        for i in range(num_parts):
+            # Add extra node to first 'remainder' partitions
+            current_size = part_size + (1 if i < remainder else 0)
+            self.partptr.append(self.partptr[-1] + current_size)
 
 
 class ReservoirPreprocessor:
@@ -403,24 +434,20 @@ class ReservoirPreprocessor:
                     logging.disable(logging.NOTSET)
 
     def create_simple_partition(self, num_nodes, num_parts):
-        """Create a simple sequential partition as fallback when METIS is not available."""
+        """Create a simple sequential partition as fallback when METIS is not available.
 
-        # Create a simple partition object that mimics the METIS partition structure
-        class SimplePartition:
-            def __init__(self, num_nodes, num_parts):
-                self.node_perm = torch.arange(num_nodes)
+        Parameters:
+        -----------
+        num_nodes : int
+            Total number of nodes to partition
+        num_parts : int
+            Number of partitions to create
 
-                # Calculate partition boundaries
-                part_size = num_nodes // num_parts
-                remainder = num_nodes % num_parts
-
-                # Create partition pointers
-                self.partptr = [0]
-                for i in range(num_parts):
-                    # Add extra node to first 'remainder' partitions
-                    current_size = part_size + (1 if i < remainder else 0)
-                    self.partptr.append(self.partptr[-1] + current_size)
-
+        Returns:
+        --------
+        SimplePartition
+            Partition object with node_perm and partptr attributes
+        """
         return SimplePartition(num_nodes, num_parts)
 
     def create_partitions_from_graphs(self, graph_file_list=None):
