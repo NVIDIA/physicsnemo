@@ -991,10 +991,11 @@ class InferenceRunner:
                                     f"   Total halo cells: {num_halo} (Halo-only: {num_halo_only}, Boundary: {num_boundary})"
                                 )
 
-                                # Mark halo cells with negative of their owner partition ID
-                                combined_data_active[
+                                # Mark halo cells with negative of their halo partition ID
+                                # Use halo_data_active (not partition_data_active) to avoid -0 for halo-only cells
+                                combined_data_active[halo_mask] = -halo_data_active[
                                     halo_mask
-                                ] = -partition_data_active[halo_mask]
+                                ]
 
                             # Initialize full array with zeros (for inactive cells)
                             partition_data_full = np.zeros((total_cells,), dtype=int)
