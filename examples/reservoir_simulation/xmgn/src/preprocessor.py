@@ -781,10 +781,18 @@ class ReservoirPreprocessor:
             print(f"   → Using existing partitions from {self.partitions_dir}")
 
         # Step 2b: Split samples and organize partitions
-        if overwrite_data or not os.path.exists(
-            os.path.join(self.partitions_dir, "train")
-        ):
-            print("\nStep 2b: Splitting samples and organizing partitions...")
+        # Check if all split directories exist (train, val, test)
+        train_dir = os.path.join(self.partitions_dir, "train")
+        val_dir = os.path.join(self.partitions_dir, "val")
+        test_dir = os.path.join(self.partitions_dir, "test")
+        splits_exist = all(os.path.exists(d) for d in [train_dir, val_dir, test_dir])
+
+        if overwrite_data or not splits_exist:
+            if not splits_exist:
+                print("\nStep 2b: Splitting samples and organizing partitions...")
+                print("   → One or more split directories (train/val/test) are missing")
+            else:
+                print("\nStep 2b: Splitting samples and organizing partitions...")
 
             # Get split configuration
             data_split = getattr(self.cfg.preprocessing, "data_split", {})
