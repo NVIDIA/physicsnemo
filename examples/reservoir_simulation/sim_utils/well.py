@@ -157,6 +157,4 @@ class Well:
             self.type = "INJ"
         else:
             self.type = "UNKNOWN"
-            logging.warning(
-                (f"Unknown well type: {type_id} found at well: {self.name}")
-            )
+            logging.warning(f"Unknown well type: {type_id} found at well: {self.name}")
