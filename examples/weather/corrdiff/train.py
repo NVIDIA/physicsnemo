@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -828,13 +828,15 @@ def main(cfg: DictConfig) -> None:
                         epoch=cur_nimg,
                     )
 
-            # Retain only the recent n checkpoints, if desired
-            if cfg.training.io.save_n_recent_checkpoints > 0:
-                for suffix in [".mdlus", ".pt"]:
-                    ckpts = checkpoint_list(checkpoint_dir, suffix=suffix)
-                    while len(ckpts) > cfg.training.io.save_n_recent_checkpoints:
-                        os.remove(os.path.join(checkpoint_dir, ckpts[0]))
-                        ckpts = ckpts[1:]
+                    # Retain only the recent n checkpoints, if desired
+                    if cfg.training.io.save_n_recent_checkpoints > 0:
+                        for suffix in [".mdlus", ".pt"]:
+                            ckpts = checkpoint_list(checkpoint_dir, suffix=suffix)
+                            while (
+                                len(ckpts) > cfg.training.io.save_n_recent_checkpoints
+                            ):
+                                os.remove(os.path.join(checkpoint_dir, ckpts[0]))
+                                ckpts = ckpts[1:]
 
     # Done.
     logger0.info("Training Completed.")

@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which has a specific `.forward()` signature
 - Examples: added a new example for reservoir simulation using X-MeshGraphNet.
   Accessible in `examples/reservoir_simulation`
+- Added abstract interfaces for constructing active learning workflows, contained
+  under the `physicsnemo.active_learning` namespace. A preliminary example of how
+  to compose and define an active learning workflow is provided in `examples/active_learning`.
+  The `moons` example provides a minimal (pedagogical) composition that is meant to
+  illustrate how to define the necessary parts of the workflow.
 
 ### Changed
 
