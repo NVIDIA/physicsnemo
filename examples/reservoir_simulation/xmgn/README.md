@@ -56,8 +56,7 @@ your_dataset/
 An open-source reservoir simulator, [OPM](https://opm-project.org/), was used
 to generate both datasets.
 
-**Norne field example visualization** - static reservoir property with wells
-and domain partitions:
+**Norne field example visualization** - static reservoir property and domain partitions:
 
 <!-- markdownlint-disable MD033 -->
 <table>
@@ -66,7 +65,7 @@ and domain partitions:
 <td><img src="docs/visualizations/PARTITION.png" alt="X-MGN Partitioning"/></td>
 </tr>
 <tr>
-<td align="center"><i>Permeability distribution</i></td>
+<td align="center"><i>Permeability (PERMX) distribution</i></td>
 <td align="center"><i>X-MeshGraphNet partitioning (0=halo region)</i></td>
 </tr>
 </table>
