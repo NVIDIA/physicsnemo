@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -35,10 +35,13 @@ class Completion:
         J (int): J-index of the grid cell (1-based).
         K (int): K-index of the grid cell (1-based).
         status (str): Completion status ("OPEN" or "SHUT").
-        IJK (int): Linear index of the grid cell (1-based).  This is set using the
-            `set_ijk` method.
-        flow_rate (float): Flow rate at the completion. Positive: injection,
-            negative: production. This is set using the `set_flow_rate` method.
+        dir (int): Penetration direction (1=X-dir, 2=Y-dir, 3=Z-dir, 4=fractured in X-dir, 5=fractured in Y-dir).
+        connection_factor (float): Connection transmissibility factor.
+        IJK (int, optional): Linear index of the grid cell (1-based). Set dynamically
+            via `set_ijk()` method. May not exist until explicitly set.
+        flow_rate (float, optional): Flow rate at the completion. Positive: injection,
+            negative: production. Set dynamically via `set_flow_rate()` method.
+            May not exist until explicitly set.
     """
 
     def __init__(
