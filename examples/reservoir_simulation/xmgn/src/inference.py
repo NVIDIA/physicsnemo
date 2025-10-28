@@ -690,11 +690,22 @@ class InferenceRunner:
 
         # Check in test/train/val subdirectories
         for split in ["test", "train", "val"]:
-            partition_pt_file = os.path.join(
-                partitions_dir, split, f"partitions_{case_name}_000.pt"
-            )
+            split_dir = os.path.join(partitions_dir, split)
 
-            if os.path.exists(partition_pt_file):
+            # Find the first partition file for this case (any timestep)
+            partition_pt_file = None
+            if os.path.exists(split_dir):
+                import glob
+
+                pattern = os.path.join(split_dir, f"partitions_{case_name}_*.pt")
+                matching_files = sorted(glob.glob(pattern))
+
+                if matching_files:
+                    partition_pt_file = matching_files[
+                        0
+                    ]  # Use first available timestep
+
+            if partition_pt_file and os.path.exists(partition_pt_file):
                 try:
                     # Load partition data from .pt file
                     partitions = torch.load(
@@ -738,9 +749,17 @@ class InferenceRunner:
                                 )  # Which partition includes this as halo
 
                     # Sort by node index and create assignment lists
-                    sorted_indices = sorted(partition_assignments_dict.keys())
+                    # Include both inner nodes AND halo nodes
+                    all_node_indices = set(partition_assignments_dict.keys()) | set(
+                        halo_info_dict.keys()
+                    )
+                    sorted_indices = sorted(all_node_indices)
+
                     partition_assignment = np.array(
-                        [partition_assignments_dict[idx] for idx in sorted_indices],
+                        [
+                            partition_assignments_dict.get(idx, 0)
+                            for idx in sorted_indices
+                        ],
                         dtype=int,
                     )
 
@@ -751,10 +770,22 @@ class InferenceRunner:
                     )
 
                     num_halo_cells = np.count_nonzero(halo_info)
+
+                    # Debug: check how many cells are halo-only vs inner+halo
+                    num_inner_cells = np.count_nonzero(partition_assignment)
+                    num_halo_only = np.sum(
+                        (halo_info > 0) & (partition_assignment == 0)
+                    )
+                    num_inner_and_halo = np.sum(
+                        (halo_info > 0) & (partition_assignment > 0)
+                    )
+
                     self.logger.info(
                         f"Loaded partition assignments from {split}/{os.path.basename(partition_pt_file)}: "
-                        f"{num_partitions} partitions, {len(partition_assignment)} active cells, "
-                        f"{num_halo_cells} cells included as halo"
+                        f"{num_partitions} partitions, {len(partition_assignment)} active cells"
+                    )
+                    self.logger.info(
+                        f"   Inner cells: {num_inner_cells}, Halo-only: {num_halo_only}, Inner+Halo: {num_inner_and_halo}"
                     )
 
                     return partition_assignment, halo_info
@@ -937,19 +968,33 @@ class InferenceRunner:
                 with h5py.File(hdf5_file, "r") as f:
                     with open(grdecl_filepath, "w") as grdecl_file:
                         # Write combined PARTITION block (if available)
-                        # Positive values = partition ID (inner nodes)
-                        # Negative values = -partition_id for halo nodes (e.g., -2 means halo in partition 2)
+                        # Positive values = partition ID (inner nodes that are NOT halo anywhere)
+                        # Negative values = -partition_id for boundary nodes (cells that serve as halo)
                         if partition_data_active is not None:
                             # Start with partition assignments for active cells
                             combined_data_active = partition_data_active.copy()
 
-                            # Override with negative values for halo regions
+                            # Mark ALL halo cells with negative values (even if they're also inner somewhere)
                             if halo_data_active is not None:
-                                # Where halo_data_active > 0, use negative value to indicate halo
+                                # All cells where halo_data_active > 0 get marked as halo (negative)
                                 halo_mask = halo_data_active > 0
-                                combined_data_active[halo_mask] = -halo_data_active[
+                                num_halo = np.sum(halo_mask)
+                                num_halo_only = np.sum(
+                                    (halo_data_active > 0)
+                                    & (partition_data_active == 0)
+                                )
+                                num_boundary = np.sum(
+                                    (halo_data_active > 0) & (partition_data_active > 0)
+                                )
+
+                                self.logger.info(
+                                    f"   Total halo cells: {num_halo} (Halo-only: {num_halo_only}, Boundary: {num_boundary})"
+                                )
+
+                                # Mark halo cells with negative of their owner partition ID
+                                combined_data_active[
                                     halo_mask
-                                ]
+                                ] = -partition_data_active[halo_mask]
 
                             # Initialize full array with zeros (for inactive cells)
                             partition_data_full = np.zeros((total_cells,), dtype=int)
@@ -959,11 +1004,12 @@ class InferenceRunner:
                             # Write PARTITION block
                             grdecl_file.write("PARTITION\n")
                             grdecl_file.write(
-                                "-- Positive values: partition ID (inner nodes)\n"
+                                "-- Positive values: partition ID (inner nodes, not serving as halo)\n"
                             )
                             grdecl_file.write(
-                                "-- Negative values: halo nodes (e.g., -2 = halo in partition 2)\n"
+                                "-- Negative values: -partition_id for boundary/halo nodes (e.g., -2 = owned by partition 2, serves as halo)\n"
                             )
+                            grdecl_file.write("-- Zero: inactive cells\n")
                             for i, value in enumerate(partition_data_full):
                                 grdecl_file.write(f"{value} ")
                                 if (i + 1) % 10 == 0:  # 10 values per line for integers
