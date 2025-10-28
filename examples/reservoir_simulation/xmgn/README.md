@@ -4,6 +4,25 @@ An example for surrogate modeling using
 [X-MeshGraphNet](https://arxiv.org/pdf/2411.17164) on reservoir simulation
 datasets.
 
+## Overview
+
+Reservoir simulation is the process of replicating and predicting reservoir
+performance by building physical and mathematical models to reduce
+uncertainties related to reservoir quality and geologic complexity. It utilizes
+static and dynamic data from various sources to evaluate and optimize reservoir
+development plans.
+
+Modern reservoir simulation employs complex gridding techniques to capture
+geologic structures and fractures, while solving highly nonlinear PDEs
+governing multi-phase/component flow and transport. Despite advances in
+numerical solvers and parallel computing (HPC and GPU acceleration), simulations
+remain computationally expensive. This creates a critical need for faster
+surrogate models when exploring large uncertainty spaces.
+
+XMeshGraphNet (X-MGN) is naturally compatible with the finite volume framework
+used in reservoir simulation and is scalable to industry-scale reservoir
+models, making it an ideal surrogate modeling approach for this domain.
+
 ## Quick Start
 
 ### Prerequisites
@@ -27,7 +46,7 @@ If you have your own reservoir simulation dataset, ensure all simulation cases
 are stored in a single directory with ECLIPSE/IX style output files:
 
 ```text
-your_dataset/
+<your-dataset>/
 ├── CASE_1.DATA
 ├── CASE_1.INIT
 ├── CASE_1.EGRID
@@ -56,7 +75,7 @@ your_dataset/
 An open-source reservoir simulator, [OPM](https://opm-project.org/), was used
 to generate both datasets.
 
-**Norne field example visualization** - static reservoir property and domain partitions:
+**Norne Field example visualization** - static reservoir property and domain partitions:
 
 <!-- markdownlint-disable MD033 -->
 <table>
@@ -79,12 +98,17 @@ to generate both datasets.
 
 ### 1. Data Preprocessing
 
-Prepare simulation results and ensembles under `dataset.sim_dir` in the
-configuration file (`conf/config.yaml`), then run:
+Configure your dataset path in `conf/<your-config>.yaml` by setting
+`dataset.sim_dir` to point to your simulation data directory, then run:
 
 ```bash
-python src/preprocessor.py
+python src/preprocessor.py --config-name=<your-config>
 ```
+
+**Note:** Replace `<your-config>` with your configuration file name from the
+`conf/` directory (without the `.yaml` extension). For example, use `config`
+for `conf/config.yaml`. Use the same config name for training and inference
+steps below.
 
 **What it does**:
 
@@ -100,7 +124,7 @@ python src/preprocessor.py
 Multi-GPU training is supported:
 
 ```bash
-torchrun --nproc_per_node=4 --nnodes=1 src/train.py
+torchrun --nproc_per_node=4 --nnodes=1 src/train.py --config-name=<your-config>
 ```
 
 ### 3. Inference and Visualization
@@ -108,11 +132,11 @@ torchrun --nproc_per_node=4 --nnodes=1 src/train.py
 Run autoregressive inference to predict future timesteps:
 
 ```bash
-torchrun --nproc_per_node=4 src/inference.py
+torchrun --nproc_per_node=4 src/inference.py --config-name=<your-config>
 ```
 
 **Output Location:** Results are saved to
-`outputs/<your_experiment_name>/inference/`
+`outputs/<your-experiment-name>/inference/`
 
 **Output Files:**
 
@@ -124,10 +148,11 @@ torchrun --nproc_per_node=4 src/inference.py
 
 ## Experiment Tracking
 
-Launch MLflow UI to monitor training progress:
+Launch MLflow UI to monitor training progress (replace `<your-experiment-name>`
+with your experiment name from the config):
 
 ```bash
-cd outputs/<your_experiment_name>
+cd outputs/<your-experiment-name>
 mlflow ui --host 0.0.0.0 --port 5000
 ```
 
