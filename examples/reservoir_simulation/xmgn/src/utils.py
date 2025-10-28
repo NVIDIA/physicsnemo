@@ -34,7 +34,14 @@ def fix_layernorm_compatibility():
     import torch.nn as nn
 
     if not hasattr(nn.LayerNorm, "register_load_state_dict_pre_hook"):
-        nn.LayerNorm.register_load_state_dict_pre_hook = lambda self, hook: None
+
+        def _register_load_state_dict_pre_hook(self, hook):
+            """Dummy implementation for compatibility."""
+            return None
+
+        nn.LayerNorm.register_load_state_dict_pre_hook = (
+            _register_load_state_dict_pre_hook
+        )
 
 
 class EarlyStopping:

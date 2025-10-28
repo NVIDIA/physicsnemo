@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -103,7 +103,7 @@ def InitializeLoggers(cfg: DictConfig):
         )
 
         # Initialize PhysicsNeMo's MLflow integration
-        client, run = initialize_mlflow(
+        initialize_mlflow(
             experiment_name=cfg.runspec.job_name,
             experiment_desc=cfg.runspec.description,
             run_name=f"{cfg.runspec.job_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -112,9 +112,6 @@ def InitializeLoggers(cfg: DictConfig):
             mode="offline",
         )
         LaunchLogger.initialize(use_mlflow=True)
-
-        # Set the active MLflow run for parameter logging
-        mlflow.start_run(run_id=run.info.run_id)
 
     return dist, RankZeroLoggingWrapper(logger, dist)
 
