@@ -30,7 +30,7 @@
     "defaultOpen": false
   },
   "sequenceDiagramSection": {
-    "included": true,
+    "included": false,
     "collapsible": false,
     "defaultOpen": false
   },
