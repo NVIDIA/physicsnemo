@@ -14,20 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-hydra:
-  job:
-    chdir: True
-  run:
-    dir: ./outputs/
+_target_: d3plot_reader.Reader
+wall_node_disp_threshold: 1.0
 
-experiment_name: "Unified-Training"
-experiment_desc: "unified training recipe for crash models"
-run_desc: "unified training recipe for crash models"
-
-defaults:
-  - reader: d3plot
-  - datapipe: point_cloud   # will be overridden by model configs
-  - model: transolver_autoregressive_rollout_training
-  - training: default
-  - inference: default
-  - _self_

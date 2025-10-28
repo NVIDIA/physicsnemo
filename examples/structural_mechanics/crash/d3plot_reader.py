@@ -409,3 +409,23 @@ def process_d3plot_data(
         )
 
     return srcs, dsts, point_data_all
+
+class Reader:
+    def __init__(self, wall_node_disp_threshold: float = 1.0):
+        self.wall_node_disp_threshold = wall_node_disp_threshold
+
+    def __call__(
+        self,
+        data_dir: str,
+        num_samples: int,
+        split: str,
+        logger=None,
+    ):
+        write_vtp = False if split == "train" else True
+        return process_d3plot_data(
+            data_dir=data_dir,
+            num_samples=num_samples,
+            wall_node_disp_threshold=self.wall_node_disp_threshold,
+            write_vtp=write_vtp,
+            logger=logger,
+        )

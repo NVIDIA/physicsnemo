@@ -17,9 +17,8 @@
 import os
 import numpy as np
 import torch
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Callable
 
-from d3plot_reader import process_d3plot_data
 from torch_geometric.data import Data
 from torch_geometric.utils import coalesce, add_self_loops
 
@@ -97,6 +96,7 @@ class CrashBaseDataset:
     def __init__(
         self,
         name: str = "dataset",
+        reader: Callable = None,
         data_dir: Optional[str] = None,
         split: str = "train",
         num_samples: int = 1000,
@@ -125,13 +125,15 @@ class CrashBaseDataset:
         os.makedirs(STATS_DIRNAME, exist_ok=True)
 
         # Load raw records; we keep (srcs, dsts) for graph dataset; point-cloud ignores them
-        self.srcs, self.dsts, point_data = process_d3plot_data(
-            self.data_dir,
-            num_samples,
-            wall_node_disp_threshold,
-            write_vtp,
-            logger=self.logger,
-        )
+        if reader is not None:
+            self.srcs, self.dsts, point_data = reader(
+                data_dir=self.data_dir,
+                num_samples=num_samples,
+                split=split,
+                logger=self.logger,
+            )
+        else:
+            raise ValueError("Data reader function is not specified.")
 
         # Storage for per-sample tensors
         self.mesh_pos_seq: List[torch.Tensor] = []  # [T, N, 3], float32
