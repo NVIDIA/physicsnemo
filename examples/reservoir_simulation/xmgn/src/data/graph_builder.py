@@ -77,7 +77,6 @@ class ReservoirGraphBuilder:
 
         self.vars = {
             "grid": {
-                "uniform_geometry": cfg.dataset.uniform_geometry,
                 "static": static_vars,
                 "dynamic": list(self.graph_config.node_features.dynamic.variables),
             }
@@ -725,7 +724,6 @@ class ReservoirGraphBuilder:
         rst_well_keys,
         include_well_completions,
         include_well_completion_cf,
-        uniform_geometry,
         output_path_graph,
     ):
         """
@@ -858,7 +856,6 @@ class ReservoirGraphBuilder:
                 rst_well_keys,
                 include_well_completions,
                 include_well_completion_cf,
-                self.vars["grid"]["uniform_geometry"],
                 self._output_path_graph,
             )
             for sample_idx_1based, file_path in enumerate(sim_input_files, start=1)

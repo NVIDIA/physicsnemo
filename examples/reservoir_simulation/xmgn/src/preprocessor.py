@@ -256,7 +256,6 @@ class ReservoirPreprocessor:
             "job_name": os.path.basename(self.dataset_dir),
             "config": {
                 "simulator": self.cfg.dataset.simulator,
-                "uniform_geometry": getattr(self.cfg.dataset, "uniform_geometry", True),
                 "num_samples": getattr(self.cfg.dataset, "num_samples", None),
             },
         }
