@@ -404,13 +404,19 @@ def process_d3plot_data(
             write_vtp,
             logger,
         )
-        point_data_all.append(
-            {"coords": mesh_pos_all, "thickness": filtered_thickness}
-        )
+        point_data_all.append({"coords": mesh_pos_all, "thickness": filtered_thickness})
 
     return srcs, dsts, point_data_all
 
+
 class Reader:
+    """
+    Reader for LS-DYNA d3plot files.
+
+    Args:
+        wall_node_disp_threshold: threshold for filtering wall nodes
+    """
+
     def __init__(self, wall_node_disp_threshold: float = 1.0):
         self.wall_node_disp_threshold = wall_node_disp_threshold
 

@@ -50,8 +50,8 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
             [T, N, 3] rollout of predicted positions
         """
         inputs = sample.node_features
-        coords = inputs['coords']                              # [N,3]
-        features = inputs.get('features', coords.new_zeros((coords.size(0), 0)))
+        coords = inputs["coords"]  # [N,3]
+        features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
         N = coords.size(0)
         device = coords.device
 
@@ -99,7 +99,7 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
             y_t1, y_t0 = y_t2, y_t1
 
         return torch.stack(outputs, dim=0)  # [T,N,3]
-    
+
 
 class TransolverTimeConditionalRollout(Transolver):
     """
@@ -125,8 +125,8 @@ class TransolverTimeConditionalRollout(Transolver):
             [T, N, 3] rollout of predicted positions
         """
         inputs = sample.node_features
-        x = inputs['coords']                                # [N,3]
-        features = inputs.get('features', x.new_zeros((x.size(0), 0))) # [N,F]
+        x = inputs["coords"]  # [N,3]
+        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
 
         outputs: List[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
@@ -176,8 +176,10 @@ class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
             [T, N, 3] rollout of predicted positions
         """
         inputs = sample.node_features
-        coords = inputs['coords']                                # [N,3]
-        features = inputs.get('features', coords.new_zeros((coords.size(0), 0))) # [N,F]
+        coords = inputs["coords"]  # [N,3]
+        features = inputs.get(
+            "features", coords.new_zeros((coords.size(0), 0))
+        )  # [N,F]
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
@@ -234,8 +236,8 @@ class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
             [T, N, 3] rollout of predicted positions
         """
         inputs = sample.node_features
-        x = inputs['coords']                                        # [N,3]
-        features = inputs.get('features', x.new_zeros((x.size(0), 0)))  # [N,F]
+        x = inputs["coords"]  # [N,3]
+        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
@@ -279,12 +281,15 @@ class TransolverOneStepRollout(
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
         inputs = sample.node_features
-        coords0 = inputs['coords']                                  # [N,3]
-        features = inputs.get('features', coords0.new_zeros((coords0.size(0), 0)))
+        coords0 = inputs["coords"]  # [N,3]
+        features = inputs.get("features", coords0.new_zeros((coords0.size(0), 0)))
 
         # Ground truth sequence [T,N,3]
         N = coords0.size(0)
-        gt_seq = torch.cat([coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)], dim=0)
+        gt_seq = torch.cat(
+            [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
+            dim=0,
+        )
 
         outputs: List[torch.Tensor] = []
 
@@ -346,14 +351,19 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
         inputs = sample.node_features
-        coords0 = inputs['coords']                                  # [N,3]
-        features = inputs.get('features', coords0.new_zeros((coords0.size(0), 0)))  # [N,F]
+        coords0 = inputs["coords"]  # [N,3]
+        features = inputs.get(
+            "features", coords0.new_zeros((coords0.size(0), 0))
+        )  # [N,F]
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
         # Full ground truth trajectory [T,N,3]
         N = coords0.size(0)
-        gt_seq = torch.cat([coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)], dim=0)
+        gt_seq = torch.cat(
+            [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
+            dim=0,
+        )
 
         outputs: List[torch.Tensor] = []
 

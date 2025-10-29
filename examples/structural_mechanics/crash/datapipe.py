@@ -53,9 +53,9 @@ class SimSample:
     ):
         assert isinstance(node_features, dict), "node_features must be a dict"
         assert "coords" in node_features, "node_features must contain 'coords'"
-        assert node_features["coords"].ndim == 2 and node_features["coords"].shape[1] == 3, (
-            f"'coords' must be [N,3], got {node_features['coords'].shape}"
-        )
+        assert (
+            node_features["coords"].ndim == 2 and node_features["coords"].shape[1] == 3
+        ), f"'coords' must be [N,3], got {node_features['coords'].shape}"
         self.node_features = node_features
         self.node_target = node_target
         self.graph = graph  # PyG Data or None
@@ -85,6 +85,7 @@ class SimSample:
         )
         e = 0 if self.graph is None else self.graph.num_edges
         return f"SimSample(N={n}, keys={list(self.node_features.keys())}, Din={din}, Dout={dout}, E={e})"
+
 
 class CrashBaseDataset:
     """
@@ -142,8 +143,10 @@ class CrashBaseDataset:
 
         # Storage for per-sample tensors
         self.mesh_pos_seq: List[torch.Tensor] = []  # [T,N,3]
-        self.node_features_data: List[torch.Tensor] = []    # [N,F]
-        self._feature_slices: Dict[str, Tuple[int,int]] = {}  # per-sample feature slices
+        self.node_features_data: List[torch.Tensor] = []  # [N,F]
+        self._feature_slices: Dict[
+            str, Tuple[int, int]
+        ] = {}  # per-sample feature slices
 
         for rec in point_data:
             # Coordinates
@@ -165,12 +168,16 @@ class CrashBaseDataset:
                     arr = arr[:, None]
                 parts.append(arr)
 
-            feats_np = np.concatenate(parts, axis=-1) if len(parts) > 0 else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
+            feats_np = (
+                np.concatenate(parts, axis=-1)
+                if len(parts) > 0
+                else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
+            )
             assert feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1], (
-                            f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
-                        )
-                        
-            # build slice map on first record to make future slicing trivial 
+                f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
+            )
+
+            # build slice map on first record to make future slicing trivial
             if len(self._feature_slices) == 0:
                 start = 0
                 for k in self.features:
@@ -178,7 +185,9 @@ class CrashBaseDataset:
                     self._feature_slices[k] = (start, start + width)
                     start += width
 
-            self.node_features_data.append(torch.as_tensor(feats_np, dtype=torch.float32))
+            self.node_features_data.append(
+                torch.as_tensor(feats_np, dtype=torch.float32)
+            )
 
         # Stats (node + generic features)
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
@@ -206,11 +215,17 @@ class CrashBaseDataset:
                 self.node_stats["pos_std"],
             )
             if self.node_features_data[i].numel() > 0:
-                mu = torch.as_tensor(self.feature_stats.get("feature_mean", []), dtype=torch.float32)
-                std = torch.as_tensor(self.feature_stats.get("feature_std", []), dtype=torch.float32)
+                mu = torch.as_tensor(
+                    self.feature_stats.get("feature_mean", []), dtype=torch.float32
+                )
+                std = torch.as_tensor(
+                    self.feature_stats.get("feature_std", []), dtype=torch.float32
+                )
                 if mu.numel() == 0:
                     continue
-                self.node_features_data[i] = (self.node_features_data[i] - mu.view(1, -1)) / (std.view(1, -1) + EPS)
+                self.node_features_data[i] = (
+                    self.node_features_data[i] - mu.view(1, -1)
+                ) / (std.view(1, -1) + EPS)
 
     def __len__(self):
         return self.length
@@ -237,16 +252,18 @@ class CrashBaseDataset:
         F = feats.shape[1]
 
         pos_t0 = pos_seq[0]  # [N,3]
-        x = {'coords': pos_t0, 'features': feats}
+        x = {"coords": pos_t0, "features": feats}
 
         # Flatten all future positions along feature dim
         y = pos_seq[1:].transpose(0, 1).flatten(start_dim=1)  # [N,(T-1)*3]
 
         _, Dout = self._xy_shapes(idx)
-        assert x['coords'].shape == (N, 3) and x['features'].shape == (N, F), (
+        assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
             f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
         )
-        assert y.shape == (N, Dout), f"y shape mismatch: expected {(N, Dout)}, got {y.shape}"
+        assert y.shape == (N, Dout), (
+            f"y shape mismatch: expected {(N, Dout)}, got {y.shape}"
+        )
         return x, y
 
     # ---- stats helpers ----
