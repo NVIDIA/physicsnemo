@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -25,6 +25,9 @@ from torch_geometric.data import Data
 from collections.abc import Mapping
 from hydra.utils import to_absolute_path
 from sim_utils import EclReader, Well, Grid
+from multiprocessing import Pool, cpu_count
+from functools import partial
+from tqdm import tqdm
 
 
 class ReservoirGraphBuilder:
@@ -44,6 +47,9 @@ class ReservoirGraphBuilder:
         self.num_samples = cfg.dataset.get(
             "num_samples", None
         )  # Limit number of samples to process
+        self.num_preprocess_workers = cfg.preprocessing.get(
+            "num_preprocess_workers", 4
+        )  # Number of parallel workers for sample processing
 
         # Get graph configuration
         self.graph_config = cfg.dataset.get("graph", None)
@@ -233,17 +239,14 @@ class ReservoirGraphBuilder:
                         # Apply log10 scaling: log10(max(data, 1e-10))
                         # Use 1e-10 as minimum to avoid log(0)
                         data_scaled = np.log10(np.maximum(data, 1e-10))
-                        print(f"Applied LOG10 scaling to variable '{var_name}'")
                         return data_scaled
                     elif scaling_type.upper() == "LOG":
                         # Apply natural log scaling: log(max(data, 1e-10))
                         data_scaled = np.log(np.maximum(data, 1e-10))
-                        print(f"Applied LOG scaling to variable '{var_name}'")
                         return data_scaled
                     elif scaling_type.upper() == "SQRT":
                         # Apply square root scaling: sqrt(max(data, 0))
                         data_scaled = np.sqrt(np.maximum(data, 0))
-                        print(f"Applied SQRT scaling to variable '{var_name}'")
                         return data_scaled
                     else:
                         print(
@@ -318,9 +321,7 @@ class ReservoirGraphBuilder:
             if var in data:
                 # Check if we have enough timesteps for the required history
                 if timestep_idx + 1 < self.prev_timestep_idx:
-                    print(
-                        f"Error: Not enough timesteps for variable '{var}' (need {self.prev_timestep_idx}, have {timestep_idx + 1}) - skipping graph"
-                    )
+                    # Not enough history - skip this timestep (expected for early timesteps)
                     return None
 
                 try:
@@ -448,11 +449,6 @@ class ReservoirGraphBuilder:
                 node_features = torch.cat([node_features, time_feature], dim=1)
                 temporal_feature_names.append("time")
                 input_var_names.append("time")
-
-            if temporal_feature_names:
-                print(
-                    f"  Added temporal features as node features: {', '.join(temporal_feature_names)}"
-                )
 
         # Keep global_features for backward compatibility and metadata (not used by model)
         global_features = None
@@ -686,10 +682,6 @@ class ReservoirGraphBuilder:
         graphs = []
         total_possible = len(combined_data.get("TIME", [])) - 1
 
-        print(
-            f"  → Creating {len(valid_timesteps)} graphs for {len(valid_timesteps)} valid timesteps (out of {total_possible} possible)"
-        )
-
         for t in valid_timesteps:
             try:
                 graph = self.build_graph_from_simulation_data(
@@ -701,16 +693,16 @@ class ReservoirGraphBuilder:
                     case_name=case_name,
                 )
                 if graph is None:
-                    self._log_error_and_continue(
-                        f"Graph creation returned None for timestep {t} (missing data or simulation died)",
-                        "  ",
-                    )
+                    # Only log as error if timestep should have had enough history
+                    if t + 1 >= self.prev_timestep_idx:
+                        self._log_error_and_continue(
+                            f"Graph creation returned None for timestep {t} (missing data or simulation died)",
+                            "  ",
+                        )
+                    # Otherwise skip silently (expected for early timesteps)
                     continue
 
                 graphs.append(graph)
-                print(
-                    f"    → Graph {t + 1}: {graph.x.shape[0]} nodes, {graph.edge_index.shape[1]} edges"
-                )
 
             except Exception as e:
                 self._log_error_and_continue(
@@ -720,6 +712,93 @@ class ReservoirGraphBuilder:
                 continue
 
         return graphs
+
+    def _process_single_sample_worker(
+        self,
+        file_path,
+        sample_idx_1based,
+        total_samples,
+        egrid_keys_geometry,
+        egrid_keys_nnc,
+        init_keys,
+        dynamic_variables,
+        rst_well_keys,
+        include_well_completions,
+        include_well_completion_cf,
+        uniform_geometry,
+        output_path_graph,
+    ):
+        """
+        Process a single sample, save graphs immediately, and return filenames.
+
+        This method is designed to be called in parallel by multiprocessing workers.
+        Returns (saved_filenames, case_name, error_msg) tuple.
+        """
+        case_name = os.path.splitext(os.path.basename(file_path))[0]
+        print(f"Processing sample {sample_idx_1based}/{total_samples}: {case_name}")
+
+        try:
+            reader = EclReader(file_path)
+
+            # Read EGRID data (each worker reads independently - simpler than sharing)
+            egrid_data_geometry = reader.read_egrid(egrid_keys_geometry)
+            egrid_data_nnc = reader.read_egrid(egrid_keys_nnc)
+            egrid_data = {**egrid_data_geometry, **egrid_data_nnc}
+
+            # Process static grid data
+            init_data, grid = self._process_static_data(
+                reader, init_keys, egrid_data, sample_idx_1based
+            )
+
+            # Process dynamic data
+            wells_data, restart_data = self._process_dynamic_data(
+                reader,
+                grid,
+                dynamic_variables,
+                rst_well_keys,
+                include_well_completions,
+                include_well_completion_cf,
+                sample_idx_1based,
+            )
+
+            if wells_data is None:  # Error occurred
+                return None, case_name, "Error in processing dynamic data"
+
+            # Combine static + dynamic data
+            combined_data = {**init_data, **restart_data}
+
+            # Validate timesteps
+            valid_timesteps = self._validate_timesteps(
+                combined_data, dynamic_variables, sample_idx_1based
+            )
+
+            if not valid_timesteps:
+                return None, case_name, "No valid timesteps found"
+
+            # Build graphs for all valid timesteps
+            sample_graphs = self._build_graphs_for_sample(
+                grid,
+                wells_data,
+                combined_data,
+                valid_timesteps,
+                sample_idx_1based,
+                case_name,
+            )
+
+            # Save graphs immediately (memory efficient)
+            saved_filenames = []
+            for graph in sample_graphs:
+                timestep_id = getattr(graph, "timestep_id", 0)
+                filename = f"{case_name}_{timestep_id:03d}.pt"
+                graph_path = os.path.join(output_path_graph, filename)
+                torch.save(graph, graph_path)
+                saved_filenames.append(filename)
+
+            return saved_filenames, case_name, None
+
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            return None, case_name, error_msg
 
     def _parse_results_from_samples(self) -> dict:
         """
@@ -750,129 +829,72 @@ class ReservoirGraphBuilder:
             include_well_completions,
         ) = self._prepare_dynamic_variables()
 
-        all_graphs = []
-        egrid_data_geometry = None  # Will be reused if geometry is uniform
+        all_graph_files = []
         failed_sample_count = 0
 
         # Limit samples if specified
         if self.num_samples is not None:
             sim_input_files = sim_input_files[: self.num_samples]
-            print(f"\n🛠 Processing {len(sim_input_files)} simulation results...")
 
-        # === PROCESS EACH SAMPLE ===
-        for sample_idx_1based, file_path in enumerate(sim_input_files, start=1):
-            case_name = os.path.splitext(os.path.basename(file_path))[0]
-            try:
-                print(
-                    f"→ Sample {sample_idx_1based}/{len(sim_input_files)}: {case_name}"
-                )
-                reader = EclReader(file_path)
+        total_samples = len(sim_input_files)
 
-                # Only read/refresh EGRID if needed (first sample or non-uniform geometry)
-                if (
-                    egrid_data_geometry is None
-                    or not self.vars["grid"]["uniform_geometry"]
-                ):
-                    egrid_data_geometry = reader.read_egrid(egrid_keys_geometry)
-                egrid_data_nnc = reader.read_egrid(
-                    (egrid_keys_nnc)
-                )  # read NNCs separately (NNCs can vary across samples)
-                egrid_data = {**egrid_data_geometry, **egrid_data_nnc}
+        # Determine number of workers
+        n_workers = min(self.num_preprocess_workers, cpu_count(), total_samples)
 
-                # Process static grid data (porosity, permeability, etc.)
-                init_data, grid = self._process_static_data(
-                    reader, init_keys, egrid_data, sample_idx_1based
-                )
+        print(
+            f"\nProcessing {total_samples} simulation results using {n_workers} parallel workers..."
+        )
 
-                # Process dynamic data (pressure, saturation, wells, etc.)
-                wells_data, restart_data = self._process_dynamic_data(
-                    reader,
-                    grid,
-                    dynamic_variables,
-                    rst_well_keys,
-                    include_well_completions,
-                    include_well_completion_cf,
-                    sample_idx_1based,
-                )
-                if wells_data is None:  # Error occurred in processing
-                    continue
+        # Prepare arguments for parallel processing
+        worker_args = [
+            (
+                file_path,
+                sample_idx_1based,
+                total_samples,
+                egrid_keys_geometry,
+                egrid_keys_nnc,
+                init_keys,
+                dynamic_variables,
+                rst_well_keys,
+                include_well_completions,
+                include_well_completion_cf,
+                self.vars["grid"]["uniform_geometry"],
+                self._output_path_graph,
+            )
+            for sample_idx_1based, file_path in enumerate(sim_input_files, start=1)
+        ]
 
-                # Combine static + dynamic data for graph creation
-                combined_data = {**init_data, **restart_data}
+        # Process samples in parallel
+        with Pool(processes=n_workers) as pool:
+            results = pool.starmap(self._process_single_sample_worker, worker_args)
 
-                # Validate timesteps and find valid ones for graph creation
-                valid_timesteps = self._validate_timesteps(
-                    combined_data, dynamic_variables, sample_idx_1based
-                )
-                if not valid_timesteps:
-                    continue
-
-                # Build graphs for all valid timesteps of this sample
-                sample_graphs = self._build_graphs_for_sample(
-                    grid,
-                    wells_data,
-                    combined_data,
-                    valid_timesteps,
-                    sample_idx_1based,
-                    case_name,
-                )
-                all_graphs.extend(sample_graphs)
-
-            except Exception as e:
+        # Collect results and handle errors
+        print("\nCollecting results...")
+        for sample_idx, (saved_filenames, case_name, error_msg) in enumerate(
+            results, start=1
+        ):
+            if saved_filenames is None:
                 failed_sample_count += 1
                 self._log_error_and_continue(
-                    f"Processing sample {sample_idx_1based} ({os.path.basename(file_path)}): {type(e).__name__}: {e}"
+                    f"Processing sample {sample_idx} ({case_name}): {error_msg}"
                 )
-                if failed_sample_count > 0.2 * len(sim_input_files):
-                    raise RuntimeError(f"Failed to process too many samples.")
-                continue
+                if failed_sample_count > 0.2 * total_samples:
+                    raise RuntimeError("Failed to process too many samples.")
+            else:
+                all_graph_files.extend(saved_filenames)
 
         # === FINAL SUMMARY ===
         total_samples = len(sim_input_files)
         avg_graphs_per_sample = (
-            (len(all_graphs) / total_samples) if total_samples else 0.0
+            (len(all_graph_files) / total_samples) if total_samples else 0.0
         )
-        print(f"\n📊 Processing Summary:")
+        print(f"\nProcessing Summary:")
         print(f"  → Total samples processed: {total_samples}")
-        print(f"  → Total graphs created: {len(all_graphs)}")
+        print(f"  → Total graphs created: {len(all_graph_files)}")
         print(f"  → Average graphs per sample: {avg_graphs_per_sample:.1f}")
+        print(f"  → Graphs saved to: {self._output_path_graph}")
 
-        return all_graphs
-
-    def _save_graphs(self, all_graphs):
-        """
-        Save all graphs to individual files.
-
-        Parameters:
-        -----------
-        all_graphs : list
-            List of PyTorch Geometric Data objects
-
-        Returns:
-        --------
-        list: List of generated graph file names
-        """
-        print(f"\n💾 Saving {len(all_graphs)} graphs...")
-
-        generated_files = []
-        for i, graph in enumerate(all_graphs):
-            # Extract case name and timestep from the graph's metadata or filename
-            case_name = getattr(
-                graph, "case_name", f"sample_{i // 10:03d}"
-            )  # Default to sample if not available
-            timestep_id = getattr(
-                graph, "timestep_id", i % 10
-            )  # Default to modulo if not available
-
-            # Create filename: case_name_timestep_id.pt
-            filename = f"{case_name}_{timestep_id:03d}.pt"
-            graph_path = os.path.join(self._output_path_graph, filename)
-            torch.save(graph, graph_path)
-            generated_files.append(filename)
-            print(f"  → Saved: {graph_path}")
-
-        print(f"✅ All graphs saved to {self._output_path_graph}")
-        return generated_files
+        return all_graph_files
 
     def _save_well_list_pickle(self, wells_data):
         """
@@ -883,12 +905,9 @@ class ReservoirGraphBuilder:
         print(f"\nWell data saved to {self._output_path_well}")
 
     def execute(self):
-        all_graphs = self._parse_results_from_samples()
+        # Process samples and save graphs (returns filenames)
+        generated_files = self._parse_results_from_samples()
 
-        # Save graphs directly
-        generated_files = self._save_graphs(all_graphs)
-
-        print(f"\n✅ Processed {len(all_graphs)} graphs successfully!")
-        print(f"📁 Graphs saved to: {self._output_path_graph}")
+        print(f"\nProcessed {len(generated_files)} graphs successfully!")
 
         return generated_files

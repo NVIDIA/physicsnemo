@@ -44,6 +44,7 @@ if repo_root not in sys.path:
 
 import torch
 import torch_geometric as pyg
+from tqdm import tqdm
 import hydra
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
@@ -294,7 +295,6 @@ class ReservoirPreprocessor:
 
         case_names = sorted(list(case_names))
         total_cases = len(case_names)
-        print(f"Found {total_cases} unique cases: {case_names}")
 
         # Validate that we have enough samples for the split
         min_samples_needed = 3  # Need at least 3 samples for train/val/test split
@@ -488,8 +488,12 @@ class ReservoirPreprocessor:
 
         # Process each graph file
         successful_partitions = 0
-        print(f"Creating partitions for {len(graph_files)} graphs...")
-        for i, graph_file in enumerate(graph_files, 1):
+        for i, graph_file in tqdm(
+            enumerate(graph_files, 1),
+            total=len(graph_files),
+            desc="Creating partitions",
+            unit="graph",
+        ):
             # Load the graph
             try:
                 graph = torch.load(graph_file, weights_only=False)
@@ -573,9 +577,6 @@ class ReservoirPreprocessor:
                 torch.save(partitions, partition_file)
 
                 successful_partitions += 1
-                print(
-                    f"  [{i}/{len(graph_files)}] Partitioned {os.path.basename(graph_file)}"
-                )
 
             except Exception as e:
                 print(f"ERROR: processing {os.path.basename(graph_file)}: {e}")
@@ -642,7 +643,7 @@ class ReservoirPreprocessor:
 
         print("\nOptions:")
         print("y. Overwrite all existing data and start fresh")
-        print("n. Exit and handle manually")
+        print("n. Exit")
 
         while True:
             try:
@@ -663,7 +664,7 @@ class ReservoirPreprocessor:
         """
         Validate configuration parameters relevant to preprocessing.
         """
-        print("🔍 Validating configuration...")
+        print("Validating configuration...")
 
         # Validate dataset parameters
         if not hasattr(self.cfg, "dataset") or not hasattr(self.cfg.dataset, "sim_dir"):
@@ -740,7 +741,7 @@ class ReservoirPreprocessor:
 
         # Step 1: Create raw graphs (unless skipped)
         if not skip_graphs:
-            print("\nStep 1: Creating raw graphs from simulation data...")
+            print("\nStep 1: Creating graphs from simulation data...")
             processor = ReservoirGraphBuilder(self.cfg)
 
             # Override the output path to use our job-specific dataset directory
@@ -774,7 +775,7 @@ class ReservoirPreprocessor:
             or len([f for f in os.listdir(self.partitions_dir) if f.endswith(".pt")])
             == 0
         ):
-            print("\nStep 2: Creating partitions from raw graphs...")
+            print("\nStep 2: Creating partitions from graphs...")
             self.create_partitions_from_graphs(graph_file_list=self.graph_file_list)
         else:
             print("\nStep 2: Skipping partition creation (using existing partitions)")
