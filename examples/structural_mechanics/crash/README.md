@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-# Machine Learning Surrogates for Automotive Crash Dynamics 🧱💥🚗💨
+# Machine Learning Surrogates for Automotive Crash Dynamics 🧱💥🚗
 
 ## Problem Overview
 
@@ -21,6 +21,8 @@ The implementation supports both:
 
 - **Mesh-based Graph Neural Networks (MeshGraphNet)** – leverage connectivity from FE meshes.
 - **Point-cloud Transformers (Transolver)** – avoid explicit mesh dependency.
+
+![Crash case animation](../../../docs/img/crash/crash_case4_reduced.gif)
 
 ## Prerequisites
 
