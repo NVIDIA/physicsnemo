@@ -7,8 +7,7 @@ datasets.
 ## Overview
 
 Reservoir simulation is the process of replicating and predicting reservoir
-performance by building physical and mathematical models to reduce
-uncertainties related to reservoir quality and geologic complexity. It utilizes
+performance by building physical and mathematical models. It utilizes
 static and dynamic data from various sources to evaluate and optimize reservoir
 development plans.
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -37,8 +37,7 @@ dataset:
   simulator: OPM                                # Simulator type (OPM, ECLIPSE, IX)
   sim_dir: ../dataset/norne/NORNE_ATW2013_LHS_TOP10_FWCT.sim # Directory containing simulation cases and results
   # num_samples: 10                              # Number of samples to process (default = all, else for small size testing)
-  uniform_geometry: true                        # Flag (uniform geometry across samples) for skipping egrid reading repeatedly. Use false for non-uniform geometry (e.g., DFN)
-  
+
   # Graph configuration
   graph:
     node_features:
@@ -72,7 +71,7 @@ preprocessing:
   skip_graphs: false                             # Skip graph generation (use existing graphs to test partitioning parameters)
   num_partitions: 3                             # Number of partitions for each graph
   halo_size: 3                                  # Size of halo region for partitions
-  num_preprocess_workers: 4                     # Number of workers for data preprocessing
+  num_preprocess_workers: 8                     # Number of workers for data preprocessing
   data_split:
     train_ratio: 0.8                            # Ratio of samples for training
     val_ratio: 0.1                              # Ratio of samples for validation
