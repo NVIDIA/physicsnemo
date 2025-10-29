@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-# Machine Learning Surrogates for Automotive Crash Dynamics
+# Machine Learning Surrogates for Automotive Crash Dynamics 🧱💥🚗💨
 
 ## Problem Overview
 
@@ -119,9 +119,12 @@ Finally, the datapipe is designed to be resilient to the “no features” case.
 
 For completeness, the datapipe also records a lightweight name-to-column map called `_feature_slices`. It associates each configured feature name with its [start, end) slice in `x['features']`. You typically won’t need it if you just consume the full `features` tensor, but it enables reliable, reproducible slicing by name for diagnostics or logging.
 
-## Reader: built-in d3plot reader and how to add your own
+## Reader: built-in d3plot and vtp readers and how to add your own
 
 The reader is the component that actually opens the raw simulation outputs and produces the arrays the datapipe consumes. It is intentionally thin and swappable via Hydra so you can adapt the pipeline to LS‑DYNA exports, Abaqus exports, or your own internal formats without touching the rest of the code.
+
+Built-in d3plot reader
+----------------------
 
 The default reader is implemented in `d3plot_reader.py`. It searches the data directory for subfolders that contain a `d3plot` file and treats each such folder as one “run.” For each run it opens the `d3plot` with `lasso.dyna.D3plot` and extracts node coordinates, time-varying displacements, element connectivity, and part identifiers. If a LS‑DYNA keyword (`.k`) file is present, it parses the shell section definitions to obtain per-part thickness values, then converts those into per-node thickness by averaging the values of incident elements. To avoid contaminating the training with rigid content, the reader classifies nodes as structural or wall based on a displacement variation threshold and drops wall nodes. After filtering, it builds a compact node index, remaps connectivity, and—if you are training a graph model—collects undirected edges from the remapped shell elements. It can optionally save one VTP file per time step to help you visually inspect the trajectories, or write the predictions to those files in inference.
 
@@ -129,13 +132,52 @@ The reader then assembles the per-run record expected by the datapipe. Positions
 
 If you use the graph datapipe, the edge list is produced by walking the filtered shell elements and collecting unique boundary pairs, then symmetrized and augmented with self-loops inside the datapipe when constructing the PyG `Data` object. If you use the point‑cloud datapipe, the edge outputs are ignored but the rest of the record shape is the same, so you can swap between model families by changing configuration only.
 
+Built‑in VTP reader (PolyData)
+------------------------------
+
+In addition to `d3plot`, a lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
+
+- loads the reference coordinates from `poly.points`
+- builds absolute positions per timestep as `[t0: coords, t>0: coords + displacement_t]`
+- extracts cell connectivity from the PolyData faces and converts it to unique edges
+- returns `(srcs, dsts, point_data)` where `point_data` contains `'coords': [T, N, 3]`
+
+By default, the VTP reader does not attach additional features; it is compatible with `features: []`. If your `.vtp` files include additional per‑point arrays you would like to model (e.g., thickness or modulus), extend the reader to add those arrays to each run’s record using keys that match your `features` list. The datapipe will then concatenate them in the configured order.
+
+Example Hydra configuration for the VTP reader:
+
+```yaml
+# conf/reader/vtp.yaml
+_target_: vtp_reader.Reader
+```
+
+Select it in `conf/config.yaml`:
+
+```yaml
+defaults:
+  - datapipe: point_cloud
+  - model: transolver_time_conditional
+  - training: default
+  - inference: default
+  - reader: vtp
+```
+
+And set `features` to empty (or to the names you add in your extended reader) in `conf/datapipe/point_cloud.yaml` or `conf/datapipe/graph.yaml`:
+
+```yaml
+features: []  # or [thickness, Y_modulus] if your reader provides them
+```
+
+Write your own reader
+---------------------
+
 To write your own reader, implement a Hydra‑instantiable function or class whose call returns a three‑tuple `(srcs, dsts, point_data)`. The first two entries are lists of integer arrays describing edges per run (they can be empty lists if you are not producing a graph), and `point_data` is a list of Python dicts with one dict per run. Each dict must contain `'coords'` as a `[T, N, 3]` array and one array per feature name listed in `conf/datapipe/*.yaml` under `features`. Feature arrays can be `[N]` or `[N, K]` and should use the same node indexing as `'coords'`. For convenience, a simple class reader can accept the Hydra `split` argument (e.g., "train" or "test") and decide whether to save VTP frames, but this is optional.
 
 As a starting point, your YAML can point to a class by dotted path. For a class:
 
 ```yaml
 # conf/reader/my_reader.yaml
-_target_: my_package.my_reader.MyReader
+_target_: my_reader.MyReader
 # any constructor kwargs here, e.g. thresholds or unit conversions
 ```
 
