@@ -83,8 +83,9 @@ class Trainer:
                 k: v.to(self.dist.device)
                 for k, v in getattr(dataset, "edge_stats", {}).items()
             },
-            thickness={
-                k: v.to(self.dist.device) for k, v in dataset.thickness_stats.items()
+            feature={
+                k: v.to(self.dist.device)
+                for k, v in getattr(dataset, "feature_stats", {}).items()
             },
         )
 

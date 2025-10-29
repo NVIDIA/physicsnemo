@@ -20,3 +20,4 @@ name: crash_train
 split: train
 num_samples: ${training.num_training_samples}
 num_steps: ${training.num_time_steps}
+features: [thickness]

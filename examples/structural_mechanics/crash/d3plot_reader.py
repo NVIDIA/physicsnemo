@@ -405,7 +405,7 @@ def process_d3plot_data(
             logger,
         )
         point_data_all.append(
-            {"mesh_pos": mesh_pos_all, "thickness": filtered_thickness}
+            {"coords": mesh_pos_all, "thickness": filtered_thickness}
         )
 
     return srcs, dsts, point_data_all
