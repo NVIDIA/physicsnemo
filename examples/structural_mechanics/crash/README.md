@@ -3,26 +3,92 @@
 
 ## Problem Overview
 
-Automotive crashworthiness assessment is a critical step in vehicle design.  
-Traditionally, engineers rely on high-fidelity finite element (FE)
-simulations (e.g., LS-DYNA) to predict structural deformation and crash responses.  
-While accurate, these simulations are computationally expensive and
-limit the speed of design iterations.
+Automotive crashworthiness assessment is a critical step in vehicle design.   Traditionally, engineers rely on high-fidelity finite element (FE) simulations (e.g., LS-DYNA) to predict structural deformation and crash responses. While accurate, these simulations are computationally expensive and limit the speed of design iterations.
 
-Machine Learning (ML) surrogates provide a promising alternative by learning
-mappings directly from simulation data, enabling:
+Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling:
 
 - **Rapid prediction** of deformation histories across thousands of design candidates.
 - **Scalability** to large structural models without rerunning costly FE simulations.
 - **Flexibility** in experimenting with different model architectures (GNNs, Transformers).
 
-In this example, we demonstrate a unified pipeline for crash dynamics modeling.
-The implementation supports both:
-
-- **Mesh-based Graph Neural Networks (MeshGraphNet)** – leverage connectivity from FE meshes.
-- **Point-cloud Transformers (Transolver)** – avoid explicit mesh dependency.
+In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports Transolver and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot and VTP. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes.
 
 ![Crash case animation](../../../docs/img/crash/crash_case4_reduced.gif)
+
+## Quickstart
+
+1) Select your recipe (reader, datapipe, model) in `conf/config.yaml`.
+
+```yaml
+# conf/config.yaml
+defaults:
+  - reader: vtp                  # or d3plot, or your custom reader
+  - datapipe: point_cloud        # or graph
+  - model: transolver_time_conditional   # or an MGN variant
+  - training: default
+  - inference: default
+  - _self_
+```
+
+2) Point to your datasets and core training knobs.
+
+- `conf/training/default.yaml`:
+  - `raw_data_dir`: path to TRAIN runs (folder of run folders for d3plot, or folder of .vtp files for VTP)
+  - `num_time_steps`: number of frames to use per run
+  - `num_training_samples`: how many runs to load
+
+```yaml
+# conf/training/default.yaml
+raw_data_dir: "/path/to/train"   # REQUIRED: change this
+num_time_steps: 14                 # adjust to your data
+num_training_samples: 8            # adjust to available runs
+```
+
+- `conf/inference/default.yaml`:
+  - `raw_data_dir_test`: path to TEST runs
+  - `output_dir_pred`/`output_dir_exact`: where to write predicted/exact VTPs
+
+```yaml
+# conf/inference/default.yaml
+raw_data_dir_test: "/path/to/test"   # REQUIRED: change this
+```
+
+3) Configure the datapipe features list (order matters and defines columns of `x['features']`).
+
+```yaml
+# conf/datapipe/point_cloud.yaml (same keys for graph.yaml)
+features: [thickness]   # or [] for no features; preserve order if adding more
+```
+
+4) Reader‑specific options (optional).
+
+- d3plot: `conf/reader/d3plot.yaml` → `wall_node_disp_threshold`
+
+5) Model config: ensure input dimensions match your features.
+
+- Transolver (time‑conditional): set `functional_dim = len(features)` and `embedding_dim = 3`;
+
+```yaml
+# conf/model/transolver_time_conditional.yaml
+functional_dim: 1    # e.g., 1 if features: [thickness]
+embedding_dim: 3
+time_input: true
+```
+
+6) Launch training.
+
+```bash
+python train.py                              # single GPU
+torchrun --standalone --nproc_per_node=4 train.py   # multi-GPU (DDP)
+```
+
+7) Run inference.
+
+```bash
+python inference.py
+```
+
+Outputs: predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
 
 ## Prerequisites
 
@@ -40,20 +106,6 @@ This will install:
 
 - lasso-python (for LS-DYNA file parsing),
 - torch_geometric and torch_scatter (for GNN operations),
-
-## Dataset Preprocessing
-
-Crash simulation data is parsed from LS-DYNA d3plot files using the d3plot_reader.py utility.
-
-Key steps:
-
-- Load node coordinates, displacements, element connectivity, and part IDs.
-- Parse .k keyword files to assign part thickness values.
-- Filter out rigid wall nodes using displacement thresholds.
-- Build edges (for graphs) and store per-node features (e.g., thickness).
-- Optionally export time-stepped meshes as .vtp for visualization.
-
-Run preprocessing automatically via the dataset class (CrashGraphDataset or CrashPointCloudDataset) when launching training or inference.
 
 ## Training
 
@@ -121,6 +173,20 @@ Finally, the datapipe is designed to be resilient to the “no features” case.
 
 For completeness, the datapipe also records a lightweight name-to-column map called `_feature_slices`. It associates each configured feature name with its [start, end) slice in `x['features']`. You typically won’t need it if you just consume the full `features` tensor, but it enables reliable, reproducible slicing by name for diagnostics or logging.
 
+### Model I/O at a glance (what models receive)
+
+- Inputs `x` (dictionary):
+  - `x['coords']`: `[N, 3]` positions at `t0`
+  - `x['features']`: `[N, F]` concatenated node features in the config‑specified order (can be width 0)
+
+- Targets `y`: `[N, (T-1)*3]` positions from `t1..tT` flattened along the feature dimension.
+
+- Rollout input construction (high level):
+  - Autoregressive: per step, the model consumes normalized velocity, optionally time, and `x['features']`; positions are fed as embeddings/state.
+  - Time‑conditional one‑step: time index is provided once per call along with `x['features']` and the positional embedding.
+
+- Transolver specifics: for unstructured data, the embedding tensor is required; in this pipeline it is the current positions over the rollout. If you set `features: []`, the functional input still includes velocity (and optionally time), so the overall functional dimension remains > 0.
+
 ## Reader: built-in d3plot and vtp readers and how to add your own
 
 The reader is the component that actually opens the raw simulation outputs and produces the arrays the datapipe consumes. It is intentionally thin and swappable via Hydra so you can adapt the pipeline to LS‑DYNA exports, Abaqus exports, or your own internal formats without touching the rest of the code.
@@ -167,6 +233,16 @@ And set `features` to empty (or to the names you add in your extended reader) in
 ```yaml
 features: []  # or [thickness, Y_modulus] if your reader provides them
 ```
+
+### Data layout expected by readers
+
+- d3plot reader (`d3plot_reader.py`):
+  - `<DATA_DIR>/<RUN_ID>/d3plot` (required)
+  - `<DATA_DIR>/<RUN_ID>/*.k` (optional; used to parse thickness)
+
+- VTP reader (`vtp_reader.py`):
+  - `<DATA_DIR>/*.vtp` (each `.vtp` is treated as one run)
+  - Displacements stored as 3‑component arrays in point_data with names like `displacement_t0.000`, `displacement_t0.005`, ... (fallback accepts any `displacement_t*`).
 
 ### Write your own reader
 
@@ -251,6 +327,25 @@ python postprocessing/plot_cross_section.py \
 ```
 
 run_post_processing.sh can automate all evaluation tasks across runs.
+
+## Performance tips (DDP, AMP, batch sizing)
+
+- AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
+- For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`. 
+
+## Troubleshooting / FAQ
+
+- My `.vtp` has no displacement fields.
+  - Ensure point_data contains vector arrays named like `displacement_t0.000`, `displacement_t0.005`, ...; the reader falls back to any `displacement_t*` pattern.
+
+- I want no node features.
+  - Set `features: []`. The datapipe will return `x['features']` with shape `[N, 0]`, and the rollout will still concatenate velocity (and time if configured) for the model input.
+
+- Can functional_dim be 0 for Transolver?
+  - It can be 0 only if the total MLP input dimension remains > 0: e.g., you provide an embedding (required for unstructured) and/or time. In this pipeline, rollout always supplies an embedding (positions), so you are safe with `features: []`.
+
+- My custom reader doesn’t accept `split` or `logger`.
+  - Implement `__call__(..., split: str | None = None, logger=None, **kwargs)` to remain forward‑compatible with optional arguments.
 
 ## References
 
