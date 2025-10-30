@@ -23,14 +23,14 @@ In this example, we demonstrate a unified pipeline for crash dynamics modeling. 
 ### Roof Crash
 
 <p align="center">
-  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="90%" />
+  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="80%" />
   
 </p>
 
 ### Crushcan
 
 <p align="center">
-  <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="90%" />
+  <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="80%" />
   
 </p>
 
