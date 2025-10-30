@@ -16,21 +16,21 @@ In this example, we demonstrate a unified pipeline for crash dynamics modeling. 
 ### Body-in-White Crash Modeling
 
 <p align="center">
-  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="70%" />
+  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="80%" />
   
 </p>
 
-### Roof Crash
-
-<p align="center">
-  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="80%" />
-  
-</p>
-
-### Crushcan
+### Crushcan Modeling
 
 <p align="center">
   <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="80%" />
+  
+</p>
+
+### Roof Crash Modeling
+
+<p align="center">
+  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="80%" />
   
 </p>
 
