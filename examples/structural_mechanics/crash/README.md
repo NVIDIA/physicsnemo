@@ -15,15 +15,24 @@ In this example, we demonstrate a unified pipeline for crash dynamics modeling. 
 
 ### Body-in-White Crash Modeling
 
-![Crash animation](../../../docs/img/crash/crash_case4_reduced.gif)
+<p align="center">
+  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="70%" />
+  
+</p>
 
 ### Roof Crash
 
-![Roof crash animation](../../../docs/img/crash/roof_crash.gif)
+<p align="center">
+  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="90%" />
+  
+</p>
 
 ### Crushcan
 
-![Crushcan animation](../../../docs/img/crash/crushcan.gif)
+<p align="center">
+  <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="90%" />
+  
+</p>
 
 ## Quickstart
 
@@ -338,7 +347,7 @@ python postprocessing/plot_cross_section.py \
 
 run_post_processing.sh can automate all evaluation tasks across runs.
 
-## Performance tips (DDP, AMP, batch sizing)
+## Performance tips
 
 - AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
 - For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`. 
