@@ -216,8 +216,9 @@ class Reader:
         self,
         data_dir: str,
         num_samples: int,
-        split: str,
+        split: str | None = None,
         logger=None,
+        **kwargs,
     ):
         write_vtp = False if split == "train" else True
         return process_vtp_data(
