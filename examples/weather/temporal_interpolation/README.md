@@ -134,5 +134,5 @@ For example, to run the validation of a model trained with `train_interp.yaml` a
 the resulting error histogram to `validation.nc`:
 
 ```bash
-python validate.py --config-name="train_interp ++validation.output_path=validation.nc
+python validate.py --config-name="train_interp" ++validation.output_path=validation.nc
 ```
