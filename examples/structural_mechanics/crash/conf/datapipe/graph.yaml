@@ -15,6 +15,7 @@
 # limitations under the License.
 
 _target_: datapipe.CrashGraphDataset
+_convert_: all
 data_dir: ${training.raw_data_dir}
 name: crash_train
 split: train

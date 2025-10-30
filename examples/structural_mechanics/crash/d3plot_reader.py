@@ -19,10 +19,10 @@ import os
 import pyvista as pv
 
 from lasso.dyna import D3plot, ArrayType
-from typing import Dict, List, Optional
+from typing import Optional
 
 
-def find_run_folders(base_data_dir: str) -> List[str]:
+def find_run_folders(base_data_dir: str) -> list[str]:
     """
     Find run directories containing LS-DYNA d3plot files.
 
@@ -43,7 +43,7 @@ def find_run_folders(base_data_dir: str) -> List[str]:
     return run_dirs
 
 
-def parse_k_file(k_file_path: str) -> Dict[int, float]:
+def parse_k_file(k_file_path: str) -> dict[int, float]:
     """
     Parse LS-DYNA keyword (.k) file to extract part thickness values.
 
@@ -53,8 +53,8 @@ def parse_k_file(k_file_path: str) -> Dict[int, float]:
     Returns:
         Dictionary mapping part ID -> thickness.
     """
-    part_to_section: Dict[int, int] = {}
-    section_thickness: Dict[int, float] = {}
+    part_to_section: dict[int, int] = {}
+    section_thickness: dict[int, float] = {}
 
     with open(k_file_path, "r") as f:
         lines = [
@@ -187,7 +187,7 @@ def build_edges_from_mesh_connectivity(mesh_connectivity) -> set:
 def compute_node_thickness(
     mesh_connectivity,
     part_ids,
-    part_thickness_map: Dict[int, float],
+    part_thickness_map: dict[int, float],
     actual_part_ids: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """

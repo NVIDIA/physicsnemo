@@ -15,5 +15,6 @@
 # limitations under the License.
 
 _target_: d3plot_reader.Reader
+_convert_: all
 wall_node_disp_threshold: 1.0
 

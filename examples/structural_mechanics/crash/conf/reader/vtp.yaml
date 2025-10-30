@@ -15,3 +15,4 @@
 # limitations under the License.
 
 _target_: vtp_reader.Reader
+_convert_: all

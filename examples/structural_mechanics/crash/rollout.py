@@ -17,7 +17,6 @@
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as ckpt
-from typing import List
 
 from physicsnemo.models.transolver import Transolver
 from physicsnemo.models.meshgraphnet import MeshGraphNet
@@ -59,7 +58,7 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
         y_t1 = coords  # [N,3]
         y_t0 = y_t1 - self.initial_vel * self.dt  # backstep using initial velocity
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         for t in range(self.rollout_steps):
             time_t = 0.0 if self.rollout_steps <= 1 else t / (self.rollout_steps - 1)
             time_t = torch.tensor([time_t], device=device, dtype=torch.float32)
@@ -128,7 +127,7 @@ class TransolverTimeConditionalRollout(Transolver):
         x = inputs["coords"]  # [N,3]
         features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
         for time in time_seq:
@@ -187,7 +186,7 @@ class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
         y_t1 = coords
         y_t0 = y_t1 - self.initial_vel * self.dt
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         for _ in range(self.rollout_steps):
             vel = (y_t1 - y_t0) / self.dt
             vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
@@ -241,7 +240,7 @@ class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
         for time in time_seq:
@@ -291,7 +290,7 @@ class TransolverOneStepRollout(
             dim=0,
         )
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
 
         # First step: backstep to create y_-1
         y_t0 = gt_seq[0] - self.initial_vel * self.dt
@@ -365,7 +364,7 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
             dim=0,
         )
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
 
         # First step: construct backstep
         y_t0 = gt_seq[0] - self.initial_vel * self.dt

@@ -17,7 +17,7 @@
 import os
 import numpy as np
 import torch
-from typing import Optional, List, Dict, Any, Tuple, Callable
+from typing import Any, Callable, Optional
 
 from torch_geometric.data import Data
 from torch_geometric.utils import coalesce, add_self_loops
@@ -38,7 +38,7 @@ class SimSample:
 
     Attributes
     ---------
-    node_features: Dict[str, Tensor] with at least:
+    node_features: dict[str, Tensor] with at least:
       - 'coords': FloatTensor [N, 3]
       - any other feature keys configured, e.g., 'thickness': [N, Fk]
     node_target   : FloatTensor [N, Dout] or [N, (T-1)*3] depending on task
@@ -47,7 +47,7 @@ class SimSample:
 
     def __init__(
         self,
-        node_features: Dict[str, torch.Tensor],
+        node_features: dict[str, torch.Tensor],
         node_target: torch.Tensor,
         graph: Optional[Data] = None,
     ):
@@ -106,7 +106,7 @@ class CrashBaseDataset:
         split: str = "train",
         num_samples: int = 1000,
         num_steps: int = 400,
-        features: Optional[List[str]] = None,
+        features: Optional[list[str]] = None,
         logger=None,
         dt: float = 5e-3,
     ):
@@ -142,10 +142,10 @@ class CrashBaseDataset:
         )
 
         # Storage for per-sample tensors
-        self.mesh_pos_seq: List[torch.Tensor] = []  # [T,N,3]
-        self.node_features_data: List[torch.Tensor] = []  # [N,F]
-        self._feature_slices: Dict[
-            str, Tuple[int, int]
+        self.mesh_pos_seq: list[torch.Tensor] = []  # [T,N,3]
+        self.node_features_data: list[torch.Tensor] = []  # [N,F]
+        self._feature_slices: dict[
+            str, tuple[int, int]
         ] = {}  # per-sample feature slices
 
         for rec in point_data:
@@ -230,7 +230,7 @@ class CrashBaseDataset:
     def __len__(self):
         return self.length
 
-    def _xy_shapes(self, idx: int) -> Tuple[int, int]:
+    def _xy_shapes(self, idx: int) -> tuple[int, int]:
         T, N, _ = self.mesh_pos_seq[idx].shape
         F = self.node_features_data[idx].shape[1]
         Din = 3 + F
@@ -240,7 +240,7 @@ class CrashBaseDataset:
     # Common x/y construction used by both datasets
     def build_xy(self, idx: int):
         """
-        x: Dict with two keys:
+        x: dict with two keys:
             - 'coords': [N, 3] at t0
             - 'features': [N, F] concatenated in the order given by self.features
         y: [N, (T-1)*3]
@@ -377,7 +377,7 @@ class CrashGraphDataset(CrashBaseDataset):
             _dsts.append(np.asarray(dst)[mask])
         self.srcs, self.dsts = _srcs, _dsts
 
-        self.graphs: List[Data] = []
+        self.graphs: list[Data] = []
         for i in range(self.num_samples):
             g = self.create_graph(
                 self.srcs[i],
@@ -391,15 +391,14 @@ class CrashGraphDataset(CrashBaseDataset):
 
         # Edge stats
         edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
-        if self.split == "train" and not os.path.exists(edge_stats_path):
+        if self.split == "train":
             self.edge_stats = self._compute_edge_stats()
             save_json(self.edge_stats, edge_stats_path)
         else:
             if os.path.exists(edge_stats_path):
                 self.edge_stats = load_json(edge_stats_path)
             else:
-                self.edge_stats = self._compute_edge_stats()
-                save_json(self.edge_stats, edge_stats_path)
+                raise FileNotFoundError(f"Edge stats file {edge_stats_path} not found")
 
         # Convert loaded stats to tensors
         self.edge_stats["edge_mean"] = torch.as_tensor(
@@ -487,7 +486,7 @@ class CrashPointCloudDataset(CrashBaseDataset):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.edge_stats: Dict[str, Any] = {}
+        self.edge_stats: dict[str, Any] = {}
 
     def __getitem__(self, idx: int):
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
@@ -495,7 +494,7 @@ class CrashPointCloudDataset(CrashBaseDataset):
         return SimSample(node_features=x, node_target=y)
 
 
-def simsample_collate(batch: List[SimSample]) -> List[SimSample]:
+def simsample_collate(batch: list[SimSample]) -> list[SimSample]:
     """
     Keep samples as a list (variable N per item is common here).
     Models should iterate the list or implement internal padding.
