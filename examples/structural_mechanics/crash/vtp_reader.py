@@ -194,6 +194,7 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
             filtered_pos_raw,
             filtered_mesh_connectivity,
             write_vtp=write_vtp,
+            logger=logger,
         )
         point_data_all.append({"coords": mesh_pos_all})
 
