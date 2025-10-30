@@ -13,7 +13,17 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 
 In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports Transolver and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot and VTP. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes.
 
-![Crash case animation](../../../docs/img/crash/crash_case4_reduced.gif)
+### Body-in-White Crash Modeling
+
+![Crash animation](../../../docs/img/crash/crash_case4_reduced.gif)
+
+### Roof Crash
+
+![Roof crash animation](../../../docs/img/crash/roof_crash.gif)
+
+### Crushcan
+
+![Crushcan animation](../../../docs/img/crash/crushcan.gif)
 
 ## Quickstart
 
