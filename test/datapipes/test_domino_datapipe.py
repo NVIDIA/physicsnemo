@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -126,8 +126,6 @@ def synthetic_domino_data(
             "stl_faces": faces.astype(np.int32).flatten(),
             "stl_centers": centroids.astype(np.float32),
             "stl_areas": areas.astype(np.float32),
-            "air_density": np.float32(1.225),  # Standard air density
-            "stream_velocity": np.float32(10.0),  # Some velocity value
         }
 
         # Now, we will randomly sample for the surface and volume data.

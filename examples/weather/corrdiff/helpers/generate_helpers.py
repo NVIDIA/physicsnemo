@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -51,8 +51,7 @@ def save_images(
     image_tar,
     image_lr,
     time_index,
-    t_index,
-    has_lead_time,
+    dataset_index,
 ):
     """
     Saves inferencing result along with the baseline
@@ -71,7 +70,7 @@ def save_images(
     image_tar (torch.Tensor): Ground truth data
     image_lr (torch.Tensor): Low resolution input data
     time_index (int): Epoch number
-    t_index (int): index where times are located
+    dataset_index (int): index where times are located
     """
     # weather sub-plot
     image_lr2 = image_lr[0].unsqueeze(0)
@@ -95,7 +94,7 @@ def save_images(
         image_out2 = image_out2.cpu().numpy()
         image_out2 = dataset.denormalize_output(image_out2)
 
-        time = times[t_index]
+        time = times[dataset_index]
         writer.write_time(time_index, time)
         for channel_idx in range(image_out2.shape[1]):
             info = dataset.output_channels()[channel_idx]
@@ -107,10 +106,10 @@ def save_images(
                 channel_name, time_index, idx, image_out2[0, channel_idx]
             )
 
-        input_channel_info = dataset.input_channels()
-        for channel_idx in range(len(input_channel_info)):
-            info = input_channel_info[channel_idx]
-            channel_name = info.name + info.level
-            writer.write_input(channel_name, time_index, image_lr2[0, channel_idx])
-            if channel_idx == image_lr2.shape[1] - 1:
-                break
+    input_channel_info = dataset.input_channels()
+    for channel_idx in range(len(input_channel_info)):
+        info = input_channel_info[channel_idx]
+        channel_name = info.name + info.level
+        writer.write_input(channel_name, time_index, image_lr2[0, channel_idx])
+        if channel_idx == image_lr2.shape[1] - 1:
+            break

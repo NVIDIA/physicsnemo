@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -46,6 +46,6 @@ perf:
     # Use Apex GroupNorm (optimized normalization for performance with channelslast layout)
   profile_mode: false
     # Enable NVTX annotations for performance profiling
-  io_syncronous: true
+  io_synchronous: true
     # Synchronize I/O operations for writing inference results
 
