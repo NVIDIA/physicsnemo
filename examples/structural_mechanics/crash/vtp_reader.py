@@ -118,7 +118,9 @@ def build_edges_from_mesh_connectivity(mesh_connectivity):
     return edges
 
 
-def collect_mesh_pos(output_dir, pos_raw, filtered_mesh_connectivity, write_vtp=False, logger=None):
+def collect_mesh_pos(
+    output_dir, pos_raw, filtered_mesh_connectivity, write_vtp=False, logger=None
+):
     """Write VTP files for each timestep and collect mesh/point data."""
     n_timesteps = pos_raw.shape[0]
     mesh_pos_all = []
