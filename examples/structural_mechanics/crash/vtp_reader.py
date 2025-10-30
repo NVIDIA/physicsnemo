@@ -169,7 +169,8 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
         exit(1)
 
     for vtp_path in vtp_files:
-        logger.info(f"Processing {vtp_path}...")
+        if logger:
+            logger.info(f"Processing {vtp_path}...")
         output_dir = f"./output_{os.path.splitext(os.path.basename(vtp_path))[0]}"
         os.makedirs(output_dir, exist_ok=True)
 
