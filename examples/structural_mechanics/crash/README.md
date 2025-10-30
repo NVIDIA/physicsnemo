@@ -352,7 +352,7 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 ## Performance tips
 
 - AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
--. For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
+- For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
 - For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`. 
 
 ## Troubleshooting / FAQ
