@@ -74,13 +74,21 @@ are stored in a single directory with ECLIPSE/IX style output files:
 An open-source reservoir simulator, [OPM](https://opm-project.org/), was used
 to generate both datasets.
 
-**Norne Field example visualization** - static reservoir property and domain partitions:
+#### Expected Data Format
+
+- **Format**: ECLIPSE/IX compatible binary files
+- **Required files per case**: `.INIT`, `.EGRID`, `.UNRST`
+- **Storage**: All cases in a single directory
+
+#### Example Visualization: Norne Field
+
+Static reservoir property and domain partitions:
 
 <!-- markdownlint-disable MD033 -->
 <table>
 <tr>
-<td><img src="docs/visualizations/PERMX.png" alt="Permeability X"/></td>
-<td><img src="docs/visualizations/PARTITION.png" alt="X-MGN Partitioning"/></td>
+<td><img src="docs/figs/Norne/static/PERMX.png" alt="Permeability X"/></td>
+<td><img src="docs/figs/Norne/static/PARTITION.png" alt="X-MGN Partitioning"/></td>
 </tr>
 <tr>
 <td align="center"><i>Permeability (PERMX) distribution</i></td>
@@ -88,12 +96,6 @@ to generate both datasets.
 </tr>
 </table>
 <!-- markdownlint-enable MD033 -->
-
-#### Expected Data Format
-
-- **Format**: ECLIPSE/IX compatible binary files
-- **Required files per case**: `.INIT`, `.EGRID`, `.UNRST`
-- **Storage**: All cases in a single directory
 
 ### 1. Data Preprocessing
 
@@ -131,7 +133,7 @@ torchrun --nproc_per_node=4 --nnodes=1 src/train.py --config-name=<your-config>
 Run autoregressive inference to predict future timesteps:
 
 ```bash
-torchrun --nproc_per_node=4 src/inference.py --config-name=<your-config>
+python src/inference.py --config-name=<your-config>
 ```
 
 **Output Location:** Results are saved to
@@ -144,6 +146,70 @@ torchrun --nproc_per_node=4 src/inference.py --config-name=<your-config>
 - **GRDECL files**: Eclipse-compatible ASCII format that can be imported into
   popular software such as Petrel and [ResInsight](https://resinsight.org/)
   for visualization
+
+#### Example Results: Autoregressive Inference
+
+Water saturation and pressure predictions for the Norne field
+across 64 timesteps spanning 10 years of operation with varying well controls,
+including open/shut-in events. Such complex operational scenarios are often
+challenging to capture with ML models. Nonetheless, X-MGN demonstrates good
+predictability, especially for near-term predictions. As expected for
+autoregressive prediction, errors accumulate over time, but the model maintains
+reasonable accuracy throughout:
+
+<!-- markdownlint-disable MD033 MD036 -->
+
+**Pressure**
+
+<table>
+<tr>
+<td></td>
+<td align="center"><b>Timestep 21</b></td>
+<td align="center"><b>Timestep 42</b></td>
+</tr>
+<tr>
+<td align="center"><b>Ground Truth</b></td>
+<td><img src="docs/figs/Norne/inference/PRES_21_TRUE.png" alt="PRES Timestep 21 True"/></td>
+<td><img src="docs/figs/Norne/inference/PRES_42_TRUE.png" alt="PRES Timestep 42 True"/></td>
+</tr>
+<tr>
+<td align="center"><b>X-MGN Prediction</b></td>
+<td><img src="docs/figs/Norne/inference/PRES_21_PRED.png" alt="PRES Timestep 21 Prediction"/></td>
+<td><img src="docs/figs/Norne/inference/PRES_42_PRED.png" alt="PRES Timestep 42 Prediction"/></td>
+</tr>
+<tr>
+<td align="center"><b>Prediction Error</b></td>
+<td><img src="docs/figs/Norne/inference/PRES_DIFF_21.png" alt="PRES Timestep 21 Difference"/></td>
+<td><img src="docs/figs/Norne/inference/PRES_DIFF_42.png" alt="PRES Timestep 42 Difference"/></td>
+</tr>
+</table>
+
+**Water Saturation**
+
+<table>
+<tr>
+<td></td>
+<td align="center"><b>Timestep 21</b></td>
+<td align="center"><b>Timestep 42</b></td>
+</tr>
+<tr>
+<td align="center"><b>Ground Truth</b></td>
+<td><img src="docs/figs/Norne/inference/SWAT_21_TRUE.png" alt="SWAT Timestep 21 True"/></td>
+<td><img src="docs/figs/Norne/inference/SWAT_42_TRUE.png" alt="SWAT Timestep 42 True"/></td>
+</tr>
+<tr>
+<td align="center"><b>X-MGN Prediction</b></td>
+<td><img src="docs/figs/Norne/inference/SWAT_21_PRED.png" alt="SWAT Timestep 21 Prediction"/></td>
+<td><img src="docs/figs/Norne/inference/SWAT_42_PRED.png" alt="SWAT Timestep 42 Prediction"/></td>
+</tr>
+<tr>
+<td align="center"><b>Prediction Error</b></td>
+<td><img src="docs/figs/Norne/inference/SWAT_DIFF_21.png" alt="SWAT Timestep 21 Difference"/></td>
+<td><img src="docs/figs/Norne/inference/SWAT_DIFF_42.png" alt="SWAT Timestep 42 Difference"/></td>
+</tr>
+</table>
+
+<!-- markdownlint-enable MD033 MD036 -->
 
 ## Experiment Tracking
 

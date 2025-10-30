@@ -25,7 +25,7 @@ from torch_geometric.data import Data
 from collections.abc import Mapping
 from hydra.utils import to_absolute_path
 from sim_utils import EclReader, Well, Grid
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, Manager
 from functools import partial
 from tqdm import tqdm
 
@@ -725,6 +725,7 @@ class ReservoirGraphBuilder:
         include_well_completions,
         include_well_completion_cf,
         output_path_graph,
+        progress_counter,
     ):
         """
         Process a single sample, save graphs immediately, and return filenames.
@@ -733,7 +734,6 @@ class ReservoirGraphBuilder:
         Returns (saved_filenames, case_name, error_msg) tuple.
         """
         case_name = os.path.splitext(os.path.basename(file_path))[0]
-        print(f"Processing sample {sample_idx_1based}/{total_samples}: {case_name}")
 
         try:
             reader = EclReader(file_path)
@@ -792,10 +792,15 @@ class ReservoirGraphBuilder:
                 torch.save(graph, graph_path)
                 saved_filenames.append(filename)
 
+            # Increment progress counter (Manager.Value is automatically thread-safe)
+            progress_counter.value += 1
+
             return saved_filenames, case_name, None
 
         except Exception as e:
             error_msg = f"{type(e).__name__}: {e}"
+            # Increment progress counter even on error
+            progress_counter.value += 1
             return None, case_name, error_msg
 
     def _parse_results_from_samples(self) -> dict:
@@ -843,27 +848,54 @@ class ReservoirGraphBuilder:
             f"\nProcessing {total_samples} simulation results using {n_workers} parallel workers..."
         )
 
-        # Prepare arguments for parallel processing
-        worker_args = [
-            (
-                file_path,
-                sample_idx_1based,
-                total_samples,
-                egrid_keys_geometry,
-                egrid_keys_nnc,
-                init_keys,
-                dynamic_variables,
-                rst_well_keys,
-                include_well_completions,
-                include_well_completion_cf,
-                self._output_path_graph,
-            )
-            for sample_idx_1based, file_path in enumerate(sim_input_files, start=1)
-        ]
+        # Process samples in parallel with periodic progress updates
+        import time
 
-        # Process samples in parallel
-        with Pool(processes=n_workers) as pool:
-            results = pool.starmap(self._process_single_sample_worker, worker_args)
+        start_time = time.time()
+
+        with Manager() as manager:
+            # Create shared progress counter
+            progress_counter = manager.Value("i", 0)
+
+            # Prepare arguments for parallel processing
+            worker_args = [
+                (
+                    file_path,
+                    sample_idx_1based,
+                    total_samples,
+                    egrid_keys_geometry,
+                    egrid_keys_nnc,
+                    init_keys,
+                    dynamic_variables,
+                    rst_well_keys,
+                    include_well_completions,
+                    include_well_completion_cf,
+                    self._output_path_graph,
+                    progress_counter,
+                )
+                for sample_idx_1based, file_path in enumerate(sim_input_files, start=1)
+            ]
+
+            with Pool(processes=n_workers) as pool:
+                # Start async processing
+                async_result = pool.starmap_async(
+                    self._process_single_sample_worker, worker_args
+                )
+
+                # Print progress every 30 seconds
+                while not async_result.ready():
+                    async_result.wait(timeout=30.0)
+                    if not async_result.ready():
+                        completed = progress_counter.value
+                        elapsed = time.time() - start_time
+                        print(
+                            f"  ... {completed}/{total_samples} samples completed (elapsed: {elapsed:.0f}s) ..."
+                        )
+
+                results = async_result.get()
+
+        elapsed = time.time() - start_time
+        print(f"Completed in {elapsed:.1f}s ({total_samples / elapsed:.1f} samples/s)")
 
         # Collect results and handle errors
         print("\nCollecting results...")
