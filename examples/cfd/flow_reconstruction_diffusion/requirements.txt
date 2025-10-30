@@ -7,3 +7,6 @@ psutil>=6.1.0
 pyyaml>=6.0.2
 requests>=2.32.3
 tqdm>=4.67.1
+nvtx>=0.2.13
+cftime>=1.6.5
+termcolor>=3.2.0
