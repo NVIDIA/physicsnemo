@@ -13,6 +13,8 @@ Machine Learning (ML) surrogates provide a promising alternative by learning map
 
 In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports Transolver and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot and VTP. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes.
 
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
+
 ### Body-in-White Crash Modeling
 
 <p align="center">
@@ -350,6 +352,7 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 ## Performance tips
 
 - AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
+-. For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
 - For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`. 
 
 ## Troubleshooting / FAQ
@@ -368,4 +371,6 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 
 ## References
 
-- Automotive Crash Dynamics Modeling Accelerated with Machine Learning (https://arxiv.org/pdf/2510.15201)
+- [Automotive Crash Dynamics Modeling Accelerated with Machine Learning](https://arxiv.org/pdf/2510.15201)
+- [Transolver: A Fast Transformer Solver for PDEs on General Geometries](https://arxiv.org/pdf/2402.02366)
+- [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/pdf/2010.03409)
