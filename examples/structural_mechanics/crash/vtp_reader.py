@@ -145,7 +145,8 @@ def collect_mesh_pos(output_dir, pos_raw, filtered_mesh_connectivity, write_vtp=
         if write_vtp:
             filename = os.path.join(output_dir, f"frame_{t:03d}.vtp")
             mesh.save(filename)
-            logger.info(f"Saved: {filename}")
+            if write_vtp and logger:
+                logger.info(f"Saved: {filename}")
 
         mesh_pos_all.append(pos)
     return np.stack(mesh_pos_all)
