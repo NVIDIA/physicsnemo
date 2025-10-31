@@ -164,8 +164,6 @@ class EclReader:
                 f"Summary specification file not found: {smspec_file}"
             )
 
-        logging.info(f"Reading .SMSPEC: {smspec_file}")
-
         # --- Step 1: Read key/entity info from SMSPEC using pattern matching ---
         with open(smspec_file, "rb") as fid:
             file_data = fid.read()
