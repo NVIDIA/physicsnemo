@@ -6,17 +6,13 @@ datasets.
 
 ## Overview
 
-Reservoir simulation is the process of replicating and predicting reservoir
-performance by building physical and mathematical models. It utilizes
-static and dynamic data from various sources to evaluate and optimize reservoir
-development plans.
+Reservoir simulation predicts reservoir performance using physical and
+mathematical models. It plays critical roles in production forecasting,
+reservoir management, field development planning, and optimization.
 
-Modern reservoir simulation employs complex gridding techniques to capture
-geologic structures and fractures, while solving highly nonlinear PDEs
-governing multi-phase/component flow and transport. Despite advances in
-numerical solvers and parallel computing (HPC and GPU acceleration), simulations
-remain computationally expensive. This creates a critical need for faster
-surrogate models when exploring large uncertainty spaces.
+Despite advances in parallel computing and GPU acceleration,
+these simulations remain computationally expensive, creating a need for faster
+surrogate models.
 
 XMeshGraphNet (X-MGN) is naturally compatible with the finite volume framework
 used in reservoir simulation and is scalable to industry-scale reservoir
