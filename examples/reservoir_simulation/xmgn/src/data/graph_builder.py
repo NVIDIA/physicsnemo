@@ -757,7 +757,12 @@ class ReservoirGraphBuilder:
         return wells_data, rst_data
 
     def _read_and_interpolate_time_series(
-        self, reader, time_series_vars, restart_times, sample_idx_1based
+        self,
+        reader,
+        time_series_vars,
+        restart_times,
+        sample_idx_1based,
+        wells_data=None,
     ):
         """Read summary data and interpolate to match restart timesteps.
 
@@ -766,6 +771,7 @@ class ReservoirGraphBuilder:
             time_series_vars: List of time series variable names (e.g., ["WWIR", "WGIR", "WBHP"])
             restart_times: Array of restart file timesteps (in days)
             sample_idx_1based: Sample index for error messages
+            wells_data: List of well dictionaries (one per timestep) for checking well status
 
         Returns:
             dict: Interpolated time series data structured as:
@@ -786,12 +792,17 @@ class ReservoirGraphBuilder:
 
             smry_times = smry_data["TIME"]
 
-            # Check if restart times are within summary time range
+            # Check if restart times are within summary time range (only warn once)
             if restart_times[0] < smry_times[0] or restart_times[-1] > smry_times[-1]:
-                print(
-                    f"  ⚠️ Warning: Restart times [{restart_times[0]:.1f}, {restart_times[-1]:.1f}] "
-                    f"outside summary time range [{smry_times[0]:.1f}, {smry_times[-1]:.1f}] "
-                    f"for sample {sample_idx_1based}"
+                # Store the warning info but don't print yet (will be collected and summarized)
+                if not hasattr(self, "_time_range_warnings"):
+                    self._time_range_warnings = []
+                self._time_range_warnings.append(
+                    {
+                        "sample": sample_idx_1based,
+                        "restart_range": (restart_times[0], restart_times[-1]),
+                        "summary_range": (smry_times[0], smry_times[-1]),
+                    }
                 )
 
             # Interpolate time series data for each well and variable
@@ -825,6 +836,30 @@ class ReservoirGraphBuilder:
 
                     # Interpolate to restart timesteps
                     interpolated_values = interp_func(restart_times)
+
+                    # Check well status for times before summary start
+                    # Use 0.0 for wells that are SHUT or don't exist yet (not drilled)
+                    if wells_data is not None and restart_times[0] < smry_times[0]:
+                        for t_idx, restart_time in enumerate(restart_times):
+                            # Only check times before summary data starts
+                            if restart_time >= smry_times[0]:
+                                break
+
+                            # Check if well exists and is open at this timestep
+                            if t_idx < len(wells_data):
+                                if entity not in wells_data[t_idx]:
+                                    # Well doesn't exist yet (not drilled/completed), use 0.0
+                                    interpolated_values[t_idx] = 0.0
+                                else:
+                                    well = wells_data[t_idx][entity]
+                                    if (
+                                        hasattr(well, "status")
+                                        and well.status == "SHUT"
+                                    ):
+                                        # Well exists but is shut, use 0.0 instead of first summary value
+                                        interpolated_values[t_idx] = 0.0
+                                    # else: well is OPEN, keep interpolated value (first summary value)
+
                     interpolated_data[entity][var_name] = interpolated_values
 
             return interpolated_data
@@ -1081,7 +1116,11 @@ class ReservoirGraphBuilder:
                 restart_times = np.array(combined_data.get("TIME", []))
                 if len(restart_times) > 0:
                     time_series_data = self._read_and_interpolate_time_series(
-                        reader, time_series_vars, restart_times, sample_idx_1based
+                        reader,
+                        time_series_vars,
+                        restart_times,
+                        sample_idx_1based,
+                        wells_data,
                     )
 
             # Validate timesteps
