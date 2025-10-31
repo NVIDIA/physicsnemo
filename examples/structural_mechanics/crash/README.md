@@ -1,26 +1,115 @@
 <!-- markdownlint-disable -->
-# Machine Learning Surrogates for Automotive Crash Dynamics
+# Machine Learning Surrogates for Automotive Crash Dynamics 🧱💥🚗
 
 ## Problem Overview
 
-Automotive crashworthiness assessment is a critical step in vehicle design.  
-Traditionally, engineers rely on high-fidelity finite element (FE)
-simulations (e.g., LS-DYNA) to predict structural deformation and crash responses.  
-While accurate, these simulations are computationally expensive and
-limit the speed of design iterations.
+Automotive crashworthiness assessment is a critical step in vehicle design.   Traditionally, engineers rely on high-fidelity finite element (FE) simulations (e.g., LS-DYNA) to predict structural deformation and crash responses. While accurate, these simulations are computationally expensive and limit the speed of design iterations.
 
-Machine Learning (ML) surrogates provide a promising alternative by learning
-mappings directly from simulation data, enabling:
+Machine Learning (ML) surrogates provide a promising alternative by learning mappings directly from simulation data, enabling:
 
 - **Rapid prediction** of deformation histories across thousands of design candidates.
 - **Scalability** to large structural models without rerunning costly FE simulations.
 - **Flexibility** in experimenting with different model architectures (GNNs, Transformers).
 
-In this example, we demonstrate a unified pipeline for crash dynamics modeling.
-The implementation supports both:
+In this example, we demonstrate a unified pipeline for crash dynamics modeling. The implementation supports Transolver and MeshGraphNet architectures with multiple rollout schemes. It supports multiple dataset formats including d3plot and VTP. The design is highly modular, enabling users to write their own readers, bring their own architectures, or implement custom rollout/transient schemes.
 
-- **Mesh-based Graph Neural Networks (MeshGraphNet)** – leverage connectivity from FE meshes.
-- **Point-cloud Transformers (Transolver)** – avoid explicit mesh dependency.
+For an in-depth comparison between the Transolver and MeshGraphNet models and the transient schemes for crash dynamics, see [this paper](https://arxiv.org/pdf/2510.15201).
+
+### Body-in-White Crash Modeling
+
+<p align="center">
+  <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="80%" />
+  
+</p>
+
+### Crushcan Modeling
+
+<p align="center">
+  <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="80%" />
+  
+</p>
+
+### Roof Crash Modeling
+
+<p align="center">
+  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="80%" />
+  
+</p>
+
+## Quickstart
+
+1) Select your recipe (reader, datapipe, model) in `conf/config.yaml`.
+
+```yaml
+# conf/config.yaml
+defaults:
+  - reader: vtp                  # or d3plot, or your custom reader
+  - datapipe: point_cloud        # or graph
+  - model: transolver_time_conditional   # or an MGN variant
+  - training: default
+  - inference: default
+  - _self_
+```
+
+2) Point to your datasets and core training knobs.
+
+- `conf/training/default.yaml`:
+  - `raw_data_dir`: path to TRAIN runs (folder of run folders for d3plot, or folder of .vtp files for VTP)
+  - `num_time_steps`: number of frames to use per run
+  - `num_training_samples`: how many runs to load
+
+```yaml
+# conf/training/default.yaml
+raw_data_dir: "/path/to/train"   # REQUIRED: change this
+num_time_steps: 14                 # adjust to your data
+num_training_samples: 8            # adjust to available runs
+```
+
+- `conf/inference/default.yaml`:
+  - `raw_data_dir_test`: path to TEST runs
+  - `output_dir_pred`/`output_dir_exact`: where to write predicted/exact VTPs
+
+```yaml
+# conf/inference/default.yaml
+raw_data_dir_test: "/path/to/test"   # REQUIRED: change this
+```
+
+3) Configure the datapipe features list (order matters and defines columns of `x['features']`).
+
+```yaml
+# conf/datapipe/point_cloud.yaml (same keys for graph.yaml)
+features: [thickness]   # or [] for no features; preserve order if adding more
+```
+
+4) Reader‑specific options (optional).
+
+- d3plot: `conf/reader/d3plot.yaml` → `wall_node_disp_threshold`
+
+5) Model config: ensure input dimensions match your features.
+
+- Transolver (time‑conditional): set `functional_dim = len(features)` and `embedding_dim = 3`;
+
+```yaml
+# conf/model/transolver_time_conditional.yaml
+functional_dim: 1    # e.g., 1 if features: [thickness]
+embedding_dim: 3
+time_input: true
+```
+
+6) Launch training.
+
+```bash
+python train.py                              # single GPU
+torchrun --standalone --nproc_per_node=4 train.py   # multi-GPU (DDP)
+```
+
+7) Run inference.
+
+```bash
+python inference.py
+```
+
+Outputs: predictions are saved under `output_dir_pred` (default `./predicted_vtps/`). Normalization stats are written to `./stats/` during training and reused for inference.
 
 ## Prerequisites
 
@@ -38,20 +127,6 @@ This will install:
 
 - lasso-python (for LS-DYNA file parsing),
 - torch_geometric and torch_scatter (for GNN operations),
-
-## Dataset Preprocessing
-
-Crash simulation data is parsed from LS-DYNA d3plot files using the d3plot_reader.py utility.
-
-Key steps:
-
-- Load node coordinates, displacements, element connectivity, and part IDs.
-- Parse .k keyword files to assign part thickness values.
-- Filter out rigid wall nodes using displacement thresholds.
-- Build edges (for graphs) and store per-node features (e.g., thickness).
-- Optionally export time-stepped meshes as .vtp for visualization.
-
-Run preprocessing automatically via the dataset class (CrashGraphDataset or CrashPointCloudDataset) when launching training or inference.
 
 ## Training
 
@@ -101,6 +176,131 @@ python inference.py
 Predicted meshes are written as .vtp files under
 ./predicted_vtps/, and can be opened using ParaView.
 
+## Datapipe: how inputs are constructed and normalized
+
+The datapipe is responsible for turning raw LS-DYNA/Abaqus or other crash runs into model-ready tensors and statistics. It does three things in a predictable, repeatable way: it reads and filters the raw data, it constructs inputs and targets with a stable interface, and it computes the statistics required to normalize both positions and features. This section explains what the datapipe returns, how to configure it, and what models should expect to receive at training and inference time.
+
+At a high level, each sample corresponds to one crash run. The datapipe loads the full deformation trajectory for that run, and emits exactly two items: inputs x and targets y. Inputs are a dictionary with two entries. The first entry, 'coords', is a [N, 3] tensor that contains the positions at the first timestep (t0) for all retained nodes. The second entry, 'features', is a [N, F] tensor that contains the concatenation of all node-wise features configured for this experiment. The order of columns in 'features' matches the order you provide in the configuration. This means if your configuration lists features as [thickness, Y_modulus], then column 0 will always be thickness and column 1 will always be Y_modulus. Targets y are the remaining positions from t1 to tT flattened along the feature dimension, so y has shape [N, (T-1)*3].
+
+Configuration lives under `conf/datapipe/`. There are two datapipe variants: one for graph-based models and one for point-cloud models. Both accept the same core options, and both expose a `features` list. The `features` list is the single source of truth for what goes into the 'features' tensor and in which order. If you do not want any features, set `features: []` and the datapipe will return an empty [N, 0] tensor for 'features' while keeping 'coords' intact. If you add more features later, the datapipe will preserve their order and update the per-dimension statistics automatically.
+
+Under the hood the datapipe reads node positions over time from LS-DYNA (via `d3plot_reader.py` or any compatible reader you configure). For each run it constructs a fixed number of time steps, selects and reindexes the active nodes, and optionally builds graph connectivity. It also computes statistics necessary for normalization. Position statistics include per-axis means and standard deviations, as well as normalized velocity and acceleration statistics used by autoregressive rollouts. Feature statistics are computed column-wise on the concatenated 'features' tensor. During dataset creation the datapipe normalizes the position trajectory using position means and standard deviations and normalizes every column of 'features' using feature means and standard deviations. The resulting tensors are numerically stable and consistent across training and evaluation. The statistics are written under `./stats/` as `node_stats.json` and `feature_stats.json` during training, and then read back in evaluation or inference.
+
+Readers are configurable through Hydra. A reader is any callable that returns `(srcs, dsts, point_data)`, where `point_data` is a list of records—one per run. Each record must include 'coords' as a [T, N, 3] array and one array per configured feature name. Arrays for features can be [N] or [N, K]; the datapipe will promote [N] to [N, 1] and then concatenate all feature arrays in the order declared in the configuration to form 'features'. If you are using graph-based models, the `srcs` and `dsts` arrays will be used to build a PyG `Data` object with symmetric edges and self-loops, and initial edge features are computed from positions at t0 (displacements and distances). If you are using point-cloud models, graph connectivity is ignored but the remainder of the pipeline is identical.
+
+Models should consume the two-part input without guessing column indices. Positions are always available in `x['coords']` and every node-wise feature is already concatenated in `x['features']`. If you need to separate features later—for example to log per-feature metrics—you can do so deterministically because the order of columns in `x['features']` exactly matches the `features` list in the configuration. For time-conditional models, you can pass the full `x['features']` to your functional input; for autoregressive models, you can concatenate `x['features']` to the normalized velocity (and time, if used) to form the model input at each rollout step.
+
+Finally, the datapipe is designed to be resilient to the “no features” case. If you set `features: []`, the 'features' tensor simply has width zero. Statistics are computed correctly (zero-length mean and unit standard deviation) and concatenations degrade gracefully to the original position-only behavior. This makes it easy to start simple and then scale up to richer feature sets without revisiting model-side code or the data normalization logic.
+
+For completeness, the datapipe also records a lightweight name-to-column map called `_feature_slices`. It associates each configured feature name with its [start, end) slice in `x['features']`. You typically won’t need it if you just consume the full `features` tensor, but it enables reliable, reproducible slicing by name for diagnostics or logging.
+
+### Model I/O at a glance (what models receive)
+
+- Inputs `x` (dictionary):
+  - `x['coords']`: `[N, 3]` positions at `t0`
+  - `x['features']`: `[N, F]` concatenated node features in the config‑specified order (can be width 0)
+
+- Targets `y`: `[N, (T-1)*3]` positions from `t1..tT` flattened along the feature dimension.
+
+- Rollout input construction (high level):
+  - Autoregressive: per step, the model consumes normalized velocity, optionally time, and `x['features']`; positions are fed as embeddings/state.
+  - Time‑conditional one‑step: time index is provided once per call along with `x['features']` and the positional embedding.
+
+- Transolver specifics: for unstructured data, the embedding tensor is required; in this pipeline it is the current positions over the rollout. If you set `features: []`, the functional input still includes velocity (and optionally time), so the overall functional dimension remains > 0.
+
+## Reader: built-in d3plot and vtp readers and how to add your own
+
+The reader is the component that actually opens the raw simulation outputs and produces the arrays the datapipe consumes. It is intentionally thin and swappable via Hydra so you can adapt the pipeline to LS‑DYNA exports, Abaqus exports, or your own internal formats without touching the rest of the code.
+
+### Built-in d3plot reader
+
+The default reader is implemented in `d3plot_reader.py`. It searches the data directory for subfolders that contain a `d3plot` file and treats each such folder as one “run.” For each run it opens the `d3plot` with `lasso.dyna.D3plot` and extracts node coordinates, time-varying displacements, element connectivity, and part identifiers. If a LS‑DYNA keyword (`.k`) file is present, it parses the shell section definitions to obtain per-part thickness values, then converts those into per-node thickness by averaging the values of incident elements. To avoid contaminating the training with rigid content, the reader classifies nodes as structural or wall based on a displacement variation threshold and drops wall nodes. After filtering, it builds a compact node index, remaps connectivity, and—if you are training a graph model—collects undirected edges from the remapped shell elements. It can optionally save one VTP file per time step to help you visually inspect the trajectories, or write the predictions to those files in inference.
+
+The reader then assembles the per-run record expected by the datapipe. Positions are returned under the key `'coords'` as a float array of shape `[T, N, 3]`, where T is the number of time steps and N is the number of retained nodes after filtering and remapping. Feature arrays are returned one per configured feature name; for example, if your datapipe configuration lists `features: [thickness, Y_modulus]`, the reader should provide a `'thickness'` array with shape `[N]` or `[N, 1]` and a `'Y_modulus'` array with shape `[N]` or `[N, K]`. The datapipe promotes 1D arrays to 2D and concatenates all provided feature arrays in the order given by the configuration to form the final `'features'` block supplied to the model.
+
+If you use the graph datapipe, the edge list is produced by walking the filtered shell elements and collecting unique boundary pairs, then symmetrized and augmented with self-loops inside the datapipe when constructing the PyG `Data` object. If you use the point‑cloud datapipe, the edge outputs are ignored but the rest of the record shape is the same, so you can swap between model families by changing configuration only.
+
+### Built‑in VTP reader (PolyData)
+
+In addition to `d3plot`, a lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
+
+- loads the reference coordinates from `poly.points`
+- builds absolute positions per timestep as `[t0: coords, t>0: coords + displacement_t]`
+- extracts cell connectivity from the PolyData faces and converts it to unique edges
+- returns `(srcs, dsts, point_data)` where `point_data` contains `'coords': [T, N, 3]`
+
+By default, the VTP reader does not attach additional features; it is compatible with `features: []`. If your `.vtp` files include additional per‑point arrays you would like to model (e.g., thickness or modulus), extend the reader to add those arrays to each run’s record using keys that match your `features` list. The datapipe will then concatenate them in the configured order.
+
+Example Hydra configuration for the VTP reader:
+
+```yaml
+# conf/reader/vtp.yaml
+_target_: vtp_reader.Reader
+```
+
+Select it in `conf/config.yaml`:
+
+```yaml
+defaults:
+  - datapipe: point_cloud
+  - model: transolver_time_conditional
+  - training: default
+  - inference: default
+  - reader: vtp
+```
+
+And set `features` to empty (or to the names you add in your extended reader) in `conf/datapipe/point_cloud.yaml` or `conf/datapipe/graph.yaml`:
+
+```yaml
+features: []  # or [thickness, Y_modulus] if your reader provides them
+```
+
+### Data layout expected by readers
+
+- d3plot reader (`d3plot_reader.py`):
+  - `<DATA_DIR>/<RUN_ID>/d3plot` (required)
+  - `<DATA_DIR>/<RUN_ID>/*.k` (optional; used to parse thickness)
+
+- VTP reader (`vtp_reader.py`):
+  - `<DATA_DIR>/*.vtp` (each `.vtp` is treated as one run)
+  - Displacements stored as 3‑component arrays in point_data with names like `displacement_t0.000`, `displacement_t0.005`, ... (fallback accepts any `displacement_t*`).
+
+### Write your own reader
+
+To write your own reader, implement a Hydra‑instantiable function or class whose call returns a three‑tuple `(srcs, dsts, point_data)`. The first two entries are lists of integer arrays describing edges per run (they can be empty lists if you are not producing a graph), and `point_data` is a list of Python dicts with one dict per run. Each dict must contain `'coords'` as a `[T, N, 3]` array and one array per feature name listed in `conf/datapipe/*.yaml` under `features`. Feature arrays can be `[N]` or `[N, K]` and should use the same node indexing as `'coords'`. For convenience, a simple class reader can accept the Hydra `split` argument (e.g., "train" or "test") and decide whether to save VTP frames, but this is optional.
+
+As a starting point, your YAML can point to a class by dotted path. For a class:
+
+```yaml
+# conf/reader/my_reader.yaml
+_target_: my_reader.MyReader
+# any constructor kwargs here, e.g. thresholds or unit conversions
+```
+
+Then, in `conf/config.yaml`, select the reader by adding or overriding `- reader: my_reader` (or `my_reader_fn`). The datapipe will call your reader with `data_dir`, `num_samples`, `split`, and an optional `logger`, and will expect the tuple described above. Provided you populate `'coords'` and the configured feature arrays per run, the rest of the pipeline—normalization, batching, graph construction, and model rollout—will work without code changes.
+
+A note on reader signatures and future‑proofing: the datapipe currently passes `data_dir`, `num_samples`, `split`, and `logger` when invoking the reader, and may pass additional keys in the future. To stay resilient, implement your reader with optional parameters and a catch‑all `**kwargs`.
+
+For a class reader, use this signature in `__call__`:
+
+```python
+class MyReader:
+    def __init__(self, some_option: float = 1.0):
+        self.some_option = some_option
+
+    def __call__(
+        self,
+        data_dir: str,
+        num_samples: int,
+        split: str | None = None,
+        logger=None,
+        **kwargs,
+    ):
+        ...
+```
+
+With this pattern, your reader will keep working even if the framework adds new optional arguments later.
+
 ## Postprocessing and Evaluation
 
 The postprocessing/ folder provides scripts for quantitative and qualitative evaluation:
@@ -149,6 +349,28 @@ python postprocessing/plot_cross_section.py \
 
 run_post_processing.sh can automate all evaluation tasks across runs.
 
+## Performance tips
+
+- AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
+- For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
+- For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`. 
+
+## Troubleshooting / FAQ
+
+- My `.vtp` has no displacement fields.
+  - Ensure point_data contains vector arrays named like `displacement_t0.000`, `displacement_t0.005`, ...; the reader falls back to any `displacement_t*` pattern.
+
+- I want no node features.
+  - Set `features: []`. The datapipe will return `x['features']` with shape `[N, 0]`, and the rollout will still concatenate velocity (and time if configured) for the model input.
+
+- Can functional_dim be 0 for Transolver?
+  - It can be 0 only if the total MLP input dimension remains > 0: e.g., you provide an embedding (required for unstructured) and/or time. In this pipeline, rollout always supplies an embedding (positions), so you are safe with `features: []`.
+
+- My custom reader doesn’t accept `split` or `logger`.
+  - Implement `__call__(..., split: str | None = None, logger=None, **kwargs)` to remain forward‑compatible with optional arguments.
+
 ## References
 
-- Automotive Crash Dynamics Modeling Accelerated with Machine Learning (https://arxiv.org/pdf/2510.15201)
+- [Automotive Crash Dynamics Modeling Accelerated with Machine Learning](https://arxiv.org/pdf/2510.15201)
+- [Transolver: A Fast Transformer Solver for PDEs on General Geometries](https://arxiv.org/pdf/2402.02366)
+- [Learning Mesh-Based Simulation with Graph Networks](https://arxiv.org/pdf/2010.03409)
