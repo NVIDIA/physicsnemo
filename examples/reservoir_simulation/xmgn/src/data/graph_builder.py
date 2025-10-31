@@ -17,7 +17,7 @@
 import os
 import re
 import glob
-import h5py
+import time
 import pickle
 import numpy as np
 import torch
@@ -26,8 +26,7 @@ from collections.abc import Mapping
 from hydra.utils import to_absolute_path
 from sim_utils import EclReader, Well, Grid
 from multiprocessing import Pool, cpu_count, Manager
-from functools import partial
-from tqdm import tqdm
+from scipy.interpolate import interp1d
 
 
 class ReservoirGraphBuilder:
@@ -81,6 +80,13 @@ class ReservoirGraphBuilder:
                 "dynamic": list(self.graph_config.node_features.dynamic.variables),
             }
         }
+
+        # Add time_series variables if specified
+        if hasattr(self.graph_config.node_features, "time_series"):
+            self.vars["time_series"] = list(self.graph_config.node_features.time_series)
+        else:
+            self.vars["time_series"] = []
+
         self.output_vars = list(self.graph_config.target_vars.node_features)
 
         # Get nonlinear scaling configuration
@@ -256,7 +262,14 @@ class ReservoirGraphBuilder:
         return data
 
     def build_graph_from_simulation_data(
-        self, grid, wells_data, data, sample_idx, timestep_idx=0, case_name=None
+        self,
+        grid,
+        wells_data,
+        data,
+        sample_idx,
+        timestep_idx=0,
+        case_name=None,
+        time_series_data=None,
     ):
         """
         Build a reservoir simulation graph from processed data.
@@ -273,6 +286,10 @@ class ReservoirGraphBuilder:
             Index of the sample
         timestep_idx : int
             Current timestep index
+        case_name : str, optional
+            Name of the case
+        time_series_data : dict, optional
+            Interpolated time series data {well_name: {var_name: [values]}}
 
         Returns:
         --------
@@ -350,7 +367,12 @@ class ReservoirGraphBuilder:
                     input_tensors.append(
                         torch.tensor(var_data_reshaped, dtype=torch.float32)
                     )
-                    input_var_names.append(f"{var}_history")
+                    # Add individual names for each timestep: current, prev_1, prev_2, ...
+                    for t in range(self.prev_timestep_idx):
+                        if t == 0:
+                            input_var_names.append(f"{var}_current")
+                        else:
+                            input_var_names.append(f"{var}_prev_{t}")
                 except Exception as e:
                     print(
                         f"Error: Failed to process variable '{var}' - {type(e).__name__}: {e}"
@@ -359,6 +381,110 @@ class ReservoirGraphBuilder:
             else:
                 print(f"Error: Variable '{var}' not available - skipping graph")
                 return None
+
+        # Add time series variables if available
+        if time_series_data and len(self.vars.get("time_series", [])) > 0:
+            time_series_vars = self.vars["time_series"]
+
+            # Get wells for current timestep (use timestep+1 for next state, as done with WCID)
+            current_wells = (
+                wells_data[timestep_idx + 1]
+                if timestep_idx + 1 < len(wells_data)
+                else {}
+            )
+
+            if current_wells:
+                # Create time series arrays for this timestep
+                ts_arrays = self._create_time_series_arrays(
+                    grid,
+                    current_wells,
+                    time_series_data,
+                    time_series_vars,
+                    timestep_idx + 1,
+                )
+
+                # Process each time series variable
+                # Note: Pressure variables (BHP, THP) will create _INJ and _PRD variants
+                for var_name in time_series_vars:
+                    var_upper = var_name.upper()
+                    is_pressure_var = ("BHP" in var_upper) or ("THP" in var_upper)
+
+                    if is_pressure_var:
+                        # Pressure variables create two channels: _INJ and _PRD
+                        channel_names = [f"{var_name}_INJ", f"{var_name}_PRD"]
+                    else:
+                        # Other variables create single channel
+                        channel_names = [var_name]
+
+                    # Process each channel (1 for non-pressure vars, 2 for pressure vars)
+                    for channel_name in channel_names:
+                        if channel_name not in ts_arrays:
+                            continue
+
+                        try:
+                            # For time series, we can also include history
+                            var_data_list = []
+                            for t in range(self.prev_timestep_idx):
+                                prev_ts_idx = (timestep_idx + 1) - t
+                                if prev_ts_idx < 0:
+                                    print(
+                                        f"Error: Time series '{channel_name}' not available at timestep {prev_ts_idx} - skipping graph"
+                                    )
+                                    return None
+
+                                # Create array for this historical timestep
+                                prev_wells = (
+                                    wells_data[prev_ts_idx]
+                                    if prev_ts_idx < len(wells_data)
+                                    else {}
+                                )
+                                if not prev_wells:
+                                    print(
+                                        f"Error: No wells data at timestep {prev_ts_idx} - skipping graph"
+                                    )
+                                    return None
+
+                                prev_ts_arrays = self._create_time_series_arrays(
+                                    grid,
+                                    prev_wells,
+                                    time_series_data,
+                                    time_series_vars,
+                                    prev_ts_idx,
+                                )
+
+                                if channel_name not in prev_ts_arrays:
+                                    var_data_list.append(
+                                        np.zeros(grid.nact, dtype=np.float32)
+                                    )
+                                else:
+                                    var_data_list.append(prev_ts_arrays[channel_name])
+
+                            # Stack historical data
+                            var_data_stacked = np.stack(var_data_list, axis=0)
+                            var_data_reshaped = (
+                                var_data_stacked.T
+                            )  # [n_active, prev_timestep_idx]
+
+                            # Apply nonlinear scaling if specified (use original var_name for config lookup)
+                            var_data_reshaped = self._apply_nonlinear_scaling(
+                                var_data_reshaped, var_name
+                            )
+
+                            input_tensors.append(
+                                torch.tensor(var_data_reshaped, dtype=torch.float32)
+                            )
+                            # Add individual names for each timestep: current, prev_1, prev_2, ...
+                            for t in range(self.prev_timestep_idx):
+                                if t == 0:
+                                    input_var_names.append(f"{channel_name}_current")
+                                else:
+                                    input_var_names.append(f"{channel_name}_prev_{t}")
+
+                        except Exception as e:
+                            print(
+                                f"Error: Failed to process time series variable '{channel_name}' - {type(e).__name__}: {e}"
+                            )
+                            return None
 
         # Concatenate all input features (will add temporal features if enabled)
         node_features = torch.cat(input_tensors, dim=1)
@@ -533,11 +659,18 @@ class ReservoirGraphBuilder:
         include_well_completions = (
             include_well_completion_ids or include_well_completion_cf
         )
+
+        # Get time series variables
+        time_series_vars = self.vars.get("time_series", []) or []
+        include_time_series = len(time_series_vars) > 0
+
         return (
             dyn_vars,
             include_well_completion_ids,
             include_well_completion_cf,
             include_well_completions,
+            time_series_vars,
+            include_time_series,
         )
 
     def _process_static_data(self, reader, init_keys, egrid_data, sample_idx_1based):
@@ -623,6 +756,179 @@ class ReservoirGraphBuilder:
 
         return wells_data, rst_data
 
+    def _read_and_interpolate_time_series(
+        self, reader, time_series_vars, restart_times, sample_idx_1based
+    ):
+        """Read summary data and interpolate to match restart timesteps.
+
+        Args:
+            reader: EclReader instance
+            time_series_vars: List of time series variable names (e.g., ["WWIR", "WGIR", "WBHP"])
+            restart_times: Array of restart file timesteps (in days)
+            sample_idx_1based: Sample index for error messages
+
+        Returns:
+            dict: Interpolated time series data structured as:
+                  {well_name: {var_name: [val_t0, val_t1, ..., val_tn]}}
+        """
+        if not time_series_vars or len(restart_times) == 0:
+            return {}
+
+        try:
+            # Read summary data for all entities (wells)
+            smry_data = reader.read_smry(keys=time_series_vars, entities=None)
+
+            if "TIME" not in smry_data:
+                print(
+                    f"  ⚠️ Warning: No TIME data in summary file for sample {sample_idx_1based}"
+                )
+                return {}
+
+            smry_times = smry_data["TIME"]
+
+            # Check if restart times are within summary time range
+            if restart_times[0] < smry_times[0] or restart_times[-1] > smry_times[-1]:
+                print(
+                    f"  ⚠️ Warning: Restart times [{restart_times[0]:.1f}, {restart_times[-1]:.1f}] "
+                    f"outside summary time range [{smry_times[0]:.1f}, {smry_times[-1]:.1f}] "
+                    f"for sample {sample_idx_1based}"
+                )
+
+            # Interpolate time series data for each well and variable
+            interpolated_data = {}
+
+            for entity, entity_data in smry_data.items():
+                if entity == "TIME":
+                    continue
+
+                if not isinstance(entity_data, dict):
+                    continue
+
+                interpolated_data[entity] = {}
+
+                for var_name, var_values in entity_data.items():
+                    if var_name not in time_series_vars:
+                        continue
+
+                    # Create interpolation function
+                    # Use linear interpolation with bounds_error=False to extrapolate if needed
+                    interp_func = interp1d(
+                        smry_times,
+                        var_values,
+                        kind="linear",
+                        bounds_error=False,
+                        fill_value=(
+                            var_values[0],
+                            var_values[-1],
+                        ),  # Use edge values for extrapolation
+                    )
+
+                    # Interpolate to restart timesteps
+                    interpolated_values = interp_func(restart_times)
+                    interpolated_data[entity][var_name] = interpolated_values
+
+            return interpolated_data
+
+        except Exception as e:
+            print(
+                f"  ⚠️ Warning: Failed to read/interpolate time series for sample {sample_idx_1based}: {type(e).__name__}: {e}"
+            )
+            return {}
+
+    def _create_time_series_arrays(
+        self, grid, wells, time_series_data, time_series_vars, timestep_idx
+    ):
+        """Create time series arrays mapped to grid cells with well completions.
+
+        Similar to completion ID arrays, this creates one array per time series variable,
+        where values are assigned to grid cells containing well completions.
+
+        For pressure variables (e.g., WBHP, WTHP - anything with BHP or THP in name),
+        creates separate channels for injection and production wells
+        (e.g., WBHP_INJ, WBHP_PRD).
+
+        Args:
+            grid: Grid object
+            wells: Dictionary of Well objects for current timestep
+            time_series_data: Interpolated time series data
+                             {well_name: {var_name: [val_t0, val_t1, ...]}}
+            time_series_vars: List of time series variable names
+            timestep_idx: Current timestep index
+
+        Returns:
+            dict: {var_name: np.ndarray} where arrays have shape (n_active_cells,)
+                  For pressure variables, returns {var_name_INJ: array, var_name_PRD: array}
+        """
+        if not time_series_data or not wells:
+            return {}
+
+        result = {}
+
+        for var_name in time_series_vars:
+            # Check if this is a pressure-related variable (bottom-hole pressure or tubing head pressure)
+            # These should be split into injection and production channels
+            var_upper = var_name.upper()
+            is_pressure_var = ("BHP" in var_upper) or ("THP" in var_upper)
+
+            if is_pressure_var:
+                # Create separate arrays for injection and production wells
+                var_array_inj = np.zeros(grid.nact, dtype=np.float32)
+                var_array_prd = np.zeros(grid.nact, dtype=np.float32)
+            else:
+                # Single array for non-pressure variables
+                var_array = np.zeros(grid.nact, dtype=np.float32)
+
+            # Iterate through wells and assign values to completion cells
+            for well_name, well in wells.items():
+                if well_name not in time_series_data:
+                    continue
+
+                if var_name not in time_series_data[well_name]:
+                    continue
+
+                # Skip shut wells - assign zeros (default array value)
+                if well.status == "SHUT":
+                    continue
+
+                # Get interpolated value at this timestep
+                var_values = time_series_data[well_name][var_name]
+                if timestep_idx >= len(var_values):
+                    continue
+
+                value = var_values[timestep_idx]
+
+                # Determine well type from Well object
+                # well.type is "INJ" or "PRD" (set by _set_type method)
+                is_injector = well.type == "INJ"
+
+                # Assign value to all completion cells for this well
+                for comp in well.completions:
+                    # Check if IJK attribute exists and is valid
+                    if hasattr(comp, "IJK") and comp.IJK is not None:
+                        # Convert from 1-based to 0-based indexing, then map to active-only index
+                        # (same logic as WCID in grid.create_completion_array)
+                        ijk = comp.IJK - 1  # Convert to 0-based
+                        if ijk in grid.ijk_to_active:
+                            active_idx = grid.ijk_to_active[ijk]
+                            if is_pressure_var:
+                                # Assign to injection or production array based on well type
+                                if is_injector:
+                                    var_array_inj[active_idx] = value
+                                else:
+                                    var_array_prd[active_idx] = value
+                            else:
+                                # Single array for non-pressure variables
+                                var_array[active_idx] = value
+
+            # Store results
+            if is_pressure_var:
+                result[f"{var_name}_INJ"] = var_array_inj
+                result[f"{var_name}_PRD"] = var_array_prd
+            else:
+                result[var_name] = var_array
+
+        return result
+
     def _validate_timesteps(self, combined_data, dynamic_variables, sample_idx_1based):
         """Validate timesteps and return valid ones."""
         times = combined_data.get("TIME") or []
@@ -676,6 +982,7 @@ class ReservoirGraphBuilder:
         valid_timesteps,
         sample_idx_1based,
         case_name,
+        time_series_data=None,
     ):
         """Build graphs for all valid timesteps of a sample."""
         graphs = []
@@ -690,6 +997,7 @@ class ReservoirGraphBuilder:
                     sample_idx=sample_idx_1based - 1,
                     timestep_idx=t,
                     case_name=case_name,
+                    time_series_data=time_series_data,
                 )
                 if graph is None:
                     # Only log as error if timestep should have had enough history
@@ -724,6 +1032,8 @@ class ReservoirGraphBuilder:
         rst_well_keys,
         include_well_completions,
         include_well_completion_cf,
+        time_series_vars,
+        include_time_series,
         output_path_graph,
         progress_counter,
     ):
@@ -765,6 +1075,15 @@ class ReservoirGraphBuilder:
             # Combine static + dynamic data
             combined_data = {**init_data, **restart_data}
 
+            # Read and interpolate time series data if needed
+            time_series_data = None
+            if include_time_series and time_series_vars:
+                restart_times = np.array(combined_data.get("TIME", []))
+                if len(restart_times) > 0:
+                    time_series_data = self._read_and_interpolate_time_series(
+                        reader, time_series_vars, restart_times, sample_idx_1based
+                    )
+
             # Validate timesteps
             valid_timesteps = self._validate_timesteps(
                 combined_data, dynamic_variables, sample_idx_1based
@@ -781,6 +1100,7 @@ class ReservoirGraphBuilder:
                 valid_timesteps,
                 sample_idx_1based,
                 case_name,
+                time_series_data=time_series_data,
             )
 
             # Save graphs immediately (memory efficient)
@@ -830,6 +1150,8 @@ class ReservoirGraphBuilder:
             include_well_completion_ids,
             include_well_completion_cf,
             include_well_completions,
+            time_series_vars,
+            include_time_series,
         ) = self._prepare_dynamic_variables()
 
         all_graph_files = []
@@ -847,9 +1169,6 @@ class ReservoirGraphBuilder:
         print(
             f"\nProcessing {total_samples} simulation results using {n_workers} parallel workers..."
         )
-
-        # Process samples in parallel with periodic progress updates
-        import time
 
         start_time = time.time()
 
@@ -870,6 +1189,8 @@ class ReservoirGraphBuilder:
                     rst_well_keys,
                     include_well_completions,
                     include_well_completion_cf,
+                    time_series_vars,
+                    include_time_series,
                     self._output_path_graph,
                     progress_counter,
                 )
