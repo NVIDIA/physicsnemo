@@ -642,10 +642,10 @@ class InferenceRunner:
                             # Predictions are FOR the next timestep after the input
                             predicted_timestep = input_timestep + 1
                             var_pred_group.create_dataset(
-                                f"timestep_{predicted_timestep:03d}", data=pred_vec
+                                f"timestep_{predicted_timestep:04d}", data=pred_vec
                             )
                             var_target_group.create_dataset(
-                                f"timestep_{predicted_timestep:03d}", data=target_vec
+                                f"timestep_{predicted_timestep:04d}", data=target_vec
                             )
 
                         # Save metadata for this variable
@@ -1056,9 +1056,9 @@ class InferenceRunner:
                                 pred_data_full[actnum] = pred_data_active
 
                                 # Write in Eclipse GRDECL format
-                                # KEY_<timestep> with 3-digit formatting (e.g., 001, 010, 120)
+                                # KEY_<timestep> with 4-digit formatting (e.g., 0001, 0010, 0120)
                                 grdecl_file.write(
-                                    f"{var_name_clean}_{timestep_num:03d}\n"
+                                    f"{var_name_clean}_{timestep_num:04d}\n"
                                 )
 
                                 # Values (write 5 values per line for readability)
