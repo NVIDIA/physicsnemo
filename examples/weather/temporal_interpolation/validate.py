@@ -91,7 +91,7 @@ def inference_model(
         invar = tuple(v.detach() for v in invar)
         outvar_true = outvar_true.detach()
         y_true_step.append(outvar_true)
-        step = int(round(invar[1].item() * timesteps))
+        step = min(int(round(invar[1].item() * timesteps)), timesteps)
         if method == "fcinterp":
             y_pred_step.append(trainer.eval_step(invar))
         elif method == "linear":
