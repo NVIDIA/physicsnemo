@@ -16,7 +16,7 @@
 
 import os
 import datetime
-from typing import Any
+from typing import Any, Dict
 import warnings
 
 import hydra
@@ -112,7 +112,7 @@ def setup_datapipes(
     mean_file = os.path.join(data_dir, "stats/global_means.npy")
     std_file = os.path.join(data_dir, "stats/global_stds.npy")
 
-    spec_kwargs = dict(
+    spec_kwargs: Dict[str, Any] = dict(
         stats_files={"mean": mean_file, "std": std_file},
         use_cos_zenith=True,
         name="atmos",
@@ -124,7 +124,7 @@ def setup_datapipes(
     spec_valid = ClimateDataSourceSpec(data_dir=valid_dir, **spec_kwargs)
 
     invariants = {}
-    num_aux_channels = 3  #  3 channels for cos_zenith
+    num_aux_channels = 3  # 3 channels for cos_zenith
     if use_latlon:
         invariants["latlon"] = invariant.LatLon()
         num_aux_channels += 4
@@ -144,7 +144,7 @@ def setup_datapipes(
     )
 
     if num_samples_per_year_train is None:
-        num_samples_per_year_train = 365 * 24 - 12  #  -12 to prevent overflow
+        num_samples_per_year_train = 365 * 24 - 12  # -12 to prevent overflow
 
     pipe_train = InterpClimateDatapipe(
         [spec_train],
