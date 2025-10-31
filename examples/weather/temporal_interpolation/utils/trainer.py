@@ -120,17 +120,17 @@ class Trainer:
             optim=self.optimizer,
             logger=self.logger,
             use_graphs=False,  # use_graphs=True seems crash prone
-        )(self.train_step_forward)
+        )(self._train_step_forward)
 
         self.eval_step = StaticCaptureEvaluateNoGrad(
             model=self.model, logger=self.logger, use_graphs=False
-        )(self.eval_step)
+        )(self._eval_step)
 
         self.local_batches_per_epoch = samples_per_epoch // (
             train_datapipe.world_size * train_datapipe.batch_size
         )
 
-    def eval_step(self, invar: tuple) -> torch.Tensor:
+    def _eval_step(self, invar: tuple) -> torch.Tensor:
         """Evaluate model for one step.
 
         Parameters
@@ -145,7 +145,7 @@ class Trainer:
         """
         return self.model(*invar)
 
-    def train_step_forward(
+    def _train_step_forward(
         self, invar: tuple, outvar_true: torch.Tensor
     ) -> torch.Tensor:
         """Training step.
