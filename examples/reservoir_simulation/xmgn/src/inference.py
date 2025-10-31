@@ -613,6 +613,7 @@ class InferenceRunner:
                     # Collect all timestep data for this variable
                     pred_vectors = []
                     target_vectors = []
+                    timestep_numbers = []  # Track actual timestep numbers
 
                     for timestep in sorted(case_data["predictions"].keys()):
                         predictions = case_data["predictions"][timestep]
@@ -625,6 +626,8 @@ class InferenceRunner:
                             # Extract this variable's data (column i)
                             pred_vectors.append(pred_array[:, i])
                             target_vectors.append(target_array[:, i])
+                            # Store actual timestep number (predictions are FOR next timestep)
+                            timestep_numbers.append(int(timestep))
 
                     # Save as variable groups with lists of vectors
                     if pred_vectors:
@@ -633,17 +636,16 @@ class InferenceRunner:
                         var_target_group = target_group.create_group(var_name_clean)
 
                         # Save each timestep as a separate dataset within the variable group
-                        for timestep_idx, (pred_vec, target_vec) in enumerate(
-                            zip(pred_vectors, target_vectors)
+                        for input_timestep, pred_vec, target_vec in zip(
+                            timestep_numbers, pred_vectors, target_vectors
                         ):
-                            next_timestep = (
-                                timestep_idx + 1
-                            )  # tstep + 1 because we're predicting next timestep
+                            # Predictions are FOR the next timestep after the input
+                            predicted_timestep = input_timestep + 1
                             var_pred_group.create_dataset(
-                                f"timestep_{next_timestep:03d}", data=pred_vec
+                                f"timestep_{predicted_timestep:03d}", data=pred_vec
                             )
                             var_target_group.create_dataset(
-                                f"timestep_{next_timestep:03d}", data=target_vec
+                                f"timestep_{predicted_timestep:03d}", data=target_vec
                             )
 
                         # Save metadata for this variable
