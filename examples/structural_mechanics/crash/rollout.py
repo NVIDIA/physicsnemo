@@ -17,7 +17,6 @@
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as ckpt
-from typing import List
 
 from physicsnemo.models.transolver import Transolver
 from physicsnemo.models.meshgraphnet import MeshGraphNet
@@ -49,16 +48,17 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
         Returns:
             [T, N, 3] rollout of predicted positions
         """
-        node_features = sample.node_features  # [N,F_in]
-        N = sample.node_features.size(0)
-        device = sample.node_features.device
+        inputs = sample.node_features
+        coords = inputs["coords"]  # [N,3]
+        features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
+        N = coords.size(0)
+        device = coords.device
 
         # Initial states
-        y_t1 = node_features[..., :3]  # [N,3]
-        thickness = node_features[..., -1:]  # [N,1]
+        y_t1 = coords  # [N,3]
         y_t0 = y_t1 - self.initial_vel * self.dt  # backstep using initial velocity
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         for t in range(self.rollout_steps):
             time_t = 0.0 if self.rollout_steps <= 1 else t / (self.rollout_steps - 1)
             time_t = torch.tensor([time_t], device=device, dtype=torch.float32)
@@ -71,8 +71,8 @@ class TransolverAutoregressiveRolloutTraining(Transolver):
 
             # Model input
             fx_t = torch.cat(
-                [vel_norm, thickness, time_t.expand(N, 1)], dim=-1
-            )  # [N, 3+1+1]
+                [vel_norm, features, time_t.expand(N, 1)], dim=-1
+            )  # [N, 3+F+1]
 
             def step_fn(fx, embedding):
                 return super(TransolverAutoregressiveRolloutTraining, self).forward(
@@ -123,18 +123,15 @@ class TransolverTimeConditionalRollout(Transolver):
         Returns:
             [T, N, 3] rollout of predicted positions
         """
-        node_features = sample.node_features  # [N,4] (pos(3) + thickness(1))
-        assert node_features.ndim == 2 and node_features.shape[1] == 4, (
-            f"Expected node_features [N,4], got {node_features.shape}"
-        )
+        inputs = sample.node_features
+        x = inputs["coords"]  # [N,3]
+        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
 
-        x = node_features[..., :3]  # initial pos
-        thickness = node_features[..., -1:]
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
         for time in time_seq:
-            fx_t = thickness  # [N,1]
+            fx_t = features  # [N,F]
 
             def step_fn(fx, embedding, time_t):
                 return super(TransolverTimeConditionalRollout, self).forward(
@@ -177,22 +174,25 @@ class MeshGraphNetAutoregressiveRolloutTraining(MeshGraphNet):
         Returns:
             [T, N, 3] rollout of predicted positions
         """
-        node_features = sample.node_features
+        inputs = sample.node_features
+        coords = inputs["coords"]  # [N,3]
+        features = inputs.get(
+            "features", coords.new_zeros((coords.size(0), 0))
+        )  # [N,F]
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
-        N = node_features.size(0)
-        y_t1 = node_features[..., :3]
-        thickness = node_features[..., -1:]
+        N = coords.size(0)
+        y_t1 = coords
         y_t0 = y_t1 - self.initial_vel * self.dt
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         for _ in range(self.rollout_steps):
             vel = (y_t1 - y_t0) / self.dt
             vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
                 data_stats["node"]["norm_vel_std"] + EPS
             )
-            fx_t = torch.cat([y_t1, vel_norm, thickness], dim=-1)
+            fx_t = torch.cat([y_t1, vel_norm, features], dim=-1)
 
             def step_fn(nf, ef, g):
                 return super(MeshGraphNetAutoregressiveRolloutTraining, self).forward(
@@ -234,17 +234,17 @@ class MeshGraphNetTimeConditionalRollout(MeshGraphNet):
         Returns:
             [T, N, 3] rollout of predicted positions
         """
-        node_features = sample.node_features
+        inputs = sample.node_features
+        x = inputs["coords"]  # [N,3]
+        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N,F]
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
-        x = node_features[..., :3]
-        thickness = node_features[..., -1:]
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
         for time in time_seq:
-            fx_t = torch.cat([x, thickness, time.expand(x.size(0), 1)], dim=-1)
+            fx_t = torch.cat([x, features, time.expand(x.size(0), 1)], dim=-1)
 
             def step_fn(nf, ef, g):
                 return super(MeshGraphNetTimeConditionalRollout, self).forward(
@@ -279,19 +279,18 @@ class TransolverOneStepRollout(
         super().__init__(*args, **kwargs)
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
-        N = sample.node_features.size(0)
-        thickness = sample.node_features[..., -1:]  # [N,1]
+        inputs = sample.node_features
+        coords0 = inputs["coords"]  # [N,3]
+        features = inputs.get("features", coords0.new_zeros((coords0.size(0), 0)))
 
         # Ground truth sequence [T,N,3]
+        N = coords0.size(0)
         gt_seq = torch.cat(
-            [
-                sample.node_features[..., :3].unsqueeze(0),  # pos_t0
-                sample.node_target.view(N, -1, 3).transpose(0, 1),  # pos_t1..pos_T
-            ],
+            [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
             dim=0,
         )
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
 
         # First step: backstep to create y_-1
         y_t0 = gt_seq[0] - self.initial_vel * self.dt
@@ -306,7 +305,7 @@ class TransolverOneStepRollout(
             vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
                 data_stats["node"]["norm_vel_std"] + EPS
             )
-            fx_t = torch.cat([vel_norm, thickness], dim=-1)
+            fx_t = torch.cat([vel_norm, features], dim=-1)
 
             def step_fn(fx, embedding):
                 return super(TransolverOneStepRollout, self).forward(
@@ -350,23 +349,22 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
         super().__init__(*args, **kwargs)
 
     def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
-        node_features = sample.node_features
+        inputs = sample.node_features
+        coords0 = inputs["coords"]  # [N,3]
+        features = inputs.get(
+            "features", coords0.new_zeros((coords0.size(0), 0))
+        )  # [N,F]
         edge_features = sample.graph.edge_attr
         graph = sample.graph
 
-        N = node_features.size(0)
-        thickness = node_features[..., -1:]
-
         # Full ground truth trajectory [T,N,3]
+        N = coords0.size(0)
         gt_seq = torch.cat(
-            [
-                node_features[..., :3].unsqueeze(0),  # pos_t0
-                sample.node_target.view(N, -1, 3).transpose(0, 1),  # pos_t1..T
-            ],
+            [coords0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
             dim=0,
         )
 
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
 
         # First step: construct backstep
         y_t0 = gt_seq[0] - self.initial_vel * self.dt
@@ -382,7 +380,7 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
                 data_stats["node"]["norm_vel_std"] + EPS
             )
 
-            fx_t = torch.cat([y_t1, vel_norm, thickness], dim=-1)
+            fx_t = torch.cat([y_t1, vel_norm, features], dim=-1)
 
             def step_fn(nf, ef, g):
                 return super(MeshGraphNetOneStepRollout, self).forward(

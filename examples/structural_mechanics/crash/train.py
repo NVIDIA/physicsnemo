@@ -66,12 +66,16 @@ class Trainer:
             )
 
         # Dataset
+        reader = instantiate(cfg.reader)
+        logging.getLogger().setLevel(logging.INFO)
         dataset = instantiate(
             cfg.datapipe,
             name="crash_train",
+            reader=reader,
             split="train",
             logger=logger0,
         )
+        logging.getLogger().setLevel(logging.INFO)
         # Move stats to device
         self.data_stats = dict(
             node={k: v.to(self.dist.device) for k, v in dataset.node_stats.items()},
@@ -79,8 +83,9 @@ class Trainer:
                 k: v.to(self.dist.device)
                 for k, v in getattr(dataset, "edge_stats", {}).items()
             },
-            thickness={
-                k: v.to(self.dist.device) for k, v in dataset.thickness_stats.items()
+            feature={
+                k: v.to(self.dist.device)
+                for k, v in getattr(dataset, "feature_stats", {}).items()
             },
         )
 

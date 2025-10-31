@@ -15,6 +15,7 @@
 # limitations under the License.
 
 _target_: rollout.MeshGraphNetTimeConditionalRollout
+_convert_: all
 
 input_dim_nodes: 5                  # pos(3) + thickness(1) + time(1)
 input_dim_edges: 4                  # dx, dy, dz, distance

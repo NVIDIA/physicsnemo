@@ -17,9 +17,8 @@
 import os
 import numpy as np
 import torch
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Any, Callable, Optional
 
-from d3plot_reader import process_d3plot_data
 from torch_geometric.data import Data
 from torch_geometric.utils import coalesce, add_self_loops
 
@@ -28,7 +27,7 @@ from physicsnemo.launch.logging import PythonLogger
 
 STATS_DIRNAME = "stats"
 NODE_STATS_FILE = "node_stats.json"
-THK_STATS_FILE = "thickness_stats.json"
+FEATURE_STATS_FILE = "feature_stats.json"
 EDGE_STATS_FILE = "edge_stats.json"
 EPS = 1e-8  # numerical stability for std
 
@@ -39,30 +38,31 @@ class SimSample:
 
     Attributes
     ---------
-    node_features : FloatTensor [N, Din]
+    node_features: dict[str, Tensor] with at least:
+      - 'coords': FloatTensor [N, 3]
+      - any other feature keys configured, e.g., 'thickness': [N, Fk]
     node_target   : FloatTensor [N, Dout] or [N, (T-1)*3] depending on task
     graph         : PyG Data or None
     """
 
     def __init__(
         self,
-        node_features: torch.Tensor,
+        node_features: dict[str, torch.Tensor],
         node_target: torch.Tensor,
         graph: Optional[Data] = None,
     ):
-        assert node_features.ndim == 2, (
-            f"node_features must be [N, D], got {node_features.shape}"
-        )
-        assert node_target.ndim >= 2, (
-            f"node_target must be [N, ...], got {node_target.shape}"
-        )
-
+        assert isinstance(node_features, dict), "node_features must be a dict"
+        assert "coords" in node_features, "node_features must contain 'coords'"
+        assert (
+            node_features["coords"].ndim == 2 and node_features["coords"].shape[1] == 3
+        ), f"'coords' must be [N,3], got {node_features['coords'].shape}"
         self.node_features = node_features
         self.node_target = node_target
         self.graph = graph  # PyG Data or None
 
     def to(self, device: torch.device):
-        self.node_features = self.node_features.to(device)
+        for k, v in self.node_features.items():
+            self.node_features[k] = v.to(device)
         self.node_target = self.node_target.to(device)
         if self.graph is not None:
             self.graph = self.graph.to(device)
@@ -72,15 +72,19 @@ class SimSample:
         return self.graph is not None
 
     def __repr__(self) -> str:
-        n = self.node_features.shape[0]
-        din = self.node_features.shape[1]
+        n = self.node_features["coords"].shape[0]
+        keys = {k: tuple(v.shape) for k, v in self.node_features.items()}
+        din = 3
+        for k, v in self.node_features.items():
+            if k != "coords":
+                din += v.shape[1]
         dout = (
             self.node_target.shape[1]
             if self.node_target.ndim == 2
             else tuple(self.node_target.shape[1:])
         )
         e = 0 if self.graph is None else self.graph.num_edges
-        return f"SimSample(N={n}, Din={din}, Dout={dout}, E={e})"
+        return f"SimSample(N={n}, keys={list(self.node_features.keys())}, Din={din}, Dout={dout}, E={e})"
 
 
 class CrashBaseDataset:
@@ -97,12 +101,12 @@ class CrashBaseDataset:
     def __init__(
         self,
         name: str = "dataset",
+        reader: Optional[Callable] = None,
         data_dir: Optional[str] = None,
         split: str = "train",
         num_samples: int = 1000,
         num_steps: int = 400,
-        wall_node_disp_threshold: float = 1.0,
-        write_vtp: bool = False,
+        features: Optional[list[str]] = None,
         logger=None,
         dt: float = 5e-3,
     ):
@@ -112,6 +116,7 @@ class CrashBaseDataset:
         self.split = split
         self.num_samples = num_samples
         self.num_steps = num_steps
+        self.features = features
         self.length = num_samples
         self.logger = logger or PythonLogger()
         self.dt = dt
@@ -120,102 +125,141 @@ class CrashBaseDataset:
             f"[{self.__class__.__name__}] Preparing the {split} dataset..."
         )
 
+        self.features = features or []
+
         # Prepare stats dir
         self._stats_dir = STATS_DIRNAME
         os.makedirs(STATS_DIRNAME, exist_ok=True)
 
-        # Load raw records; we keep (srcs, dsts) for graph dataset; point-cloud ignores them
-        self.srcs, self.dsts, point_data = process_d3plot_data(
-            self.data_dir,
-            num_samples,
-            wall_node_disp_threshold,
-            write_vtp,
+        # Load raw records via provided reader callable (Hydra can pass a class/callable)
+        if reader is None:
+            raise ValueError("Data reader function is not specified.")
+        self.srcs, self.dsts, point_data = reader(
+            data_dir=self.data_dir,
+            num_samples=num_samples,
+            split=split,
             logger=self.logger,
         )
 
         # Storage for per-sample tensors
-        self.mesh_pos_seq: List[torch.Tensor] = []  # [T, N, 3], float32
-        self.thickness_data: List[torch.Tensor] = []  # [N], float32
+        self.mesh_pos_seq: list[torch.Tensor] = []  # [T,N,3]
+        self.node_features_data: list[torch.Tensor] = []  # [N,F]
+        self._feature_slices: dict[
+            str, tuple[int, int]
+        ] = {}  # per-sample feature slices
 
         for rec in point_data:
-            # Expect keys: "mesh_pos": [T, N, 3], "thickness": [N]
-            mesh_pos_np = rec["mesh_pos"][:num_steps]
-            thk_np = rec["thickness"]
-
-            assert mesh_pos_np.ndim == 3 and mesh_pos_np.shape[-1] == 3, (
-                f"mesh_pos must be [T,N,3], got {mesh_pos_np.shape}"
+            # Coordinates
+            if "coords" not in rec:
+                raise KeyError(f"Missing coordinates key 'coords' in reader record")
+            coords_np = rec["coords"][:num_steps]
+            assert coords_np.ndim == 3 and coords_np.shape[-1] == 3, (
+                f"coords must be [T,N,3], got {coords_np.shape}"
             )
-            assert thk_np.ndim == 1, f"thickness must be [N], got {thk_np.shape}"
+            self.mesh_pos_seq.append(torch.as_tensor(coords_np, dtype=torch.float32))
 
-            self.mesh_pos_seq.append(torch.as_tensor(mesh_pos_np, dtype=torch.float32))
-            self.thickness_data.append(torch.as_tensor(thk_np, dtype=torch.float32))
+            # Features: concatenate requested keys if present; allow empty
+            parts = []
+            for k in self.features:
+                if k not in rec:
+                    raise KeyError(f"Missing feature key '{k}' in reader record")
+                arr = rec[k]
+                if arr.ndim == 1:
+                    arr = arr[:, None]
+                parts.append(arr)
 
-        # Stats (node + thickness)
+            feats_np = (
+                np.concatenate(parts, axis=-1)
+                if len(parts) > 0
+                else np.zeros((coords_np.shape[1], 0), dtype=np.float32)
+            )
+            assert feats_np.ndim == 2 and feats_np.shape[0] == coords_np.shape[1], (
+                f"features must be [N,F], got {feats_np.shape}, N mismatch with {coords_np.shape}"
+            )
+
+            # build slice map on first record to make future slicing trivial
+            if len(self._feature_slices) == 0:
+                start = 0
+                for k in self.features:
+                    width = rec[k].shape[1] if rec[k].ndim > 1 else 1
+                    self._feature_slices[k] = (start, start + width)
+                    start += width
+
+            self.node_features_data.append(
+                torch.as_tensor(feats_np, dtype=torch.float32)
+            )
+
+        # Stats (node + generic features)
         node_stats_path = os.path.join(self._stats_dir, NODE_STATS_FILE)
-        thk_stats_path = os.path.join(self._stats_dir, THK_STATS_FILE)
+        feat_stats_path = os.path.join(self._stats_dir, FEATURE_STATS_FILE)
 
         if self.split == "train":
             self.node_stats = self._compute_autoreg_node_stats()
-            self.thickness_stats = self._compute_thickness_stats()
+            self.feature_stats = self._compute_feature_stats()
             save_json(self.node_stats, node_stats_path)
-            save_json(self.thickness_stats, thk_stats_path)
+            save_json(self.feature_stats, feat_stats_path)
         else:
-            # Load if exists; otherwise compute and persist
-            if os.path.exists(node_stats_path) and os.path.exists(thk_stats_path):
+            if os.path.exists(node_stats_path) and os.path.exists(feat_stats_path):
                 self.node_stats = load_json(node_stats_path)
-                self.thickness_stats = load_json(thk_stats_path)
+                self.feature_stats = load_json(feat_stats_path)
             else:
                 raise FileNotFoundError(
-                    f"Node stats file {node_stats_path} or thickness stats file {thk_stats_path} not found"
+                    f"Node stats file {node_stats_path} or feature stats file {feat_stats_path} not found"
                 )
 
-        # Normalize trajectories and thickness
+        # Normalize trajectories and features
         for i in range(self.num_samples):
             self.mesh_pos_seq[i] = self._normalize_node_tensor(
                 self.mesh_pos_seq[i],
                 self.node_stats["pos_mean"],
                 self.node_stats["pos_std"],
             )
-            self.thickness_data[i] = self._normalize_thickness_tensor(
-                self.thickness_data[i],
-                torch.tensor(
-                    self.thickness_stats["thickness_mean"], dtype=torch.float32
-                ),
-                torch.tensor(
-                    self.thickness_stats["thickness_std"], dtype=torch.float32
-                ),
-            )
+            if self.node_features_data[i].numel() > 0:
+                mu = torch.as_tensor(
+                    self.feature_stats.get("feature_mean", []), dtype=torch.float32
+                )
+                std = torch.as_tensor(
+                    self.feature_stats.get("feature_std", []), dtype=torch.float32
+                )
+                if mu.numel() == 0:
+                    continue
+                self.node_features_data[i] = (
+                    self.node_features_data[i] - mu.view(1, -1)
+                ) / (std.view(1, -1) + EPS)
 
     def __len__(self):
         return self.length
 
-    def _xy_shapes(self, idx: int) -> Tuple[int, int]:
+    def _xy_shapes(self, idx: int) -> tuple[int, int]:
         T, N, _ = self.mesh_pos_seq[idx].shape
-        Din = 4
+        F = self.node_features_data[idx].shape[1]
+        Din = 3 + F
         Dout = (T - 1) * 3
         return Din, Dout
 
     # Common x/y construction used by both datasets
     def build_xy(self, idx: int):
         """
-        x: [N, 4] = pos_t0(3) + thickness(1)
-        y: [N, (T-1)*3] flattened all future positions
+        x: dict with two keys:
+            - 'coords': [N, 3] at t0
+            - 'features': [N, F] concatenated in the order given by self.features
+        y: [N, (T-1)*3]
         """
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         pos_seq = self.mesh_pos_seq[idx]  # [T,N,3]
-        thk = self.thickness_data[idx]  # [N]
+        feats = self.node_features_data[idx]  # [N,F]
         T, N, _ = pos_seq.shape
+        F = feats.shape[1]
 
         pos_t0 = pos_seq[0]  # [N,3]
-        thickness_expanded = thk.unsqueeze(1)  # [N,1]
-        x = torch.cat([pos_t0, thickness_expanded], dim=1)  # [N,4]
+        x = {"coords": pos_t0, "features": feats}
 
         # Flatten all future positions along feature dim
         y = pos_seq[1:].transpose(0, 1).flatten(start_dim=1)  # [N,(T-1)*3]
 
-        Din, Dout = self._xy_shapes(idx)
-        assert x.shape == (N, Din), (
-            f"x shape mismatch: expected {(N, Din)}, got {x.shape}"
+        _, Dout = self._xy_shapes(idx)
+        assert x["coords"].shape == (N, 3) and x["features"].shape == (N, F), (
+            f"coords shape {x['coords'].shape}, features shape {x['features'].shape}, expected (N,3)/(N,{F})"
         )
         assert y.shape == (N, Dout), (
             f"y shape mismatch: expected {(N, Dout)}, got {y.shape}"
@@ -273,11 +317,28 @@ class CrashBaseDataset:
             "norm_acc_std": acc_std,
         }
 
-    def _compute_thickness_stats(self):
-        all_thickness = torch.cat(self.thickness_data, dim=0)  # [sum_N]
-        thk_mean = torch.mean(all_thickness)
-        thk_std = torch.std(all_thickness)
-        return {"thickness_mean": thk_mean, "thickness_std": thk_std}
+    def _compute_feature_stats(self):
+        # If no features, return empty stats compatible with normalization branch
+        fdim = self.node_features_data[0].shape[1]
+        for t in self.node_features_data:
+            assert t.shape[1] == fdim, f"Feature dim mismatch: {t.shape[1]} vs {fdim}"
+
+        if fdim == 0:
+            mu = torch.zeros(0, dtype=torch.float32)
+            std = torch.ones(0, dtype=torch.float32)
+            return {"feature_mean": mu, "feature_std": std}
+
+        feat_mean = torch.zeros(fdim, dtype=torch.float32)
+        feat_meansqr = torch.zeros(fdim, dtype=torch.float32)
+        for i in range(self.num_samples):
+            x = self.node_features_data[i].to(torch.float32)
+            m = torch.mean(x, dim=0)
+            msq = torch.mean(x * x, dim=0)
+            feat_mean += m / self.num_samples
+            feat_meansqr += msq / self.num_samples
+        feat_var = torch.clamp(feat_meansqr - feat_mean * feat_mean, min=0.0)
+        feat_std = torch.sqrt(feat_var + EPS)
+        return {"feature_mean": feat_mean, "feature_std": feat_std}
 
     @staticmethod
     def _normalize_node_tensor(
@@ -316,7 +377,7 @@ class CrashGraphDataset(CrashBaseDataset):
             _dsts.append(np.asarray(dst)[mask])
         self.srcs, self.dsts = _srcs, _dsts
 
-        self.graphs: List[Data] = []
+        self.graphs: list[Data] = []
         for i in range(self.num_samples):
             g = self.create_graph(
                 self.srcs[i],
@@ -330,15 +391,14 @@ class CrashGraphDataset(CrashBaseDataset):
 
         # Edge stats
         edge_stats_path = os.path.join(self._stats_dir, EDGE_STATS_FILE)
-        if self.split == "train" and not os.path.exists(edge_stats_path):
+        if self.split == "train":
             self.edge_stats = self._compute_edge_stats()
             save_json(self.edge_stats, edge_stats_path)
         else:
             if os.path.exists(edge_stats_path):
                 self.edge_stats = load_json(edge_stats_path)
             else:
-                self.edge_stats = self._compute_edge_stats()
-                save_json(self.edge_stats, edge_stats_path)
+                raise FileNotFoundError(f"Edge stats file {edge_stats_path} not found")
 
         # Convert loaded stats to tensors
         self.edge_stats["edge_mean"] = torch.as_tensor(
@@ -359,7 +419,7 @@ class CrashGraphDataset(CrashBaseDataset):
     def __getitem__(self, idx: int):
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
         g = self.graphs[idx]
-        x, y = self.build_xy(idx)  # [N,4], [N,(T-1)*3]
+        x, y = self.build_xy(idx)  # [N,3+F], [N,(T-1)*3]
 
         return SimSample(
             node_features=x,
@@ -426,7 +486,7 @@ class CrashPointCloudDataset(CrashBaseDataset):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.edge_stats: Dict[str, Any] = {}
+        self.edge_stats: dict[str, Any] = {}
 
     def __getitem__(self, idx: int):
         assert 0 <= idx < self.num_samples, f"Index {idx} out of range"
@@ -434,7 +494,7 @@ class CrashPointCloudDataset(CrashBaseDataset):
         return SimSample(node_features=x, node_target=y)
 
 
-def simsample_collate(batch: List[SimSample]) -> List[SimSample]:
+def simsample_collate(batch: list[SimSample]) -> list[SimSample]:
     """
     Keep samples as a list (variable N per item is common here).
     Models should iterate the list or implement internal padding.
