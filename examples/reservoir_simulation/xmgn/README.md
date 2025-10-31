@@ -81,7 +81,7 @@ to generate both datasets.
 #### Expected Data Format
 
 - **Format**: ECLIPSE/IX compatible binary files
-- **Required files per case**: `.INIT`, `.EGRID`, `.UNRST`
+- **Required files per case**: `.INIT`, `.EGRID`, `.UNRST` (or `.X00xx`), `.UNSMRY` (or `.S00xx`)
 - **Storage**: All cases in a single directory
 
 #### Example Visualization: Norne Field
