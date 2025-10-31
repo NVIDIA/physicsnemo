@@ -39,6 +39,14 @@ pip install -r requirements.txt
 You need to provide reservoir simulation data in ECLIPSE/IX format to use this
 example.
 
+> **⚠️ Dataset License Disclaimer**
+>
+> Users are responsible for verifying and complying with the license terms of
+> any dataset they use with this example. This includes datasets referenced in
+> this documentation (such as the Norne Field dataset) or any proprietary data.
+> Please ensure you have the appropriate rights and permissions before using
+> any dataset for your research or commercial applications.
+
 #### Option 1: Use Your Own Simulation Data
 
 If you have your own reservoir simulation dataset, ensure all simulation cases
@@ -87,8 +95,10 @@ Static reservoir property and domain partitions:
 <!-- markdownlint-disable MD033 -->
 <table>
 <tr>
-<td><img src="docs/figs/Norne/static/PERMX.png" alt="Permeability X"/></td>
-<td><img src="docs/figs/Norne/static/PARTITION.png" alt="X-MGN Partitioning"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/static/PERMX.png"
+alt="Permeability X"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/static/PARTITION.png"
+alt="X-MGN Partitioning"/></td>
 </tr>
 <tr>
 <td align="center"><i>Permeability (PERMX) distribution</i></td>
@@ -149,11 +159,11 @@ python src/inference.py --config-name=<your-config>
 
 #### Example Results: Autoregressive Inference
 
-Water saturation and pressure predictions for the Norne field
-across 64 timesteps spanning 10 years of operation with varying well controls,
-including open/shut-in events. Such complex operational scenarios are often
-challenging to capture with ML models. Nonetheless, X-MGN demonstrates good
-predictability, especially for near-term predictions. As expected for
+The following shows water saturation and pressure predictions for the Norne
+field across 64 timesteps spanning 10 years of operation with varying well
+controls, including open/shut-in events. Such complex operational scenarios are
+often challenging to capture with ML models. Nonetheless, X-MGN demonstrates
+good predictability, especially for near-term predictions. As expected for
 autoregressive prediction, errors accumulate over time, but the model maintains
 reasonable accuracy throughout:
 
@@ -164,23 +174,29 @@ reasonable accuracy throughout:
 <table>
 <tr>
 <td></td>
-<td align="center"><b>Timestep 21</b></td>
-<td align="center"><b>Timestep 42</b></td>
+<td align="center"><b>30 Jul 2001<br/>(Timestep 21, Day 1362)</b></td>
+<td align="center"><b>16 Sep 2003<br/>(Timestep 42, Day 2140)</b></td>
 </tr>
 <tr>
 <td align="center"><b>Ground Truth</b></td>
-<td><img src="docs/figs/Norne/inference/PRES_21_TRUE.png" alt="PRES Timestep 21 True"/></td>
-<td><img src="docs/figs/Norne/inference/PRES_42_TRUE.png" alt="PRES Timestep 42 True"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/PRES_21_TRUE.png"
+alt="PRES Timestep 21 True"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/PRES_42_TRUE.png"
+alt="PRES Timestep 42 True"/></td>
 </tr>
 <tr>
 <td align="center"><b>X-MGN Prediction</b></td>
-<td><img src="docs/figs/Norne/inference/PRES_21_PRED.png" alt="PRES Timestep 21 Prediction"/></td>
-<td><img src="docs/figs/Norne/inference/PRES_42_PRED.png" alt="PRES Timestep 42 Prediction"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/PRES_21_PRED.png"
+alt="PRES Timestep 21 Prediction"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/PRES_42_PRED.png"
+alt="PRES Timestep 42 Prediction"/></td>
 </tr>
 <tr>
 <td align="center"><b>Prediction Error</b></td>
-<td><img src="docs/figs/Norne/inference/PRES_DIFF_21.png" alt="PRES Timestep 21 Difference"/></td>
-<td><img src="docs/figs/Norne/inference/PRES_DIFF_42.png" alt="PRES Timestep 42 Difference"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/PRES_DIFF_21.png"
+alt="PRES Timestep 21 Difference"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/PRES_DIFF_42.png"
+alt="PRES Timestep 42 Difference"/></td>
 </tr>
 </table>
 
@@ -189,23 +205,29 @@ reasonable accuracy throughout:
 <table>
 <tr>
 <td></td>
-<td align="center"><b>Timestep 21</b></td>
-<td align="center"><b>Timestep 42</b></td>
+<td align="center"><b>30 Jul 2001<br/>(Timestep 21, Day 1362)</b></td>
+<td align="center"><b>16 Sep 2003<br/>(Timestep 42, Day 2140)</b></td>
 </tr>
 <tr>
 <td align="center"><b>Ground Truth</b></td>
-<td><img src="docs/figs/Norne/inference/SWAT_21_TRUE.png" alt="SWAT Timestep 21 True"/></td>
-<td><img src="docs/figs/Norne/inference/SWAT_42_TRUE.png" alt="SWAT Timestep 42 True"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/SWAT_21_TRUE.png"
+alt="SWAT Timestep 21 True"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/SWAT_42_TRUE.png"
+alt="SWAT Timestep 42 True"/></td>
 </tr>
 <tr>
 <td align="center"><b>X-MGN Prediction</b></td>
-<td><img src="docs/figs/Norne/inference/SWAT_21_PRED.png" alt="SWAT Timestep 21 Prediction"/></td>
-<td><img src="docs/figs/Norne/inference/SWAT_42_PRED.png" alt="SWAT Timestep 42 Prediction"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/SWAT_21_PRED.png"
+alt="SWAT Timestep 21 Prediction"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/SWAT_42_PRED.png"
+alt="SWAT Timestep 42 Prediction"/></td>
 </tr>
 <tr>
 <td align="center"><b>Prediction Error</b></td>
-<td><img src="docs/figs/Norne/inference/SWAT_DIFF_21.png" alt="SWAT Timestep 21 Difference"/></td>
-<td><img src="docs/figs/Norne/inference/SWAT_DIFF_42.png" alt="SWAT Timestep 42 Difference"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/SWAT_DIFF_21.png"
+alt="SWAT Timestep 21 Difference"/></td>
+<td><img src="../../../docs/img/reservoir_simulation/xmgn/Norne/inference/SWAT_DIFF_42.png"
+alt="SWAT Timestep 42 Difference"/></td>
 </tr>
 </table>
 

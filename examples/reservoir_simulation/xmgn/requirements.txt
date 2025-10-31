@@ -25,9 +25,6 @@ h5py>=3.14.0
 # Experiment tracking
 mlflow>=3.4.0
 
-# NVIDIA PhysicsNeMo
-nvidia-physicsnemo==1.2.0
-
 # Terminal colors (required by PhysicsNeMo logging)
 termcolor>=2.0.0
 
