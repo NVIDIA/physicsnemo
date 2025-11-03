@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import torch
-import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as ckpt
 
 from physicsnemo.models.transolver import Transolver
@@ -432,25 +431,21 @@ class FIGConvUNetTimeConditionalRollout(FIGConvUNet):
         Returns:
             [T, N, 3] rollout of predicted positions
         """
-        node_features = sample.node_features  # [N, 4] (pos(3) + thickness(1))
-        assert node_features.ndim == 2 and node_features.shape[1] == 4, (
-            f"Expected node_features [N,4], got {node_features.shape}"
-        )
+        inputs = sample.node_features
+        x = inputs["coords"]  # initial pos [N, 3]
+        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N, F]
 
-        x = node_features[..., :3]  # initial pos [N, 3]
-        thickness = node_features[..., -1:]  # [N, 1]
-
-        outputs: List[torch.Tensor] = []
+        outputs: list[torch.Tensor] = []
         time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
 
         for time_t in time_seq:
             # Prepare vertices for FIGConvUNet: [1, N, 3]
             vertices = x.unsqueeze(0)  # [1, N, 3]
 
-            # Prepare features: thickness + time [N, 2]
+            # Prepare features: features + time [N, F+1]
             time_expanded = time_t.expand(x.size(0), 1)  # [N, 1]
-            features = torch.cat([thickness, time_expanded], dim=-1)  # [N, 2]
-            features = features.unsqueeze(0)  # [1, N, 2]
+            features_t = torch.cat([features, time_expanded], dim=-1)  # [N, F+1]
+            features_t = features_t.unsqueeze(0)  # [1, N, F+1]
 
             def step_fn(verts, feats):
                 out, _ = super(FIGConvUNetTimeConditionalRollout, self).forward(
@@ -462,11 +457,11 @@ class FIGConvUNetTimeConditionalRollout(FIGConvUNet):
                 outf = ckpt(
                     step_fn,
                     vertices,
-                    features,
+                    features_t,
                     use_reentrant=False,
                 ).squeeze(0)  # [N, 3]
             else:
-                outf = step_fn(vertices, features).squeeze(0)  # [N, 3]
+                outf = step_fn(vertices, features_t).squeeze(0)  # [N, 3]
 
             y_t = x + outf
             outputs.append(y_t)

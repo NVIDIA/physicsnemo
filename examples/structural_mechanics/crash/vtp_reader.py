@@ -169,7 +169,7 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
 
     if not vtp_files:
         if logger:
-            logger.error("No .vtp files found in:", base_data_dir)
+            logger.error(f"No .vtp files found in: {base_data_dir}")
         exit(1)
 
     for vtp_path in vtp_files:

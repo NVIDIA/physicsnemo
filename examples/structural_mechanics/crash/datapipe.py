@@ -350,13 +350,6 @@ class CrashBaseDataset:
         )
         return (invar - mu.view(1, 1, -1)) / (std.view(1, 1, -1) + EPS)
 
-    @staticmethod
-    def _normalize_thickness_tensor(
-        thickness: torch.Tensor, mu: torch.Tensor, std: torch.Tensor
-    ):
-        # thickness: [N], mu/std: scalar tensors
-        return (thickness - mu) / (std + EPS)
-
 
 class CrashGraphDataset(CrashBaseDataset):
     """
