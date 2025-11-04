@@ -23,15 +23,15 @@ out_channels: 3                      # displacement offset (xyz)
 
 # Architecture
 kernel_size: 3
-hidden_channels: [8, 16, 16]      # channels at each level
+hidden_channels: [16, 16, 16]      # channels at each level
 num_levels: 2                        # number of down/up levels
 num_down_blocks: 1
 num_up_blocks: 1
 mlp_channels: [256, 256]
 
-# Spatial domain (adjust based on your crash data)
-aabb_max: [150.0, 150.0, 150.0]
-aabb_min: [-150.0, -150.0, -150.0]
+# Spatial domain
+aabb_max: [2.0, 2.0, 2.0]
+aabb_min: [-2.0, -2.0, -2.0]
 voxel_size: null
 
 # Grid resolutions (factorized implicit grids)
