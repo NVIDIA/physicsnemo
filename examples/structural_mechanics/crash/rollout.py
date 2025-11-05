@@ -15,11 +15,11 @@
 # limitations under the License.
 
 import torch
-import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as ckpt
 
 from physicsnemo.models.transolver import Transolver
 from physicsnemo.models.meshgraphnet import MeshGraphNet
+from physicsnemo.models.figconvnet.figconvunet import FIGConvUNet
 
 from datapipe import SimSample
 
@@ -406,3 +406,64 @@ class MeshGraphNetOneStepRollout(MeshGraphNet):
                 y_t0, y_t1 = y_t1, y_t2_pred
 
         return torch.stack(outputs, dim=0)  # [T,N,3]
+
+
+class FIGConvUNetTimeConditionalRollout(FIGConvUNet):
+    """
+    FIGConvUNet with time-conditional rollout for crash simulation.
+
+    Predicts each time step independently, conditioned on normalized time.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+        super().__init__(*args, **kwargs)
+
+    def forward(
+        self,
+        sample: SimSample,
+        data_stats: dict,
+    ) -> torch.Tensor:
+        """
+        Args:
+            Sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [T, N, 3] rollout of predicted positions
+        """
+        inputs = sample.node_features
+        x = inputs["coords"]  # initial pos [N, 3]
+        features = inputs.get("features", x.new_zeros((x.size(0), 0)))  # [N, F]
+
+        outputs: list[torch.Tensor] = []
+        time_seq = torch.linspace(0.0, 1.0, self.rollout_steps, device=x.device)
+
+        for time_t in time_seq:
+            # Prepare vertices for FIGConvUNet: [1, N, 3]
+            vertices = x.unsqueeze(0)  # [1, N, 3]
+
+            # Prepare features: features + time [N, F+1]
+            time_expanded = time_t.expand(x.size(0), 1)  # [N, 1]
+            features_t = torch.cat([features, time_expanded], dim=-1)  # [N, F+1]
+            features_t = features_t.unsqueeze(0)  # [1, N, F+1]
+
+            def step_fn(verts, feats):
+                out, _ = super(FIGConvUNetTimeConditionalRollout, self).forward(
+                    vertices=verts, features=feats
+                )
+                return out
+
+            if self.training:
+                outf = ckpt(
+                    step_fn,
+                    vertices,
+                    features_t,
+                    use_reentrant=False,
+                ).squeeze(0)  # [N, 3]
+            else:
+                outf = step_fn(vertices, features_t).squeeze(0)  # [N, 3]
+
+            y_t = x + outf
+            outputs.append(y_t)
+
+        return torch.stack(outputs, dim=0)  # [T, N, 3]
