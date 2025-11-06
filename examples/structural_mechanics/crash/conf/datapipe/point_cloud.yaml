@@ -15,7 +15,8 @@
 # limitations under the License.
 
 _target_: datapipe.CrashPointCloudDataset
+_convert_: all
 data_dir: ${training.raw_data_dir}
 num_samples: ${training.num_training_samples}
 num_steps: ${training.num_time_steps}
-wall_node_disp_threshold: 1.0
+features: [thickness]

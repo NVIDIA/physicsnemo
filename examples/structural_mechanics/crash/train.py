@@ -30,7 +30,6 @@ from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
 
 from physicsnemo.distributed.manager import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
@@ -64,14 +63,23 @@ class Trainer:
                 f"Model {model_name} requires a point-cloud datapipe, "
                 f"but you selected {datapipe_name}."
             )
+        if "FIGConvUNet" in model_name and "PointCloudDataset" not in datapipe_name:
+            raise ValueError(
+                f"Model {model_name} requires a point-cloud datapipe, "
+                f"but you selected {datapipe_name}."
+            )
 
         # Dataset
+        reader = instantiate(cfg.reader)
+        logging.getLogger().setLevel(logging.INFO)
         dataset = instantiate(
             cfg.datapipe,
             name="crash_train",
+            reader=reader,
             split="train",
             logger=logger0,
         )
+        logging.getLogger().setLevel(logging.INFO)
         # Move stats to device
         self.data_stats = dict(
             node={k: v.to(self.dist.device) for k, v in dataset.node_stats.items()},
@@ -79,8 +87,9 @@ class Trainer:
                 k: v.to(self.dist.device)
                 for k, v in getattr(dataset, "edge_stats", {}).items()
             },
-            thickness={
-                k: v.to(self.dist.device) for k, v in dataset.thickness_stats.items()
+            feature={
+                k: v.to(self.dist.device)
+                for k, v in getattr(dataset, "feature_stats", {}).items()
             },
         )
 
@@ -218,7 +227,7 @@ def main(cfg: DictConfig) -> None:
         for sample in trainer.dataloader:
             sample = sample[0].to(dist.device)  # SimSample .to()
             loss = trainer.train(sample)
-            total_loss += loss.item()
+            total_loss += loss.detach().item()
             num_batches += 1
 
         trainer.scheduler.step()

@@ -19,10 +19,10 @@ import os
 import pyvista as pv
 
 from lasso.dyna import D3plot, ArrayType
-from typing import Dict, List, Optional
+from typing import Optional
 
 
-def find_run_folders(base_data_dir: str) -> List[str]:
+def find_run_folders(base_data_dir: str) -> list[str]:
     """
     Find run directories containing LS-DYNA d3plot files.
 
@@ -43,7 +43,7 @@ def find_run_folders(base_data_dir: str) -> List[str]:
     return run_dirs
 
 
-def parse_k_file(k_file_path: str) -> Dict[int, float]:
+def parse_k_file(k_file_path: str) -> dict[int, float]:
     """
     Parse LS-DYNA keyword (.k) file to extract part thickness values.
 
@@ -53,8 +53,8 @@ def parse_k_file(k_file_path: str) -> Dict[int, float]:
     Returns:
         Dictionary mapping part ID -> thickness.
     """
-    part_to_section: Dict[int, int] = {}
-    section_thickness: Dict[int, float] = {}
+    part_to_section: dict[int, int] = {}
+    section_thickness: dict[int, float] = {}
 
     with open(k_file_path, "r") as f:
         lines = [
@@ -187,7 +187,7 @@ def build_edges_from_mesh_connectivity(mesh_connectivity) -> set:
 def compute_node_thickness(
     mesh_connectivity,
     part_ids,
-    part_thickness_map: Dict[int, float],
+    part_thickness_map: dict[int, float],
     actual_part_ids: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
@@ -404,8 +404,34 @@ def process_d3plot_data(
             write_vtp,
             logger,
         )
-        point_data_all.append(
-            {"mesh_pos": mesh_pos_all, "thickness": filtered_thickness}
-        )
+        point_data_all.append({"coords": mesh_pos_all, "thickness": filtered_thickness})
 
     return srcs, dsts, point_data_all
+
+
+class Reader:
+    """
+    Reader for LS-DYNA d3plot files.
+
+    Args:
+        wall_node_disp_threshold: threshold for filtering wall nodes
+    """
+
+    def __init__(self, wall_node_disp_threshold: float = 1.0):
+        self.wall_node_disp_threshold = wall_node_disp_threshold
+
+    def __call__(
+        self,
+        data_dir: str,
+        num_samples: int,
+        split: str,
+        logger=None,
+    ):
+        write_vtp = False if split == "train" else True
+        return process_d3plot_data(
+            data_dir=data_dir,
+            num_samples=num_samples,
+            wall_node_disp_threshold=self.wall_node_disp_threshold,
+            write_vtp=write_vtp,
+            logger=logger,
+        )
