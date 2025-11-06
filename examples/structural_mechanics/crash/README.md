@@ -29,13 +29,6 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
   
 </p>
 
-### Roof Crash Modeling
-
-<p align="center">
-  <img src="../../../docs/img/crash/roof_crash.gif" alt="Roof crash animation" width="80%" />
-  
-</p>
-
 ## Quickstart
 
 1) Select your recipe (reader, datapipe, model) in `conf/config.yaml`.
