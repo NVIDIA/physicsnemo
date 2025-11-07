@@ -127,6 +127,8 @@ This will install:
 [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
 Using `PhysicsNeMo-Curator`, crash simulation data from LS-DYNA can be processed into training-ready formats easily.
 
+Currently, this can be used to preprocess d3plot files into VTP.
+
 ### Quick Start
 
 Install PhysicsNeMo-Curator following
@@ -180,18 +182,6 @@ Each VTP contains:
 - Node thickness values
 
 This format is directly compatible with the VTP reader in this example.
-
-### Configuration Options
-
-Key parameters you can adjust:
-
-- **`wall_threshold`**: Controls how aggressively wall nodes are filtered (default: 1.0)
-- **`time_step`**: Time between frames in VTP output (default: 0.005s)
-- **`num_processes`**: Number of parallel processes (default: 4)
-- **`overwrite_existing`**: Whether to reprocess existing files (default: true)
-
-For detailed documentation on the Crash ETL pipeline, see the
-[Crash Curator README](https://github.com/NVIDIA/physicsnemo-curator/tree/main/examples/structural_mechanics/crash).
 
 ## Training
 
