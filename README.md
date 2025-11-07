@@ -13,7 +13,7 @@
 | [**Install Guide**](#installation)
 | [**Getting Started**](#getting-started)
 | [**Contributing Guidelines**](#contributing-to-physicsnemo)
-| [**License**](#license)
+| [**Dev blog**](https://nvidia.github.io/physicsnemo/blog/)
 
 ## What is PhysicsNeMo?
 
