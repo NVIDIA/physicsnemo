@@ -336,40 +336,58 @@ def load_scaling_factors(
         )
 
     if cfg.model.normalization == "min_max_scaling":
-        vol_factors = np.asarray(
-            [
-                scaling_factors.max_val["volume_fields"],
-                scaling_factors.min_val["volume_fields"],
-            ]
-        )
-        surf_factors = np.asarray(
-            [
-                scaling_factors.max_val["surface_fields"],
-                scaling_factors.min_val["surface_fields"],
-            ]
-        )
+        if cfg.model.model_type == "volume" or cfg.model.model_type == "combined":
+            vol_factors = np.asarray(
+                [
+                    scaling_factors.max_val["volume_fields"],
+                    scaling_factors.min_val["volume_fields"],
+                ]
+            )
+        else:
+            vol_factors = None
+        if cfg.model.model_type == "surface" or cfg.model.model_type == "combined":
+            surf_factors = np.asarray(
+                [
+                    scaling_factors.max_val["surface_fields"],
+                    scaling_factors.min_val["surface_fields"],
+                ]
+            )
+        else:
+            surf_factors = None
     elif cfg.model.normalization == "mean_std_scaling":
-        vol_factors = np.asarray(
-            [
-                scaling_factors.mean["volume_fields"],
-                scaling_factors.std["volume_fields"],
-            ]
-        )
-        surf_factors = np.asarray(
-            [
-                scaling_factors.mean["surface_fields"],
-                scaling_factors.std["surface_fields"],
-            ]
-        )
+        if cfg.model.model_type == "volume" or cfg.model.model_type == "combined":
+            vol_factors = np.asarray(
+                [
+                    scaling_factors.mean["volume_fields"],
+                    scaling_factors.std["volume_fields"],
+                ]
+            )
+        else:
+            vol_factors = None
+        if cfg.model.model_type == "surface" or cfg.model.model_type == "combined":
+            surf_factors = np.asarray(
+                [
+                    scaling_factors.mean["surface_fields"],
+                    scaling_factors.std["surface_fields"],
+                ]
+            )
+        else:
+            surf_factors = None
     else:
         raise ValueError(f"Invalid normalization mode: {cfg.model.normalization}")
 
-    vol_factors_tensor = torch.from_numpy(vol_factors)
-    surf_factors_tensor = torch.from_numpy(surf_factors)
-
     dm = DistributedManager()
-    vol_factors_tensor = vol_factors_tensor.to(dm.device, dtype=torch.float32)
-    surf_factors_tensor = surf_factors_tensor.to(dm.device, dtype=torch.float32)
+
+    if cfg.model.model_type == "volume" or cfg.model.model_type == "combined":
+        vol_factors_tensor = torch.from_numpy(vol_factors)
+        vol_factors_tensor = vol_factors_tensor.to(dm.device, dtype=torch.float32)
+    else:
+        vol_factors_tensor = None
+    if cfg.model.model_type == "surface" or cfg.model.model_type == "combined":
+        surf_factors_tensor = torch.from_numpy(surf_factors)
+        surf_factors_tensor = surf_factors_tensor.to(dm.device, dtype=torch.float32)
+    else:
+        surf_factors_tensor = None
 
     return vol_factors_tensor, surf_factors_tensor
 
