@@ -88,7 +88,7 @@ def main(cfg: DictConfig) -> None:
 
     # Create dataset object
     dataset_cfg = OmegaConf.to_container(cfg.dataset)
-
+    
     # Register dataset (if custom dataset)
     register_dataset(cfg.dataset.type)
     logger0.info(f"Using dataset: {cfg.dataset.type}")
@@ -100,6 +100,7 @@ def main(cfg: DictConfig) -> None:
     dataset, sampler = get_dataset_and_sampler(
         dataset_cfg=dataset_cfg, times=times, has_lead_time=has_lead_time
     )
+    solar = getattr(dataset, 'solar', False) #If we are doing solar downscaling
     img_shape = dataset.image_shape()
     img_out_channels = len(dataset.output_channels())
 
@@ -381,7 +382,8 @@ def main(cfg: DictConfig) -> None:
                 start = end = DummyEvent()
 
             times = dataset.time()
-            for dataset_index, (image_tar, image_lr, *lead_time_label) in zip(
+            
+            for dataset_index, batch in zip(
                 sampler,
                 iter(data_loader),
             ):
@@ -392,7 +394,11 @@ def main(cfg: DictConfig) -> None:
                 if time_index == warmup_steps:
                     start.record()
 
-                # continue
+                if solar:
+                    image_tar, image_lr, windows, *lead_time_label = batch 
+                else:
+                    image_tar, image_lr, *lead_time_label = batch
+                
                 if lead_time_label:
                     lead_time_label = lead_time_label[0].to(dist.device).contiguous()
                 else:
@@ -403,7 +409,19 @@ def main(cfg: DictConfig) -> None:
                     .to(memory_format=torch.channels_last)
                 )
                 image_tar = image_tar.to(device=device).to(torch.float32)
-                image_out = generate_fn()
+                if solar:#We need perform multi-diffusion generation
+                    image_out = generate_solar(image_lr_full=image_lr,
+                                            image_tar_full=image_tar, 
+                                            windows=windows,
+                                            net_reg=net_reg,
+                                            logger0 = logger0 
+                                            img_out_channels = img_out_channels,
+                                            net_res = net_res,
+                                            seeds = seeds
+                                            )
+                else:
+                    image_out = generate_fn()
+
                 if dist.rank == 0:
                     batch_size = image_out.shape[0]
                     if cfg.generation.perf.io_synchronous:
@@ -419,6 +437,7 @@ def main(cfg: DictConfig) -> None:
                                 image_lr.cpu(),
                                 time_index,
                                 dataset_index,
+                                solar
                             )
                         )
                     else:
@@ -431,6 +450,7 @@ def main(cfg: DictConfig) -> None:
                             image_lr.cpu(),
                             time_index,
                             dataset_index,
+                            solar
                         )
             end.record()
             end.synchronize()

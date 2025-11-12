@@ -131,7 +131,7 @@ def main(cfg: DictConfig) -> None:
     # Resolve and parse configs
     OmegaConf.resolve(cfg)
     dataset_cfg = OmegaConf.to_container(cfg.dataset)  # TODO needs better handling
-
+    
     # Register custom dataset if specified in config
     register_dataset(cfg.dataset.type)
     logger0.info(f"Using dataset: {cfg.dataset.type}")
@@ -191,6 +191,7 @@ def main(cfg: DictConfig) -> None:
 
     # Parse image configuration & update model args
     dataset_channels = len(dataset.input_channels())
+    solar = getattr(dataset, 'solar', False) #If we are doing solar downscaling
     img_in_channels = dataset_channels
     img_shape = dataset.image_shape()
     img_out_channels = len(dataset.output_channels())
@@ -541,9 +542,13 @@ def main(cfg: DictConfig) -> None:
                             f"accumulation round {n_i}", color="Magenta"
                         ):
                             with nvtx.annotate("loading data", color="green"):
-                                img_clean, img_lr, *lead_time_label = next(
+                                batch = next(
                                     dataset_iterator
                                 )
+                                if solar:
+                                    img_clean, img_lr, windows, *lead_time_label = batch 
+                                else:
+                                    img_clean, img_lr, *lead_time_label = batch
                                 if use_apex_gn:
                                     img_clean = img_clean.to(
                                         dist.device,
