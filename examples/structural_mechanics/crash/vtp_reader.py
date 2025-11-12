@@ -225,7 +225,7 @@ class Reader:
         logger=None,
         **kwargs,
     ):
-        write_vtp = False if split == "train" else True
+        write_vtp = False if split in ("train", "validation") else True
         return process_vtp_data(
             data_dir=data_dir,
             num_samples=num_samples,

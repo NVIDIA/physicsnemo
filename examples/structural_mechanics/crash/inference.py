@@ -150,13 +150,14 @@ class InferenceWorker:
             os.symlink(run_path, os.path.join(tmpdir, run_name))
 
             # Instantiate a dataset that sees exactly one run
+            reader = instantiate(self.cfg.reader)
             dataset = instantiate(
                 self.cfg.datapipe,
                 name="crash_test",
+                reader=reader,
                 split="test",
                 num_steps=self.cfg.training.num_time_steps,
                 num_samples=1,
-                write_vtp=True,  # ensures it writes ./output_<run_name>/frame_*.vtp
                 logger=self.logger,
                 data_dir=tmpdir,  # IMPORTANT: dataset reads from the tmpdir with single run
             )
@@ -197,12 +198,7 @@ class InferenceWorker:
                 sample = sample.to(self.device)
 
                 # Forward rollout: expected to return [T,N,3]
-                pred_seq = self.model(
-                    node_features=sample.node_features,
-                    edge_index=sample.edge_index,
-                    edge_features=sample.edge_features,
-                    data_stats=data_stats,
-                )
+                pred_seq = self.model(sample=sample, data_stats=data_stats)
 
                 # Exact sequence (if provided)
                 exact_seq = None
