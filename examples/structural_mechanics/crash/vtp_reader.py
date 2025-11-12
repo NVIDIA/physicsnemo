@@ -105,13 +105,13 @@ def load_vtp_file(vtp_path):
 
     pos_raw = np.stack(pos_list, axis=0)
     mesh_connectivity = extract_mesh_connectivity_from_polydata(poly)
-    
+
     # Extract all other point data fields (not displacement fields)
     point_data_dict = {}
     for name in poly.point_data.keys():
         if not name.startswith("displacement_"):
             point_data_dict[name] = np.asarray(poly.point_data[name])
-    
+
     return pos_raw, mesh_connectivity, point_data_dict
 
 
@@ -208,7 +208,7 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
             write_vtp=write_vtp,
             logger=logger,
         )
-        
+
         # Create record with coords and all other point data fields
         record = {"coords": mesh_pos_all}
         record.update(point_data_dict)  # Add thickness and any other fields
