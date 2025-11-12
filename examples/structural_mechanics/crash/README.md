@@ -121,6 +121,68 @@ This will install:
 - lasso-python (for LS-DYNA file parsing),
 - torch_geometric and torch_scatter (for GNN operations),
 
+## Data Preprocessing
+
+`PhysicsNeMo` has a related project to help with data processing, called
+[PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
+Using `PhysicsNeMo-Curator`, crash simulation data from LS-DYNA can be processed into training-ready formats easily.
+
+Currently, this can be used to preprocess d3plot files into VTP.
+
+### Quick Start
+
+Install PhysicsNeMo-Curator following
+[these instructions](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#installation-and-usage).
+
+Process your LS-DYNA data:
+
+```bash
+export PYTHONPATH=$PYTHONPATH:examples &&
+physicsnemo-curator-etl                                    \
+    --config-dir=examples/config                           \
+    --config-name=crash_etl                                \
+    etl.source.input_dir=/data/crash_sims/                 \
+    etl.sink.output_dir=/data/crash_processed_vtp/         \
+    etl.processing.num_processes=4
+```
+
+This will process all LS-DYNA runs in `/data/crash_sims/` and output VTP files to `/data/crash_processed_vtp/`.
+
+### Input Data Structure
+
+The Curator expects your LS-DYNA data organized as:
+
+```
+crash_sims/
+├── Run100/
+│   ├── d3plot          # Required: binary mesh/displacement data
+│   └── run100.k        # Optional: part thickness definitions
+├── Run101/
+│   ├── d3plot
+│   └── run101.k
+└── ...
+```
+
+### Output Formats
+
+#### VTP Format (Recommended for this example)
+
+Produces single VTP file per run with all timesteps as displacement fields:
+
+```
+crash_processed_vtp/
+├── Run100.vtp
+├── Run101.vtp
+└── ...
+```
+
+Each VTP contains:
+- Reference coordinates at t=0
+- Displacement fields: `displacement_t0.000`, `displacement_t0.005`, etc.
+- Node thickness values
+
+This format is directly compatible with the VTP reader in this example.
+
 ## Training
 
 Training is managed via Hydra configurations located in conf/.
