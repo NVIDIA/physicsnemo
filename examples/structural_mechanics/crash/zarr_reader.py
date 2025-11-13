@@ -144,9 +144,22 @@ def process_zarr_data(
 
             # Validate point data features
             for name, data in point_data_dict.items():
-                if data.ndim != 1:
+            for name, data in point_data_dict.items():
+                if data.ndim == 1:
+                    if len(data) != num_nodes:
+                        raise ValueError(
+                            f"Point data '{name}' length {len(data)} doesn't match "
+                            f"number of nodes {num_nodes} in {zarr_path}"
+                        )
+                elif data.ndim == 2:
+                    if data.shape[0] != num_nodes:
+                        raise ValueError(
+                            f"Point data '{name}' shape {data.shape} doesn't match "
+                            f"number of nodes {num_nodes} in {zarr_path}"
+                        )
+                else:
                     raise ValueError(
-                        f"Point data '{name}' must be [N], got {data.shape} in {zarr_path}"
+                        f"Point data '{name}' must be [N] or [N,K], got shape {data.shape} in {zarr_path}"
                     )
                 if len(data) != num_nodes:
                     raise ValueError(
