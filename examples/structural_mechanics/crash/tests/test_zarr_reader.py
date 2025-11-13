@@ -218,6 +218,46 @@ def test_load_zarr_store_multiple_point_data_fields():
             assert data.dtype == np.float32, f"{name} should be float32"
 
 
+def test_load_zarr_store_2d_feature_arrays():
+    """Test that load_zarr_store correctly handles 2D feature arrays [N, K]."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        store_path = Path(temp_dir) / "2d_features.zarr"
+        store_path.mkdir()
+
+        # Create store with 2D feature array
+        num_nodes = 8
+        feature_dim = 3
+        store = zarr.open(str(store_path), mode="w")
+        store.create_dataset(
+            "mesh_pos", data=np.random.randn(3, num_nodes, 3).astype(np.float32)
+        )
+        store.create_dataset("edges", data=np.array([[0, 1]], dtype=np.int64))
+        # Add 1D feature (thickness)
+        store.create_dataset("thickness", data=np.ones(num_nodes, dtype=np.float32))
+        # Add 2D feature array [N, K] (e.g., stress tensor components)
+        stress_tensor = np.random.randn(num_nodes, feature_dim).astype(np.float32)
+        store.create_dataset("stress_tensor", data=stress_tensor)
+
+        mesh_pos, edges, point_data_dict = zarr_reader.load_zarr_store(str(store_path))
+
+        # Should have both 1D and 2D features
+        assert "thickness" in point_data_dict
+        assert "stress_tensor" in point_data_dict
+
+        # Check 1D feature shape
+        assert point_data_dict["thickness"].shape == (num_nodes,)
+        assert point_data_dict["thickness"].ndim == 1
+
+        # Check 2D feature shape
+        assert point_data_dict["stress_tensor"].shape == (num_nodes, feature_dim)
+        assert point_data_dict["stress_tensor"].ndim == 2
+
+        # Verify values match
+        np.testing.assert_array_almost_equal(
+            point_data_dict["stress_tensor"], stress_tensor
+        )
+
+
 def test_process_zarr_data(mock_zarr_directory):
     """Test processing multiple Zarr stores."""
     srcs, dsts, point_data = zarr_reader.process_zarr_data(
