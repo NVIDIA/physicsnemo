@@ -412,8 +412,8 @@ def main():
         num_workers: int = num_gpus * workers_per_gpu
         
         logging.info(
-                     f"Found {num_gpus} GPUs. Starting parallel processing with\
-                         {num_workers} workers ({workers_per_gpu} per GPU).")
+                     f"Found {num_gpus} GPUs. Starting parallel processing with "
+                     f"{num_workers} workers ({workers_per_gpu} per GPU).")
         args: list[tuple[str, str, int, int]] = [
             (filepath, output_path, i % num_gpus, user_source_frequency)
             for i, filepath in enumerate(file_list)
