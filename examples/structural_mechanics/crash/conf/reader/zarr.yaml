@@ -14,20 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-hydra:
-  job:
-    chdir: True
-  run:
-    dir: ./outputs/
-
-experiment_name: "Unified-Training"
-experiment_desc: "unified training recipe for crash models"
-run_desc: "unified training recipe for crash models"
-
-defaults:
-  - reader: vtp # Options are: vtp, d3plot, zarr
-  - datapipe: point_cloud   # will be overridden by model configs
-  - model: transolver_autoregressive_rollout_training
-  - training: default
-  - inference: default
-  - _self_
+_target_: zarr_reader.Reader
+_convert_: all
