@@ -143,7 +143,7 @@ def process_zarr_data(
             num_nodes = mesh_pos.shape[1]
 
             # Validate point data features
-            for name, data in point_data_dict.items():
+            # Validate point data features
             for name, data in point_data_dict.items():
                 if data.ndim == 1:
                     if len(data) != num_nodes:
@@ -160,11 +160,6 @@ def process_zarr_data(
                 else:
                     raise ValueError(
                         f"Point data '{name}' must be [N] or [N,K], got shape {data.shape} in {zarr_path}"
-                    )
-                if len(data) != num_nodes:
-                    raise ValueError(
-                        f"Point data '{name}' length {len(data)} doesn't match "
-                        f"number of nodes {num_nodes} in {zarr_path}"
                     )
 
             # Validate edge indices are within bounds
