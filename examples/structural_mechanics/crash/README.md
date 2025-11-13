@@ -36,7 +36,7 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 ```yaml
 # conf/config.yaml
 defaults:
-  - reader: vtp                  # or d3plot, or your custom reader
+  - reader: vtp                  # vtp, zarr, d3plot, or your custom reader
   - datapipe: point_cloud        # or graph
   - model: transolver_time_conditional   # or an MGN variant
   - training: default
@@ -47,7 +47,7 @@ defaults:
 2) Point to your datasets and core training knobs.
 
 - `conf/training/default.yaml`:
-  - `raw_data_dir`: path to TRAIN runs (folder of run folders for d3plot, or folder of .vtp files for VTP)
+  - `raw_data_dir`: path to TRAIN runs (folder of run folders for d3plot, folder of .vtp files for VTP, or folder of .zarr stores for Zarr)
   - `num_time_steps`: number of frames to use per run
   - `num_training_samples`: how many runs to load
 
@@ -77,6 +77,7 @@ features: [thickness]   # or [] for no features; preserve order if adding more
 4) Reader‑specific options (optional).
 
 - d3plot: `conf/reader/d3plot.yaml` → `wall_node_disp_threshold`
+- VTP and Zarr readers have no additional options (they read pre-processed data)
 
 5) Model config: ensure input dimensions match your features.
 
@@ -127,26 +128,38 @@ This will install:
 [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator).
 Using `PhysicsNeMo-Curator`, crash simulation data from LS-DYNA can be processed into training-ready formats easily.
 
-Currently, this can be used to preprocess d3plot files into VTP.
+PhysicsNeMo-Curator can preprocess d3plot files into **VTP** (for visualization and smaller datasets) or **Zarr** (for large-scale ML training).
 
 ### Quick Start
 
 Install PhysicsNeMo-Curator following
 [these instructions](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#installation-and-usage).
 
-Process your LS-DYNA data:
+Process your LS-DYNA data to **VTP format**:
 
 ```bash
 export PYTHONPATH=$PYTHONPATH:examples &&
-physicsnemo-curator-etl                                    \
-    --config-dir=examples/config                           \
-    --config-name=crash_etl                                \
-    etl.source.input_dir=/data/crash_sims/                 \
-    etl.sink.output_dir=/data/crash_processed_vtp/         \
+physicsnemo-curator-etl                                         \
+    --config-dir=examples/structural_mechanics/crash/config     \
+    --config-name=crash_etl                                     \
+    serialization_format=vtp                                    \
+    etl.source.input_dir=/data/crash_sims/                      \
+    serialization_format.sink.output_dir=/data/crash_vtp/       \
     etl.processing.num_processes=4
 ```
 
-This will process all LS-DYNA runs in `/data/crash_sims/` and output VTP files to `/data/crash_processed_vtp/`.
+Or process to **Zarr format** for large-scale training:
+
+```bash
+export PYTHONPATH=$PYTHONPATH:examples &&
+physicsnemo-curator-etl                                         \
+    --config-dir=examples/structural_mechanics/crash/config     \
+    --config-name=crash_etl                                     \
+    serialization_format=zarr                                   \
+    etl.source.input_dir=/data/crash_sims/                      \
+    serialization_format.sink.output_dir=/data/crash_zarr/      \
+    etl.processing.num_processes=4
+```
 
 ### Input Data Structure
 
@@ -165,7 +178,7 @@ crash_sims/
 
 ### Output Formats
 
-#### VTP Format (Recommended for this example)
+#### VTP Format
 
 Produces single VTP file per run with all timesteps as displacement fields:
 
@@ -179,9 +192,32 @@ crash_processed_vtp/
 Each VTP contains:
 - Reference coordinates at t=0
 - Displacement fields: `displacement_t0.000`, `displacement_t0.005`, etc.
-- Node thickness values
+- Node thickness and other point data features
 
 This format is directly compatible with the VTP reader in this example.
+
+#### Zarr Format
+
+Produces one Zarr store per run with pre-computed graph structure:
+
+```
+crash_processed_zarr/
+├── Run100.zarr/
+│   ├── mesh_pos       # (timesteps, nodes, 3) - temporal positions
+│   ├── thickness      # (nodes,) - node features
+│   └── edges          # (num_edges, 2) - pre-computed graph connectivity
+├── Run101.zarr/
+└── ...
+```
+
+Each Zarr store contains:
+- `mesh_pos`: Full temporal trajectory (no displacement reconstruction needed)
+- `thickness`: Per-node features
+- `edges`: Pre-computed edge connectivity (no edge rebuilding during training)
+
+**NOTE:** All heavy preprocessing (node filtering, edge building, thickness computation) is done once during curation using PhysicsNeMo-Curator. The reader simply loads pre-computed arrays.
+
+This format is directly compatible with the Zarr reader in this example.
 
 ## Training
 
@@ -277,14 +313,15 @@ If you use the graph datapipe, the edge list is produced by walking the filtered
 
 ### Built‑in VTP reader (PolyData)
 
-In addition to `d3plot`, a lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
+A lightweight VTP reader is provided in `vtp_reader.py`. It treats each `.vtp` file in a directory as a separate run and expects point displacements to be stored as vector arrays in `poly.point_data` with names like `displacement_t0.000`, `displacement_t0.005`, … (a more permissive fallback of any `displacement_t*` is also supported). The reader:
 
 - loads the reference coordinates from `poly.points`
 - builds absolute positions per timestep as `[t0: coords, t>0: coords + displacement_t]`
 - extracts cell connectivity from the PolyData faces and converts it to unique edges
-- returns `(srcs, dsts, point_data)` where `point_data` contains `'coords': [T, N, 3]`
+- extracts all point data fields dynamically (e.g., thickness, modulus)
+- returns `(srcs, dsts, point_data)` where `point_data` contains `'coords': [T, N, 3]` and all feature arrays
 
-By default, the VTP reader does not attach additional features; it is compatible with `features: []`. If your `.vtp` files include additional per‑point arrays you would like to model (e.g., thickness or modulus), extend the reader to add those arrays to each run’s record using keys that match your `features` list. The datapipe will then concatenate them in the configured order.
+The VTP reader dynamically extracts all non-displacement point data fields from the VTP file and makes them available to the datapipe. If your `.vtp` files include additional per‑point arrays (e.g., thickness or modulus), simply add their names to the `features` list in your datapipe config.
 
 Example Hydra configuration for the VTP reader:
 
@@ -304,11 +341,57 @@ defaults:
   - reader: vtp
 ```
 
-And set `features` to empty (or to the names you add in your extended reader) in `conf/datapipe/point_cloud.yaml` or `conf/datapipe/graph.yaml`:
+And configure features in `conf/datapipe/point_cloud.yaml` or `conf/datapipe/graph.yaml`:
 
 ```yaml
-features: []  # or [thickness, Y_modulus] if your reader provides them
+features: [thickness]  # or [] for no features
 ```
+
+### Built‑in Zarr reader
+
+A Zarr reader provided in `zarr_reader.py`. It reads pre-processed Zarr stores created by PhysicsNeMo-Curator, where all heavy computation (node filtering, edge building, thickness computation) has already been done during the ETL pipeline. The reader:
+
+- loads pre-computed temporal positions directly from `mesh_pos` (no displacement reconstruction)
+- loads pre-computed edges (no connectivity-to-edge conversion needed)
+- dynamically extracts all point data fields (thickness, etc.) from the Zarr store
+- returns `(srcs, dsts, point_data)` similar to VTP reader
+
+Data layout expected by Zarr reader:
+- `<DATA_DIR>/*.zarr/` (each `.zarr` directory is treated as one run)
+- Each Zarr store must contain:
+  - `mesh_pos`: `[T, N, 3]` temporal positions
+  - `edges`: `[E, 2]` pre-computed edge connectivity
+  - Feature arrays (e.g., `thickness`): `[N]` or `[N, K]` per-node features
+
+Example Hydra configuration for the Zarr reader:
+
+```yaml
+# conf/reader/zarr.yaml
+_target_: zarr_reader.Reader
+```
+
+Select it in `conf/config.yaml`:
+
+```yaml
+defaults:
+  - reader: zarr # Options are: vtp, d3plot, zarr
+  - datapipe: point_cloud   # will be overridden by model configs
+  - model: transolver_autoregressive_rollout_training
+  - training: default
+  - inference: default
+  - _self_
+```
+
+And configure features in `conf/datapipe/graph.yaml`:
+
+```yaml
+features: [thickness]  # Must match fields stored in Zarr
+```
+
+**Recommended workflow:**
+1. Use PhysicsNeMo-Curator to preprocess d3plot → VTP or Zarr once
+2. Use corresponding reader for all training/validation
+3. Optionally use d3plot reader for quick prototyping on raw data
 
 ### Data layout expected by readers
 
@@ -319,6 +402,10 @@ features: []  # or [thickness, Y_modulus] if your reader provides them
 - VTP reader (`vtp_reader.py`):
   - `<DATA_DIR>/*.vtp` (each `.vtp` is treated as one run)
   - Displacements stored as 3‑component arrays in point_data with names like `displacement_t0.000`, `displacement_t0.005`, ... (fallback accepts any `displacement_t*`).
+
+- Zarr reader (`zarr_reader.py`):
+  - `<DATA_DIR>/*.zarr/` (each `.zarr` directory is treated as one run)
+  - Contains pre-computed `mesh_pos`, `edges`, and feature arrays
 
 ### Write your own reader
 
