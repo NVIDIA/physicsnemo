@@ -143,7 +143,6 @@ def process_zarr_data(
             num_nodes = mesh_pos.shape[1]
 
             # Validate point data features
-            # Validate point data features
             for name, data in point_data_dict.items():
                 if data.ndim == 1:
                     if len(data) != num_nodes:
