@@ -22,23 +22,24 @@ import nvidia.dali as dali
 
 from physicsnemo.datapipes.climate.climate import (
     ClimateDatapipe,
-    ClimateDaliExternalSource,
     ClimateHDF5DaliExternalSource,
 )
 
 
-class InterpDaliExternalSource(ClimateDaliExternalSource):
+class InterpHDF5DaliExternalSource(ClimateHDF5DaliExternalSource):
     """
-    Data source specialized for interpolation training.
+    DALI source for reading HDF5 formatted climate data files.
+
+    Specialized for interpolation training with HDF5 climate data.
 
     Parameters
     ----------
     *args : tuple
-        Positional arguments passed to parent class.
+        Positional arguments passed to parent classes.
     all_steps : bool, optional
         Whether to return all steps in the sequence. Default is False.
     **kwargs : dict
-        Keyword arguments passed to parent class.
+        Keyword arguments passed to parent classes.
     """
 
     def __init__(self, *args, all_steps: bool = False, **kwargs):
@@ -104,26 +105,6 @@ class InterpDaliExternalSource(ClimateDaliExternalSource):
     def __len__(self) -> int:
         return len(self.indices) // self.stride
 
-
-class InterpHDF5DaliExternalSource(
-    ClimateHDF5DaliExternalSource, InterpDaliExternalSource
-):
-    """
-    DALI source for reading HDF5 formatted climate data files.
-
-    Specialized for interpolation training with HDF5 climate data.
-
-    Parameters
-    ----------
-    *args : tuple
-        Positional arguments passed to parent classes.
-    **kwargs : dict
-        Keyword arguments passed to parent classes.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def _get_read_buffer(self, steps: list[int], data) -> np.ndarray:
         """Get memory buffer for reading data."""
         shape = (len(steps), len(self.chans)) + data.shape[-2:]
@@ -186,7 +167,9 @@ class InterpClimateDatapipe(ClimateDatapipe):
     Extends ClimateDatapipe to use interpolation source.
     """
 
-    def _source_cls_from_type(self, source_type: str) -> type[InterpDaliExternalSource]:
+    def _source_cls_from_type(
+        self, source_type: str
+    ) -> type[InterpHDF5DaliExternalSource]:
         """
         Get the external source class based on a string descriptor.
 
@@ -197,7 +180,7 @@ class InterpClimateDatapipe(ClimateDatapipe):
 
         Returns
         -------
-        type[InterpDaliExternalSource]
+        type[InterpHDF5DaliExternalSource]
             The appropriate external source class for the given type.
         """
         return {
