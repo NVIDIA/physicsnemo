@@ -212,7 +212,7 @@ def setup_model(
         model_cfg["in_channels"] = 2 * num_variables + num_auxiliaries
     if model_cfg.get("out_channels") is None:
         model_cfg["out_channels"] = num_variables
-    model_name = model_cfg.pop("model_name")
+    model_name = model_cfg.pop("model_name", None)
     model_kwargs = default_model_params[model_type].copy()
     model_kwargs.update(model_cfg)
     if model_type == "modafno":

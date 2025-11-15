@@ -196,13 +196,15 @@ def error_by_time(
     """
     trainer = setup_analysis(cfg=cfg, checkpoint=checkpoint)
 
-    lat = torch.linspace(90, -90, 721)[:-1].to(device=trainer.model.device)
-    lat[0] = 0.5 * (lat[0] + lat[1])
-    cos_lat = torch.cos(lat * (torch.pi / 180))[None, None, :, None]
-
     bins = torch.linspace(0, max_error, nbins + 1)
 
     def _hist(y_true: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+        lat = torch.linspace(90, -90, y_true.shape[-2])[:-1].to(
+            device=trainer.model.device
+        )
+        lat[0] = 0.5 * (lat[0] + lat[1])
+        cos_lat = torch.cos(lat * (torch.pi / 180))[None, None, :, None]
+
         err = (y_true - y_pred) ** 2
         weights = torch.ones_like(err) * cos_lat
         return torch.histogram(
