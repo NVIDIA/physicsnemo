@@ -207,18 +207,25 @@ class Grid:
         Returns
             np.ndarray: The connection matrix where each row represents a connection
             between two grid cells.
+
+        Notes
+            Indexing convention:
+            - cell_idx_cumsum: 1-based sequential indices for active cells (1, 2, 3, ...)
+            - NNC1/NNC2: 1-based ECLIPSE global cell indices
+            - Final output (_conx): 0-based Python indices for active cells
         """
 
-        # Compute active cell indexing
+        # Compute active cell indexing: creates 1-based sequential indices (1, 2, 3, ...)
+        # for active cells, 0 for inactive cells
         cell_idx = np.ones(self.nn, dtype=int)
         cell_idx[self.actnum == 0] = 0
-        cell_idx_cumsum = np.cumsum(cell_idx)
-        cell_idx_cumsum[self.actnum == 0] = 0
+        cell_idx_cumsum = np.cumsum(cell_idx)  # 1-based: active cells get 1, 2, 3, ...
+        cell_idx_cumsum[self.actnum == 0] = 0  # Set inactive cells back to 0
 
-        # Reshape active grid indices into 3D
+        # Reshape active grid indices into 3D (maintains 1-based indexing)
         cell_idx_3D = cell_idx_cumsum.reshape(self.nx, self.ny, self.nz, order="F")
 
-        # Extend face indexing by adding ghost layers
+        # Extend face indexing by adding ghost layers (boundary cells remain 0)
         face_idx = np.zeros((self.nx + 2, self.ny + 2, self.nz + 2), dtype=int)
         face_idx[1 : self.nx + 1, 1 : self.ny + 1, 1 : self.nz + 1] = cell_idx_3D
 
@@ -242,6 +249,9 @@ class Grid:
         conx = np.vstack(conx)
 
         # Non-neighboring connections (NNC)
+        # NNC1/NNC2 are 1-based ECLIPSE global cell indices
+        # We subtract 1 to convert to 0-based Python indices for array access
+        # cell_idx_flattened then returns the 1-based sequential active cell index
         if self.NNC and self.NNC1.size > 0 and self.NNC2.size > 0:
             cell_idx_flattened = cell_idx_3D.ravel(order="F")
             NNC_conx = np.column_stack(
@@ -249,12 +259,13 @@ class Grid:
             )
             conx = np.vstack((conx, NNC_conx))
 
-        # **Filter out boundary connections (connections involving inactive cells)**
+        # Filter out boundary connections (connections involving inactive cells)
+        # Inactive cells have index 0, so any connection with 0 is invalid
         self._valid_conx_idx = ~np.any(conx == 0, axis=1)
 
         # Filter boundary connections and convert to 0-based indexing
-        # Note: conx contains 1-based sequential active cell indices from cell_idx_cumsum,
-        # so we simply subtract 1 to get 0-based indices (vectorized, no dictionary needed)
+        # At this point, conx contains 1-based sequential active cell indices (1, 2, 3, ...)
+        # We subtract 1 to convert to 0-based Python indices (0, 1, 2, ...) for final output
         self._conx = conx[self._valid_conx_idx] - 1
 
         # Log detailed grid and connection information at debug level
@@ -294,16 +305,16 @@ class Grid:
 
         nx, ny, nz = self.nx, self.ny, self.nz
         self._T_xyz = np.zeros((self.nn, self.num_max_dims))  # tran in xyz-dirs
-        self._Tx = np.zeros((nx + 1, ny, nz))  # total flux in x-dir
-        self._Ty = np.zeros((nx, ny + 1, nz))  # total flux in y-dir
-        self._Tz = np.zeros((nx, ny, nz + 1))  # total flux in z-dir
+        self._Tx = np.zeros((nx + 1, ny, nz))  # total tran in x-dir
+        self._Ty = np.zeros((nx, ny + 1, nz))  # total tran in y-dir
+        self._Tz = np.zeros((nx, ny, nz + 1))  # total tran in z-dir
 
-        # Store phase fluxes at active cells
+        # Store phase tran at active cells
         for i, key in enumerate(self._tran_keys[:-1]):
             if key in init_data and init_data[key].size:
                 self._T_xyz[self.actnum_bool, i] = init_data[key]
 
-        # Compute total flux for xyz dirs
+        # Compute total tran for xyz dirs
         Txyz_flattened = np.array([])
         if nx > 1:
             self._Tx[1 : nx + 1, :, :] = self._T_xyz[:, 0].reshape(
@@ -321,7 +332,7 @@ class Grid:
             )
             Txyz_flattened = np.append(Txyz_flattened, self._Tz.ravel(order="F"))
 
-        # Append total flux for NNCs if applicable
+        # Append total tran for NNCs if applicable
         if "TRANNNC" in init_data and init_data["TRANNNC"].size:
             Txyz_flattened = np.append(Txyz_flattened, init_data["TRANNNC"])
 

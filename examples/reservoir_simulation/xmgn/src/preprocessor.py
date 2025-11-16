@@ -53,6 +53,8 @@ from data.graph_builder import ReservoirGraphBuilder
 from data.dataloader import PartitionedGraph, compute_global_statistics
 from utils import get_dataset_dir
 
+logger = logging.getLogger(__name__)
+
 
 class SimplePartition:
     """Simple sequential partition as fallback when METIS is not available.
@@ -125,8 +127,8 @@ class ReservoirPreprocessor:
 
         # Extract job name from dataset directory for display
         job_name = os.path.basename(self.dataset_dir)
-        print(f"Dataset directory: {self.dataset_dir}")
-        print(f"Job name: {job_name}")
+        logger.info(f"Dataset directory: {self.dataset_dir}")
+        logger.info(f"Job name: {job_name}")
 
     def _extract_case_name_from_filename(self, filename):
         """
@@ -187,7 +189,7 @@ class ReservoirPreprocessor:
         with open(list_path, "w") as f:
             json.dump(graph_list, f, indent=2)
 
-        print(f"Saved graph file list to: {list_path}")
+        logger.info(f"Saved graph file list to: {list_path}")
 
     def load_graph_file_list(self, list_file="generated_graphs.json"):
         """
@@ -227,12 +229,16 @@ class ReservoirPreprocessor:
             "graphs_dir": self.graphs_dir,
             "partitions_dir": self.partitions_dir,
             "preprocessing_completed": True,
+            "partition_config": {
+                "num_partitions": self.cfg.preprocessing.num_partitions,
+                "halo_size": self.cfg.preprocessing.halo_size,
+            },
         }
 
         with open(metadata_file, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        print(f"Saved preprocessing metadata to: {metadata_file}")
+        logger.info(f"Saved preprocessing metadata to: {metadata_file}")
 
     def save_dataset_metadata(self, metadata_file="dataset_metadata.json"):
         """
@@ -258,13 +264,81 @@ class ReservoirPreprocessor:
                 "simulator": self.cfg.dataset.simulator,
                 "num_samples": getattr(self.cfg.dataset, "num_samples", None),
             },
+            "partition_config": {
+                "num_partitions": self.cfg.preprocessing.num_partitions,
+                "halo_size": self.cfg.preprocessing.halo_size,
+            },
         }
 
         metadata_path = os.path.join(self.dataset_dir, metadata_file)
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        print(f"Saved dataset metadata to: {metadata_path}")
+        logger.info(f"Saved dataset metadata to: {metadata_path}")
+
+    def validate_partition_topology(self):
+        """
+        Validate that existing partitions match the current configuration.
+
+        Returns
+        --------
+        bool
+            True if partitions are valid and match current config, False otherwise
+        """
+        # Check if dataset metadata exists
+        metadata_path = os.path.join(self.dataset_dir, "dataset_metadata.json")
+        if not os.path.exists(metadata_path):
+            logger.warning(
+                "No dataset metadata found, cannot validate partition topology"
+            )
+            return False
+
+        try:
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+
+            # Check if partition config exists in metadata
+            if "partition_config" not in metadata:
+                logger.warning(
+                    "Partition configuration not found in metadata, "
+                    "partitions may have been created with older version"
+                )
+                return False
+
+            saved_config = metadata["partition_config"]
+            current_num_partitions = self.cfg.preprocessing.num_partitions
+            current_halo_size = self.cfg.preprocessing.halo_size
+
+            saved_num_partitions = saved_config.get("num_partitions")
+            saved_halo_size = saved_config.get("halo_size")
+
+            # Validate num_partitions
+            if saved_num_partitions != current_num_partitions:
+                logger.warning(
+                    f"Partition topology mismatch: "
+                    f"existing partitions have num_partitions={saved_num_partitions}, "
+                    f"but current config has num_partitions={current_num_partitions}"
+                )
+                return False
+
+            # Validate halo_size
+            if saved_halo_size != current_halo_size:
+                logger.warning(
+                    f"Partition topology mismatch: "
+                    f"existing partitions have halo_size={saved_halo_size}, "
+                    f"but current config has halo_size={current_halo_size}"
+                )
+                return False
+
+            logger.info(
+                f"Partition topology validated: "
+                f"num_partitions={current_num_partitions}, halo_size={current_halo_size}"
+            )
+            return True
+
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to validate partition topology: {e}")
+            return False
 
     def split_samples_by_case(self, train_ratio, val_ratio, test_ratio, random_seed=42):
         """
@@ -333,14 +407,14 @@ class ReservoirPreprocessor:
             val_cases = [test_cases[0]]
             test_cases = test_cases[1:]
 
-        print(f"Sample split:")
-        print(
+        logger.info(f"Sample split:")
+        logger.info(
             f"   Training: {len(train_cases)} cases ({len(train_cases) / total_cases * 100:.1f}%)"
         )
-        print(
+        logger.info(
             f"   Validation: {len(val_cases)} cases ({len(val_cases) / total_cases * 100:.1f}%)"
         )
-        print(
+        logger.info(
             f"   Test: {len(test_cases)} cases ({len(test_cases) / total_cases * 100:.1f}%)"
         )
 
@@ -356,10 +430,10 @@ class ReservoirPreprocessor:
             elif case_name in test_cases:
                 splits["test"].append(filename)
 
-        print(f"File split:")
-        print(f"   Training: {len(splits['train'])} files")
-        print(f"   Validation: {len(splits['val'])} files")
-        print(f"   Test: {len(splits['test'])} files")
+        logger.info(f"File split:")
+        logger.info(f"   Training: {len(splits['train'])} files")
+        logger.info(f"   Validation: {len(splits['val'])} files")
+        logger.info(f"   Test: {len(splits['test'])} files")
 
         return splits
 
@@ -372,7 +446,7 @@ class ReservoirPreprocessor:
         splits : dict
             Dictionary with 'train', 'val', 'test' keys containing file lists
         """
-        print(f"\nOrganizing partitions by split...")
+        logger.info(f"\nOrganizing partitions by split...")
 
         # Create subdirectories
         train_dir = os.path.join(self.partitions_dir, "train")
@@ -386,14 +460,14 @@ class ReservoirPreprocessor:
         total_moved = 0
         for split_name, file_list in splits.items():
             if not file_list:
-                print(f"   → {split_name.capitalize()}: No files to process")
+                logger.info(f"   → {split_name.capitalize()}: No files to process")
                 continue
 
             split_dir = os.path.join(self.partitions_dir, split_name)
-            print(f"   → Processing {split_name} split: {len(file_list)} files")
+            logger.info(f"   → Processing {split_name} split: {len(file_list)} files")
 
             moved_count = 0
-            print(f"Organizing {split_name} split ({len(file_list)} files)...")
+            logger.info(f"Organizing {split_name} split ({len(file_list)} files)...")
             for filename in file_list:
                 # Load the graph
                 try:
@@ -411,10 +485,12 @@ class ReservoirPreprocessor:
                 except Exception as e:
                     continue
 
-            print(f"     Moved {moved_count}/{len(file_list)} files to {split_name}/")
+            logger.info(
+                f"     Moved {moved_count}/{len(file_list)} files to {split_name}/"
+            )
             total_moved += moved_count
 
-        print(f"Partition organization complete!")
+        logger.info(f"Partition organization complete!")
 
     @contextlib.contextmanager
     def suppress_all_output(self):
@@ -458,7 +534,7 @@ class ReservoirPreprocessor:
         graph_file_list : list or None
             List of specific graph files to process (if None, process all .pt files)
         """
-        print(f"\nCreating partitions from graphs...")
+        logger.info(f"\nCreating partitions from graphs...")
 
         # Create partitions directory
         os.makedirs(self.partitions_dir, exist_ok=True)
@@ -478,7 +554,7 @@ class ReservoirPreprocessor:
                 if file.endswith(".pt"):
                     graph_files.append(os.path.join(self.graphs_dir, file))
 
-        print(
+        logger.info(
             f"   → Processing {len(graph_files)} graphs with {self.cfg.preprocessing.num_partitions} partitions each..."
         )
 
@@ -508,7 +584,7 @@ class ReservoirPreprocessor:
                         )
                         part_meta = cluster_data.partition
                 except Exception as e:
-                    print(
+                    logger.warning(
                         f"     WARNING: METIS partitioning failed ({e}), using simple partitioning..."
                     )
                     # Fallback: simple sequential partitioning
@@ -578,12 +654,12 @@ class ReservoirPreprocessor:
                 successful_partitions += 1
 
             except Exception as e:
-                print(f"ERROR: processing {os.path.basename(graph_file)}: {e}")
+                logger.error(f"ERROR: processing {os.path.basename(graph_file)}: {e}")
                 continue
 
         # Save partition assignments to JSON files (one per case)
         if partition_assignments_by_case:
-            print(
+            logger.info(
                 f"\nSaving partition assignments for {len(partition_assignments_by_case)} cases..."
             )
             for case_name, partition_array in partition_assignments_by_case.items():
@@ -598,11 +674,11 @@ class ReservoirPreprocessor:
                 }
                 with open(partition_json_file, "w") as f:
                     json.dump(partition_data, f, indent=2)
-            print(
+            logger.info(
                 f"  → Saved partition assignments to {self.dataset_dir}/*_partitions.json"
             )
 
-        print(
+        logger.info(
             f"Partitioning complete! {successful_partitions}/{len(graph_files)} graphs processed successfully"
         )
 
@@ -623,47 +699,49 @@ class ReservoirPreprocessor:
         if not graphs_exist and not stats_exist:
             return True  # No existing data, proceed normally
 
-        print("\nWARNING: Existing preprocessing data detected:")
+        logger.warning("\nWARNING: Existing preprocessing data detected:")
         if graphs_exist:
             graph_count = len(
                 [f for f in os.listdir(self.graphs_dir) if f.endswith(".pt")]
             )
-            print(f"   → Graphs directory exists with {graph_count} graph files")
+            logger.warning(
+                f"   → Graphs directory exists with {graph_count} graph files"
+            )
         if stats_exist:
-            print(f"   → Global statistics file exists")
+            logger.warning(f"   → Global statistics file exists")
 
         # Check if we're in a non-interactive environment
         if not sys.stdin.isatty():
-            print(
+            logger.info(
                 "\nNon-interactive environment detected. Auto-selecting 'y' (overwrite)"
             )
-            print("Will overwrite all existing data")
+            logger.info("Will overwrite all existing data")
             return True
 
-        print("\nOptions:")
-        print("y. Overwrite all existing data and start fresh")
-        print("n. Exit")
+        logger.info("\nOptions:")
+        logger.info("y. Overwrite all existing data and start fresh")
+        logger.info("n. Exit")
 
         while True:
             try:
                 choice = input("\nOverwrite existing data? (y/n): ").strip().lower()
                 if choice in ["y", "yes"]:
-                    print("Will overwrite all existing data")
+                    logger.info("Will overwrite all existing data")
                     return True
                 elif choice in ["n", "no"]:
-                    print("Exiting preprocessing")
+                    logger.info("Exiting preprocessing")
                     sys.exit(0)
                 else:
-                    print("Invalid choice. Please enter y or n.")
+                    logger.info("Invalid choice. Please enter y or n.")
             except KeyboardInterrupt:
-                print("\nExiting preprocessing")
+                logger.info("\nExiting preprocessing")
                 sys.exit(0)
 
     def validate_config(self) -> None:
         """
         Validate configuration parameters relevant to preprocessing.
         """
-        print("Validating configuration...")
+        logger.info("Validating configuration...")
 
         # Validate dataset parameters
         if not hasattr(self.cfg, "dataset") or not hasattr(self.cfg.dataset, "sim_dir"):
@@ -711,7 +789,7 @@ class ReservoirPreprocessor:
             if halo_size < 0:
                 raise ValueError(f"halo_size must be >= 0, got {halo_size}")
 
-        print("Configuration validation passed!")
+        logger.info("Configuration validation passed!")
 
     def execute(self):
         """
@@ -724,8 +802,8 @@ class ReservoirPreprocessor:
         4. Compute global statistics
         5. Save preprocessing metadata
         """
-        print("Reservoir Simulation XMeshGraphNet Preprocessor")
-        print("=" * 50)
+        logger.info("Reservoir Simulation XMeshGraphNet Preprocessor")
+        logger.info("=" * 50)
 
         # Validate configuration first
         self.validate_config()
@@ -740,7 +818,7 @@ class ReservoirPreprocessor:
 
         # Step 1: Create raw graphs (unless skipped)
         if not skip_graphs:
-            print("\nStep 1: Creating graphs from simulation data...")
+            logger.info("\nStep 1: Creating graphs from simulation data...")
             processor = ReservoirGraphBuilder(self.cfg)
 
             # Override the output path to use our job-specific dataset directory
@@ -755,7 +833,9 @@ class ReservoirPreprocessor:
             )
             self.graph_file_list = self.generated_files
         else:
-            print("\nStep 1: Skipping graph generation (using existing graphs)...")
+            logger.info(
+                "\nStep 1: Skipping graph generation (using existing graphs)..."
+            )
             if not os.path.exists(self.graphs_dir):
                 raise FileNotFoundError(
                     f"Graphs directory not found: {self.graphs_dir}"
@@ -764,21 +844,36 @@ class ReservoirPreprocessor:
             # Load existing graph file list
             self.graph_file_list = self.load_graph_file_list()
             if self.graph_file_list is None:
-                print("   → No tracked graph files found, will process all .pt files")
+                logger.info(
+                    "   → No tracked graph files found, will process all .pt files"
+                )
                 self.graph_file_list = None
 
         # Step 2: Create partitions from the raw graphs
-        if (
-            overwrite_data
-            or not os.path.exists(self.partitions_dir)
-            or len([f for f in os.listdir(self.partitions_dir) if f.endswith(".pt")])
-            == 0
-        ):
-            print("\nStep 2: Creating partitions from graphs...")
+        partitions_exist = (
+            os.path.exists(self.partitions_dir)
+            and len([f for f in os.listdir(self.partitions_dir) if f.endswith(".pt")])
+            > 0
+        )
+
+        # Validate partition topology if partitions exist
+        topology_valid = False
+        if partitions_exist and not overwrite_data:
+            topology_valid = self.validate_partition_topology()
+            if not topology_valid:
+                logger.warning(
+                    "Existing partitions do not match current configuration. "
+                    "Partitions will be recreated."
+                )
+
+        if overwrite_data or not partitions_exist or not topology_valid:
+            logger.info("\nStep 2: Creating partitions from graphs...")
             self.create_partitions_from_graphs(graph_file_list=self.graph_file_list)
         else:
-            print("\nStep 2: Skipping partition creation (using existing partitions)")
-            print(f"   → Using existing partitions from {self.partitions_dir}")
+            logger.info(
+                "\nStep 2: Skipping partition creation (using existing partitions)"
+            )
+            logger.info(f"   → Using existing partitions from {self.partitions_dir}")
 
         # Step 2b: Split samples and organize partitions
         # Check if all split directories exist (train, val, test)
@@ -789,10 +884,12 @@ class ReservoirPreprocessor:
 
         if overwrite_data or not splits_exist:
             if not splits_exist:
-                print("\nStep 2b: Splitting samples and organizing partitions...")
-                print("   → One or more split directories (train/val/test) are missing")
+                logger.info("\nStep 2b: Splitting samples and organizing partitions...")
+                logger.info(
+                    "   → One or more split directories (train/val/test) are missing"
+                )
             else:
-                print("\nStep 2b: Splitting samples and organizing partitions...")
+                logger.info("\nStep 2b: Splitting samples and organizing partitions...")
 
             # Get split configuration
             data_split = getattr(self.cfg.preprocessing, "data_split", {})
@@ -812,12 +909,16 @@ class ReservoirPreprocessor:
             # Organize partitions into subdirectories
             self.organize_partitions_by_split(splits)
         else:
-            print("\nStep 2b: Skipping partition organization (using existing splits)")
-            print(f"   → Using existing train/val/test splits in {self.partitions_dir}")
+            logger.info(
+                "\nStep 2b: Skipping partition organization (using existing splits)"
+            )
+            logger.info(
+                f"   → Using existing train/val/test splits in {self.partitions_dir}"
+            )
 
         # Step 3: Compute and save global statistics
         if overwrite_data or not os.path.exists(self.stats_file):
-            print("\nStep 3: Computing global statistics...")
+            logger.info("\nStep 3: Computing global statistics...")
 
             # Get all graph files
             graph_files = [
@@ -826,8 +927,10 @@ class ReservoirPreprocessor:
                 if f.endswith(".pt")
             ]
 
-            print(f"   → Computing statistics from {len(graph_files)} graph files...")
-            print(
+            logger.info(
+                f"   → Computing statistics from {len(graph_files)} graph files..."
+            )
+            logger.info(
                 f"   → This includes node features, edge features, and target features"
             )
 
@@ -836,29 +939,33 @@ class ReservoirPreprocessor:
                 stats = compute_global_statistics(graph_files, self.stats_file)
 
             if stats is not None:
-                print(f"Global statistics computed and saved to {self.stats_file}")
-                print(
+                logger.info(
+                    f"Global statistics computed and saved to {self.stats_file}"
+                )
+                logger.info(
                     f"   → Node features: {len(stats['node_features']['mean'])} features"
                 )
-                print(
+                logger.info(
                     f"   → Edge features: {len(stats['edge_features']['mean'])} features"
                 )
                 if "target_features" in stats:
-                    print(
+                    logger.info(
                         f"   → Target features: {len(stats['target_features']['mean'])} features"
                     )
                 else:
-                    print(
+                    logger.info(
                         f"   → Target features: Not found (graphs may not have target data)"
                     )
             else:
-                print("Failed to compute global statistics")
+                logger.error("Failed to compute global statistics")
         else:
-            print("\nStep 3: Skipping statistics computation (using existing file)")
-            print(f"   → Using existing statistics from {self.stats_file}")
+            logger.info(
+                "\nStep 3: Skipping statistics computation (using existing file)"
+            )
+            logger.info(f"   → Using existing statistics from {self.stats_file}")
 
         # Step 4: Save preprocessing metadata
-        print("\nStep 4: Saving preprocessing metadata...")
+        logger.info("\nStep 4: Saving preprocessing metadata...")
         # Always save metadata in the outputs directory
         # Since hydra.run.dir is not available when running preprocessor directly,
         # we'll use the current directory (which should be the outputs directory when run through Hydra)
@@ -867,12 +974,12 @@ class ReservoirPreprocessor:
         self.save_preprocessing_metadata(metadata_file)
 
         # Step 5: Save dataset metadata for inference
-        print("\nStep 5: Saving dataset metadata...")
+        logger.info("\nStep 5: Saving dataset metadata...")
         self.save_dataset_metadata()
 
-        print("\nPreprocessing complete!")
-        print(f"   → Raw graphs: {self.graphs_dir}")
-        print(f"   → Partitions: {self.partitions_dir}")
+        logger.info("\nPreprocessing complete!")
+        logger.info(f"   → Raw graphs: {self.graphs_dir}")
+        logger.info(f"   → Partitions: {self.partitions_dir}")
 
 
 @hydra.main(version_base="1.3", config_path="../conf", config_name="config")

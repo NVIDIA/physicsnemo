@@ -19,8 +19,11 @@ Utility functions and classes for XMeshGraphNet training and inference.
 """
 
 import os
+import logging
 from hydra.utils import to_absolute_path
 from omegaconf import DictConfig
+
+logger = logging.getLogger(__name__)
 
 
 def fix_layernorm_compatibility():
@@ -183,5 +186,5 @@ def print_dataset_info(cfg: DictConfig) -> None:
     job_name = cfg.runspec.job_name
     dataset_dir = get_dataset_dir(cfg)
 
-    print(f"Job name: {job_name}")
-    print(f"Dataset directory: {dataset_dir}")
+    logger.info(f"Job name: {job_name}")
+    logger.info(f"Dataset directory: {dataset_dir}")
