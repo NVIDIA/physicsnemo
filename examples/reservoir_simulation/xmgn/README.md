@@ -17,7 +17,7 @@ This example provides a reference implementation of XMeshGraphNet (X-MGN) for
 building reservoir simulation surrogates. X-MGN is naturally compatible with
 the finite volume framework commonly used in reservoir simulation. It is
 particularly effective for systems with irregular connections such as faults,
-pinch-outs, dual-porosity regions, and discrete fractures. Furthermore, X-MGN
+pinch-outs, dual-porosity, and discrete fractures, etc. Furthermore, X-MGN
 scales efficiently to industry-scale reservoir models with millions of cells.
 
 ## Quick Start
