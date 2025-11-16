@@ -22,7 +22,6 @@ import json
 import numpy as np
 import torch
 from torch_geometric.data import Data
-from collections.abc import Mapping
 from hydra.utils import to_absolute_path
 from sim_utils import EclReader, Well, Grid
 from multiprocessing import Pool, cpu_count, Manager

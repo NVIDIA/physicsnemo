@@ -34,7 +34,7 @@ runspec:
 # └───────────────────────────────────────────┘
 
 dataset:
-  simulator: OPM                                # Simulator type (OPM, ECLIPSE, IX)
+  simulator: OPM                                # Simulator type (currently support simulators with ECLIPSE-style output files: OPM, ECLIPSE, IX, etc.)
   sim_dir: ../dataset/2D_OW/CASE_2D.sim         # Directory containing simulation cases and results
   # num_samples: 20                               # Number of samples to process (default = all, else for small size testing)
   
@@ -45,7 +45,7 @@ dataset:
       dynamic: 
         variables: ["PRESSURE", "SWAT", "WCID"]               # Dynamic node features (current timestep) 
         prev_timesteps: 2                                     # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
-      time_series: ["WWIR", "WGIR", "WBHP"]                   # Time series variables. mapped onto grid cells with completion cell indices.
+      # time_series: ["WWIR", "WGIR", "WBHP"]              # Time series variables. mapped onto grid cells with completion cell indices. #TODO: implement later (currently not used)
     
     edge_features: ["TRANX", "TRANY", "TRANZ", "TRANNNC"]    # directional transmissibilities (including nnc). will be combined.
     
@@ -58,7 +58,7 @@ dataset:
       node_features: ["PRESSURE", "SWAT"]                     # Target variables (next timestep)
       # time_series: ["WWCT", "WGOR"]                         # Time series variables #TODO: implement later (currently not used)
       weights: [1.0, 1.0]                                     # Per-variable loss weights (same order as node_features)
-      loss_functions: ["L2", "L2"]                            # Loss functions for each target variable (L1, L2, Huber)
+      loss_functions: ["L2", "L1"]                            # Loss functions for each target variable (L1, L2, Huber)
 
     nonlinear_scaling: ["PERMX:LOG10", "TRAN:LOG10"]         # Optional: specify irregular distribution, otherwise values will be directly scaled to [0, 1]
 

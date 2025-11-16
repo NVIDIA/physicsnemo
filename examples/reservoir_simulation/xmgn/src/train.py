@@ -23,7 +23,6 @@ trains the model with early stopping, and saves checkpoints using PhysicsNeMo ut
 import os
 import sys
 import json
-import mlflow
 from datetime import datetime
 
 # Add repository root to Python path for sim_utils import
@@ -37,8 +36,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributed as dist
 from torch.cuda.amp import GradScaler
-from torch.nn.parallel import DataParallel, DistributedDataParallel
-from torch_geometric.loader import DataLoader as PyGDataLoader
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
 
@@ -46,7 +44,6 @@ import numpy as np
 import hydra
 from omegaconf import DictConfig
 
-# Import PhysicsNeMo distributed manager and logging
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.launch.logging.mlflow import initialize_mlflow

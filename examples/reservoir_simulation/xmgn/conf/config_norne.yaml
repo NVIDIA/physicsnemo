@@ -34,9 +34,9 @@ runspec:
 # └───────────────────────────────────────────┘
 
 dataset:
-  simulator: OPM                                # Simulator type (OPM, ECLIPSE, IX)
-  sim_dir: ../dataset/norne/NORNE_ATW2013_LHS_TOP10_FWCT.sim # Directory containing simulation cases and results
-  # num_samples: 10                              # Number of samples to process (default = all, else for small size testing)
+  simulator: OPM                                # Simulator type (currently support simulators with ECLIPSE-style output files: OPM, ECLIPSE, IX, etc.)
+  sim_dir: ../dataset/norne/NORNE_LHS.sim       # Directory containing simulation cases and results
+  # num_samples: 10                             # Number of samples to process (default = all, else for small size testing)
 
   # Graph configuration
   graph:
@@ -45,7 +45,7 @@ dataset:
       dynamic: 
         variables: ["PRESSURE", "SWAT", "WCID"]           # Dynamic node features (current timestep) 
         prev_timesteps: 2                                 # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
-      time_series: ["WWIR", "WGIR", "WBHP"]               # Time series variables. mapped onto grid cells with completion cell indices.
+      # time_series: ["WWIR", "WGIR", "WBHP"]              # Time series variables. mapped onto grid cells with completion cell indices. #TODO: implement later (currently not used)
 
     edge_features: ["TRANX", "TRANY", "TRANZ", "TRANNNC"] # directional transmissibilities (including nnc). will be combined.
     
@@ -58,9 +58,9 @@ dataset:
       node_features: ["PRESSURE", "SWAT"]                 # Target variables (next timestep)
       # time_series: ["WWCT", "WGOR"]                     # Time series variables #TODO: implement later (currently not used)
       weights: [1.0, 1.0]                                 # Per-variable loss weights (same order as node_features)
-      loss_functions: ["L2", "L2"]                        # Loss functions for each target variable (L1, L2, Huber)
+      loss_functions: ["L2", "L1"]                        # Loss functions for each target variable (L1, L2, Huber)
 
-    nonlinear_scaling: ["PERMX:LOG10", "TRAN:LOG10"]     # Optional: specify irregular distribution, otherwise values will be directly scaled to [0, 1]
+    nonlinear_scaling: ["PERMX:LOG10", "TRAN:LOG10"]      # Optional: specify irregular distribution, otherwise values will be directly scaled to [0, 1]
 
 
 # ┌───────────────────────────────────────────┐
@@ -68,9 +68,9 @@ dataset:
 # └───────────────────────────────────────────┘  
 
 preprocessing:
-  skip_graphs: false                             # Skip graph generation (use existing graphs to test partitioning parameters)
+  skip_graphs: false                            # Skip graph generation (use existing graphs to test partitioning parameters)
   num_partitions: 3                             # Number of partitions for each graph
-  halo_size: 3                                  # Size of halo region for partitions
+  halo_size: 5                                  # Size of halo region for partitions
   num_preprocess_workers: 8                     # Number of workers for data preprocessing
   data_split:
     train_ratio: 0.8                            # Ratio of samples for training
@@ -82,9 +82,9 @@ preprocessing:
 # └───────────────────────────────────────────┘
 
 model:
-  num_message_passing_layers: 3                 # Number of message passing layers
+  num_message_passing_layers: 5                 # Number of message passing layers
   hidden_dim: 128                               # Hidden dimension of the model
-  activation: silu                               # Activation function
+  activation: silu                              # Activation function
 
 # ┌───────────────────────────────────────────┐
 # │          Training Configuration           │
