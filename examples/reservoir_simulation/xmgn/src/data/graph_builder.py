@@ -19,6 +19,7 @@ import re
 import glob
 import time
 import json
+import logging
 import numpy as np
 import torch
 from torch_geometric.data import Data
@@ -26,6 +27,9 @@ from hydra.utils import to_absolute_path
 from sim_utils import EclReader, Well, Grid
 from multiprocessing import Pool, cpu_count, Manager
 from scipy.interpolate import interp1d
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 class ReservoirGraphBuilder:
@@ -253,8 +257,8 @@ class ReservoirGraphBuilder:
                         data_scaled = np.sqrt(np.maximum(data, 0))
                         return data_scaled
                     else:
-                        print(
-                            f"Warning: Unknown scaling type '{scaling_type}' for variable '{var_name}'. Skipping scaling."
+                        logger.warning(
+                            f"Unknown scaling type '{scaling_type}' for variable '{var_name}'. Skipping scaling."
                         )
 
         # No scaling configured for this variable
@@ -324,8 +328,8 @@ class ReservoirGraphBuilder:
                 )
                 input_var_names.append(var)
             except Exception as e:
-                print(
-                    f"Error: Failed to process static variable '{var}' - {type(e).__name__}: {e}"
+                logger.error(
+                    f"Failed to process static variable '{var}' - {type(e).__name__}: {e}"
                 )
                 return None
 
@@ -345,8 +349,8 @@ class ReservoirGraphBuilder:
                     for t in range(self.prev_timestep_idx):
                         prev_timestep = timestep_idx - t  # Go backwards in time
                         if prev_timestep < 0 or prev_timestep >= len(data[var]):
-                            print(
-                                f"Error: Variable '{var}' not available at timestep {prev_timestep} - skipping graph"
+                            logger.error(
+                                f"Variable '{var}' not available at timestep {prev_timestep} - skipping graph"
                             )
                             return None
                         var_data_list.append(data[var][prev_timestep])
@@ -373,12 +377,12 @@ class ReservoirGraphBuilder:
                         else:
                             input_var_names.append(f"{var}_prev_{t}")
                 except Exception as e:
-                    print(
-                        f"Error: Failed to process variable '{var}' - {type(e).__name__}: {e}"
+                    logger.error(
+                        f"Failed to process variable '{var}' - {type(e).__name__}: {e}"
                     )
                     return None
             else:
-                print(f"Error: Variable '{var}' not available - skipping graph")
+                logger.error(f"Variable '{var}' not available - skipping graph")
                 return None
 
         # Add time series variables if available
@@ -426,8 +430,8 @@ class ReservoirGraphBuilder:
                             for t in range(self.prev_timestep_idx):
                                 prev_ts_idx = (timestep_idx + 1) - t
                                 if prev_ts_idx < 0:
-                                    print(
-                                        f"Error: Time series '{channel_name}' not available at timestep {prev_ts_idx} - skipping graph"
+                                    logger.error(
+                                        f"Time series '{channel_name}' not available at timestep {prev_ts_idx} - skipping graph"
                                     )
                                     return None
 
@@ -438,8 +442,8 @@ class ReservoirGraphBuilder:
                                     else {}
                                 )
                                 if not prev_wells:
-                                    print(
-                                        f"Error: No wells data at timestep {prev_ts_idx} - skipping graph"
+                                    logger.error(
+                                        f"No wells data at timestep {prev_ts_idx} - skipping graph"
                                     )
                                     return None
 
@@ -480,8 +484,8 @@ class ReservoirGraphBuilder:
                                     input_var_names.append(f"{channel_name}_prev_{t}")
 
                         except Exception as e:
-                            print(
-                                f"Error: Failed to process time series variable '{channel_name}' - {type(e).__name__}: {e}"
+                            logger.error(
+                                f"Failed to process time series variable '{channel_name}' - {type(e).__name__}: {e}"
                             )
                             return None
 
@@ -506,13 +510,13 @@ class ReservoirGraphBuilder:
                     )
                     target_var_names.append(var)
                 except Exception as e:
-                    print(
-                        f"Error: Failed to process target variable '{var}' at timestep {target_timestep} for sample {sample_idx} - {type(e).__name__}: {e}"
+                    logger.error(
+                        f"Failed to process target variable '{var}' at timestep {target_timestep} for sample {sample_idx} - {type(e).__name__}: {e}"
                     )
                     return None
             else:
-                print(
-                    f"Error: Target variable '{var}' not available at timestep {target_timestep} for sample {sample_idx}"
+                logger.error(
+                    f"Target variable '{var}' not available at timestep {target_timestep} for sample {sample_idx}"
                 )
                 # If target is not available, return None to skip this graph
                 return None
@@ -530,20 +534,20 @@ class ReservoirGraphBuilder:
         ):
             # Validate that we have TIME data available
             if "TIME" not in data or len(data["TIME"]) == 0:
-                print(
-                    f"Error: No TIME data available in restart file for sample {sample_idx}"
+                logger.error(
+                    f"No TIME data available in restart file for sample {sample_idx}"
                 )
                 return None
 
             if target_timestep >= len(data["TIME"]):
-                print(
-                    f"Error: Target timestep {target_timestep} >= available timesteps {len(data['TIME'])} for sample {sample_idx}"
+                logger.error(
+                    f"Target timestep {target_timestep} >= available timesteps {len(data['TIME'])} for sample {sample_idx}"
                 )
                 return None
 
             if timestep_idx >= len(data["TIME"]):
-                print(
-                    f"Error: Current timestep {timestep_idx} >= available timesteps {len(data['TIME'])} for sample {sample_idx}"
+                logger.error(
+                    f"Current timestep {timestep_idx} >= available timesteps {len(data['TIME'])} for sample {sample_idx}"
                 )
                 return None
 
@@ -551,8 +555,8 @@ class ReservoirGraphBuilder:
                 # Calculate actual delta_t from TIME array
                 delta_t = data["TIME"][target_timestep] - data["TIME"][timestep_idx]
             except Exception as e:
-                print(
-                    f"Error: Failed to calculate delta_t for sample {sample_idx} - {type(e).__name__}: {e}"
+                logger.error(
+                    f"Failed to calculate delta_t for sample {sample_idx} - {type(e).__name__}: {e}"
                 )
                 return None
 
@@ -610,8 +614,8 @@ class ReservoirGraphBuilder:
                     coordinates, dtype=torch.float32
                 )
         except Exception as e:
-            print(
-                f"Error: Failed to create graph data dictionary for sample {sample_idx} - {type(e).__name__}: {e}"
+            logger.error(
+                f"Failed to create graph data dictionary for sample {sample_idx} - {type(e).__name__}: {e}"
             )
             return None
 
@@ -620,8 +624,8 @@ class ReservoirGraphBuilder:
             graph = Data(**graph_data)
             return graph
         except Exception as e:
-            print(
-                f"Error: Failed to create PyTorch Geometric Data object for sample {sample_idx} - {type(e).__name__}: {e}"
+            logger.error(
+                f"Failed to create PyTorch Geometric Data object for sample {sample_idx} - {type(e).__name__}: {e}"
             )
             return None
 
@@ -742,8 +746,8 @@ class ReservoirGraphBuilder:
             # Validate dynamic data
             for key in dynamic_variables:
                 if key not in rst_data or not rst_data[key]:
-                    print(
-                        f"  [WARNING] Failed to read {key} from restart file for sample {sample_idx_1based}"
+                    logger.warning(
+                        f"Failed to read {key} from restart file for sample {sample_idx_1based}"
                     )
                     rst_data[key] = []
 
@@ -784,8 +788,8 @@ class ReservoirGraphBuilder:
             smry_data = reader.read_smry(keys=time_series_vars, entities=None)
 
             if "TIME" not in smry_data:
-                print(
-                    f"  [WARNING] No TIME data in summary file for sample {sample_idx_1based}"
+                logger.warning(
+                    f"No TIME data in summary file for sample {sample_idx_1based}"
                 )
                 return {}
 
@@ -864,8 +868,8 @@ class ReservoirGraphBuilder:
             return interpolated_data
 
         except Exception as e:
-            print(
-                f"  [WARNING] Failed to read/interpolate time series for sample {sample_idx_1based}: {type(e).__name__}: {e}"
+            logger.warning(
+                f"Failed to read/interpolate time series for sample {sample_idx_1based}: {type(e).__name__}: {e}"
             )
             return {}
 
@@ -1004,8 +1008,8 @@ class ReservoirGraphBuilder:
 
     def _log_error_and_continue(self, message, context=""):
         """Log error message and return indication to continue."""
-        print(f"  {context}Error: {message}")
-        print("  → Skipping and continuing with the next one...")
+        logger.error(f"{context}{message}")
+        logger.info("Skipping and continuing with the next one...")
         return True
 
     def _build_graphs_for_sample(
@@ -1204,8 +1208,8 @@ class ReservoirGraphBuilder:
         # Determine number of workers
         n_workers = min(self.num_preprocess_workers, cpu_count(), total_samples)
 
-        print(
-            f"\nProcessing {total_samples} simulation results using {n_workers} parallel workers..."
+        logger.info(
+            f"Processing {total_samples} simulation results using {n_workers} parallel workers..."
         )
 
         start_time = time.time()
@@ -1247,17 +1251,19 @@ class ReservoirGraphBuilder:
                     if not async_result.ready():
                         completed = progress_counter.value
                         elapsed = time.time() - start_time
-                        print(
-                            f"  ... {completed}/{total_samples} samples completed (elapsed: {elapsed:.0f}s) ..."
+                        logger.info(
+                            f"... {completed}/{total_samples} samples completed (elapsed: {elapsed:.0f}s) ..."
                         )
 
                 results = async_result.get()
 
         elapsed = time.time() - start_time
-        print(f"Completed in {elapsed:.1f}s ({total_samples / elapsed:.1f} samples/s)")
+        logger.info(
+            f"Completed in {elapsed:.1f}s ({total_samples / elapsed:.1f} samples/s)"
+        )
 
         # Collect results and handle errors
-        print("\nCollecting results...")
+        logger.info("Collecting results...")
         for sample_idx, (saved_filenames, case_name, error_msg) in enumerate(
             results, start=1
         ):
@@ -1276,11 +1282,11 @@ class ReservoirGraphBuilder:
         avg_graphs_per_sample = (
             (len(all_graph_files) / total_samples) if total_samples else 0.0
         )
-        print(f"\nProcessing Summary:")
-        print(f"  → Total samples processed: {total_samples}")
-        print(f"  → Total graphs created: {len(all_graph_files)}")
-        print(f"  → Average graphs per sample: {avg_graphs_per_sample:.1f}")
-        print(f"  → Graphs saved to: {self._output_path_graph}")
+        logger.info("Processing Summary:")
+        logger.info(f"  Total samples processed: {total_samples}")
+        logger.info(f"  Total graphs created: {len(all_graph_files)}")
+        logger.info(f"  Average graphs per sample: {avg_graphs_per_sample:.1f}")
+        logger.info(f"  Graphs saved to: {self._output_path_graph}")
 
         return all_graph_files
 
@@ -1364,12 +1370,12 @@ class ReservoirGraphBuilder:
 
         with open(self._output_path_well, "w") as f:
             json.dump(json_data, f, indent=2)
-        print(f"\nWell data saved to {self._output_path_well}")
+        logger.info(f"Well data saved to {self._output_path_well}")
 
     def execute(self):
         # Process samples and save graphs (returns filenames)
         generated_files = self._parse_results_from_samples()
 
-        print(f"\nProcessed {len(generated_files)} graphs successfully!")
+        logger.info(f"Processed {len(generated_files)} graphs successfully!")
 
         return generated_files

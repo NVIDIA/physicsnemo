@@ -23,11 +23,15 @@ along with utilities for computing global statistics and creating efficient data
 import os
 import sys
 import json
+import logging
 
 import torch
 import torch_geometric as pyg
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def find_pt_files(directory):
