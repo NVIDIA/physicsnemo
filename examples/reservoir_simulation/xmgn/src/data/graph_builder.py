@@ -743,7 +743,7 @@ class ReservoirGraphBuilder:
             for key in dynamic_variables:
                 if key not in rst_data or not rst_data[key]:
                     print(
-                        f"  ⚠️ Warning: Failed to read {key} from restart file for sample {sample_idx_1based}"
+                        f"  [WARNING] Failed to read {key} from restart file for sample {sample_idx_1based}"
                     )
                     rst_data[key] = []
 
@@ -785,7 +785,7 @@ class ReservoirGraphBuilder:
 
             if "TIME" not in smry_data:
                 print(
-                    f"  ⚠️ Warning: No TIME data in summary file for sample {sample_idx_1based}"
+                    f"  [WARNING] No TIME data in summary file for sample {sample_idx_1based}"
                 )
                 return {}
 
@@ -865,7 +865,7 @@ class ReservoirGraphBuilder:
 
         except Exception as e:
             print(
-                f"  ⚠️ Warning: Failed to read/interpolate time series for sample {sample_idx_1based}: {type(e).__name__}: {e}"
+                f"  [WARNING] Failed to read/interpolate time series for sample {sample_idx_1based}: {type(e).__name__}: {e}"
             )
             return {}
 

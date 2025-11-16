@@ -45,7 +45,7 @@ dataset:
       dynamic: 
         variables: ["PRESSURE", "SWAT", "WCID"]               # Dynamic node features (current timestep) 
         prev_timesteps: 2                                     # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
-      # time_series: ["WWIR", "WGIR", "WBHP"]              # Time series variables. mapped onto grid cells with completion cell indices. #TODO: implement later (currently not used)
+      # time_series: ["WWIR", "WGIR", "WBHP"]              # Time series variables. mapped onto grid cells with completion cell indices. (currently prototype implementation)
     
     edge_features: ["TRANX", "TRANY", "TRANZ", "TRANNNC"]    # directional transmissibilities (including nnc). will be combined.
     

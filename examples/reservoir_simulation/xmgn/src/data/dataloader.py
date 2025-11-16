@@ -302,7 +302,7 @@ class PartitionedGraph:
             part_meta = cluster_data.partition
         except Exception as e:
             print(
-                f"     ⚠️  METIS partitioning failed ({e}), using simple partitioning..."
+                f"     [WARNING] METIS partitioning failed ({e}), using simple partitioning..."
             )
             # Fallback: simple sequential partitioning
             part_meta = self._create_simple_partition(graph.num_nodes, num_parts)
