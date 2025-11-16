@@ -839,7 +839,7 @@ class Trainer:
         Complete training loop with validation and checkpointing.
         Handles resume logic internally based on configuration.
 
-        Returns:
+        Returns
         --------
         float: Best validation loss
         """

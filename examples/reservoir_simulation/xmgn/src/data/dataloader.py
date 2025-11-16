@@ -38,13 +38,13 @@ def find_pt_files(directory):
     """
     Find all .pt files in a directory.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     directory : str
         Directory to search for .pt files
 
-    Returns:
-    --------
+    Returns
+    -------
     file_paths : list
         List of file paths to .pt files
     """
@@ -62,8 +62,8 @@ def save_stats(stats, output_file):
     """
     Save statistics to a JSON file.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     stats : dict
         Statistics dictionary
     output_file : str
@@ -72,20 +72,20 @@ def save_stats(stats, output_file):
     with open(output_file, "w") as f:
         json.dump(stats, f, indent=2)
 
-    print(f"Statistics saved to {output_file}")
+    logger.info(f"Statistics saved to {output_file}")
 
 
 def load_stats(stats_file):
     """
     Load statistics from a JSON file.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     stats_file : str
         Path to the statistics file
 
-    Returns:
-    --------
+    Returns
+    -------
     stats : dict
         Statistics dictionary
     """
@@ -99,18 +99,18 @@ def compute_global_statistics(graph_files, stats_file=None):
     """
     Compute global statistics (mean and std) across all graphs for normalization.
 
-    Parameters:
+    Parameters
     ----------
     graph_files : list
         List of paths to graph files (.pt files)
     stats_file : str, optional
         Path to save statistics JSON file. If None, statistics are not saved.
 
-    Returns:
-    --------
+    Returns
+    -------
     dict : Dictionary containing node, edge, and target statistics
     """
-    print(f"Computing global statistics across {len(graph_files)} graphs...")
+    logger.info(f"Computing global statistics across {len(graph_files)} graphs...")
 
     # Collect all node, edge, and target features
     all_node_features = []
@@ -118,7 +118,7 @@ def compute_global_statistics(graph_files, stats_file=None):
     all_target_features = []
 
     # Process all graphs to compute statistics
-    print(f"Computing statistics from {len(graph_files)} graphs...")
+    logger.info(f"Computing statistics from {len(graph_files)} graphs...")
     for i, file_path in enumerate(graph_files, 1):
         try:
             graph = torch.load(file_path, weights_only=False)
@@ -136,10 +136,10 @@ def compute_global_statistics(graph_files, stats_file=None):
                 all_target_features.append(graph.y)
 
             if i % 100 == 0:
-                print(f"  Processed {i}/{len(graph_files)} graphs...")
+                logger.info(f"  Processed {i}/{len(graph_files)} graphs...")
 
         except Exception as e:
-            print(f"Warning: Failed to load graph {file_path}: {e}")
+            logger.warning(f"Failed to load graph {file_path}: {e}")
             continue
 
     # Compute statistics for node features
@@ -160,7 +160,7 @@ def compute_global_statistics(graph_files, stats_file=None):
                     for feat in all_node_features
                     if feat.shape[1] == most_common_dim
                 ]
-                print(
+                logger.info(
                     f"  Filtered to {len(all_node_features)} graphs with consistent {most_common_dim} node features"
                 )
 
@@ -169,17 +169,17 @@ def compute_global_statistics(graph_files, stats_file=None):
             all_nodes = torch.cat(all_node_features, dim=0)
             node_mean = torch.mean(all_nodes, dim=0)  # [num_node_features]
             node_std = torch.std(all_nodes, dim=0)  # [num_node_features]
-            print(
+            logger.info(
                 f"  Node features: {all_nodes.shape[1]} features, {all_nodes.shape[0]} total nodes"
             )
         else:
             node_mean = torch.tensor([])
             node_std = torch.tensor([])
-            print("  Warning: No consistent node features found")
+            logger.warning("  No consistent node features found")
     else:
         node_mean = torch.tensor([])
         node_std = torch.tensor([])
-        print("  Warning: No node features found")
+        logger.warning("  No node features found")
 
     # Compute statistics for edge features
     if all_edge_features:
@@ -199,7 +199,7 @@ def compute_global_statistics(graph_files, stats_file=None):
                     for feat in all_edge_features
                     if feat.shape[1] == most_common_dim
                 ]
-                print(
+                logger.info(
                     f"  Filtered to {len(all_edge_features)} graphs with consistent {most_common_dim} edge features"
                 )
 
@@ -208,17 +208,17 @@ def compute_global_statistics(graph_files, stats_file=None):
             all_edges = torch.cat(all_edge_features, dim=0)
             edge_mean = torch.mean(all_edges, dim=0)  # [num_edge_features]
             edge_std = torch.std(all_edges, dim=0)  # [num_edge_features]
-            print(
+            logger.info(
                 f"  Edge features: {all_edges.shape[1]} features, {all_edges.shape[0]} total edges"
             )
         else:
             edge_mean = torch.tensor([])
             edge_std = torch.tensor([])
-            print("  Warning: No consistent edge features found")
+            logger.warning("  No consistent edge features found")
     else:
         edge_mean = torch.tensor([])
         edge_std = torch.tensor([])
-        print("  Warning: No edge features found")
+        logger.warning("  No edge features found")
 
     # Compute statistics for target features
     if all_target_features:
@@ -238,7 +238,7 @@ def compute_global_statistics(graph_files, stats_file=None):
                     for feat in all_target_features
                     if feat.shape[1] == most_common_dim
                 ]
-                print(
+                logger.info(
                     f"  Filtered to {len(all_target_features)} graphs with consistent {most_common_dim} target features"
                 )
 
@@ -247,17 +247,17 @@ def compute_global_statistics(graph_files, stats_file=None):
             all_targets = torch.cat(all_target_features, dim=0)
             target_mean = torch.mean(all_targets, dim=0)  # [num_target_features]
             target_std = torch.std(all_targets, dim=0)  # [num_target_features]
-            print(
+            logger.info(
                 f"  Target features: {all_targets.shape[1]} features, {all_targets.shape[0]} total nodes"
             )
         else:
             target_mean = torch.tensor([])
             target_std = torch.tensor([])
-            print("  Warning: No consistent target features found")
+            logger.warning("  No consistent target features found")
     else:
         target_mean = torch.tensor([])
         target_std = torch.tensor([])
-        print("  Warning: No target features found")
+        logger.warning("  No target features found")
 
     # Create statistics dictionary
     stats = {
@@ -270,14 +270,14 @@ def compute_global_statistics(graph_files, stats_file=None):
     if stats_file:
         with open(stats_file, "w") as f:
             json.dump(stats, f, indent=2)
-        print(f"  Statistics saved to {stats_file}")
+        logger.info(f"  Statistics saved to {stats_file}")
 
-    print(f"  Node features - Mean: {node_mean.tolist()}")
-    print(f"  Node features - Std:  {node_std.tolist()}")
-    print(f"  Edge features - Mean: {edge_mean.tolist()}")
-    print(f"  Edge features - Std:  {edge_std.tolist()}")
-    print(f"  Target features - Mean: {target_mean.tolist()}")
-    print(f"  Target features - Std:  {target_std.tolist()}")
+    logger.info(f"  Node features - Mean: {node_mean.tolist()}")
+    logger.info(f"  Node features - Std:  {node_std.tolist()}")
+    logger.info(f"  Edge features - Mean: {edge_mean.tolist()}")
+    logger.info(f"  Edge features - Std:  {edge_std.tolist()}")
+    logger.info(f"  Target features - Mean: {target_mean.tolist()}")
+    logger.info(f"  Target features - Std:  {target_std.tolist()}")
 
     return stats
 
@@ -286,11 +286,14 @@ class PartitionedGraph:
     """
     A class for partitioning a graph into multiple parts with halo regions.
 
-    Parameters:
+    Parameters
     ----------
-        graph (pyg.data.Data): The graph data.
-        num_parts (int): The number of partitions.
-        halo_size (int): The size of the halo region.
+    graph : pyg.data.Data
+        The graph data.
+    num_parts : int
+        The number of partitions.
+    halo_size : int
+        The size of the halo region.
     """
 
     def __init__(self, graph: pyg.data.Data, num_parts: int, halo_size: int):
@@ -305,8 +308,8 @@ class PartitionedGraph:
             cluster_data = pyg.loader.ClusterData(graph, num_parts=self.num_parts)
             part_meta = cluster_data.partition
         except Exception as e:
-            print(
-                f"     [WARNING] METIS partitioning failed ({e}), using simple partitioning..."
+            logger.warning(
+                f"     METIS partitioning failed ({e}), using simple partitioning..."
             )
             # Fallback: simple sequential partitioning
             part_meta = self._create_simple_partition(graph.num_nodes, num_parts)
@@ -375,15 +378,22 @@ class GraphDataset(Dataset):
     """
     A custom dataset class for loading and normalizing graph partition data.
 
-    Parameters:
+    Parameters
     ----------
-        file_paths (list): List of file paths to the graph partition files.
-        node_mean (torch.Tensor): Global mean for node attributes (shape: [num_node_features]).
-        node_std (torch.Tensor): Global standard deviation for node attributes (shape: [num_node_features]).
-        edge_mean (torch.Tensor): Global mean for edge attributes (shape: [num_edge_features]).
-        edge_std (torch.Tensor): Global standard deviation for edge attributes (shape: [num_edge_features]).
-        target_mean (torch.Tensor): Global mean for target attributes (shape: [num_target_features]).
-        target_std (torch.Tensor): Global standard deviation for target attributes (shape: [num_target_features]).
+    file_paths : list
+        List of file paths to the graph partition files.
+    node_mean : torch.Tensor
+        Global mean for node attributes (shape: [num_node_features]).
+    node_std : torch.Tensor
+        Global standard deviation for node attributes (shape: [num_node_features]).
+    edge_mean : torch.Tensor
+        Global mean for edge attributes (shape: [num_edge_features]).
+    edge_std : torch.Tensor
+        Global standard deviation for edge attributes (shape: [num_edge_features]).
+    target_mean : torch.Tensor
+        Global mean for target attributes (shape: [num_target_features]).
+    target_std : torch.Tensor
+        Global standard deviation for target attributes (shape: [num_target_features]).
     """
 
     def __init__(
@@ -451,8 +461,8 @@ class GraphDataset(Dataset):
                     )
                 else:
                     # Fallback for mismatched dimensions
-                    print(
-                        f"Warning: Dimension mismatch in node features. Partition shape: {partition.x.shape}, Stats shape: {self.node_mean.shape}"
+                    logger.warning(
+                        f"Dimension mismatch in node features. Partition shape: {partition.x.shape}, Stats shape: {self.node_mean.shape}"
                     )
                     partition.x = (partition.x - self.node_mean.unsqueeze(0)) / (
                         self.node_std.unsqueeze(0) + 1e-8
@@ -469,8 +479,8 @@ class GraphDataset(Dataset):
                     )
                 else:
                     # Fallback for mismatched dimensions
-                    print(
-                        f"Warning: Dimension mismatch in edge features. Partition shape: {partition.edge_attr.shape}, Stats shape: {self.edge_mean.shape}"
+                    logger.warning(
+                        f"Dimension mismatch in edge features. Partition shape: {partition.edge_attr.shape}, Stats shape: {self.edge_mean.shape}"
                     )
                     partition.edge_attr = (
                         partition.edge_attr - self.edge_mean.unsqueeze(0)
@@ -492,8 +502,8 @@ class GraphDataset(Dataset):
                     )
                 else:
                     # Fallback for mismatched dimensions
-                    print(
-                        f"Warning: Dimension mismatch in target features. Partition shape: {partition.y.shape}, Stats shape: {self.target_mean.shape}"
+                    logger.warning(
+                        f"Dimension mismatch in target features. Partition shape: {partition.y.shape}, Stats shape: {self.target_mean.shape}"
                     )
                     partition.y = (partition.y - self.target_mean.unsqueeze(0)) / (
                         self.target_std.unsqueeze(0) + 1e-8
@@ -506,14 +516,14 @@ def custom_collate_fn(batch):
     """
     Custom collate function for lists of PartitionedGraph objects (following xaeronet pattern).
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     batch : list
         List of (partitions, label) tuples from the dataset
         where partitions is a list of PartitionedGraph objects
 
-    Returns:
-    --------
+    Returns
+    -------
     tuple
         (partitions_list, labels) where partitions_list is a list of lists of PartitionedGraph objects
         and labels is a tensor of labels
@@ -536,21 +546,31 @@ def create_dataloader(
     """
     Create a data loader for graph partition data.
 
-    Parameters:
+    Parameters
     ----------
-        partitions_path (str): Path to the partitions directory.
-        validation_partitions_path (str): Path to the validation partitions directory.
-        stats_file (str): Path to the global statistics file.
-        batch_size (int): Batch size for the data loader.
-        shuffle (bool): Whether to shuffle the data.
-        num_workers (int): Number of worker processes for data loading.
-        prefetch_factor (int): Number of batches to prefetch.
-        pin_memory (bool): Whether to pin memory for faster GPU transfer.
-        is_validation (bool): Whether this is for validation data.
+    partitions_path : str
+        Path to the partitions directory.
+    validation_partitions_path : str
+        Path to the validation partitions directory.
+    stats_file : str
+        Path to the global statistics file.
+    batch_size : int
+        Batch size for the data loader.
+    shuffle : bool
+        Whether to shuffle the data.
+    num_workers : int
+        Number of worker processes for data loading.
+    prefetch_factor : int
+        Number of batches to prefetch.
+    pin_memory : bool
+        Whether to pin memory for faster GPU transfer.
+    is_validation : bool
+        Whether this is for validation data.
 
-    Returns:
-    --------
-        DataLoader: The data loader.
+    Returns
+    -------
+    DataLoader
+        The data loader.
     """
     # Load global statistics
     with open(stats_file, "r") as f:

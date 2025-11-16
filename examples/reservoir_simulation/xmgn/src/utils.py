@@ -119,12 +119,12 @@ def get_dataset_dir(cfg: DictConfig) -> str:
     """
     Get the job-specific dataset directory path.
 
-    Parameters:
+    Parameters
     -----------
     cfg : DictConfig
         Hydra configuration object
 
-    Returns:
+    Returns
     --------
     str: Path to the job-specific dataset directory
     """
@@ -149,12 +149,12 @@ def get_dataset_paths(cfg: DictConfig) -> dict:
     """
     Get all dataset-related paths for a given configuration.
 
-    Parameters:
+    Parameters
     -----------
     cfg : DictConfig
         Hydra configuration object
 
-    Returns:
+    Returns
     --------
     dict: Dictionary containing all dataset paths
     """
@@ -175,7 +175,7 @@ def print_dataset_info(cfg: DictConfig) -> None:
     """
     Print dataset directory information for debugging.
 
-    Parameters:
+    Parameters
     -----------
     cfg : DictConfig
         Hydra configuration object

@@ -64,7 +64,7 @@ class SimplePartition:
         """
         Initialize a simple sequential partition.
 
-        Parameters:
+        Parameters
         -----------
         num_nodes : int
             Total number of nodes to partition
@@ -97,7 +97,7 @@ class ReservoirPreprocessor:
         """
         Initialize the ReservoirPreprocessor with configuration.
 
-        Parameters:
+        Parameters
         -----------
         cfg : DictConfig
             Hydra configuration object containing all preprocessing parameters
@@ -140,12 +140,12 @@ class ReservoirPreprocessor:
             NORNE_ATW2013_DOE_0004_002.pt -> NORNE_ATW2013_DOE_0004
             sample_005_123.pt -> sample_005
 
-        Parameters:
+        Parameters
         -----------
         filename : str
             Graph filename (with or without .pt extension)
 
-        Returns:
+        Returns
         --------
         str: Case name without timestep suffix
         """
@@ -167,7 +167,7 @@ class ReservoirPreprocessor:
         """
         Save list of generated graph files for tracking.
 
-        Parameters:
+        Parameters
         -----------
         graph_files : list
             List of generated graph file paths
@@ -193,12 +193,12 @@ class ReservoirPreprocessor:
         """
         Load list of generated graph files.
 
-        Parameters:
+        Parameters
         -----------
         list_file : str
             Path to graph file list
 
-        Returns:
+        Returns
         --------
         list or None: List of graph file names, or None if not found
         """
@@ -218,7 +218,7 @@ class ReservoirPreprocessor:
         """
         Save preprocessing paths to a metadata file for later retrieval.
 
-        Parameters:
+        Parameters
         -----------
         metadata_file : str
             Path to save metadata file
@@ -238,7 +238,7 @@ class ReservoirPreprocessor:
         """
         Save dataset metadata for inference use.
 
-        Parameters:
+        Parameters
         -----------
         metadata_file : str
             Path to save dataset metadata file
@@ -270,7 +270,7 @@ class ReservoirPreprocessor:
         """
         Split graph files by case (sample) to ensure all timesteps of a sample stay together.
 
-        Parameters:
+        Parameters
         -----------
         train_ratio : float
             Ratio of samples for training
@@ -281,7 +281,7 @@ class ReservoirPreprocessor:
         random_seed : int
             Random seed for reproducible splits
 
-        Returns:
+        Returns
         --------
         dict: Dictionary with 'train', 'val', 'test' keys containing lists of file names
         """
@@ -367,7 +367,7 @@ class ReservoirPreprocessor:
         """
         Create partitions and organize them into train/val/test subdirectories.
 
-        Parameters:
+        Parameters
         -----------
         splits : dict
             Dictionary with 'train', 'val', 'test' keys containing file lists
@@ -435,14 +435,14 @@ class ReservoirPreprocessor:
     def create_simple_partition(self, num_nodes, num_parts):
         """Create a simple sequential partition as fallback when METIS is not available.
 
-        Parameters:
+        Parameters
         -----------
         num_nodes : int
             Total number of nodes to partition
         num_parts : int
             Number of partitions to create
 
-        Returns:
+        Returns
         --------
         SimplePartition
             Partition object with node_perm and partptr attributes
@@ -453,7 +453,7 @@ class ReservoirPreprocessor:
         """
         Create partitions from raw graphs for efficient training.
 
-        Parameters:
+        Parameters
         -----------
         graph_file_list : list or None
             List of specific graph files to process (if None, process all .pt files)
@@ -610,7 +610,7 @@ class ReservoirPreprocessor:
         """
         Check if preprocessing data already exists and ask user for overwrite decision.
 
-        Returns:
+        Returns
         --------
         bool: Whether to overwrite existing data
         """

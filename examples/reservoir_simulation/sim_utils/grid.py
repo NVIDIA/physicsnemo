@@ -69,7 +69,7 @@ class Grid:
     def get_conx_tran(self) -> tuple:
         """Get connections and transmissibilities for the grid.
 
-        Returns:
+        Returns
             tuple: A tuple containing (connections, transmissibilities) where
                 connections is an array of grid cell connections and
                 transmissibilities is the corresponding edge features.
@@ -91,12 +91,12 @@ class Grid:
         """
         Compute cell center coordinates from COORD and ZCORN arrays (corner-point grid).
 
-        Args:
+        Parameters
             coord (np.ndarray): shape (6, nx+1, ny+1), coordinates of grid pillars.
             zcorn (np.ndarray): shape (8 * nx * ny * nz,), raw ZCORN values (Fortran-ordered).
             nx, ny, nz (int): number of cells in each direction.
 
-        Returns:
+        Returns
             (center_x, center_y, center_z): 3D arrays of shape (nx, ny, nz) with cell centers.
         """
         if "COORD" not in egrid_data or "ZCORN" not in egrid_data:
@@ -163,7 +163,7 @@ class Grid:
     def _set_dual_poro(self, dp_flag: int) -> None:
         """Configures the grid for dual porosity.
 
-        Args:
+        Parameters
             dp_flag (int): Dual porosity flag (0 for single porosity, 1 or 2 for dual porosity).
         """
         self.dual_poro = dp_flag in [1, 2]
@@ -177,7 +177,7 @@ class Grid:
     def _set_NNC(self, dict_NNC: dict) -> None:
         """Configures the grid for NNCs.
 
-        Args:
+        Parameters
             dict_NNC (dict): Dictionary containing egrid data (NNC1, NNC2).
         """
         self.NNC = dict_NNC["NNC1"].size > 0
@@ -204,7 +204,7 @@ class Grid:
         """
         Computes the connection matrix.
 
-        Returns:
+        Returns
             np.ndarray: The connection matrix where each row represents a connection
             between two grid cells.
         """
@@ -281,7 +281,7 @@ class Grid:
     def _compute_total_tran(self, init_data: dict) -> None:
         """Computes and stores total transmissibility, including TRANNNC.
 
-        Args:
+        Parameters
             init_data (dict): Dictionary of initialization data containing transmissibility keys.
         """
         # Check if any transmissibility keys exist in init_data
@@ -333,12 +333,12 @@ class Grid:
         """
         Create completion array from well data for a specific timestep.
 
-        Parameters:
+        Parameters
         -----------
         wells : dict
             dict of Well objects for this sample
 
-        Returns:
+        Returns
         --------
         completion : np.ndarray
             Completion status array for active cells (1=injector, 0=closed, -1=producer)

@@ -58,7 +58,7 @@ class EclReader:
     def __init__(self, input_file_path: str) -> None:
         """Initializes the EclReader object.
 
-        Args:
+        Parameters
             input_file_path (str): Path to the main ECLIPSE input file (.DATA or .AFI).
 
         Raises:
@@ -72,10 +72,10 @@ class EclReader:
     def read_init(self, keys: list = None) -> dict:
         """Reads data from the initial conditions file (.INIT).
 
-        Args:
+        Parameters
             keys (list, optional): List of keys to read. If None, all keys are read. Defaults to None.
 
-        Returns:
+        Returns
             dict: Dictionary containing the requested data, keyed by the provided keys.
                 Returns an empty dictionary if no keys are provided.
         """
@@ -84,10 +84,10 @@ class EclReader:
     def read_egrid(self, keys: list = None) -> dict:
         """Reads data from the grid data file (.EGRID).
 
-        Args:
+        Parameters
             keys (list, optional): List of keys to read. If None, all keys are read. Defaults to None.
 
-        Returns:
+        Returns
             dict: Dictionary containing the requested data, keyed by the provided keys.
                 Returns an empty dictionary if no keys are provided.
         """
@@ -96,11 +96,11 @@ class EclReader:
     def read_restart(self, keys: list = None, tstep_id: int = None) -> dict:
         """Reads restart data from .UNRST or .X00xx files (automatically selected).
 
-        Args:
+        Parameters
             keys (list): List of variables to extract.
             tstep_id (int, optional): Specific timestep. If None, reads all available.
 
-        Returns:
+        Returns
             dict: { timestep_id: { "DATE": ..., "TIME": ..., key1: ..., ... }, ... }
 
         Raises:
@@ -157,12 +157,12 @@ class EclReader:
     def read_smry(self, keys: list, entities: list = None) -> dict:
         """Reads summary data from .UNSMRY or .Sxxxx files for fields, wells, or groups.
 
-        Args:
+        Parameters
             keys (list): Summary variable names to extract (e.g., ["WBHP", "WOPR"]).
             entities (list, optional): List of entities (e.g., wells or groups like ["INJ", "PROD", "FIELD"]).
                                        If None, all unique entities will be used.
 
-        Returns:
+        Returns
             dict: {
                 "TIME": np.ndarray,
                 "<ENTITY_1>": { "<KEY_1>": np.ndarray, ... },
@@ -320,11 +320,11 @@ class EclReader:
     def _read_bin(self, file_path: str, keys: list) -> dict:
         """Reads ECLIPSE style binary data from the given file.
 
-        Args:
+        Parameters
             file_path (str): Path to the binary file.
             keys (list): List of keys to read.
 
-        Returns:
+        Returns
             dict: Dictionary containing the requested data. Returns an empty dictionary if keys is None.
         """
 
@@ -375,11 +375,11 @@ class EclReader:
     def _load_vector(self, fid, endian):
         """Reads a data block (vector) from the binary file.
 
-        Args:
+        Parameters
             fid: File object.
             endian (str): Endianness ('<' for little-endian, '>' for big-endian).
 
-        Returns:
+        Returns
             tuple: A tuple containing the data (NumPy array or string), the data count, and the key.
                 Returns (None, None, key) if an error occurs during reading.
         """
@@ -447,11 +447,11 @@ class EclReader:
     def _read_smspec_record(self, fid, endian):
         """Read a single SMSPEC record using pattern matching approach.
 
-        Args:
+        Parameters
             fid: File object positioned at the start of a record
             endian: Endianness string
 
-        Returns:
+        Returns
             tuple: (data_array, count)
         """
         try:
@@ -523,10 +523,10 @@ class EclReader:
     def _detect_endian(self, fid):
         """Detects file endianness.
 
-        Args:
+        Parameters
             fid: File object.
 
-        Returns:
+        Returns
             str: Endianness ('<' for little-endian, '>' for big-endian).
         """
         fid.seek(0)
@@ -539,10 +539,10 @@ class EclReader:
     def _int2ext(self, i):
         """Converts an integer to a formatted string with leading zeros (e.g., 1 to "0001").
 
-        Args:
+        Parameters
             i (int): Integer to convert.
 
-        Returns:
+        Returns
             str: Formatted string with leading zeros.
         """
         return f"{i:04d}"

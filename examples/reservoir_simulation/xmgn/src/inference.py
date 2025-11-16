@@ -261,11 +261,11 @@ class InferenceRunner:
         Update node features in partitions with predictions from previous timestep.
         Replace only the features that correspond to target variables.
 
-        Args:
+        Parameters
             partitions_list: List of graph partitions
             predictions_normalized: Normalized predictions from previous timestep (list of arrays per partition)
 
-        Returns:
+        Returns
             Updated partitions_list with predictions in node features
         """
         target_indices = self._get_target_feature_indices()
@@ -333,12 +333,12 @@ class InferenceRunner:
         """
         Evaluate a single sample (list of partitions).
 
-        Args:
+        Parameters
             partitions_list: List of graph partitions for this timestep
             use_predictions_as_input: If True, replace target features with predictions from previous timestep
             prev_predictions_normalized: Normalized predictions from previous timestep (for autoregressive inference)
 
-        Returns:
+        Returns
             avg_loss, avg_denorm_loss, predictions, targets, predictions_normalized
         """
         total_loss = 0.0
@@ -680,10 +680,10 @@ class InferenceRunner:
         Load partition assignments and halo information for a given case.
         First tries to read from partition .pt files (preferred), then falls back to JSON.
 
-        Args:
+        Parameters
             case_name: Name of the simulation case
 
-        Returns:
+        Returns
             tuple: (partition_assignment, halo_info)
                 - partition_assignment: numpy array with partition IDs for active cells (1-indexed), or None
                 - halo_info: numpy array indicating which partition includes this cell as halo (0=none, partition_id if halo), or None

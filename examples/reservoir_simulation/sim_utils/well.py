@@ -63,7 +63,7 @@ class Completion:
     ) -> None:
         """Initializes a Completion object.
 
-        Args:
+        Parameters
             I (int): I-index of the grid cell (1-based).
             J (int): J-index of the grid cell (1-based).
             K (int): K-index of the grid cell (1-based).
@@ -81,7 +81,7 @@ class Completion:
     def set_ijk(self, ijk: int) -> None:
         """Sets the linear grid cell index (IJK).
 
-        Args:
+        Parameters
             ijk (int): Linear index of the grid cell (1-based).
         """
         self.IJK = ijk
@@ -89,7 +89,7 @@ class Completion:
     def set_flow_rate(self, val: float) -> None:
         """Sets the flow rate at the completion.
 
-        Args:
+        Parameters
             val (float): Flow rate. Positive: injection, negative: production.
         """
         self.flow_rate = val  # positive: injection, negative: production
@@ -99,7 +99,7 @@ class Completion:
     def _set_status(self, stat_id: int) -> None:
         """Sets the completion status.
 
-        Args:
+        Parameters
             stat_id (int): Status ID (positive for open, other values for shut).
         """
         self.status = "OPEN" if stat_id > 0 else "SHUT"
@@ -120,7 +120,7 @@ class Well:
     def __init__(self, name: str, type_id: int, stat: int) -> None:
         """Initializes a Well object.
 
-        Args:
+        Parameters
             name (str): Name of the well.
             type_id (int): Well type ID.
             stat (int): Well status ID (positive for open, other values for shut).
@@ -136,7 +136,7 @@ class Well:
     ) -> None:
         """Adds a completion to the well.
 
-        Args:
+        Parameters
             I (int): I-index of the grid cell (1-based).
             J (int): J-index of the grid cell (1-based).
             K (int): K-index of the grid cell (1-based).
@@ -160,7 +160,7 @@ class Well:
     def _set_type(self, type_id: int) -> None:
         """Sets the well type.
 
-        Args:
+        Parameters
             type_id (int):
             - Well type ID - 1 for PRD, 2 for OILINJ, 3 for WATINJ, 4 for GASINJ (ECL)
             - 5 for injector identifier for CMG (unclear how to get different injector types in CMG)

@@ -134,7 +134,7 @@ class ReservoirGraphBuilder:
     def _find_primary_input_files(self):
         """Find simulation primary input files based on simulator type.
 
-        Returns:
+        Returns
             list: Sorted list of primary input file paths
 
         Note:
@@ -171,11 +171,11 @@ class ReservoirGraphBuilder:
     def get_completion_info(self, grid, well_info) -> list:
         """Extract well completion information from simulation data.
 
-        Args:
+        Parameters
             grid: Grid object containing grid information.
             well_info: Dictionary containing well data from restart files.
 
-        Returns:
+        Returns
             list: List of Well objects with completion data for each timestep.
         """
         wells_lst = []
@@ -226,14 +226,14 @@ class ReservoirGraphBuilder:
         """
         Apply nonlinear scaling to data based on configuration.
 
-        Parameters:
+        Parameters
         -----------
         data : np.ndarray
             Input data array
         var_name : str
             Variable name to check for scaling configuration
 
-        Returns:
+        Returns
         --------
         np.ndarray
             Scaled data array
@@ -277,7 +277,7 @@ class ReservoirGraphBuilder:
         """
         Build a reservoir simulation graph from processed data.
 
-        Parameters:
+        Parameters
         -----------
         grid : Grid object
             Grid object with all grid information
@@ -294,7 +294,7 @@ class ReservoirGraphBuilder:
         time_series_data : dict, optional
             Interpolated time series data {well_name: {var_name: [values]}}
 
-        Returns:
+        Returns
         --------
         graph : pyg.data.Data
             Graph with node and edge features
@@ -769,14 +769,14 @@ class ReservoirGraphBuilder:
     ):
         """Read summary data and interpolate to match restart timesteps.
 
-        Args:
+        Parameters
             reader: EclReader instance
             time_series_vars: List of time series variable names (e.g., ["WWIR", "WGIR", "WBHP"])
             restart_times: Array of restart file timesteps (in days)
             sample_idx_1based: Sample index for error messages
             wells_data: List of well dictionaries (one per timestep) for checking well status
 
-        Returns:
+        Returns
             dict: Interpolated time series data structured as:
                   {well_name: {var_name: [val_t0, val_t1, ..., val_tn]}}
         """
@@ -885,7 +885,7 @@ class ReservoirGraphBuilder:
         creates separate channels for injection and production wells
         (e.g., WBHP_INJ, WBHP_PRD).
 
-        Args:
+        Parameters
             grid: Grid object
             wells: Dictionary of Well objects for current timestep
             time_series_data: Interpolated time series data
@@ -893,7 +893,7 @@ class ReservoirGraphBuilder:
             time_series_vars: List of time series variable names
             timestep_idx: Current timestep index
 
-        Returns:
+        Returns
             dict: {var_name: np.ndarray} where arrays have shape (n_active_cells,)
                   For pressure variables, returns {var_name_INJ: array, var_name_PRD: array}
         """
@@ -1294,10 +1294,10 @@ class ReservoirGraphBuilder:
         """
         Convert a Completion object to a JSON-serializable dictionary.
 
-        Args:
+        Parameters
             completion: Completion object
 
-        Returns:
+        Returns
             dict: Dictionary representation of the completion
         """
         comp_dict = {
@@ -1323,10 +1323,10 @@ class ReservoirGraphBuilder:
         """
         Convert a Well object to a JSON-serializable dictionary.
 
-        Args:
+        Parameters
             well: Well object
 
-        Returns:
+        Returns
             dict: Dictionary representation of the well
         """
         return {
@@ -1343,7 +1343,7 @@ class ReservoirGraphBuilder:
         """
         Save wells_data (list of lists of dicts of Well objects) to a JSON file.
 
-        Args:
+        Parameters
             wells_data: List of lists of dictionaries of Well objects
         """
         # Convert Wells objects to JSON-serializable format
