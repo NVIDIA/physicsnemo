@@ -18,7 +18,7 @@ import os
 import re
 import glob
 import time
-import pickle
+import json
 import numpy as np
 import torch
 from torch_geometric.data import Data
@@ -162,7 +162,7 @@ class ReservoirGraphBuilder:
             os.path.dirname(self.sim_dir), f"{os.path.basename(self.sim_dir)}.dataset"
         )
         self._output_path_graph = os.path.join(out_dir, "graphs")
-        self._output_path_well = os.path.join(out_dir, "well.pkl")
+        self._output_path_well = os.path.join(out_dir, "well.json")
         # Note: Directory creation is handled by preprocessor to ensure correct job-specific paths
 
     def get_completion_info(self, grid, well_info) -> list:
@@ -1285,12 +1285,86 @@ class ReservoirGraphBuilder:
 
         return all_graph_files
 
-    def _save_well_list_pickle(self, wells_data):
+    def _completion_to_dict(self, completion):
         """
-        Save wells_data (list of lists of dicts of Well objects) to a pickle file.
+        Convert a Completion object to a JSON-serializable dictionary.
+
+        Args:
+            completion: Completion object
+
+        Returns:
+            dict: Dictionary representation of the completion
         """
-        with open(self._output_path_well, "wb") as f:
-            pickle.dump(wells_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        comp_dict = {
+            "I": completion.I,
+            "J": completion.J,
+            "K": completion.K,
+            "dir": completion.dir,
+            "status": completion.status,
+            "connection_factor": completion.connection_factor,
+        }
+
+        # Add optional attributes if they exist
+        if hasattr(completion, "IJK"):
+            comp_dict["IJK"] = (
+                int(completion.IJK) if completion.IJK is not None else None
+            )
+        if hasattr(completion, "flow_rate"):
+            comp_dict["flow_rate"] = float(completion.flow_rate)
+
+        return comp_dict
+
+    def _well_to_dict(self, well):
+        """
+        Convert a Well object to a JSON-serializable dictionary.
+
+        Args:
+            well: Well object
+
+        Returns:
+            dict: Dictionary representation of the well
+        """
+        return {
+            "name": well.name,
+            "type": well.type,
+            "status": well.status,
+            "num_active_completions": well.num_active_completions,
+            "completions": [
+                self._completion_to_dict(comp) for comp in well.completions
+            ],
+        }
+
+    def _save_well_list_json(self, wells_data):
+        """
+        Save wells_data (list of lists of dicts of Well objects) to a JSON file.
+
+        Args:
+            wells_data: List of lists of dictionaries of Well objects
+        """
+        # Convert Wells objects to JSON-serializable format
+        json_data = []
+        for timestep_wells in wells_data:
+            if isinstance(timestep_wells, dict):
+                # Dictionary of well_name: Well object
+                timestep_dict = {
+                    well_name: self._well_to_dict(well)
+                    for well_name, well in timestep_wells.items()
+                }
+            elif isinstance(timestep_wells, list):
+                # List is empty or contains Wells
+                if len(timestep_wells) == 0:
+                    timestep_dict = {}
+                else:
+                    timestep_dict = [
+                        self._well_to_dict(well) for well in timestep_wells
+                    ]
+            else:
+                timestep_dict = {}
+
+            json_data.append(timestep_dict)
+
+        with open(self._output_path_well, "w") as f:
+            json.dump(json_data, f, indent=2)
         print(f"\nWell data saved to {self._output_path_well}")
 
     def execute(self):
