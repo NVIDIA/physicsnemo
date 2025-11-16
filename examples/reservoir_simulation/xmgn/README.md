@@ -8,15 +8,17 @@ datasets.
 
 Reservoir simulation predicts reservoir performance using physical and
 mathematical models. It plays critical roles in production forecasting,
-reservoir management, field development planning, and optimization.
+reservoir management, field development planning, and optimization. Despite
+advances in parallel computing and GPU acceleration, routine reservoir
+simulation workflows requiring thousands of simulations remain computationally
+expensive, creating a need for faster surrogate models.
 
-Despite advances in parallel computing and GPU acceleration,
-these simulations remain computationally expensive, creating a need for faster
-surrogate models.
-
-XMeshGraphNet (X-MGN) is naturally compatible with the finite volume framework
-used in reservoir simulation and is scalable to industry-scale reservoir
-models, making it an ideal surrogate modeling approach for this domain.
+This example provides a reference implementation of XMeshGraphNet (X-MGN) for
+building reservoir simulation surrogates. X-MGN is naturally compatible with
+the finite volume framework commonly used in reservoir simulation. It is
+particularly effective for systems with irregular connections such as faults,
+pinch-outs, dual-porosity regions, and discrete fractures. Furthermore, X-MGN
+scales efficiently to industry-scale reservoir models with millions of cells.
 
 ## Quick Start
 
@@ -32,8 +34,8 @@ pip install -r requirements.txt
 
 ### 0. Dataset Preparation
 
-You need to provide reservoir simulation data in ECLIPSE/IX format to use this
-example.
+You need to provide reservoir simulation data with ECLIPSE/IX style output
+format to use this example.
 
 > **⚠️ Dataset License Disclaimer**
 >
@@ -72,7 +74,7 @@ are stored in a single directory with ECLIPSE/IX style output files:
   transmissibility and KVKH multipliers as key variables, which were then
   varied using Latin Hypercube Sampling to generate 500 samples. This
   well-known model contains numerous faults represented by Non-Neighbor
-  Connections (NNCs), which X-MeshGraphNet naturally handles through its
+  Connections (NNCs), which X-MGN naturally handles through its
   graph structure.
 
 An open-source reservoir simulator, [OPM](https://opm-project.org/), was used
@@ -119,8 +121,7 @@ steps below.
 
 **What it does**:
 
-- Reads simulation binary files (`.INIT`, `.EGRID`, `.UNRST`) using
-  `sim_utils`
+- Reads simulation binary files (`.INIT`, `.EGRID`, `.UNRST`) in the dataset directory.
 - Extracts variables specified in the configuration file
 - Builds graph structures with nodes (grid cells) and edges (connections)
 - Creates autoregressive training sequences for next-timestep prediction
@@ -157,8 +158,7 @@ python src/inference.py --config-name=<your-config>
 
 The following shows water saturation and pressure predictions for the Norne
 field across 64 timesteps spanning 10 years of operation with varying well
-controls, including open/shut-in events. Such complex operational scenarios are
-often challenging to capture with ML models. Nonetheless, X-MGN demonstrates
+controls. X-MGN demonstrates
 good predictability, especially for near-term predictions. As expected for
 autoregressive prediction, errors accumulate over time, but the model maintains
 reasonable accuracy throughout:
