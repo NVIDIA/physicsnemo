@@ -281,7 +281,9 @@ class FIGConvUNet(BaseModel):
             self.grid_pools = nn.ModuleList(grid_pools)
 
             self.mlp = MLP(
-                mlp_channels[0] * len(self.compressed_spatial_dims) * len(pooling_layers),
+                mlp_channels[0]
+                * len(self.compressed_spatial_dims)
+                * len(pooling_layers),
                 mlp_channels[-1],
                 mlp_channels,
                 use_residual=True,

@@ -102,7 +102,9 @@ def stub_parent_classes(monkeypatch):
         return torch.zeros_like(vertices), None
 
     monkeypatch.setattr(rollout.FIGConvUNet, "__init__", figconvunet_init, raising=True)
-    monkeypatch.setattr(rollout.FIGConvUNet, "forward", figconvunet_forward, raising=True)
+    monkeypatch.setattr(
+        rollout.FIGConvUNet, "forward", figconvunet_forward, raising=True
+    )
 
 
 def test_transolver_autoregressive_rollout_eval():

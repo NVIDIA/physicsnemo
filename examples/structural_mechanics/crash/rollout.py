@@ -608,9 +608,9 @@ class FIGConvUNetAutoregressiveRolloutTraining(FIGConvUNet):
             fx_t = fx_t.unsqueeze(0)  # [1, N, 3+F+1]
 
             def step_fn(verts, feats):
-                out, _ = super(
-                    FIGConvUNetAutoregressiveRolloutTraining, self
-                ).forward(vertices=verts, features=feats)
+                out, _ = super(FIGConvUNetAutoregressiveRolloutTraining, self).forward(
+                    vertices=verts, features=feats
+                )
                 return out
 
             if self.training:
