@@ -150,6 +150,7 @@ class FIGConvUNet(BaseModel):
         knn_k: int = 16,
         reductions: List[REDUCTION_TYPES] = ["mean"],
         use_scalar_output: bool = True,
+        has_input_features: bool = False,
         pooling_type: Literal["attention", "max", "mean"] = "max",
         pooling_layers: List[int] = None,
     ):
@@ -318,7 +319,7 @@ class FIGConvUNet(BaseModel):
 
         self.pad_to_match = GridFeatureGroupPadToMatch()
 
-        if in_channels == 0:
+        if not has_input_features:
             self.vertex_to_point_features = VerticesToPointFeatures(
                 embed_dim=pos_encode_dim,
                 out_features=hidden_channels[0],
