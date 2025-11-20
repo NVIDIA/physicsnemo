@@ -247,9 +247,6 @@ class TransolverDataPipe(Dataset):
         positions = data_dict["volume_mesh_centers"]
 
         if self.config.resolution is not None:
-            # idx = torch.multinomial(
-            #     torch.ones(positions.shape[0], device=positions.device), self.config.resolution,
-            # )
             idx = poisson_sample_indices_fixed(
                 positions.shape[0], self.config.resolution, device=positions.device
             )
