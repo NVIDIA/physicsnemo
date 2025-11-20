@@ -23,12 +23,12 @@ type annotations.
 
 Protocol Architecture
 ---------------------
-Python ``Protocol``s are used for structural typing: essentially, they are used to
-describe an expected interface in a way that is helpful for static type checkers
+Python :class:`typing.Protocol` s are used for structural typing: essentially, they are
+used to describe an expected interface in a way that is helpful for static type checkers
 to make sure concrete implementations provide everything that is needed for a workflow
-to function. ``Protocol``s are not actually enforced at runtime, and inheritance is not
-required for them to function: as long as the implementation provides the expected
-attributes and methods, they will be compatible with the protocol.
+to function. :class:`typing.Protocol` s are not actually enforced at runtime, and
+inheritance is not required for them to function: as long as the implementation
+provides the expected attributes and methods, they will be compatible with the protocol.
 
 The active learning framework is built around several key protocol abstractions
 that work together to orchestrate the active learning workflow:
