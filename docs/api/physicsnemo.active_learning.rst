@@ -8,7 +8,7 @@ Developing Active Learning Workflows
 
 For a high level overview and understanding of how to construct active
 learning workflows using PhysicsNeMo, users should consult the `User 
-Guide <https://docs.nvidia.com/physicsnemo/latest/user-guide/active-learning/index.html>`_
+Guide <https://docs.nvidia.com/physicsnemo/latest/user-guide/active_learning.html>`_
 . The guide will motivate the need for active learning, the abstraction
 provided by PhysicsNeMo, and some additional tips for developing custom
 components like querying and labeling strategies.
