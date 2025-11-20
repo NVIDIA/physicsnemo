@@ -39,6 +39,11 @@ class ActiveLearningLoggerAdapter(logging.LoggerAdapter):
 
     This adapter automatically adds iteration information to log messages
     by accessing the driver's current iteration state.
+
+    See Also
+    --------
+    Driver : Uses this adapter for logging
+    setup_active_learning_logger : Sets up loggers with this adapter
     """
 
     def __init__(self, logger: logging.Logger, driver_ref: Any = None):
@@ -46,10 +51,10 @@ class ActiveLearningLoggerAdapter(logging.LoggerAdapter):
 
         Parameters
         ----------
-        logger : logging.Logger
+        logger : :class:`logging.Logger`
             The underlying logger to adapt
         driver_ref : Any, optional
-            Reference to the driver object to get iteration context from
+            Reference to the :class:`~physicsnemo.active_learning.driver.Driver` object to get iteration context from
         """
         super().__init__(logger, {})
         self.driver_ref = driver_ref
@@ -102,6 +107,11 @@ class JSONFormatter(logging.Formatter):
 
     This formatter converts log records to JSON format, including all
     contextual information and metadata for structured analysis.
+
+    See Also
+    --------
+    setup_active_learning_logger : Uses this formatter for file handlers
+    ContextFormatter : Alternative formatter for console output
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -156,7 +166,13 @@ def _get_context_stack():
 
 
 class ContextFormatter(logging.Formatter):
-    """Standard formatter that includes active learning context information with colors."""
+    """Standard formatter that includes active learning context information with colors.
+
+    See Also
+    --------
+    setup_active_learning_logger : Uses this formatter for console handlers
+    JSONFormatter : Alternative formatter for file output
+    """
 
     def format(self, record):
         # Build context string
@@ -200,7 +216,13 @@ class ContextFormatter(logging.Formatter):
 
 
 class ContextInjectingFilter(logging.Filter):
-    """Filter that injects contextual information into log records."""
+    """Filter that injects contextual information into log records.
+
+    See Also
+    --------
+    setup_active_learning_logger : Uses this filter for context injection
+    log_context : Context manager that works with this filter
+    """
 
     def filter(self, record):
         # Add context information from thread-local storage
@@ -232,15 +254,21 @@ def setup_active_learning_logger(
         Logger name
     run_id : str
         Unique identifier for this run, used in log filename
-    log_dir : str | Path, optional
+    log_dir : str or :class:`pathlib.Path`, optional
         Directory to store log files, by default "./logs"
     level : int, optional
         Logging level, by default logging.INFO
 
     Returns
     -------
-    logging.Logger
+    :class:`logging.Logger`
         Configured standard Python logger
+
+    See Also
+    --------
+    Driver : Uses this function to set up logging
+    ActiveLearningLoggerAdapter : Logger adapter for context
+    log_context : Context manager for logging
 
     Example
     -------
@@ -305,6 +333,11 @@ def log_context(
         Current phase of the active learning process
     **kwargs : Any
         Additional contextual key-value pairs
+
+    See Also
+    --------
+    ContextInjectingFilter : Filter that injects context into log records
+    setup_active_learning_logger : Sets up loggers with context support
 
     Example
     -------
