@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support passing custom tokenizer, detokenizer, and attention `Module`s in
   experimental DiT architecture
 - Improved Transolver training recipe's configuration for checkpointing and normalization.
+- Bumped `multi-storage-client` version to 0.33.0 with rust client.
 
 ### Deprecated
 

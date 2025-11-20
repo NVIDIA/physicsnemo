@@ -213,7 +213,7 @@ RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==
 RUN pip install --no-cache-dir "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely" "numpy<2.0"
 
 # Install MSC
-RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.14.0"
+RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.33.0"
 
 # cleanup of stage
 RUN rm -rf /physicsnemo/
