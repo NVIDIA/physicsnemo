@@ -617,6 +617,23 @@ class Typhon(Module):
     ValueError
         If ``n_hidden`` is not evenly divisible by ``n_head``.
 
+
+    Forward
+    ----------
+    local_embedding : torch.Tensor
+        Local embedding of the input data of shape \((B, N, C)\) where \(B\) is batch size, \(N\) is number of nodes/tokens, and \(C\) is ``functional_dim``. Output will have the same \((B, N)\) shape but with ``out_dim`` channels.
+    global_embedding : torch.Tensor, optional
+        Global embedding of the input data of shape \((B, N_g, C_g)\) where \(N_g\) is number of global tokens and \(C_g\) is ``global_dim``. If None, global context is not used. Default is None.
+    geometry : torch.Tensor, optional
+        Geometry features of the input data of shape \((B, N, C_{geo})\) where \(C_{geo}\) is ``geometry_dim``. If None, geometry context is not used. Default is None.
+    time : torch.Tensor, optional
+        Time embedding (currently not implemented). Default is None.
+
+    Returns
+    -------
+    torch.Tensor
+        Output tensor of shape \((B, N, C_{out})\) where \(C_{out}\) is ``out_dim``.
+
     Notes
     -----
     Typhon currently supports unstructured mesh input only. Enhancements for image-based
@@ -775,21 +792,6 @@ class Typhon(Module):
         in all GALE blocks via cross-attention, allowing geometric and global information to
         guide the learned physical state dynamics.
 
-        Parameters
-        ----------
-        local_embedding : torch.Tensor
-            Local embedding of the input data of shape \((B, N, C)\) where \(B\) is batch size, \(N\) is number of nodes/tokens, and \(C\) is ``functional_dim``. Output will have the same \((B, N)\) shape but with ``out_dim`` channels.
-        global_embedding : torch.Tensor, optional
-            Global embedding of the input data of shape \((B, N_g, C_g)\) where \(N_g\) is number of global tokens and \(C_g\) is ``global_dim``. If None, global context is not used. Default is None.
-        geometry : torch.Tensor, optional
-            Geometry features of the input data of shape \((B, N, C_{geo})\) where \(C_{geo}\) is ``geometry_dim``. If None, geometry context is not used. Default is None.
-        time : torch.Tensor, optional
-            Time embedding (currently not implemented). Default is None.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape \((B, N, C_{out})\) where \(C_{out}\) is ``out_dim``.
         """
 
         # First, construct the global context vectors:
