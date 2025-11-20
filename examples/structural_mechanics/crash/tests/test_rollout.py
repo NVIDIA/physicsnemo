@@ -90,6 +90,22 @@ def stub_parent_classes(monkeypatch):
     monkeypatch.setattr(rollout.MeshGraphNet, "__init__", mgn_init, raising=True)
     monkeypatch.setattr(rollout.MeshGraphNet, "forward", mgn_forward, raising=True)
 
+    # Stub FIGConvUNet.__init__ and FIGConvUNet.forward
+    def figconvunet_init(self, *args, **kwargs):
+        torch.nn.Module.__init__(self)
+
+    def figconvunet_forward(self, vertices=None, features=None):
+        # Return zeros with shape matching vertices
+        # vertices: [B, N, 3], features: [B, N, F]
+        # output: [B, N, 3]
+        assert vertices is not None
+        return torch.zeros_like(vertices), None
+
+    monkeypatch.setattr(rollout.FIGConvUNet, "__init__", figconvunet_init, raising=True)
+    monkeypatch.setattr(
+        rollout.FIGConvUNet, "forward", figconvunet_forward, raising=True
+    )
+
 
 def test_transolver_autoregressive_rollout_eval():
     N, T, F = 5, 4, 2
@@ -175,6 +191,46 @@ def test_meshgraphnet_one_step_rollout_eval():
     stats = make_data_stats()
 
     model = rollout.MeshGraphNetOneStepRollout(
+        dt=5e-3, initial_vel=torch.zeros(1, 3), num_time_steps=T
+    )
+    model.eval()
+
+    out = model.forward(sample=sample, data_stats=stats)
+    assert out.shape == (T - 1, N, 3)
+
+
+def test_figconvunet_time_conditional_rollout_eval():
+    N, T, F = 6, 5, 3
+    sample = make_sample(N=N, T=T, F=F)
+    stats = make_data_stats()
+
+    model = rollout.FIGConvUNetTimeConditionalRollout(num_time_steps=T)
+    model.eval()
+
+    out = model.forward(sample=sample, data_stats=stats)
+    assert out.shape == (T - 1, N, 3)
+
+
+def test_figconvunet_one_step_rollout_eval():
+    N, T, F = 7, 6, 1
+    sample = make_sample(N=N, T=T, F=F)
+    stats = make_data_stats()
+
+    model = rollout.FIGConvUNetOneStepRollout(
+        dt=5e-3, initial_vel=torch.zeros(1, 3), num_time_steps=T
+    )
+    model.eval()
+
+    out = model.forward(sample=sample, data_stats=stats)
+    assert out.shape == (T - 1, N, 3)
+
+
+def test_figconvunet_autoregressive_rollout_eval():
+    N, T, F = 5, 4, 2
+    sample = make_sample(N=N, T=T, F=F)
+    stats = make_data_stats()
+
+    model = rollout.FIGConvUNetAutoregressiveRolloutTraining(
         dt=5e-3, initial_vel=torch.zeros(1, 3), num_time_steps=T
     )
     model.eval()

@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.FIGConvUNetTimeConditionalRollout
+_target_: rollout.FIGConvUNetAutoregressiveRolloutTraining
 _convert_: all
 
 # Input/output channels
-in_channels: 2                       # thickness + time
-out_channels: 3                      # displacement offset (xyz)
+in_channels: 5                       # velocity(3) + features(F) + time(1)
+out_channels: 3                      # acceleration (xyz)
 
 # Architecture
 kernel_size: 3
-hidden_channels: [16, 16, 16]      # channels at each level
+hidden_channels: [16, 16, 16]       # channels at each level
 num_levels: 2                        # number of down/up levels
 num_down_blocks: 1
 num_up_blocks: 1
@@ -35,7 +35,7 @@ aabb_min: [-2.0, -2.0, -2.0]
 voxel_size: null
 
 # Grid resolutions (factorized implicit grids)
-# Format: Uses res_mem_pair resolver (memory_format_enum, resolution_tuple)
+# Format: [memory_format, resolution_tuple]
 resolution_memory_format_pairs:
   - [b_xc_y_z, [2, 64, 64]]
   - [b_yc_x_z, [64, 2, 64]]
@@ -62,3 +62,5 @@ pooling_layers: [2]
 
 # Rollout parameters
 num_time_steps: ${training.num_time_steps}
+dt: 5e-3
+initial_vel: 9.22

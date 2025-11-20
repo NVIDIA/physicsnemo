@@ -19,14 +19,14 @@ For an in-depth comparison between the Transolver and MeshGraphNet models and th
 
 <p align="center">
   <img src="../../../docs/img/crash/crash_case4_reduced.gif" alt="Crash animation" width="80%" />
-  
+
 </p>
 
 ### Crushcan Modeling
 
 <p align="center">
   <img src="../../../docs/img/crash/crushcan.gif" alt="Crushcan animation" width="80%" />
-  
+
 </p>
 
 ## Quickstart
@@ -238,7 +238,10 @@ conf/
 │   ├── mgn_time_conditional.yaml
 │   ├── transolver_autoregressive_rollout_training.yaml
 │   ├── transolver_one_step_rollout.yaml
-│   └── transolver_time_conditional.yaml
+│   ├── transolver_time_conditional.yaml
+│   ├── figconvunet_autoregressive_rollout_training.yaml
+│   ├── figconvunet_one_step_rollout.yaml
+│   └── figconvunet_time_conditional.yaml
 ├── training/default.yaml    # training hyperparameters
 └── inference/default.yaml   # inference options
 ```
@@ -495,7 +498,7 @@ run_post_processing.sh can automate all evaluation tasks across runs.
 
 - AMP is enabled by default in training; it reduces memory and accelerates matmuls on modern GPUs.
 - For multi-GPU training, use `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
-- For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`. 
+- For DDP, prefer `torchrun --standalone --nproc_per_node=<NUM_GPUS> train.py`.
 
 ## Troubleshooting / FAQ
 

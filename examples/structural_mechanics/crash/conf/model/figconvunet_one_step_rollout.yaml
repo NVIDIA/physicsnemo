@@ -14,16 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: rollout.FIGConvUNetTimeConditionalRollout
+_target_: rollout.FIGConvUNetOneStepRollout
 _convert_: all
 
 # Input/output channels
-in_channels: 2                       # thickness + time
-out_channels: 3                      # displacement offset (xyz)
+in_channels: 4                       # velocity(3) + features (F)
+out_channels: 3                      # next step position (xyz)
 
 # Architecture
 kernel_size: 3
-hidden_channels: [16, 16, 16]      # channels at each level
+hidden_channels: [16, 16, 16]        # channels at each level
 num_levels: 2                        # number of down/up levels
 num_down_blocks: 1
 num_up_blocks: 1
@@ -62,3 +62,5 @@ pooling_layers: [2]
 
 # Rollout parameters
 num_time_steps: ${training.num_time_steps}
+dt: 5e-3
+initial_vel: 9.22
