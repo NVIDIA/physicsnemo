@@ -234,7 +234,7 @@ class SongUNet(Module):
           architectures. Despite the name, these embeddings encode temporal information about the
           diffusion process rather than spatial position information.
         • Limitations on input image resolution: for a model that has :math:`N` levels,
-          the latent state :math:`\mathbf{x}` must have resolution that is a multiple of :math:`2^N` in each dimension.
+          the latent state :math:`\mathbf{x}` must have resolution that is a multiple of :math:`2^{N-1}` in each dimension.
           This is due to a limitation in the decoder that does not support shape mismatch
           in the residual connections from the encoder to the decoder. For images that do not match
           this requirement, it is recommended to interpolate your data on a grid of the required resolution
@@ -337,7 +337,7 @@ class SongUNet(Module):
             self.img_shape_x = img_resolution[1]
 
         self._num_levels = len(channel_mult)
-        self._input_shape_mult = 2**self._num_levels
+        self._input_shape_mult = 2 ** (self._num_levels - 1)
 
         # set the threshold for checkpointing based on image resolution
         self.checkpoint_threshold = (
@@ -534,7 +534,7 @@ class SongUNet(Module):
                     f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
                 )
 
-            # Check spatial dimensions are powers of 2 or multiples of 2^N
+            # Check spatial dimensions are powers of 2 or multiples of 2^{N-1}
             for d in x.shape[-2:]:
                 # Check if d is a power of 2
                 is_power_of_2 = (d & (d - 1)) == 0 and d > 0
@@ -545,7 +545,7 @@ class SongUNet(Module):
                 ):
                     raise ValueError(
                         f"Input spatial dimensions ({x.shape[-2:]}) must be "
-                        f"either powers of 2 or multiples of 2**N where "
+                        f"either powers of 2 or multiples of 2**(N-1) where "
                         f"N (={self._num_levels}) is the number of levels "
                         f"in the U-Net."
                     )

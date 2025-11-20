@@ -11,9 +11,9 @@
 [**NVIDIA PhysicsNeMo**](#what-is-physicsnemo)
 | [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 | [**Install Guide**](#installation)
-| [**Getting Started**](#getting-started)
+| [**Getting Started**](#getting-started-with-physicsnemo)
 | [**Contributing Guidelines**](#contributing-to-physicsnemo)
-| [**License**](#license)
+| [**Dev blog**](https://nvidia.github.io/physicsnemo/blog/)
 
 ## What is PhysicsNeMo?
 
@@ -46,7 +46,7 @@ provides you with an optimized stack that will enable you to train your models a
     - [Domain-Specific Packages](#domain-specific-packages)
 - [Who is Using and Contributing to PhysicsNeMo](#who-is-using-and-contributing-to-physicsnemo)
 - [Why Use PhysicsNeMo](#why-are-they-using-physicsnemo)
-- [Getting Started](#getting-started)
+- [Getting Started](#getting-started-with-physicsnemo)
 - [Resources](#resources)
 - [Installation](#installation)
 - [Contributing](#contributing-to-physicsnemo)
@@ -302,7 +302,7 @@ Here are some of the key benefits of PhysicsNeMo for SciML model development:
 
 See what your peer SciML researchers are saying about PhysicsNeMo (coming soon).
 
-## Getting Started
+## Getting Started with PhysicsNeMo
 
 The following resources will help you learn how to use PhysicsNeMo. The best
 way is to start with a reference sample and then update it for your own use case.
@@ -313,16 +313,21 @@ way is to start with a reference sample and then update it for your own use case
 - [Reference Samples](https://github.com/NVIDIA/physicsnemo/blob/main/examples/README.md)
 - [User Guide Documentation](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)
 
+## Learning AI Physics
+
+- [Explore Jupyter Notebooks on Hugging Face](https://huggingface.co/collections/nvidia/physicsnemo)
+- [AI4Science PhysicsNeMo Bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science)
+- [Self-Paced DLI Training](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1)
+- [Deep Learning for Science and Engineering Lecture Series](https://www.nvidia.com/en-us/on-demand/deep-learning-for-science-and-engineering/)
+- [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=physicsnemo&sort=relevance&sortDir=desc)
+
 ## Resources
 
 - [Getting Started Webinar](https://www.nvidia.com/en-us/on-demand/session/gtc24-dlit61460/?playlistId=playList-bd07f4dc-1397-4783-a959-65cec79aa985)
+- [PhysicsNeMo: Purpose and Usage](https://www.nvidia.com/en-us/on-demand/session/dliteachingkit-setk5002/)
 - [AI4Science PhysicsNeMo Bootcamp](https://github.com/openhackathons-org/End-to-End-AI-for-Science)
 - [PhysicsNeMo Pretrained Models](https://catalog.ngc.nvidia.com/models?filters=&orderBy=scoreDESC&query=PhysicsNeMo&page=&pageSize=)
 - [PhysicsNeMo Datasets and Supplementary Materials](https://catalog.ngc.nvidia.com/resources?filters=&orderBy=scoreDESC&query=PhysicsNeMo&page=&pageSize=)
-- [Self-Paced PhysicsNeMo DLI Training](https://learn.nvidia.com/courses/course-detail?course_id=course-v1:DLI+S-OV-04+V1)
-- [Deep Learning for Science and Engineering Lecture Series with PhysicsNeMo](https://www.nvidia.com/en-us/on-demand/deep-learning-for-science-and-engineering/)
-  - [PhysicsNeMo: Purpose and Usage](https://www.nvidia.com/en-us/on-demand/session/dliteachingkit-setk5002/)
-- [Video Tutorials](https://www.nvidia.com/en-us/on-demand/search/?facet.mimetype[]=event%20session&layout=list&page=1&q=physicsnemo&sort=relevance&sortDir=desc)
 
 ## Installation
 
