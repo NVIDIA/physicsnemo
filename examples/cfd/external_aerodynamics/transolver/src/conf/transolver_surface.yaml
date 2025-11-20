@@ -19,14 +19,31 @@
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
 run_id: "surface/bfloat16"
+
+# Performance considerations:
+precision: bfloat16 # float32, float16, bfloat16, or float8
+compile: true
 profile: false
 
 # Training configuration
 training:
-  precision: bfloat16 # float32, float16, bfloat16, or float8
-  num_epochs: 251 # Add one to save at 250
+  num_epochs: 501 # Add one to save at 250
   save_interval: 25  # Save checkpoint every N epochs
-  compile: false
+
+  # StepLR scheduler: Decays the learning rate by gamma every step_size epochs
+  scheduler:
+    name: "StepLR"
+    params:
+      step_size: 100    # Decay every 200 epochs (set X as desired)
+      gamma: 0.5        # Decay factor
+
+  # Optimizer configuration
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
 
 # Model configuration
 model:
@@ -40,7 +57,7 @@ model:
   n_head: 8         # Number of attention heads
   act: "gelu"       # Activation function
   mlp_ratio: 2      # MLP ratio in attention blocks
-  slice_num: 256     # Number of slices in physics attention
+  slice_num: 512     # Number of slices in physics attention
   unified_pos: false # Whether to use unified positional embeddings
   ref: 8            # Reference dimension for unified pos
   structured_shape: null
@@ -48,28 +65,13 @@ model:
   time_input: false # Whether to use time embeddings
   plus: false
 
-# StepLR scheduler: Decays the learning rate by gamma every step_size epochs
-scheduler:
-  name: "StepLR"
-  params:
-    step_size: 200    # Decay every 200 epochs (set X as desired)
-    gamma: 0.5        # Decay factor
-
-
-# Optimizer configuration
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 5.0e-4
-  weight_decay: 1.0e-4
-  betas: [0.9, 0.999]
-  eps: 1.0e-8
 
 # Data configuration
 data:
   train:
-    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/drivaer_aws/domino/train/
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/drivaer_aws/domino/train/
   val:
-    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/drivaer_aws/domino/val/
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/drivaer_aws/domino/val/
   max_workers: 8
   normalization_dir: "src/"  # Directory for normalization files
   preload_depth: 1
@@ -87,6 +89,7 @@ data:
     - "surface_fields"
     - "surface_mesh_centers"
     - "surface_normals"
+    - "surface_areas"
     - "air_density"
     - "stream_velocity"
     - "stl_faces"

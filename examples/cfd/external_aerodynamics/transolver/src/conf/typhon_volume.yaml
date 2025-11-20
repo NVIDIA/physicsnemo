@@ -19,18 +19,37 @@
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
 run_id: "volumeX/fake-name"
+
+# Performance considerations:
+precision: bfloat16 # float32, float16, bfloat16, or float8
+compile: true
 profile: false
 
 # Training configuration
 training:
-  precision: bfloat16 # float32, float16, bfloat16, or float8
-  num_epochs: 500 # Add one to save at 250
-  save_interval: 10  # Save checkpoint every N epochs
-  compile: false
+  num_epochs: 501 # Add one to save at 250
+  save_interval: 25  # Save checkpoint every N epochs
+
+  # StepLR scheduler: Decays the learning rate by gamma every step_size epochs
+  scheduler:
+    name: "StepLR"
+    params:
+      step_size: 100    # Decay every 200 epochs (set X as desired)
+      gamma: 0.5        # Decay factor
+
+
+  # Optimizer configuration
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
 
 # Model configuration
 model:
-  _target_: physicsnemo.models.transolver.TransolverX
+  _target_: physicsnemo.experimental.models.typhon.Typhon
   functional_dim: 7 # Input feature dimension
   global_dim: 2
   geometry_dim: 3
@@ -45,34 +64,14 @@ model:
   use_te: false     # Use transformer engine
   plus: false
 
-# scheduler:
-#   name: "OneCycleLR"
-#   params:
-#     final_div_factor: 1e3
-#     div_factor: 10
 
-# StepLR scheduler: Decays the learning rate by gamma every step_size epochs
-scheduler:
-  name: "StepLR"
-  params:
-    step_size: 200    # Decay every 200 epochs (set X as desired)
-    gamma: 0.5        # Decay factor
-
-
-# Optimizer configuration
-optimizer:
-  _target_: torch.optim.AdamW
-  lr: 3.0e-4
-  weight_decay: 1.0e-4
-  betas: [0.9, 0.999]
-  eps: 1.0e-8
 
 # Data configuration
 data:
   train:
-    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/drivaer_aws/domino/train/
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/drivaer_aws/domino/train/
   val:
-    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/drivaer_aws/domino/val/
+    data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/drivaer_aws/domino/val/
   max_workers: 8
   normalization_dir: "src/"  # Directory for normalization files
   preload_depth: 1
@@ -80,7 +79,7 @@ data:
   pin_memory: true
   resolution: 100_000
   # Preprocessing switches:
-  # (Changing thes will change the embedding dim)
+  # (Changing these will change the embedding dim)
   include_geometry: true
   include_normals: true
   include_sdf: true

@@ -21,15 +21,15 @@ import torch.nn as nn
 from einops import rearrange
 
 import physicsnemo  # noqa: F401 for docs
-from physicsnemo.core.version_check import check_min_version
+from physicsnemo.utils.version_check import check_min_version
 from physicsnemo.models.transolver.Physics_Attention import (
     PhysicsAttentionIrregularMesh,
     gumbel_softmax,
 )
 from physicsnemo.models.transolver.transolver import MLP
 
-from ..meta import ModelMetaData
-from ..module import Module
+from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.models.module import Module
 
 # Check optional dependency availability
 TE_AVAILABLE = check_min_version("transformer-engine", "0.1.0", hard_fail=False)

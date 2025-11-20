@@ -38,11 +38,14 @@ def all_reduce_dict(
     if dm.world_size == 1:
         return metrics
 
-    for key, value in metrics.items():
-        dist.all_reduce(value)
-        value = value / dm.world_size
-        metrics[key] = value
+    # Pack the metrics together:
+    merged_metrics = torch.stack(list(metrics.values()), dim=-1)
 
+    dist.all_reduce(merged_metrics)
+    merged_metrics = merged_metrics / dm.world_size
+
+    # Unstack metrics:
+    metrics = {key: merged_metrics[i] for i, key in enumerate(metrics.keys())}
     return metrics
 
 

@@ -14,46 +14,70 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Core python imports:
 import os
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Any, Callable, Sequence
+import collections
+from contextlib import nullcontext
 
-import torch
+# Configuration:
 import hydra
 import omegaconf
-from tabulate import tabulate
 from omegaconf import DictConfig
-import torchinfo
+
+# Pytorch imports:
+import torch
+from torch.optim import Optimizer
+from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
+# For metrics and model printouts:
+from tabulate import tabulate
+import torchinfo
+
+# For loading dataset stats:
 import numpy as np
 
+# Physicsnemo imports ...
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.distributed import DistributedManager
-
 from physicsnemo.utils.profiling import profile, Profiler
-
 from physicsnemo.datapipes.cae.transolver_datapipe import (
     create_transolver_dataset,
     TransolverDataPipe,
 )
-from loss import loss_fn
+
+# Local folder imports for this example
 from metrics import metrics_fn
 from preprocess import (
     preprocess_surface_data,
     downsample_surface,
 )
 
-from contextlib import nullcontext
-from torch.amp import autocast, GradScaler
+# Special import, if transformer engine is available:
+from physicsnemo.utils.version_check import check_min_version
 
-# import transformer_engine.pytorch as te
-# from transformer_engine.common.recipe import Format, DelayedScaling
+TE_AVAILABLE = check_min_version("transformer_engine", "0.0.0", hard_fail=False)
 
-from torch.optim import Optimizer
-from typing import Any, Callable, Sequence
+if TE_AVAILABLE:
+    import transformer_engine.pytorch as te
+    from transformer_engine.common.recipe import Format, DelayedScaling
+else:
+    te, Format, DelayedScaling = None, None, None
+
+# This will go away when checkpointing is refined further below:
+torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
+torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
+torch.serialization.add_safe_globals([Any])
+torch.serialization.add_safe_globals([list])
+torch.serialization.add_safe_globals([collections.defaultdict])
+torch.serialization.add_safe_globals([dict])
+torch.serialization.add_safe_globals([int])
+torch.serialization.add_safe_globals([omegaconf.nodes.AnyNode])
+torch.serialization.add_safe_globals([omegaconf.base.Metadata])
 
 
 class CombinedOptimizer(Optimizer):
@@ -63,6 +87,10 @@ class CombinedOptimizer(Optimizer):
     that learning-rate schedulers (e.g., ReduceLROnPlateau, CosineAnnealingLR)
     operate transparently across every parameter. Only a minimal subset of the
     *torch.optim.Optimizer* API is implemented—extend as needed.
+
+    Note:
+        This will get upstreamed to physicsnemo shortly.  Don't count on this
+        class existing here in the future!
     """
 
     def __init__(
@@ -124,7 +152,7 @@ def get_autocast_context(precision: str) -> nullcontext:
         return autocast("cuda", dtype=torch.float16)
     elif precision == "bfloat16":
         return autocast("cuda", dtype=torch.bfloat16)
-    elif precision == "float8":
+    elif precision == "float8" and TE_AVAILABLE:
         fp8_format = Format.HYBRID
         fp8_recipe = DelayedScaling(
             fp8_format=fp8_format, amax_history_len=16, amax_compute_algo="max"
@@ -231,7 +259,7 @@ def forward_pass(
 
     with get_autocast_context(precision):
         # For fp8, we may have to pad the inputs:
-        if precision == "float8":
+        if precision == "float8" and TE_AVAILABLE:
             features, geometry = pad_input_for_fp8(features, embeddings, geometry)
 
         if "geometry" in batch.keys():
@@ -243,7 +271,7 @@ def forward_pass(
 
         outputs = unpad_output_for_fp8(outputs, output_pad_size)
 
-        loss = loss_fn(outputs, targets, data_mode)
+        loss = torch.nn.functional.mse_loss(outputs, targets)
 
     air_density = batch["air_density"] if "air_density" in batch.keys() else None
     stream_velocity = (
@@ -493,7 +521,7 @@ def update_model_params_for_fp8(cfg, logger) -> tuple | None:
     # if (cfg.model.embedding_dim + cfg.model.functional_dim) % 16 != 0:
 
     output_pad_size = None
-    if cfg.training.precision == "float8":
+    if cfg.precision == "float8":
         if cfg.model.out_dim % 16 != 0:
             # pad the output:
             output_pad_size = 16 - (cfg.model.out_dim % 16)
@@ -626,43 +654,34 @@ def main(cfg: DictConfig):
     other_params = [p for p in model.parameters() if p.ndim != 2]
 
     # Set up optimizer and scheduler
-    optimizer = hydra.utils.instantiate(cfg.optimizer, params=other_params)
+    optimizer = hydra.utils.instantiate(cfg.training.optimizer, params=other_params)
 
     optimizer = CombinedOptimizer(
         optimizers=[
             torch.optim.Muon(
                 muon_params,
-                lr=cfg.optimizer.lr,
-                weight_decay=cfg.optimizer.weight_decay,
+                lr=cfg.training.optimizer.lr,
+                weight_decay=cfg.training.optimizer.weight_decay,
                 adjust_lr_fn="match_rms_adamw",
             ),
             optimizer,
         ],
     )
-    # optimizer = hydra.utils.instantiate(cfg.optimizer, params=model.parameters())
 
     # Set up learning rate scheduler based on config
-    scheduler_cfg = cfg.scheduler
+    scheduler_cfg = cfg.training.scheduler
     scheduler_name = scheduler_cfg.name
     scheduler_params = dict(scheduler_cfg.params)
 
-    if scheduler_name == "OneCycleLR":
-        scheduler_params.setdefault("max_lr", cfg.optimizer.lr)
-        # Dynamically compute total_steps
-        total_steps = len(list(train_sampler)) * cfg.training.num_epochs
-        scheduler_params["total_steps"] = total_steps
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, **scheduler_params)
-    elif scheduler_name == "ReduceLROnPlateau":
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, **scheduler_params
-        )
-    elif scheduler_name == "StepLR":
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, **scheduler_params)
-    else:
-        raise ValueError(f"Unknown scheduler: {scheduler_name}")
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, **scheduler_params)
 
-    precision = getattr(cfg.training, "precision", "float32")
+    precision = cfg.precision
     scaler = GradScaler() if precision == "float16" else None
+
+    if precision == "float8" and not TE_AVAILABLE:
+        raise ImportError(
+            "TransformerEngine is not installed.  Please install it to use float8 precision."
+        )
 
     ckpt_args = {
         "path": f"{checkpoint_dir}/{cfg.run_id}/checkpoints",
@@ -673,7 +692,7 @@ def main(cfg: DictConfig):
 
     loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
 
-    if cfg.training.compile:
+    if cfg.compile:
         model = torch.compile(model)
 
     # Training loop
