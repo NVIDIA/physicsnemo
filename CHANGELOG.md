@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to compose and define an active learning workflow is provided in `examples/active_learning`.
   The `moons` example provides a minimal (pedagogical) composition that is meant to
   illustrate how to define the necessary parts of the workflow.
+- Added a new example for temporal interpolation of weather forecasts using ModAFNO.
+  Accessible in `examples/weather/temporal_interpolation`.
 
 ### Changed
 
