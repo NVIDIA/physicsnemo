@@ -68,7 +68,7 @@ def isotropic_trainer(cfg: DictConfig) -> None:
     log.file_logging()
     LaunchLogger.initialize()  # PhysicsNeMo launch logger
 
-    # define model, loss, optimiser, scheduler, data loader
+    # define model, loss, optimizer
     model = EddyFormer(
         idim=cfg.model.idim,
         odim=cfg.model.odim,
@@ -78,11 +78,18 @@ def isotropic_trainer(cfg: DictConfig) -> None:
     ).to(dist.device)
     loss_fun = MSELoss(reduction="mean")
     optimizer = Adam(model.parameters(), lr=cfg.training.learning_rate)
-    dataset = Re94(root=cfg.training.dataset, split="train", t=cfg.training.t)
 
-    # define forward passes for training and inference
+    # define dataset and dataloader
+    dataset = Re94(root=cfg.training.dataset, split="train", t=cfg.training.t)
+    dataloader = DataLoader(dataset, cfg.training.batch_size, shuffle=True)
+
+    # define forward passes for training
     @StaticCaptureTraining(
-        model=model, optim=optimizer, logger=log, use_amp=False, use_graphs=False
+        model=model,
+        optim=optimizer,
+        logger=log,
+        use_amp=False,
+        use_graphs=False
     )
     def training_step(input, target):
         pred = torch.vmap(model)(input)
@@ -91,14 +98,11 @@ def isotropic_trainer(cfg: DictConfig) -> None:
 
     for epoch in range(cfg.training.num_epochs):
 
-        dataloader = DataLoader(dataset, cfg.training.batch_size, shuffle=True)
-
         for input, target in dataloader:
 
             input = input.to(dist.device)
             target = target.to(dist.device)
-            with torch.autograd.set_detect_anomaly(True):
-                loss = training_step(input, target)
+            loss = training_step(input, target)
 
             with LaunchLogger("train", epoch=epoch) as logger:
                 logger.log_minibatch({"Training loss": loss.item()})

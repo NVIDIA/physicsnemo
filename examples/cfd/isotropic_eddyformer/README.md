@@ -92,4 +92,4 @@ python train_ef_isotropic.py
 
 ## References
 
-- [EddyFormer: EddyFormer: Accelerated Neural Simulations of Three-Dimensional Turbulence at Scale](https://arxiv.org/abs/2510.24173)
+- [EddyFormer: Accelerated Neural Simulations of Three-Dimensional Turbulence at Scale](https://arxiv.org/abs/2510.24173)
