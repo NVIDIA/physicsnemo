@@ -59,7 +59,7 @@ model:
   dropout: 0.0      # Dropout rate
   n_head: 8         # Number of attention heads
   act: "gelu"       # Activation function
-  mlp_ratio: 4     # MLP ratio in attention blocks
+  mlp_ratio: 2     # MLP ratio in attention blocks
   slice_num: 512     # Number of slices in physics attention
   use_te: false     # Use transformer engine
   plus: false
@@ -75,7 +75,7 @@ data:
   normalization_dir: "src/"  # Directory for normalization files
   preload_depth: 1
   pin_memory: true
-  resolution: 300_000
+  resolution: 200_000
   mode: surface
   # Preprocessing switches:
   # (Changing thes will change the embedding dim)

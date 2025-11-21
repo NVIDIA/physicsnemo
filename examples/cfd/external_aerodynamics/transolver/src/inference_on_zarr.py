@@ -229,11 +229,26 @@ def inference(cfg: DictConfig) -> None:
 
     cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)
 
+    logger.info(f"Config:\n{omegaconf.OmegaConf.to_yaml(cfg, resolve=True)}")
+
     # Set up model
     model = hydra.utils.instantiate(cfg.model)
     logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
     model.eval()
     model.to(dist_manager.device)
+
+    if cfg.checkpoint_dir is not None:
+        checkpoint_dir = cfg.checkpoint_dir
+    else:
+        checkpoint_dir = f"{cfg.output_dir}/{cfg.run_id}/checkpoints"
+
+    ckpt_args = {
+        "path": checkpoint_dir,
+        "models": model,
+    }
+
+    loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
+    logger.info(f"loaded epoch: {loaded_epoch}")
 
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Number of parameters: {num_params}")
@@ -251,7 +266,7 @@ def inference(cfg: DictConfig) -> None:
         "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
     }
 
-    if cfg.training.compile:
+    if cfg.compile:
         model = torch.compile(model, dynamic=True)
 
     # For INFERENCE, we deliberately set the resolution in the data pipe to NONE
@@ -268,14 +283,6 @@ def inference(cfg: DictConfig) -> None:
         scaling_factors=norm_factors,
     )
 
-    ckpt_args = {
-        "path": f"{cfg.output_dir}/{cfg.run_id}/checkpoints",
-        "models": model,
-    }
-
-    loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
-    logger.info(f"loaded epoch: {loaded_epoch}")
-
     results = []
     start = time.time()
     for batch_idx, batch in enumerate(val_dataset):
@@ -284,7 +291,7 @@ def inference(cfg: DictConfig) -> None:
                 batched_inference_loop(
                     batch,
                     model,
-                    cfg.training.precision,
+                    cfg.precision,
                     cfg.data.mode,
                     batch_resolution,
                     output_pad_size,
