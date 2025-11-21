@@ -54,6 +54,7 @@ class SEMAttn(nn.Module):
 
             if name in ["Q", "K"]:
                 x = x + self.bias[f"{name}{n}"]
+                assert x.shape[-1] % 2 == 0
 
                 f, g = torch.split(self.norm[f"{name}{n}"](x), x.shape[-1] // 2, dim=-1)
                 k = ϕ.coords[..., None, [n]] * torch.arange(f.shape[-1], device=x.device)
