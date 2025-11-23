@@ -2,7 +2,6 @@ from typing import Tuple
 from torch import Tensor
 
 import torch
-import torch.nn.functional as F
 
 from dataclasses import dataclass, replace
 from functools import cached_property
@@ -22,7 +21,7 @@ def interp1d(value: Tensor, xs: Tensor, method: str) -> Tensor:
   if method == "fft":
     coef = torch.fft.rfft(value, dim=0, norm="forward")
 
-    k = 2 * torch.pi * torch.arange(len(coef))
+    k = 2 * torch.pi * torch.arange(len(coef), device=xs.device)
     f = torch.exp(1j * k * xs[..., None]); f[..., 1:-1] *= 2
     return torch.tensordot(f.real, coef.real, dims=1) \
          - torch.tensordot(f.imag, coef.imag, dims=1)
@@ -149,7 +148,7 @@ class SEM:
 
             # indices of each global coordinate `x`
             idx = torch.floor(x * float(self.mesh[n])).int()
-            idx = torch.minimum(idx, torch.tensor(self.mesh[n] - 1))
+            idx = torch.minimum(idx, torch.tensor(self.mesh[n] - 1, device=idx.device))
 
             # global coordinate to local coordinate
             ys = x * float(self.mesh[n]) - torch.arange(self.mesh[n], device=x.device)[idx]
@@ -159,7 +158,7 @@ class SEM:
                 # coefficients where each `x` belongs
                 coef = coef.movedim(self.ndim, 0)[idx]
 
-                # evaluate at each coordonate and move the output axis to the last dimension
+                # evaluate at each coordinate and move the output axis to the last dimension
                 # after `ndim` iterations, the axes are automatically rolled to the correct order
                 value = torch.vmap(self.T[n].at, out_dims=self.ndim - 1)(coef, ys)
 
@@ -213,7 +212,7 @@ class SEM:
         Interpolate grid values to a target datatype.
 
         Args:
-            out: Target datatype.
+            value: Input tensor (include boundary points).
             method: Interpolation method along each axis.
                     See `interp1d::method` for details.
         """
