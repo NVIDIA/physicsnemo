@@ -3,10 +3,11 @@ from torch import Tensor
 
 import torch
 import torch.nn as nn
-
 import numpy as np
+
 from functools import partial, cache
 from scipy import integrate
+from tqdm import tqdm
 
 from ._basis import Basis
 from ._datatype import SEM
@@ -100,7 +101,6 @@ def weight(T: Basis, s: int, use_mp: bool = True) -> Tensor:
     for i in range(-s//2, s//2 + 1):
         ws.append(w:=[])
 
-        from tqdm import tqdm
         for a, b in tqdm(ab, f"{i=}"):
             a = torch.clip(a - i, -eps, 1 + eps)
             b = torch.clip(b - i, -eps, 1 + eps)
@@ -125,12 +125,8 @@ def sem_conv(nodal: Tensor, coef: Tensor, ws: Tensor, *, T: Basis, ndim: int, di
     pad_r = nodal.index_select(n, torch.arange(0, r:=len(ws)//2, device=nodal.device))
     pad_l = nodal.index_select(n, torch.arange(nodal.shape[n]-r, nodal.shape[n], device=nodal.device))
 
-    # pad_r = torch.slice_copy(nodal, n, 0, r:=len(ws)//2)
-    # pad_l = torch.slice_copy(nodal, n, -r, end=None)
-
     f = torch.concatenate([pad_l, nodal, pad_r], dim=n)
     out = []
-    # out = torch.zeros(*nodal.shape[:-1], coef.shape[-1], device=nodal.device)
 
     for k, w in enumerate(ws):
 
@@ -141,10 +137,6 @@ def sem_conv(nodal: Tensor, coef: Tensor, ws: Tensor, *, T: Basis, ndim: int, di
         gxy = kernel(coef, xy / (len(ws) - 1))
 
         eqn = f"{ns}...i, {o}{i}io, {o}{i} -> {ms}...o"
-        # print(f"{eqn}: {tuple(fx.shape)}, {tuple(gxy.shape)}, {tuple(w.shape)}")
-
-        # print(out.shape, torch.einsum(eqn, fx, gxy, w).shape)
-        # out += torch.einsum(eqn, fx, gxy, w)
         out.append(torch.einsum(eqn, fx, gxy, w))
 
     return sum(out)
