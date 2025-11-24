@@ -14,9 +14,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Data processing and loading utilities
 
-from .knn import knn
-from .radius_search import radius_search
+# Import data processing utilities
+from .graph_builder import ReservoirGraphBuilder
+from sim_utils import EclReader, Grid, Well, Completion
+from .dataloader import (
+    GraphDataset,
+    create_dataloader,
+    load_stats,
+    find_pt_files,
+    custom_collate_fn,
+)
 
-# This is exclusively for the autodoc to generate the api docs:
-__all__ = ["radius_search", "knn"]
+__all__ = [
+    # Data processing
+    "ReservoirGraphBuilder",
+    "EclReader",
+    "Grid",
+    "Well",
+    "Completion",
+    # Data loading
+    "GraphDataset",
+    "create_dataloader",
+    "load_stats",
+    "find_pt_files",
+    "custom_collate_fn",
+]

@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and three transient schemes.
 - Added a check to `stochastic_sampler` that helps handle the `EDMPrecond` model,
   which has a specific `.forward()` signature
+- Examples: added a new example for reservoir simulation using X-MeshGraphNet.
+  Accessible in `examples/reservoir_simulation`
 - Added abstract interfaces for constructing active learning workflows, contained
   under the `physicsnemo.active_learning` namespace. A preliminary example of how
   to compose and define an active learning workflow is provided in `examples/active_learning`.
