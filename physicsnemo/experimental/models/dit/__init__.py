@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,5 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .layers import DiTBlock, ProjLayer
+from .layers import (
+    DiTBlock,
+    ProjLayer,
+    PatchEmbed2DTokenizer,
+    ProjReshape2DDetokenizer,
+    TimmSelfAttention,
+    TESelfAttention,
+    Natten2DSelfAttention,
+    get_tokenizer,
+    get_detokenizer,
+    get_attention,
+    get_layer_norm,
+)
 from .dit import DiT

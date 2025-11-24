@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -17,6 +17,7 @@
 
 
 output_dir: "runs"
+checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
 run_id: "surface/float32"
 
 # Training configuration
@@ -72,6 +73,7 @@ data:
     data_path: /user_data/datasets/domino/train/
   val:
     data_path: /user_data/datasets/domino/val/
+  normalization_dir: "."  # Directory for normalization files
   max_workers: 8
   pin_memory: true
   resolution: 300_000

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -37,7 +37,10 @@ VERSION_REQUIREMENTS = {
 
 
 def check_min_version(
-    package_name: str, min_version: str, error_msg: Optional[str] = None
+    package_name: str,
+    min_version: str,
+    error_msg: Optional[str] = None,
+    hard_fail: bool = True,
 ) -> bool:
     """
     Check if an installed package meets the minimum version requirement.
@@ -46,7 +49,7 @@ def check_min_version(
         package_name: Name of the package to check
         min_version: Minimum required version string (e.g. '2.6.0')
         error_msg: Optional custom error message
-
+        hard_fail: Whether to raise an ImportError if the version requirement is not met
     Returns:
         True if version requirement is met
 
@@ -57,14 +60,20 @@ def check_min_version(
         package = importlib.import_module(package_name)
         package_version = getattr(package, "__version__", "0.0.0")
     except ImportError:
-        raise ImportError(f"Package {package_name} is required but not installed.")
+        if hard_fail:
+            raise ImportError(f"Package {package_name} is required but not installed.")
+        else:
+            return False
 
     if version.parse(package_version) < version.parse(min_version):
         msg = (
             error_msg
             or f"{package_name} version {min_version} or higher is required, but found {package_version}"
         )
-        raise ImportError(msg)
+        if hard_fail:
+            raise ImportError(msg)
+        else:
+            return False
 
     return True
 

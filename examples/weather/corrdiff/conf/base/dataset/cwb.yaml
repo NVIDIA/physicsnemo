@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -23,8 +23,8 @@ in_channels: [0, 1, 2, 3, 4, 9, 10, 11, 12, 17, 18, 19]
 # Indices of output channels
 out_channels: [0, 1, 2, 3]
 # Shape of the image
-img_shape_x: 448
-img_shape_y: 448
+img_shape_x: 448  # domain width
+img_shape_y: 448  # domain height
 # Add grid coordinates to the image
 add_grid: true
 # Factor to downscale the image

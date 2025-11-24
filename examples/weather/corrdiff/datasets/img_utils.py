@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -22,7 +22,7 @@ import torch
 def reshape_fields(
     img,
     inp_or_tar,
-    y_roll,
+    x_roll,
     train,
     n_history,
     in_channels,
@@ -39,7 +39,7 @@ def reshape_fields(
 ):
     """
     Takes in np array of size (n_history+1, c, h, w) and returns torch tensor of
-    size ((n_channels*(n_history+1), img_shape_x, img_shape_y)
+    size ((n_channels*(n_history+1), img_shape_y, img_shape_x)
     """
 
     if len(np.shape(img)) == 3:
@@ -59,7 +59,7 @@ def reshape_fields(
         means = np.load(global_means_path)[:, channels]
         stds = np.load(global_stds_path)[:, channels]
 
-    img = img[:, :, :img_shape_x, :img_shape_y]
+    img = img[:, :, :img_shape_y, :img_shape_x]
 
     if normalize and train:
         if normalization == "minmax":
@@ -70,11 +70,11 @@ def reshape_fields(
             img /= stds
 
     if roll:
-        img = np.roll(img, y_roll, axis=-1)
+        img = np.roll(img, x_roll, axis=-1)
 
     if inp_or_tar == "inp":
-        img = np.reshape(img, (n_channels * (n_history + 1), img_shape_x, img_shape_y))
+        img = np.reshape(img, (n_channels * (n_history + 1), img_shape_y, img_shape_x))
     elif inp_or_tar == "tar":
-        img = np.reshape(img, (n_channels, img_shape_x, img_shape_y))
+        img = np.reshape(img, (n_channels, img_shape_y, img_shape_x))
 
     return torch.as_tensor(img)

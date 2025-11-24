@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -19,4 +19,4 @@ from .knn import knn
 from .radius_search import radius_search
 
 # This is exclusively for the autodoc to generate the api docs:
-__all__ = ["radius_search"]
+__all__ = ["radius_search", "knn"]

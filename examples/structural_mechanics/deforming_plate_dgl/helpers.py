@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -64,13 +64,8 @@ def add_world_edges(graph, world_edge_radius=0.03, edge_stats_path="edge_stats.j
         device=graph.device,
     ).T  # shape: (2, num_world_edges)
 
-    if world_edges.shape[1] == 0:
-        # No new world edges to add
-        return (
-            graph,
-            graph.edata["x"],
-            torch.zeros((0, graph.edata["x"].shape[1]), device=graph.device),
-        )
+    if world_edges.size(0) == 0:
+        raise ValueError("No world edges to add. Try increasing the world edge radius.")
 
     # Compute edge features for new edges
     world_src, world_dst = world_edges[0], world_edges[1]

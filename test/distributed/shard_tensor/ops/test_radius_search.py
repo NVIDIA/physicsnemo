@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,7 +31,6 @@ import pytest
 import torch
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.models.domino.model import BQWarp
 from physicsnemo.utils.version_check import check_module_requirements
 
 try:
@@ -138,6 +137,8 @@ def run_radius_search_module(model, data_dict, reverse_mapping):
 def test_sharded_radius_search_layer_forward(
     distributed_mesh, shard_points, shard_grid, reverse_mapping
 ):
+    from physicsnemo.models.layers.ball_query import BQWarp
+
     dm = DistributedManager()
 
     device = dm.device
@@ -175,7 +176,6 @@ def test_sharded_radius_search_layer_forward(
 
     # Create the model:
     model = BQWarp(
-        grid_resolution=[nx, ny, nz],
         radius=1.0,
         neighbors_in_radius=num_neigh,
     ).to(device)

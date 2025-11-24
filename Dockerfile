@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.06-py3
-FROM ${BASE_CONTAINER} as builder
+ARG BASE_CONTAINER=nvcr.io/nvidia/pytorch:25.09-py3
+FROM ${BASE_CONTAINER} AS builder
 
 ARG TARGETPLATFORM
 
@@ -24,7 +24,7 @@ RUN pip install "pip>=23.2.1" "setuptools>=77.0.3"
 
 # Setup git lfs, graphviz gl1(vtk dep)
 RUN apt-get update && \
-    apt-get install -y git-lfs graphviz libgl1 && \
+    apt-get install -y git-lfs graphviz libgl1 zip unzip && \
     git lfs install
 
 ENV _CUDA_COMPAT_TIMEOUT=90
@@ -52,9 +52,14 @@ RUN FILE="/etc/pip/constraint.txt" && \
     else \
         echo "File not found: $FILE"; \
     fi
-RUN pip install --no-cache-dir "nvidia_dali_cuda120>=1.35.0"
+
 RUN pip install --no-cache-dir "h5py>=3.7.0" "netcdf4>=1.6.3" "ruamel.yaml>=0.17.22" "scikit-learn>=1.0.2" "cftime>=1.6.2" "einops>=0.7.0"
 RUN pip install --no-cache-dir "hydra-core>=1.2.0" "termcolor>=2.1.1" "wandb>=0.13.7" "pydantic>=1.10.2" "imageio" "moviepy" "tqdm>=4.60.0"
+
+# Install nvtx and dask separately
+# Earlier these used to be pre-packaged in the base pytorch image (transitive dependencies of cudf / rapids)
+# From 25.09 onwards, Rapids libs are no longer packaged in PyTorch containers: https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-09.html#rel-25-09
+RUN pip install --no-cache-dir "dask>=2025.10.0" "nvtx>=0.2.13"
 
 # Install Numcodecs (This needs a separate install because Numcodecs ARM pip install has issues)
 # A fix is being added here: https://github.com/zarr-developers/numcodecs/pull/315 but the public release is not ready yet.
@@ -92,32 +97,6 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$VTK_ARM64_WHEEL" != "unknown
         cd ../../ && rm -r vtk; \
     fi
 RUN pip install --no-cache-dir "pyvista>=0.40.1"
-
-# Install DGL, below instructions only work for containers with CUDA >= 12.1
-# (https://www.dgl.ai/pages/start.html)
-ARG DGL_BACKEND=pytorch
-ENV DGL_BACKEND=$DGL_BACKEND
-ENV DGLBACKEND=$DGL_BACKEND
-
-ARG DGL_ARM64_WHEEL
-ENV DGL_ARM64_WHEEL=${DGL_ARM64_WHEEL:-unknown}
-
-# TODO: this is a workaround as dgl is not yet shipping arm compatible wheels for CUDA 12.x: https://github.com/NVIDIA/physicsnemo/issues/432
-RUN if [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$DGL_ARM64_WHEEL" != "unknown" ]; then \
-        echo "Custom DGL wheel $DGL_ARM64_WHEEL for $TARGETPLATFORM exists, installing!" && \
-        pip install --no-cache-dir --no-deps /physicsnemo/deps/${DGL_ARM64_WHEEL}; \
-    elif [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-        echo "Installing DGL for: $TARGETPLATFORM" && \
-        pip install --no-cache-dir --no-deps dgl -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html; \
-    else \
-        echo "No custom wheel or wheel on PyPi found. Installing DGL for: $TARGETPLATFORM from source" && \
-        git clone https://github.com/dmlc/dgl.git && cd dgl/ && git checkout tags/v2.4.0 && git submodule update --init --recursive && \
-        DGL_HOME="/workspace/dgl" bash script/build_dgl.sh -g && \
-        cd python && \
-        python setup.py install && \
-        python setup.py build_ext --inplace && \
-        cd ../../ && rm -r /workspace/dgl; \
-    fi
 
 # Install onnx
 # Need to install Onnx from custom wheel as Onnx does not support ARM wheels
@@ -161,11 +140,31 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$TORCH_SCATTER_AMD64_WHEEL" !
         cd ../ && rm -r pytorch_scatter; \
     fi
 
+# Install pyg-lib
+
+ARG PYGLIB_ARM64_WHEEL
+ENV PYGLIB_ARM64_WHEEL=${PYGLIB_ARM64_WHEEL:-unknown}
+
+ARG PYGLIB_AMD64_WHEEL
+ENV PYGLIB_AMD64_WHEEL=${PYGLIB_AMD64_WHEEL:-unknown}
+
+RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ "$PYGLIB_AMD64_WHEEL" != "unknown" ]; then \
+        echo "Installing pyg_lib for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${PYGLIB_AMD64_WHEEL}; \
+    elif [ "$TARGETPLATFORM" = "linux/arm64" ] && [ "$PYGLIB_ARM64_WHEEL" != "unknown" ]; then \
+        echo "Installing pyg_lib for: $TARGETPLATFORM" && \
+        pip install --force-reinstall --no-cache-dir /physicsnemo/deps/${PYGLIB_ARM64_WHEEL}; \
+    else \
+        echo "No custom wheel present for pyg_lib, building from source"; \
+        pip install ninja wheel && \
+        pip install --no-build-isolation git+https://github.com/pyg-team/pyg-lib.git@0.5.0; \
+    fi
+
 # cleanup of stage
 RUN rm -rf /physicsnemo/
 
 # CI image
-FROM builder as ci
+FROM builder AS ci
 
 ARG TARGETPLATFORM
 
@@ -195,8 +194,6 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ] && [ -e "/physicsnemo/deps/torch_cl
         cd ../ && rm -r pytorch_cluster; \
     fi
 
-# TODO: Install pyg-lib
-
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
         echo "Installing tensorflow and warp-lang for: $TARGETPLATFORM" && \
         pip install --no-cache-dir "tensorflow>=2.9.0" "warp-lang>=0.6.0"; \
@@ -216,13 +213,13 @@ RUN pip install --no-cache-dir "black==22.10.0" "interrogate==1.5.0" "coverage==
 RUN pip install --no-cache-dir "numpy-stl" "scikit-image>=0.24.0" "sparse-dot-mkl" "shapely" "numpy<2.0"
 
 # Install MSC
-RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.14.0"
+RUN pip install --no-cache-dir "multi-storage-client[boto3]>=0.33.0"
 
 # cleanup of stage
 RUN rm -rf /physicsnemo/
 
 # Deployment image
-FROM builder as deploy
+FROM builder AS deploy
 COPY . /physicsnemo/
 RUN cd /physicsnemo/ && pip install .
 
@@ -234,7 +231,7 @@ ENV PHYSICSNEMO_GIT_HASH=${PHYSICSNEMO_GIT_HASH:-unknown}
 RUN rm -rf /physicsnemo/
 
 # Docs image
-FROM deploy as docs
+FROM deploy AS docs
 
 ARG TARGETPLATFORM
 

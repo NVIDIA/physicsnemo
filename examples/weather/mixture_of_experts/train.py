@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -106,8 +106,8 @@ def main(cfg: DictConfig) -> None:
         depth=cfg.model_params.depth,
         num_heads=cfg.model_params.num_heads,
         mlp_ratio=cfg.model_params.mlp_ratio,
-        attention_backbone=cfg.model_params.attention_backbone,
-        layernorm_backbone=cfg.model_params.layernorm_backbone,
+        attention_backend=cfg.model_params.attention_backend,
+        layernorm_backend=cfg.model_params.layernorm_backend,
         noise_dim=cfg.model_params.noise_dim,
         return_probabilities=cfg.model_params.return_probabilities,
         bias=cfg.model_params.bias,

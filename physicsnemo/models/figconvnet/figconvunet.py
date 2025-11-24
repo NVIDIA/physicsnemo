@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -135,7 +135,7 @@ class FIGConvUNet(BaseModel):
         aabb_min: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         voxel_size: Optional[float] = None,
         resolution_memory_format_pairs: List[
-            Tuple[GridFeaturesMemoryFormat, Tuple[int, int, int]]
+            Tuple[GridFeaturesMemoryFormat | str, Tuple[int, int, int]]
         ] = [
             (GridFeaturesMemoryFormat.b_xc_y_z, (2, 128, 128)),
             (GridFeaturesMemoryFormat.b_yc_x_z, (128, 2, 128)),
@@ -149,7 +149,8 @@ class FIGConvUNet(BaseModel):
         neighbor_search_type: Literal["knn", "radius"] = "radius",
         knn_k: int = 16,
         reductions: List[REDUCTION_TYPES] = ["mean"],
-        drag_loss_weight: Optional[float] = None,
+        use_scalar_output: bool = True,
+        has_input_features: bool = False,
         pooling_type: Literal["attention", "max", "mean"] = "max",
         pooling_layers: List[int] = None,
     ):
@@ -163,7 +164,11 @@ class FIGConvUNet(BaseModel):
         self.point_feature_to_grids = nn.ModuleList()
         self.aabb_length = torch.tensor(aabb_max) - torch.tensor(aabb_min)
         self.min_voxel_edge_length = torch.tensor([np.inf, np.inf, np.inf])
+        self.use_scalar_output = use_scalar_output
+
         for mem_fmt, res in resolution_memory_format_pairs:
+            if isinstance(mem_fmt, str):
+                mem_fmt = GridFeaturesMemoryFormat[mem_fmt]
             compressed_axis = memory_format_to_axis_index[mem_fmt]
             compressed_spatial_dims.append(res[compressed_axis])
             to_grid = nn.Sequential(
@@ -253,37 +258,40 @@ class FIGConvUNet(BaseModel):
             memory_format=GridFeaturesMemoryFormat.b_x_y_z_c
         )
 
-        if pooling_layers is None:
-            pooling_layers = [num_levels]
-        else:
-            assert isinstance(pooling_layers, list), (
-                f"pooling_layers must be a list, got {type(pooling_layers)}."
-            )
-            for layer in pooling_layers:
-                assert layer <= num_levels, (
-                    f"pooling_layer {layer} is greater than num_levels {num_levels}."
+        if use_scalar_output:
+            if pooling_layers is None:
+                pooling_layers = [num_levels]
+            else:
+                assert isinstance(pooling_layers, list), (
+                    f"pooling_layers must be a list, got {type(pooling_layers)}."
                 )
-        self.pooling_layers = pooling_layers
-        grid_pools = [
-            GridFeatureGroupPool(
-                in_channels=hidden_channels[layer],
-                out_channels=mlp_channels[0],
-                compressed_spatial_dims=self.compressed_spatial_dims,
-                pooling_type=pooling_type,
-            )
-            for layer in pooling_layers
-        ]
-        self.grid_pools = nn.ModuleList(grid_pools)
+                for layer in pooling_layers:
+                    assert layer <= num_levels, (
+                        f"pooling_layer {layer} is greater than num_levels {num_levels}."
+                    )
+            self.pooling_layers = pooling_layers
+            grid_pools = [
+                GridFeatureGroupPool(
+                    in_channels=hidden_channels[layer],
+                    out_channels=mlp_channels[0],
+                    compressed_spatial_dims=self.compressed_spatial_dims,
+                    pooling_type=pooling_type,
+                )
+                for layer in pooling_layers
+            ]
+            self.grid_pools = nn.ModuleList(grid_pools)
 
-        self.mlp = MLP(
-            mlp_channels[0] * len(self.compressed_spatial_dims) * len(pooling_layers),
-            mlp_channels[-1],
-            mlp_channels,
-            use_residual=True,
-            activation=nn.GELU,
-        )
-        self.mlp_projection = nn.Linear(mlp_channels[-1], 1)
-        # nn.Sigmoid(),
+            self.mlp = MLP(
+                mlp_channels[0]
+                * len(self.compressed_spatial_dims)
+                * len(pooling_layers),
+                mlp_channels[-1],
+                mlp_channels,
+                use_residual=True,
+                activation=nn.GELU,
+            )
+            self.mlp_projection = nn.Linear(mlp_channels[-1], 1)
+            # nn.Sigmoid(),
 
         self.to_point = GridFeatureGroupToPoint(
             grid_in_channels=hidden_channels[0],
@@ -311,16 +319,13 @@ class FIGConvUNet(BaseModel):
 
         self.pad_to_match = GridFeatureGroupPadToMatch()
 
-        vertex_to_point_features = VerticesToPointFeatures(
-            embed_dim=pos_encode_dim,
-            out_features=hidden_channels[0],
-            use_mlp=True,
-            pos_embed_range=aabb_max[0] - aabb_min[0],
-        )
-
-        self.vertex_to_point_features = vertex_to_point_features
-        if drag_loss_weight is not None:
-            self.drag_loss_weight = drag_loss_weight
+        if not has_input_features:
+            self.vertex_to_point_features = VerticesToPointFeatures(
+                embed_dim=pos_encode_dim,
+                out_features=hidden_channels[0],
+                use_mlp=True,
+                pos_embed_range=aabb_max[0] - aabb_min[0],
+            )
 
     @profile
     def _grid_forward(self, point_features: PointFeatures):
@@ -332,15 +337,17 @@ class FIGConvUNet(BaseModel):
             out_features = down_block(down_grid_feature_groups[-1])
             down_grid_feature_groups.append(out_features)
 
-        # Drag prediction
-        pooled_feats = []
-        for grid_pool, layer in zip(self.grid_pools, self.pooling_layers):
-            pooled_feats.append(grid_pool(down_grid_feature_groups[layer]))
-        if len(pooled_feats) > 1:
-            pooled_feats = torch.cat(pooled_feats, dim=-1)
-        else:
-            pooled_feats = pooled_feats[0]
-        drag_pred = self.mlp_projection(self.mlp(pooled_feats))
+        drag_pred = None
+        if self.use_scalar_output:
+            # Drag prediction
+            pooled_feats = []
+            for grid_pool, layer in zip(self.grid_pools, self.pooling_layers):
+                pooled_feats.append(grid_pool(down_grid_feature_groups[layer]))
+            if len(pooled_feats) > 1:
+                pooled_feats = torch.cat(pooled_feats, dim=-1)
+            else:
+                pooled_feats = pooled_feats[0]
+            drag_pred = self.mlp_projection(self.mlp(pooled_feats))
 
         for level in reversed(range(self.num_levels)):
             up_grid_features = self.up_blocks[level](

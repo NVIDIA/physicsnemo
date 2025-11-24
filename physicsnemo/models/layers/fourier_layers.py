@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -20,6 +20,86 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch import Tensor
+
+from .mlp_layers import Mlp
+
+
+def fourier_encode(coords: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+    """Vectorized Fourier feature encoding
+
+    Args:
+        coords: Tensor containing coordinates, of shape (batch_size, D)
+        freqs: Tensor containing frequencies, of shape (F,) (num frequencies)
+
+    Returns:
+        Tensor containing Fourier features, of shape (batch_size, D * 2 * F)
+    """
+
+    D = coords.shape[-1]
+    F = freqs.shape[0]
+
+    freqs = freqs[None, None, :, None]  # reshape to [*, F, 1] for broadcasting
+
+    coords = coords.unsqueeze(-2)  # [*, 1, D]
+    scaled = (coords * freqs).reshape(*coords.shape[:-2], D * F)  # [*, D, F]
+    features = torch.cat([torch.sin(scaled), torch.cos(scaled)], dim=-1)  # [*, D, 2F]
+
+    return features.reshape(*coords.shape[:-2], D * 2 * F)  # [*, D * 2F]
+
+
+class FourierMLP(nn.Module):
+    """
+    This is an MLP that will, optionally, fourier encode the input features.
+
+    The encoded features are concatenated to the original inputs, and then
+    processed with an MLP.
+
+    Args:
+        input_features: The number of input features to the MLP.
+        base_layer: The number of neurons in the hidden layer of the MLP.
+        fourier_features: Whether to fourier encode the input features.
+        num_modes: The number of modes to use for the fourier encoding.
+        activation: The activation function to use in the MLP.
+
+    """
+
+    def __init__(
+        self,
+        input_features: int,
+        base_layer: int,
+        fourier_features: bool,
+        num_modes: int,
+        activation: nn.Module | str,
+    ):
+        super().__init__()
+        self.fourier_features = fourier_features
+
+        # self.num_modes = model_parameters.num_modes
+
+        if self.fourier_features:
+            input_features_calculated = input_features + input_features * num_modes * 2
+            self.register_buffer(
+                "freqs", torch.exp(torch.linspace(0, math.pi, num_modes))
+            )
+        else:
+            input_features_calculated = input_features
+
+        self.mlp = Mlp(
+            in_features=input_features_calculated,
+            hidden_features=[
+                base_layer,
+                base_layer,
+            ],
+            out_features=base_layer,
+            act_layer=activation,
+            drop=0.0,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.fourier_features:
+            x = torch.cat((x, fourier_encode(x, self.freqs)), dim=-1)
+
+        return self.mlp(x)
 
 
 class FourierLayer(nn.Module):

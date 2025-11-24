@@ -18,8 +18,10 @@
 ./CHANGELOG.md 
 ./*.md @ram-cherukuri @megnvidia
 
-# All changes to documentation:
+# All changes to documentation, except images:
 docs/ @megnvidia @ktangsali
+docs/img/
+
 
 # Core release files
 Dockerfile @ktangsali
@@ -48,7 +50,9 @@ physicsnemo/deploy
 
 # DATAPIPES
 physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
-physicsnemo/datapipes/cae @RishikeshRanade @coreyjadams @peterdsharpe @mnabian @Alexey-Kamenev
+physicsnemo/datapipes/cae/domino_datapipe.py @RishikeshRanade @coreyjadams
+physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian @Alexey-Kamenev
+physicsnemo/datapipes/cae/readers.py @mnabian
 physicsnemo/datapipes/gnn @mnabian @Alexey-Kamenev
 physicsnemo/datapipes/healpix @pzharrington 
 # Distributed tools

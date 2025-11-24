@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -171,7 +171,7 @@ def download(name: str, resume: bool = True) -> None:
 
     # Combine multi-part zip archive into a single file
     logging.info(f"Combining zip parts for {name} dataset...")
-    combined_zip: Path = output_dir / "_temp_combined.zip"
+    combined_zip: Path = output_dir / f"_temp_combined_{name}.zip"
     try:
         subprocess.run(
             [

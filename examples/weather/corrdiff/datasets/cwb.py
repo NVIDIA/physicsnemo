@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -399,9 +399,9 @@ class ZarrDataset(DownscalingDataset):
         # crop and downsamples
         # rolling
         if self.train and self.roll:
-            y_roll = random.randint(0, self.img_shape_y)
+            x_roll = random.randint(0, self.img_shape_x)
         else:
-            y_roll = 0
+            x_roll = 0
 
         # channels
         input = input[self.in_channels, :, :]
@@ -411,7 +411,7 @@ class ZarrDataset(DownscalingDataset):
             target = self._create_lowres_(target, factor=self.ds_factor)
 
         reshape_args = (
-            y_roll,
+            x_roll,
             self.train,
             self.n_history,
             self.in_channels,
@@ -468,7 +468,7 @@ class ZarrDataset(DownscalingDataset):
 
     def image_shape(self):
         """Get the shape of the image (same for input and output)."""
-        return (self.img_shape_x, self.img_shape_y)
+        return (self.img_shape_y, self.img_shape_x)
 
     def normalize_input(self, x):
         """Convert input from physical units to normalized data."""

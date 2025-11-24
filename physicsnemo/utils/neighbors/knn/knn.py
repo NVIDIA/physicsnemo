@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,7 +18,9 @@ from typing import Literal
 
 import torch
 
+from ._cuml_impl import CUML_AVAILABLE
 from ._cuml_impl import knn_impl as knn_cuml
+from ._scipy_impl import SCIPY_AVAILABLE
 from ._scipy_impl import knn_impl as knn_scipy
 from ._torch_impl import knn_impl as knn_torch
 
@@ -72,9 +74,15 @@ def knn(
 
     if backend == "auto":
         if points.is_cuda:
-            backend = "cuml"
+            if CUML_AVAILABLE:
+                backend = "cuml"
+            else:
+                backend = "torch"
         else:
-            backend = "scipy"
+            if SCIPY_AVAILABLE:
+                backend = "scipy"
+            else:
+                backend = "torch"
 
     # Cuml foes not support bfloat16:
     # Autocast to float32:

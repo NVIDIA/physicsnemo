@@ -16,3 +16,4 @@ API Reference
    api/physicsnemo.utils.rst
    api/physicsnemo.launch.logging.rst
    api/physicsnemo.launch.utils.rst 
+   api/physicsnemo.active_learning.rst

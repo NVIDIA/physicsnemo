@@ -76,7 +76,7 @@ fignet = [
 ]
 
 storage = [
-    "multi-storage-client[boto3]>=0.14.0",
+    "multi-storage-client[boto3]>=0.33.0",
 ]
 
 shardtensor = [
