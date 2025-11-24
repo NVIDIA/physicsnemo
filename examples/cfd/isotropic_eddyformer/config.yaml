@@ -3,6 +3,7 @@ model:
   odim: 3
   hdim: 32
   num_layers: 4
+  use_scale: true
   layer_config:
     basis: legendre
     mesh: [8, 8, 8]
@@ -17,7 +18,9 @@ model:
 
 training:
   dataset: data/ns3d-re94
+  result_dir: outputs/ef-re94
   t: 0.5
   batch_size: 4
-  num_epochs: 100
+  num_epochs: 1
   learning_rate: 1e-3
+  ckpt_every: 1000

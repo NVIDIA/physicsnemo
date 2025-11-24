@@ -7,13 +7,14 @@ import os
 import numpy as np
 
 import torch
-from torch.nn import MSELoss
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.parallel import DistributedDataParallel
 
 from physicsnemo.models.eddyformer import EddyFormer, EddyFormerConfig
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils import StaticCaptureTraining
+from physicsnemo.launch.utils import save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 
 
@@ -65,25 +66,43 @@ def isotropic_trainer(cfg: DictConfig) -> None:
 
     # initialize monitoring
     log = PythonLogger(name="re94_ef")
-    log.file_logging()
+    log.file_logging(f"{cfg.training.result_dir}/log.txt")
     LaunchLogger.initialize()  # PhysicsNeMo launch logger
 
-    # define model, loss, optimizer
+    # define model and optimizer
     model = EddyFormer(
         idim=cfg.model.idim,
         odim=cfg.model.odim,
         hdim=cfg.model.hdim,
         num_layers=cfg.model.num_layers,
+        use_scale=cfg.model.use_scale,
         cfg=EddyFormerConfig(**cfg.model.layer_config),
     ).to(dist.device)
-    loss_fun = MSELoss(reduction="mean")
+
+    if dist.distributed:
+        ddps = torch.cuda.Stream()
+        with torch.cuda.stream(ddps):
+            model = DistributedDataParallel(
+                model,
+                device_ids=[dist.local_rank],
+                output_device=dist.device,
+                broadcast_buffers=dist.broadcast_buffers,
+                find_unused_parameters=dist.find_unused_parameters,
+            )
+        torch.cuda.current_stream().wait_stream(ddps)
+        log.success("Initialized DDP training")
+
     optimizer = Adam(model.parameters(), lr=cfg.training.learning_rate)
 
     # define dataset and dataloader
     dataset = Re94(root=cfg.training.dataset, split="train", t=cfg.training.t)
     dataloader = DataLoader(dataset, cfg.training.batch_size, shuffle=True)
 
-    # define forward passes for training
+    # define relative l2 error as the loss function
+    def loss_fun(pred: Tensor, target: Tensor) -> Tensor:
+        return torch.linalg.norm(pred - target) / torch.linalg.norm(target)
+
+    # define training step
     @StaticCaptureTraining(
         model=model,
         optim=optimizer,
@@ -91,14 +110,16 @@ def isotropic_trainer(cfg: DictConfig) -> None:
         use_amp=False,
         use_graphs=False
     )
-    def training_step(input, target):
+    def training_step(input: Tensor, target: Tensor) -> Tensor:
         pred = torch.vmap(model)(input)
-        loss = loss_fun(pred, target)
-        return loss
+        loss = torch.vmap(loss_fun)(pred, target)
+        return torch.mean(loss)
+
+    it = 0
+    log.info("Training started")
 
     for epoch in range(cfg.training.num_epochs):
-
-        for input, target in dataloader:
+        for it, (input, target) in enumerate(dataloader, it):
 
             input = input.to(dist.device)
             target = target.to(dist.device)
@@ -107,7 +128,11 @@ def isotropic_trainer(cfg: DictConfig) -> None:
             with LaunchLogger("train", epoch=epoch) as logger:
                 logger.log_minibatch({"Training loss": loss.item()})
 
+            if it and it % cfg.training.ckpt_every == 0 and dist.rank == 0:
+                save_checkpoint(f"{cfg.training.result_dir}/ckpt.pt", model, optimizer, epoch=it)
+
     log.success("Training completed")
+    save_checkpoint(f"{cfg.training.result_dir}/ckpt.pt", model, optimizer)
 
 
 if __name__ == "__main__":
