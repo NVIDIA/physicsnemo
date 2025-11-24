@@ -117,7 +117,7 @@ PhysicsNeMo offers a library of state-of-the-art models specifically designed
 for Physics-ML applications. Users can build any model architecture by using the underlying
 PyTorch layers and combining them with curated PhysicsNeMo layers.
 
-The [Model Zoo](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/api/physicsnemo.models.html#model-zoo)
+The [Model Zoo](https://docs.nvidia.com/physicsnemo/latest/user-guide/model_architectures.html)
 includes optimized implementations of families of model architectures such as
 Neural Operators:
 
