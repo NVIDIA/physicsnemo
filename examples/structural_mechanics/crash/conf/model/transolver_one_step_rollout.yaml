@@ -15,6 +15,7 @@
 # limitations under the License.
 
 _target_: rollout.TransolverOneStepRollout
+_convert_: all
 
 functional_dim: 4
 embedding_dim: 3

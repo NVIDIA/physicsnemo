@@ -15,6 +15,7 @@
 # limitations under the License.
 
 _target_: rollout.TransolverTimeConditionalRollout
+_convert_: all
 
 functional_dim: 1                # thickness
 embedding_dim: 3                 # position

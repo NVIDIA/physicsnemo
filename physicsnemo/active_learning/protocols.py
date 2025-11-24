@@ -23,12 +23,12 @@ type annotations.
 
 Protocol Architecture
 ---------------------
-Python ``Protocol``s are used for structural typing: essentially, they are used to
-describe an expected interface in a way that is helpful for static type checkers
+Python :class:`typing.Protocol` s are used for structural typing: essentially, they are
+used to describe an expected interface in a way that is helpful for static type checkers
 to make sure concrete implementations provide everything that is needed for a workflow
-to function. ``Protocol``s are not actually enforced at runtime, and inheritance is not
-required for them to function: as long as the implementation provides the expected
-attributes and methods, they will be compatible with the protocol.
+to function. :class:`typing.Protocol` s are not actually enforced at runtime, and
+inheritance is not required for them to function: as long as the implementation
+provides the expected attributes and methods, they will be compatible with the protocol.
 
 The active learning framework is built around several key protocol abstractions
 that work together to orchestrate the active learning workflow:
@@ -53,99 +53,6 @@ that work together to orchestrate the active learning workflow:
 **Orchestration Protocol:**
  - `DriverProtocol` - Main orchestrator that coordinates all components in the active learning loop
 
-Protocol Relationships
-----------------------
-
-```mermaid
-graph TB
-    subgraph "Core Infrastructure"
-        AQ[AbstractQueue&lt;T&gt;]
-        DP[DataPool&lt;T&gt;]
-        ALP[ActiveLearningProtocol]
-    end
-
-    subgraph "Strategy Layer"
-        QS[QueryStrategy]
-        LS[LabelStrategy]
-        MS[MetrologyStrategy]
-    end
-
-    subgraph "Model Interface Layer"
-        TP[TrainingProtocol]
-        VP[ValidationProtocol]
-        IP[InferenceProtocol]
-        TL[TrainingLoop]
-        LP[LearnerProtocol]
-    end
-
-    subgraph "Orchestration Layer"
-        Driver[DriverProtocol]
-    end
-
-    %% Inheritance relationships (thick blue arrows)
-    ALP ==>|inherits| QS
-    ALP ==>|inherits| LS
-    ALP ==>|inherits| MS
-
-    %% Composition relationships (dashed green arrows)
-    Driver -.->|uses| LP
-    Driver -.->|manages| QS
-    Driver -.->|manages| LS
-    Driver -.->|manages| MS
-    Driver -.->|contains| DP
-    Driver -.->|contains| AQ
-
-    %% Protocol usage relationships (dotted purple arrows)
-    TL -.->|can use| TP
-    TL -.->|can use| VP
-    TL -.->|can use| LP
-    LP -.->|implements| TP
-    LP -.->|implements| VP
-    LP -.->|implements| IP
-
-    %% Data flow relationships (solid red arrows)
-    QS -->|enqueues to| AQ
-    AQ -->|consumed by| LS
-    LS -->|enqueues to| AQ
-
-    %% Styling for different relationship types
-    linkStyle 0 stroke:#1976d2,stroke-width:4px
-    linkStyle 1 stroke:#1976d2,stroke-width:4px
-    linkStyle 2 stroke:#1976d2,stroke-width:4px
-    linkStyle 3 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 4 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 5 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 6 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 7 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 8 stroke:#388e3c,stroke-width:2px,stroke-dasharray: 5 5
-    linkStyle 9 stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 2 2
-    linkStyle 10 stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 2 2
-    linkStyle 11 stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 2 2
-    linkStyle 12 stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 2 2
-    linkStyle 13 stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 2 2
-    linkStyle 14 stroke:#7b1fa2,stroke-width:2px,stroke-dasharray: 2 2
-    linkStyle 15 stroke:#d32f2f,stroke-width:3px
-    linkStyle 16 stroke:#d32f2f,stroke-width:3px
-    linkStyle 17 stroke:#d32f2f,stroke-width:3px
-
-    %% Node styling
-    classDef coreInfra fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    classDef strategy fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef modelInterface fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
-    classDef orchestration fill:#fff3e0,stroke:#f57c00,stroke-width:3px
-
-    class AQ,DP,ALP coreInfra
-    class QS,LS,MS strategy
-    class TP,VP,IP,TL,LP modelInterface
-    class Driver orchestration
-```
-
-**Relationship Legend:**
-- **Blue thick arrows (==>)**: Inheritance relationships (subclass extends parent)
-- **Green dashed arrows (-.->)**: Composition relationships (object contains/manages other objects)
-- **Purple dotted arrows (-.->)**: Protocol usage relationships (can use or implements interface)
-- **Red solid arrows (-->)**: Data flow relationships (data moves between components)
-
 Active Learning Workflow
 ------------------------
 
@@ -161,6 +68,8 @@ Type Parameters
 ---------------
 - `T`: Data structure containing both inputs and ground truth labels
 - `S`: Data structure containing only inputs (no ground truth labels)
+
+----
 """
 
 from __future__ import annotations
@@ -191,6 +100,11 @@ class ActiveLearningPhase(StrEnum):
 
     This is primarily used in the metadata for restarting an ongoing active
     learning experiment.
+
+    See Also
+    --------
+    ActiveLearningProtocol : Base protocol for active learning strategies
+    DriverProtocol : Main orchestrator that uses this enumeration
     """
 
     TRAINING = "training"
@@ -226,6 +140,12 @@ class AbstractQueue(Protocol[T]):
     ---------------
     T
         The type of items that will be stored in the queue.
+
+    See Also
+    --------
+    QueryStrategy : Enqueues data to be labeled
+    LabelStrategy : Dequeues data for labeling and enqueues labeled data
+    DriverProtocol : Uses queues to pass data between strategies
     """
 
     def put(self, item: T) -> None:
@@ -273,7 +193,7 @@ class DataPool(Protocol[T]):
 
     **All** methods are left abstract, and need to be defined
     by concrete implementations. For the most part, a `torch.utils.data.Dataset`
-    would match this protocol, provided that it implements the ``append`` method
+    would match this protocol, provided that it implements the :meth:`append` method
     which will allow data to be persisted to a filesystem.
 
     Methods
@@ -286,6 +206,11 @@ class DataPool(Protocol[T]):
         Method to iterate over the data pool.
     append(self, item: T) -> None:
         Method to append a data structure to the data pool.
+
+    See Also
+    --------
+    DriverProtocol : Uses data pools for training, validation, and unlabeled data
+    AbstractQueue : Queue protocol for passing data between components
     """
 
     def __getitem__(self, index: int) -> T:
@@ -351,20 +276,20 @@ class ActiveLearningProtocol(Protocol):
     This protocol acts as a basis for all active learning protocols.
 
     This ensures that all protocols have some common interface, for
-    example the ability to `attach` to another object for scope
+    example the ability to :meth:`attach` to another object for scope
     management.
 
     Attributes
     ----------
     __protocol_name__: str
-        The name of the protocol. This is primarily used for `repr`
-        and `str` f-strings. This should be defined by concrete
+        The name of the protocol. This is primarily used for ``repr``
+        and ``str`` f-strings. This should be defined by concrete
         implementations.
     _args: dict[str, Any]
         A dictionary of arguments that were used to instantiate the protocol.
         This is used for serialization and deserialization of the protocol,
         and follows the same pattern as the ``_args`` attribute of
-        ``physicsnemo.Module``.
+        :class:`physicsnemo.Module`.
 
     Methods
     -------
@@ -376,7 +301,7 @@ class ActiveLearningProtocol(Protocol):
         This needs to be implemented by concrete implementations.
     is_attached: bool
         Whether the current object is attached to another object.
-        This is left abstract, as it depends on how ``attach`` is implemented.
+        This is left abstract, as it depends on how :meth:`attach` is implemented.
     logger: Logger
         The logger for this protocol. This is used to log information
         about the protocol's progress.
@@ -384,6 +309,13 @@ class ActiveLearningProtocol(Protocol):
         This method is used to setup the logger for the protocol.
         The default implementation is to configure the logger similarly
         to how ``physicsnemo`` loggers are configured.
+
+    See Also
+    --------
+    QueryStrategy : Query strategy protocol (child)
+    LabelStrategy : Label strategy protocol (child)
+    MetrologyStrategy : Metrology strategy protocol (child)
+    DriverProtocol : Main orchestrator that uses these protocols
     """
 
     __protocol_name__: str
@@ -397,7 +329,7 @@ class ActiveLearningProtocol(Protocol):
         This method will use `inspect` to capture arguments and keyword
         arguments that were used to instantiate the protocol, and stash
         them into the `_args` attribute of the instance, following
-        what is done with `physicsnemo.Module`.
+        what is done with :class:`physicsnemo.Module`.
 
         This approach is useful for reconstructing strategies from checkpoints.
 
@@ -600,6 +532,13 @@ class QueryStrategy(ActiveLearningProtocol):
         The maximum number of samples to query. This can be interpreted
         as the exact number of samples to query, or as an upper limit
         for querying methods that are threshold based.
+
+    See Also
+    --------
+    ActiveLearningProtocol : Base protocol for all active learning strategies
+    AbstractQueue : Queue protocol for enqueuing data
+    LabelStrategy : Consumes queued data for labeling
+    DriverProtocol : Orchestrates query strategies
     """
 
     max_samples: int
@@ -662,10 +601,17 @@ class LabelStrategy(ActiveLearningProtocol):
     ----------
     __is_external_process__: bool
         Whether the label strategy is running in an external process.
-    __provides_fields__: set[str]
+    __provides_fields__: set or None
         The fields that the label strategy provides. This should be
         set by concrete implementations, and should be used to write
         and map labeled data to fields within the data structure ``T``.
+
+    See Also
+    --------
+    ActiveLearningProtocol : Base protocol for all active learning strategies
+    AbstractQueue : Queue protocol for dequeuing and enqueuing data
+    QueryStrategy : Produces queued data for labeling
+    DriverProtocol : Orchestrates the label strategy
     """
 
     __is_external_process__: bool
@@ -737,10 +683,16 @@ class MetrologyStrategy(ActiveLearningProtocol):
 
     Attributes
     ----------
-    records: list[S]
+    records: list
         A sequence of record data structures that records the
         history of the active learning process, as viewed by
         this particular metrology view.
+
+    See Also
+    --------
+    ActiveLearningProtocol : Base protocol for all active learning strategies
+    DriverProtocol : Orchestrates metrology strategies
+    DataPool : Data pool protocol for accessing validation data
     """
 
     records: list[S]
@@ -869,7 +821,13 @@ class TrainingProtocol(Protocol):
     loss tensor and return it.
 
     A concrete implementation can simply be a function with a signature that
-    matches what is defined in ``__call__``.
+    matches what is defined in :meth:`__call__`.
+
+    See Also
+    --------
+    TrainingLoop : Training loop protocol that uses this protocol
+    LearnerProtocol : Learner protocol with a training_step method
+    ValidationProtocol : Validation step protocol
     """
 
     def __call__(
@@ -878,7 +836,7 @@ class TrainingProtocol(Protocol):
         """
         Implements the training logic for a single training sample or batch.
 
-        For a PhysicsNeMo ``Module`` with trainable parameters, the output
+        For a PhysicsNeMo :class:`physicsnemo.Module` with trainable parameters, the output
         of this function should correspond to a PyTorch tensor that is
         ``backward``-ready. If there are any logging operations associated
         with training, they should be performed within this function.
@@ -888,7 +846,7 @@ class TrainingProtocol(Protocol):
 
         Parameters
         ----------
-        model: Module
+        model: :class:`physicsnemo.Module`
             The model to train.
         data: T
             The data to train on. This data structure should comprise
@@ -906,6 +864,7 @@ class TrainingProtocol(Protocol):
         Example
         -------
         Minimum viable implementation:
+
         >>> import torch
         >>> def training_step(model, data):
         ...     output = model(data)
@@ -922,7 +881,13 @@ class ValidationProtocol(Protocol):
     relevant to do so, log the results.
 
     A concrete implementation can simply be a function with a signature that
-    matches what is defined in ``__call__``.
+    matches what is defined in :meth:`__call__`.
+
+    See Also
+    --------
+    TrainingLoop : Training loop protocol that uses this protocol
+    LearnerProtocol : Learner protocol with a validation_step method
+    TrainingProtocol : Training step protocol
     """
 
     def __call__(self, model: Module, data: T, *args: Any, **kwargs: Any) -> None:
@@ -930,8 +895,8 @@ class ValidationProtocol(Protocol):
         Implements the validation logic for a single sample or batch.
 
         This method will be called in validation steps **only**, and not used
-        for training, query, or metrology steps. In those cases, implement the
-        ``inference_step`` method instead.
+        for training, query, or metrology steps. In those cases,
+        implement the :meth:`InferenceProtocol.__call__` method instead.
 
         This function should not return anything, but should contain the logic
         for computing metrics of interest over a validation/test set. If there
@@ -945,7 +910,7 @@ class ValidationProtocol(Protocol):
 
         Parameters
         ----------
-        model: Module
+        model: :class:`physicsnemo.Module`
             The model to validate.
         data: T
             The data to validate on. This data structure should comprise
@@ -958,6 +923,7 @@ class ValidationProtocol(Protocol):
         Example
         -------
         Minimum viable implementation:
+
         >>> import torch
         >>> def validation_step(model, data):
         ...     output = model(data)
@@ -973,7 +939,13 @@ class InferenceProtocol(Protocol):
     a model and some input data, return the output of the model's forward pass.
 
     A concrete implementation can simply be a function with a signature that
-    matches what is defined in ``__call__``.
+    matches what is defined in :meth:`__call__`.
+
+    See Also
+    --------
+    LearnerProtocol : Learner protocol with an inference_step method
+    QueryStrategy : Uses inference for query strategies
+    MetrologyStrategy : Uses inference for metrology strategies
     """
 
     def __call__(self, model: Module, data: S, *args: Any, **kwargs: Any) -> Any:
@@ -989,13 +961,13 @@ class InferenceProtocol(Protocol):
         validation protocols is that the data structure ``S`` does not need
         to contain ground truth values to compute a loss.
 
-        Similar to ``ValidationProtocol``, if relevant to the underlying architecture,
+        Similar to :class:`ValidationProtocol`, if relevant to the underlying architecture,
         consider wrapping a concrete implementation of this protocol with
         ``StaticCaptureInference`` for performance optimizations.
 
         Parameters
         ----------
-        model: Module
+        model: :class:`physicsnemo.Module`
             The model to infer on.
         data: S
             The data to infer on. This data structure should comprise
@@ -1013,6 +985,7 @@ class InferenceProtocol(Protocol):
         Example
         -------
         Minimum viable implementation:
+
         >>> def inference_step(model, data):
         ...     output = model(data)
         ...     return output
@@ -1028,14 +1001,21 @@ class TrainingLoop(Protocol):
     during the training phase, where the model is trained on a specified
     number of epochs or training steps, and optionally validated on a dataset.
 
-    If a ``LearnerProtocol`` is provided, then ``train_fn`` and ``validate_fn``
-    become optional as they will be defined within the ``LearnerProtocol``. If
-    they are provided, however, then they should override the ``LearnerProtocol``
+    If a :class:`LearnerProtocol` is provided, then ``train_fn`` and ``validate_fn``
+    become optional as they will be defined within the :class:`LearnerProtocol`. If
+    they are provided, however, then they should override the :class:`LearnerProtocol`
     variants.
 
     If graph capture/compilation is intended, then ``train_fn`` and ``validate_fn``
     should be wrapped with ``StaticCaptureTraining`` and ``StaticCaptureEvaluateNoGrad``,
     respectively.
+
+    See Also
+    --------
+    DriverProtocol : Uses training loops in the training phase
+    TrainingProtocol : Training step protocol
+    ValidationProtocol : Validation step protocol
+    LearnerProtocol : Learner protocol with training/validation methods
     """
 
     def __call__(
@@ -1090,7 +1070,7 @@ class TrainingLoop(Protocol):
                        if val_idx + 1 == max_val_steps:
                            break
 
-        The pseudocode for training with a ``LearnerProtocol`` would look like this:
+        The pseudocode for training with a :class:`LearnerProtocol` would look like this:
 
         .. code-block:: python
 
@@ -1105,7 +1085,7 @@ class TrainingLoop(Protocol):
                        if val_idx + 1 == max_val_steps:
                            break
 
-        The key difference between specifying ``train_step_fn`` and ``LearnerProtocol``
+        The key difference between specifying ``train_step_fn`` and :class:`LearnerProtocol`
         is that the former excludes the backward pass and optimizer step logic,
         whereas the latter encapsulates them.
 
@@ -1115,45 +1095,45 @@ class TrainingLoop(Protocol):
 
         Parameters
         ----------
-        model: Module | LearnerProtocol
+        model: :class:`physicsnemo.Module` or :class:`LearnerProtocol`
             The model to train.
-        optimizer: Optimizer
+        optimizer: `Optimizer`
             The optimizer to use for training.
-        train_dataloader: DataLoader
+        train_dataloader: `DataLoader`
             The dataloader to use for training.
-        validation_dataloader: DataLoader | None
+        validation_dataloader: `DataLoader` or None
             The dataloader to use for validation.
-        train_step_fn: TrainingProtocol | None
+        train_step_fn: :class:`TrainingProtocol` or None
             The training function to use for training. This is optional only
-            if ``model`` implements the ``LearnerProtocol``. If this is
-            provided and ``model`` implements the ``LearnerProtocol``,
+            if ``model`` implements the :class:`LearnerProtocol`. If this is
+            provided and ``model`` implements the :class:`LearnerProtocol`,
             then this function will take precedence over the
-            ``LearnerProtocol.training_step`` method.
-        validate_step_fn: ValidationProtocol | None
+            :meth:`LearnerProtocol.training_step` method.
+        validate_step_fn: :class:`ValidationProtocol` or None
             The validation function to use for validation, only if it is
             provided alongside ``validation_dataloader``. If ``model`` implements
-            the ``LearnerProtocol``, then this function will take precedence over
-            the ``LearnerProtocol.validation_step`` method.
-        max_epochs: int | None
+            the :class:`LearnerProtocol`, then this function will take precedence over
+            the :meth:`LearnerProtocol.validation_step` method.
+        max_epochs: int or None
             The maximum number of epochs to train for. Mututally exclusive
             with ``max_train_steps``.
-        max_train_steps: int | None
+        max_train_steps: int or None
             The maximum number of training steps to perform. Mututally exclusive
             with ``max_epochs``. If this value is greater than the length
             of ``train_dataloader``, then the training loop will recycle the data
             (i.e. more than one epoch) until the maximum number of training steps
             is reached.
-        max_val_steps: int | None
+        max_val_steps: int or None
             The maximum number of validation steps to perform per training
-            epoch. If ``None``, then the full validation set will be used.
-        lr_scheduler: _LRScheduler | None = None,
+            epoch. If None, then the full validation set will be used.
+        lr_scheduler: `_LRScheduler` or None
             The learning rate scheduler to use for training. If provided,
             this will be used to update the learning rate of the optimizer
             during training. If not provided, then the learning rate will
             not be adjusted within this function.
-        device: str | torch.device | None = None
+        device: str or `torch.device` or None
             The device to use for the training loop.
-        dtype: torch.dtype | None = None
+        dtype: `torch.dtype` or None
             The dtype to use for the training loop.
         args: Any
             Additional arguments to pass to the method.
@@ -1175,6 +1155,14 @@ class LearnerProtocol:
     provide all the required functionality across all active learning steps.
     Keep in mind that, similar to all other protocols in this module, this
     is merely the required interface and not the actual implementation.
+
+    See Also
+    --------
+    DriverProtocol : Uses the learner protocol in the active learning loop
+    TrainingProtocol : Training step protocol
+    ValidationProtocol : Validation step protocol
+    InferenceProtocol : Inference step protocol
+    TrainingLoop : Training loop protocol that can use a learner
     """
 
     def training_step(self, data: T, *args: Any, **kwargs: Any) -> None:
@@ -1186,9 +1174,9 @@ class LearnerProtocol:
         that gradients will be computed and used to update parameters.
 
         In cases where gradients are not needed, consider implementing the
-        ``validation_step`` method instead.
+        :meth:`validation_step` method instead.
 
-        This should mirror the ``TrainingProtocol`` definition, except that
+        This should mirror the :class:`TrainingProtocol` definition, except that
         the model corresponds to this object.
 
         Parameters
@@ -1209,10 +1197,10 @@ class LearnerProtocol:
 
         This can match the forward pass, without the need for weight updates.
         This method will be called in validation steps **only**, and not used
-        for query or metrology steps. In those cases, implement the ``inference_step``
+        for query or metrology steps. In those cases, implement the :meth:`inference_step`
         method instead.
 
-        This should mirror the ``ValidationProtocol`` definition, except that
+        This should mirror the :class:`ValidationProtocol` definition, except that
         the model corresponds to this object.
 
         Parameters
@@ -1235,12 +1223,12 @@ class LearnerProtocol:
         to differentiate (or lack thereof, with no pun intended). Specifically,
         this method will be called during query and metrology steps.
 
-        This should mirror the ``InferenceProtocol`` definition, except that
+        This should mirror the :class:`InferenceProtocol` definition, except that
         the model corresponds to this object.
 
         Parameters
         ----------
-        data: T
+        data: T | S
             The data to infer on. Typically assumed to be a batch
             of data.
         args: Any
@@ -1290,50 +1278,59 @@ class LearnerProtocol:
 class DriverProtocol:
     """
     This protocol specifies the expected interface for an active learning
-    driver: for a concrete implementation, refer to the `driver` module
-    instead. The specification is provided mostly as a reference, and for
+    driver: for a concrete implementation, refer to the :mod:`~physicsnemo.active_learning.driver`
+    module instead. The specification is provided mostly as a reference, and for
     ease of type hinting to prevent circular imports.
 
     Attributes
     ----------
-    learner: LearnerProtocol
+    learner: :class:`LearnerProtocol`
         The learner module that will be used as the surrogate within
         the active learning loop.
-    query_strategies: list[QueryStrategy]
+    query_strategies: list
         The query strategies that will be used for selecting data points to label.
-        A list of strategies can be included, and will sequentially be used to
+        A list of :class:`QueryStrategy` instances can be included, and will sequentially be used to
         populate the ``query_queue`` that passes samples over to labeling.
-    query_queue: AbstractQueue[T]
-        The queue containing data samples to be labeled. ``QueryStrategy`` instances
+    query_queue: :class:`AbstractQueue`
+        The queue containing data samples to be labeled. :class:`QueryStrategy` instances
         should enqueue samples to this queue.
-    label_strategy: LabelStrategy | None
+    label_strategy: :class:`LabelStrategy` or None
         The label strategy that will be used for labeling data points. In contrast
         to the other strategies, only a single label strategy is supported.
         This strategy will consume the ``query_queue`` and enqueue labeled data to
         the ``label_queue``.
-    label_queue: AbstractQueue[T] | None
-        The queue containing freshly labeled data. ``LabelStrategy`` instances
+    label_queue: :class:`AbstractQueue` or None
+        The queue containing freshly labeled data. :class:`LabelStrategy` instances
         should enqueue labeled data to this queue, and the driver will subsequently
         serialize data contained within this queue to a persistent format.
-    metrology_strategies: list[MetrologyStrategy] | None
+    metrology_strategies: list or None
         The metrology strategies that will be used for assessing the performance
-        of the surrogate. A list of strategies can be included, and will sequentially
+        of the surrogate. A list of :class:`MetrologyStrategy` instances can be included, and will sequentially
         be used to populate the ``metrology_queue`` that passes data over to the
         learner.
-    training_pool: DataPool[T]
+    training_pool: :class:`DataPool`
         The pool of data to be used for training. This data will be used to train
         the underlying model, and is assumed to be mutable in that additional data
         can be added to the pool over the course of active learning.
-    validation_pool: DataPool[T] | None
+    validation_pool: :class:`DataPool` or None
         The pool of data to be used for validation. This data will be used for both
         conventional validation, as well as for metrology. This dataset is considered
         to be immutable, and should not be modified over the course of active learning.
         This dataset is considered optional, as both validation and metrology are.
-    unlabeled_pool: DataPool[T] | None
+    unlabeled_pool: :class:`DataPool` or None
         An optional pool of data to be used for querying and labeling. If supplied,
         this dataset can be depleted by a query strategy to select data points for labeling.
         In principle, this could also represent a generative model, i.e. not just a static
         dataset, but at a high level represents a distribution of data.
+
+    See Also
+    --------
+    QueryStrategy : Query strategy protocol
+    LabelStrategy : Label strategy protocol
+    MetrologyStrategy : Metrology strategy protocol
+    LearnerProtocol : Learner protocol
+    DataPool : Data pool protocol
+    AbstractQueue : Queue protocol
     """
 
     learner: LearnerProtocol

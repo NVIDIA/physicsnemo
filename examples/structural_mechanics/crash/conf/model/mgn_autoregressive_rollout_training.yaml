@@ -15,6 +15,7 @@
 # limitations under the License.
 
 _target_: rollout.MeshGraphNetAutoregressiveRolloutTraining
+_convert_: all
 
 input_dim_nodes: 7                 # pos(3) + vel(3) + thickness(1)
 input_dim_edges: 4                 # dx, dy, dz, distance
