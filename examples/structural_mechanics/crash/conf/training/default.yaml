@@ -19,6 +19,7 @@
 # └───────────────────────────────────────────┘  
 
 raw_data_dir:  "/code/datasets/gm_crash/train"  # TODO change
+raw_data_dir_validation:  "/code/datasets/gm_crash/validation"  
 max_workers_preprocessing: 64  # Maximum parallel workers
 
 # ┌───────────────────────────────────────────┐
@@ -27,9 +28,12 @@ max_workers_preprocessing: 64  # Maximum parallel workers
 
 num_time_steps: 14
 num_training_samples: 8
+num_validation_samples: 8
 start_lr: 0.0001
 end_lr: 0.0000003
 epochs: 10000
+validation_freq: 10
+save_chckpoint_freq: 10
 
 # ┌───────────────────────────────────────────┐
 # │        Performance Optimization           │

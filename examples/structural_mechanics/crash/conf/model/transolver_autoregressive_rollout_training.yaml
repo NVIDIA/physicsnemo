@@ -15,6 +15,7 @@
 # limitations under the License.
 
 _target_: rollout.TransolverAutoregressiveRolloutTraining
+_convert_: all
 
 functional_dim: 5
 embedding_dim: 3

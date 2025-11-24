@@ -31,32 +31,39 @@ class ActiveLearningRegistry:
     Registry for active learning protocols.
 
     This class provides a centralized registry for user-defined active learning
-    protocols that implement the `ActiveLearningProtocol`. It enables string-based
+    protocols that implement the :class:`~physicsnemo.active_learning.protocols.ActiveLearningProtocol`. It enables string-based
     lookups for checkpointing and provides argument validation when constructing
     protocol instances.
 
     The registry supports two primary modes of interaction:
-    1. Registration via decorator: `@registry.register("my_strategy")`
-    2. Construction with validation: `registry.construct("my_strategy", **kwargs)`
+    1. Registration via decorator: ``@registry.register("my_strategy")``
+    2. Construction with validation: ``registry.construct("my_strategy", **kwargs)``
 
     Attributes
     ----------
-    _registry : dict[str, type[ActiveLearningProtocol]]
+    _registry : dict
         Internal dictionary mapping protocol names to their class types.
 
     Methods
     -------
-    register(cls_name: str) -> Callable[[type[ActiveLearningProtocol]], type[ActiveLearningProtocol]]
+    register(cls_name: str) -> Callable
         Decorator to register a protocol class with a given name.
-    construct(cls_name: str, **kwargs) -> ActiveLearningProtocol
+    construct(cls_name: str, **kwargs) -> :class:`~physicsnemo.active_learning.protocols.ActiveLearningProtocol`
         Construct an instance of a registered protocol with argument validation.
     is_registered(cls_name: str) -> bool
         Check if a protocol name is registered.
 
     Properties
     ----------
-    registered_names : list[str]
+    registered_names : list
         A list of all registered protocol names, sorted alphabetically.
+
+    See Also
+    --------
+    ActiveLearningProtocol : Base protocol for active learning strategies
+    QueryStrategy : Query strategy protocol
+    LabelStrategy : Label strategy protocol
+    MetrologyStrategy : Metrology strategy protocol
 
     Examples
     --------
@@ -84,9 +91,9 @@ class ActiveLearningRegistry:
         """
         Decorator to register an active learning protocol class.
 
-        This decorator registers a class implementing the `ActiveLearningProtocol`
+        This decorator registers a class implementing the :class:`~physicsnemo.active_learning.protocols.ActiveLearningProtocol`
         under the given name, allowing it to be retrieved and constructed later
-        using the `construct` method.
+        using the :meth:`construct` method.
 
         Parameters
         ----------
@@ -96,7 +103,7 @@ class ActiveLearningRegistry:
 
         Returns
         -------
-        Callable[[type[ActiveLearningProtocol]], type[ActiveLearningProtocol]]
+        Callable
             A decorator function that registers the class and returns it unchanged.
 
         Raises
@@ -142,14 +149,14 @@ class ActiveLearningRegistry:
         ----------
         cls_name : str
             The name of the registered protocol to construct.
-        module_path: str | None
+        module_path: str or None
             The path to the module to get the class from.
         **kwargs : Any
             Keyword arguments to pass to the protocol's constructor.
 
         Returns
         -------
-        ActiveLearningProtocol
+        :class:`~physicsnemo.active_learning.protocols.ActiveLearningProtocol`
             A new instance of the requested protocol class.
 
         Raises

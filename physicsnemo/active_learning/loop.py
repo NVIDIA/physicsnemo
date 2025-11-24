@@ -83,13 +83,29 @@ def _recursive_data_device_cast(
 
 
 class DefaultTrainingLoop(p.TrainingLoop):
+    """
+    Default implementation of the :class:`~physicsnemo.active_learning.protocols.TrainingLoop` protocol.
+
+    This provides a functional training loop with support for static capture,
+    progress bars, checkpointing, and distributed training. It implements the
+    standard epoch-based training pattern with optional validation.
+
+    See Also
+    --------
+    TrainingLoop : Protocol specification for training loops
+    Driver : Uses training loops in the training phase
+    TrainingConfig : Configuration for training
+    TrainingProtocol : Training step protocol
+    ValidationProtocol : Validation step protocol
+    """
+
     def __new__(cls, *args: Any, **kwargs: Any) -> DefaultTrainingLoop:
         """
         Wrapper for instantiating DefaultTrainingLoop.
 
         This method captures arguments used to instantiate the loop
-        and stores them in the `_args` attribute for serialization.
-        This follows the same pattern as `ActiveLearningProtocol.__new__`.
+        and stores them in the ``_args`` attribute for serialization.
+        This follows the same pattern as :meth:`~physicsnemo.active_learning.protocols.ActiveLearningProtocol.__new__`.
 
         Parameters
         ----------
@@ -100,8 +116,8 @@ class DefaultTrainingLoop(p.TrainingLoop):
 
         Returns
         -------
-        DefaultTrainingLoop
-            A new instance with an `_args` attribute for serialization.
+        :class:`DefaultTrainingLoop`
+            A new instance with an ``_args`` attribute for serialization.
         """
         out = super().__new__(cls)
 
@@ -162,30 +178,30 @@ class DefaultTrainingLoop(p.TrainingLoop):
 
         Parameters
         ----------
-        train_step_fn: TrainingProtocol | None = None
+        train_step_fn: :class:`~physicsnemo.active_learning.protocols.TrainingProtocol` or None
             A callable that implements the logic for performing a single
-            training step. See ``protocols.TrainingProtocol`` for the expected
+            training step. See :class:`~physicsnemo.active_learning.protocols.TrainingProtocol` for the expected
             interface, but ultimately the function should return a scalar loss
             value that has a ``backward`` method.
-        validate_step_fn: ValidationProtocol | None = None
+        validate_step_fn: :class:`~physicsnemo.active_learning.protocols.ValidationProtocol` or None
             A callable that implements the logic for performing a single
-            validation step. See ``protocols.ValidationProtocol`` for the expected
+            validation step. See :class:`~physicsnemo.active_learning.protocols.ValidationProtocol` for the expected
             interface, but in contrast to ``train_step_fn`` this function should
             not return anything.
-        enable_static_capture: bool = True
-            Whether to enable static capture for the training and validation steps.
-        use_progress_bars: bool = True
-            Whether to show ``tqdm`` progress bars to display epoch and step progress.
-        device: str | torch.device | None = None
+        enable_static_capture: bool
+            Whether to enable static capture for the training and validation steps. Defaults to True.
+        use_progress_bars: bool
+            Whether to show ``tqdm`` progress bars to display epoch and step progress. Defaults to True.
+        device: str or `torch.device` or None
             The device used for performing the loop. If not provided, then the device
             will default to the model's device at runtime.
-        dtype: torch.dtype | None = None
+        dtype: `torch.dtype` or None
             The dtype used for performing the loop. If not provided, then the dtype
             will default to ``torch.get_default_dtype()``.
-        checkpoint_frequency: int = 0
+        checkpoint_frequency: int
             How often to save checkpoints during training (every N epochs).
-            If 0, no checkpoints are saved during training. Set via Driver before
-            training execution.
+            If 0, no checkpoints are saved during training. Set via :class:`~physicsnemo.active_learning.driver.Driver` before
+            training execution. Defaults to 0.
         capture_kwargs: Any
             Additional keyword arguments to pass to the static capture decorators.
         """
@@ -223,15 +239,15 @@ class DefaultTrainingLoop(p.TrainingLoop):
 
         Parameters
         ----------
-        checkpoint_dir: Path
+        checkpoint_dir: :class:`pathlib.Path`
             Directory to save checkpoint files.
-        model: Module | p.LearnerProtocol
+        model: :class:`~physicsnemo.Module` or :class:`~physicsnemo.active_learning.protocols.LearnerProtocol`
             Model to save weights for.
-        optimizer: Optimizer
+        optimizer: `Optimizer`
             Optimizer to save state from.
-        lr_scheduler: _LRScheduler | None
+        lr_scheduler: `_LRScheduler` or None
             Optional LR scheduler to save state from.
-        training_epoch: int | None
+        training_epoch: int or None
             Current training epoch for metadata.
         """
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -268,18 +284,18 @@ class DefaultTrainingLoop(p.TrainingLoop):
 
         Parameters
         ----------
-        checkpoint_dir: Path
+        checkpoint_dir: :class:`pathlib.Path`
             Directory containing checkpoint files.
-        model: Module | p.LearnerProtocol
+        model: :class:`~physicsnemo.Module` or :class:`~physicsnemo.active_learning.protocols.LearnerProtocol`
             Model to load weights into.
-        optimizer: Optimizer
+        optimizer: `Optimizer`
             Optimizer to load state into.
-        lr_scheduler: _LRScheduler | None
+        lr_scheduler: `_LRScheduler` or None
             Optional LR scheduler to load state into.
 
         Returns
         -------
-        int | None
+        int or None
             Training epoch from metadata if available, else None.
         """
         # Load model weights separately
