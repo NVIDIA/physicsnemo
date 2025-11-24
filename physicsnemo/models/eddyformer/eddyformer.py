@@ -1,4 +1,4 @@
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 from torch import Tensor
 
 import torch
@@ -15,53 +15,72 @@ from ._datatype import SEM
 from .sem_conv import SEMConv
 from .sem_attn import SEMAttn
 
+class EddyFormerConfig(Module):
+
+    basis: str
+    mesh: Tuple[int]
+    mode: Tuple[int]
+
+    # SGS STREAM
+    kernel_size: Tuple[int]
+
+    ffn_dim: int
+    activation: str
+
+    # LES STREAM
+    mode_les: Tuple[int]
+    kernel_size_les: Tuple[int]
+
+    num_heads: int
+    heads_dim: int
+
+    def __init__(self, basis: str, mesh: Tuple[int], mode: Tuple[int],
+                 kernel_size: Tuple[int], ffn_dim: int, activation: str,
+                 mode_les: Tuple[int], kernel_size_les: Tuple[int], num_heads: int, heads_dim: int):
+        """
+        """
+        super().__init__()
+
+        self.basis = basis
+        self.mesh = mesh
+        self.mode = mode
+
+        self.kernel_size = kernel_size
+        self.ffn_dim = ffn_dim
+        self.activation = activation
+
+        self.mode_les = mode_les
+        self.kernel_size_les = kernel_size_les
+        self.num_heads = num_heads
+        self.heads_dim = heads_dim
+
+    @property
+    def ffn(self) -> partial[Mlp]:
+        return partial(Mlp,
+            hidden_features=self.ffn_dim,
+            act_layer=getattr(nn, self.activation),
+        )
+
+    @property
+    def attn(self) -> partial[SEMAttn]:
+        return partial(SEMAttn,
+            mode=self.mode_les,
+            num_heads=self.num_heads,
+            heads_dim=self.heads_dim,
+        )
+
+    def conv(self, stream: str) -> partial[SEMConv]:
+        return partial(SEMConv,
+            kernel_mode=(mode:=self.mode if stream == "sgs" else self.mode_les),
+            kernel_size=self.kernel_size if stream == "sgs" else self.kernel_size_les,
+            T=tuple(map(SEM.basis(self.basis), mode)),
+        )
+
 # Layer
 
-class EddyFormerLayer(nn.Module):
+class EddyFormerLayer(Module):
 
-    @dataclass
-    class Config:
-
-        basis: str
-        mesh: Tuple[int]
-        mode: Tuple[int]
-
-        # SGS STREAM
-        kernel_size: Tuple[int]
-
-        ffn_dim: int
-        activation: str
-
-        # LES STREAM
-        mode_les: Tuple[int]
-        kernel_size_les: Tuple[int]
-
-        num_heads: int
-        heads_dim: int
-
-        @property
-        def ffn(self) -> partial[Mlp]:
-            return partial(Mlp,
-                hidden_features=self.ffn_dim,
-                act_layer=getattr(nn, self.activation),
-            )
-
-        @property
-        def attn(self) -> partial[SEMAttn]:
-            return partial(SEMAttn,
-                mode=self.mode_les,
-                num_heads=self.num_heads,
-                heads_dim=self.heads_dim,
-            )
-
-        def conv(self, stream: str) -> partial[SEMConv]:
-            return partial(SEMConv,
-                kernel_mode=(mode:=self.mode if stream == "sgs" else self.mode_les),
-                kernel_size=self.kernel_size if stream == "sgs" else self.kernel_size_les,
-                T=tuple(map(SEM.basis(self.basis), mode)),
-            )
-
-    def __init__(self, hdim: int, cfg: Config, *, layer_scale: float = 1e-7):
+    def __init__(self, hdim: int, cfg: EddyFormerConfig, *, layer_scale: float = 1e-7):
         """
         EddyFormer layer.
         """
@@ -108,7 +127,7 @@ class MetaData(ModelMetaData):
 
 class EddyFormer(Module):
 
-    cfg: EddyFormerLayer.Config
+    cfg: EddyFormerConfig
 
     lift_les: nn.Linear
     lift_sgs: nn.Linear
@@ -118,14 +137,16 @@ class EddyFormer(Module):
     proj_les: Mlp
     proj_sgs: Mlp
 
-    scale: nn.Parameter
+    scale: Optional[nn.Parameter]
 
     def __init__(self,
                  idim: int,
                  odim: int,
                  hdim: int,
                  num_layers: int,
-                 cfg: EddyFormerLayer.Config):
+                 *,
+                 use_scale: bool = True,
+                 cfg: EddyFormerConfig):
         """
         EddyFormer model.
         """
@@ -145,7 +166,7 @@ class EddyFormer(Module):
         self.proj_les = cfg.ffn(hdim, out_features=odim)
         self.proj_sgs = cfg.ffn(hdim, out_features=odim)
 
-        self.scale = nn.Parameter(torch.zeros(odim))
+        self.scale = nn.Parameter(torch.zeros(odim)) if use_scale else None
 
     def __call__(self, input: Union[SEM, Tensor], return_sem: bool = False) -> Union[SEM, Tensor]:
         """
@@ -175,7 +196,9 @@ class EddyFormer(Module):
         sgs.nodal = self.proj_sgs(sgs.nodal)
         les.nodal = self.proj_les(les.nodal)
 
-        out = ϕ.new(les.to(ϕ.mode).nodal + sgs.nodal)
-        if not return_sem: out = out.eval(input.shape[:-1])
+        scale = self.scale if self.scale is not None else 1.
+        out = ϕ.new(les.to(ϕ.mode).nodal + scale * sgs.nodal)
 
+        if not return_sem:
+            out = out.eval(input.shape[:-1])
         return out

@@ -6,10 +6,11 @@ import torch.nn as nn
 
 from functools import partial
 
+from ..module import Module
 from ._datatype import SEM
 from .sem_conv import SEMConv
 
-class SEMAttn(nn.Module):
+class SEMAttn(Module):
 
     proj: nn.ModuleDict
     bias: nn.ParameterDict
@@ -37,9 +38,10 @@ class SEMAttn(nn.Module):
         for name in "QKV":
             self.proj[name] = conv(idim, (num_heads, heads_dim))
 
-            for n in range(len(mode)):
-                self.bias[f"{name}{n}"] = nn.Parameter(bias_init((num_heads, heads_dim)))
-                self.norm[f"{name}{n}"] = nn.LayerNorm(heads_dim)
+            if name in ["Q", "K"]:
+                for n in range(len(mode)):
+                    self.bias[f"{name}{n}"] = nn.Parameter(bias_init((num_heads, heads_dim)))
+                    self.norm[f"{name}{n}"] = nn.LayerNorm(heads_dim)
 
         self.out = nn.Linear(num_heads * heads_dim * len(mode), odim)
 

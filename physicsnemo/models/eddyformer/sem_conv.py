@@ -9,10 +9,11 @@ from functools import partial, cache
 from scipy import integrate
 from tqdm import tqdm
 
+from ..module import Module
 from ._basis import Basis
 from ._datatype import SEM
 
-class SEMConv(nn.Module):
+class SEMConv(Module):
 
     odim: Tuple[int]
     kernel: nn.ParameterList
