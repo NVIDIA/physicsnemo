@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Training Configuration
+# This file imports model_config.yaml and adds training-specific settings
+
+defaults:
+  - model_config
+  - _self_
+
+hydra:
+  job:
+    chdir: False
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Data configuration
+data:
+  data_path: /home/wdyab/physicsnemo/data_lustre
+  variable: saturation  # 'pressure' or 'saturation'
+  normalize: false
+  num_workers: null  # Auto-set to 2 × num_gpus
+
+# Training configuration
+training:
+  batch_size: 4
+  epochs: 11
+  initial_lr: 0.001
+  checkpoint_freq: 10
+  checkpoint_dir: ./checkpoints
+  validate_freq: 10
+  early_stopping: true
+  patience: 20
+  use_amp: false  # Not beneficial for FNO models
+  use_graphs: true
+
+# Optimizer configuration
+optimizer:
+  type: adam
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+# Learning rate scheduler configuration
+scheduler:
+  type: step                # Scheduler type: 'step' or 'exponential'
+  step_size: 4              # Step every N epochs (for StepLR)
+  gamma: 0.85               # Multiplicative factor of learning rate decay
+  min_lr: 1.0e-6            # Minimum learning rate
+
+# Logging configuration
+logging:
+  console_freq: 10
+  use_tensorboard: true
+  tensorboard_dir: ./tensorboard
+  use_mlflow: false
+  experiment_name: ufno_co2_sequestration
+  use_wandb: false
+  wandb_project: physicsnemo_co2
+  wandb_entity: null
+
+# Random seed for reproducibility
+seed: 42
+
+# Compute configuration
+compute:
+  # Device
+  device: cuda              # 'cuda' or 'cpu'
+  
+  # Multi-GPU training
+  num_gpus: 8               # Number of GPUs to use (null = auto-detect)
+  distributed: true         # Enable distributed training
+  
+  # Performance
+  benchmark: false          # Enable cudnn benchmarking
+  deterministic: true       # Deterministic mode (slower but reproducible)
+

@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Model Architecture and Loss Configuration
+
+arch:
+  # Model type: "ufno" (Fourier + U-Net) or "unet" (pure U-Net, no Fourier layers)
+  model_type: ufno  # Options: "ufno", "unet"
+  
+  ufno:
+    in_channels: 12         # Input channels (12 physical quantities)
+    out_channels: 1         # Output channel (pressure dP OR saturation sg)
+    width: 36               # Latent feature dimension (reduced for 3D)
+    modes1: 10              # Number of Fourier modes in height direction  
+    modes2: 10              # Number of Fourier modes in width direction
+    modes3: 10              # Number of Fourier modes in time direction
+    num_fno_layers: 3       # Standard Fourier layers (no enhancement)
+    num_unet_layers: 3      # U-Net enhanced layers (U-FNO: set > 0, Conv-FNO: set to 0)
+    num_conv_layers: 0      # Conv enhanced layers (Conv-FNO: set > 0, U-FNO: set to 0)
+    padding: 8              # Spatial padding
+    conv_kernel_size: 3     # Conv layer kernel size (for Conv-FNO)
+    unet_kernel_size: 3     # U-Net convolutional kernel size
+    unet_dropout: 0.0       # U-Net dropout rate
+    unet_type: physicsnemo  # UNet type: "custom" (UNet3D) or "physicsnemo" (PhysicsNemo's UNet)
+    
+    # Activation function 
+    # Options: "relu", "gelu", "silu", "swish", "mish", "tanh", "leaky_relu", etc.
+    activation_fn: relu     
+    
+    # Lifting network configuration (input -> latent space)
+    lifting_type: mlp       # Type: "mlp" or "conv"
+    lifting_layers: 1       # Number of layers 
+    lifting_width: 2        # Hidden width factor: hidden_width = width // lifting_width
+    
+    # Decoder network configuration (latent space -> output)
+    decoder_type: mlp       # Type: "mlp" or "conv"
+    decoder_layers: 1       # Number of hidden layers (1 = original U-FNO)
+    decoder_width: 128      # Hidden layer size
+  
+  # Standalone U-Net configuration (used when model_type: "unet")
+  # NOTE: Only PhysicsNemo UNet is supported for standalone use.
+  # Custom UNet3D is designed for U-FNO only (where channels remain constant).
+  unet:
+    in_channels: 12         # Input channels
+    out_channels: 1         # Output channels
+    unet_type: physicsnemo  # MUST be "physicsnemo" (custom UNet3D only works within U-FNO)
+    
+    # PhysicsNemo UNet parameters (only used when unet_type: "physicsnemo")
+    # Defaults are set to match the U-FNO comparison for reproducibility
+    physicsnemo:
+      kernel_size: 3
+      stride: 1
+      model_depth: 3        # Number of downsampling levels
+      feature_map_channels: [36, 36, 36]  # Channels at each level (length = model_depth * num_conv_blocks)
+      num_conv_blocks: 1    # Number of conv blocks per level
+      conv_activation: relu
+      conv_transpose_activation: relu
+      padding: 1
+      padding_mode: zeros
+      pooling_type: MaxPool3d
+      pool_size: 2
+      normalization: batchnorm
+      use_attn_gate: false
+      gradient_checkpointing: false
+    
+    # Custom UNet3D parameters (only used when unet_type: "custom")
+    custom:
+      kernel_size: 3
+      dropout_rate: 0.0
+
+# Loss function configuration
+loss:
+  base_loss_type: relative_l2    # Base loss type - Options: 'mse', 'l1', 'relative_l2', 'simple_relative_l2'
+  
+  # Reduction method - Options: 'mean', 'sum', 'none'
+  reduction: mean
+  
+  # Masking - Options: true, false
+  # Apply loss only on active reservoir cells (irregular domain)
+  use_mask: true
+  
+  # Physics-informed derivative loss - Options: true, false
+  # Add spatial derivative term to loss 
+  use_derivative: true
+  # Derivative weight - Range: 0.0 to 1.0
+  derivative_weight: 0.5
+  derivative_dim: dx
+

@@ -1,0 +1,34 @@
+# Requirements for U-FNO CO2 Sequestration Example
+# Install with: pip install -r requirements.txt
+
+# Core dependencies
+torch>=2.0.0
+numpy>=1.21.0
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+
+# PhysicsNeMo - install from source
+# git clone https://github.com/NVIDIA/modulus.git
+# cd modulus && pip install -e .
+# Note: physicsnemo provides DistributedManager, Module, launch utils, and logging
+
+# Experiment tracking (required for train_fno3d.py)
+mlflow>=2.0.0
+
+# Testing utilities (required for test_fno3d.py)
+loguru>=0.6.0
+
+# Optional: Enhanced visualization
+matplotlib>=3.5.0
+seaborn>=0.12.0
+plotly>=5.0.0
+
+# Optional: Alternative experiment tracking
+# tensorboard>=2.10.0
+# wandb>=0.13.0
+
+# Optional: For distributed training profiling
+# mpi4py>=3.1.0
+
+# Note: CUDA/cuDNN should be installed separately based on your system
+# This code is tested with CUDA 12.2 and H100 GPUs
