@@ -224,6 +224,13 @@ class NpyFileReader(BackendReader):
 
         return self.fill_optional_keys(data)
 
+    def read_file_attributes(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
+        """
+        NPY doesn't read the attributes of a file and return a dictionary of tensors.
+        Returning nothing.
+        """
+        return {}
+        
     def read_file_sharded(
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
@@ -286,6 +293,13 @@ class NpzFileReader(BackendReader):
 
         return self.fill_optional_keys(data)
 
+    def read_file_attributes(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
+        """
+        NPZ doesn't read the attributes of a file and return a dictionary of tensors.
+        Returning nothing.
+        """
+        return {}
+    
     def read_file_sharded(
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
