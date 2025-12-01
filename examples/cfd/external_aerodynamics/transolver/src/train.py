@@ -33,6 +33,8 @@ from torch.optim import Optimizer
 from torch.amp import autocast, GradScaler
 from torch.utils.tensorboard import SummaryWriter
 
+import torch.distributed as dist
+
 # For metrics and model printouts:
 from tabulate import tabulate
 import torchinfo
@@ -91,6 +93,8 @@ class CombinedOptimizer(Optimizer):
     Note:
         This will get upstreamed to physicsnemo shortly.  Don't count on this
         class existing here in the future!
+
+        In other words, this is already marked for deprecation!
     """
 
     def __init__(
@@ -328,7 +332,7 @@ def train_epoch(
     total_loss = 0
     total_metrics = {}
 
-    precision = getattr(cfg.training, "precision", "float32")
+    precision = getattr(cfg, "precision", "float32")
     start_time = time.time()
 
     for i, batch in enumerate(dataloader):
@@ -747,7 +751,7 @@ def main(cfg: DictConfig):
 
         # save checkpoint
         if epoch % cfg.training.save_interval == 0 and dist_manager.rank == 0:
-            save_checkpoint(**ckpt_args, epoch=epoch)
+            save_checkpoint(**ckpt_args, epoch=epoch + 1)
 
         if scheduler_name == "StepLR":
             scheduler.step()

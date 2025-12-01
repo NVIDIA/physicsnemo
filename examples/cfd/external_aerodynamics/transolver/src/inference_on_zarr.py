@@ -55,15 +55,15 @@ from train import (
     update_model_params_for_fp8,
 )
 
-torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
-torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
-torch.serialization.add_safe_globals([typing.Any])
-torch.serialization.add_safe_globals([list])
-torch.serialization.add_safe_globals([collections.defaultdict])
-torch.serialization.add_safe_globals([dict])
-torch.serialization.add_safe_globals([int])
-torch.serialization.add_safe_globals([omegaconf.nodes.AnyNode])
-torch.serialization.add_safe_globals([omegaconf.base.Metadata])
+# torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
+# torch.serialization.add_safe_globals([omegaconf.base.ContainerMetadata])
+# torch.serialization.add_safe_globals([typing.Any])
+# torch.serialization.add_safe_globals([list])
+# torch.serialization.add_safe_globals([collections.defaultdict])
+# torch.serialization.add_safe_globals([dict])
+# torch.serialization.add_safe_globals([int])
+# torch.serialization.add_safe_globals([omegaconf.nodes.AnyNode])
+# torch.serialization.add_safe_globals([omegaconf.base.Metadata])
 
 
 @torch.no_grad()
@@ -137,6 +137,7 @@ def batched_inference_loop(
 
     global_preds_targets = []
     global_weight = 0.0
+    start = time.time()
     for i, index_block in enumerate(index_blocks):
         # We compute the local_batch by slicing from embeddings and fields:
         local_embeddings = batch["embeddings"][:, index_block]
@@ -187,6 +188,13 @@ def batched_inference_loop(
 
         global_preds_targets.append(local_preds_targets)
 
+        end = time.time()
+        elapsed = end - start
+        print(
+            f"Completed sub-batch {i} of {len(index_blocks)} in {elapsed:.4f} seconds"
+        )
+        start = end
+
     # Now, compute the overall loss, metrics, and coefficients:
     metrics = {k: v / global_weight for k, v in metrics.items()}
     loss = loss / global_weight
@@ -201,14 +209,6 @@ def batched_inference_loop(
     global_predictions = global_predictions[:, inverse_indices]
     global_targets = global_targets[:, inverse_indices]
     return loss, metrics, (global_predictions, global_targets)
-
-    # # Now, we have to *unshuffle* the prediction to the original index
-    # inverse_indices = torch.empty_like(indices)
-    # inverse_indices[indices] = torch.arange(
-    #     indices.size(0), device=indices.device
-    # )
-    # # Suppose prediction is of shape [batch, N, ...]
-    # prediction = prediction[:, inverse_indices]
 
 
 def inference(cfg: DictConfig) -> None:
@@ -234,8 +234,6 @@ def inference(cfg: DictConfig) -> None:
     # Set up model
     model = hydra.utils.instantiate(cfg.model)
     logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
-    model.eval()
-    model.to(dist_manager.device)
 
     if cfg.checkpoint_dir is not None:
         checkpoint_dir = cfg.checkpoint_dir
@@ -249,6 +247,7 @@ def inference(cfg: DictConfig) -> None:
 
     loaded_epoch = load_checkpoint(device=dist_manager.device, **ckpt_args)
     logger.info(f"loaded epoch: {loaded_epoch}")
+    model.to(dist_manager.device)
 
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Number of parameters: {num_params}")
@@ -268,13 +267,21 @@ def inference(cfg: DictConfig) -> None:
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
+    model.eval()
 
     # For INFERENCE, we deliberately set the resolution in the data pipe to NONE
     # so there is not downsampling.  We still batch it in the inference script
-    # for efficiency
+    # for memory usage constraints.
 
     batch_resolution = cfg.data.resolution
     cfg.data.resolution = None
+    ## Make sure to read the whole data sample for volume:
+    if cfg.data.mode == "volume":
+        cfg.data.volume_sample_from_disk = False
+
+    # And we need the mesh features for drag, lift in surface data:
+    if cfg.data.mode == "surface":
+        cfg.data.return_mesh_features = True
 
     # Validation dataset
     val_dataset = create_transolver_dataset(
@@ -299,6 +306,10 @@ def inference(cfg: DictConfig) -> None:
                     val_dataset,
                 )
             )
+        end = time.time()
+        elapsed = end - start
+        logger.info(f"Finished batch {batch_idx} in {elapsed:.4f} seconds")
+        start = time.time()
 
         if cfg.data.mode == "surface":
             coeff = 1.0
@@ -308,10 +319,6 @@ def inference(cfg: DictConfig) -> None:
             pred_pressure, pred_shear = torch.split(
                 global_predictions[0], (1, 3), dim=-1
             )
-            # pred_pressure = pred_pressure * (
-            #     batch["air_density"] * batch["stream_velocity"] ** 2
-            # )
-            # pred_shear = pred_shear * (batch["air_density"] * batch["stream_velocity"] ** 2)
 
             pred_pressure = pred_pressure.reshape(-1)
             pred_drag_coeff, _, _ = compute_force_coefficients(
@@ -381,9 +388,6 @@ def inference(cfg: DictConfig) -> None:
                 else metrics["l2_shear_z"]
             )
 
-            end = time.time()
-            elapsed = end - start
-            logger.info(f"Finished batch {batch_idx} in {elapsed:.4f} seconds")
             results.append(
                 [
                     batch_idx,
@@ -400,33 +404,91 @@ def inference(cfg: DictConfig) -> None:
                 ]
             )
 
-            start = time.time()
+        elif cfg.data.mode == "volume":
+            # Extract metric values and convert tensors to floats
+            l2_pressure = (
+                metrics["l2_pressure_vol"].item()
+                if hasattr(metrics["l2_pressure_vol"], "item")
+                else metrics["l2_pressure_vol"]
+            )
+            l2_velocity_x = (
+                metrics["l2_velocity_x"].item()
+                if hasattr(metrics["l2_velocity_x"], "item")
+                else metrics["l2_velocity_x"]
+            )
+            l2_velocity_y = (
+                metrics["l2_velocity_y"].item()
+                if hasattr(metrics["l2_velocity_y"], "item")
+                else metrics["l2_velocity_y"]
+            )
+            l2_velocity_z = (
+                metrics["l2_velocity_z"].item()
+                if hasattr(metrics["l2_velocity_z"], "item")
+                else metrics["l2_velocity_z"]
+            )
+            l2_nut = (
+                metrics["l2_nut"].item()
+                if hasattr(metrics["l2_nut"], "item")
+                else metrics["l2_nut"]
+            )
 
-    pred_drag_coeffs = [r[6] for r in results]
-    pred_lift_coeffs = [r[7] for r in results]
-    true_drag_coeffs = [r[8] for r in results]
-    true_lift_coeffs = [r[9] for r in results]
+            results.append(
+                [
+                    batch_idx,
+                    f"{loss:.4f}",
+                    f"{l2_pressure:.4f}",
+                    f"{l2_velocity_x:.4f}",
+                    f"{l2_velocity_y:.4f}",
+                    f"{l2_velocity_z:.4f}",
+                    f"{l2_nut:.4f}",
+                    f"{elapsed:.4f}",
+                ]
+            )
 
-    # Compute the R2 scores for lift and drag:
-    r2_lift = r2_score(true_lift_coeffs, pred_lift_coeffs)
-    r2_drag = r2_score(true_drag_coeffs, pred_drag_coeffs)
+    if cfg.data.mode == "surface":
+        pred_drag_coeffs = [r[6] for r in results]
+        pred_lift_coeffs = [r[7] for r in results]
+        true_drag_coeffs = [r[8] for r in results]
+        true_lift_coeffs = [r[9] for r in results]
 
-    headers = [
-        "Batch",
-        "Loss",
-        "L2 Pressure",
-        "L2 Shear X",
-        "L2 Shear Y",
-        "L2 Shear Z",
-        "Predicted Drag Coefficient",
-        "Pred Lift Coefficient",
-        "True Drag Coefficient",
-        "True Lift Coefficient",
-        "Elapsed (s)",
-    ]
-    logger.info(f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}")
-    logger.info(f"R2 score for lift: {r2_lift:.4f}")
-    logger.info(f"R2 score for drag: {r2_drag:.4f}")
+        # Compute the R2 scores for lift and drag:
+        r2_lift = r2_score(true_lift_coeffs, pred_lift_coeffs)
+        r2_drag = r2_score(true_drag_coeffs, pred_drag_coeffs)
+
+        headers = [
+            "Batch",
+            "Loss",
+            "L2 Pressure",
+            "L2 Shear X",
+            "L2 Shear Y",
+            "L2 Shear Z",
+            "Predicted Drag Coefficient",
+            "Pred Lift Coefficient",
+            "True Drag Coefficient",
+            "True Lift Coefficient",
+            "Elapsed (s)",
+        ]
+        logger.info(
+            f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
+        )
+        logger.info(f"R2 score for lift: {r2_lift:.4f}")
+        logger.info(f"R2 score for drag: {r2_drag:.4f}")
+
+    elif cfg.data.mode == "volume":
+        headers = [
+            "Batch",
+            "Loss",
+            "L2 Pressure",
+            "L2 Velocity X",
+            "L2 Velocity Y",
+            "L2 Velocity Z",
+            "L2 Nut",
+            "Elapsed (s)",
+        ]
+        logger.info(
+            f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
+        )
+
     # Calculate means for each metric (skip batch index)
     if results:
         # Convert string values back to float for mean calculation
