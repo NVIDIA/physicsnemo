@@ -230,7 +230,7 @@ class NpyFileReader(BackendReader):
         Returning nothing.
         """
         return {}
-        
+
     def read_file_sharded(
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
@@ -299,7 +299,7 @@ class NpzFileReader(BackendReader):
         Returning nothing.
         """
         return {}
-    
+
     def read_file_sharded(
         self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
     ) -> dict[str, ShardTensor]:
