@@ -448,7 +448,7 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
         use_te: bool = True,
         plus: bool = False,
     ):  # kernel=3):
-        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
+        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te, plus)
 
         inner_dim = dim_head * heads
         self.H = spatial_shape[0]
@@ -513,7 +513,7 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
         use_te: int = True,
         plus: bool = False,
     ):
-        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te)
+        super().__init__(dim, heads, dim_head, dropout, slice_num, use_te, plus)
 
         inner_dim = dim_head * heads
         self.H = spatial_shape[0]
