@@ -30,7 +30,7 @@ from typing import Union
 from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 from hydra.utils import to_absolute_path
-from pyevtk.hl import imageToVTK
+import pyvista as pv
 
 
 def prepare_data(
@@ -83,13 +83,18 @@ def validation_step(model, dataloader, epoch):
 
     # plotting
     for t in range(outvar.shape[2]):
-        cellData = {
-            "outvar_chan0": outvar[0, 0, t, ...],
-            "outvar_chan1": outvar[0, 1, t, ...],
-            "predvar_chan0": predvar[0, 0, t, ...],
-            "predvar_chan1": predvar[0, 1, t, ...],
-        }
-        imageToVTK(f"./test_{t}", cellData=cellData)
+        data_shape = outvar[0, 0, t, ...].shape
+
+        grid = pv.ImageData(
+            dimensions=(data_shape[0] + 1, data_shape[1] + 1, data_shape[2] + 1)
+        )
+
+        grid.cell_data["outvar_chan0"] = outvar[0, 0, t, ...].flatten(order="F")
+        grid.cell_data["outvar_chan1"] = outvar[0, 1, t, ...].flatten(order="F")
+        grid.cell_data["predvar_chan0"] = predvar[0, 0, t, ...].flatten(order="F")
+        grid.cell_data["predvar_chan1"] = predvar[0, 1, t, ...].flatten(order="F")
+
+        grid.save(f"./test_{t}.vti")
 
 
 class HDF5MapStyleDataset(Dataset):
