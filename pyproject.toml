@@ -116,6 +116,9 @@ utils-extras = [
     "rmm",
     "cupy",
 ]
+mesh = [
+    "tensordict>=0.10.0",
+]
 nn = [
     "einops",
     "timm",
@@ -144,10 +147,12 @@ models = [
     "torch_sparse",
     "pyvista",
     "ipdb",
-    {include-group="nn"}
+    {include-group="nn"},
+    {include-group="mesh"},
 ]
 physicsnemo = [
     {include-group = "nn"},
+    {include-group = "mesh"},
     {include-group = "utils"},
 ]
 physicsnemo-extras = [
