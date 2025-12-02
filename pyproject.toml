@@ -124,6 +124,13 @@ utils-extras = [
 ]
 mesh = [
     "tensordict>=0.10.0",
+    {include-group = "core"},
+]
+mesh-extras = [
+    "matplotlib>=3.10.7",
+    "numpy>=2.2.6",
+    "pyvista>=0.46.4",
+    {include-group = "mesh"},
 ]
 nn = [
     "einops",
@@ -144,6 +151,7 @@ models = [
     "zarr",
     "jaxtyping",
     {include-group="nn"},
+    {include-group="mesh"},
 ]
 models-extras = [
     "cftime",
@@ -153,6 +161,7 @@ models-extras = [
     "vtk",
     {include-group="models"},
     {include-group="nn-extras"},
+    {include-group="mesh-extras"},
 ]
 physicsnemo = [
     {include-group = "models"},
