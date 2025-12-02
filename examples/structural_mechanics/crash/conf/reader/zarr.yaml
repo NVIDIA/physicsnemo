@@ -14,29 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  - _self_
-  - data: era5_hpx32_8var-coupled_6h_24h
-  - model: coupled_hpx_rec_unet
-  - trainer: dlwp
-
-experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}
-output_dir: outputs/${experiment_name}
-# checkpoints names are in the form training-state-<name>.mdlus
-checkpoint_name: last
-load_weights_only: false
-seed: 0
-
-# Training specifications
-batch_size: 32
-learning_rate: 1e-3
-num_workers: 8
-
-# Distributed setup (multi GPU)
-port: 29450
-master_address: localhost
-
-hydra:
-  verbose: true
-  run:
-    dir: ${output_dir}
+_target_: zarr_reader.Reader
+_convert_: all

@@ -51,10 +51,7 @@ def write_checkpoint(
     :param dst_path: Path where the checkpoint is written to
     :param keep_n_checkpoints: Number of best checkpoints that will be saved (worse checkpoints are overwritten)
     """
-    root_path = os.path.join(
-        dst_path,
-        "checkpoints",
-    )
+    root_path = dst_path
     # root_path = os.path.dirname(ckpt_dst_path)
     ckpt_dst_path = os.path.join(
         root_path,

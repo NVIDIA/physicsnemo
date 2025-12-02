@@ -29,7 +29,7 @@ import torch
 
 from physicsnemo.utils.version_check import check_min_version
 
-WARP_AVAILABLE = check_min_version("warp", "0.6.0")
+WARP_AVAILABLE = check_min_version("warp", "0.6.0", hard_fail=False)
 
 if WARP_AVAILABLE:
     import warp as wp

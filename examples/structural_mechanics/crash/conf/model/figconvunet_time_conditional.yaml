@@ -53,6 +53,9 @@ neighbor_search_type: "knn"
 knn_k: 16
 reductions: ["mean"]
 
+use_scalar_output: false
+has_input_features: true
+
 # Pooling (for global features if needed)
 pooling_type: "max"
 pooling_layers: [2]

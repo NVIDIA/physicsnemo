@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+model:
+  model_type: "modafno" # should always be "modafno"
+  model_name: "modafno-cplxscale-smallpatch" # name for the model
+  inp_shape: [720, 1440] # should be [720, 1440], must be divisible by patch_size
+  in_channels: null # number of input channels to the model, null determines it from datapipe
+  out_channels: null # number of output channels from the model, null determines it from datapipe
+  patch_size: [2,2] # size of AFNO patches
+  embed_dim: 512 # embedding dimension
+  mlp_ratio: 2.0 # multiplier for MLP hidden layer size (may be a non-integer value, e.g. 2.5)
+  num_blocks: 12 # number of AFNO blocks
+
+  scale_shift_mode: complex # type of numbers used for the ModAFNO modulation, "real" or "complex"
+  embed_model:
+    dim: 64 # width of time embedding net
+    depth: 1 # depth of time embedding net
+    method: sinusoidal # embedding type used in time embedding net, "sinusoidal" or "learned"
+
+datapipe:
+  data_dir: "/data/era5-73varQ-hourly" # directory where data files are located
+  metadata_path: "/data/era5-73varQ-hourly/metadata/data.json" # directory to metadata json file
+  geopotential_filename: "/data/era5-wind_gust/invariants/orography.nc" # location of orography file
+  lsm_filename: "/data/era5-wind_gust/invariants/land_sea_mask.nc" # location of lsm file
+  use_latlon: True # when True, return latitude and longitude from datapipe
+  num_samples_per_year_train: null # number of training samples per year, null uses all available
+  num_samples_per_year_valid: 64 # number of validation samples per year
+  batch_size_train: 1 # batch size per GPU
+
+training:
+  max_epoch: 120 # number of data "epochs" (each epoch we save a checkpoint, run validation, update LR)
+  samples_per_epoch: 50000 # number of samples per "epoch"
+  load_epoch: "latest" # int, null or "latest"; "latest" loads the most recent checkpoint in checkpoint_dir
+  checkpoint_dir: "/checkpoints/fcinterp/" # location where checkpoints are saved
+
+optimizer_params:
+  lr: 5e-4 # learning rate
+  betas: [0.9, 0.95] # beta parameters for Adam
+
+logging:
+  mlflow:
+    use_mlflow: True # when True, produce logs with mlflow
+    experiment_name: "Forecast interpolation model" # experiment name, can be set freely
+    user_name: "PhysicsNeMo User" # user name, can be set freely
+  wandb:
+    use_wandb: False # when True, produce logs with wandb
+    mode: "offline" # "online", "offline", or "disabled"
+    project: "Temporal-Interpolation-Training" # project name for wandb
+    entity: null # entity (username or team) for Weights & Biases
+    results_dir: "./wandb/" # directory to save wandb logs

@@ -15,4 +15,6 @@
 # limitations under the License.
 
 from .domino_datapipe import DoMINODataPipe
-from .mesh_datapipe import MeshDatapipe
+
+# from .mesh_datapipe import MeshDatapipe
+from .transolver_datapipe import TransolverDataPipe

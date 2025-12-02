@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+hydra:
+  job:
+    chdir: true
+    name: XMGN_2D_Q5SP_Waterflood
+  run:
+    dir: ./outputs/${hydra:job.name}
+
+# ┌───────────────────────────────────────────┐
+# │            Run Specification              │
+# └───────────────────────────────────────────┘
+
+runspec:
+  job_name: ${hydra:job.name}
+  description: "2D Q5SP waterflood reservoir simulation experiment"
+
+# ┌───────────────────────────────────────────┐
+# │            Dataset Configuration          │
+# └───────────────────────────────────────────┘
+
+dataset:
+  simulator: OPM                                # Simulator type (currently support simulators with ECLIPSE-style output files: OPM, ECLIPSE, IX, etc.)
+  sim_dir: ../dataset/2D_OW/CASE_2D.sim         # Directory containing simulation cases and results
+  # num_samples: 20                               # Number of samples to process (default = all, else for small size testing)
+  
+  # Graph configuration
+  graph:
+    node_features:
+      static: ["PERMX", "PORV", "X", "Y", "Z"]                # Static node features (ECL standard + some custom keys supported)
+      dynamic: 
+        variables: ["PRESSURE", "SWAT", "WCID"]               # Dynamic node features (current timestep) 
+        prev_timesteps: 2                                     # Number of previous timesteps to include (0=current only, 1=current+previous, etc.)
+      # time_series: ["WWIR", "WGIR", "WBHP"]              # Time series variables. mapped onto grid cells with completion cell indices. (currently prototype implementation)
+    
+    edge_features: ["TRANX", "TRANY", "TRANZ", "TRANNNC"]    # directional transmissibilities (including nnc). will be combined.
+    
+    global_features:
+      delta_t: true                                           # Include time step size as global feature
+      time: true                                              # Include time (normalized 0-1) as global feature
+      # TODO: implement advanced global features (e.g., field management)
+
+    target_vars: 
+      node_features: ["PRESSURE", "SWAT"]                     # Target variables (next timestep)
+      # time_series: ["WWCT", "WGOR"]                         # Time series variables #TODO: implement later (currently not used)
+      weights: [1.0, 1.0]                                     # Per-variable loss weights (same order as node_features)
+      loss_functions: ["L2", "L1"]                            # Loss functions for each target variable (L1, L2, Huber)
+
+    nonlinear_scaling: ["PERMX:LOG10", "TRAN:LOG10"]         # Optional: specify irregular distribution, otherwise values will be directly scaled to [0, 1]
+
+
+# ┌───────────────────────────────────────────┐
+# │            Data Preprocessing             │
+# └───────────────────────────────────────────┘  
+
+preprocessing:
+  skip_graphs: false                            # Skip graph generation (use existing graphs to test partitioning parameters)
+  num_partitions: 2                             # Number of partitions for each graph
+  halo_size: 3                                  # Size of halo region for partitions
+  num_preprocess_workers: 4                     # Number of workers for data preprocessing
+  data_split:
+    train_ratio: 0.8                            # Ratio of samples for training
+    val_ratio: 0.1                              # Ratio of samples for validation
+    test_ratio: 0.1                             # Ratio of samples for testing
+
+# ┌───────────────────────────────────────────┐
+# │           Model Configuration             │
+# └───────────────────────────────────────────┘
+
+model:
+  num_message_passing_layers: 3                 # Number of message passing layers
+  hidden_dim: 64                                # Hidden dimension of the model
+  activation: silu                              # Activation function
+
+# ┌───────────────────────────────────────────┐
+# │          Training Configuration           │
+# └───────────────────────────────────────────┘
+
+training:
+  num_epochs: 1000                              # Number of epochs
+  batch_size: 1                                 # Batch size for training
+  start_lr: 1e-4                                # Initial learning rate (cos annealing schedule is used) 
+  end_lr: 1e-6                                  # Final learning rate (cos annealing schedule is used)
+  weight_decay: 1e-3                            # Weight decay for AdamW optimizer (L2 regularization)
+  validation_freq: 5                            # Frequency of validation and checkpoint saving
+  resume: false                                 # Resume training from existing checkpoints (true) or start fresh (false)
+  early_stopping:
+    patience: 20                                # Number of actual epochs (not validation checks) to wait for improvement
+    min_delta: 1e-6                             # Minimum change to qualify as improvement
+
+# ┌───────────────────────────────────────────┐
+# │        Performance Optimization           │
+# └───────────────────────────────────────────┘
+
+performance:
+  use_concat_trick: true                        # Use the concatenation trick
+  checkpoint_segments: 2                        # Number of segments for the activation checkpointing
+  enable_cudnn_benchmark: true                  # Enable cudnn benchmark
+
+# ┌───────────────────────────────────────────┐
+# │        Inference Configuration            │
+# └───────────────────────────────────────────┘
+
+inference:
+  checkpoint_path: null                         # Explicit path to .pt checkpoint file (e.g., "outputs/XMeshGraphNet_Reservoir/best_checkpoints/checkpoint.0.30.pt")
+  model_path: null                              # Explicit path to .mdlus model file (e.g., "outputs/XMeshGraphNet_Reservoir/best_checkpoints/MeshGraphNet.0.30.mdlus")
+  # Note: If both are null, automatically uses the best checkpoint from best_checkpoints directory

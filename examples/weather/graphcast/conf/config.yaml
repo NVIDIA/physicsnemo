@@ -117,6 +117,8 @@ val_freq: 5               # Frequency (iterations) for performing light-weight v
 # │          Logging and Monitoring           │
 # └───────────────────────────────────────────┘
 
+wb_entity: PhysicsNeMo
+wb_project: GraphCast
 wb_mode: online            # Weights and Biases mode ["online", "offline", "disabled"]. If you don’t have a Weights and Biases API key, set this to "disabled".
 watch_model: false         # If true, records the model parameter gradients through Weights and Biases.
 

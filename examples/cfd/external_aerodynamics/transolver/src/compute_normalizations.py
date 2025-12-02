@@ -26,17 +26,20 @@ for a given field in a dataset, typically used for preprocessing in CFD workflow
 """
 
 from pathlib import Path
+import time
 
 import numpy as np
 import torch
 import hydra
 from omegaconf import DictConfig
 
-from datapipe import DomainParallelZarrDataset
+from physicsnemo.datapipes.cae.cae_dataset import CAEDataset
 
 
 def compute_mean_std_min_max(
-    dataset: DomainParallelZarrDataset, field_key: str
+    dataset: CAEDataset,
+    field_key: str,
+    max_samples: int = 100,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Compute the mean, standard deviation, minimum, and maximum for a specified field
@@ -45,19 +48,22 @@ def compute_mean_std_min_max(
     Uses a numerically stable online algorithm for mean and variance.
 
     Args:
-        dataset (DomainParallelZarrDataset): The dataset to process.
+        dataset (CAEDataset): The dataset to process.
         field_key (str): The key for the field to normalize.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
             mean, std, min, max tensors for the field.
     """
-    N = 0  # Total number of elements processed
+    N = torch.tensor(
+        0, dtype=torch.int64, device="cpu"
+    )  # Total number of elements processed
     mean = None
     M2 = None  # Sum of squares of differences from the current mean
     min_val = None
     max_val = None
 
+    time_start = time.time()
     for i in range(len(dataset)):
         print(f"reading file: {i}")
         data = dataset[i][field_key]
@@ -67,17 +73,17 @@ def compute_mean_std_min_max(
             M2 = torch.zeros(data.shape[-1], device=data.device)
             min_val = torch.full((data.shape[-1],), float("inf"), device=data.device)
             max_val = torch.full((data.shape[-1],), float("-inf"), device=data.device)
-        n = data.shape[1]
+        n = data.shape[0]
         N += n
 
         # Compute batch statistics
-        batch_mean = data.mean(axis=(0, 1))
-        batch_M2 = ((data - batch_mean) ** 2).sum(axis=(0, 1))
-        batch_n = data.shape[1]
+        batch_mean = data.mean(axis=(0,))
+        batch_M2 = ((data - batch_mean) ** 2).sum(axis=(0,))
+        batch_n = data.shape[0]
 
         # Update min/max
-        batch_min = data.amin(dim=(0, 1))
-        batch_max = data.amax(dim=(0, 1))
+        batch_min = data.amin(dim=(0,))
+        batch_max = data.amax(dim=(0,))
         min_val = torch.minimum(min_val, batch_min)
         max_val = torch.maximum(max_val, batch_max)
 
@@ -86,6 +92,11 @@ def compute_mean_std_min_max(
         N += batch_n
         mean = mean + delta * (batch_n / N)
         M2 = M2 + batch_M2 + delta**2 * (batch_n * N) / N
+        time_end = time.time()
+        print(f"Time taken for file {i}: {time_end - time_start:.2f} seconds")
+        time_start = time.time()
+        if i >= max_samples:
+            break
 
     var = M2 / (N - 1)
     std = torch.sqrt(var)
@@ -100,8 +111,10 @@ def main(cfg: DictConfig) -> None:
 
     The computed statistics are printed and saved to a .npz file.
     """
+
     # Choose which field to normalize (can be overridden via command line)
-    field_key: str = cfg.get("field_key", "surface_fields")
+    field_key: str = cfg.data.mode + "_fields"
+
     # Normalization directory can be configured (backward compatible: defaults to current directory)
     normalization_dir: str = getattr(cfg.data, "normalization_dir", ".")
 
@@ -110,19 +123,21 @@ def main(cfg: DictConfig) -> None:
         Path(normalization_dir) / f"{field_key}_normalization.npz"
     )
 
-    # Create the dataset using configuration parameters
-    dataset = DomainParallelZarrDataset(
-        data_path=cfg.data.train.data_path,
-        device_mesh=None,
-        placements=None,
-        max_workers=cfg.data.max_workers,
-        pin_memory=cfg.data.pin_memory,
-        keys_to_read=[field_key],
-        large_keys=[field_key],
-    )
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
+    # Create the dataset using configuration parameters
+    dataset = CAEDataset(
+        data_dir=cfg.data.train.data_path,
+        keys_to_read=[
+            field_key,
+        ],
+        keys_to_read_if_available={},
+        output_device=device,
+        preload_depth=cfg.data.preload_depth,
+        pin_memory=cfg.data.pin_memory,
+    )
     # Compute normalization statistics
-    mean, std, min_val, max_val = compute_mean_std_min_max(dataset, field_key)
+    mean, std, min_val, max_val = compute_mean_std_min_max(dataset, field_key, 100)
     print(f"Mean for {field_key}: {mean}")
     print(f"Std for {field_key}: {std}")
     print(f"Min for {field_key}: {min_val}")

@@ -40,7 +40,7 @@ try:
     import transformer_engine.pytorch as te
 
     TE_AVAILABLE = True
-except ImportError:
+except (ImportError, FileNotFoundError):
     TE_AVAILABLE = False
 
 import physicsnemo  # noqa: F401 for docs
@@ -123,6 +123,7 @@ class Transolver_block(nn.Module):
         slice_num=32,
         spatial_shape: tuple[int, ...] | None = None,
         use_te=True,
+        plus: bool = False,
     ):
         super().__init__()
 
@@ -145,6 +146,7 @@ class Transolver_block(nn.Module):
                 dropout=dropout,
                 slice_num=slice_num,
                 use_te=use_te,
+                plus=plus,
             )
         else:
             if len(spatial_shape) == 2:
@@ -156,6 +158,7 @@ class Transolver_block(nn.Module):
                     dropout=dropout,
                     slice_num=slice_num,
                     use_te=use_te,
+                    plus=plus,
                 )
             elif len(spatial_shape) == 3:
                 self.Attn = PhysicsAttentionStructuredMesh3D(
@@ -166,6 +169,7 @@ class Transolver_block(nn.Module):
                     dropout=dropout,
                     slice_num=slice_num,
                     use_te=use_te,
+                    plus=plus,
                 )
             else:
                 raise Exception(
@@ -323,6 +327,7 @@ class Transolver(Module):
         structured_shape: None | tuple[int] = None,
         use_te: bool = True,
         time_input: bool = False,
+        plus: bool = False,
     ) -> None:
         super().__init__(meta=MetaData())
         self.__name__ = "Transolver"
@@ -405,6 +410,7 @@ class Transolver(Module):
                     spatial_shape=structured_shape,
                     last_layer=(_ == n_layers - 1),
                     use_te=use_te,
+                    plus=plus,
                 )
                 for _ in range(n_layers)
             ]

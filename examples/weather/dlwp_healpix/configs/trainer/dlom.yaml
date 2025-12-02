@@ -26,4 +26,5 @@ early_stopping_patience: null
 amp_mode: "fp16"
 graph_mode: "train_eval"
 output_dir: ${output_dir}
+checkpoint_dir: ${checkpoint_dir}
 max_norm: 0.25
