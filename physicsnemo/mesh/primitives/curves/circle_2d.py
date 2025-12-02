@@ -1,0 +1,46 @@
+"""Closed circle curve in 2D space.
+
+Dimensional: 1D manifold in 2D space (closed, no boundary).
+"""
+
+import torch
+
+from physicsnemo.mesh.mesh import Mesh
+
+
+def load(radius: float = 1.0, n_points: int = 32, device: str = "cpu") -> Mesh:
+    """Create a closed circle curve in 2D space.
+
+    Args:
+        radius: Radius of the circle
+        n_points: Number of points around the circle
+        device: Compute device ('cpu' or 'cuda')
+
+    Returns:
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points
+    """
+    if n_points < 3:
+        raise ValueError(f"n_points must be at least 3, got {n_points=}")
+
+    theta = torch.linspace(0, 2 * torch.pi, n_points + 1, device=device)[:-1]
+
+    points = torch.stack(
+        [radius * torch.cos(theta), radius * torch.sin(theta)],
+        dim=1,
+    )
+
+    # Create edge cells, including wrap-around edge
+    cells = torch.stack(
+        [
+            torch.arange(n_points, device=device),
+            torch.cat(
+                [
+                    torch.arange(1, n_points, device=device),
+                    torch.tensor([0], device=device),
+                ]
+            ),
+        ],
+        dim=1,
+    )
+
+    return Mesh(points=points, cells=cells)

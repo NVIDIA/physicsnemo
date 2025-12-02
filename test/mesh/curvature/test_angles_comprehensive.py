@@ -1,0 +1,460 @@
+"""Comprehensive tests for angle computation in all dimensions.
+
+Tests coverage for:
+- Solid angle computation for 3D tetrahedra
+- Multi-edge vertices in 1D manifolds
+- Higher-dimensional angle computations
+- Edge cases and numerical stability
+"""
+
+import torch
+import pytest
+
+from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.curvature._angles import (
+    compute_angles_at_vertices,
+    compute_solid_angle_at_tet_vertex,
+)
+from physicsnemo.mesh.curvature._utils import stable_angle_between_vectors
+
+
+@pytest.fixture(params=["cpu"])
+def device(request):
+    """Test on CPU (GPU testing in other test files)."""
+    return request.param
+
+
+class TestSolidAngles3D:
+    """Tests for solid angle computation in 3D tetrahedral meshes."""
+
+    def test_solid_angle_regular_tetrahedron(self, device):
+        """Test solid angle at vertex of regular tetrahedron."""
+        # Regular tetrahedron: each vertex has solid angle ≈ 0.551 steradians
+        # This is arccos(23/27) or approximately π - 3*arccos(1/3)
+
+        # Create regular tetrahedron vertices
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, (3**0.5) / 2, 0.0],
+                [0.5, (3**0.5) / 6, ((2 / 3) ** 0.5)],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        # Compute solid angle at vertex 0
+        vertex_pos = points[0]
+        opposite_vertices = points[[1, 2, 3]]
+
+        solid_angle = compute_solid_angle_at_tet_vertex(vertex_pos, opposite_vertices)
+
+        # For regular tet, each corner has solid angle ≈ 0.55129 steradians
+        expected = torch.acos(torch.tensor(23 / 27))  # Exact formula
+
+        assert torch.abs(solid_angle - expected) < 1e-5
+
+    def test_solid_angle_right_tetrahedron(self, device):
+        """Test solid angle at right-angle corner."""
+        # Tetrahedron with right angle at origin
+        vertex_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
+        opposite_vertices = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        solid_angle = compute_solid_angle_at_tet_vertex(vertex_pos, opposite_vertices)
+
+        # Right angle corner: solid angle = π/2 steradians
+        expected = torch.pi / 2
+
+        assert torch.abs(solid_angle - expected) < 1e-5
+
+    def test_solid_angle_vectorized(self, device):
+        """Test vectorized computation of multiple solid angles."""
+        # Create multiple tetrahedron vertices
+        n_tets = 10
+
+        # Apex vertices
+        apexes = torch.randn(n_tets, 3, device=device)
+
+        # Opposite face vertices (random triangles)
+        opposite_verts = (
+            torch.randn(n_tets, 3, 3, device=device) + apexes.unsqueeze(1) + 1.0
+        )
+
+        # Compute solid angles
+        solid_angles = compute_solid_angle_at_tet_vertex(apexes, opposite_verts)
+
+        # Should all be positive and less than 4π (full sphere)
+        assert torch.all(solid_angles > 0)
+        assert torch.all(solid_angles < 4 * torch.pi)
+        assert solid_angles.shape == (n_tets,)
+
+    def test_angles_at_vertices_3d_single_tet(self, device):
+        """Test angle computation for single tetrahedron."""
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, (3**0.5) / 2, 0.0],
+                [0.5, (3**0.5) / 6, ((2 / 3) ** 0.5)],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.long, device=device)
+
+        mesh = Mesh(points=points, cells=cells)
+
+        # Compute solid angles at all vertices
+        angles = compute_angles_at_vertices(mesh)
+
+        # All four vertices should have the same solid angle (regular tet)
+        assert angles.shape == (4,)
+        assert torch.all(angles > 0)
+
+        # Verify they're approximately equal
+        assert torch.std(angles) < 0.01  # Should be nearly identical
+
+    def test_angles_at_vertices_3d_two_tets(self, device):
+        """Test angle computation for two adjacent tetrahedra."""
+        # Create two tets sharing a face
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],  # 0
+                [1.0, 0.0, 0.0],  # 1
+                [0.5, 1.0, 0.0],  # 2
+                [0.5, 0.5, 1.0],  # 3 (above)
+                [0.5, 0.5, -1.0],  # 4 (below)
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor(
+            [
+                [0, 1, 2, 3],  # Tet 1
+                [0, 1, 2, 4],  # Tet 2 (shares face 0,1,2)
+            ],
+            dtype=torch.long,
+            device=device,
+        )
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Vertices 0, 1, 2 should have sum of two solid angles
+        # Vertices 3, 4 should have one solid angle each
+        assert angles.shape == (5,)
+        assert torch.all(angles > 0)
+
+        # Shared vertices should have larger angles
+        assert angles[0] > angles[3]
+        assert angles[1] > angles[3]
+        assert angles[2] > angles[3]
+
+    def test_solid_angle_degenerate_protection(self, device):
+        """Test that degenerate cases don't produce NaN."""
+        # Nearly degenerate tetrahedron (very flat)
+        vertex_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
+        opposite_vertices = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+                [1.5, 0.001, 0.0],  # Very small height
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        solid_angle = compute_solid_angle_at_tet_vertex(vertex_pos, opposite_vertices)
+
+        # Should be small but not NaN
+        assert not torch.isnan(solid_angle)
+        assert solid_angle >= 0
+        assert solid_angle < 0.01  # Very small solid angle
+
+
+class TestMultiEdgeVertices1D:
+    """Tests for vertices with more than 2 incident edges in 1D manifolds."""
+
+    def test_junction_point_three_edges(self, device):
+        """Test vertex where three edges meet (Y-junction)."""
+        # Create Y-shaped curve
+        points = torch.tensor(
+            [
+                [0.0, 0.0],  # Center (junction)
+                [1.0, 0.0],  # Right
+                [-0.5, (3**0.5) / 2],  # Upper left
+                [-0.5, -(3**0.5) / 2],  # Lower left
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        # Three edges meeting at vertex 0
+        cells = torch.tensor(
+            [
+                [0, 1],  # To right
+                [0, 2],  # To upper left
+                [0, 3],  # To lower left
+            ],
+            dtype=torch.long,
+            device=device,
+        )
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Center vertex should have sum of pairwise angles
+        # Between the three 120° separated rays: 3 * 120° = 360° = 2π
+        assert angles[0] > 0
+
+        # Each end vertex has angle from its single edge
+        # (For open curves, this is not well-defined, so we just check it's computed)
+        assert not torch.isnan(angles[1])
+        assert not torch.isnan(angles[2])
+        assert not torch.isnan(angles[3])
+
+    def test_junction_point_four_edges(self, device):
+        """Test vertex where four edges meet (cross junction)."""
+        # Create cross-shaped curve
+        points = torch.tensor(
+            [
+                [0.0, 0.0],  # Center (junction)
+                [1.0, 0.0],  # Right
+                [-1.0, 0.0],  # Left
+                [0.0, 1.0],  # Up
+                [0.0, -1.0],  # Down
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        # Four edges meeting at vertex 0
+        cells = torch.tensor(
+            [
+                [0, 1],
+                [0, 2],
+                [0, 3],
+                [0, 4],
+            ],
+            dtype=torch.long,
+            device=device,
+        )
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Center vertex with 4 edges at 90° intervals
+        # Sum of pairwise angles should be computed
+        assert angles[0] > 0
+        assert not torch.isnan(angles[0])
+
+
+class TestHigherDimensionalAngles:
+    """Tests for angle computation in higher dimensions."""
+
+    def test_stable_angle_between_vectors_3d(self, device):
+        """Test stable angle computation in 3D."""
+        # Perpendicular vectors
+        v1 = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+        v2 = torch.tensor([[0.0, 1.0, 0.0]], device=device)
+
+        angle = stable_angle_between_vectors(v1, v2)
+
+        assert torch.abs(angle - torch.pi / 2) < 1e-6
+
+    def test_stable_angle_between_vectors_parallel(self, device):
+        """Test angle between parallel vectors."""
+        v1 = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+        v2 = torch.tensor([[2.0, 0.0, 0.0]], device=device)
+
+        angle = stable_angle_between_vectors(v1, v2)
+
+        assert torch.abs(angle) < 1e-6  # Should be 0
+
+    def test_stable_angle_between_vectors_opposite(self, device):
+        """Test angle between opposite vectors."""
+        v1 = torch.tensor([[1.0, 0.0, 0.0]], device=device)
+        v2 = torch.tensor([[-1.0, 0.0, 0.0]], device=device)
+
+        angle = stable_angle_between_vectors(v1, v2)
+
+        assert torch.abs(angle - torch.pi) < 1e-6
+
+    def test_stable_angle_4d(self, device):
+        """Test angle computation in 4D space."""
+        # Two 4D vectors
+        v1 = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=device)
+        v2 = torch.tensor([[0.0, 1.0, 0.0, 0.0]], device=device)
+
+        angle = stable_angle_between_vectors(v1, v2)
+
+        assert torch.abs(angle - torch.pi / 2) < 1e-6
+
+    def test_edges_in_higher_dim_space(self, device):
+        """Test 1D manifold (edges) embedded in higher dimensional space."""
+        # Create bent polyline in 4D space (not straight)
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 0.0, 0.0],  # Bent at 90 degrees
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor(
+            [
+                [0, 1],
+                [1, 2],
+            ],
+            dtype=torch.long,
+            device=device,
+        )
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Middle vertex should have angle π/2 (90 degree bend)
+        # Note: In higher dimensions, the angle computation uses stable_angle_between_vectors
+        # Interior angle = π - exterior angle
+        assert angles[1] > 0  # Should be computed
+
+        # For a 90° bend, interior angle should be π/2
+        assert torch.abs(angles[1] - torch.pi / 2) < 0.1
+
+
+class TestAngleEdgeCases:
+    """Tests for edge cases in angle computation."""
+
+    def test_empty_mesh(self, device):
+        """Test angle computation on empty mesh."""
+        points = torch.zeros((5, 3), device=device)
+        cells = torch.zeros((0, 3), dtype=torch.long, device=device)
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # All angles should be zero (no incident cells)
+        assert torch.allclose(angles, torch.zeros(5, device=device))
+
+    def test_isolated_vertex(self, device):
+        """Test that isolated vertices have zero angle."""
+        points = torch.tensor(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [0.5, 1.0],
+                [5.0, 5.0],  # Isolated
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # First three vertices have angles from triangle
+        assert angles[0] > 0
+        assert angles[1] > 0
+        assert angles[2] > 0
+
+        # Isolated vertex should have zero angle
+        assert angles[3] == 0
+
+    def test_single_edge_open_curve(self, device):
+        """Test angle computation for single open edge."""
+        points = torch.tensor(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor([[0, 1]], dtype=torch.long, device=device)
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Each endpoint has only one incident edge
+        # Angle is not well-defined for single edge, but should be computed
+        assert angles.shape == (2,)
+        # Both should be zero (no angle to measure)
+        assert angles[0] == 0
+        assert angles[1] == 0
+
+    def test_nearly_degenerate_triangle(self, device):
+        """Test angle computation for nearly degenerate triangle."""
+        # Very flat triangle
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 1e-6, 0.0],  # Nearly collinear
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Should not produce NaN
+        assert not torch.any(torch.isnan(angles))
+
+        # Two vertices should have angles close to π/2 (nearly 90°)
+        # One vertex should have angle close to 0 (nearly 0°)
+        # Sum should still be close to π
+        total = angles.sum()
+        assert torch.abs(total - torch.pi) < 1e-3
+
+    def test_2d_manifold_in_higher_dim(self, device):
+        """Test triangle mesh embedded in higher dimensional space."""
+        # Triangle in 4D space
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.5, (3**0.5) / 2, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+            device=device,
+        )
+
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
+
+        mesh = Mesh(points=points, cells=cells)
+
+        angles = compute_angles_at_vertices(mesh)
+
+        # Should compute angles correctly (equilateral triangle)
+        # Each angle should be π/3
+        expected = torch.pi / 3
+        assert torch.allclose(
+            angles, torch.full((3,), expected, device=device), atol=1e-5
+        )

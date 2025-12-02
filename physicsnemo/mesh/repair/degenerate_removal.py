@@ -1,0 +1,108 @@
+"""Remove degenerate cells from meshes.
+
+Removes cells with zero or near-zero area/volume, and cells with duplicate vertices.
+"""
+
+from typing import TYPE_CHECKING
+
+import torch
+
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
+
+
+def remove_degenerate_cells(
+    mesh: "Mesh",
+    area_tolerance: float = 1e-10,
+) -> tuple["Mesh", dict[str, int]]:
+    """Remove cells with area < tolerance or duplicate vertices.
+
+    Identifies and removes degenerate cells that have:
+    1. Area/volume below tolerance (nearly zero or negative)
+    2. Duplicate vertex indices (invalid simplices)
+
+    Args:
+        mesh: Input mesh
+        area_tolerance: Minimum acceptable cell area
+
+    Returns:
+        Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
+        - "n_zero_area_cells": Number of cells removed for zero area
+        - "n_duplicate_vertex_cells": Number of cells with duplicate vertices
+        - "n_cells_original": Original number of cells
+        - "n_cells_final": Final number of cells
+
+    Example:
+        >>> mesh_clean, stats = remove_degenerate_cells(mesh)
+        >>> print(f"Removed {stats['n_zero_area_cells']} degenerate cells")
+    """
+    n_original = mesh.n_cells
+    device = mesh.points.device
+
+    if n_original == 0:
+        return mesh, {
+            "n_zero_area_cells": 0,
+            "n_duplicate_vertex_cells": 0,
+            "n_cells_original": 0,
+            "n_cells_final": 0,
+        }
+
+    ### Check 1: Zero area cells
+    cell_areas = mesh.cell_areas
+    non_degenerate_by_area = cell_areas >= area_tolerance
+    n_zero_area = (~non_degenerate_by_area).sum().item()
+
+    ### Check 2: Cells with duplicate vertices (vectorized)
+    # For each cell, check if all vertices are unique
+    # Sort vertices in each cell and check for adjacent duplicates
+    cells_sorted = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts)
+
+    # Check if any adjacent sorted vertices are equal
+    n_verts_per_cell = mesh.n_manifold_dims + 1
+    has_duplicates = torch.zeros(n_original, dtype=torch.bool, device=device)
+
+    for i in range(n_verts_per_cell - 1):
+        has_duplicates |= cells_sorted[:, i] == cells_sorted[:, i + 1]
+
+    has_unique_vertices = ~has_duplicates
+
+    n_duplicate_vertex = (~has_unique_vertices).sum().item()
+
+    ### Combined mask: keep cells that are good
+    keep_mask = non_degenerate_by_area & has_unique_vertices
+    n_keep = keep_mask.sum().item()
+
+    if n_keep == n_original:
+        # No degenerate cells
+        return mesh, {
+            "n_zero_area_cells": 0,
+            "n_duplicate_vertex_cells": 0,
+            "n_cells_original": n_original,
+            "n_cells_final": n_original,
+        }
+
+    ### Filter cells
+    new_cells = mesh.cells[keep_mask]
+
+    ### Transfer data (excluding cache)
+    new_cell_data = mesh.cell_data.exclude("_cache")[keep_mask]
+
+    ### Keep all points and point data (will be cleaned by remove_isolated_vertices if needed)
+    from physicsnemo.mesh.mesh import Mesh
+
+    cleaned_mesh = Mesh(
+        points=mesh.points,
+        cells=new_cells,
+        point_data=mesh.point_data.exclude("_cache").clone(),
+        cell_data=new_cell_data,
+        global_data=mesh.global_data.clone(),
+    )
+
+    stats = {
+        "n_zero_area_cells": n_zero_area,
+        "n_duplicate_vertex_cells": n_duplicate_vertex,
+        "n_cells_original": n_original,
+        "n_cells_final": n_keep,
+    }
+
+    return cleaned_mesh, stats

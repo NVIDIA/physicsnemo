@@ -1,0 +1,46 @@
+"""Zigzag polyline in 2D space.
+
+Dimensional: 1D manifold in 2D space.
+"""
+
+import torch
+
+from physicsnemo.mesh.mesh import Mesh
+
+
+def load(
+    n_segments: int = 10,
+    amplitude: float = 0.5,
+    wavelength: float = 1.0,
+    device: str = "cpu",
+) -> Mesh:
+    """Create a zigzag polyline in 2D space.
+
+    Args:
+        n_segments: Number of segments in the polyline
+        amplitude: Amplitude of the zigzag
+        wavelength: Wavelength of the zigzag pattern
+        device: Compute device ('cpu' or 'cuda')
+
+    Returns:
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_segments
+    """
+    if n_segments < 1:
+        raise ValueError(f"n_segments must be at least 1, got {n_segments=}")
+
+    n_points = n_segments + 1
+    x = torch.linspace(0, n_segments * wavelength, n_points, device=device)
+    y = amplitude * (2 * (torch.arange(n_points, device=device) % 2) - 1).float()
+
+    points = torch.stack([x, y], dim=1)
+
+    # Create edge cells
+    cells = torch.stack(
+        [
+            torch.arange(n_segments, device=device),
+            torch.arange(1, n_segments + 1, device=device),
+        ],
+        dim=1,
+    )
+
+    return Mesh(points=points, cells=cells)

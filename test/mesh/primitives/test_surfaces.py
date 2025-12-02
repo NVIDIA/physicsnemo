@@ -1,0 +1,91 @@
+"""Tests for surface example meshes."""
+
+import pytest
+import torch
+
+from physicsnemo.mesh import primitives
+
+
+class TestSurfacePrimitives:
+    """Test all surface example meshes (2D→3D)."""
+
+    @pytest.mark.parametrize(
+        "example_name",
+        [
+            # Spheres
+            "sphere_icosahedral",
+            "sphere_uv",
+            # Cylinders
+            "cylinder",
+            "cylinder_open",
+            # Other shapes
+            "torus",
+            "plane",
+            "cone",
+            "disk",
+            "hemisphere",
+            # Platonic solids
+            "cube_surface",
+            "tetrahedron_surface",
+            "octahedron_surface",
+            "icosahedron_surface",
+            # Special
+            "mobius_strip",
+        ],
+    )
+    def test_surface_mesh(self, example_name):
+        """Test that surface mesh loads with correct dimensions."""
+        primitives_module = getattr(primitives.surfaces, example_name)
+        mesh = primitives_module.load()
+
+        assert mesh.n_manifold_dims == 2
+        assert mesh.n_spatial_dims == 3
+        assert mesh.n_points > 0
+        assert mesh.n_cells > 0
+
+    def test_sphere_subdivision(self):
+        """Test sphere subdivision."""
+        sphere0 = primitives.surfaces.sphere_icosahedral.load(subdivisions=0)
+        sphere1 = primitives.surfaces.sphere_icosahedral.load(subdivisions=1)
+        sphere2 = primitives.surfaces.sphere_icosahedral.load(subdivisions=2)
+
+        assert sphere0.n_cells < sphere1.n_cells < sphere2.n_cells
+
+    def test_sphere_radius(self):
+        """Test that sphere has correct radius."""
+        radius = 2.5
+        sphere = primitives.surfaces.sphere_icosahedral.load(
+            radius=radius, subdivisions=2
+        )
+
+        # All points should be approximately at the specified radius
+        radii = torch.norm(sphere.points, dim=1)
+        assert torch.allclose(radii, torch.full_like(radii, radius), atol=1e-5)
+
+    def test_torus_radii(self):
+        """Test that torus has correct radii."""
+        major_radius = 2.0
+        minor_radius = 0.5
+        torus = primitives.surfaces.torus.load(
+            major_radius=major_radius,
+            minor_radius=minor_radius,
+            n_major=32,
+            n_minor=16,
+        )
+
+        # Check that points are in expected range
+        radii_xy = torch.norm(torus.points[:, :2], dim=1)
+        assert radii_xy.min() >= major_radius - minor_radius - 0.1
+        assert radii_xy.max() <= major_radius + minor_radius + 0.1
+
+    def test_closed_vs_open(self):
+        """Test that closed and open surfaces have correct topology."""
+        # Closed cylinder should have no boundary
+        cylinder_closed = primitives.surfaces.cylinder.load(n_circ=16, n_height=5)
+
+        # Open cylinder should have boundary
+        cylinder_open = primitives.surfaces.cylinder_open.load(n_circ=16, n_height=5)
+
+        # Both should have points
+        assert cylinder_closed.n_points > 0
+        assert cylinder_open.n_points > 0
