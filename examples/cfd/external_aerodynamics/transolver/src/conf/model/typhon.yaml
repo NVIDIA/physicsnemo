@@ -28,4 +28,5 @@ mlp_ratio: 2
 slice_num: 512
 use_te: false
 plus: false
+include_local_features: true # use local features
 

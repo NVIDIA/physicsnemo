@@ -28,6 +28,7 @@ from physicsnemo.models.transolver.Physics_Attention import (
     gumbel_softmax,
 )
 from physicsnemo.models.transolver.transolver import MLP
+from physicsnemo.models.layers import BQWarp, fourier_encode, Mlp
 
 from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
@@ -575,6 +576,64 @@ class ContextProjector(nn.Module):
 
         return slice_tokens
 
+class GeoConvOut(nn.Module):
+    """
+    Geometry layer to project STL geometry data onto regular grids.
+    """
+
+    def __init__(
+        self,
+        input_features: int,
+        neighbors_in_radius: int,
+        base_neurons: int,
+    ):
+        """
+        Initialize the GeoConvOut layer.
+
+        Args:
+            input_features: Number of input feature dimensions
+            neighbors_in_radius: Number of neighbors in radius
+        """
+        super().__init__()
+        self.base_neurons = base_neurons
+
+        input_features_calculated = input_features * neighbors_in_radius
+
+        self.mlp = Mlp(
+            in_features=input_features_calculated,
+            hidden_features=[base_neurons, base_neurons // 2],
+            out_features=base_neurons,
+            act_layer=nn.GELU,
+            drop=0.0,
+        )
+
+        self.activation = nn.GELU
+
+        self.neighbors_in_radius = neighbors_in_radius
+
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Process and project geometric features onto a 3D grid.
+
+        Args:
+            x: Input tensor containing coordinates of the neighboring points
+               (batch_size, n_points, n_neighbors, 3)
+            
+        Returns:
+            Processed geometry features of shape (batch_size, n_points, n_neighbors, base_neurons)
+        """
+
+        b, n_points, n_neighbors, c = x.shape
+        x = rearrange(
+            x, "b x y z -> b x (y z)", x=n_points, y=n_neighbors, z=c
+        )
+        
+        x = F.tanh(self.mlp(x))
+
+        return x
 
 
 def _normalize_dim(x):
@@ -637,6 +696,14 @@ class Typhon(Module):
         Whether to include time embeddings. Default is False.
     plus : bool, optional
         Whether to use Transolver++ features in the GALE layers. Default is False.
+    include_local_features : bool, optional
+        Whether to include local features in the global context. Default is False.
+    radii : list[float], optional
+        Radii for the local features. Default is [0.05, 0.25].
+    neighbors_in_radius : list[int], optional
+        Neighbors in radius for the local features. Default is [8, 32].
+    n_hidden_local : int, optional
+        Hidden dimension for the local features. Default is 512.
 
     Raises
     ------
@@ -726,9 +793,15 @@ class Typhon(Module):
         use_te: bool = True,
         time_input: bool = False,
         plus: bool = False,
+        include_local_features: bool = False,
+        radii: list[float] = [0.05, 0.25],
+        neighbors_in_radius: list[int] = [8, 32],
+        n_hidden_local: int = 512,
     ) -> None:
         super().__init__(meta=TyphonMetaData())
         self.__name__ = "Typhon"
+
+        self.include_local_features = include_local_features
 
         self.use_te = use_te
         # Check that the hidden dimension and head dimensions are compatible:
@@ -740,6 +813,36 @@ class Typhon(Module):
         # These are to project geometry embeddings and global embeddings onto
         # a physical state space:
         context_dim = 0
+        if geometry_dim is not None and self.include_local_features:
+            self.radii = radii
+            self.neighbors_in_radius = neighbors_in_radius
+            self.bq_warp = nn.ModuleList()
+            self.geo_conv_out = nn.ModuleList()
+            self.geometry_features_tokenizer = nn.ModuleList()
+
+            for h in range(len(self.radii)):
+                self.bq_warp.append(BQWarp(
+                    radius=radii[h],
+                    neighbors_in_radius=neighbors_in_radius[h],
+                ))
+
+                self.geo_conv_out.append(GeoConvOut(
+                    input_features=geometry_dim,
+                    neighbors_in_radius=neighbors_in_radius[h],
+                    base_neurons=n_hidden_local,
+                ))
+                
+                self.geometry_features_tokenizer.append(ContextProjector(
+                    n_hidden_local,
+                    n_head,
+                    n_hidden // n_head,
+                    dropout,
+                    slice_num,
+                    use_te,
+                    plus,
+                ))
+                context_dim += n_hidden // n_head
+
         if geometry_dim is not None:
             self.geometry_tokenizer = ContextProjector(
                 geometry_dim,
@@ -849,8 +952,13 @@ class Typhon(Module):
 
         # First, construct the global context vectors:
         global_context_input = []
-
         if geometry is not None:
+            if self.include_local_features:
+                for h in range(len(self.radii)):
+                    mapping, k_short = self.bq_warp[h](geometry, geometry)
+                    geometry_features = self.geo_conv_out[h](k_short)
+                    geometry_states = self.geometry_features_tokenizer[h](geometry_features)
+                    global_context_input.append(geometry_states)
             geometry_states = self.geometry_tokenizer(geometry)
             global_context_input.append(geometry_states)
 

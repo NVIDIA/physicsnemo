@@ -21,7 +21,7 @@ defaults:
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "volumeX/fake-name"
+run_id: "typhon/volume/bq"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
@@ -37,7 +37,10 @@ datapipe:
 model:
   functional_dim: 7
   out_dim: 5
-  n_layers: 6
+  n_layers: 14
+  radii: [0.05, 0.25] # radius for local features
+  neighbors_in_radius: [8, 32] # neighbors in radius for local features
+  n_hidden_local: 32 # hidden dimension for local features
 
 # Logging configuration
 logging:
