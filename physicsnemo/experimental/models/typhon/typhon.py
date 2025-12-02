@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 
 import torch
 import torch.nn as nn
@@ -131,7 +132,10 @@ class GALE(PhysicsAttentionIrregularMesh):
         """
 
         # Project the slice and context tokens:
-        q = self.cross_q(slice_tokens)
+        
+        q_input = torch.cat(slice_tokens, dim=-2)
+        q = self.cross_q(q_input)
+        
         k = self.cross_k(context)
         v = self.cross_v(context)
 
@@ -142,11 +146,13 @@ class GALE(PhysicsAttentionIrregularMesh):
             cross_attention = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, is_causal=False
             )
+        cross_attention = torch.split(cross_attention, slice_tokens[0].shape[-2], dim=-2)
+
 
         return cross_attention
 
     def forward(
-        self, x: torch.Tensor, context: torch.Tensor | None = None
+        self, x: tuple[torch.Tensor, ...], context: torch.Tensor | None = None
     ) -> torch.Tensor:
         r"""Forward pass of the GALE module.
 
@@ -162,34 +168,29 @@ class GALE(PhysicsAttentionIrregularMesh):
         torch.Tensor
             Output tensor of shape \((B, N, C)\), same shape as input.
         """
-
         # Project the inputs onto learned spaces:
         if self.plus:
-            x_mid = self.project_input_onto_slices(x)
+            x_mid = [ self.project_input_onto_slices(_x) for _x in x ]
             # In transolver ++, fx_mid is gone.
             # x_mid is used to compute the projections instead:
-            fx_mid = x_mid
+            fx_mid = [ _x_mid for _x_mid in x_mid ]
         else:
-            x_mid, fx_mid = self.project_input_onto_slices(x)
+            x_mid, fx_mid = zip(*[ self.project_input_onto_slices(_x) for _x in x ])
 
         # Perform the linear projection of learned latent space onto slices:
-        slice_projections = self.in_project_slice(x_mid)
+        slice_projections = [ self.in_project_slice(_x_mid) for _x_mid in x_mid ]
 
         # Slice projections has shape [B, N_head, N_tokens, Head_dim], but head_dim may have changed!
-
         # Use the slice projections and learned spaces to compute the slices, and their weights:
-        slice_weights, slice_tokens = self.compute_slices_from_projections(
-            slice_projections, fx_mid
-        )
+        slice_weights, slice_tokens = zip(*[self.compute_slices_from_projections(proj, _fx_mid) for proj, _fx_mid in zip(slice_projections, fx_mid)])
         # slice_weights has shape [Batch, N_heads, N_tokens, Slice_num]
         # slice_tokens has shape  [Batch, N_heads, N_tokens, head_dim]
-
         # Apply attention to the slice tokens
         if self.use_te:
-            self_slice_token = self.compute_slice_attention_te(slice_tokens)
+            self_slice_token = [ self.compute_slice_attention_te(_slice_token) for _slice_token in slice_tokens ]
         else:
-            self_slice_token = self.compute_slice_attention_sdpa(slice_tokens)
-
+            self_slice_token = [ self.compute_slice_attention_sdpa(_slice_token) for _slice_token in slice_tokens ]
+        
         # HERE, we are differing: apply cross-attention with physical states:
         if context is not None:
             cross_slice_token = self.compute_slice_attention_cross(
@@ -198,10 +199,9 @@ class GALE(PhysicsAttentionIrregularMesh):
 
             # Apply learnable mixing:
             mixing_weight = torch.sigmoid(self.state_mixing)
-            out_slice_token = (
-                mixing_weight * self_slice_token
-                + (1 - mixing_weight) * cross_slice_token
-            )
+            out_slice_token = [ mixing_weight * sst + (1 - mixing_weight) * cst
+                for sst, cst in zip(self_slice_token, cross_slice_token)
+            ]
 
         else:
             # Just keep self attention:
@@ -210,7 +210,9 @@ class GALE(PhysicsAttentionIrregularMesh):
         # Shape unchanged
 
         # Deslice:
-        outputs = self.project_attention_outputs(out_slice_token, slice_weights)
+        outputs = [
+            self.project_attention_outputs(ost, sw) for ost, sw in zip(out_slice_token, slice_weights)
+        ]
 
         # Outputs now has the same shape as the original input x
 
@@ -327,8 +329,13 @@ class GALE_block(nn.Module):
         torch.Tensor
             Output tensor of shape \((B, N, C)\), same shape as input.
         """
-        fx = self.Attn(self.ln_1(fx), global_context) + fx
-        fx = self.ln_mlp1(fx) + fx
+        
+        normed_inputs = [ self.ln_1(_fx) for _fx in fx ]
+        attn = self.Attn(normed_inputs, global_context)
+        
+        fx = [ attn[i] + normed_inputs[i] for i in range(len(normed_inputs)) ]
+        
+        fx = [ self.ln_mlp1(_fx) + _fx for _fx in fx ]
 
         return fx
 
@@ -569,6 +576,25 @@ class ContextProjector(nn.Module):
         return slice_tokens
 
 
+
+def _normalize_dim(x):
+    # Accept int as scalar
+    if isinstance(x, int):
+        return (x,)
+    # Accept any non-string sequence of ints
+    if isinstance(x, Sequence) and not isinstance(x, (str, bytes)):
+        return tuple(int(v) for v in x)
+    raise TypeError(f"Invalid dim specifier {x!r}")
+
+
+def _normalize_tensor(x):
+    # Accept int as scalar
+    if isinstance(x, torch.Tensor):
+        return (x,)
+    if isinstance(x, Sequence):
+        return x
+    raise TypeError(f"Invalid tensor structure")
+
 class Typhon(Module):
     r"""Typhon: Geometry-Aware Physics Attention Transformer.
 
@@ -686,8 +712,8 @@ class Typhon(Module):
 
     def __init__(
         self,
-        functional_dim: int,
-        out_dim: int,
+        functional_dim: int | tuple[int, ...],
+        out_dim: int | tuple[int, ...],
         geometry_dim: int | None = None,
         global_dim: int | None = None,
         n_layers: int = 4,
@@ -731,16 +757,32 @@ class Typhon(Module):
             )
             context_dim += n_hidden // n_head
 
-        # This MLP is the initial projection onto the hidden space
-        self.preprocess = MLP(
-            functional_dim,
-            n_hidden * 2,
-            n_hidden,
-            n_layers=0,
-            res=False,
-            act=act,
-            use_te=use_te,
+        functional_dims = _normalize_dim(functional_dim)
+        out_dims = _normalize_dim(out_dim)
+      
+        if len(functional_dims) != len(out_dims):
+            raise ValueError(
+                f"functional_dim and out_dim must be the same length, but instead got {len(functional_dims)} and {len(out_dims)}"
+            )
+      
+        # This MLP is the initial projection onto the hidden space.
+        # One per input "type"
+        
+        self.preprocess = nn.ModuleList(
+            [
+                MLP(
+                    f,
+                    n_hidden * 2,
+                    n_hidden,
+                    n_layers=0,
+                    res=False,
+                    act=act,
+                    use_te=use_te,
+                )
+                for f in functional_dims
+            ]
         )
+
 
         self.n_hidden = n_hidden
 
@@ -763,14 +805,25 @@ class Typhon(Module):
         )
 
         if use_te:
-            self.ln_mlp_out = te.LayerNormLinear(
-                in_features=n_hidden, out_features=out_dim
+            self.ln_mlp_out = nn.ModuleList(
+                [
+                    te.LayerNormLinear(
+                        in_features=n_hidden, out_features=o
+                    ) for o in out_dims
+                 ]
             )
         else:
-            self.ln_mlp_out = nn.Sequential(
-                nn.LayerNorm(n_hidden),
-                nn.Linear(n_hidden, out_dim),
+            self.ln_mlp_out = nn.ModuleList(
+                [
+                    nn.Sequential(
+                        nn.LayerNorm(n_hidden),
+                        nn.Linear(n_hidden, o),
+                    )
+                    for o in out_dims
+                ]
+                
             )
+
 
         self.time_input = time_input
         if time_input:
@@ -780,7 +833,7 @@ class Typhon(Module):
 
     def forward(
         self,
-        local_embedding: torch.Tensor,
+        local_embedding: torch.Tensor | tuple[torch.Tensor, ...],
         global_embedding: torch.Tensor | None = None,
         geometry: torch.Tensor | None = None,
         time: torch.Tensor | None = None,
@@ -809,13 +862,15 @@ class Typhon(Module):
         if len(global_context_input) > 0:
             embedding_states = torch.cat(global_context_input, dim=-1)
 
+        local_embedding = _normalize_tensor(local_embedding)
+
         # Project the inputs to the hidden dimension:
-        x = self.preprocess(local_embedding)
+        x = [ self.preprocess[i](le) for i, le in enumerate(local_embedding) ]
 
         for block in self.blocks:
             x = block(x, embedding_states)
 
         # Now, pass the data through the model:
-        x = self.ln_mlp_out(x)
+        x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
 
         return x
