@@ -254,12 +254,25 @@ def forward_pass(
     targets = batch["fields"]
 
     # Cast precisions:
-    features, embeddings = cast_precisions(features, embeddings, precision=precision)
+    # features, = cast_precisions(features, precision=precision)
+    # embeddings = cast_precisions(embeddings, precision=precision)
 
     if "geometry" in batch.keys():
         (geometry,) = cast_precisions(batch["geometry"], precision=precision)
     else:
         geometry = None
+
+    all_metrics = {}
+    if datapipe.config.model_type == "combined":
+        modes = ["surface", "volume"]
+    elif datapipe.config.model_type == "surface":
+        modes = [
+            "surface",
+        ]
+    elif datapipe.config.model_type == "volume":
+        modes = [
+            "volume",
+        ]
 
     with get_autocast_context(precision):
         # For fp8, we may have to pad the inputs:
@@ -273,25 +286,37 @@ def forward_pass(
         else:
             outputs = model(fx=features, embedding=embeddings)
 
-        outputs = unpad_output_for_fp8(outputs, output_pad_size)
+        outputs = [unpad_output_for_fp8(o, output_pad_size) for o in outputs]
 
-        loss = torch.nn.functional.mse_loss(outputs, targets)
+        loss = [torch.nn.functional.mse_loss(o, t) for o, t in zip(outputs, targets)]
+        for i, _loss in enumerate(loss):
+            all_metrics[f"loss/{modes[i]}"] = _loss
+
+        full_loss = torch.sum(torch.stack(loss))
 
     air_density = batch["air_density"] if "air_density" in batch.keys() else None
     stream_velocity = (
         batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
     )
 
-    unscaled_outputs = datapipe.unscale_model_targets(
-        outputs, air_density=air_density, stream_velocity=stream_velocity
-    )
-    unscaled_targets = datapipe.unscale_model_targets(
-        targets, air_density=air_density, stream_velocity=stream_velocity
-    )
+    for i in range(len(outputs)):
+        unscaled_outputs = datapipe.unscale_model_targets(
+            outputs[i],
+            air_density=air_density,
+            stream_velocity=stream_velocity,
+            factor_type=modes[i],
+        )
+        unscaled_targets = datapipe.unscale_model_targets(
+            targets[i],
+            air_density=air_density,
+            stream_velocity=stream_velocity,
+            factor_type=modes[i],
+        )
 
-    metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, data_mode)
+        metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes[i])
+        all_metrics.update(metrics)
 
-    return loss, metrics, (unscaled_outputs, unscaled_targets)
+    return full_loss, all_metrics, (unscaled_outputs, unscaled_targets)
 
 
 @profile
@@ -344,7 +369,7 @@ def train_epoch(
             precision,
             output_pad_size,
             dist_manager,
-            cfg.data.mode,
+            cfg.datapipe.mode,
             dataloader,
         )
 
@@ -460,7 +485,7 @@ def val_epoch(
                 precision,
                 output_pad_size,
                 dist_manager,
-                cfg.data.mode,
+                cfg.datapipe.mode,
                 dataloader,
             )
 
@@ -592,7 +617,8 @@ def main(cfg: DictConfig):
     cfg, output_pad_size = update_model_params_for_fp8(cfg, logger)
 
     # Set up model
-    model = hydra.utils.instantiate(cfg.model)
+    # (Using partial convert to get lists, etc., instead of ListConfigs.)
+    model = hydra.utils.instantiate(cfg.model, _convert_="partial")
     logger.info(f"\n{torchinfo.summary(model, verbose=0)}")
 
     model.to(dist_manager.device)
@@ -607,31 +633,42 @@ def main(cfg: DictConfig):
     logger.info(f"Number of parameters: {num_params}")
 
     # Load the normalization file from configured directory (defaults to current dir)
-    norm_dir = getattr(cfg.data, "normalization_dir", ".")
-    if cfg.data.mode == "surface":
+    norm_dir = getattr(cfg.datapipe, "normalization_dir", ".")
+    if cfg.datapipe.mode == "surface" or cfg.datapipe.mode == "combined":
         norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
-    elif cfg.data.mode == "volume":
-        norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
+        norm_data = np.load(norm_file)
+        surface_factors = {
+            "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+            "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+        }
+    else:
+        surface_factors = None
 
-    norm_data = np.load(norm_file)
-    norm_factors = {
-        "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
-        "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
-    }
+    if cfg.datapipe.mode == "volume" or cfg.datapipe.mode == "combined":
+        norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
+        norm_data = np.load(norm_file)
+        volume_factors = {
+            "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+            "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+        }
+    else:
+        volume_factors = None
 
     # Training dataset
     train_dataloader = create_transolver_dataset(
-        cfg.data,
+        cfg.datapipe,
         phase="train",
-        scaling_factors=norm_factors,
+        surface_factors=surface_factors,
+        volume_factors=volume_factors,
     )
 
     # Validation dataset
 
     val_dataloader = create_transolver_dataset(
-        cfg.data,
+        cfg.datapipe,
         phase="val",
-        scaling_factors=norm_factors,
+        surface_factors=surface_factors,
+        volume_factors=volume_factors,
     )
 
     num_replicas = dist_manager.world_size

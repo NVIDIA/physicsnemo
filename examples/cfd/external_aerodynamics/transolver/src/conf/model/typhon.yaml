@@ -14,31 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  - training: base
-  - model: typhon
-  - datapipe: volume
+_target_: physicsnemo.experimental.models.typhon.Typhon
+functional_dim: 6
+global_dim: 2
+geometry_dim: 3
+out_dim: 4
+n_layers: 8
+n_hidden: 256
+dropout: 0.0
+n_head: 8
+act: "gelu"
+mlp_ratio: 2
+slice_num: 512
+use_te: false
+plus: false
 
-output_dir: "runs"
-checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "volumeX/fake-name"
-
-# Performance considerations:
-precision: bfloat16 # float32, float16, bfloat16, or float8
-compile: false
-profile: false
-
-data.include_geometry: true
-data.geometry_sampling: 300_000
-data.broadcast_global_features: false
-
-
-model:
-  functional_dim: 7
-  out_dim: 5
-  n_layers: 6
-
-# Logging configuration
-logging:
-  level: INFO
-  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
+# You may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -15,30 +15,17 @@
 # limitations under the License.
 
 defaults:
-  - training: base
-  - model: typhon
-  - datapipe: volume
+  -  core
 
-output_dir: "runs"
-checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "volumeX/fake-name"
+# Overrides for volume data:
+mode: volume
 
-# Performance considerations:
-precision: bfloat16 # float32, float16, bfloat16, or float8
-compile: false
-profile: false
-
-data.include_geometry: true
-data.geometry_sampling: 300_000
-data.broadcast_global_features: false
-
-
-model:
-  functional_dim: 7
-  out_dim: 5
-  n_layers: 6
-
-# Logging configuration
-logging:
-  level: INFO
-  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# volume-speficic needs:
+data_keys:
+  - "volume_fields"
+  - "volume_mesh_centers"
+  - "air_density"
+  - "stream_velocity"
+  - "stl_faces"
+  - "stl_centers"
+  - "stl_coordinates"

@@ -14,31 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  - training: base
-  - model: typhon
-  - datapipe: volume
+num_epochs: 501
+save_interval: 25
 
-output_dir: "runs"
-checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "volumeX/fake-name"
+scheduler:
+  name: "StepLR"
+  params:
+    step_size: 100
+    gamma: 0.5
 
-# Performance considerations:
-precision: bfloat16 # float32, float16, bfloat16, or float8
-compile: false
-profile: false
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
 
-data.include_geometry: true
-data.geometry_sampling: 300_000
-data.broadcast_global_features: false
-
-
-model:
-  functional_dim: 7
-  out_dim: 5
-  n_layers: 6
-
-# Logging configuration
-logging:
-  level: INFO
-  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
