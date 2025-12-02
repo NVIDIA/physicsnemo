@@ -38,21 +38,22 @@ def all_reduce_dict(
     if dm.world_size == 1:
         return metrics
 
-    for key, value in metrics.items():
-        dist.all_reduce(value)
-        value = value / dm.world_size
-        metrics[key] = value
+    # Pack the metrics together:
+    merged_metrics = torch.stack(list(metrics.values()), dim=-1)
 
+    dist.all_reduce(merged_metrics)
+    merged_metrics = merged_metrics / dm.world_size
+
+    # Unstack metrics:
+    metrics = {key: merged_metrics[i] for i, key in enumerate(metrics.keys())}
     return metrics
 
 
 def metrics_fn(
     pred: torch.Tensor,
     target: torch.Tensor,
-    others: dict[str, torch.Tensor],
     dm: DistributedManager,
     mode: str,
-    norm_factors: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     """
     Computes metrics for either surface or volume data.
@@ -69,9 +70,9 @@ def metrics_fn(
     """
     with torch.no_grad():
         if mode == "surface":
-            metrics = metrics_fn_surface(pred, target, others, dm, norm_factors)
+            metrics = metrics_fn_surface(pred, target, dm)
         elif mode == "volume":
-            metrics = metrics_fn_volume(pred, target, others, dm, norm_factors)
+            metrics = metrics_fn_volume(pred, target, dm)
         else:
             raise ValueError(f"Unknown data mode: {mode}")
 
@@ -82,9 +83,7 @@ def metrics_fn(
 def metrics_fn_volume(
     pred: torch.Tensor,
     target: torch.Tensor,
-    others: dict[str, torch.Tensor],
     dm: DistributedManager,
-    norm_factors: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     """
     Placeholder for volume metrics computation.
@@ -99,15 +98,31 @@ def metrics_fn_volume(
     Raises:
         NotImplementedError: Always, as this function is not yet implemented.
     """
-    raise NotImplementedError("Volume metrics not yet implemented.")
+    l2_num = (pred - target) ** 2
+    l2_num = torch.sum(l2_num, dim=1)
+    l2_num = torch.sqrt(l2_num)
+
+    l2_denom = target**2
+    l2_denom = torch.sum(l2_denom, dim=1)
+    l2_denom = torch.sqrt(l2_denom)
+
+    l2 = l2_num / l2_denom
+
+    metrics = {
+        "l2_pressure_vol": torch.mean(l2[:, 3]),
+        "l2_velocity_x": torch.mean(l2[:, 0]),
+        "l2_velocity_y": torch.mean(l2[:, 1]),
+        "l2_velocity_z": torch.mean(l2[:, 2]),
+        "l2_nut": torch.mean(l2[:, 4]),
+    }
+
+    return metrics
 
 
 def metrics_fn_surface(
     pred: torch.Tensor,
     target: torch.Tensor,
-    others: dict[str, torch.Tensor],
     dm: DistributedManager,
-    norm_factors: dict[str, torch.Tensor],
 ) -> dict[str, torch.Tensor]:
     """
     Computes L2 surface metrics between prediction and target.
@@ -123,8 +138,8 @@ def metrics_fn_surface(
         Dictionary of L2 surface metrics for pressure and shear components.
     """
     # Unnormalize the surface values for L2:
-    target = target * norm_factors["std"] + norm_factors["mean"]
-    pred = pred * norm_factors["std"] + norm_factors["mean"]
+    # target = target * norm_factors["std"] + norm_factors["mean"]
+    # pred = pred * norm_factors["std"] + norm_factors["mean"]
 
     l2_num = (pred - target) ** 2
     l2_num = torch.sum(l2_num, dim=1)
@@ -137,26 +152,10 @@ def metrics_fn_surface(
     l2 = l2_num / l2_denom
 
     metrics = {
-        "l2_pressure": torch.mean(l2[:, 0]),
+        "l2_pressure_surf": torch.mean(l2[:, 0]),
         "l2_shear_x": torch.mean(l2[:, 1]),
         "l2_shear_y": torch.mean(l2[:, 2]),
         "l2_shear_z": torch.mean(l2[:, 3]),
     }
 
     return metrics
-
-
-def metrics_fn_surface_pressure(
-    pred: torch.Tensor, target: torch.Tensor
-) -> torch.Tensor:
-    """
-    Computes mean squared error between predicted and target surface pressure.
-
-    Args:
-        pred: Predicted surface pressure.
-        target: Target surface pressure.
-
-    Returns:
-        Mean squared error as a torch.Tensor.
-    """
-    return torch.mean((pred - target) ** 2.0)

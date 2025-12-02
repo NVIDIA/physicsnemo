@@ -5,11 +5,14 @@ authors = [
 ]
 description = "A deep learning framework for AI-driven multi-physics systems"
 readme = "README.md"
-requires-python = ">=3.11"
+
+# Python 3.10 is EOL in 2026.  Migrating to 3.11+
+requires-python = ">=3.10"
+
 license = "Apache-2.0"
 # NOTE: this is meant to move to `uv` off of dependency-groups.
 # This is just informational here:
-# dependencies = [
+#_dependencies = [
 #     "certifi>=2023.7.22",
 #     "einops>=0.8.0",
 #     "fsspec>=2023.1.0",
@@ -30,7 +33,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dynamic = ["version"]
+dynamic = ["version", "optional_dependencies"]
 
 [project.urls]
 Homepage = "https://github.com/NVIDIA/physicsnemo"
@@ -45,7 +48,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
-no-build-isolation-package = ["torch_scatter"]
+no-build-isolation-package = [
+    "torch_scatter",
+    "torch_cluster",
+]
 managed = true
 default-groups = ["physicsnemo"]
 
@@ -66,8 +72,8 @@ exclude = [
 
 
 # The dependency-group tree is critically important for physicsnemo.
-# Here, we list dependencies for each physicsnemo pacakge.  Optional
-# dependencies are listed with the name `package`-extras.  Dependencies
+# Here, we list_dependencies for each physicsnemo pacakge.  Optional
+#_dependencies are listed with the name `package`-extras. _Dependencies
 # are chained together: for example, everything in core is a dep of the
 # entire repo, but utils-extra only shows up for subsequent *-extra
 # lists.
@@ -128,41 +134,46 @@ nn-extras = [
     "cuml",
     "transformer_engine",
     "scipy",
-    "nvfuser",
-    "torch_geometric",
-    "torch_scatter",
-    "pylibcugraphops",
-    {include-group = "utils-extras"}
+    {include-group = "nn"},
+    {include-group = "utils-extras"},
 ]
 models = [
     "hydra-core",
     "omegaconf",
     "xarray",
-    "torch_cluster",
-    "netCDF4",
-    "vtk",
+    "zarr",
     "jaxtyping",
-    "cftime",
-    "earth2grid",
-    "torch_sparse",
-    "pyvista",
-    "ipdb",
     {include-group="nn"},
-    {include-group="mesh"},
+]
+models-extras = [
+    "cftime",
+    "transformer_engine",
+    "netCDF4",
+    "pyvista",
+    "vtk",
+    {include-group="models"},
+    {include-group="nn-extras"},
 ]
 physicsnemo = [
-    {include-group = "nn"},
-    {include-group = "mesh"},
-    {include-group = "utils"},
+    {include-group = "models"},
 ]
 physicsnemo-extras = [
     {include-group = "physicsnemo"},
-    {include-group = "nn-extras"},
-    {include-group = "utils-extras"},
+ #   {include-group = "models-extras"},
 ]
 dev = [
     "pytest",
     "import-linter"
+]
+
+[project.optional_dependencies]
+gnns = [
+    "torch_geometric",
+    "torch_scatter",
+    "torch_sparse",
+    "torch_cluster",
+    "pylibcugraphops",
+    "nvfuser",
 ]
 
 [tool.ruff]

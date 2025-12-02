@@ -34,7 +34,7 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
 
     import vtk
 
-    from physicsnemo.datapipes.cae import MeshDatapipe
+    from physicsnemo.datapipes.cae.mesh_datapipe import MeshDatapipe
 
     def _create_random_vtp_vtu_mesh(
         num_points: int, num_triangles: int, dir: str

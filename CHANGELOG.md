@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   experimental DiT architecture
 - Improved Transolver training recipe's configuration for checkpointing and normalization.
 - Bumped `multi-storage-client` version to 0.33.0 with rust client.
+- Improved configuration for DLWP Healpix (checkpoint directory) and GraphCast (W&B settings).
 
 ### Fixed
 

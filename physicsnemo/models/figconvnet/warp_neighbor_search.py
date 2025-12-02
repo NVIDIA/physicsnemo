@@ -258,7 +258,3 @@ if __name__ == "__main__":
         print(result_point_dist.shape)
         print(torch_offset.shape)
         print()
-
-        import ipdb
-
-        ipdb.set_trace()

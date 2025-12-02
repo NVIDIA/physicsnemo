@@ -89,10 +89,29 @@ class ForbiddenImportContract(Contract):
         )
 
     def render_broken_contract(self, check):
+        inverted_violations = {}
+
+        output.print_error("Listing broken imports by external package...")
+        output.new_line()
+
         for broken_import in check.metadata["broken_imports"]:
+            violating_files = check.metadata["violations"][broken_import]
+            for violating_file in violating_files:
+                if violating_file not in inverted_violations:
+                    inverted_violations[violating_file] = []
+                inverted_violations[violating_file].append(broken_import)
             violations = ", ".join(check.metadata["violations"][broken_import])
             output.print_error(
                 f"{self.container} is not allowed to import {broken_import} (from {violations})",
+                bold=True,
+            )
+            output.new_line()
+
+        output.print_error("Listing broken imports by internal file...")
+        output.new_line()
+        for violating_file, violating_imports in inverted_violations.items():
+            output.print_error(
+                f"{violating_file} is not allowed to import: {', '.join(violating_imports)}",
                 bold=True,
             )
             output.new_line()
