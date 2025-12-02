@@ -19,6 +19,8 @@ import torch.distributed as dist
 from physicsnemo.distributed import ShardTensor
 from physicsnemo.distributed import DistributedManager
 
+from utils import tensorwise
+
 
 def all_reduce_dict(
     metrics: dict[str, torch.Tensor], dm: DistributedManager
@@ -49,6 +51,7 @@ def all_reduce_dict(
     return metrics
 
 
+@tensorwise
 def metrics_fn(
     pred: torch.Tensor,
     target: torch.Tensor,

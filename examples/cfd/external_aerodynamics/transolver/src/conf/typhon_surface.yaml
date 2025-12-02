@@ -24,14 +24,18 @@ checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output
 run_id: "typhon/surface/bfloat16"
 
 # Performance considerations:
-precision: bfloat16 # float32, float16, bfloat16, or float8
-compile: true
+precision: float32 # float32, float16, bfloat16, or float8
+compile: false
 profile: false
 
+model:
+  functional_dim: 6
 
-data.include_geometry: true
-data.geometry_sampling: 300_000
-data.broadcast_global_features: false
+datapipe:
+  include_sdf: false
+  include_geometry: true
+  geometry_sampling: 300_000
+  broadcast_global_features: false
 
 
 # Logging configuration

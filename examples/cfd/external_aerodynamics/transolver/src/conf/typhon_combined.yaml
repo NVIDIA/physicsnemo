@@ -36,9 +36,10 @@ precision: float32 # float32, float16, bfloat16, or float8
 compile: false
 profile: false
 
-data.include_geometry: true
-data.geometry_sampling: 300_000
-data.broadcast_global_features: false
+datapipe:
+  include_geometry: true
+  geometry_sampling: 300_000
+  broadcast_global_features: false
 
 
 # Logging configuration

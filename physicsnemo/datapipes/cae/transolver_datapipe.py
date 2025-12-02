@@ -479,22 +479,10 @@ class TransolverDataPipe(Dataset):
             outputs = self.preprocess_surface_data(
                 data_dict, center_of_mass, scale_factor
             )
-            outputs["embeddings"] = [
-                outputs["embeddings"],
-            ]
-            outputs["fields"] = [
-                outputs["fields"],
-            ]
         elif self.config.model_type == "volume":
             outputs = self.preprocess_volume_data(
                 data_dict, center_of_mass, scale_factor
             )
-            outputs["embeddings"] = [
-                outputs["embeddings"],
-            ]
-            outputs["fields"] = [
-                outputs["fields"],
-            ]
         elif self.config.model_type == "combined":
             outputs_surf = self.preprocess_surface_data(
                 data_dict, center_of_mass, scale_factor

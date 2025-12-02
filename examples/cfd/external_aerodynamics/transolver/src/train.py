@@ -22,6 +22,8 @@ from typing import Literal, Any, Callable, Sequence
 import collections
 from contextlib import nullcontext
 
+from collections.abc import Sequence
+
 # Configuration:
 import hydra
 import omegaconf
@@ -58,6 +60,11 @@ from preprocess import (
     preprocess_surface_data,
     downsample_surface,
 )
+
+# tensorwise is to handle single-point-cloud or multi-point-cloud running.
+# it's a decorator that will automatically unzip one or more of a list of tensors,
+# run the funtcion, and rezip the results.
+from utils import tensorwise
 
 # Special import, if transformer engine is available:
 from physicsnemo.core.version_check import check_version_spec
@@ -166,9 +173,12 @@ def get_autocast_context(precision: str) -> nullcontext:
         return nullcontext()
 
 
-def cast_precisions(*tensors: torch.Tensor, precision: str) -> list[torch.Tensor]:
+@tensorwise
+def cast_precisions(tensor: torch.Tensor, precision: str) -> torch.Tensor:
     """
     Casts the tensors to the specified precision.
+
+    We are careful to take either a tensor or list of tensors, and return the same format.
     """
 
     match precision:
@@ -180,11 +190,12 @@ def cast_precisions(*tensors: torch.Tensor, precision: str) -> list[torch.Tensor
             dtype = None
 
     if dtype is not None:
-        tensors = [t.to(dtype) for t in tensors]
+        return tensor.to(dtype)
+    else:
+        return tensor
 
-    return tensors
 
-
+@tensorwise
 def pad_input_for_fp8(
     features: torch.Tensor,
     embeddings: torch.Tensor,
@@ -217,6 +228,7 @@ def pad_input_for_fp8(
     return features, geometry
 
 
+@tensorwise
 def unpad_output_for_fp8(
     outputs: torch.Tensor, output_pad_size: int | None
 ) -> torch.Tensor:
@@ -236,6 +248,14 @@ def unpad_output_for_fp8(
     return outputs
 
 
+@tensorwise
+def loss_fn(outputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the loss for the model.
+    """
+    return torch.nn.functional.mse_loss(outputs, targets)
+
+
 def forward_pass(
     batch: dict,
     model: torch.nn.Module,
@@ -247,6 +267,12 @@ def forward_pass(
 ):
     """
     Run the forward pass of the model for one batch, including metrics and loss calculation.
+
+    Transolver takes just one tensor for features, embeddings.
+    Typhon takes a  list of tensors, for each.
+
+    Typhon needs a `geometry` tensor, so that's the switch we use to distinguish.
+
     """
 
     features = batch["fx"]
@@ -254,16 +280,17 @@ def forward_pass(
     targets = batch["fields"]
 
     # Cast precisions:
-    # features, = cast_precisions(features, precision=precision)
-    # embeddings = cast_precisions(embeddings, precision=precision)
-
+    features = cast_precisions(features, precision=precision)
+    embeddings = cast_precisions(embeddings, precision=precision)
     if "geometry" in batch.keys():
-        (geometry,) = cast_precisions(batch["geometry"], precision=precision)
+        geometry = cast_precisions(batch["geometry"], precision=precision)
     else:
         geometry = None
 
     all_metrics = {}
     if datapipe.config.model_type == "combined":
+        # This is hard coded for Typhon.  If you have more point clouds,
+        # your mileage may vary.
         modes = ["surface", "volume"]
     elif datapipe.config.model_type == "surface":
         modes = [
@@ -280,41 +307,95 @@ def forward_pass(
             features, geometry = pad_input_for_fp8(features, embeddings, geometry)
 
         if "geometry" in batch.keys():
+            # This is the Typhon path
             outputs = model(
                 global_embedding=features, local_embedding=embeddings, geometry=geometry
             )
+
+            outputs = unpad_output_for_fp8(outputs, output_pad_size)
+            # Loss per point cloud:
+            loss = loss_fn(outputs, targets)
+            # Log them too:
+            for i, mode in enumerate(modes):
+                all_metrics[f"loss/{mode}"] = loss[i]
+            # Averaging over point cloud inputs, instead of summing.
+            full_loss = torch.mean(torch.stack(loss))
+
         else:
+            # This is the Transolver path
             outputs = model(fx=features, embedding=embeddings)
+            outputs = unpad_output_for_fp8(outputs, output_pad_size)
+            full_loss = torch.nn.functional.mse_loss(outputs, targets)
 
-        outputs = [unpad_output_for_fp8(o, output_pad_size) for o in outputs]
-
-        loss = [torch.nn.functional.mse_loss(o, t) for o, t in zip(outputs, targets)]
-        for i, _loss in enumerate(loss):
-            all_metrics[f"loss/{modes[i]}"] = _loss
-
-        full_loss = torch.sum(torch.stack(loss))
+            all_metrics[f"loss/{modes[0]}"] = full_loss
 
     air_density = batch["air_density"] if "air_density" in batch.keys() else None
     stream_velocity = (
         batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
     )
 
-    for i in range(len(outputs)):
-        unscaled_outputs = datapipe.unscale_model_targets(
-            outputs[i],
-            air_density=air_density,
-            stream_velocity=stream_velocity,
-            factor_type=modes[i],
-        )
-        unscaled_targets = datapipe.unscale_model_targets(
-            targets[i],
-            air_density=air_density,
-            stream_velocity=stream_velocity,
-            factor_type=modes[i],
-        )
+    unscaled_outputs = tensorwise(datapipe.unscale_model_targets)(
+        outputs,
+        air_density=air_density,
+        stream_velocity=stream_velocity,
+        factor_type=modes,
+    )
+    unscaled_targets = tensorwise(datapipe.unscale_model_targets)(
+        targets,
+        air_density=air_density,
+        stream_velocity=stream_velocity,
+        factor_type=modes,
+    )
+    metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes)
 
-        metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes[i])
-        all_metrics.update(metrics)
+    # In the combined mode, this is a list of dicts.  Merge them.
+    metrics = (
+        {k: v for d in metrics for k, v in d.items()}
+        if isinstance(metrics, list)
+        else metrics
+    )
+    all_metrics.update(metrics)
+
+    # if "geometry" in batch.keys():
+    #     print(f"HERE")
+    #     unscaled_outputs = []
+    #     unscaled_targets = []
+    #     for i in range(len(outputs)):
+    #         local_unscaled_outputs = datapipe.unscale_model_targets(
+    #             outputs[i],
+    #             air_density=air_density,
+    #             stream_velocity=stream_velocity,
+    #             factor_type=modes[i],
+    #         )
+    #         local_unscaled_targets = datapipe.unscale_model_targets(
+    #             targets[i],
+    #             air_density=air_density,
+    #             stream_velocity=stream_velocity,
+    #             factor_type=modes[i],
+    #         )
+    #         print(f"local_unscaled_outputs: {local_unscaled_outputs.shape}")
+    #         print(f"local_unscaled_targets: {local_unscaled_targets.shape}")
+    #         metrics = metrics_fn(local_unscaled_outputs, local_unscaled_targets, dist_manager, modes[i])
+    #         print(f"metrics: {metrics}")
+    #         all_metrics.update(metrics)
+    #         unscaled_outputs.append(local_unscaled_outputs)
+    #         unscaled_targets.append(local_unscaled_targets)
+    # else:
+    #     unscaled_outputs = datapipe.unscale_model_targets(
+    #         outputs,
+    #         air_density=air_density,
+    #         stream_velocity=stream_velocity,
+    #         factor_type=modes[0],
+    #     )
+    #     unscaled_targets = datapipe.unscale_model_targets(
+    #         targets,
+    #         air_density=air_density,
+    #         stream_velocity=stream_velocity,
+    #         factor_type=modes[0],
+    #     )
+
+    #     metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes[0])
+    #     all_metrics.update(metrics)
 
     return full_loss, all_metrics, (unscaled_outputs, unscaled_targets)
 
