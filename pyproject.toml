@@ -10,30 +10,34 @@ readme = "README.md"
 requires-python = ">=3.10"
 
 license = "Apache-2.0"
-# NOTE: this is meant to move to `uv` off of dependency-groups.
-# This is just informational here:
-#_dependencies = [
-#     "certifi>=2023.7.22",
-#     "einops>=0.8.0",
-#     "fsspec>=2023.1.0",
-#     "numpy>=1.22.4",
-#     "onnx>=1.14.0",
-#     "packaging>=24.2",
-#     "requests>=2.32.2",
-#     "s3fs>=2023.5.0",
-#     "setuptools>=77.0.3",
-#     "timm>=1.0.0",
-#     "torch>=2.4.0",
-#     "tqdm>=4.60.0",
-#     "treelib>=1.2.5",
-#     "xarray>=2023.1.0",
-#     "zarr>=2.14.2",
-# ]
+
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
 dynamic = ["version", "optional_dependencies"]
+
+# NOTE: THIS DEPENDENCY LIST IS AUTO-GENERATED.
+# DEPENDENCY GROUPS BELOW IS THE SOLE SOURCE OF DEPENDENCY TRUTH.
+# IF YOU UPDATE THIS LIST, IT WILL GET OVERWRITTEN.
+# PRE-COMMIT (AND CI) WILL USE THE DEPENDENCY GROUPS BELOW TO GENERATE
+# THIS LIST AND INSERT IT HERE.  IF THE GENERATED LIST DOESN'T MATCH THIS,
+# IT'S AN ERROR.
+dependencies = [
+    "termcolor",
+    "onnx>=1.14.0",
+    "warp-lang",
+    "pandas",
+    "nvtx",
+    "treelib>=1.2.5",
+    "numpy>=1.22.4",
+    "torch>=2.4.0",
+    "tqdm>=4.60.0",
+    "requests>=2.32.2",
+    "GitPython",
+    "s3fs>=2023.5.0",
+    "packaging>=24.2",
+]
 
 [project.urls]
 Homepage = "https://github.com/NVIDIA/physicsnemo"
@@ -73,7 +77,7 @@ exclude = [
 
 # The dependency-group tree is critically important for physicsnemo.
 # Here, we list_dependencies for each physicsnemo pacakge.  Optional
-#_dependencies are listed with the name `package`-extras. _Dependencies
+# dependencies are listed with the name `package`-extras. _Dependencies
 # are chained together: for example, everything in core is a dep of the
 # entire repo, but utils-extra only shows up for subsequent *-extra
 # lists.
@@ -141,7 +145,7 @@ models = [
     "xarray>=2023.1.0",
     "zarr>=2.14.2",
     "jaxtyping",
-    {include-group="nn"},
+    {include-group="domain_parallel"},
 ]
 models-extras = [
     "transformer_engine",
@@ -168,7 +172,7 @@ domain_parallel = [
     {include-group = "nn"}
 ]
 physicsnemo = [
-    {include-group = "domain-parallel"},
+    {include-group = "models"},
     {include-group = "datapipes"},
 ]
 physicsnemo-extras = [
