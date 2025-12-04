@@ -1,5 +1,5 @@
 <h1 align="center">
-  <strong>PhysicsNeMo-Mesh</strong>
+  PhysicsNeMo-Mesh
 </h1>
 
 <p align="center">
