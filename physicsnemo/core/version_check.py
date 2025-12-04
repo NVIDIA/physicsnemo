@@ -60,7 +60,7 @@ def check_version_spec(
     spec: str = "0.0.0",
     *,
     error_msg: Optional[str] = None,
-    hard_fail: bool = True,
+    hard_fail: bool = False,
 ) -> bool:
     """
     Check whether the installed distribution satisfies a PEP 440 version specifier.

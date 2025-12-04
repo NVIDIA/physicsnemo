@@ -22,6 +22,7 @@ from typing import List, Tuple, Union
 import torch
 from torch import Tensor, testing
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.graphcast.utils.graph_utils import (
     azimuthal_angle,
     geospatial_rotation,
@@ -30,11 +31,15 @@ from physicsnemo.models.graphcast.utils.graph_utils import (
 )
 from physicsnemo.nn.gnn_layers.utils import PYG_AVAILABLE, GraphType
 
-if PYG_AVAILABLE:
+TORCH_SPARSE_AVAILABLE = check_version_spec("torch_sparse", hard_fail=False)
+
+if PYG_AVAILABLE and TORCH_SPARSE_AVAILABLE:
     pyg_data = importlib.import_module("torch_geometric.data")
     pyg_utils = importlib.import_module("torch_geometric.utils")
     PyGData = pyg_data.Data
     PyGHeteroData = pyg_data.HeteroData
+
+    SparseTensor = importlib.import_module("torch_sparse").SparseTensor
 
     class PyGGraphBackend:
         """PyG graph backend."""
@@ -186,8 +191,6 @@ if PYG_AVAILABLE:
         def khop_adj_all_k(graph: PyGData, kmax: int):
             """Construct the union of k-hop adjacencies up to distance `kmax` for a graph."""
 
-            from torch_sparse import SparseTensor
-
             if not isinstance(graph, PyGData):
                 raise ValueError(
                     f"Invalid graph type: {type(graph)}, only Data type is supported."
@@ -217,7 +220,7 @@ else:
 
     def _raise_pyg_import_error():
         raise ImportError(
-            "Pytorch geometric is required for PyGGraphBackend of Graphcast."
+            "Pytorch geometric with torch_sparse is required for PyGGraphBackend of Graphcast."
             "Please see the installation guide at https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html"
         )
 

@@ -53,8 +53,8 @@ class ModelRegistry:
         return obj
 
     @staticmethod
-    def _construct_registry() -> Dict[str, type[Module] | EntryPoint]:
-        registry: Dict[str, type[Module] | EntryPoint] = {}
+    def _construct_registry() -> Dict[str, type["Module"] | EntryPoint]:
+        registry: Dict[str, type["Module"] | EntryPoint] = {}
         entrypoints = entry_points(group="physicsnemo.models")
         for entry_point in entrypoints:
             registry[entry_point.name] = entry_point
@@ -76,7 +76,7 @@ class ModelRegistry:
 
         return registry
 
-    def register(self, model: type[Module], name: Union[str, None] = None) -> None:
+    def register(self, model: type["Module"], name: Union[str, None] = None) -> None:
         """
         Registers a physicsnemo model class in the model registry under the provided name. If no name
         is provided, the model's name (from its `__name__` attribute) is used. If the
@@ -140,12 +140,6 @@ class ModelRegistry:
 
         """
 
-        # Check if model is a physicsnemo module
-        if not issubclass(model, Module):
-            raise ValueError(
-                f"Only subclasses of physicsnemo.core.Module can be registered, but got {model.__name__}"
-            )
-
         # If no name provided, use the model class name
         if name is None:
             name = model.__name__
@@ -160,7 +154,7 @@ class ModelRegistry:
         # Add this class to the dict of model registry
         self._model_registry[name] = model
 
-    def factory(self, name: str) -> type[Module]:
+    def factory(self, name: str) -> type["Module"]:
         """
         Returns a registered model class given its name.
 

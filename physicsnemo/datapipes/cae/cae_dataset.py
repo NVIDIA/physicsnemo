@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import json
 import pathlib
 import time
@@ -26,22 +27,12 @@ import torch.distributed as dist
 import zarr
 from torch.distributed.tensor import Replicate, Shard
 
-try:
-    import tensorstore as ts
-
-    TENSORSTORE_AVAILABLE = True
-except ImportError:
-    TENSORSTORE_AVAILABLE = False
-
-try:
-    import pyvista as pv
-
-    PV_AVAILABLE = True
-except ImportError:
-    PV_AVAILABLE = False
-
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
+
+TENSORSTORE_AVAILABLE = check_version_spec("tensorstore", hard_fail=False)
+PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
 
 # Abstractions:
 # - want to read npy/npz/.zarr/.stl/.vtp files
@@ -470,6 +461,7 @@ class ZarrFileReader(BackendReader):
 
 
 if PV_AVAILABLE:
+    pv = importlib.import_module("pyvista")
 
     class VTKFileReader(BackendReader):
         """
@@ -600,9 +592,22 @@ if PV_AVAILABLE:
             raise NotImplementedError(
                 "volume sampling directly from disk is not supported for vtk files."
             )
+else:
+
+    class VTKFileReader(BackendReader):
+        """
+        Dummy reader for vtk files.
+        """
+
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "CAE Dataset: VTKFileReader is not available without pyvista.\n"
+                "Please see https://docs.pyvista.org/getting-started/installation.html for installation instructions."
+            )
 
 
 if TENSORSTORE_AVAILABLE:
+    ts = importlib.import_module("tensorstore")
 
     class TensorStoreZarrReader(BackendReader):
         """

@@ -2,7 +2,7 @@
 root_package = physicsnemo
 include_external_packages = True
 contract_types =
-    forbidden_import: prevent_untracked_imports.ForbiddenImportContract
+    forbidden_import: test.ci_tests.prevent_untracked_imports.ForbiddenImportContract
 
 [importlinter:contract:physicsnemo-modules]
 name = Prevent Upward Imports in the PhysicsNemo Structure
@@ -114,8 +114,26 @@ type = forbidden_import
 container = physicsnemo.nn
 dependency_group = nn
 
-; [importlinter:contract:physicsnemo-models-external-imports]
-; name = Prevent Non-listed external imports in physicsnemo models
+[importlinter:contract:physicsnemo-models-external-imports]
+name = Prevent Non-listed external imports in physicsnemo models
+type = forbidden_import
+container = physicsnemo.models
+dependency_group = models
+
+[importlinter:contract:physicsnemo-metrics-external-imports]
+name = Prevent Non-listed external imports in physicsnemo metrics
+type = forbidden_import
+container = physicsnemo.metrics
+dependency_group = metrics
+
+; [importlinter:contract:physicsnemo-datapipes-external-imports]
+; name = Prevent Non-listed external imports in physicsnemo datapipes
 ; type = forbidden_import
-; container = physicsnemo.models
-; dependency_group = models
+; container = physicsnemo.datapipes
+; dependency_group = datapipes
+
+[importlinter:contract:physicsnemo-domain_parallel-external-imports]
+name = Prevent Non-listed external imports in physicsnemo domain_parallel
+type = forbidden_import
+container = physicsnemo.domain_parallel
+dependency_group = domain_parallel

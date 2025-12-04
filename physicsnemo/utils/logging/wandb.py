@@ -141,6 +141,7 @@ if WANDB_AVAILABLE:
         return _WANDB_INITIALIZED
 
 else:
+    wandb = None
 
     def _raise_wandb_not_installed():
         raise ImportError(

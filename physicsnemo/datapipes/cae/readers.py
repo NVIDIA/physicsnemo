@@ -14,178 +14,209 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 from typing import Any
 
 import torch
-import vtk
+
+from physicsnemo.core.version_check import check_version_spec
+
+VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
+if VTK_AVAILABLE:
+    vtk = importlib.import_module("vtk")
+else:
+    raise ImportError(
+        "VTK is not installed, can not be used as a reader for VTK files.\n"
+        "Please see https://vtk.org/download/ for installation instructions."
+    )
 
 Tensor = torch.Tensor
+if VTK_AVAILABLE:
+    vtk = importlib.import_module("vtk")
 
+    def read_vtp(file_path: str) -> Any:  # TODO add support for older format (VTK)
+        """
+        Read a VTP file and return the polydata.
 
-def read_vtp(file_path: str) -> Any:  # TODO add support for older format (VTK)
-    """
-    Read a VTP file and return the polydata.
+        Parameters
+        ----------
+        file_path : str
+            Path to the VTP file.
 
-    Parameters
-    ----------
-    file_path : str
-        Path to the VTP file.
+        Returns
+        -------
+        vtkPolyData
+            The polydata read from the VTP file.
+        """
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"{file_path} does not exist.")
 
-    Returns
-    -------
-    vtkPolyData
-        The polydata read from the VTP file.
-    """
-    # Check if file exists
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"{file_path} does not exist.")
+        # Check if file has .vtp extension
+        if not file_path.endswith(".vtp"):
+            raise ValueError(f"Expected a .vtp file, got {file_path}")
 
-    # Check if file has .vtp extension
-    if not file_path.endswith(".vtp"):
-        raise ValueError(f"Expected a .vtp file, got {file_path}")
+        reader = vtk.vtkXMLPolyDataReader()
+        reader.SetFileName(file_path)
+        reader.Update()
 
-    reader = vtk.vtkXMLPolyDataReader()
-    reader.SetFileName(file_path)
-    reader.Update()
+        # Get the polydata
+        polydata = reader.GetOutput()
 
-    # Get the polydata
-    polydata = reader.GetOutput()
+        # Check if polydata is valid
+        if polydata is None:
+            raise ValueError(f"Failed to read polydata from {file_path}")
 
-    # Check if polydata is valid
-    if polydata is None:
-        raise ValueError(f"Failed to read polydata from {file_path}")
+        return polydata
 
-    return polydata
+    def read_vtu(file_path: str) -> Any:
+        """
+        Read a VTU file and return the unstructured grid data.
 
+        Parameters
+        ----------
+        file_path : str
+            Path to the VTU file.
 
-def read_vtu(file_path: str) -> Any:
-    """
-    Read a VTU file and return the unstructured grid data.
+        Returns
+        -------
+        vtkUnstructuredGrid
+            The unstructured grid data read from the VTU file.
+        """
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"{file_path} does not exist.")
 
-    Parameters
-    ----------
-    file_path : str
-        Path to the VTU file.
+        # Check if file has .vtu extension
+        if not file_path.endswith(".vtu"):
+            raise ValueError(f"Expected a .vtu file, got {file_path}")
 
-    Returns
-    -------
-    vtkUnstructuredGrid
-        The unstructured grid data read from the VTU file.
-    """
-    # Check if file exists
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"{file_path} does not exist.")
+        reader = vtk.vtkXMLUnstructuredGridReader()
+        reader.SetFileName(file_path)
+        reader.Update()
 
-    # Check if file has .vtu extension
-    if not file_path.endswith(".vtu"):
-        raise ValueError(f"Expected a .vtu file, got {file_path}")
+        # Get the unstructured grid data
+        grid = reader.GetOutput()
 
-    reader = vtk.vtkXMLUnstructuredGridReader()
-    reader.SetFileName(file_path)
-    reader.Update()
+        # Check if grid is valid
+        if grid is None:
+            raise ValueError(f"Failed to read unstructured grid data from {file_path}")
 
-    # Get the unstructured grid data
-    grid = reader.GetOutput()
+        return grid
 
-    # Check if grid is valid
-    if grid is None:
-        raise ValueError(f"Failed to read unstructured grid data from {file_path}")
+    def read_cgns(file_path: str) -> Any:
+        """
+        Read a CGNS file and return the unstructured grid data.
 
-    return grid
+        Parameters
+        ----------
+        file_path : str
+            Path to the CGNS file.
 
+        Returns
+        -------
+        vtkUnstructuredGrid
+            The unstructured grid data read from the CGNS file.
+        """
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"{file_path} does not exist.")
 
-def read_cgns(file_path: str) -> Any:
-    """
-    Read a CGNS file and return the unstructured grid data.
+        # Check if file has .cgns extension
+        if not file_path.endswith(".cgns"):
+            raise ValueError(f"Expected a .cgns file, got {file_path}")
 
-    Parameters
-    ----------
-    file_path : str
-        Path to the CGNS file.
+        reader = vtk.vtkCGNSReader()
+        reader.SetFileName(file_path)
+        reader.Update()
 
-    Returns
-    -------
-    vtkUnstructuredGrid
-        The unstructured grid data read from the CGNS file.
-    """
-    # Check if file exists
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"{file_path} does not exist.")
+        # Get the multi-block dataset
+        multi_block = reader.GetOutput()
 
-    # Check if file has .cgns extension
-    if not file_path.endswith(".cgns"):
-        raise ValueError(f"Expected a .cgns file, got {file_path}")
+        # Check if the multi-block dataset is valid
+        if multi_block is None:
+            raise ValueError(f"Failed to read multi-block data from {file_path}")
 
-    reader = vtk.vtkCGNSReader()
-    reader.SetFileName(file_path)
-    reader.Update()
+        # Extract and return the vtkUnstructuredGrid from the multi-block dataset
+        return _extract_unstructured_grid(multi_block)
 
-    # Get the multi-block dataset
-    multi_block = reader.GetOutput()
+    def read_stl(file_path: str) -> vtk.vtkPolyData:
+        """
+        Read an STL file and return the polydata.
 
-    # Check if the multi-block dataset is valid
-    if multi_block is None:
-        raise ValueError(f"Failed to read multi-block data from {file_path}")
+        Parameters
+        ----------
+        file_path : str
+            Path to the STL file.
 
-    # Extract and return the vtkUnstructuredGrid from the multi-block dataset
-    return _extract_unstructured_grid(multi_block)
+        Returns
+        -------
+        vtkPolyData
+            The polydata read from the STL file.
+        """
+        # Check if file exists
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"{file_path} does not exist.")
 
+        # Check if file has .stl extension
+        if not file_path.endswith(".stl"):
+            raise ValueError(f"Expected a .stl file, got {file_path}")
 
-def read_stl(file_path: str) -> vtk.vtkPolyData:
-    """
-    Read an STL file and return the polydata.
+        # Create an STL reader
+        reader = vtk.vtkSTLReader()
+        reader.SetFileName(file_path)
+        reader.Update()
 
-    Parameters
-    ----------
-    file_path : str
-        Path to the STL file.
+        # Get the polydata
+        polydata = reader.GetOutput()
 
-    Returns
-    -------
-    vtkPolyData
-        The polydata read from the STL file.
-    """
-    # Check if file exists
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"{file_path} does not exist.")
+        # Check if polydata is valid
+        if polydata is None:
+            raise ValueError(f"Failed to read polydata from {file_path}")
 
-    # Check if file has .stl extension
-    if not file_path.endswith(".stl"):
-        raise ValueError(f"Expected a .stl file, got {file_path}")
+        return polydata
 
-    # Create an STL reader
-    reader = vtk.vtkSTLReader()
-    reader.SetFileName(file_path)
-    reader.Update()
+    def _extract_unstructured_grid(
+        multi_block: vtk.vtkMultiBlockDataSet,
+    ) -> vtk.vtkUnstructuredGrid:
+        """
+        Extracts a vtkUnstructuredGrid from a vtkMultiBlockDataSet.
 
-    # Get the polydata
-    polydata = reader.GetOutput()
+        Parameters
+        ----------
+        multi_block : vtk.vtkMultiBlockDataSet
+            The multi-block dataset containing various data blocks.
 
-    # Check if polydata is valid
-    if polydata is None:
-        raise ValueError(f"Failed to read polydata from {file_path}")
+        Returns
+        -------
+        vtk.vtkUnstructuredGrid
+            The unstructured grid extracted from the multi-block dataset.
+        """
+        block = multi_block.GetBlock(0).GetBlock(0)
+        if isinstance(block, vtk.vtkUnstructuredGrid):
+            return block
+        raise ValueError("No vtkUnstructuredGrid found in the vtkMultiBlockDataSet.")
 
-    return polydata
+else:
 
+    def _raise_vtk_not_available_error():
+        raise ImportError(
+            "VTK is not installed, can not be used as a reader for VTK files.\n"
+            "Please see https://vtk.org/download/ for installation instructions."
+        )
 
-def _extract_unstructured_grid(
-    multi_block: vtk.vtkMultiBlockDataSet,
-) -> vtk.vtkUnstructuredGrid:
-    """
-    Extracts a vtkUnstructuredGrid from a vtkMultiBlockDataSet.
+    def read_vtp(*args, **kwargs):  # TODO add support for older format (VTK)
+        _raise_vtk_not_available_error()
 
-    Parameters
-    ----------
-    multi_block : vtk.vtkMultiBlockDataSet
-        The multi-block dataset containing various data blocks.
+    def read_vtu(*args, **kwargs):
+        _raise_vtk_not_available_error()
 
-    Returns
-    -------
-    vtk.vtkUnstructuredGrid
-        The unstructured grid extracted from the multi-block dataset.
-    """
-    block = multi_block.GetBlock(0).GetBlock(0)
-    if isinstance(block, vtk.vtkUnstructuredGrid):
-        return block
-    raise ValueError("No vtkUnstructuredGrid found in the vtkMultiBlockDataSet.")
+    def read_cgns(*args, **kwargs):
+        _raise_vtk_not_available_error()
+
+    def read_stl(*args, **kwargs):
+        _raise_vtk_not_available_error()
+
+    def _extract_unstructured_grid(*args, **kwargs):
+        _raise_vtk_not_available_error()

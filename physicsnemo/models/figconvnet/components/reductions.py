@@ -14,43 +14,64 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+
 # ruff: noqa: S101
 from typing import Literal, Tuple
 
 import torch
 from jaxtyping import Float, Int
 from torch import Tensor
-from torch_scatter import segment_csr
+
+from physicsnemo.core.version_check import check_version_spec
+
+TORCH_SCATTER_AVAILABLE = check_version_spec("torch_scatter", hard_fail=False)
 
 REDUCTIONS = ["min", "max", "mean", "sum", "var", "std"]
 REDUCTION_TYPES = Literal["min", "max", "mean", "sum", "var", "std"]
 
+if TORCH_SCATTER_AVAILABLE:
+    segment_csr = importlib.import_module("torch_scatter").segment_csr
 
-def _var(
-    features: Float[Tensor, "N F"],  # noqa: F722
-    neighbors_row_splits: Int[Tensor, "M"],  # noqa: F821
-) -> Tuple[Float[Tensor, "M F"], Float[Tensor, "M F"]]:  # noqa: F722
-    out_mean = segment_csr(features, neighbors_row_splits, reduce="mean")
-    out_var = (
-        segment_csr(features**2, neighbors_row_splits, reduce="mean") - out_mean**2
-    )
-    return out_var, out_mean
+    def _var(
+        features: Float[Tensor, "N F"],  # noqa: F722
+        neighbors_row_splits: Int[Tensor, "M"],  # noqa: F821
+    ) -> Tuple[Float[Tensor, "M F"], Float[Tensor, "M F"]]:  # noqa: F722
+        out_mean = segment_csr(features, neighbors_row_splits, reduce="mean")
+        out_var = (
+            segment_csr(features**2, neighbors_row_splits, reduce="mean") - out_mean**2
+        )
+        return out_var, out_mean
+
+    def row_reduction(
+        features: Float[Tensor, "N F"],  # noqa
+        neighbors_row_splits: Int[Tensor, "M"],  # noqa
+        reduction: REDUCTION_TYPES,
+        eps: float = 1e-6,
+    ) -> Float[Tensor, "M F"]:  # noqa
+        assert reduction in REDUCTIONS
+
+        if reduction in ["min", "max", "mean", "sum"]:
+            out_feature = segment_csr(features, neighbors_row_splits, reduce=reduction)
+        elif reduction == "var":
+            out_feature = _var(features, neighbors_row_splits)[0]
+        elif reduction == "std":
+            out_feature = torch.sqrt(_var(features, neighbors_row_splits)[0] + eps)
+        else:
+            raise ValueError(f"Invalid reduction: {reduction}")
+        return out_feature
 
 
-def row_reduction(
-    features: Float[Tensor, "N F"],  # noqa
-    neighbors_row_splits: Int[Tensor, "M"],  # noqa
-    reduction: REDUCTION_TYPES,
-    eps: float = 1e-6,
-) -> Float[Tensor, "M F"]:  # noqa
-    assert reduction in REDUCTIONS
+else:
 
-    if reduction in ["min", "max", "mean", "sum"]:
-        out_feature = segment_csr(features, neighbors_row_splits, reduce=reduction)
-    elif reduction == "var":
-        out_feature = _var(features, neighbors_row_splits)[0]
-    elif reduction == "std":
-        out_feature = torch.sqrt(_var(features, neighbors_row_splits)[0] + eps)
-    else:
-        raise ValueError(f"Invalid reduction: {reduction}")
-    return out_feature
+    def _torch_scatter_not_available_error():
+        raise ImportError(
+            "torch_scatter is not installed, can not be used as a backend for a reduction.\n"
+            "Please see https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html for installation instructions."
+        )
+
+    def _var(*args, **kwargs):
+        _torch_scatter_not_available_error()
+
+    def row_reduction(*args, **kwargs):
+        _torch_scatter_not_available_error()

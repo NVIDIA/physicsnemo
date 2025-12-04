@@ -14,47 +14,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass
 from itertools import chain
-from types import NoneType
-from typing import Callable, List, Tuple, TypeAlias, Union
+from typing import Callable, List, Tuple, Union
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-try:
-    import dgl  # noqa: F401 for docs
-    from dgl import DGLGraph
-
-    warnings.warn(
-        "DGL version of MeshGraphNet will soon be deprecated. "
-        "Please use PyG version instead.",
-        DeprecationWarning,
-    )
-except ImportError:
-    warnings.warn(
-        "Note: This only applies if you're using DGL.\n"
-        "MeshGraphNet (DGL version) requires the DGL library.\n"
-        "Install it with your preferred CUDA version from:\n"
-        "https://www.dgl.ai/pages/start.html\n"
-    )
-
-    DGLGraph: TypeAlias = NoneType
-
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.nn import get_activation
+from physicsnemo.nn.gnn_layers.graph_types import GraphType
 from physicsnemo.nn.gnn_layers.mesh_edge_block import MeshEdgeBlock
 from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 from physicsnemo.nn.gnn_layers.mesh_node_block import MeshNodeBlock
-from physicsnemo.nn.gnn_layers.utils import CuGraphCSC, set_checkpoint_fn
+from physicsnemo.nn.gnn_layers.utils import set_checkpoint_fn
 
 # Import the Kolmogorov–Arnold Network layer.
-# Ensure that the file defining KolmogorovArnoldNetwork is accessible (e.g. physicsnemo/models/gnn_layers/kan_layer.py)
+# Ensure that the file defining KolmogorovArnoldNetwork is accessible (e.g. physicsnemo/nn/gnn_layers/kan_layer.py)
 from physicsnemo.nn.kan_layers import KolmogorovArnoldNetwork
 
 
@@ -220,7 +200,7 @@ class MeshGraphKAN(Module):
         self,
         node_features: Tensor,
         edge_features: Tensor,
-        graph: Union[DGLGraph, List[DGLGraph], CuGraphCSC],
+        graph: Union[GraphType, List[GraphType]],
         **kwargs,
     ) -> Tensor:
         edge_features = self.edge_encoder(edge_features)
@@ -338,7 +318,7 @@ class MeshGraphNetProcessor(nn.Module):
     def run_function(
         self, segment_start: int, segment_end: int
     ) -> Callable[
-        [Tensor, Tensor, Union[DGLGraph, List[DGLGraph]]], Tuple[Tensor, Tensor]
+        [Tensor, Tensor, Union[GraphType, List[GraphType]]], Tuple[Tensor, Tensor]
     ]:
         """Custom forward for gradient checkpointing
 
@@ -359,7 +339,7 @@ class MeshGraphNetProcessor(nn.Module):
         def custom_forward(
             node_features: Tensor,
             edge_features: Tensor,
-            graph: Union[DGLGraph, List[DGLGraph]],
+            graph: Union[GraphType, List[GraphType]],
         ) -> Tuple[Tensor, Tensor]:
             """Custom forward function"""
             for module in segment:
@@ -375,7 +355,7 @@ class MeshGraphNetProcessor(nn.Module):
         self,
         node_features: Tensor,
         edge_features: Tensor,
-        graph: Union[DGLGraph, List[DGLGraph], CuGraphCSC],
+        graph: Union[GraphType, List[GraphType]],
     ) -> Tensor:
         with self.checkpoint_offload_ctx:
             for segment_start, segment_end in self.checkpoint_segments:
