@@ -96,8 +96,11 @@ exclude = [
 
 [dependency-groups]
 dev = [
-    "pytest",
-    "import-linter"
+    "import-linter>=2.7",
+    "interrogate>=1.7.0",
+    "pre-commit>=4.5.0",
+    "pytest>=9.0.1",
+    "ruff>=0.14.8",
 ]
 
 #####################################################################
@@ -148,6 +151,7 @@ gnns = [
 healpix = [
     "earth2grid",
 ]
+
 
 #####################################################################
 # Linting configuration
