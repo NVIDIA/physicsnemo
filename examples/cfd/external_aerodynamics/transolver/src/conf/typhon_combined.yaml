@@ -25,7 +25,7 @@ run_id: "typhon/combined/bfloat16"
 
 model:
   functional_dim: 
-   - 7 
+   - 6 
    - 7
   out_dim: 
    - 4

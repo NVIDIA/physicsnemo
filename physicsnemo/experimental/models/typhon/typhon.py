@@ -20,6 +20,7 @@ from collections.abc import Sequence
 import torch
 import torch.nn as nn
 from einops import rearrange
+import torch.nn.functional as F
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.utils.version_check import check_min_version
@@ -796,7 +797,7 @@ class Typhon(Module):
         include_local_features: bool = False,
         radii: list[float] = [0.05, 0.25],
         neighbors_in_radius: list[int] = [8, 32],
-        n_hidden_local: int = 512,
+        n_hidden_local: int = 32,
     ) -> None:
         super().__init__(meta=TyphonMetaData())
         self.__name__ = "Typhon"
@@ -810,38 +811,60 @@ class Typhon(Module):
                 f"Typhon requires n_hidden % n_head == 0, but instead got {n_hidden % n_head}"
             )
 
+        functional_dims = _normalize_dim(functional_dim)
+        out_dims = _normalize_dim(out_dim)
+
         # These are to project geometry embeddings and global embeddings onto
         # a physical state space:
         context_dim = 0
         if geometry_dim is not None and self.include_local_features:
             self.radii = radii
             self.neighbors_in_radius = neighbors_in_radius
+
             self.bq_warp = nn.ModuleList()
+            self.geo_conv_in = nn.ModuleList()
             self.geo_conv_out = nn.ModuleList()
             self.geometry_features_tokenizer = nn.ModuleList()
 
-            for h in range(len(self.radii)):
-                self.bq_warp.append(BQWarp(
-                    radius=radii[h],
-                    neighbors_in_radius=neighbors_in_radius[h],
-                ))
+            for i in range(len(functional_dims)):
+                self.bq_warp_list = nn.ModuleList()
+                self.geo_conv_in_list = nn.ModuleList()
+                self.geo_conv_out_list = nn.ModuleList()
+                self.geometry_features_tokenizer_list = nn.ModuleList()
 
-                self.geo_conv_out.append(GeoConvOut(
-                    input_features=geometry_dim,
-                    neighbors_in_radius=neighbors_in_radius[h],
-                    base_neurons=n_hidden_local,
-                ))
-                
-                self.geometry_features_tokenizer.append(ContextProjector(
-                    n_hidden_local,
-                    n_head,
-                    n_hidden // n_head,
-                    dropout,
-                    slice_num,
-                    use_te,
-                    plus,
-                ))
-                context_dim += n_hidden // n_head
+                for h in range(len(self.radii)):
+                    self.bq_warp_list.append(BQWarp(
+                        radius=radii[h],
+                        neighbors_in_radius=neighbors_in_radius[h],
+                    ))
+
+                    self.geo_conv_in_list.append(GeoConvOut(
+                        input_features=geometry_dim,
+                        neighbors_in_radius=neighbors_in_radius[h],
+                        base_neurons=n_hidden_local,
+                    ))
+
+                    self.geo_conv_out_list.append(GeoConvOut(
+                        input_features=geometry_dim,
+                        neighbors_in_radius=neighbors_in_radius[h],
+                        base_neurons=n_hidden_local,
+                    ))
+                    
+                    self.geometry_features_tokenizer_list.append(ContextProjector(
+                        n_hidden_local,
+                        n_head,
+                        n_hidden // n_head,
+                        dropout,
+                        slice_num,
+                        use_te,
+                        plus,
+                    ))
+                    context_dim += n_hidden // n_head
+
+                self.bq_warp.append(nn.ModuleList(self.bq_warp_list))
+                self.geo_conv_in.append(nn.ModuleList(self.geo_conv_in_list))
+                self.geo_conv_out.append(nn.ModuleList(self.geo_conv_out_list))
+                self.geometry_features_tokenizer.append(nn.ModuleList(self.geometry_features_tokenizer_list))
 
         if geometry_dim is not None:
             self.geometry_tokenizer = ContextProjector(
@@ -859,9 +882,6 @@ class Typhon(Module):
                 global_dim, n_head, n_hidden // n_head, dropout, slice_num, use_te, plus
             )
             context_dim += n_hidden // n_head
-
-        functional_dims = _normalize_dim(functional_dim)
-        out_dims = _normalize_dim(out_dim)
       
         if len(functional_dims) != len(out_dims):
             raise ValueError(
@@ -886,14 +906,13 @@ class Typhon(Module):
             ]
         )
 
-
         self.n_hidden = n_hidden
 
         self.blocks = nn.ModuleList(
             [
                 GALE_block(
                     num_heads=n_head,
-                    hidden_dim=n_hidden,
+                    hidden_dim=n_hidden + n_hidden_local * len(self.radii) if self.include_local_features else n_hidden,
                     dropout=dropout,
                     act=act,
                     mlp_ratio=mlp_ratio,
@@ -911,7 +930,7 @@ class Typhon(Module):
             self.ln_mlp_out = nn.ModuleList(
                 [
                     te.LayerNormLinear(
-                        in_features=n_hidden, out_features=o
+                        in_features=n_hidden + n_hidden_local * len(self.radii) if self.include_local_features else n_hidden, out_features=o
                     ) for o in out_dims
                  ]
             )
@@ -919,8 +938,8 @@ class Typhon(Module):
             self.ln_mlp_out = nn.ModuleList(
                 [
                     nn.Sequential(
-                        nn.LayerNorm(n_hidden),
-                        nn.Linear(n_hidden, o),
+                        nn.LayerNorm(n_hidden + n_hidden_local * len(self.radii) if self.include_local_features else n_hidden),
+                        nn.Linear(n_hidden + n_hidden_local * len(self.radii) if self.include_local_features else n_hidden, o),
                     )
                     for o in out_dims
                 ]
@@ -954,14 +973,15 @@ class Typhon(Module):
         global_context_input = []
         if geometry is not None:
             if self.include_local_features:
-                for h in range(len(self.radii)):
-                    mapping, k_short = self.bq_warp[h](geometry, geometry)
-                    geometry_features = self.geo_conv_out[h](k_short)
-                    geometry_states = self.geometry_features_tokenizer[h](geometry_features)
-                    global_context_input.append(geometry_states)
+                for i in range(len(local_embedding)):
+                    for h in range(len(self.radii)):
+                        mapping, k_short = self.bq_warp[i][h](local_embedding[i][:, :, :3], geometry)
+                        geometry_features = self.geo_conv_in[i][h](k_short)
+                        geometry_states = self.geometry_features_tokenizer[i][h](geometry_features)
+                        global_context_input.append(geometry_states)
             geometry_states = self.geometry_tokenizer(geometry)
             global_context_input.append(geometry_states)
-
+        
         if global_embedding is not None:
             global_states = self.global_tokenizer(global_embedding)
             global_context_input.append(global_states)
@@ -970,10 +990,23 @@ class Typhon(Module):
         if len(global_context_input) > 0:
             embedding_states = torch.cat(global_context_input, dim=-1)
 
+        if self.include_local_features and geometry is not None:
+            local_embedding_bq = []
+            for i in range(len(local_embedding)):
+                local_embedding_list_radii = []
+                for h in range(len(self.radii)):
+                    mapping, k_short = self.bq_warp[i][h](geometry, local_embedding[i][:, :, :3])
+                    local_features = self.geo_conv_out[i][h](k_short)
+                    local_embedding_list_radii.append(local_features)
+                local_embedding_bq.append(torch.cat(local_embedding_list_radii, dim=-1))
+
         local_embedding = _normalize_tensor(local_embedding)
 
         # Project the inputs to the hidden dimension:
         x = [ self.preprocess[i](le) for i, le in enumerate(local_embedding) ]
+
+        if self.include_local_features:
+            x = [torch.cat([x[i], local_embedding_bq[i]], dim=-1) for i in range(len(x))]
 
         for block in self.blocks:
             x = block(x, embedding_states)

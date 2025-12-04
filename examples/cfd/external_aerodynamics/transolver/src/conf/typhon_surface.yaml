@@ -30,9 +30,9 @@ profile: false
 
 model:
   functional_dim: 6
-  n_layers: 14
-  radii: [0.05, 0.25] # radius for local features
-  neighbors_in_radius: [8, 32] # neighbors in radius for local features
+  include_local_features: true # use local features
+  radii: [0.05, 0.25, 1.0, 2.5] # radius for local features
+  neighbors_in_radius: [16, 64, 128, 256] # neighbors in radius for local features
   n_hidden_local: 32 # hidden dimension for local features
 
 datapipe:

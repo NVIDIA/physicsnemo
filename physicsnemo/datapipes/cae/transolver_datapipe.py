@@ -200,11 +200,6 @@ class TransolverDataPipe(Dataset):
         # Build the embeddings:
         embeddings_inputs = [positions]
 
-        # Surface SDF is always 0:
-        if self.config.include_sdf:
-            sdf = torch.zeros_like(positions[:, 0:1])
-            embeddings_inputs.append(sdf)
-
         if self.config.include_normals:
             normals = data_dict["surface_normals"]
             if idx is not None:

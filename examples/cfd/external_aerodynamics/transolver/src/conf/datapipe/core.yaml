@@ -30,7 +30,7 @@ preload_depth: 1
 pin_memory: true
 
 # Sampling resolution of the point clouds:
-resolution: 100_000
+resolution: 50_000
 
 # Surface / Volume / (combined, if supported)
 mode: ???
