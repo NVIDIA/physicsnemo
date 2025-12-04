@@ -90,50 +90,9 @@ layers =
    afno | dlwp | dlwp_healpix | domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn 
    unet | diffusion  | dlwp_healpix_layers 
 
-[importlinter:contract:physicsnemo-core-external-imports]
-name = Prevent Non-listed external imports in physicsnemo core
+[importlinter:contract:physicsnemo-external-imports]
+name = Prevent Non-listed external imports in physicsnemo
 type = forbidden_import
-container = physicsnemo.core
-dependency_group = core
-
-[importlinter:contract:physicsnemo-distributed-external-imports]
-name = Prevent Non-listed external imports in physicsnemo distributed
-type = forbidden_import
-container = physicsnemo.distributed
-dependency_group = distributed
-
-[importlinter:contract:physicsnemo-utils-external-imports]
-name = Prevent Non-listed external imports in physicsnemo utils
-type = forbidden_import
-container = physicsnemo.utils
-dependency_group = utils
-
-[importlinter:contract:physicsnemo-nn-external-imports]
-name = Prevent Non-listed external imports in physicsnemo nn
-type = forbidden_import
-container = physicsnemo.nn
-dependency_group = nn
-
-[importlinter:contract:physicsnemo-models-external-imports]
-name = Prevent Non-listed external imports in physicsnemo models
-type = forbidden_import
-container = physicsnemo.models
-dependency_group = models
-
-[importlinter:contract:physicsnemo-metrics-external-imports]
-name = Prevent Non-listed external imports in physicsnemo metrics
-type = forbidden_import
-container = physicsnemo.metrics
-dependency_group = metrics
-
-; [importlinter:contract:physicsnemo-datapipes-external-imports]
-; name = Prevent Non-listed external imports in physicsnemo datapipes
-; type = forbidden_import
-; container = physicsnemo.datapipes
-; dependency_group = datapipes
-
-[importlinter:contract:physicsnemo-domain_parallel-external-imports]
-name = Prevent Non-listed external imports in physicsnemo domain_parallel
-type = forbidden_import
-container = physicsnemo.domain_parallel
-dependency_group = domain_parallel
+container = physicsnemo
+exclude = 
+   datapipes

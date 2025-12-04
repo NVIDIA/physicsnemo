@@ -48,13 +48,6 @@ repos:
       language: python
       pass_filenames: false
 
-    - id: sync-deps
-      name: Ensure dependencies match dependency groups
-      entry: python test/ci_tests/sync_deps.py
-      language: system
-      pass_filenames: false
-      always_run: true
-
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v3.4.0
     hooks:

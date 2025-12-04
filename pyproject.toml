@@ -1,3 +1,6 @@
+#####################################################################
+# Core Project metadata
+#####################################################################
 [project]
 name = "nvidia-physicsnemo"
 authors = [
@@ -17,12 +20,6 @@ classifiers = [
 ]
 dynamic = ["version", "optional_dependencies"]
 
-# NOTE: THIS DEPENDENCY LIST IS AUTO-GENERATED.
-# DEPENDENCY GROUPS BELOW IS THE SOLE SOURCE OF DEPENDENCY TRUTH.
-# IF YOU UPDATE THIS LIST, IT WILL GET OVERWRITTEN.
-# PRE-COMMIT (AND CI) WILL USE THE DEPENDENCY GROUPS BELOW TO GENERATE
-# THIS LIST AND INSERT IT HERE.  IF THE GENERATED LIST DOESN'T MATCH THIS,
-# IT'S AN ERROR.
 dependencies = [
     "termcolor",
     "onnx>=1.14.0",
@@ -37,6 +34,9 @@ dependencies = [
     "GitPython",
     "s3fs>=2023.5.0",
     "packaging>=24.2",
+    "h5py",
+    "jaxtyping",
+    "cftime"
 ]
 
 [project.urls]
@@ -47,9 +47,9 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 
 
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+#####################################################################
+# Flags for UV compatibility
+#####################################################################
 
 [tool.uv]
 no-build-isolation-package = [
@@ -57,7 +57,22 @@ no-build-isolation-package = [
     "torch_cluster",
 ]
 managed = true
-default-groups = ["physicsnemo"]
+
+# torch-sparse requires us to tell uv about it's dependency on torch.
+[tool.uv.extra-build-dependencies]
+torch-sparse = ["torch"]
+
+# Earth2 grid is not on pypi ....
+[tool.uv.sources]
+earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/main.tar.gz" }
+
+#####################################################################
+# Flags Controlling the local build of physicsnemo
+#####################################################################
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 
 [tool.hatch.version]
 path = "physicsnemo/__init__.py"
@@ -75,128 +90,68 @@ exclude = [
 ]
 
 
-# The dependency-group tree is critically important for physicsnemo.
-# Here, we list_dependencies for each physicsnemo pacakge.  Optional
-# dependencies are listed with the name `package`-extras. _Dependencies
-# are chained together: for example, everything in core is a dep of the
-# entire repo, but utils-extra only shows up for subsequent *-extra
-# lists.
-# 
-# We do this to ensure a consistent install path for targeted levels of the
-# repository.  If you just want the distributed manager, for example, you can
-# target `distributed` instead of `physicsnemo` and you're up and running.
-# 
-# These lists are the SINGLE SOURCE OF TRUTH.  Models are also included
-# below, to make single-model installation easier.
-# 
-# In general, we do not draw a finer line than "required" and "extra".
-# So, physicsnemo.nn's requirements do not include scipy and cuml, but the
-# "extra" version includes BOTH. 
+#####################################################################
+# Local Development Requirements (pytest, etc)
+#####################################################################
 
 [dependency-groups]
-core = [
-    "torch>=2.4.0",
-    "tqdm>=4.60.0", # done
-    "requests>=2.32.2",
-    "GitPython",
-    "s3fs>=2023.5.0",
-    "packaging>=24.2",
-]
-# no core-extras
-distributed = [
-    "treelib>=1.2.5",
-    "numpy>=1.22.4",
-    {include-group = "core"}
-]
-# no distributed-extras
-utils = [
-    "termcolor",
-    "onnx>=1.14.0",
-    "warp-lang",
-    "pandas",
-    "nvtx",
-    {include-group = "distributed"},
-]
-utils-extras = [
-    "wandb",
-    "mlflow",
-    "line_profiler",
-    "vtx",
-    "stl",
-    "rmm",
-    "cupy",
-]
-nn = [
-    "einops>=0.8.0",
-    "timm>=1.0.0",
-    {include-group= "utils"}
-]
-nn-extras = [
-    "cuml",
-    "transformer_engine",
-    "scipy",
-    {include-group = "nn"},
-    {include-group = "utils-extras"},
-]
-models = [
-    "cftime",
-    "hydra-core",
-    "omegaconf",
-    "xarray>=2023.1.0",
-    "zarr>=2.14.2",
-    "jaxtyping",
-    {include-group="domain_parallel"},
-]
-models-extras = [
-    "transformer_engine",
-    "netCDF4",
-    "pyvista",
-    "vtk",
-    {include-group="models"},
-    {include-group="nn-extras"},
-]
-metrics = [
-    {include-group="models"},
-]
-datapipes = [
-    "h5py",
-    {include-group="metrics"},
-]
-datapipes-extras = [
-    "dask",
-    "tensorflow",
-    {include-group="datapipes"},
-    {include-group="models-extras"},
-]
-domain_parallel = [
-    {include-group = "nn"}
-]
-physicsnemo = [
-    {include-group = "models"},
-    {include-group = "datapipes"},
-]
-physicsnemo-extras = [
-    {include-group = "physicsnemo"},
- #   {include-group = "models-extras"},
-]
 dev = [
     "pytest",
     "import-linter"
 ]
 
-[project.optional_dependencies]
+#####################################################################
+# Optional Dependency groups
+#####################################################################
+
+# These groups are self-referential.  So, they chain together as you
+# move up the physicsnemo hierarchy.  A new extra dep in `physicsnemo/nn`
+# will also be an extra dep in `physicsnemo/models`, but not the other
+# direction.
+
+[project.optional-dependencies]
+utils-extras = [
+    "wandb",
+    "mlflow",
+    "line_profiler",
+    "vtk",
+    "stl",
+    "rmm",
+    "cupy",
+]
+nn-extras = [
+    "cuml",
+    "transformer_engine[pytorch]",
+    "scipy",
+    "nvidia-physicsnemo[utils-extras]",
+]
+model-extras = [
+    "nvidia-physicsnemo[nn-extras]",
+    "transformer_engine[pytorch]",
+    "netCDF4",
+    "pyvista",
+    "vtk",
+]
+datapipes-extras = [
+    "dask",
+    "tensorflow",
+    "nvidia-physicsnemo[model-extras]",
+]
 gnns = [
     "torch_geometric",
     "torch_scatter",
     "torch_sparse",
     "torch_cluster",
-    "pylibcugraphops",
     "nvfuser",
+    "nvidia-physicsnemo[model-extras]",
 ]
-
 healpix = [
     "earth2grid",
 ]
+
+#####################################################################
+# Linting configuration
+#####################################################################
 
 [tool.ruff]
 # Enable flake8/pycodestyle (`E`), Pyflakes (`F`), flake8-bandit (`S`),
