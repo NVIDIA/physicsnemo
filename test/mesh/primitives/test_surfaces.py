@@ -13,7 +13,7 @@ class TestSurfacePrimitives:
         "example_name",
         [
             # Spheres
-            "sphere_icosahedral",
+            # "sphere_icosahedral",
             "sphere_uv",
             # Cylinders
             "cylinder",
@@ -42,25 +42,6 @@ class TestSurfacePrimitives:
         assert mesh.n_spatial_dims == 3
         assert mesh.n_points > 0
         assert mesh.n_cells > 0
-
-    def test_sphere_subdivision(self):
-        """Test sphere subdivision."""
-        sphere0 = primitives.surfaces.sphere_icosahedral.load(subdivisions=0)
-        sphere1 = primitives.surfaces.sphere_icosahedral.load(subdivisions=1)
-        sphere2 = primitives.surfaces.sphere_icosahedral.load(subdivisions=2)
-
-        assert sphere0.n_cells < sphere1.n_cells < sphere2.n_cells
-
-    def test_sphere_radius(self):
-        """Test that sphere has correct radius."""
-        radius = 2.5
-        sphere = primitives.surfaces.sphere_icosahedral.load(
-            radius=radius, subdivisions=2
-        )
-
-        # All points should be approximately at the specified radius
-        radii = torch.norm(sphere.points, dim=1)
-        assert torch.allclose(radii, torch.full_like(radii, radius), atol=1e-5)
 
     def test_torus_radii(self):
         """Test that torus has correct radii."""

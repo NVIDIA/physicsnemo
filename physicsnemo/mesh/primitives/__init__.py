@@ -27,7 +27,6 @@ from physicsnemo.mesh.primitives import (
     volumes,
     procedural,
     pyvista_datasets,
-    text,
 )
 
 __all__ = [
@@ -38,5 +37,4 @@ __all__ = [
     "volumes",
     "procedural",
     "pyvista_datasets",
-    "text",
 ]

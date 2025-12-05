@@ -15,7 +15,6 @@ from physicsnemo.mesh.primitives.surfaces import (
     mobius_strip,
     octahedron_surface,
     plane,
-    sphere_icosahedral,
     sphere_uv,
     tetrahedron_surface,
     torus,
@@ -23,7 +22,6 @@ from physicsnemo.mesh.primitives.surfaces import (
 
 __all__ = [
     # Spheres
-    "sphere_icosahedral",
     "sphere_uv",
     # Cylinders
     "cylinder",
