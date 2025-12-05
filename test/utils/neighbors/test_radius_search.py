@@ -352,7 +352,7 @@ def test_radius_search_gradients(device, max_points):
     # assert torch.allclose(qrs_grad_warp, qrs_grad_torch, atol=1e-5), "Query gradients do not match"
 
 
-@pytest.mark.parametrize("precision", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("precision", [torch.bfloat16, torch.float16, torch.float32])
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("max_points", [8, None])
 def test_radius_search_reduced_precision(device, precision, max_points):
