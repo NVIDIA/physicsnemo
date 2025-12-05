@@ -1,8 +1,9 @@
 """PyVista backend for mesh visualization."""
 
-from typing import Literal, TYPE_CHECKING
-import torch
+from typing import TYPE_CHECKING, Literal
+
 import pyvista as pv
+import torch
 
 if TYPE_CHECKING:
     from physicsnemo.mesh import Mesh

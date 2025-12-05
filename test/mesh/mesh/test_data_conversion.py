@@ -10,7 +10,6 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities import get_cached
 
-
 ### Helper Functions ###
 
 

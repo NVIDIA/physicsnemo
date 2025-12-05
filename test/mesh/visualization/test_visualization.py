@@ -4,15 +4,14 @@ Tests validate visualization across different mesh configurations, spatial dimen
 and visualization backends (matplotlib, PyVista).
 """
 
-import pytest
-import torch
 import matplotlib
 import matplotlib.pyplot as plt
+import pytest
+import torch
 
 matplotlib.use("Agg")  # Use non-interactive backend for testing
 
 from physicsnemo.mesh import Mesh
-
 
 ### Helper Functions ###
 

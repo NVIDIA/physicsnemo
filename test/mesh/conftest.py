@@ -10,20 +10,19 @@ without explicit imports.
 import pytest
 import torch
 
-
 ### Pytest Hooks ###
 
 
 def pytest_collection_modifyitems(config, items):
     """Skip tests marked with 'cuda' if CUDA is not available.
-    
+
     This hook runs during test collection phase and adds skip markers to CUDA tests
     when CUDA is unavailable. This is the idiomatic pytest approach for conditional
     skipping based on markers.
     """
     if torch.cuda.is_available():
         return  # CUDA available, run all tests
-    
+
     skip_cuda = pytest.mark.skip(reason="CUDA not available")
     for item in items:
         if "cuda" in item.keywords:
@@ -35,7 +34,7 @@ def pytest_collection_modifyitems(config, items):
 
 def get_available_devices() -> list[str]:
     """Get list of available compute devices for testing.
-    
+
     Returns both 'cpu' and 'cuda' (if available). Tests marked with 'cuda'
     will be automatically skipped if CUDA is not available via pytest_collection_modifyitems.
     """
@@ -283,7 +282,7 @@ def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
 )
 def device(request):
     """Parametrize tests over all available devices (CPU, CUDA).
-    
+
     CUDA tests are automatically skipped if CUDA is not available via
     the pytest_collection_modifyitems hook.
     """

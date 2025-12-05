@@ -23,10 +23,10 @@ from physicsnemo.mesh.primitives import (
     basic,
     curves,
     planar,
-    surfaces,
-    volumes,
     procedural,
     pyvista_datasets,
+    surfaces,
+    volumes,
 )
 
 __all__ = [

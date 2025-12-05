@@ -6,12 +6,10 @@ preserved during PyVista → physicsnemo.mesh conversion across backends.
 
 import numpy as np
 import pyvista as pv
-import pytest
 import torch
 
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
-
 
 ### Helper Functions ###
 

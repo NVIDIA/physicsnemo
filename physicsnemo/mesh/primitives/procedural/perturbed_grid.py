@@ -5,8 +5,8 @@ Dimensional: 2D manifold in 2D space (irregular).
 
 import torch
 
-from physicsnemo.mesh.primitives.planar import structured_grid
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.primitives.planar import structured_grid
 
 
 def load(

@@ -1,8 +1,8 @@
 """Tests for physicsnemo.mesh.io module - error handling."""
 
 import numpy as np
-import pyvista as pv
 import pytest
+import pyvista as pv
 
 from physicsnemo.mesh.io import from_pyvista
 

@@ -1,12 +1,13 @@
 """Matplotlib backend for mesh visualization."""
 
-from typing import Literal, TYPE_CHECKING
-import torch
-import numpy as np
+from typing import TYPE_CHECKING, Literal
+
 import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from matplotlib.cm import ScalarMappable
 from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import Normalize
-from matplotlib.cm import ScalarMappable
 
 if TYPE_CHECKING:
     from physicsnemo.mesh import Mesh

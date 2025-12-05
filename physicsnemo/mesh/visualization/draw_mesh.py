@@ -1,6 +1,7 @@
 """Main entry point for mesh visualization with backend selection."""
 
-from typing import Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+
 import torch
 
 if TYPE_CHECKING:

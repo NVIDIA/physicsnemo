@@ -4,8 +4,9 @@ Provides dimension-agnostic Perlin noise implementations that work on any
 n-dimensional point set, fully GPU-compatible using pure PyTorch.
 """
 
-import torch
 from itertools import product
+
+import torch
 
 
 def perlin_noise_nd(

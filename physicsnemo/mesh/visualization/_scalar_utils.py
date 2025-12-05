@@ -1,6 +1,7 @@
 """Utilities for processing scalar data for visualization."""
 
 from typing import Literal
+
 import torch
 from tensordict import TensorDict
 

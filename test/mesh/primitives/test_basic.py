@@ -1,7 +1,6 @@
 """Tests for basic example meshes."""
 
 import pytest
-import torch
 
 from physicsnemo.mesh import primitives
 

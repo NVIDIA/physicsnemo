@@ -4,10 +4,10 @@ import pytest
 import torch
 
 from physicsnemo.mesh.primitives.procedural import (
-    perlin_noise_nd,
     perlin_noise_1d,
     perlin_noise_2d,
     perlin_noise_3d,
+    perlin_noise_nd,
 )
 
 

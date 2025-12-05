@@ -9,10 +9,10 @@ from physicsnemo.mesh.primitives.procedural import (
     perturbed_grid,
 )
 from physicsnemo.mesh.primitives.procedural.noise import (
-    perlin_noise_nd,
     perlin_noise_1d,
     perlin_noise_2d,
     perlin_noise_3d,
+    perlin_noise_nd,
 )
 
 __all__ = [

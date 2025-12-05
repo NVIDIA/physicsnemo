@@ -405,7 +405,7 @@ def test_repr_with_multiple_cached_fields():
             break
 
     # cell_data should be multiline since it has pressure + _cache with multiple fields
-    assert "{" in lines[cell_data_line_idx], f"cell_data should start multiline format"
+    assert "{" in lines[cell_data_line_idx], "cell_data should start multiline format"
 
 
 def test_repr_with_subclass():
@@ -448,10 +448,7 @@ def test_repr_colon_alignment():
     lines = result.split("\n")
 
     # Find colon positions in main data fields
-    colon_positions = []
-    for line in lines[1:4]:  # point_data, cell_data, global_data lines
-        if ":" in line:
-            colon_positions.append(line.index(":"))
+    colon_positions = [line.index(":") for line in lines[1:4] if ":" in line]
 
     # All colons should be at the same position
     assert len(set(colon_positions)) == 1, (

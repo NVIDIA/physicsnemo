@@ -1,8 +1,8 @@
 from typing import Literal
 
 import numpy as np
-import torch
 import pyvista as pv
+import torch
 from pyvista import CellType
 
 from physicsnemo.mesh.mesh import Mesh
@@ -148,8 +148,12 @@ def from_pyvista(
                 point_ids = lines_raw[i + 1 : i + 1 + n_points]
 
                 # Convert polyline to line segments (consecutive pairs)
-                for j in range(len(point_ids) - 1):
-                    cells_list.append([point_ids[j], point_ids[j + 1]])
+                cells_list.extend(
+                    [
+                        [point_ids[j], point_ids[j + 1]]
+                        for j in range(len(point_ids) - 1)
+                    ]
+                )
 
                 i += n_points + 1
 
