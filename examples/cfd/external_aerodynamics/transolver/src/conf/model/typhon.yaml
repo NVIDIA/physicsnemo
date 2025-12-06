@@ -25,7 +25,7 @@ dropout: 0.0
 n_head: 8
 act: "gelu"
 mlp_ratio: 2
-slice_num: 256
+slice_num: 128
 use_te: false
 plus: false
 include_local_features: true # use local features
