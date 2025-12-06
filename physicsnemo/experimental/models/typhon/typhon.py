@@ -134,7 +134,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         """
 
         # Project the slice and context tokens:
-        
+
         q_input = torch.cat(slice_tokens, dim=-2)
         q = self.cross_q(q_input)
         
@@ -154,7 +154,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         return cross_attention
 
     def forward(
-        self, x: tuple[torch.Tensor, ...], context: torch.Tensor | None = None
+        self, x: tuple[torch.Tensor, ...], context: tuple[torch.Tensor, ...] | None = None
     ) -> torch.Tensor:
         r"""Forward pass of the GALE module.
 
@@ -195,10 +195,13 @@ class GALE(PhysicsAttentionIrregularMesh):
         
         # HERE, we are differing: apply cross-attention with physical states:
         if context is not None:
-            cross_slice_token = self.compute_slice_attention_cross(
-                slice_tokens, context
-            )
-
+            # cross_slice_token = self.compute_slice_attention_cross(
+            #     slice_tokens, context
+            # )
+            cross_slice_token = [ self.compute_slice_attention_cross([_slice_token], context)[0] 
+                for _slice_token in slice_tokens 
+            ]
+            
             # Apply learnable mixing:
             mixing_weight = torch.sigmoid(self.state_mixing)
             out_slice_token = [ mixing_weight * sst + (1 - mixing_weight) * cst
@@ -316,7 +319,7 @@ class GALE_block(nn.Module):
                 ),
             )
 
-    def forward(self, fx: torch.Tensor, global_context: torch.Tensor) -> torch.Tensor:
+    def forward(self, fx: tuple[torch.Tensor, ...], global_context: tuple[torch.Tensor, ...]) -> torch.Tensor:
         r"""Forward pass of the GALE block.
 
         Parameters
@@ -577,66 +580,6 @@ class ContextProjector(nn.Module):
 
         return slice_tokens
 
-class GeoConvOut(nn.Module):
-    """
-    Geometry layer to project STL geometry data onto regular grids.
-    """
-
-    def __init__(
-        self,
-        input_features: int,
-        neighbors_in_radius: int,
-        base_neurons: int,
-    ):
-        """
-        Initialize the GeoConvOut layer.
-
-        Args:
-            input_features: Number of input feature dimensions
-            neighbors_in_radius: Number of neighbors in radius
-        """
-        super().__init__()
-        self.base_neurons = base_neurons
-
-        input_features_calculated = input_features * neighbors_in_radius
-
-        self.mlp = Mlp(
-            in_features=input_features_calculated,
-            hidden_features=[base_neurons, base_neurons // 2],
-            out_features=base_neurons,
-            act_layer=nn.GELU,
-            drop=0.0,
-        )
-
-        self.activation = nn.GELU
-
-        self.neighbors_in_radius = neighbors_in_radius
-
-    def forward(
-        self,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Process and project geometric features onto a 3D grid.
-
-        Args:
-            x: Input tensor containing coordinates of the neighboring points
-               (batch_size, n_points, n_neighbors, 3)
-            
-        Returns:
-            Processed geometry features of shape (batch_size, n_points, n_neighbors, base_neurons)
-        """
-
-        b, n_points, n_neighbors, c = x.shape
-        x = rearrange(
-            x, "b x y z -> b x (y z)", x=n_points, y=n_neighbors, z=c
-        )
-        
-        x = F.tanh(self.mlp(x))
-
-        return x
-
-
 def _normalize_dim(x):
     # Accept int as scalar
     if isinstance(x, int):
@@ -838,17 +781,25 @@ class Typhon(Module):
                         neighbors_in_radius=neighbors_in_radius[h],
                     ))
 
-                    self.geo_conv_in_list.append(GeoConvOut(
-                        input_features=geometry_dim,
-                        neighbors_in_radius=neighbors_in_radius[h],
-                        base_neurons=n_hidden_local,
-                    ))
+                    self.geo_conv_in_list.append(
+                        Mlp(
+                            in_features=geometry_dim * neighbors_in_radius[h],
+                            hidden_features=[n_hidden_local, n_hidden_local // 2],
+                            out_features=n_hidden_local,
+                            act_layer=nn.GELU,
+                            drop=0.0,
+                        )
+                    )
 
-                    self.geo_conv_out_list.append(GeoConvOut(
-                        input_features=geometry_dim,
-                        neighbors_in_radius=neighbors_in_radius[h],
-                        base_neurons=n_hidden_local,
-                    ))
+                    self.geo_conv_out_list.append(
+                        Mlp(
+                            in_features=geometry_dim * neighbors_in_radius[h],
+                            hidden_features=[n_hidden_local, n_hidden_local // 2],
+                            out_features=n_hidden_local,
+                            act_layer=nn.GELU,
+                            drop=0.0,
+                        )
+                    )
                     
                     self.geometry_features_tokenizer_list.append(ContextProjector(
                         n_hidden_local,
@@ -969,6 +920,7 @@ class Typhon(Module):
 
         """
 
+        local_embedding = _normalize_tensor(local_embedding)
         # First, construct the global context vectors:
         global_context_input = []
         if geometry is not None:
@@ -976,7 +928,11 @@ class Typhon(Module):
                 for i in range(len(local_embedding)):
                     for h in range(len(self.radii)):
                         mapping, k_short = self.bq_warp[i][h](local_embedding[i][:, :, :3], geometry)
-                        geometry_features = self.geo_conv_in[i][h](k_short)
+                        b, n_points, n_neighbors, c = k_short.shape
+                        k_short_reshaped = rearrange(
+                            k_short, "b x y z -> b x (y z)", x=n_points, y=n_neighbors, z=c
+                        )
+                        geometry_features = F.tanh(self.geo_conv_in[i][h](k_short_reshaped))
                         geometry_states = self.geometry_features_tokenizer[i][h](geometry_features)
                         global_context_input.append(geometry_states)
             geometry_states = self.geometry_tokenizer(geometry)
@@ -996,11 +952,13 @@ class Typhon(Module):
                 local_embedding_list_radii = []
                 for h in range(len(self.radii)):
                     mapping, k_short = self.bq_warp[i][h](geometry, local_embedding[i][:, :, :3])
-                    local_features = self.geo_conv_out[i][h](k_short)
+                    b, n_points, n_neighbors, c = k_short.shape
+                    k_short_reshaped = rearrange(
+                        k_short, "b x y z -> b x (y z)", x=n_points, y=n_neighbors, z=c
+                    )
+                    local_features = F.tanh(self.geo_conv_out[i][h](k_short_reshaped))
                     local_embedding_list_radii.append(local_features)
                 local_embedding_bq.append(torch.cat(local_embedding_list_radii, dim=-1))
-
-        local_embedding = _normalize_tensor(local_embedding)
 
         # Project the inputs to the hidden dimension:
         x = [ self.preprocess[i](le) for i, le in enumerate(local_embedding) ]
