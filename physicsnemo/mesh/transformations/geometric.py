@@ -182,6 +182,7 @@ def transform(
     transform_point_data: bool = False,
     transform_cell_data: bool = False,
     transform_global_data: bool = False,
+    assume_invertible: bool | None = None,
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
@@ -191,16 +192,19 @@ def transform(
         transform_point_data: If True, transform vector/tensor fields in point_data
         transform_cell_data: If True, transform vector/tensor fields in cell_data
         transform_global_data: If True, transform vector/tensor fields in global_data
+        assume_invertible: Controls cache propagation for square matrices:
+            - True: Assume matrix is invertible, propagate caches (compile-safe)
+            - False: Assume matrix is singular, skip cache propagation (compile-safe)
+            - None: Check determinant at runtime (may cause graph breaks under torch.compile)
 
     Returns:
         New Mesh with transformed geometry and appropriately updated caches.
 
     Cache Handling:
         - areas: For square invertible matrices:
-            - Full-dimensional meshes: scaled by |det|^(k/n)
-            - Isotropic transforms: scaled by |det|^(k/n)
+            - Full-dimensional meshes: scaled by |det|
             - Codimension-1 manifolds: per-element scaling using |det| × ||M^{-T} n||
-            - Other cases: invalidated
+            - Higher codimension: invalidated
         - centroids: Always transformed
         - normals: For square invertible matrices, transformed by inverse-transpose
     """
@@ -219,60 +223,50 @@ def transform(
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
         det = matrix.det()
-        if det.abs() > 1e-10:  # Invertible
-            # Determine if we can use a global scale factor for areas
-            # This is valid for full-dimensional meshes OR isotropic transforms.
-            is_full_dim = mesh.n_manifold_dims == mesh.n_spatial_dims
-            is_isotropic = False
-            if not is_full_dim:
-                # Check if M is isotropic: M^T @ M = λ * I for some scalar λ
-                mtm = matrix.T @ matrix
-                identity_scaled = mtm[0, 0] * torch.eye(
-                    matrix.shape[0], device=matrix.device, dtype=matrix.dtype
-                )
-                is_isotropic = torch.allclose(mtm, identity_scaled, atol=1e-6)
 
-            if is_full_dim or is_isotropic:
-                # Global area scaling: |det|^(k/n) where k = n_manifold_dims, n = n_spatial_dims
-                scale_factor = det.abs() ** (mesh.n_manifold_dims / mesh.n_spatial_dims)
-                if (v := get_cached(mesh.point_data, "areas")) is not None:
-                    set_cached(new_point_data, "areas", v * scale_factor)
-                if (v := get_cached(mesh.cell_data, "areas")) is not None:
-                    set_cached(new_cell_data, "areas", v * scale_factor)
+        # Determine invertibility: explicit flag avoids data-dependent branches for torch.compile
+        if assume_invertible is not None:
+            is_invertible = assume_invertible
+        else:
+            # Runtime check (may cause graph break under torch.compile)
+            is_invertible = det.abs() > 1e-10
 
-            # Normals transform by inverse-transpose: n' = sign(det) * normalize(n @ M^{-1})
-            # Using linear solve: solve M.T @ x.T = n.T to get x = n @ M^{-1}
-            #
-            # For codimension-1 embedded manifolds with non-isotropic transforms, we can also
-            # compute per-element area scaling using:  area' = area × |det(M)| × ||M^{-T} n||
-            # This works because the normal encodes the tangent space orientation, and:
-            #   (Mt_1 × ... × Mt_{k}) = det(M) × M^{-T} × (t_1 × ... × t_k)
-            # where t_i are tangent vectors and × is the generalized cross product.
+        if is_invertible:
             det_sign = det.sign()
             det_abs = det.abs()
 
-            # For non-isotropic transforms of codimension-1 manifolds, compute per-element scaling
-            use_normal_based_area_scaling = (
-                not is_full_dim and not is_isotropic and mesh.codimension == 1
-            )
+            ### Full-dimensional meshes: global area scaling
+            if mesh.n_manifold_dims == mesh.n_spatial_dims:
+                # Areas scale by |det| (since k/n = 1 for full-dimensional)
+                if (v := get_cached(mesh.point_data, "areas")) is not None:
+                    set_cached(new_point_data, "areas", v * det_abs)
+                if (v := get_cached(mesh.cell_data, "areas")) is not None:
+                    set_cached(new_cell_data, "areas", v * det_abs)
 
-            if (v := get_cached(mesh.point_data, "normals")) is not None:
-                transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
-                if use_normal_based_area_scaling:
-                    # Area scaling = |det(M)| × ||M^{-T} n|| per element
+            ### Codimension-1 manifolds: per-element area scaling via normals
+            # Formula: area' = area × |det(M)| × ||M^{-T} n||
+            # This generalizes the global formula and handles both isotropic and
+            # non-isotropic transforms correctly. For isotropic M = λR (orthogonal R),
+            # ||M^{-T} n|| = |λ|^{-1}, giving area' = area × |λ|^{n-1} as expected.
+            elif mesh.codimension == 1:
+                # Normals transform by inverse-transpose: n' = sign(det) * normalize(M^{-T} n)
+                # Using linear solve: solve M.T @ x.T = n.T to get x = n @ M^{-1} = (M^{-T} n)^T
+                if (v := get_cached(mesh.point_data, "normals")) is not None:
+                    transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
                     norm_scale = transformed.norm(dim=-1)  # [n_points]
                     if (areas := get_cached(mesh.point_data, "areas")) is not None:
                         set_cached(new_point_data, "areas", areas * det_abs * norm_scale)
-                set_cached(new_point_data, "normals", det_sign * F.normalize(transformed, dim=-1))
+                    set_cached(new_point_data, "normals", det_sign * F.normalize(transformed, dim=-1))
 
-            if (v := get_cached(mesh.cell_data, "normals")) is not None:
-                transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
-                if use_normal_based_area_scaling:
-                    # Area scaling = |det(M)| × ||M^{-T} n|| per element
+                if (v := get_cached(mesh.cell_data, "normals")) is not None:
+                    transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
                     norm_scale = transformed.norm(dim=-1)  # [n_cells]
                     if (areas := get_cached(mesh.cell_data, "areas")) is not None:
                         set_cached(new_cell_data, "areas", areas * det_abs * norm_scale)
-                set_cached(new_cell_data, "normals", det_sign * F.normalize(transformed, dim=-1))
+                    set_cached(new_cell_data, "normals", det_sign * F.normalize(transformed, dim=-1))
+
+            # Higher codimension: areas invalidated (would need full tangent basis)
+            # Normals for higher codimension are not well-defined as single vectors
 
     ### Opt-in: centroids
     if (v := get_cached(mesh.cell_data, "centroids")) is not None:
@@ -416,13 +410,14 @@ def rotate(
         )
 
     ### Apply transformation (handles points, areas, centroids, normals, user data)
-    ### For rotation: det=1, inverse-transpose equals original matrix, so normals rotate correctly
+    ### For rotation: det=±1, always invertible, so we can skip the runtime check
     return transform(
         mesh,
         rotation_matrix,
         transform_point_data=transform_point_data,
         transform_cell_data=transform_cell_data,
         transform_global_data=transform_global_data,
+        assume_invertible=True,
     )
 
 
@@ -433,6 +428,7 @@ def scale(
     transform_point_data: bool = False,
     transform_cell_data: bool = False,
     transform_global_data: bool = False,
+    assume_invertible: bool | None = None,
 ) -> "Mesh":
     """Scale the mesh by specified factor(s).
 
@@ -443,6 +439,10 @@ def scale(
         transform_point_data: If True, scale vector/tensor fields in point_data
         transform_cell_data: If True, scale vector/tensor fields in cell_data
         transform_global_data: If True, scale vector/tensor fields in global_data
+        assume_invertible: Controls cache propagation:
+            - True: Assume all factors are non-zero, propagate caches (compile-safe)
+            - False: Assume some factor is zero, skip cache propagation (compile-safe)
+            - None: Check determinant at runtime (may cause graph breaks under torch.compile)
 
     Returns:
         New Mesh with scaled geometry.
@@ -480,6 +480,7 @@ def scale(
                 transform_point_data=transform_point_data,
                 transform_cell_data=transform_cell_data,
                 transform_global_data=transform_global_data,
+                assume_invertible=assume_invertible,
             ),
             center,
         )
@@ -491,4 +492,5 @@ def scale(
         transform_point_data=transform_point_data,
         transform_cell_data=transform_cell_data,
         transform_global_data=transform_global_data,
+        assume_invertible=assume_invertible,
     )

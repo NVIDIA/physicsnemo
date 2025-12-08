@@ -980,11 +980,12 @@ class Mesh:
 
     def scale(
         self,
-        factor: float | torch.Tensor | list | tuple,
-        center: torch.Tensor | list | tuple | None = None,
+        factor: float | torch.Tensor,
+        center: torch.Tensor | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
+        assume_invertible: bool | None = None,
     ) -> "Mesh":
         """Scale the mesh by specified factor(s).
 
@@ -996,6 +997,10 @@ class Mesh:
             transform_point_data: If True, scale vector/tensor fields in point_data
             transform_cell_data: If True, scale vector/tensor fields in cell_data
             transform_global_data: If True, scale vector/tensor fields in global_data
+            assume_invertible: Controls cache propagation:
+                - True: Assume all factors are non-zero (compile-safe)
+                - False: Skip cache propagation (compile-safe)
+                - None: Check at runtime (may cause graph breaks)
 
         Returns:
             New Mesh with scaled geometry
@@ -1005,6 +1010,7 @@ class Mesh:
         return scale(
             self, factor, center,
             transform_point_data, transform_cell_data, transform_global_data,
+            assume_invertible,
         )
 
     def transform(
@@ -1013,6 +1019,7 @@ class Mesh:
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
         transform_global_data: bool = False,
+        assume_invertible: bool | None = None,
     ) -> "Mesh":
         """Apply a linear transformation to the mesh.
 
@@ -1023,6 +1030,10 @@ class Mesh:
             transform_point_data: If True, transform vector/tensor fields in point_data
             transform_cell_data: If True, transform vector/tensor fields in cell_data
             transform_global_data: If True, transform vector/tensor fields in global_data
+            assume_invertible: Controls cache propagation for square matrices:
+                - True: Assume matrix is invertible (compile-safe)
+                - False: Skip cache propagation (compile-safe)
+                - None: Check at runtime (may cause graph breaks)
 
         Returns:
             New Mesh with transformed geometry
@@ -1032,6 +1043,7 @@ class Mesh:
         return transform(
             self, matrix,
             transform_point_data, transform_cell_data, transform_global_data,
+            assume_invertible,
         )
 
 
