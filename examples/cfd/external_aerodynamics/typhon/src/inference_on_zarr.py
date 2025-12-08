@@ -199,8 +199,9 @@ def batched_inference_loop(
     metrics = {k: v / global_weight for k, v in metrics.items()}
     loss = loss / global_weight
 
-    global_predictions = torch.cat([l[0] for l in global_preds_targets], dim=1)
-    global_targets = torch.cat([l[1] for l in global_preds_targets], dim=1)
+    # import pdb; pdb.set_trace()
+    global_predictions = torch.cat([l[0][0] for l in global_preds_targets], dim=1)
+    global_targets = torch.cat([l[1][0] for l in global_preds_targets], dim=1)
 
     # Now, we have to *unshuffle* the prediction to the original index
     inverse_indices = torch.empty_like(indices)
@@ -253,17 +254,26 @@ def inference(cfg: DictConfig) -> None:
     logger.info(f"Number of parameters: {num_params}")
 
     # Load the normalization file from configured directory (defaults to current dir)
-    norm_dir = getattr(cfg.data, "normalization_dir", ".")
-    if cfg.data.mode == "surface":
+    norm_dir = getattr(cfg.datapipe, "normalization_dir", ".")
+    if cfg.datapipe.mode == "surface" or cfg.datapipe.mode == "combined":
         norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
-    elif cfg.data.mode == "volume":
-        norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
+        norm_data = np.load(norm_file)
+        surface_factors = {
+            "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+            "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+        }
+    else:
+        surface_factors = None
 
-    norm_data = np.load(norm_file)
-    norm_factors = {
-        "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
-        "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
-    }
+    if cfg.datapipe.mode == "volume" or cfg.datapipe.mode == "combined":
+        norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
+        norm_data = np.load(norm_file)
+        volume_factors = {
+            "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+            "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+        }
+    else:
+        volume_factors = None
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
@@ -273,21 +283,22 @@ def inference(cfg: DictConfig) -> None:
     # so there is not downsampling.  We still batch it in the inference script
     # for memory usage constraints.
 
-    batch_resolution = cfg.data.resolution
-    cfg.data.resolution = None
+    batch_resolution = cfg.datapipe.resolution
+    cfg.datapipe.resolution = None
     ## Make sure to read the whole data sample for volume:
-    if cfg.data.mode == "volume":
-        cfg.data.volume_sample_from_disk = False
+    if cfg.datapipe.mode == "volume":
+        cfg.datapipe.volume_sample_from_disk = False
 
     # And we need the mesh features for drag, lift in surface data:
-    if cfg.data.mode == "surface":
-        cfg.data.return_mesh_features = True
+    if cfg.datapipe.mode == "surface":
+        cfg.datapipe.return_mesh_features = True
 
     # Validation dataset
     val_dataset = create_transolver_dataset(
-        cfg.data,
+        cfg.datapipe,
         phase="val",
-        scaling_factors=norm_factors,
+        surface_factors=surface_factors,
+        volume_factors=volume_factors,
     )
 
     results = []
@@ -299,7 +310,7 @@ def inference(cfg: DictConfig) -> None:
                     batch,
                     model,
                     cfg.precision,
-                    cfg.data.mode,
+                    cfg.datapipe.mode,
                     batch_resolution,
                     output_pad_size,
                     dist_manager,
@@ -311,7 +322,7 @@ def inference(cfg: DictConfig) -> None:
         logger.info(f"Finished batch {batch_idx} in {elapsed:.4f} seconds")
         start = time.time()
 
-        if cfg.data.mode == "surface":
+        if cfg.datapipe.mode == "surface":
             coeff = 1.0
 
             # Compute the drag and loss coefficients:
@@ -404,7 +415,7 @@ def inference(cfg: DictConfig) -> None:
                 ]
             )
 
-        elif cfg.data.mode == "volume":
+        elif cfg.datapipe.mode == "volume":
             # Extract metric values and convert tensors to floats
             l2_pressure = (
                 metrics["l2_pressure_vol"].item()
@@ -445,7 +456,7 @@ def inference(cfg: DictConfig) -> None:
                 ]
             )
 
-    if cfg.data.mode == "surface":
+    if cfg.datapipe.mode == "surface":
         pred_drag_coeffs = [r[6] for r in results]
         pred_lift_coeffs = [r[7] for r in results]
         true_drag_coeffs = [r[8] for r in results]
@@ -474,7 +485,7 @@ def inference(cfg: DictConfig) -> None:
         logger.info(f"R2 score for lift: {r2_lift:.4f}")
         logger.info(f"R2 score for drag: {r2_drag:.4f}")
 
-    elif cfg.data.mode == "volume":
+    elif cfg.datapipe.mode == "volume":
         headers = [
             "Batch",
             "Loss",
