@@ -17,7 +17,7 @@
 defaults:
   - training: base
   - model: transolver
-  - datapipe: surface
+  - data: surface
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
@@ -28,7 +28,7 @@ precision: float32 # float32, float16, bfloat16, or float8
 compile: true
 profile: false
 
-datapipe:
+data:
   include_sdf: false
 
 # Logging configuration

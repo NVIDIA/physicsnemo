@@ -17,7 +17,7 @@
 defaults:
   - training: base
   - model: typhon
-  - datapipe: surface
+  - data: surface
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
@@ -35,7 +35,7 @@ model:
   neighbors_in_radius: [4, 8, 16, 64, 128, 256]  # neighbors in radius for local features
   n_hidden_local: 32 # hidden dimension for local features
 
-datapipe:
+data:
   include_sdf: false
   include_geometry: true
   geometry_sampling: 300_000

@@ -17,7 +17,7 @@
 defaults:
   - training: base
   - model: typhon
-  - datapipe: volume
+  - data: volume
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
@@ -25,10 +25,10 @@ run_id: "typhon/volume/bq"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
-compile: false
+compile: true 
 profile: false
 
-datapipe:
+data:
   include_geometry: true
   geometry_sampling: 300_000
   broadcast_global_features: false
