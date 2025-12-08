@@ -657,7 +657,7 @@ if TENSORSTORE_AVAILABLE:
                 for k, v in attributes_dict.items():
                     try:
                         attributes[k] = torch.tensor(v)
-                    except (TypeError, ValueError):  # noqa PERF203
+                    except (TypeError, ValueError, RuntimeError):  # noqa PERF203
                         pass
                 return attributes
 
