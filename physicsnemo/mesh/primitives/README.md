@@ -1,6 +1,8 @@
 # PhysicsNeMo-Mesh Examples
 
-This module provides a comprehensive collection of canonical meshes for tutorials, testing, and experimentation. All meshes are generated at runtime and organized by category and dimensional configuration.
+This module provides a comprehensive collection of canonical meshes for tutorials,
+testing, and experimentation. All meshes are generated at runtime and organized by
+category and dimensional configuration.
 
 ## Quick Start
 
@@ -79,6 +81,7 @@ Triangulated 2D shapes in the plane.
 
 Surface meshes embedded in 3D.
 
+<!-- markdownlint-disable MD013 -->
 | Function | Dimensions | Description | Properties |
 |----------|------------|-------------|------------|
 | **Spheres** |
@@ -100,6 +103,7 @@ Surface meshes embedded in 3D.
 | `icosahedron_surface` | 2D→3D | Regular icosahedron | Closed |
 | **Special Surfaces** |
 | `mobius_strip` | 2D→3D | Möbius strip | Non-orientable, has boundary |
+<!-- markdownlint-enable MD013 -->
 
 ### volumes/ - 3D Manifolds in 3D Space
 
@@ -119,11 +123,13 @@ Functions for creating modified versions of meshes and standalone noise generati
 
 **Mesh Variations:**
 
+<!-- markdownlint-disable MD013 -->
 | Function | Description | Use Case |
 |----------|-------------|----------|
 | `lumpy_sphere` | Sphere with radial noise | Testing robustness to irregular geometry |
 | `noisy_mesh` | Add Gaussian noise to any mesh | Generic perturbation utility |
 | `perturbed_grid` | Structured grid with random perturbations | Testing on nearly-regular grids |
+<!-- markdownlint-enable MD013 -->
 
 **Procedural Noise Functions:**
 
@@ -236,7 +242,8 @@ lumpy = examples.procedural.lumpy_sphere.load(
 
 ## Testing
 
-These examples are used throughout the physicsnemo.mesh test suite. You can also use them in your own tests:
+These examples are used throughout the physicsnemo.mesh test suite. You can also
+use them in your own tests:
 
 ```python
 def test_my_algorithm():
@@ -252,4 +259,3 @@ def test_my_algorithm():
         result = my_algorithm(mesh)
         assert result is not None
 ```
-

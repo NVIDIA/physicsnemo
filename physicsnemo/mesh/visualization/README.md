@@ -1,6 +1,7 @@
 # Mesh Visualization
 
-The `physicsnemo.mesh` library now includes comprehensive visualization capabilities through the `Mesh.draw()` method, supporting both matplotlib and PyVista backends.
+The `physicsnemo.mesh` library now includes comprehensive visualization capabilities
+through the `Mesh.draw()` method, supporting both matplotlib and PyVista backends.
 
 ## Quick Start
 
@@ -242,10 +243,10 @@ plt.show()
 
 The visualization system is organized into:
 
-- `physicsnemo.mesh/visualization/draw_mesh.py`: Main dispatcher with backend selection
-- `physicsnemo.mesh/visualization/_matplotlib_impl.py`: Matplotlib backend (0D-3D)
-- `physicsnemo.mesh/visualization/_pyvista_impl.py`: PyVista backend (3D)
-- `physicsnemo.mesh/visualization/_scalar_utils.py`: Scalar data processing utilities
+- `physicsnemo/mesh/visualization/draw_mesh.py`: Main dispatcher with backend selection
+- `physicsnemo/mesh/visualization/_matplotlib_impl.py`: Matplotlib backend (0D-3D)
+- `physicsnemo/mesh/visualization/_pyvista_impl.py`: PyVista backend (3D)
+- `physicsnemo/mesh/visualization/_scalar_utils.py`: Scalar data processing utilities
 
 Key features:
 
@@ -254,21 +255,3 @@ Key features:
 - Intelligent neutral color selection
 - Comprehensive parameter validation
 - Full matplotlib 3D support via `mpl_toolkits.mplot3d`
-
-## Testing
-
-Run visualization tests:
-
-```bash
-uv run pytest test/test_visualization.py -v
-```
-
-All 31 tests cover:
-- Backend selection (auto and explicit)
-- Scalar data types (None, tensor, string, tuple)
-- Multi-dimensional scalar norming
-- Nested TensorDict access
-- Parameter validation
-- Color and transparency control
-- Different mesh dimensionalities (0D, 1D, 2D, 3D)
-
