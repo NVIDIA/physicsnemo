@@ -55,12 +55,14 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 no-build-isolation-package = [
     "torch_scatter",
     "torch_cluster",
+    "earth2grid",
 ]
 managed = true
 
 # torch-sparse requires us to tell uv about it's dependency on torch.
 [tool.uv.extra-build-dependencies]
 torch-sparse = ["torch"]
+earth2grid = ["setuptools", "torch"] 
 
 # Earth2 grid is not on pypi ....
 [tool.uv.sources]
@@ -126,6 +128,7 @@ nn-extras = [
     "cuml",
     "transformer_engine[pytorch]",
     "scipy",
+    "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
@@ -140,6 +143,8 @@ datapipes-extras = [
     "tensorflow",
     "nvidia-physicsnemo[model-extras]",
 ]
+
+# Use case specific dependency groups.
 gnns = [
     "torch_geometric",
     "torch_scatter",
