@@ -7,16 +7,186 @@ from tensordict import TensorDict, tensorclass
 from physicsnemo.mesh.utilities import get_cached, set_cached
 
 
-@tensorclass  # Note: tensor_only=True provides minimal performance benefit (<5%) but reduces flexibility
+@tensorclass(tensor_only=True)
 class Mesh:
+    r"""GPU-accelerated mesh data structure for n-dimensional simplicial complexes.
+
+    A ``Mesh`` represents a pure simplicial complex: a collection of n-dimensional
+    simplices (cells) defined by vertices (points) embedded in a Euclidean space.
+    This unified representation handles diverse mesh types:
+
+    - **Point clouds**: 0-simplices (vertices) in any dimension
+    - **Undirected Graphs** or **Curve meshes**: 1-simplices (edges) in 2D, 3D, or higher
+    - **Surface meshes**: 2-simplices (triangles) in 2D, 3D, or higher
+    - **Volume meshes**: 3-simplices (tetrahedra) in 3D or higher
+    - **Higher-dimensional**: n-simplices in m-dimensional space (where n ≤ m)
+
+    **Simplices and Dimensionality**
+
+    An n-simplex is the simplest n-dimensional polytope: a point (0-simplex),
+    line segment (1-simplex), triangle (2-simplex), tetrahedron (3-simplex), etc.
+    Each n-simplex has exactly n+1 vertices.
+
+    Two key dimensions characterize a mesh:
+
+    - **Manifold dimension** (``n_manifold_dims``): The intrinsic dimension of each
+      cell. For triangles this is 2, regardless of the ambient space.
+    - **Spatial dimension** (``n_spatial_dims``): The dimension of the embedding
+      space where vertex coordinates live.
+
+    The **codimension** is their difference: ``codimension = n_spatial_dims - n_manifold_dims``.
+    Codimension-1 manifolds (surfaces in 3D, curves in 2D) have well-defined normal
+    vectors. Higher codimensions do not have unique normals.
+
+    **Data Storage**
+
+    Arbitrary tensor data can be attached at three levels:
+
+    - ``point_data``: Per-vertex quantities (e.g., temperature, velocity)
+    - ``cell_data``: Per-cell quantities (e.g., pressure, stress tensors)
+    - ``global_data``: Mesh-level quantities (e.g., simulation time, metadata)
+
+    Data fields can be scalars, vectors, tensors of any rank, or nested structures.
+    All data is stored in ``TensorDict`` containers that move together with the
+    mesh under ``.to(device)`` calls.
+
+    **Design**
+
+    ``Mesh`` is a ``tensorclass``, providing automatic device management, batching
+    support, and seamless integration with PyTorch. All geometric computations are
+    fully vectorized for GPU acceleration.
+
+    Parameters
+    ----------
+    points : torch.Tensor
+        Vertex coordinates with shape :math:`(N_p, D_s)` where :math:`N_p` is the
+        number of points and :math:`D_s` is the spatial dimension. Must be a
+        floating-point dtype.
+    cells : torch.Tensor
+        Cell connectivity with shape :math:`(N_c, D_m + 1)` where :math:`N_c` is
+        the number of cells and :math:`D_m` is the manifold dimension. Each row
+        contains indices into ``points`` defining one simplex. Must be an integer
+        dtype, since these are treated as indices into the ``points`` tensor.
+    point_data : TensorDict or dict[str, torch.Tensor] (optional)
+        Per-vertex data. If a dict, converted to TensorDict with batch size
+        :math:`(N_p,)`. Default is an empty TensorDict.
+    cell_data : TensorDict or dict[str, torch.Tensor] (optional)
+        Per-cell data. If a dict, converted to TensorDict with batch size
+        :math:`(N_c,)`. Default is an empty TensorDict.
+    global_data : TensorDict or dict[str, torch.Tensor] (optional)
+        Mesh-level data. If a dict, converted to TensorDict with scalar batch
+        size. Default is an empty TensorDict.
+
+    Attributes
+    ----------
+    points : torch.Tensor
+        Vertex coordinates, shape :math:`(N_p, D_s)`.
+    cells : torch.Tensor
+        Cell connectivity, shape :math:`(N_c, D_m + 1)`.
+    point_data : TensorDict
+        Per-vertex data container with batch size :math:`(N_p,)`.
+    cell_data : TensorDict
+        Per-cell data container with batch size :math:`(N_c,)`.
+    global_data : TensorDict
+        Mesh-level data container with scalar batch size.
+
+    Raises
+    ------
+    ValueError
+        If ``points`` is not 2D, ``cells`` is not 2D, or manifold dimension
+        exceeds spatial dimension.
+    TypeError
+        If ``cells`` has a floating-point dtype (must be integer).
+
+    Examples
+    --------
+    Create a single triangle in 2D:
+
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])
+    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> mesh.n_points, mesh.n_cells, mesh.n_spatial_dims, mesh.n_manifold_dims
+    (3, 1, 2, 2)
+
+    Create a triangle mesh with attached scalar data:
+
+    >>> mesh = Mesh(
+    ...     points=points,
+    ...     cells=cells,
+    ...     point_data={"temperature": torch.tensor([300.0, 350.0, 325.0])},
+    ...     cell_data={"pressure": torch.tensor([101.3])},
+    ... )
+
+    Move mesh and all data to GPU:
+
+    >>> mesh_gpu = mesh.to("cuda")  # doctest: +SKIP
+
+    Notes
+    -----
+    **Simplex Definition**
+
+    An n-simplex is the convex hull of n+1 affinely independent points. The vertices
+    are stored as indices into the ``points`` array, so a triangle (2-simplex) is
+    represented by 3 indices, a tetrahedron (3-simplex) by 4 indices, etc.
+
+    **Caching**
+
+    Expensive geometric computations (centroids, areas, normals) are automatically
+    cached in the data dictionaries under keys prefixed with ``_cache``. The cache
+    is invalidated when creating new ``Mesh`` instances but persists across
+    repeated property accesses on the same instance.
+
+    **Pure Simplicial Complexes**
+
+    This class assumes a *pure* simplicial complex where all cells have the same
+    manifold dimension. Mixed-dimension meshes (e.g., triangles and tetrahedra
+    together) are not supported.
+    """
+
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
     cells: torch.Tensor  # shape: (n_cells, n_manifold_dimensions + 1)
-    point_data: TensorDict = None  # accepts dict/None, converted to TensorDict in __post_init__  # ty: ignore
-    cell_data: TensorDict = None  # accepts dict/None, converted to TensorDict in __post_init__  # ty: ignore
-    global_data: TensorDict = None  # accepts dict/None, converted to TensorDict in __post_init__  # ty: ignore
+    point_data: TensorDict
+    cell_data: TensorDict
+    global_data: TensorDict
 
-    def __post_init__(self):
-        ### Validate shapes
+    def __init__(
+        self,
+        points: torch.Tensor,
+        cells: torch.Tensor,
+        point_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        cell_data: TensorDict | dict[str, torch.Tensor] | None = None,
+        global_data: TensorDict | dict[str, torch.Tensor] | None = None,
+    ) -> None:
+        ### Assign tensorclass fields
+        self.points = points
+        self.cells = cells
+
+        # For data fields, convert inputs to TensorDicts if needed
+        if not isinstance(point_data, TensorDict):
+            point_data = TensorDict(
+                {} if point_data is None else dict(point_data),
+                batch_size=torch.Size([self.n_points]),
+                device=self.points.device,
+            )
+        self.point_data = point_data
+        if not isinstance(cell_data, TensorDict):
+            cell_data = TensorDict(
+                {} if cell_data is None else dict(cell_data),
+                batch_size=torch.Size([self.n_cells]),
+                device=self.cells.device,
+            )
+        self.cell_data = cell_data
+        if not isinstance(global_data, TensorDict):
+            global_data = TensorDict(
+                {} if global_data is None else dict(global_data),
+                batch_size=torch.Size([]),
+                device=self.points.device,
+            )
+        self.global_data = global_data
+
+        ### Validate shapes and dtypes
         if self.points.ndim != 2:
             raise ValueError(
                 f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
@@ -29,38 +199,9 @@ class Mesh:
             raise ValueError(
                 f"`n_manifold_dims` must be <= `n_spatial_dims`, but got {self.n_manifold_dims=} > {self.n_spatial_dims=}."
             )
-
-        ### Validate dtypes
         if torch.is_floating_point(self.cells):
             raise TypeError(
                 f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
-            )
-
-        ### Initialize data TensorDicts
-        if self.point_data is None:
-            self.point_data = {}
-        if self.cell_data is None:
-            self.cell_data = {}
-        if self.global_data is None:
-            self.global_data = {}
-
-        if not isinstance(self.point_data, TensorDict):
-            self.point_data = TensorDict(
-                dict(self.point_data),
-                batch_size=torch.Size([self.n_points]),
-                device=self.points.device,
-            )
-        if not isinstance(self.cell_data, TensorDict):
-            self.cell_data = TensorDict(
-                dict(self.cell_data),
-                batch_size=torch.Size([self.n_cells]),
-                device=self.points.device,
-            )
-        if not isinstance(self.global_data, TensorDict):
-            self.global_data = TensorDict(
-                dict(self.global_data),
-                batch_size=torch.Size([]),
-                device=self.points.device,
             )
 
     @property
