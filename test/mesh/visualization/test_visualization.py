@@ -13,14 +13,6 @@ matplotlib.use("Agg")  # Use non-interactive backend for testing
 
 from physicsnemo.mesh import Mesh
 
-### Helper Functions ###
-
-
-### Test Fixtures ###
-
-
-### Helper functions for creating test meshes
-
 
 def create_0d_point_cloud(n_points: int = 10) -> Mesh:
     """Create a 0D point cloud in 0D space."""
