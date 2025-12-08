@@ -928,11 +928,7 @@ class Typhon(Module):
         """
 
         single_input = isinstance(local_embedding, torch.Tensor)
-
-        print(f"type of local_embedding: {type(local_embedding)}")
-        print(f"type of global_embedding: {type(global_embedding)}")
-        print(f"type of geometry: {type(geometry)}")
-
+        
         if time is not None:
             raise NotImplementedError("Time input is not implemented yet."
                                       "Error rather than silently ignoring it.")
