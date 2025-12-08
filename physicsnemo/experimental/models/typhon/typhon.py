@@ -35,7 +35,7 @@ from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.models.module import Module
 
 # Check optional dependency availability
-TE_AVAILABLE = check_min_version("transformer-engine", "0.1.0", hard_fail=False)
+TE_AVAILABLE = check_min_version("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
 
@@ -143,7 +143,13 @@ class GALE(PhysicsAttentionIrregularMesh):
 
         # Compute the attention:
         if self.use_te:
+            q = rearrange(q, "b h s d -> b s h d")
+            k = rearrange(k, "b h s d -> b s h d")
+            v = rearrange(v, "b h s d -> b s h d")
             cross_attention = self.attn_fn(q, k, v)
+            cross_attention = rearrange(
+                cross_attention, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head
+            )
         else:
             cross_attention = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, is_causal=False
