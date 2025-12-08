@@ -417,11 +417,12 @@ class TestScale:
     def test_scale_non_uniform_handles_caches(
         self, n_spatial_dims, n_manifold_dims, device
     ):
-        """Verify non-uniform scaling invalidates areas but preserves normals.
+        """Verify non-uniform scaling correctly computes areas using normals.
 
-        For embedded manifolds, areas are invalidated because the scaling formula
-        |det|^(n_manifold/n_spatial) is only valid for full-dimensional meshes.
-        Normals are correctly computed using the inverse-transpose formula.
+        For codimension-1 embedded manifolds, per-element area scaling is computed
+        using the formula: area' = area × |det(M)| × ||M^{-T} n||
+        where n is the unit normal. This works because the normal encodes the
+        tangent space orientation.
         """
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
 
@@ -430,8 +431,157 @@ class TestScale:
 
         scaled = scale(mesh, factor)
 
-        # Areas invalidated for embedded manifolds, normals correctly computed
-        validate_caches(scaled, {"areas": False, "centroids": True, "normals": True})
+        # Areas correctly computed using normal-based scaling, normals also correct
+        validate_caches(scaled, {"areas": True, "centroids": True, "normals": True})
+
+
+class TestNonIsotropicAreaScaling:
+    """Tests for per-element area scaling under non-isotropic transforms.
+
+    For codimension-1 manifolds, areas scale by: |det(M)| × ||M^{-T} n||
+    where n is the unit normal. This depends on the orientation of each element.
+    """
+
+    def test_anisotropic_scale_horizontal_surface_3d(self, device):
+        """Test anisotropic scaling of a horizontal surface in 3D.
+
+        For a surface in the xy-plane with normal n=(0,0,1), scaling by (a,b,c)
+        should scale the area by |abc| × ||M^{-T} n|| = |abc| × |1/c| = |ab|.
+        """
+        # Triangle in xy-plane (z=0)
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Pre-compute caches
+        original_area = mesh.cell_areas.clone()
+        _ = mesh.cell_normals  # Ensure normals are cached
+
+        # Scale by (2, 3, 5) - non-isotropic
+        scaled = scale(mesh, [2.0, 3.0, 5.0])
+
+        # Area should scale by 2 × 3 = 6 (xy-plane is stretched by x and y factors)
+        expected_area = original_area * 6.0
+        assert torch.allclose(get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5), (
+            f"Expected area {expected_area.item()}, got {get_cached(scaled.cell_data, 'areas').item()}"
+        )
+
+    def test_anisotropic_scale_vertical_surface_3d(self, device):
+        """Test anisotropic scaling of a vertical surface in 3D.
+
+        For a surface in the xz-plane with normal n=(0,1,0), scaling by (a,b,c)
+        should scale the area by |abc| × ||M^{-T} n|| = |abc| × |1/b| = |ac|.
+        """
+        # Triangle in xz-plane (y=0)
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 0.0, 2.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        original_area = mesh.cell_areas.clone()
+        _ = mesh.cell_normals
+
+        # Scale by (2, 3, 5)
+        scaled = scale(mesh, [2.0, 3.0, 5.0])
+
+        # Area should scale by 2 × 5 = 10 (xz-plane is stretched by x and z factors)
+        expected_area = original_area * 10.0
+        assert torch.allclose(get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5)
+
+    def test_anisotropic_scale_diagonal_surface_3d(self, device):
+        """Test anisotropic scaling of a diagonal surface in 3D.
+
+        For a surface at 45° to all axes, the area scaling depends on the normal
+        direction and should match the recomputed area exactly.
+        """
+        # Triangle tilted at 45° - points form a surface with normal ≈ (1,1,1)/√3
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 1.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        _ = mesh.cell_areas
+        _ = mesh.cell_normals
+
+        # Scale by (2, 0.5, 3) - highly anisotropic
+        scaled = scale(mesh, [2.0, 0.5, 3.0])
+
+        # Validate against recomputation
+        validate_caches(scaled, {"areas": True, "normals": True})
+
+    def test_shear_transform_preserves_area_correctness(self, device):
+        """Test that shear transforms correctly compute per-element areas.
+
+        Shear transforms have det=1, but the area scaling is orientation-dependent
+        for embedded manifolds.
+        """
+        # Triangle in xy-plane
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        _ = mesh.cell_areas
+        _ = mesh.cell_normals
+
+        # Shear in xy plane: [[1, 0.5, 0], [0, 1, 0], [0, 0, 1]]
+        # This is det=1, but non-isotropic
+        shear_matrix = torch.tensor(
+            [[1.0, 0.5, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            device=device,
+        )
+        sheared = transform(mesh, shear_matrix)
+
+        # For a horizontal surface with normal (0,0,1), shear in xy doesn't change z
+        # So M^{-T} n should still have unit length in z-direction, thus area unchanged
+        # Validate against recomputation
+        validate_caches(sheared, {"areas": True, "normals": True})
+
+    def test_mixed_orientation_surfaces_3d(self, device):
+        """Test mesh with multiple surfaces at different orientations.
+
+        Each surface element should have its area scaled according to its own
+        normal direction.
+        """
+        # Two triangles: one horizontal (z=0), one vertical (y=0)
+        points = torch.tensor(
+            [
+                # Horizontal triangle (xy-plane)
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                # Vertical triangle (xz-plane)
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor([[0, 1, 2], [3, 4, 5]], device=device, dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        original_areas = mesh.cell_areas.clone()
+        _ = mesh.cell_normals
+
+        # Scale by (2, 3, 5)
+        scaled = scale(mesh, [2.0, 3.0, 5.0])
+
+        # Cell 0 (horizontal): area scales by 2 × 3 = 6
+        # Cell 1 (vertical in xz): area scales by 2 × 5 = 10
+        expected_areas = original_areas * torch.tensor([6.0, 10.0], device=device)
+
+        assert torch.allclose(
+            get_cached(scaled.cell_data, "areas"), expected_areas, atol=1e-5
+        ), f"Expected {expected_areas}, got {get_cached(scaled.cell_data, 'areas')}"
 
 
 class TestTransform:
