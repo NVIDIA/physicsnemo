@@ -949,8 +949,8 @@ class Mesh:
 
     def rotate(
         self,
-        axis: torch.Tensor | list | tuple | None,
         angle: float,
+        axis: torch.Tensor | list | tuple | None = None,
         center: torch.Tensor | list | tuple | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
@@ -961,8 +961,8 @@ class Mesh:
         Convenience wrapper for physicsnemo.mesh.transformations.rotate().
 
         Args:
-            axis: Rotation axis vector (ignored for 2D, required for 3D)
             angle: Rotation angle in radians
+            axis: Rotation axis vector. None for 2D, shape (3,) for 3D.
             center: Center point for rotation (optional)
             transform_point_data: If True, rotate vector/tensor fields in point_data
             transform_cell_data: If True, rotate vector/tensor fields in cell_data
@@ -974,7 +974,7 @@ class Mesh:
         from physicsnemo.mesh.transformations import rotate
 
         return rotate(
-            self, axis, angle, center,
+            self, angle, axis, center,
             transform_point_data, transform_cell_data, transform_global_data,
         )
 

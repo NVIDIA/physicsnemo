@@ -46,8 +46,6 @@ def _transform_tensordict(
     matrix: torch.Tensor,
     n_spatial_dims: int,
     field_type: str,
-    has_batch_dim: bool,
-    batch_size: torch.Size,
 ) -> TensorDict:
     """Transform all vector/tensor fields in a TensorDict.
 
@@ -55,42 +53,17 @@ def _transform_tensordict(
         data: TensorDict with cache already stripped
         matrix: Transformation matrix
         n_spatial_dims: Expected spatial dimensionality
-        field_type: Description for error messages
-        has_batch_dim: Whether tensors have a leading batch dimension
-        batch_size: Batch size for the returned TensorDict
+        field_type: Description for error messages (e.g., "point_data", "global_data")
 
     Returns:
-        New TensorDict with transformed fields
+        TensorDict with transformed fields
     """
+    batch_size = data.batch_size
+    has_batch_dim = len(batch_size) > 0
 
-    def transform_data_field(
-        key: str,
-        value: torch.Tensor,
-    ) -> torch.Tensor:
-        """Transform a single vector or tensor field by a linear transformation matrix.
-
-        Args:
-            key: Field name (for error messages)
-            value: Field tensor. Shape depends on has_batch_dim:
-                - has_batch_dim=True: (batch, ...) where batch is n_points or n_cells
-                - has_batch_dim=False: (...) for global_data
-                The remaining dimensions define the field type:
-                - () = scalar (unchanged)
-                - (n_spatial_dims,) = vector
-                - (n_spatial_dims, n_spatial_dims) = rank-2 tensor
-                - (n_spatial_dims, ..., n_spatial_dims) = higher-rank tensor
-            matrix: Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims)
-            n_spatial_dims: Expected spatial dimensionality of the field
-            field_type: Description for error messages (e.g., "point_data", "global_data")
-            has_batch_dim: Whether the tensor has a leading batch dimension
-
-        Returns:
-            Transformed field tensor
-
-        Raises:
-            ValueError: If field shape is incompatible with transformation
-        """
-        shape = value.shape[1:] if has_batch_dim else value.shape
+    def transform_field(key: str, value: torch.Tensor) -> torch.Tensor:
+        """Transform a single vector or tensor field."""
+        shape = value.shape[len(batch_size) :]
 
         ### Scalars are invariant under linear transformations
         if len(shape) == 0:
@@ -145,9 +118,7 @@ def _transform_tensordict(
             f"Expected all spatial dimensions to be {n_spatial_dims}, but got {shape}"
         )
 
-    transformed = data.exclude("_cache").named_apply(
-        transform_data_field, batch_size=batch_size
-    )
+    transformed = data.exclude("_cache").named_apply(transform_field, batch_size=batch_size)
     data.update(transformed)
     return data
 
@@ -155,90 +126,51 @@ def _transform_tensordict(
 ### Rotation Matrix Construction ###
 
 
-def _build_3d_rotation(
-    u: torch.Tensor, angle: torch.Tensor | float, device
+def _build_rotation_matrix(
+    angle: float | torch.Tensor,
+    axis: torch.Tensor | None,
+    device,
 ) -> torch.Tensor:
-    """Build 3D rotation matrix using Rodrigues' formula.
-
-    Implements: R = cos(θ) I + sin(θ) [u]_× + (1 - cos(θ)) (u ⊗ u)
-
-    where:
-    - u is a unit vector (axis of rotation)
-    - θ is the rotation angle
-    - [u]_× is the skew-symmetric cross product matrix
-    - u ⊗ u is the outer product u u^T
+    """Build rotation matrix for 2D or 3D.
 
     Args:
-        u: Unit vector axis of rotation, shape (3,)
-        angle: Rotation angle in radians (scalar or 0-d tensor)
+        angle: Rotation angle in radians
+        axis: Rotation axis vector. None for 2D, shape (3,) for 3D.
         device: Target device for the output matrix
 
     Returns:
-        3×3 rotation matrix
+        Rotation matrix: 2×2 if axis is None, 3×3 if axis has shape (3,)
     """
     angle = torch.as_tensor(angle, device=device)
     c, s = torch.cos(angle), torch.sin(angle)
 
-    ### Skew-symmetric cross-product matrix [u]_×
+    if axis is None:
+        ### 2D rotation matrix: [[c, -s], [s, c]]
+        return torch.stack([torch.stack([c, -s]), torch.stack([s, c])])
+
+    ### 3D rotation using Rodrigues' formula: R = cI + s[u]_× + (1-c)(u⊗u)
+    axis = torch.as_tensor(axis, device=device, dtype=torch.float32)
+    if axis.shape != (3,):
+        raise NotImplementedError(
+            f"Rotation only supported for 2D (axis=None) or 3D (axis shape (3,)). "
+            f"Got axis with shape {axis.shape}."
+        )
+    if axis.norm() < 1e-10:
+        raise ValueError(f"Axis vector has near-zero length: {axis.norm()=}")
+
+    u = F.normalize(axis, dim=0, eps=0.0)
     ux, uy, uz = u
     zero = torch.zeros((), device=device, dtype=u.dtype)
-    u_cross = torch.stack(
-        [
-            torch.stack([zero, -uz, uy]),
-            torch.stack([uz, zero, -ux]),
-            torch.stack([-uy, ux, zero]),
-        ]
-    )
 
-    ### Rodrigues' rotation formula
+    # Skew-symmetric cross-product matrix [u]_×
+    u_cross = torch.stack([
+        torch.stack([zero, -uz, uy]),
+        torch.stack([uz, zero, -ux]),
+        torch.stack([-uy, ux, zero]),
+    ])
+
     identity = torch.eye(3, device=device, dtype=u.dtype)
     return c * identity + s * u_cross + (1 - c) * u.outer(u)
-
-
-def _build_rotation_matrix(
-    axis: torch.Tensor | None,
-    angle: float,
-    n_spatial_dims: int,
-    device,
-) -> torch.Tensor:
-    """Build rotation matrix for arbitrary spatial dimensions.
-
-    Args:
-        axis: Rotation axis vector. For 2D, this is ignored. For 3D, must be a
-            3D vector (will be normalized automatically).
-        angle: Rotation angle in radians
-        n_spatial_dims: Spatial dimensionality (2 or 3)
-        device: Target device for the output matrix
-
-    Returns:
-        Rotation matrix of shape (n_spatial_dims, n_spatial_dims)
-    """
-    if n_spatial_dims == 2:
-        u = torch.tensor([0.0, 0.0, 1.0], device=device)
-        R_3d = _build_3d_rotation(u, angle, device)
-        return R_3d[:2, :2]
-
-    elif n_spatial_dims == 3:
-        if axis is None:
-            raise ValueError("axis must be provided for 3D rotation")
-
-        axis = torch.as_tensor(axis, device=device, dtype=torch.float32)
-        if axis.shape != (3,):
-            raise ValueError(
-                f"For 3D rotation, axis must have shape (3,), got {axis.shape}"
-            )
-
-        if axis.norm() < 1e-10:
-            raise ValueError(f"Axis vector has near-zero length: {axis.norm()=}")
-        u = F.normalize(axis, dim=0, eps=0.0)
-
-        return _build_3d_rotation(u, angle, device)
-
-    else:
-        raise NotImplementedError(
-            f"Axis-angle rotation not supported for {n_spatial_dims}D spaces. "
-            f"For dimensions > 3, use transform() with an explicit rotation matrix."
-        )
 
 
 ### Public API ###
@@ -266,7 +198,7 @@ def transform(
     Cache Handling:
         - areas: For square matrices, scaled by |det|^(n_manifold_dims/n_spatial_dims)
         - centroids: Always transformed
-        - normals: Invalidated (directions change for non-orthogonal transforms)
+        - normals: For square invertible matrices, transformed by inverse-transpose
     """
     if not torch.compiler.is_compiling():
         if matrix.ndim != 2:
@@ -280,13 +212,38 @@ def transform(
     new_points = mesh.points @ matrix.T
     new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
 
-    ### Opt-in: areas (only for square matrices)
+    ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
-        scale_factor = matrix.det().abs() ** (mesh.n_manifold_dims / mesh.n_spatial_dims)
-        if (v := get_cached(mesh.point_data, "areas")) is not None:
-            set_cached(new_point_data, "areas", v * scale_factor)
-        if (v := get_cached(mesh.cell_data, "areas")) is not None:
-            set_cached(new_cell_data, "areas", v * scale_factor)
+        det = matrix.det()
+        if det.abs() > 1e-10:  # Invertible
+            # Areas scale by |det|^(n_manifold_dims/n_spatial_dims), but this formula is only
+            # valid for full-dimensional meshes OR isotropic transforms (uniform scaling ± rotation).
+            # For non-isotropic transforms of embedded manifolds, area scaling is element-dependent.
+            preserve_areas = mesh.n_manifold_dims == mesh.n_spatial_dims
+            if not preserve_areas:
+                # Check if M is isotropic: M^T @ M = λ * I for some scalar λ
+                mtm = matrix.T @ matrix
+                identity_scaled = mtm[0, 0] * torch.eye(
+                    matrix.shape[0], device=matrix.device, dtype=matrix.dtype
+                )
+                preserve_areas = torch.allclose(mtm, identity_scaled, atol=1e-6)
+
+            if preserve_areas:
+                scale_factor = det.abs() ** (mesh.n_manifold_dims / mesh.n_spatial_dims)
+                if (v := get_cached(mesh.point_data, "areas")) is not None:
+                    set_cached(new_point_data, "areas", v * scale_factor)
+                if (v := get_cached(mesh.cell_data, "areas")) is not None:
+                    set_cached(new_cell_data, "areas", v * scale_factor)
+
+            # Normals transform by inverse-transpose: n' = sign(det) * normalize(n @ M^{-1})
+            # Using linear solve: solve M.T @ x.T = n.T to get x = n @ M^{-1}
+            det_sign = det.sign()
+            if (v := get_cached(mesh.point_data, "normals")) is not None:
+                transformed = torch.linalg.solve(matrix.T, v.T).T
+                set_cached(new_point_data, "normals", det_sign * F.normalize(transformed, dim=-1))
+            if (v := get_cached(mesh.cell_data, "normals")) is not None:
+                transformed = torch.linalg.solve(matrix.T, v.T).T
+                set_cached(new_cell_data, "normals", det_sign * F.normalize(transformed, dim=-1))
 
     ### Opt-in: centroids
     if (v := get_cached(mesh.cell_data, "centroids")) is not None:
@@ -294,32 +251,11 @@ def transform(
 
     ### Transform user data if requested
     if transform_point_data:
-        _transform_tensordict(
-            new_point_data,
-            matrix,
-            mesh.n_spatial_dims,
-            "point_data",
-            has_batch_dim=True,
-            batch_size=torch.Size([mesh.n_points]),
-        )
+        _transform_tensordict(new_point_data, matrix, mesh.n_spatial_dims, "point_data")
     if transform_cell_data:
-        _transform_tensordict(
-            new_cell_data,
-            matrix,
-            mesh.n_spatial_dims,
-            "cell_data",
-            has_batch_dim=True,
-            batch_size=torch.Size([mesh.n_cells]),
-        )
+        _transform_tensordict(new_cell_data, matrix, mesh.n_spatial_dims, "cell_data")
     if transform_global_data:
-        _transform_tensordict(
-            new_global_data,
-            matrix,
-            mesh.n_spatial_dims,
-            "global_data",
-            has_batch_dim=False,
-            batch_size=torch.Size([]),
-        )
+        _transform_tensordict(new_global_data, matrix, mesh.n_spatial_dims, "global_data")
 
     from physicsnemo.mesh.mesh import Mesh
 
@@ -393,8 +329,8 @@ def translate(
 
 def rotate(
     mesh: "Mesh",
-    axis: torch.Tensor | list | tuple | None,
     angle: float,
+    axis: torch.Tensor | list | tuple | None = None,
     center: torch.Tensor | list | tuple | None = None,
     transform_point_data: bool = False,
     transform_cell_data: bool = False,
@@ -404,9 +340,8 @@ def rotate(
 
     Args:
         mesh: Input mesh to rotate
-        axis: Rotation axis vector. For 2D meshes, this is ignored.
-            For 3D meshes, must be a 3D vector (will be normalized).
         angle: Rotation angle in radians (counterclockwise, right-hand rule)
+        axis: Rotation axis vector. None for 2D, shape (3,) for 3D.
         center: Center point for rotation. If None, rotates about the origin.
         transform_point_data: If True, rotate vector/tensor fields in point_data
         transform_cell_data: If True, rotate vector/tensor fields in cell_data
@@ -423,85 +358,42 @@ def rotate(
     if axis is not None:
         axis = torch.as_tensor(axis, device=mesh.points.device, dtype=torch.float32)
 
-    rotation_matrix = _build_rotation_matrix(
-        axis=axis,
-        angle=angle,
-        n_spatial_dims=mesh.n_spatial_dims,
-        device=mesh.points.device,
-    )
+    ### Validate axis matches mesh dimensionality
+    expected_dims = 2 if axis is None else 3
+    if mesh.n_spatial_dims != expected_dims:
+        raise ValueError(
+            f"axis={'None' if axis is None else 'provided'} implies {expected_dims}D rotation, "
+            f"but mesh has n_spatial_dims={mesh.n_spatial_dims}"
+        )
 
+    rotation_matrix = _build_rotation_matrix(angle, axis, mesh.points.device)
+
+    ### Handle center by translate-rotate-translate
     if center is not None:
         center = torch.as_tensor(
             center, device=mesh.points.device, dtype=mesh.points.dtype
         )
-        mesh_centered = translate(mesh, -center)
-        mesh_rotated = rotate(
-            mesh_centered,
-            axis,
-            angle,
-            center=None,
-            transform_point_data=transform_point_data,
-            transform_cell_data=transform_cell_data,
-            transform_global_data=transform_global_data,
-        )
-        return translate(mesh_rotated, center)
-
-    new_points = mesh.points @ rotation_matrix.T
-    new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
-
-    ### Opt-in: areas (unchanged)
-    if (v := get_cached(mesh.point_data, "areas")) is not None:
-        set_cached(new_point_data, "areas", v)
-    if (v := get_cached(mesh.cell_data, "areas")) is not None:
-        set_cached(new_cell_data, "areas", v)
-
-    ### Opt-in: normals (rotate)
-    if (v := get_cached(mesh.point_data, "normals")) is not None:
-        set_cached(new_point_data, "normals", v @ rotation_matrix.T)
-    if (v := get_cached(mesh.cell_data, "normals")) is not None:
-        set_cached(new_cell_data, "normals", v @ rotation_matrix.T)
-
-    ### Opt-in: centroids (rotate)
-    if (v := get_cached(mesh.cell_data, "centroids")) is not None:
-        set_cached(new_cell_data, "centroids", v @ rotation_matrix.T)
-
-    ### Transform user data if requested
-    if transform_point_data:
-        _transform_tensordict(
-            new_point_data,
-            rotation_matrix,
-            mesh.n_spatial_dims,
-            "point_data",
-            has_batch_dim=True,
-            batch_size=torch.Size([mesh.n_points]),
-        )
-    if transform_cell_data:
-        _transform_tensordict(
-            new_cell_data,
-            rotation_matrix,
-            mesh.n_spatial_dims,
-            "cell_data",
-            has_batch_dim=True,
-            batch_size=torch.Size([mesh.n_cells]),
-        )
-    if transform_global_data:
-        _transform_tensordict(
-            new_global_data,
-            rotation_matrix,
-            mesh.n_spatial_dims,
-            "global_data",
-            has_batch_dim=False,
-            batch_size=torch.Size([]),
+        return translate(
+            rotate(
+                translate(mesh, -center),
+                angle,
+                axis,
+                center=None,
+                transform_point_data=transform_point_data,
+                transform_cell_data=transform_cell_data,
+                transform_global_data=transform_global_data,
+            ),
+            center,
         )
 
-    from physicsnemo.mesh.mesh import Mesh
-
-    return Mesh(
-        points=new_points,
-        cells=mesh.cells,
-        point_data=new_point_data,
-        cell_data=new_cell_data,
-        global_data=new_global_data,
+    ### Apply transformation (handles points, areas, centroids, normals, user data)
+    ### For rotation: det=1, inverse-transpose equals original matrix, so normals rotate correctly
+    return transform(
+        mesh,
+        rotation_matrix,
+        transform_point_data=transform_point_data,
+        transform_cell_data=transform_cell_data,
+        transform_global_data=transform_global_data,
     )
 
 
@@ -526,120 +418,48 @@ def scale(
     Returns:
         New Mesh with scaled geometry.
 
-    Cache Handling (uniform scaling):
-        - areas: Multiplied by |factor|^n_manifold_dims
+    Cache Handling:
+        - areas: Scaled correctly; for non-isotropic transforms of embedded manifolds,
+                 invalidated (formula is orientation-dependent)
         - centroids: Scaled
-        - normals: Flipped if factor < 0 and n_manifold_dims is odd
-
-    Cache Handling (non-uniform scaling):
-        - areas: Invalidated
-        - centroids: Scaled component-wise
-        - normals: Invalidated
+        - normals: Transformed by inverse-transpose (direction adjusted, magnitude normalized)
     """
-    ### Parse factor
-    if isinstance(factor, (int, float)):
-        is_uniform = True
-        factor_scalar = float(factor)
-        scale_matrix = (
-            torch.eye(mesh.n_spatial_dims, device=mesh.points.device) * factor_scalar
+    ### Parse factor and build scale matrix
+    factor_tensor = torch.as_tensor(
+        factor, device=mesh.points.device, dtype=mesh.points.dtype
+    )
+    if factor_tensor.ndim == 0:
+        factor_tensor = factor_tensor.expand(mesh.n_spatial_dims)
+    elif not torch.compiler.is_compiling() and factor_tensor.shape[-1] != mesh.n_spatial_dims:
+        raise ValueError(
+            f"factor must be scalar or shape ({mesh.n_spatial_dims},), "
+            f"got {factor_tensor.shape}"
         )
-    else:
-        factor_tensor = torch.as_tensor(
-            factor, device=mesh.points.device, dtype=mesh.points.dtype
-        )
-        if factor_tensor.ndim == 0:
-            is_uniform = True
-            factor_scalar = factor_tensor.item()
-            scale_matrix = (
-                torch.eye(mesh.n_spatial_dims, device=mesh.points.device)
-                * factor_scalar
-            )
-        else:
-            if not torch.compiler.is_compiling():
-                if factor_tensor.shape[-1] != mesh.n_spatial_dims:
-                    raise ValueError(
-                        f"factor must be scalar or shape ({mesh.n_spatial_dims},), "
-                        f"got {factor_tensor.shape}"
-                    )
-            is_uniform = False
-            scale_matrix = torch.diag(factor_tensor)
 
+    scale_matrix = torch.diag(factor_tensor)
+
+    ### Handle center by translate-scale-translate
     if center is not None:
         center = torch.as_tensor(
             center, device=mesh.points.device, dtype=mesh.points.dtype
         )
-        mesh_centered = translate(mesh, -center)
-        mesh_scaled = scale(
-            mesh_centered,
-            factor,
-            center=None,
-            transform_point_data=transform_point_data,
-            transform_cell_data=transform_cell_data,
-            transform_global_data=transform_global_data,
-        )
-        return translate(mesh_scaled, center)
-
-    new_points = mesh.points @ scale_matrix.T
-    new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
-
-    if is_uniform:
-        # Areas: scale by |factor|^n_manifold_dims
-        area_scale = abs(factor_scalar) ** mesh.n_manifold_dims
-        if (v := get_cached(mesh.point_data, "areas")) is not None:
-            set_cached(new_point_data, "areas", v * area_scale)
-        if (v := get_cached(mesh.cell_data, "areas")) is not None:
-            set_cached(new_cell_data, "areas", v * area_scale)
-
-        # Normals: flip if factor < 0 AND n_manifold_dims is odd
-        sign = -1 if (factor_scalar < 0 and mesh.n_manifold_dims % 2 == 1) else 1
-        if (v := get_cached(mesh.point_data, "normals")) is not None:
-            set_cached(new_point_data, "normals", v * sign)
-        if (v := get_cached(mesh.cell_data, "normals")) is not None:
-            set_cached(new_cell_data, "normals", v * sign)
-
-        # Centroids: scale
-        if (v := get_cached(mesh.cell_data, "centroids")) is not None:
-            set_cached(new_cell_data, "centroids", v * factor_scalar)
-    else:
-        # Non-uniform: only centroids preserved
-        if (v := get_cached(mesh.cell_data, "centroids")) is not None:
-            set_cached(new_cell_data, "centroids", v @ scale_matrix.T)
-
-    ### Transform user data if requested
-    if transform_point_data:
-        _transform_tensordict(
-            new_point_data,
-            scale_matrix,
-            mesh.n_spatial_dims,
-            "point_data",
-            has_batch_dim=True,
-            batch_size=torch.Size([mesh.n_points]),
-        )
-    if transform_cell_data:
-        _transform_tensordict(
-            new_cell_data,
-            scale_matrix,
-            mesh.n_spatial_dims,
-            "cell_data",
-            has_batch_dim=True,
-            batch_size=torch.Size([mesh.n_cells]),
-        )
-    if transform_global_data:
-        _transform_tensordict(
-            new_global_data,
-            scale_matrix,
-            mesh.n_spatial_dims,
-            "global_data",
-            has_batch_dim=False,
-            batch_size=torch.Size([]),
+        return translate(
+            scale(
+                translate(mesh, -center),
+                factor,
+                center=None,
+                transform_point_data=transform_point_data,
+                transform_cell_data=transform_cell_data,
+                transform_global_data=transform_global_data,
+            ),
+            center,
         )
 
-    from physicsnemo.mesh.mesh import Mesh
-
-    return Mesh(
-        points=new_points,
-        cells=mesh.cells,
-        point_data=new_point_data,
-        cell_data=new_cell_data,
-        global_data=new_global_data,
+    ### Apply transformation (handles points, areas, centroids, normals, user data)
+    return transform(
+        mesh,
+        scale_matrix,
+        transform_point_data=transform_point_data,
+        transform_cell_data=transform_cell_data,
+        transform_global_data=transform_global_data,
     )

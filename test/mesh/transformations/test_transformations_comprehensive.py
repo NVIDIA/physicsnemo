@@ -20,17 +20,17 @@ class TestRotationErrors:
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
 
-        with pytest.raises(ValueError, match="axis must be provided"):
-            rotate(mesh, axis=None, angle=np.pi / 2)
+        with pytest.raises(ValueError, match="implies 2D rotation"):
+            rotate(mesh, angle=np.pi / 2, axis=None)
 
     def test_rotate_3d_with_wrong_axis_shape_raises(self):
-        """Test that axis with wrong shape raises ValueError."""
+        """Test that axis with wrong shape raises NotImplementedError."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
 
-        with pytest.raises(ValueError, match="axis must have shape"):
-            rotate(mesh, axis=[1.0, 0.0], angle=np.pi / 2)  # Only 2D axis for 3D mesh
+        with pytest.raises(NotImplementedError, match="only supported for 2D.*or 3D"):
+            rotate(mesh, angle=np.pi / 2, axis=[1.0, 0.0])  # 2D axis for 3D mesh
 
     def test_rotate_with_zero_length_axis_raises(self):
         """Test that zero-length axis raises ValueError."""
@@ -39,18 +39,19 @@ class TestRotationErrors:
         mesh = Mesh(points=points, cells=cells)
 
         with pytest.raises(ValueError, match="near-zero length"):
-            rotate(mesh, axis=[0.0, 0.0, 0.0], angle=np.pi / 2)
+            rotate(mesh, angle=np.pi / 2, axis=[0.0, 0.0, 0.0])
 
-    def test_rotate_4d_raises_not_implemented(self):
-        """Test that rotation in >3D raises NotImplementedError."""
+    def test_rotate_4d_raises_error(self):
+        """Test that rotation in >3D raises an error."""
         torch.manual_seed(42)
         # 4D mesh
         points = torch.randn(5, 4)
         cells = torch.tensor([[0, 1, 2, 3]])
         mesh = Mesh(points=points, cells=cells)
 
-        with pytest.raises(NotImplementedError, match="not supported for 4D"):
-            rotate(mesh, axis=[1.0, 0.0, 0.0, 0.0], angle=np.pi / 4)
+        # axis=provided implies 3D, so this raises ValueError for dimension mismatch
+        with pytest.raises(ValueError, match="implies 3D rotation"):
+            rotate(mesh, angle=np.pi / 4, axis=[1.0, 0.0, 0.0, 0.0])
 
 
 class TestTransformErrors:
@@ -93,7 +94,7 @@ class TestHigherOrderTensorTransformation:
 
         # Rotate by 90 degrees
         angle = np.pi / 2
-        rotated = rotate(mesh, axis=None, angle=angle, transform_point_data=True)
+        rotated = rotate(mesh, angle=angle, transform_point_data=True)
 
         # Stress tensor should be transformed: T' = R @ T @ R^T
         transformed_stress = rotated.point_data["stress"]
@@ -132,7 +133,7 @@ class TestHigherOrderTensorTransformation:
         # This swaps x->y, y->-x, z->z
         angle = np.pi / 2
         rotated = rotate(
-            mesh, axis=[0.0, 0.0, 1.0], angle=angle, transform_point_data=True
+            mesh, angle=angle, axis=[0.0, 0.0, 1.0], transform_point_data=True
         )
 
         transformed = rotated.point_data["piezo"]
@@ -195,7 +196,7 @@ class TestHigherOrderTensorTransformation:
         # Rotate 90 degrees in 2D
         # R = [[0, -1], [1, 0]]
         angle = np.pi / 2
-        rotated = rotate(mesh, axis=None, angle=angle, transform_point_data=True)
+        rotated = rotate(mesh, angle=angle, transform_point_data=True)
 
         transformed = rotated.point_data["elasticity"]
 
@@ -248,7 +249,7 @@ class TestDataTransformation:
 
         # Rotate 90° about z
         rotated = rotate(
-            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_point_data=True
+            mesh, angle=np.pi / 2, axis=[0.0, 0.0, 1.0], transform_point_data=True
         )
 
         # Vector should now point in y direction
@@ -314,7 +315,7 @@ class TestDataTransformation:
 
         # Rotate 90° about z
         rotated = rotate(
-            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_cell_data=True
+            mesh, angle=np.pi / 2, axis=[0.0, 0.0, 1.0], transform_cell_data=True
         )
 
         # Flux should rotate
@@ -333,7 +334,7 @@ class TestRotateWithCenter:
 
         # Rotate about center=[1.5, 0, 0] by 180°
         center = [1.5, 0.0, 0.0]
-        rotated = rotate(mesh, axis=[0.0, 0.0, 1.0], angle=np.pi, center=center)
+        rotated = rotate(mesh, angle=np.pi, axis=[0.0, 0.0, 1.0], center=center)
 
         # Points should be reflected about center in xy-plane
         # [1, 0, 0] -> [2, 0, 0] and [2, 0, 0] -> [1, 0, 0]
@@ -450,7 +451,7 @@ class TestCacheInvalidation:
         original_area = mesh.cell_areas
 
         # Rotate 45°
-        rotated = rotate(mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 4)
+        rotated = rotate(mesh, angle=np.pi / 4, axis=[0.0, 0.0, 1.0])
 
         # Area preserved
         assert torch.allclose(rotated.cell_areas, original_area, atol=1e-5)
@@ -496,7 +497,7 @@ class TestCacheInvalidation:
         assert torch.allclose(original_normal[0], torch.tensor([0.0, 0.0, 1.0]))
 
         # Rotate 90° about x-axis
-        rotated = rotate(mesh, axis=[1.0, 0.0, 0.0], angle=np.pi / 2)
+        rotated = rotate(mesh, angle=np.pi / 2, axis=[1.0, 0.0, 0.0])
 
         # Normal should now point in -y direction
         new_normal = rotated.cell_normals
@@ -514,8 +515,8 @@ class TestRotationComposition:
         mesh = Mesh(points=points, cells=cells)
 
         # Rotate 90° about z, then 90° about x
-        mesh1 = rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2)
-        mesh2 = rotate(mesh1, axis=[1, 0, 0], angle=np.pi / 2)
+        mesh1 = rotate(mesh, angle=np.pi / 2, axis=[0, 0, 1])
+        mesh2 = rotate(mesh1, angle=np.pi / 2, axis=[1, 0, 0])
 
         # First point [1,0,0] -> [0,1,0] -> [0,0,1]
         expected0 = torch.tensor([0.0, 0.0, 1.0])
@@ -546,7 +547,7 @@ class TestMeshMethodWrappers:
         cells = torch.tensor([[0]])
         mesh = Mesh(points=points, cells=cells)
 
-        rotated = mesh.rotate([0, 0, 1], np.pi / 2)
+        rotated = mesh.rotate(np.pi / 2, [0, 0, 1])
 
         expected = torch.tensor([[0.0, 1.0, 0.0]])
         assert torch.allclose(rotated.points, expected, atol=1e-5)
@@ -586,7 +587,7 @@ class TestTransformationAccuracy:
 
         # Multiple rotations should preserve lengths
         for angle in [np.pi / 6, np.pi / 4, np.pi / 3, np.pi / 2, np.pi]:
-            rotated = rotate(mesh, axis=[1, 1, 1], angle=angle)
+            rotated = rotate(mesh, angle=angle, axis=[1, 1, 1])
 
             # Length should be preserved
             original_length = torch.norm(mesh.points[0])
@@ -605,7 +606,7 @@ class TestTransformationAccuracy:
         original_volume = mesh.cell_areas
 
         # Rotate by arbitrary angle
-        rotated = rotate(mesh, axis=[1, 2, 3], angle=0.7)
+        rotated = rotate(mesh, angle=0.7, axis=[1, 2, 3])
 
         # Volume should be preserved (rotation is isometry)
         assert torch.allclose(rotated.cell_areas, original_volume, atol=1e-5)
@@ -667,7 +668,7 @@ class TestRotateDataTransformEdgeCases:
         assert torch.allclose(original_normal[0], torch.tensor([0.0, 0.0, 1.0]))
 
         # Rotate - normals should be rotated by cache handler, not transform flags
-        rotated = rotate(mesh, axis=[1, 0, 0], angle=np.pi / 2)
+        rotated = rotate(mesh, angle=np.pi / 2, axis=[1, 0, 0])
 
         # Normal should still be rotated (handled by internal cache logic)
         new_normal = rotated.cell_normals
@@ -684,7 +685,7 @@ class TestRotateDataTransformEdgeCases:
         mesh.point_data["weird"] = torch.ones(mesh.n_points, 5)  # 5 != 3
 
         with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_point_data=True)
+            rotate(mesh, angle=np.pi / 2, axis=[0, 0, 1], transform_point_data=True)
 
     def test_rotate_with_incompatible_tensor_raises(self):
         """Test that incompatible tensor raises ValueError."""
@@ -696,7 +697,7 @@ class TestRotateDataTransformEdgeCases:
         mesh.point_data["bad"] = torch.ones(mesh.n_points, 3, 2)
 
         with pytest.raises(ValueError, match="Cannot transform.*field"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_point_data=True)
+            rotate(mesh, angle=np.pi / 2, axis=[0, 0, 1], transform_point_data=True)
 
     def test_rotate_cell_data_skips_cached(self):
         """Test that rotate skips cached cell_data fields (under "_cache")."""
@@ -710,7 +711,7 @@ class TestRotateDataTransformEdgeCases:
         set_cached(mesh.cell_data, "test_vector", torch.ones(mesh.n_cells, 3))
 
         rotated = rotate(
-            mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_cell_data=True
+            mesh, angle=np.pi / 2, axis=[0, 0, 1], transform_cell_data=True
         )
 
         # Cache should not be transformed (not included in user data transformation)
@@ -730,7 +731,7 @@ class TestRotateDataTransformEdgeCases:
         mesh.cell_data["weird"] = torch.ones(mesh.n_cells, 5)
 
         with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_cell_data=True)
+            rotate(mesh, angle=np.pi / 2, axis=[0, 0, 1], transform_cell_data=True)
 
     def test_rotate_cell_data_incompatible_tensor_raises(self):
         """Test rotate with incompatible cell tensor raises."""
@@ -741,7 +742,7 @@ class TestRotateDataTransformEdgeCases:
         mesh.cell_data["bad"] = torch.ones(mesh.n_cells, 3, 2)
 
         with pytest.raises(ValueError, match="Cannot transform.*field"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_cell_data=True)
+            rotate(mesh, angle=np.pi / 2, axis=[0, 0, 1], transform_cell_data=True)
 
 
 class TestScaleDataTransformEdgeCases:
@@ -815,7 +816,7 @@ class TestGlobalDataTransformation:
 
         # Rotate 90° about z
         rotated = rotate(
-            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_global_data=True
+            mesh, angle=np.pi / 2, axis=[0.0, 0.0, 1.0], transform_global_data=True
         )
 
         # Vector should now point in y direction
@@ -853,7 +854,7 @@ class TestGlobalDataTransformation:
 
         with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
             rotate(
-                mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_global_data=True
+                mesh, angle=np.pi / 2, axis=[0.0, 0.0, 1.0], transform_global_data=True
             )
 
     def test_scale_global_data(self):

@@ -236,7 +236,7 @@ class TestRotation:
             pv_result = pv_mesh.rotate_z(angle, inplace=False)
 
         # physicsnemo.mesh rotation
-        tm_result = rotate(tm_mesh, axis, np.radians(angle))
+        tm_result = rotate(tm_mesh, np.radians(angle), axis)
 
         # Compare points
         tm_as_pv = to_pyvista(tm_result.to("cpu"))
@@ -253,7 +253,7 @@ class TestRotation:
         cells = torch.tensor([[0, 1, 2], [0, 2, 3]], device=device, dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
-        rotated = rotate(mesh, None, np.pi / 2)
+        rotated = rotate(mesh, np.pi / 2)
 
         # After 90 degree rotation: [1, 0] -> [0, 1], [0, 1] -> [-1, 0]
         expected = torch.tensor(
@@ -271,7 +271,7 @@ class TestRotation:
         cells = torch.tensor([[0, 1, 2]], device=device, dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
-        rotated = rotate(mesh, [0, 0, 1], np.pi / 2)
+        rotated = rotate(mesh, np.pi / 2, [0, 0, 1])
 
         expected = torch.tensor(
             [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
@@ -292,9 +292,9 @@ class TestRotation:
 
         # Rotate by 45 degrees
         if n_spatial_dims == 2:
-            rotated = rotate(mesh, None, np.pi / 4)
+            rotated = rotate(mesh, np.pi / 4)
         else:
-            rotated = rotate(mesh, [1, 0, 0], np.pi / 4)
+            rotated = rotate(mesh, np.pi / 4, [1, 0, 0])
 
         validate_caches(
             rotated,
@@ -414,10 +414,15 @@ class TestScale:
         validate_caches(scaled, {"areas": True, "centroids": True, "normals": True})
 
     @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", [(2, 1), (3, 2)])
-    def test_scale_non_uniform_invalidates_areas_and_normals(
+    def test_scale_non_uniform_handles_caches(
         self, n_spatial_dims, n_manifold_dims, device
     ):
-        """Verify non-uniform scaling invalidates areas and normals."""
+        """Verify non-uniform scaling invalidates areas but preserves normals.
+
+        For embedded manifolds, areas are invalidated because the scaling formula
+        |det|^(n_manifold/n_spatial) is only valid for full-dimensional meshes.
+        Normals are correctly computed using the inverse-transpose formula.
+        """
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
 
         factor = torch.ones(n_spatial_dims, device=device)
@@ -425,8 +430,8 @@ class TestScale:
 
         scaled = scale(mesh, factor)
 
-        # Both areas and normals should be invalidated
-        validate_caches(scaled, {"areas": False, "centroids": True, "normals": False})
+        # Areas invalidated for embedded manifolds, normals correctly computed
+        validate_caches(scaled, {"areas": False, "centroids": True, "normals": True})
 
 
 class TestTransform:
@@ -491,7 +496,7 @@ class TestEdgeCases:
         assert translated.n_points == 0
         assert_on_device(translated.points, device)
 
-        rotated = rotate(mesh, [0, 0, 1], np.pi / 2)
+        rotated = rotate(mesh, np.pi / 2, [0, 0, 1])
         assert rotated.n_points == 0
 
         scaled = scale(mesh, 2.0)
@@ -509,7 +514,7 @@ class TestEdgeCases:
         assert_on_device(translated.cells, device)
 
         if n_spatial_dims == 3:
-            rotated = mesh.rotate([0, 0, 1], np.pi / 4)
+            rotated = mesh.rotate(np.pi / 4, [0, 0, 1])
             assert_on_device(rotated.points, device)
 
         scaled = mesh.scale(2.0)
@@ -523,8 +528,8 @@ class TestEdgeCases:
         axis_unnormalized = [2.0, 0.0, 0.0]
         axis_normalized = [1.0, 0.0, 0.0]
 
-        result1 = rotate(mesh, axis_unnormalized, np.pi / 4)
-        result2 = rotate(mesh, axis_normalized, np.pi / 4)
+        result1 = rotate(mesh, np.pi / 4, axis_unnormalized)
+        result2 = rotate(mesh, np.pi / 4, axis_normalized)
 
         assert torch.allclose(result1.points, result2.points, atol=1e-6)
 
@@ -536,7 +541,7 @@ class TestEdgeCases:
         result = mesh.translate([1, 2, 3])
         validate_caches(result, {"areas": True, "centroids": True, "normals": True})
 
-        result = result.rotate([0, 0, 1], np.pi / 4)
+        result = result.rotate(np.pi / 4, [0, 0, 1])
         validate_caches(result, {"areas": True, "centroids": True, "normals": True})
 
         result = result.scale(2.0)
