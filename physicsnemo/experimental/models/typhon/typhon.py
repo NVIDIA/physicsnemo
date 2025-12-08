@@ -917,8 +917,19 @@ class Typhon(Module):
         projecting them onto physical state spaces. These context embeddings are then used
         in all GALE blocks via cross-attention, allowing geometric and global information to
         guide the learned physical state dynamics.
+        
 
         """
+
+        single_input = isinstance(local_embedding, torch.Tensor)
+
+        print(f"type of local_embedding: {type(local_embedding)}")
+        print(f"type of global_embedding: {type(global_embedding)}")
+        print(f"type of geometry: {type(geometry)}")
+
+        if time is not None:
+            raise NotImplementedError("Time input is not implemented yet."
+                                      "Error rather than silently ignoring it.")
 
         local_embedding = _normalize_tensor(local_embedding)
         # First, construct the global context vectors:
@@ -945,6 +956,9 @@ class Typhon(Module):
         # Construct the embedding states:
         if len(global_context_input) > 0:
             embedding_states = torch.cat(global_context_input, dim=-1)
+        else:
+            embedding_states = None
+
 
         if self.include_local_features and geometry is not None:
             local_embedding_bq = []
@@ -971,5 +985,11 @@ class Typhon(Module):
 
         # Now, pass the data through the model:
         x = [self.ln_mlp_out[i](x[i]) for i in range(len(x))]
+
+        if single_input:
+            # If only one input came in, use just that as output:
+            x = x[0]
+        else:
+            x = tuple(x)
 
         return x
