@@ -397,16 +397,21 @@ class TestScale:
             )
 
     @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", [(2, 1), (3, 2)])
-    def test_scale_negative_invalidates_normals(
+    def test_scale_negative_handles_normals(
         self, n_spatial_dims, n_manifold_dims, device
     ):
-        """Verify negative scaling invalidates normals."""
+        """Verify negative scaling correctly handles normals based on manifold dimension.
+
+        The generalized cross product of (n-1) vectors scales by (-1)^(n-1) when negated:
+        - n_manifold_dims=1 (odd): normals flip
+        - n_manifold_dims=2 (even): normals unchanged
+        """
         mesh = create_mesh_with_caches(n_spatial_dims, n_manifold_dims, device=device)
 
         scaled = scale(mesh, -1.0)
 
-        # Normals should be invalidated due to winding order change
-        validate_caches(scaled, {"areas": True, "centroids": True, "normals": False})
+        # Normals should be correct (validated against recomputed values)
+        validate_caches(scaled, {"areas": True, "centroids": True, "normals": True})
 
     @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", [(2, 1), (3, 2)])
     def test_scale_non_uniform_invalidates_areas_and_normals(

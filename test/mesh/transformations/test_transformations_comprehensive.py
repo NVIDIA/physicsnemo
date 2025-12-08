@@ -93,7 +93,7 @@ class TestHigherOrderTensorTransformation:
 
         # Rotate by 90 degrees
         angle = np.pi / 2
-        rotated = rotate(mesh, axis=None, angle=angle, transform_data=True)
+        rotated = rotate(mesh, axis=None, angle=angle, transform_point_data=True)
 
         # Stress tensor should be transformed: T' = R @ T @ R^T
         transformed_stress = rotated.point_data["stress"]
@@ -131,7 +131,9 @@ class TestHigherOrderTensorTransformation:
         #      [0,  0, 1]]
         # This swaps x->y, y->-x, z->z
         angle = np.pi / 2
-        rotated = rotate(mesh, axis=[0.0, 0.0, 1.0], angle=angle, transform_data=True)
+        rotated = rotate(
+            mesh, axis=[0.0, 0.0, 1.0], angle=angle, transform_point_data=True
+        )
 
         transformed = rotated.point_data["piezo"]
 
@@ -193,7 +195,7 @@ class TestHigherOrderTensorTransformation:
         # Rotate 90 degrees in 2D
         # R = [[0, -1], [1, 0]]
         angle = np.pi / 2
-        rotated = rotate(mesh, axis=None, angle=angle, transform_data=True)
+        rotated = rotate(mesh, axis=None, angle=angle, transform_point_data=True)
 
         transformed = rotated.point_data["elasticity"]
 
@@ -216,10 +218,10 @@ class TestHigherOrderTensorTransformation:
 
 
 class TestDataTransformation:
-    """Test transform_data=True for all transformation types."""
+    """Test transform_point_data/transform_cell_data/transform_global_data for all types."""
 
-    def test_translate_doesnt_transform_data(self):
-        """Test that translate doesn't have transform_data parameter (affine transformation)."""
+    def test_translate_preserves_data(self):
+        """Test that translate preserves vector fields unchanged."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
@@ -236,7 +238,7 @@ class TestDataTransformation:
         )
 
     def test_rotate_with_vector_data(self):
-        """Test rotate with transform_data=True rotates vectors."""
+        """Test rotate with transform_point_data=True rotates vectors."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
@@ -246,7 +248,7 @@ class TestDataTransformation:
 
         # Rotate 90° about z
         rotated = rotate(
-            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_data=True
+            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_point_data=True
         )
 
         # Vector should now point in y direction
@@ -254,7 +256,7 @@ class TestDataTransformation:
         assert torch.allclose(rotated.point_data["vec"], expected, atol=1e-5)
 
     def test_scale_with_vector_data(self):
-        """Test scale with transform_data=True scales vectors."""
+        """Test scale with transform_point_data=True scales vectors."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
@@ -262,7 +264,7 @@ class TestDataTransformation:
         mesh.point_data["vec"] = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
 
         # Uniform scale by 2
-        scaled = scale(mesh, factor=2.0, transform_data=True)
+        scaled = scale(mesh, factor=2.0, transform_point_data=True)
 
         # Vectors should be scaled
         expected = mesh.point_data["vec"] * 2.0
@@ -279,7 +281,7 @@ class TestDataTransformation:
 
         # Transform
         matrix = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
-        transformed = transform(mesh, matrix, transform_data=True)
+        transformed = transform(mesh, matrix, transform_point_data=True)
 
         # Scalar should be unchanged
         assert torch.allclose(
@@ -298,8 +300,8 @@ class TestDataTransformation:
         matrix = torch.eye(2)
 
         # Should raise - incompatible with transformation
-        with pytest.raises(ValueError, match="Cannot transform.*First dimension"):
-            transform(mesh, matrix, transform_data=True)
+        with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
+            transform(mesh, matrix, transform_point_data=True)
 
     def test_transform_cell_data_vectors(self):
         """Test that cell_data vectors are also transformed."""
@@ -312,7 +314,7 @@ class TestDataTransformation:
 
         # Rotate 90° about z
         rotated = rotate(
-            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_data=True
+            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_cell_data=True
         )
 
         # Flux should rotate
@@ -370,14 +372,16 @@ class TestScaleWithCenter:
         assert torch.allclose(scaled.points, expected, atol=1e-5)
 
     def test_scale_with_center_and_data(self):
-        """Test scaling with center and transform_data=True."""
+        """Test scaling with center and transform_point_data=True."""
         points = torch.tensor([[0.0, 0.0], [2.0, 0.0]])
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
 
         mesh.point_data["vec"] = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
 
-        scaled = scale(mesh, factor=2.0, center=[1.0, 0.0], transform_data=True)
+        scaled = scale(
+            mesh, factor=2.0, center=[1.0, 0.0], transform_point_data=True
+        )
 
         # Vectors should be scaled
         expected_vec = mesh.point_data["vec"] * 2.0
@@ -650,10 +654,10 @@ class TestScaleEdgeCases:
 
 
 class TestRotateDataTransformEdgeCases:
-    """Test rotate() with transform_data covering all code paths."""
+    """Test rotate() with transform_point_data/transform_cell_data covering all code paths."""
 
     def test_rotate_handles_geometric_caches_separately(self):
-        """Test that geometric cached properties are handled by cache handler, not transform_data."""
+        """Test that geometric cached properties are handled by cache handler, not transform flags."""
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
@@ -662,10 +666,10 @@ class TestRotateDataTransformEdgeCases:
         original_normal = mesh.cell_normals
         assert torch.allclose(original_normal[0], torch.tensor([0.0, 0.0, 1.0]))
 
-        # Rotate - normals should be rotated by cache handler, not transform_data
-        rotated = rotate(mesh, axis=[1, 0, 0], angle=np.pi / 2, transform_data=False)
+        # Rotate - normals should be rotated by cache handler, not transform flags
+        rotated = rotate(mesh, axis=[1, 0, 0], angle=np.pi / 2)
 
-        # Normal should still be rotated (handled by _handle_caches_for_rotation)
+        # Normal should still be rotated (handled by internal cache logic)
         new_normal = rotated.cell_normals
         expected = torch.tensor([0.0, -1.0, 0.0])
         assert torch.allclose(new_normal[0], expected, atol=1e-5)
@@ -679,8 +683,8 @@ class TestRotateDataTransformEdgeCases:
         # Field with wrong first dimension
         mesh.point_data["weird"] = torch.ones(mesh.n_points, 5)  # 5 != 3
 
-        with pytest.raises(ValueError, match="Cannot transform.*First dimension"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_data=True)
+        with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
+            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_point_data=True)
 
     def test_rotate_with_incompatible_tensor_raises(self):
         """Test that incompatible tensor raises ValueError."""
@@ -692,7 +696,7 @@ class TestRotateDataTransformEdgeCases:
         mesh.point_data["bad"] = torch.ones(mesh.n_points, 3, 2)
 
         with pytest.raises(ValueError, match="Cannot transform.*field"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_data=True)
+            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_point_data=True)
 
     def test_rotate_cell_data_skips_cached(self):
         """Test that rotate skips cached cell_data fields (under "_cache")."""
@@ -705,7 +709,9 @@ class TestRotateDataTransformEdgeCases:
         # Cached field
         set_cached(mesh.cell_data, "test_vector", torch.ones(mesh.n_cells, 3))
 
-        rotated = rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_data=True)
+        rotated = rotate(
+            mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_cell_data=True
+        )
 
         # Cache should not be transformed (not included in user data transformation)
         # The cache is preserved but not included in the transformation
@@ -723,8 +729,8 @@ class TestRotateDataTransformEdgeCases:
         # Wrong shape
         mesh.cell_data["weird"] = torch.ones(mesh.n_cells, 5)
 
-        with pytest.raises(ValueError, match="Cannot transform.*First dimension"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_data=True)
+        with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
+            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_cell_data=True)
 
     def test_rotate_cell_data_incompatible_tensor_raises(self):
         """Test rotate with incompatible cell tensor raises."""
@@ -735,11 +741,11 @@ class TestRotateDataTransformEdgeCases:
         mesh.cell_data["bad"] = torch.ones(mesh.n_cells, 3, 2)
 
         with pytest.raises(ValueError, match="Cannot transform.*field"):
-            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_data=True)
+            rotate(mesh, axis=[0, 0, 1], angle=np.pi / 2, transform_cell_data=True)
 
 
 class TestScaleDataTransformEdgeCases:
-    """Test scale() with transform_data covering all paths."""
+    """Test scale() with transform_point_data covering all paths."""
 
     def test_scale_data_skips_cached(self):
         """Test scale skips cached fields (under "_cache")."""
@@ -751,7 +757,7 @@ class TestScaleDataTransformEdgeCases:
 
         set_cached(mesh.point_data, "test_vector", torch.tensor([[1.0, 2.0]]))
 
-        scaled = scale(mesh, factor=2.0, transform_data=True)
+        scaled = scale(mesh, factor=2.0, transform_point_data=True)
 
         # Cache should not be transformed (excluded from user data transformation)
         assert (
@@ -767,8 +773,8 @@ class TestScaleDataTransformEdgeCases:
 
         mesh.point_data["weird"] = torch.ones(mesh.n_points, 5)
 
-        with pytest.raises(ValueError, match="Cannot transform.*First dimension"):
-            scale(mesh, factor=2.0, transform_data=True)
+        with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
+            scale(mesh, factor=2.0, transform_point_data=True)
 
     def test_scale_with_incompatible_tensor_raises(self):
         """Test scale with incompatible tensor raises ValueError."""
@@ -779,7 +785,7 @@ class TestScaleDataTransformEdgeCases:
         mesh.point_data["bad"] = torch.ones(mesh.n_points, 2, 3)
 
         with pytest.raises(ValueError, match="Cannot transform.*field"):
-            scale(mesh, factor=2.0, transform_data=True)
+            scale(mesh, factor=2.0, transform_point_data=True)
 
 
 class TestTranslateEdgeCases:
@@ -791,8 +797,77 @@ class TestTranslateEdgeCases:
         cells = torch.tensor([[0, 1]])
         mesh = Mesh(points=points, cells=cells)
 
-        with pytest.raises(ValueError, match="offset must be broadcastable"):
+        with pytest.raises(ValueError, match="offset must have shape"):
             translate(mesh, offset=[1.0, 2.0, 3.0])  # 3D offset for 2D mesh
+
+
+class TestGlobalDataTransformation:
+    """Test global_data transformation."""
+
+    def test_transform_global_data_vector(self):
+        """Test that global_data vectors are transformed."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        cells = torch.tensor([[0, 1]])
+        mesh = Mesh(points=points, cells=cells)
+
+        # Global vector field (no batch dimension)
+        mesh.global_data["reference_direction"] = torch.tensor([1.0, 0.0, 0.0])
+
+        # Rotate 90° about z
+        rotated = rotate(
+            mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_global_data=True
+        )
+
+        # Vector should now point in y direction
+        expected = torch.tensor([0.0, 1.0, 0.0])
+        assert torch.allclose(
+            rotated.global_data["reference_direction"], expected, atol=1e-5
+        )
+
+    def test_transform_global_data_scalar_unchanged(self):
+        """Test that global_data scalars are unchanged."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]])
+        cells = torch.tensor([[0, 1]])
+        mesh = Mesh(points=points, cells=cells)
+
+        # Global scalar
+        mesh.global_data["temperature"] = torch.tensor(300.0)
+
+        # Transform
+        matrix = torch.tensor([[0.0, -1.0], [1.0, 0.0]])
+        transformed = transform(mesh, matrix, transform_global_data=True)
+
+        # Scalar should be unchanged
+        assert torch.allclose(
+            transformed.global_data["temperature"], mesh.global_data["temperature"]
+        )
+
+    def test_transform_global_data_incompatible_raises(self):
+        """Test that incompatible global_data raises ValueError."""
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        cells = torch.tensor([[0, 1]])
+        mesh = Mesh(points=points, cells=cells)
+
+        # Incompatible vector (5 != 3)
+        mesh.global_data["bad_vector"] = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+
+        with pytest.raises(ValueError, match="Cannot transform.*First.*dimension"):
+            rotate(
+                mesh, axis=[0.0, 0.0, 1.0], angle=np.pi / 2, transform_global_data=True
+            )
+
+    def test_scale_global_data(self):
+        """Test scale transforms global_data vectors."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]])
+        cells = torch.tensor([[0, 1]])
+        mesh = Mesh(points=points, cells=cells)
+
+        mesh.global_data["force"] = torch.tensor([1.0, 2.0])
+
+        scaled = scale(mesh, factor=3.0, transform_global_data=True)
+
+        expected = torch.tensor([3.0, 6.0])
+        assert torch.allclose(scaled.global_data["force"], expected, atol=1e-5)
 
 
 if __name__ == "__main__":

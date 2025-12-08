@@ -929,20 +929,19 @@ class Mesh:
             **kwargs,
         )
 
-    def translate(self, offset: torch.Tensor | list | tuple) -> "Mesh":
-        """Apply a translation (affine transformation) to the mesh.
+    def translate(
+        self,
+        offset: torch.Tensor | list | tuple,
+    ) -> "Mesh":
+        """Apply a translation to the mesh.
 
         Convenience wrapper for physicsnemo.mesh.transformations.translate().
-        See that function for detailed documentation.
 
         Args:
-            offset: Translation vector, shape (n_spatial_dims,) or broadcastable
+            offset: Translation vector, shape (n_spatial_dims,)
 
         Returns:
             New Mesh with translated geometry
-
-        Example:
-            >>> translated = mesh.translate([1.0, 2.0, 3.0])
         """
         from physicsnemo.mesh.transformations import translate
 
@@ -953,86 +952,87 @@ class Mesh:
         axis: torch.Tensor | list | tuple | None,
         angle: float,
         center: torch.Tensor | list | tuple | None = None,
-        transform_data: bool = False,
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
     ) -> "Mesh":
         """Rotate the mesh about an axis by a specified angle.
 
         Convenience wrapper for physicsnemo.mesh.transformations.rotate().
-        See that function for detailed documentation.
 
         Args:
             axis: Rotation axis vector (ignored for 2D, required for 3D)
             angle: Rotation angle in radians
             center: Center point for rotation (optional)
-            transform_data: If True, also rotate vector/tensor fields
+            transform_point_data: If True, rotate vector/tensor fields in point_data
+            transform_cell_data: If True, rotate vector/tensor fields in cell_data
+            transform_global_data: If True, rotate vector/tensor fields in global_data
 
         Returns:
             New Mesh with rotated geometry
-
-        Example:
-            >>> # Rotate 90 degrees about z-axis
-            >>> import numpy as np
-            >>> rotated = mesh.rotate([0, 0, 1], np.pi/2)
         """
         from physicsnemo.mesh.transformations import rotate
 
-        return rotate(self, axis, angle, center, transform_data)
+        return rotate(
+            self, axis, angle, center,
+            transform_point_data, transform_cell_data, transform_global_data,
+        )
 
     def scale(
         self,
         factor: float | torch.Tensor | list | tuple,
         center: torch.Tensor | list | tuple | None = None,
-        transform_data: bool = False,
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
     ) -> "Mesh":
         """Scale the mesh by specified factor(s).
 
         Convenience wrapper for physicsnemo.mesh.transformations.scale().
-        See that function for detailed documentation.
 
         Args:
             factor: Scale factor (scalar) or factors (per-dimension)
             center: Center point for scaling (optional)
-            transform_data: If True, also scale vector/tensor fields
+            transform_point_data: If True, scale vector/tensor fields in point_data
+            transform_cell_data: If True, scale vector/tensor fields in cell_data
+            transform_global_data: If True, scale vector/tensor fields in global_data
 
         Returns:
             New Mesh with scaled geometry
-
-        Example:
-            >>> # Uniform scaling
-            >>> scaled = mesh.scale(2.0)
-            >>>
-            >>> # Non-uniform scaling
-            >>> scaled = mesh.scale([2.0, 1.0, 0.5])
         """
         from physicsnemo.mesh.transformations import scale
 
-        return scale(self, factor, center, transform_data)
+        return scale(
+            self, factor, center,
+            transform_point_data, transform_cell_data, transform_global_data,
+        )
 
     def transform(
         self,
         matrix: torch.Tensor,
-        transform_data: bool = False,
+        transform_point_data: bool = False,
+        transform_cell_data: bool = False,
+        transform_global_data: bool = False,
     ) -> "Mesh":
         """Apply a linear transformation to the mesh.
 
         Convenience wrapper for physicsnemo.mesh.transformations.transform().
-        See that function for detailed documentation.
 
         Args:
             matrix: Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims)
-            transform_data: If True, also transform vector/tensor fields
+            transform_point_data: If True, transform vector/tensor fields in point_data
+            transform_cell_data: If True, transform vector/tensor fields in cell_data
+            transform_global_data: If True, transform vector/tensor fields in global_data
 
         Returns:
             New Mesh with transformed geometry
-
-        Example:
-            >>> # Shear transformation
-            >>> shear = torch.tensor([[1.0, 0.5], [0.0, 1.0]])
-            >>> sheared = mesh.transform(shear)
         """
         from physicsnemo.mesh.transformations import transform
 
-        return transform(self, matrix, transform_data)
+        return transform(
+            self, matrix,
+            transform_point_data, transform_cell_data, transform_global_data,
+        )
 
 
 ### Override the tensorclass __repr__ with custom formatting
