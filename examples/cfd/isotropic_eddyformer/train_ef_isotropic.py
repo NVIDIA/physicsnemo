@@ -8,6 +8,7 @@ import numpy as np
 
 import torch
 from torch.optim import Adam
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel
 
@@ -76,7 +77,18 @@ def isotropic_trainer(cfg: DictConfig) -> None:
         hdim=cfg.model.hdim,
         num_layers=cfg.model.num_layers,
         use_scale=cfg.model.use_scale,
-        cfg=EddyFormerConfig(**cfg.model.layer_config),
+        cfg=EddyFormerConfig(
+            basis=cfg.model.layer_config.basis,
+            mesh=tuple(cfg.model.layer_config.mesh),
+            mode=tuple(cfg.model.layer_config.mode),
+            mode_les=tuple(cfg.model.layer_config.mode_les),
+            kernel_size=tuple(cfg.model.layer_config.kernel_size),
+            kernel_size_les=tuple(cfg.model.layer_config.kernel_size_les),
+            ffn_dim=cfg.model.layer_config.ffn_dim,
+            activation=cfg.model.layer_config.activation,
+            num_heads=cfg.model.layer_config.num_heads,
+            heads_dim=cfg.model.layer_config.heads_dim,
+        ),
     ).to(dist.device)
 
     if dist.distributed:
@@ -107,7 +119,7 @@ def isotropic_trainer(cfg: DictConfig) -> None:
         model=model,
         optim=optimizer,
         logger=log,
-        use_amp=False,
+        use_amp=cfg.training.amp,
         use_graphs=False
     )
     def training_step(input: Tensor, target: Tensor) -> Tensor:

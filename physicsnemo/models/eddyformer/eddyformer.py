@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union, Sequence, Optional
 from torch import Tensor
 
 import torch
@@ -34,23 +34,23 @@ class EddyFormerConfig(Module):
     num_heads: int
     heads_dim: int
 
-    def __init__(self, basis: str, mesh: Tuple[int], mode: Tuple[int],
-                 kernel_size: Tuple[int], ffn_dim: int, activation: str,
-                 mode_les: Tuple[int], kernel_size_les: Tuple[int], num_heads: int, heads_dim: int):
+    def __init__(self, basis: str, mesh: Sequence[int], mode: Sequence[int],
+                 kernel_size: Sequence[int], ffn_dim: int, activation: str,
+                 mode_les: Sequence[int], kernel_size_les: Sequence[int], num_heads: int, heads_dim: int):
         """
         """
         super().__init__()
 
         self.basis = basis
-        self.mesh = mesh
-        self.mode = mode
+        self.mesh = tuple(mesh)
+        self.mode = tuple(mode)
 
-        self.kernel_size = kernel_size
+        self.kernel_size = tuple(kernel_size)
         self.ffn_dim = ffn_dim
         self.activation = activation
 
-        self.mode_les = mode_les
-        self.kernel_size_les = kernel_size_les
+        self.mode_les = tuple(mode_les)
+        self.kernel_size_les = tuple(kernel_size_les)
         self.num_heads = num_heads
         self.heads_dim = heads_dim
 
@@ -110,12 +110,12 @@ class EddyFormerLayer(Module):
 # Model
 
 @dataclass
-class MetaData(ModelMetaData):
+class EddyFormerMetaData(ModelMetaData):
     name: str = "EddyFormer"
     # Optimization
     jit: bool = True
     cuda_graphs: bool = True
-    amp: bool = False
+    amp: bool = True
     # Inference
     onnx_cpu: bool = False
     onnx_gpu: bool = False
@@ -150,7 +150,7 @@ class EddyFormer(Module):
         """
         EddyFormer model.
         """
-        super().__init__(meta=MetaData())
+        super().__init__(meta=EddyFormerMetaData())
 
         self.cfg = cfg
         self.ndim = len(cfg.mesh)
