@@ -4,7 +4,11 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict, tensorclass
 
-from physicsnemo.mesh.utilities import get_cached, set_cached
+from physicsnemo.mesh.transformations import rotate, scale, transform, translate
+from physicsnemo.mesh.utilities import get_cached, scatter_aggregate, set_cached
+from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
+from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
+from physicsnemo.mesh.visualization import draw_mesh
 
 
 @tensorclass(tensor_only=True)
@@ -610,8 +614,6 @@ class Mesh:
                     )
 
         ### Convert each cell data field to point data
-        from physicsnemo.mesh.utilities import scatter_aggregate
-
         new_point_data = self.point_data.clone()
 
         # Get flat list of point indices and corresponding cell indices
@@ -755,11 +757,6 @@ class Mesh:
             target_n_points = self.n_points
         if target_n_cells is None:
             target_n_cells = self.n_cells
-
-        from physicsnemo.mesh.utilities._padding import (
-            _pad_by_tiling_last,
-            _pad_with_value,
-        )
 
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
@@ -910,8 +907,6 @@ class Mesh:
             >>> import matplotlib.pyplot as plt
             >>> plt.show()
         """
-        from physicsnemo.mesh.visualization import draw_mesh
-
         return draw_mesh(
             mesh=self,
             backend=backend,
@@ -943,8 +938,6 @@ class Mesh:
         Returns:
             New Mesh with translated geometry
         """
-        from physicsnemo.mesh.transformations import translate
-
         return translate(self, offset)
 
     def rotate(
@@ -971,8 +964,6 @@ class Mesh:
         Returns:
             New Mesh with rotated geometry
         """
-        from physicsnemo.mesh.transformations import rotate
-
         return rotate(
             self, angle, axis, center,
             transform_point_data, transform_cell_data, transform_global_data,
@@ -1005,8 +996,6 @@ class Mesh:
         Returns:
             New Mesh with scaled geometry
         """
-        from physicsnemo.mesh.transformations import scale
-
         return scale(
             self, factor, center,
             transform_point_data, transform_cell_data, transform_global_data,
@@ -1038,8 +1027,6 @@ class Mesh:
         Returns:
             New Mesh with transformed geometry
         """
-        from physicsnemo.mesh.transformations import transform
-
         return transform(
             self, matrix,
             transform_point_data, transform_cell_data, transform_global_data,
@@ -1051,8 +1038,6 @@ class Mesh:
 # Note: Must be done after class definition because @tensorclass overrides __repr__
 # even when defined inside the class body
 def _mesh_repr(self) -> str:
-    from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
-
     return format_mesh_repr(self, exclude_cache=False)
 
 
