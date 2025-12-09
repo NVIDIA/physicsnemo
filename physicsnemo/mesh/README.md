@@ -415,12 +415,17 @@ sampled = mesh.sample_data_at_points(query_points, data_source="points")
 
 ### Neighbors
 
-Note that these use an efficient sparse (`indices`, `offsets`) encoding of the adjacency
-relationships, which is used internally for all computations. (See the dedicated
+The neighbors module provides efficient ways to compute the *topological*
+neighbors of mesh elements (i.e., based on the mesh connectivity,as opposed to
+*spatial* neighbors based on distance).
+
+Note that these use an efficient sparse (`indices`, `offsets`) encoding of the
+adjacency relationships, which is used internally for all computations. (See the
+dedicated
 [`physicsnemo.mesh.neighbors._adjacency.py`](physicsnemo/mesh/neighbors/_adjacency.py)
-module.) You can convert these to a typical ragged list-of-lists representation with
-`.to_list()`, which is useful for debugging or interoperability, at the cost of
-performance:
+module.) You can convert these to a typical ragged list-of-lists representation
+with `.to_list()`, which is useful for debugging or interoperability, at the
+cost of performance:
 
 ```python
 point_neighbors = mesh.get_point_to_points_adjacency().to_list()
