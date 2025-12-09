@@ -7,7 +7,7 @@ model:
   layer_config:
     basis: leg_elem
     mesh: [8, 8, 8]
-    mode: [10, 10, 10]
+    mode: [13, 13, 13]
     mode_les: [5, 5, 5]
     kernel_size: [2, 2, 2]
     kernel_size_les: [2, 2, 2]

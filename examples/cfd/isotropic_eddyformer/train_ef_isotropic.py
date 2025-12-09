@@ -110,6 +110,9 @@ def isotropic_trainer(cfg: DictConfig) -> None:
     dataset = Re94(root=cfg.training.dataset, split="train", t=cfg.training.t)
     dataloader = DataLoader(dataset, cfg.training.batch_size, shuffle=True)
 
+    testset = Re94(root=cfg.training.dataset, split="test", t=cfg.training.t)
+    testloader = DataLoader(testset)
+
     # define relative l2 error as the loss function
     def loss_fun(pred: Tensor, target: Tensor) -> Tensor:
         return torch.linalg.norm(pred - target) / torch.linalg.norm(target)

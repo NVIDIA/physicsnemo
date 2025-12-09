@@ -24,7 +24,8 @@ class Basis(Protocol):
         """
         Evaluate basis expansion at given points.
         """
-        return torch.tensordot(self.fn(xs), coef, dims=1)
+        mat = self.fn(xs)[..., :len(coef)]
+        return torch.tensordot(mat, coef, dims=1)
 
     def modal(self, vals: Tensor) -> Tensor:
         """
@@ -53,14 +54,13 @@ class Legendre(nn.Module, Basis):
     def extra_repr(self) -> str:
         return f"m={self.m}"
 
-    @functools.cache
     def __init__(self, m: int, endpoint: bool = False):
         """
         """
         super().__init__()
         self.m = m
 
-        if endpoint: m += 1
+        if endpoint: m -= 1
         c = (0, ) * m + (1, )
         dc = legendre.legder(c)
 
@@ -104,11 +104,11 @@ class Legendre(nn.Module, Basis):
 class LegendreSEM(Legendre):
 
     def __init__(self, m: int):
-        super().__init__(m - 2, True)
+        super().__init__(m, True)
 
         xs = self.grid[:, torch.newaxis]
-        mat = super().modal(self.f * xs * (1 - xs))
-        self.register_buffer("inv", torch.linalg.inv(mat))
+        mat = super().modal(self.f[:, :-2] * xs * (1 - xs))
+        self.register_buffer("inv", torch.linalg.inv(mat[:-2]))
 
     def at(self, coef: Tensor, xs: Tensor) -> Tensor:
         vals = super().at(coef[2:], xs)
@@ -123,7 +123,7 @@ class LegendreSEM(Legendre):
         for _ in range(vals.ndim - 1):
             xs = xs.unsqueeze(-1)
 
-        coef = super().modal(vals - (1 - xs) * vals[0] - xs * vals[-1])
+        coef = super().modal(vals - (1 - xs) * vals[0] - xs * vals[-1])[:-2]
         return torch.concat([vals[[0, -1], ...], torch.tensordot(self.inv, coef, 1)], axis=0)
 
     def nodal(self, coef: Tensor) -> Tensor:

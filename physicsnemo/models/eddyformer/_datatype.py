@@ -4,9 +4,12 @@ from torch import Tensor
 import torch
 
 from dataclasses import dataclass, replace
-from functools import cached_property
+from functools import cache, cached_property
 
 from ._basis import Basis, Legendre, LegendreSEM
+
+Legendre = cache(Legendre)
+LegendreSEM = cache(LegendreSEM)
 
 def interp1d(value: Tensor, xs: Tensor, method: str) -> Tensor:
   """
