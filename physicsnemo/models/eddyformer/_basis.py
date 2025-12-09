@@ -36,19 +36,12 @@ class Basis(Protocol):
         Convert modal coefficients to nodal values.
         """
 
-class Element(Basis):
-
-    def __init__(self, base: Basis):
-        """
-        """
-
 # ---------------------------------------------------------------------------- #
 #                                   LEGENDRE                                   #
 # ---------------------------------------------------------------------------- #
 
 from numpy.polynomial import legendre
 
-@functools.cache
 class Legendre(nn.Module, Basis):
 
     """
@@ -60,13 +53,14 @@ class Legendre(nn.Module, Basis):
     def extra_repr(self) -> str:
         return f"m={self.m}"
 
+    @functools.cache
     def __init__(self, m: int, endpoint: bool = False):
         """
         """
         super().__init__()
         self.m = m
 
-        if endpoint: m -= 1
+        if endpoint: m += 1
         c = (0, ) * m + (1, )
         dc = legendre.legder(c)
 
@@ -100,13 +94,44 @@ class Legendre(nn.Module, Basis):
 # --------------------------------- TRANSFORM -------------------------------- #
 
     def modal(self, vals: Tensor) -> Tensor:
-        """
-        """
         norm = 2 * torch.arange(self.m, device=vals.device) + 1
         coef = self.f * norm * self.quad[:, None]
         return torch.tensordot(coef.T, vals, dims=1)
 
     def nodal(self, coef: Tensor) -> Tensor:
+        return Legendre.at(self, coef, self.grid)
+
+class LegendreSEM(Legendre):
+
+    def __init__(self, m: int):
+        super().__init__(m - 2, True)
+
+        xs = self.grid[:, torch.newaxis]
+        mat = super().modal(self.f * xs * (1 - xs))
+        self.register_buffer("inv", torch.linalg.inv(mat))
+
+    def at(self, coef: Tensor, xs: Tensor) -> Tensor:
+        vals = super().at(coef[2:], xs)
+        while xs.ndim < vals.ndim:
+            xs = xs.unsqueeze(-1)
+        return coef[0] * (1 - xs) + coef[1] * xs + vals * xs * (1 - xs)
+
+    def modal(self, vals: Tensor) -> Tensor:
         """
         """
-        return self.at(coef, self.grid)
+        xs = self.grid
+        for _ in range(vals.ndim - 1):
+            xs = xs.unsqueeze(-1)
+
+        coef = super().modal(vals - (1 - xs) * vals[0] - xs * vals[-1])
+        return torch.concat([vals[[0, -1], ...], torch.tensordot(self.inv, coef, 1)], axis=0)
+
+    def nodal(self, coef: Tensor) -> Tensor:
+        """
+        """
+        xs = self.grid
+        for _ in range(coef.ndim - 1):
+            xs = xs.unsqueeze(-1)
+
+        vals = xs * (1 - xs) * super().nodal(coef[2:])
+        return coef[0] * (1 - xs) + coef[1] * xs + vals

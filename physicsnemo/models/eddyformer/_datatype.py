@@ -6,7 +6,7 @@ import torch
 from dataclasses import dataclass, replace
 from functools import cached_property
 
-from ._basis import Basis, Legendre
+from ._basis import Basis, Legendre, LegendreSEM
 
 def interp1d(value: Tensor, xs: Tensor, method: str) -> Tensor:
   """
@@ -104,7 +104,10 @@ class SEM:
 
     @staticmethod
     def basis(T_: str) -> Basis:
-        if T_.startswith("leg"): return Legendre
+        if T_.startswith("leg"):
+            if T_.endswith("elem"):
+                return LegendreSEM
+            return Legendre
         raise ValueError(f"invalid basis {T_=}")
 
     @cached_property

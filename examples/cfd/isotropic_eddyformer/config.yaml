@@ -5,7 +5,7 @@ model:
   num_layers: 4
   use_scale: true
   layer_config:
-    basis: legendre
+    basis: leg_elem
     mesh: [8, 8, 8]
     mode: [10, 10, 10]
     mode_les: [5, 5, 5]
@@ -18,7 +18,7 @@ model:
 
 training:
   dataset: data/ns3d-re94
-  result_dir: outputs/ef-re94
+  result_dir: outputs/ef-leg-re94
   t: 0.5
   amp: false
   batch_size: 4
