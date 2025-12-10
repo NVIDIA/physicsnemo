@@ -13,86 +13,92 @@ from physicsnemo.mesh.visualization import draw_mesh
 
 @tensorclass(tensor_only=True)
 class Mesh:
-    r"""GPU-accelerated mesh data structure for n-dimensional simplicial complexes.
+    r"""A PyTorch-based, dimensionally-generic Mesh data structure.
 
-    A ``Mesh`` represents a pure simplicial complex: a collection of n-dimensional
-    simplices (cells) defined by vertices (points) embedded in a Euclidean space.
-    This unified representation handles diverse mesh types:
+    A ``Mesh`` is a discrete representation of an n-dimensional manifold embedded
+    in m-dimensional Euclidean space (where n ≤ m). Field data can be associated
+    with each point, with each cell, or globally with the mesh itself. This field
+    data can be arbitrarily-dimensional (scalar fields, vector fields, or
+    arbitrary-rank tensor fields) and semantically-rich (supporting string keys
+    and nested data structures).
 
-    - **Point clouds**: 0-simplices (vertices) in any dimension
-    - **Undirected Graphs** or **Curve meshes**: 1-simplices (edges) in 2D, 3D, or higher
-    - **Surface meshes**: 2-simplices (triangles) in 2D, 3D, or higher
-    - **Volume meshes**: 3-simplices (tetrahedra) in 3D or higher
-    - **Higher-dimensional**: n-simplices in m-dimensional space (where n ≤ m)
+    **Simplices**
 
-    **Simplices and Dimensionality**
+    The building block of a ``Mesh`` is a **simplex** (plural: **simplices**): a
+    generalization of the notion of a triangle or tetrahedron to arbitrary
+    dimensions. Consider these familiar examples of an n-dimensional simplex
+    (an **n-simplex**):
 
-    An n-simplex is the simplest n-dimensional polytope: a point (0-simplex),
-    line segment (1-simplex), triangle (2-simplex), tetrahedron (3-simplex), etc.
-    Each n-simplex has exactly n+1 vertices.
+    +-----------+-------------+----------------------------------------------+
+    |           | Common Name | Description                                  |
+    +===========+=============+==============================================+
+    | 0-simplex | Point       | A single vertex                              |
+    +-----------+-------------+----------------------------------------------+
+    | 1-simplex | Edge        | Connects 2 points                            |
+    +-----------+-------------+----------------------------------------------+
+    | 2-simplex | Triangle    | Connects 3 points; bounded by 3 edges        |
+    +-----------+-------------+----------------------------------------------+
+    | 3-simplex | Tetrahedron | Connects 4 points; bounded by 4 triangles    |
+    +-----------+-------------+----------------------------------------------+
 
-    Two key dimensions characterize a mesh:
+    **Manifold Dimension**
 
-    - **Manifold dimension** (``n_manifold_dims``): The intrinsic dimension of each
-      cell. For triangles this is 2, regardless of the ambient space.
-    - **Spatial dimension** (``n_spatial_dims``): The dimension of the embedding
-      space where vertex coordinates live.
+    A ``Mesh`` is a collection of simplices that share vertices. Every simplex
+    in a ``Mesh`` must have the same dimension; this shared dimension is called
+    the **manifold dimension** (``n_manifold_dims``), representing the intrinsic
+    dimensionality of each cell. A triangle has manifold dimension 2 regardless
+    of whether it lives in 2D or 3D space.
 
-    The **codimension** is their difference: ``codimension = n_spatial_dims - n_manifold_dims``.
-    Codimension-1 manifolds (surfaces in 3D, curves in 2D) have well-defined normal
-    vectors. Higher codimensions do not have unique normals.
+    **Spatial Dimension and Codimension**
 
-    **Data Storage**
+    The **spatial dimension** (``n_spatial_dims``) is the dimension of the
+    embedding space where point coordinates live. A triangle mesh representing
+    a 3D surface has ``n_spatial_dims=3`` but ``n_manifold_dims=2``.
 
-    Arbitrary tensor data can be attached at three levels:
+    The difference, **codimension** = ``n_spatial_dims - n_manifold_dims``,
+    determines whether unique normal vectors exist:
 
-    - ``point_data``: Per-vertex quantities (e.g., temperature, velocity)
-    - ``cell_data``: Per-cell quantities (e.g., pressure, stress tensors)
-    - ``global_data``: Mesh-level quantities (e.g., simulation time, metadata)
+    - Codimension 1 (triangles in 3D, edges in 2D): unique unit normal (up to sign)
+    - Codimension 0 (triangles in 2D, tets in 3D): no normal direction exists
+    - Codimension > 1 (edges in 3D): infinitely many normal directions
 
-    Data fields can be scalars, vectors, tensors of any rank, or nested structures.
+    **Core Data Structure**
+
+    A mesh is defined by two tensors:
+
+    - ``points``: Vertex coordinates with shape :math:`(N_p, D_s)` where
+      :math:`N_p` is the number of points and :math:`D_s` is the spatial
+      dimension. For 1000 vertices in 3D: shape ``(1000, 3)``.
+
+    - ``cells``: Cell connectivity with shape :math:`(N_c, D_m + 1)` where
+      :math:`N_c` is the number of cells and :math:`D_m` is the manifold
+      dimension. Each row lists point indices defining one simplex. For 500
+      triangles: shape ``(500, 3)`` since each triangle references 3 vertices.
+
+    **Attaching Field Data**
+
+    Tensor data of any shape can be attached at three levels:
+
+    - ``point_data``: Per-vertex quantities (temperature, velocity, embeddings)
+    - ``cell_data``: Per-cell quantities (pressure, stress, material ID)
+    - ``global_data``: Mesh-level quantities (simulation time, Reynolds number)
+
     All data is stored in ``TensorDict`` containers that move together with the
-    mesh under ``.to(device)`` calls.
-
-    **Design**
-
-    ``Mesh`` is a ``tensorclass``, providing automatic device management, batching
-    support, and seamless integration with PyTorch. All geometric computations are
-    fully vectorized for GPU acceleration.
+    mesh geometry under ``.to(device)`` calls.
 
     Parameters
     ----------
     points : torch.Tensor
-        Vertex coordinates with shape :math:`(N_p, D_s)` where :math:`N_p` is the
-        number of points and :math:`D_s` is the spatial dimension. Must be a
-        floating-point dtype.
+        Vertex coordinates with shape :math:`(N_p, D_s)`. Must be floating-point.
     cells : torch.Tensor
-        Cell connectivity with shape :math:`(N_c, D_m + 1)` where :math:`N_c` is
-        the number of cells and :math:`D_m` is the manifold dimension. Each row
-        contains indices into ``points`` defining one simplex. Must be an integer
-        dtype, since these are treated as indices into the ``points`` tensor.
-    point_data : TensorDict or dict[str, torch.Tensor] (optional)
-        Per-vertex data. If a dict, converted to TensorDict with batch size
-        :math:`(N_p,)`. Default is an empty TensorDict.
-    cell_data : TensorDict or dict[str, torch.Tensor] (optional)
-        Per-cell data. If a dict, converted to TensorDict with batch size
-        :math:`(N_c,)`. Default is an empty TensorDict.
-    global_data : TensorDict or dict[str, torch.Tensor] (optional)
-        Mesh-level data. If a dict, converted to TensorDict with scalar batch
-        size. Default is an empty TensorDict.
-
-    Attributes
-    ----------
-    points : torch.Tensor
-        Vertex coordinates, shape :math:`(N_p, D_s)`.
-    cells : torch.Tensor
-        Cell connectivity, shape :math:`(N_c, D_m + 1)`.
-    point_data : TensorDict
-        Per-vertex data container with batch size :math:`(N_p,)`.
-    cell_data : TensorDict
-        Per-cell data container with batch size :math:`(N_c,)`.
-    global_data : TensorDict
-        Mesh-level data container with scalar batch size.
+        Cell connectivity with shape :math:`(N_c, D_m + 1)`. Each row contains
+        indices into ``points`` defining one simplex. Must be integer dtype.
+    point_data : TensorDict or dict[str, torch.Tensor], optional
+        Per-vertex data. Dicts are automatically converted to TensorDict.
+    cell_data : TensorDict or dict[str, torch.Tensor], optional
+        Per-cell data. Dicts are automatically converted to TensorDict.
+    global_data : TensorDict or dict[str, torch.Tensor], optional
+        Mesh-level data. Dicts are automatically converted to TensorDict.
 
     Raises
     ------
@@ -100,53 +106,72 @@ class Mesh:
         If ``points`` is not 2D, ``cells`` is not 2D, or manifold dimension
         exceeds spatial dimension.
     TypeError
-        If ``cells`` has a floating-point dtype (must be integer).
+        If ``cells`` has a floating-point dtype (indices must be integers).
 
     Examples
     --------
-    Create a single triangle in 2D:
+    Create a 2D triangular mesh (two triangles forming a unit square):
 
     >>> import torch
     >>> from physicsnemo.mesh import Mesh
-    >>> points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])
-    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> points = torch.tensor([
+    ...     [0.0, 0.0],  # vertex 0: bottom-left
+    ...     [1.0, 0.0],  # vertex 1: bottom-right
+    ...     [1.0, 1.0],  # vertex 2: top-right
+    ...     [0.0, 1.0],  # vertex 3: top-left
+    ... ])
+    >>> cells = torch.tensor([
+    ...     [0, 1, 2],  # triangle 0: vertices 0-1-2
+    ...     [0, 2, 3],  # triangle 1: vertices 0-2-3
+    ... ])
     >>> mesh = Mesh(points=points, cells=cells)
     >>> mesh.n_points, mesh.n_cells, mesh.n_spatial_dims, mesh.n_manifold_dims
-    (3, 1, 2, 2)
+    (4, 2, 2, 2)
 
-    Create a triangle mesh with attached scalar data:
+    Attach field data at vertices and cells:
 
     >>> mesh = Mesh(
     ...     points=points,
     ...     cells=cells,
-    ...     point_data={"temperature": torch.tensor([300.0, 350.0, 325.0])},
-    ...     cell_data={"pressure": torch.tensor([101.3])},
+    ...     point_data={"temperature": torch.tensor([300., 350., 340., 310.])},
+    ...     cell_data={"pressure": torch.tensor([101.3, 99.8])},
     ... )
 
     Move mesh and all data to GPU:
 
     >>> mesh_gpu = mesh.to("cuda")  # doctest: +SKIP
 
+    Create an undirected graph (1-simplices in 3D):
+
+    >>> nodes = torch.randn(100, 3)  # 100 vertices in 3D
+    >>> edges = torch.randint(0, 100, (200, 2))  # 200 edges
+    >>> graph = Mesh(points=nodes, cells=edges)
+    >>> graph.n_manifold_dims, graph.n_spatial_dims
+    (1, 3)
+
     Notes
     -----
-    **Simplex Definition**
+    **Mixed Manifold Dimensions**
 
-    An n-simplex is the convex hull of n+1 affinely independent points. The vertices
-    are stored as indices into the ``points`` array, so a triangle (2-simplex) is
-    represented by 3 indices, a tetrahedron (3-simplex) by 4 indices, etc.
+    To represent structures with multiple manifold dimensions (e.g., a
+    tetrahedral volume mesh together with its triangular boundary surface),
+    use separate ``Mesh`` objects for each dimension.
+
+    **Non-Simplicial Elements**
+
+    This class only supports simplicial cells. Non-simplicial elements must be
+    subdivided before use:
+
+    - **Quads** → split into 2 triangles each
+    - **Hexahedra** → split into 5 or 6 tetrahedra each
+    - **Polygons/polyhedra** → triangulate/tetrahedralize
 
     **Caching**
 
-    Expensive geometric computations (centroids, areas, normals) are automatically
-    cached in the data dictionaries under keys prefixed with ``_cache``. The cache
-    is invalidated when creating new ``Mesh`` instances but persists across
-    repeated property accesses on the same instance.
-
-    **Pure Simplicial Complexes**
-
-    This class assumes a *pure* simplicial complex where all cells have the same
-    manifold dimension. Mixed-dimension meshes (e.g., triangles and tetrahedra
-    together) are not supported.
+    Expensive geometric computations (centroids, areas, normals, etc.) are
+    cached automatically under keys prefixed with ``_cache`` in the data
+    dictionaries. The cache persists across repeated property accesses but is
+    invalidated when creating new ``Mesh`` instances.
     """
 
     points: torch.Tensor  # shape: (n_points, n_spatial_dimensions)
