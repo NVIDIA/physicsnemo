@@ -3,7 +3,6 @@ from typing import Literal
 import numpy as np
 import pyvista as pv
 import torch
-from pyvista import CellType
 
 from physicsnemo.mesh.mesh import Mesh
 
@@ -60,17 +59,17 @@ def from_pyvista(
                 n_faces = sum(
                     len(cells)
                     for cell_type, cells in cells_dict.items()
-                    if cell_type in [CellType.TRIANGLE, CellType.QUAD, CellType.POLYGON]
+                    if cell_type in [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
                 )
 
             # Check for 3D volume cells
             cells_dict = getattr(pyvista_mesh, "cells_dict", {})
             volume_cell_types = [
-                CellType.TETRA,
-                CellType.HEXAHEDRON,
-                CellType.WEDGE,
-                CellType.PYRAMID,
-                CellType.VOXEL,
+                pv.CellType.TETRA,
+                pv.CellType.HEXAHEDRON,
+                pv.CellType.WEDGE,
+                pv.CellType.PYRAMID,
+                pv.CellType.VOXEL,
             ]
             n_volume_cells = sum(
                 len(cells)
@@ -116,14 +115,14 @@ def from_pyvista(
 
         def is_all_tetra(pv_mesh) -> bool:
             """Check if mesh contains only tetrahedral cells."""
-            return list(pv_mesh.cells_dict.keys()) == [CellType.TETRA]
+            return list(pv_mesh.cells_dict.keys()) == [pv.CellType.TETRA]
 
         if not is_all_tetra(pyvista_mesh):
             pyvista_mesh = pyvista_mesh.tessellate(max_n_subdivide=1)
 
         if not is_all_tetra(pyvista_mesh):
             cell_type_names = "\n".join(
-                f"- {CellType(id)}" for id in pyvista_mesh.cells_dict.keys()
+                f"- {pv.CellType(id)}" for id in pyvista_mesh.cells_dict.keys()
             )
             raise ValueError(
                 f"Expected all cells to be tetrahedra after tessellation, but got:\n{cell_type_names}"
@@ -179,11 +178,11 @@ def from_pyvista(
         # Tetrahedral cells - extract from cells
         # After tessellation, all cells should be tetrahedra
         cells_dict = pyvista_mesh.cells_dict
-        if CellType.TETRA not in cells_dict:
+        if pv.CellType.TETRA not in cells_dict:
             raise ValueError(
                 f"Expected tetrahedral cells after tessellation, but got {list(cells_dict.keys())}"
             )
-        tetra_cells = cells_dict[CellType.TETRA]
+        tetra_cells = cells_dict[pv.CellType.TETRA]
         cells = torch.from_numpy(tetra_cells)
 
     ### Return Mesh object
@@ -286,7 +285,7 @@ def to_pyvista(mesh: Mesh) -> pv.PolyData | pv.UnstructuredGrid | pv.PointSet:
             cells_array = np.array(cells_list, dtype=np.int64)
 
             # All cells are tetrahedra
-            celltypes = np.full(mesh.n_cells, CellType.TETRA, dtype=np.uint8)
+            celltypes = np.full(mesh.n_cells, pv.CellType.TETRA, dtype=np.uint8)
 
             pv_mesh = pv.UnstructuredGrid(cells_array, celltypes, points_np)
 
