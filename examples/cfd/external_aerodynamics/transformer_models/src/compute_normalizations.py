@@ -113,10 +113,10 @@ def main(cfg: DictConfig) -> None:
     """
 
     # Choose which field to normalize (can be overridden via command line)
-    field_key: str = cfg.datapipe.mode + "_fields"
+    field_key: str = cfg.data.mode + "_fields"
 
     # Normalization directory can be configured (backward compatible: defaults to current directory)
-    normalization_dir: str = getattr(cfg.datapipe, "normalization_dir", ".")
+    normalization_dir: str = getattr(cfg.data, "normalization_dir", ".")
 
     # Construct full path using pathlib (cross-platform, concise)
     workspace_path: str = str(
@@ -127,14 +127,14 @@ def main(cfg: DictConfig) -> None:
 
     # Create the dataset using configuration parameters
     dataset = CAEDataset(
-        data_dir=cfg.datapipe.train.data_path,
+        data_dir=cfg.data.train.data_path,
         keys_to_read=[
             field_key,
         ],
         keys_to_read_if_available={},
         output_device=device,
-        preload_depth=cfg.datapipe.preload_depth,
-        pin_memory=cfg.datapipe.pin_memory,
+        preload_depth=cfg.data.preload_depth,
+        pin_memory=cfg.data.pin_memory,
     )
     # Compute normalization statistics
     mean, std, min_val, max_val = compute_mean_std_min_max(dataset, field_key, 100)

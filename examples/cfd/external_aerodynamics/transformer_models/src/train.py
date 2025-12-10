@@ -307,9 +307,10 @@ def forward_pass(
             features, geometry = pad_input_for_fp8(features, embeddings, geometry)
 
         if "geometry" in batch.keys():
+            local_positions = embeddings[:, :, :3]
             # This is the Typhon path
             outputs = model(
-                global_embedding=features, local_embedding=embeddings, geometry=geometry
+                global_embedding=features, local_embedding=embeddings, geometry=geometry, local_positions=local_positions
             )
 
             outputs = unpad_output_for_fp8(outputs, output_pad_size)
@@ -317,9 +318,9 @@ def forward_pass(
             loss = loss_fn(outputs, targets)
             # Log them too:
             for i, mode in enumerate(modes):
-                all_metrics[f"loss/{mode}"] = loss[i]
+                all_metrics[f"loss/{mode}"] = loss.item()
             # Averaging over point cloud inputs, instead of summing.
-            full_loss = torch.mean(torch.stack(loss))
+            full_loss = torch.mean(loss)
 
         else:
             # This is the Transolver path
@@ -450,7 +451,7 @@ def train_epoch(
             precision,
             output_pad_size,
             dist_manager,
-            cfg.datapipe.mode,
+            cfg.data.mode,
             dataloader,
         )
 
@@ -476,7 +477,7 @@ def train_epoch(
             total_metrics = metrics
         else:
             total_metrics = {
-                k: total_metrics[k] + metrics[k].item() for k in metrics.keys()
+                k: total_metrics[k] + metrics[k] for k in metrics.keys()
             }
 
         duration = end_time - start_time
@@ -566,7 +567,7 @@ def val_epoch(
                 precision,
                 output_pad_size,
                 dist_manager,
-                cfg.datapipe.mode,
+                cfg.data.mode,
                 dataloader,
             )
 
@@ -714,8 +715,8 @@ def main(cfg: DictConfig):
     logger.info(f"Number of parameters: {num_params}")
 
     # Load the normalization file from configured directory (defaults to current dir)
-    norm_dir = getattr(cfg.datapipe, "normalization_dir", ".")
-    if cfg.datapipe.mode == "surface" or cfg.datapipe.mode == "combined":
+    norm_dir = getattr(cfg.data, "normalization_dir", ".")
+    if cfg.data.mode == "surface" or cfg.data.mode == "combined":
         norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
         norm_data = np.load(norm_file)
         surface_factors = {
@@ -725,7 +726,7 @@ def main(cfg: DictConfig):
     else:
         surface_factors = None
 
-    if cfg.datapipe.mode == "volume" or cfg.datapipe.mode == "combined":
+    if cfg.data.mode == "volume" or cfg.data.mode == "combined":
         norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
         norm_data = np.load(norm_file)
         volume_factors = {
@@ -737,7 +738,7 @@ def main(cfg: DictConfig):
 
     # Training dataset
     train_dataloader = create_transolver_dataset(
-        cfg.datapipe,
+        cfg.data,
         phase="train",
         surface_factors=surface_factors,
         volume_factors=volume_factors,
@@ -746,7 +747,7 @@ def main(cfg: DictConfig):
     # Validation dataset
 
     val_dataloader = create_transolver_dataset(
-        cfg.datapipe,
+        cfg.data,
         phase="val",
         surface_factors=surface_factors,
         volume_factors=volume_factors,

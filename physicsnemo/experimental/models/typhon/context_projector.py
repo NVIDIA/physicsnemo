@@ -309,8 +309,8 @@ class GeometricFeatureProcessor(nn.Module):
         torch.Tensor
             Processed features of shape \((B, N, hidden_dim)\).
         """
-        print(f"query_points shape: {query_points.shape}")
-        print(f"key_features shape: {key_features.shape}")
+        # print(f"query_points shape: {query_points.shape}")
+        # print(f"key_features shape: {key_features.shape}")
         
         _, neighbors = self.bq_warp(query_points, key_features)
         b, n, k, c = neighbors.shape

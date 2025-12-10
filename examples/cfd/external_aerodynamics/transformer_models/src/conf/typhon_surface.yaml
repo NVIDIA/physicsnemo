@@ -17,7 +17,7 @@
 defaults:
   - training: base
   - model: typhon
-  - datapipe: surface
+  - data: surface
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
@@ -25,7 +25,7 @@ run_id: "typhon/surface/bq"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
-compile: false
+compile: true
 profile: false
 
 model:

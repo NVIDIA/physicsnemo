@@ -17,7 +17,7 @@
 defaults:
   - training: base
   - model: typhon
-  - datapipe: volume
+  - data: volume
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
@@ -32,11 +32,12 @@ data:
   include_geometry: true
   geometry_sampling: 300_000
   broadcast_global_features: false
+  volume_sample_from_disk: true
 
 
 model:
   functional_dim: 7
-  out_dim: 4
+  out_dim: 5
   include_local_features: true # use local features
   radii: [0.01, 0.05, 0.25, 1.0, 2.5, 5.0] # radius for local features
   neighbors_in_radius: [4, 8, 16, 64, 128, 256]  # neighbors in radius for local features
