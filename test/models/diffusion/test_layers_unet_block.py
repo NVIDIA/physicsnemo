@@ -119,15 +119,7 @@ def generate_data(device: str) -> Tuple[torch.Tensor, torch.Tensor]:
     return x, emb
 
 
-@pytest.mark.parametrize(
-    ("device", "use_apex_gn"),
-    [
-        ("cuda:0", False),
-        ("cuda:0", True),
-        ("cpu", False),
-    ],
-    ids=["gpu", "gpu-apexgn", "cpu"],
-)
+@pytest.mark.parametrize("use_apex_gn", [False, True], ids=["no-apexgn", "apexgn"])
 @pytest.mark.parametrize("fused_conv_bias", [False, True], ids=["non_fused", "fused"])
 @pytest.mark.parametrize(
     "arch_type",
@@ -139,6 +131,9 @@ def test_unet_block_non_regression(arch_type, device, use_apex_gn, fused_conv_bi
     Test that UNetBlock can be instantiated and compare the output with a
     reference output generated with v1.0.1.
     """
+    # apex group norm only works on CUDA
+    if use_apex_gn and device == "cpu":
+        pytest.skip("apex group norm not supported on CPU")
 
     model: UNetBlockModule = UNetBlockModule.factory(
         arch_type=arch_type,
@@ -194,15 +189,7 @@ def test_unet_block_non_regression(arch_type, device, use_apex_gn, fused_conv_bi
     assert torch.allclose(out, out_ref, atol=atol, rtol=rtol), _err(out, out_ref)
 
 
-@pytest.mark.parametrize(
-    ("device", "use_apex_gn"),
-    [
-        ("cuda:0", False),
-        ("cuda:0", True),
-        ("cpu", False),
-    ],
-    ids=["gpu", "gpu-apexgn", "cpu"],
-)
+@pytest.mark.parametrize("use_apex_gn", [False, True], ids=["no-apexgn", "apexgn"])
 @pytest.mark.parametrize("fused_conv_bias", [False, True], ids=["non_fused", "fused"])
 @pytest.mark.parametrize(
     "arch_type",
@@ -217,6 +204,9 @@ def test_unet_block_non_regression_from_checkpoint(
     UNetBlock class with v1.0.1. Also tests the API to override ``use_apex_gn``
     and ``fused_conv_bias`` when loading the checkpoint.
     """
+    # apex group norm only works on CUDA
+    if use_apex_gn and device == "cpu":
+        pytest.skip("apex group norm not supported on CPU")
 
     script_dir = Path(__file__).parent
     file_name: str = str(

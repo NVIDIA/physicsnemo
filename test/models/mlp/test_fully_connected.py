@@ -23,7 +23,6 @@ from physicsnemo.models.mlp import FullyConnected
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fully_connected_forward(device):
     """Test fully-connected forward pass"""
     torch.manual_seed(0)
@@ -42,7 +41,6 @@ def test_fully_connected_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fully_connected_constructor(device):
     """Test fully-connected constructor options"""
     # Define dictionary of constructor args
@@ -110,7 +108,6 @@ def test_fully_connected_constructor(device):
             assert outvar.shape == (bsize, kw_args["out_features"])
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fully_connected_optims(device):
     """Test fully-connected optimizations"""
 
@@ -142,7 +139,6 @@ def test_fully_connected_optims(device):
     assert common.validate_combo_optims(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fully_connected_checkpoint(device):
     """Test fully-connected checkpoint save/load"""
     # Construct FC model
@@ -166,7 +162,6 @@ def test_fully_connected_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fully_connected_deploy(device):
     """Test fully-connected deployment support"""
     # Construct AFNO model

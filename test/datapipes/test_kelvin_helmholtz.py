@@ -27,7 +27,6 @@ Tensor = torch.Tensor
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kelvin_helmholtz_2d_constructor(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 
@@ -50,7 +49,6 @@ def test_kelvin_helmholtz_2d_constructor(device, pytestconfig):
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kelvin_helmholtz_2d_device(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
 
@@ -80,7 +78,6 @@ def test_kelvin_helmholtz_2d_device(device, pytestconfig):
 @pytest.mark.parametrize("resolution", [32, 64])
 @pytest.mark.parametrize("batch_size", [1, 2, 3])
 @pytest.mark.parametrize("seq_length", [2, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kelvin_helmholtz_2d_shape(
     resolution, batch_size, seq_length, device, pytestconfig
 ):
@@ -122,9 +119,12 @@ def test_kelvin_helmholtz_2d_shape(
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_kelvin_helmholtz_cudagraphs(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.kelvin_helmholtz import KelvinHelmholtz2D
+
+    # CUDA only:
+    if device == "cpu":
+        pytest.skip("CUDA only")
 
     # Preprocess function to convert dataloader output into Tuple of tensors
     def input_fn(data) -> Tuple[Tensor, ...]:

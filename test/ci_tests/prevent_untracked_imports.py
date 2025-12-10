@@ -19,13 +19,28 @@ import os
 import sys
 import sysconfig
 from pathlib import Path
-from typing import Dict, List, Set, Union
+from typing import Dict, List, Set
 
 import tomllib
 from importlinter import Contract, ContractCheck, fields, output
 from packaging.requirements import Requirement
 
-Dependency = Union[str, Dict[str, str]]
+"""
+This is a script meant to be used in import-linter as a pre-commit hook to 
+prevent unlisted / not-required imports as a bare import in physicsnemo.
+
+It will do the following:
+- Scan the entire "container" (configured in .importlinter) for 
+  imports, using import-linter and grimp.  Automatic.
+- Extract all the "upstream" modules: things that go "import ABC"
+- From that list, remove all the upstream modules from the standard library.
+- Scan pyproject.toml for the requirements listed in `[project.dependencies]`
+- From the upstream list, Remove all the modules listed as a requirement.
+- From the remaining list,  find all the importers but exclude anything in 
+  `container.e for e in exclude`.
+- Pass if all upstream modules are standard or hard requirements.
+- Fail otherwise, and report which modules and from what files.
+"""
 
 # For irregular mappings that we don't want to have cause errors:
 dep_to_import_name = {
@@ -45,12 +60,13 @@ class ForbiddenImportContract(Contract):
     """
 
     container = fields.StringField()
-    dependency_group = fields.StringField()
+    exclude = fields.ListField(fields.StringField(), required=False)
 
     def check(self, graph, verbose):
         output.verbose_print(
             verbose,
-            f"Getting import details from {self.container} vs uv group {self.dependency_group}...",
+            "Getting import details from "
+            f"{self.container} vs project core dependencies...",
         )
 
         upstream_modules = graph.find_upstream_modules(self.container, as_package=True)
@@ -59,31 +75,46 @@ class ForbiddenImportContract(Contract):
         upstream_modules = set(
             module
             for module in upstream_modules
-            if not module.startswith("physicsnemo")
+            if not module.startswith(self.container)
         )
 
         upstream_external_modules = remove_standard_library(upstream_modules)
 
         # Now, read the tree from pyproject.toml:
-        dependency_tree = resolve_dependency_group_no_versions(
-            Path("pyproject.toml"), self.dependency_group
-        )
+        dependency_tree = resolve_core_dependencies(Path("pyproject.toml"))
 
+        # This list hasn't been pruned for excludes:
         broken_imports = upstream_external_modules - dependency_tree
         violations = {}
 
+        unexcluded_broken_imports = set[str]()
+
         for broken_import in broken_imports:
-            violations[broken_import] = graph.find_modules_that_directly_import(
-                broken_import
+            local_violations = graph.find_modules_that_directly_import(broken_import)
+
+            # Remove violations that start with any exclusions:
+
+            local_violations = set[str](
+                lv
+                for lv in local_violations
+                if not any(
+                    lv.startswith(self.container + "." + ex) for ex in self.exclude
+                )
             )
-            violations[broken_import] = [
-                v for v in violations[broken_import] if self.container in v
-            ]
+
+            if len(local_violations) > 0:
+                unexcluded_broken_imports.add(broken_import)
+
+                violations[broken_import] = local_violations
+
+                violations[broken_import] = [
+                    v for v in violations[broken_import] if self.container in v
+                ]
 
         return ContractCheck(
-            kept=len(broken_imports) == 0,
+            kept=len(unexcluded_broken_imports) == 0,
             metadata={
-                "broken_imports": list(broken_imports),
+                "broken_imports": list(unexcluded_broken_imports),
                 "violations": violations,
             },
         )
@@ -119,72 +150,38 @@ class ForbiddenImportContract(Contract):
             )
             output.new_line()
 
-        output.print_error("Listing broken imports by internal file...")
-        output.new_line()
-        for violating_file, violating_imports in inverted_violations.items():
-            output.print_error(
-                f"{violating_file} is not allowed to import: {', '.join(violating_imports)}",
-                bold=True,
-            )
-            output.new_line()
-
-        output.print_error("Listing broken imports by internal file...")
-        output.new_line()
-        for violating_file, violating_imports in inverted_violations.items():
-            output.print_error(
-                f"{violating_file} is not allowed to import: {', '.join(violating_imports)}",
-                bold=True,
-            )
-            output.new_line()
-            output.new_line()
-            n_file_violations += 1
-
         output.print_error(
             f"Found {n_invalid_imports} invalid imports and {n_file_violations} file violations"
         )
 
 
-def resolve_dependency_group_no_versions(
-    pyproject_path: str | Path, group_name: str
-) -> List[str]:
+def resolve_core_dependencies(pyproject_path: str | Path) -> Set[str]:
     """
-    Open a uv-style pyproject.toml, recursively resolve a dependency group,
-    and strip version specifiers from all dependencies.
+    Load and normalize the dependencies declared under ``[project].dependencies``
+    so that we can compare external imports against the canonical list of core
+    dependencies shipped with the package.
     """
     pyproject_path = Path(pyproject_path)
     with pyproject_path.open("rb") as f:
         data = tomllib.load(f)
 
-    dep_groups: Dict[str, List[Dependency]] = data.get("dependency-groups", {})
+    project_table = data.get("project") or {}
+    dependency_list: List[str] | None = project_table.get("dependencies")
+    if dependency_list is None:
+        raise KeyError("Core dependency list not found under [project].dependencies")
 
-    if group_name not in dep_groups:
-        raise KeyError(f"Dependency group '{group_name}' not found")
+    resolved: List[str] = []
+    for item in dependency_list:
+        requirement = Requirement(item)
+        resolved.append(dep_to_import_name.get(requirement.name, requirement.name))
 
-    def _resolve(group: str, seen: set[str] = None) -> List[str]:
-        if seen is None:
-            seen = set()
-        if group in seen:
-            return []
-        seen.add(group)
-        deps: List[str] = []
-        for item in dep_groups.get(group, []):
-            if isinstance(item, str):
-                # strip version using packaging
-                deps.append(Requirement(item).name)
-            elif isinstance(item, dict) and "include-group" in item:
-                deps.extend(_resolve(item["include-group"], seen))
-            else:
-                raise ValueError(f"Unknown dependency format: {item}")
-        return deps
-
-    # remove duplicates while preserving order
-    resolved = _resolve(group_name)
-
-    # Convert dep tree names to what they import as:
-    resolved = [dep_to_import_name.get(d, d) for d in resolved]
-
-    seen_ordered = set()
-    return set([d for d in resolved if not (d in seen_ordered or seen_ordered.add(d))])
+    seen: Set[str] = set()
+    ordered_unique: List[str] = []
+    for dep in resolved:
+        if dep not in seen:
+            ordered_unique.append(dep)
+            seen.add(dep)
+    return set(ordered_unique)
 
 
 def flatten_deps(tree: Dict) -> Set[str]:

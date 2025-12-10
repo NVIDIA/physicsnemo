@@ -23,3 +23,9 @@ if not check_version_spec("torch", "2.6.0", hard_fail=False):
         "These tests require torch >= 2.6.0",
         allow_module_level=True,
     )
+
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
+

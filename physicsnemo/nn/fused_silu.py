@@ -22,11 +22,11 @@ from typing import Tuple
 import torch
 from torch.autograd import Function
 
-from physicsnemo.core.version_check import check_module_requirements
+from physicsnemo.core.version_check import check_version_spec
 
 logger = logging.getLogger(__name__)
 
-NV_FUSER_AVAILABLE = check_module_requirements("nvfuser", hard_fail=False)
+NV_FUSER_AVAILABLE = check_version_spec("nvfuser", hard_fail=False)
 
 
 if NV_FUSER_AVAILABLE:

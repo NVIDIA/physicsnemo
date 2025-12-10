@@ -97,15 +97,7 @@ def generate_data(device: str):
     return x
 
 
-@pytest.mark.parametrize(
-    ("device", "use_apex_gn"),
-    [
-        ("cuda:0", False),
-        ("cuda:0", True),
-        ("cpu", False),
-    ],
-    ids=["gpu", "gpu-apexgn", "cpu"],
-)
+@pytest.mark.parametrize("use_apex_gn", [False, True], ids=["no-apexgn", "apexgn"])
 @pytest.mark.parametrize(
     "arch_type",
     ["gn_type_1", "gn_type_2", "gn_type_3"],
@@ -116,6 +108,9 @@ def test_group_norm_non_regression(device, arch_type, use_apex_gn):
     Test that GroupNorm can be instantiated and compare the output with a
     reference output generated with v1.0.1.
     """
+    # apex group norm only works on CUDA
+    if use_apex_gn and device == "cpu":
+        pytest.skip("apex group norm not supported on CPU")
 
     model: GroupNormModule = GroupNormModule.factory(
         arch_type=arch_type,
@@ -151,15 +146,8 @@ def test_group_norm_non_regression(device, arch_type, use_apex_gn):
 # TODO : currently only test overrding use_apex_gn from False to True. Need to
 # add test to do the opposite (that is load checkpoint with use_apex_gn=True and
 # override it to False)
-@pytest.mark.parametrize(
-    ("device", "use_apex_gn", "chkpt_use_apex_gn"),
-    [
-        ("cuda:0", False, False),
-        ("cuda:0", True, False),
-        ("cpu", False, False),
-    ],
-    ids=["gpu", "gpu-apexgn", "cpu"],
-)
+@pytest.mark.parametrize("use_apex_gn", [False, True], ids=["no-apexgn", "apexgn"])
+@pytest.mark.parametrize("chkpt_use_apex_gn", [False], ids=["chkpt-no-apexgn"])
 @pytest.mark.parametrize(
     "arch_type",
     ["gn_type_1", "gn_type_2", "gn_type_3"],
@@ -173,6 +161,9 @@ def test_group_norm_non_regression_from_checkpoint(
     get_group_norm class. Also tests the API to override ``use_apex_gn`` to
     use Apex-based group norm when loading the checkpoint.
     """
+    # apex group norm only works on CUDA
+    if use_apex_gn and device == "cpu":
+        pytest.skip("apex group norm not supported on CPU")
 
     script_dir = Path(__file__).parent
     file_name: str = str(

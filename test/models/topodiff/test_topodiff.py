@@ -28,7 +28,6 @@ from test import common
 
 
 # @import_or_fail("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_topodiff_forward(device):
     """Test topodiff forward pass"""
 
@@ -59,7 +58,6 @@ def test_topodiff_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_topodiff_constructor(device):
     """Test topodiff forward pass"""
 

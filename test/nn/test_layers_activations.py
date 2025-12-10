@@ -29,7 +29,6 @@ from physicsnemo.nn.activations import (
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_activation_identity(device):
     """Test identity function in physicsnemo.nn"""
     func = Identity().to(device)
@@ -42,7 +41,6 @@ def test_activation_identity(device):
     assert common.compare_output(invar, outvar)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_activation_stan(device):
     """Test Stan function in physicsnemo.nn"""
     func = Stan(out_features=2).to(device)
@@ -64,7 +62,6 @@ def test_activation_stan(device):
         pass
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_activation_squareplus(device):
     """Test square plus function in physicsnemo.nn"""
     func = SquarePlus().to(device)
@@ -78,7 +75,6 @@ def test_activation_squareplus(device):
     assert common.compare_output(torch.ones_like(invar), outvar)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_activation_capped_leaky_relu(device):
     """Test capped_gelu function in physicsnemo.nn"""
     func = CappedLeakyReLU(cap_value=1.0).to(device)
@@ -103,7 +99,6 @@ def test_activation_capped_leaky_relu(device):
     assert common.compare_output(torch.ones_like(invar), outvar)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_activation_capped_gelu(device):
     """Test capped_gelu function in physicsnemo.nn"""
     func = CappedGELU(cap_value=1.0).to(device)

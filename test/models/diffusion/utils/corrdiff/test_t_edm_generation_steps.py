@@ -23,7 +23,6 @@ from test.conftest import requires_module
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_diffusion_step(device, pytestconfig):
     from physicsnemo.experimental.models.diffusion.preconditioning import (
         tEDMPrecondSuperRes,

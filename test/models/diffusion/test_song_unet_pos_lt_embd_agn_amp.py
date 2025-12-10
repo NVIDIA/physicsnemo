@@ -21,6 +21,12 @@ import torch
 from physicsnemo.models.diffusion import SongUNetPosLtEmbd
 from test import common
 
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
+
+
 
 def setup_model_learnable_embd(img_resolution, lt_steps, lt_channels, N_pos, seed=0):
     """
@@ -133,7 +139,6 @@ def generate_data_no_patches(H, W, device):
     return input_image, noise_label, class_label, lead_time_label, global_index
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_constructor(device):
     """
     Test the SongUNetPosLtEmbd constructor for different architectures and shapes.
@@ -186,7 +191,6 @@ def test_song_unet_constructor(device):
 
 
 # TODO: duplicate tests for model.eval()
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_forward_no_patches(device):
     """
     Test the forward method of the SongUNetPosLtEmbd for different architectures
@@ -250,7 +254,6 @@ def test_song_unet_forward_no_patches(device):
 
 
 # TODO: duplicate tests for model.eval() mode
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_forward_with_patches(device):
     """
     Test the forward method of the SongUNetPosLtEmbd for different architectures
@@ -313,7 +316,6 @@ def test_song_unet_forward_with_patches(device):
     return
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_positional_embedding_indexing_no_patches(device):
     """
     Test for positional_embedding_indexing method. Does not use patches (i.e.
@@ -341,7 +343,6 @@ def test_song_unet_positional_embedding_indexing_no_patches(device):
     # TODO: add non-regression tests for other architectures
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_positional_embedding_indexing_with_patches(device):
     """
     Test for positional_embedding_indexing method. Uses patches (i.e. input image
@@ -369,7 +370,6 @@ def test_song_unet_positional_embedding_indexing_with_patches(device):
     # TODO: add non-regression tests for other architectures
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims_no_patches(device):
     """Test SongUNetPosLtEmbd optimizations (CUDA graphs, JIT, AMP). Uses input
     data without patches (i.e. the entire global image)."""
@@ -398,7 +398,6 @@ def test_song_unet_optims_no_patches(device):
         assert common.validate_amp(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims_with_patches(device):
     """Test SongUNetPosLtEmbd optimizations (CUDA graphs, JIT, AMP). Uses input
     data with patches (i.e. input image is only a subset of the global image)."""
@@ -428,7 +427,6 @@ def test_song_unet_optims_with_patches(device):
         assert common.validate_amp(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint_no_patches(device):
     """Test SongUNetPosLtEmbd checkpoint save/load for different
     architectures. Uses input data without patches (i.e. input image is the
@@ -500,7 +498,6 @@ def test_song_unet_checkpoint_no_patches(device):
     return
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint_with_patches(device):
     """Test SongUNetPosLtEmbd checkpoint save/load for different
     architectures. Uses input data with patches (i.e. input image is only a
@@ -573,7 +570,6 @@ def test_song_unet_checkpoint_with_patches(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_son_unet_deploy(device):
     """Test Song UNet deployment support"""
 

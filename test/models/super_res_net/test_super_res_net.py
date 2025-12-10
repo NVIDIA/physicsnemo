@@ -23,7 +23,6 @@ from physicsnemo.models.srrn import SRResNet
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_super_res_net_forward(device):
     """Test super_res_net forward pass"""
     torch.manual_seed(0)
@@ -43,7 +42,6 @@ def test_super_res_net_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_super_res_net_constructor(device):
     """Test super_res_net constructor options"""
     # Define dictionary of constructor args
@@ -77,7 +75,6 @@ def test_super_res_net_constructor(device):
         assert outvar.shape == (bsize, kw_args["out_channels"], 16, 16, 16)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_super_res_net_optims(device):
     """Test super_res_net optimizations"""
 
@@ -104,7 +101,6 @@ def test_super_res_net_optims(device):
     assert common.validate_combo_optims(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_super_res_net_checkpoint(device):
     """Test super_res_net checkpoint save/load"""
     # Construct super_res_net model
@@ -121,7 +117,6 @@ def test_super_res_net_checkpoint(device):
     assert common.validate_checkpoint(model_1, model_2, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_super_res_net_deploy(device):
     """Test super_res_net deployment support"""
     # Construct super_res_net model

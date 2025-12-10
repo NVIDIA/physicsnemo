@@ -46,7 +46,6 @@ class MockNet:
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_regression_step(device, pytestconfig):
     from physicsnemo.models.diffusion import UNet
     from physicsnemo.models.diffusion.corrdiff_utils import regression_step
@@ -72,7 +71,6 @@ def test_regression_step(device, pytestconfig):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_diffusion_step(device, pytestconfig):
     from physicsnemo.models.diffusion import EDMPrecondSuperResolution
     from physicsnemo.models.diffusion.corrdiff_utils import diffusion_step
@@ -135,7 +133,6 @@ def test_diffusion_step(device, pytestconfig):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_diffusion_step_rectangle(device, pytestconfig):
     from physicsnemo.models.diffusion.corrdiff_utils import diffusion_step
     from physicsnemo.models.diffusion.patching import GridPatching2D

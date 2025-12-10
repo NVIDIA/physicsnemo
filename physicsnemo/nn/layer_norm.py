@@ -21,9 +21,9 @@ import warnings
 import torch
 from torch import nn
 
-from physicsnemo.core.version_check import check_module_requirements
+from physicsnemo.core.version_check import check_version_spec
 
-TE_AVAILABLE = check_module_requirements("transformer_engine", hard_fail=False)
+TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 
 
 def remove_extra_state_hook_for_torch(

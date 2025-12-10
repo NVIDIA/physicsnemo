@@ -20,7 +20,6 @@ import torch
 from .utils import validate_output_shape_and_values
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["relu", "gelu"])
 def test_aggregation_model(device, activation):
     """Test AggregationModel"""
@@ -42,7 +41,6 @@ def test_aggregation_model(device, activation):
     validate_output_shape_and_values(output, (2, 30, 1))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["relu", "gelu"])
 def test_local_point_conv(device, activation):
     """Test LocalPointConv"""

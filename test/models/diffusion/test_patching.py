@@ -24,7 +24,6 @@ from test.nn import validate_utils
 
 
 @requires_module(["cftime"])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_grid_patching_2d(pytestconfig, device):
     from physicsnemo.models.diffusion.patching import GridPatching2D
 
@@ -80,7 +79,6 @@ def test_grid_patching_2d(pytestconfig, device):
 
 
 @requires_module(["cftime"])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_image_fuse_basic(pytestconfig, device):
     from physicsnemo.models.diffusion.patching import image_fuse
 
@@ -117,7 +115,6 @@ def test_image_fuse_basic(pytestconfig, device):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_image_fuse_with_boundary(pytestconfig, device):
     from physicsnemo.models.diffusion.patching import image_fuse
 
@@ -149,7 +146,6 @@ def test_image_fuse_with_boundary(pytestconfig, device):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_image_fuse_with_multiple_batches(pytestconfig, device):
     from physicsnemo.models.diffusion.patching import image_batching, image_fuse
 
@@ -207,7 +203,6 @@ def test_image_fuse_with_multiple_batches(pytestconfig, device):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_image_batching_basic(pytestconfig, device):
     from physicsnemo.models.diffusion.patching import image_batching
 
@@ -240,7 +235,6 @@ def test_image_batching_basic(pytestconfig, device):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_image_batching_with_boundary(pytestconfig, device):
     from physicsnemo.models.diffusion.patching import image_batching
 
@@ -277,7 +271,6 @@ def test_image_batching_with_boundary(pytestconfig, device):
 
 
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_image_batching_with_input_interp(device, pytestconfig):
     from physicsnemo.models.diffusion.patching import image_batching
 

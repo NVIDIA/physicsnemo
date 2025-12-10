@@ -153,7 +153,6 @@ def unet_decoder_dict(
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixUNet_initialize(
     device, unet_encoder_dict, unet_decoder_dict, pytestconfig
 ):
@@ -230,7 +229,6 @@ def test_HEALPixUNet_initialize(
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixUNet_integration_steps(
     device, unet_encoder_dict, unet_decoder_dict, pytestconfig
 ):
@@ -258,7 +256,6 @@ def test_HEALPixUNet_integration_steps(
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixUNet_forward(
     device,
     unet_encoder_dict,

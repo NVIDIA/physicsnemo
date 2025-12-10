@@ -70,7 +70,6 @@ def tet_verts(flip_x=1):
 
 @requires_module("warp")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_sdf(pytestconfig, dtype, device):
     from physicsnemo.nn.sdf import signed_distance_field
 

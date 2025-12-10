@@ -26,6 +26,13 @@ from physicsnemo.distributed.autograd import (
 )
 
 
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
+
+
+
 @pytest.mark.multigpu_static
 def test_scatter_v():
     manager = DistributedManager()

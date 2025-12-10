@@ -61,7 +61,7 @@ class trainer_helper:
     device: str
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_BaseMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
     mse_func = BaseMSE()
     mse_func.setup(None)  # for coverage
@@ -132,7 +132,7 @@ def test_BaseMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_WeightedMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
     num_channels = 3
     channels, pred_tensor_np, targ_tensor_np = test_data(channels=num_channels)
@@ -237,7 +237,7 @@ def dataset_name():
 
 
 @requires_module("xarray")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_OceanMSE(
     data_dir,
     dataset_name,
@@ -316,7 +316,7 @@ def test_OceanMSE(
 
 
 @requires_module("xarray")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_WeightedOceanMSE(
     data_dir,
     dataset_name,

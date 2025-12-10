@@ -21,13 +21,11 @@ This file creates a uniform interface for the graph type, usable in typing conte
 import importlib
 from typing import TypeAlias
 
-from physicsnemo.core.version_check import check_module_requirements
+from physicsnemo.core.version_check import check_version_spec
 
-CUGRAPH_OPS_AVAILABLE = check_module_requirements("pylibcugraphops", hard_fail=False)
+CUGRAPH_OPS_AVAILABLE = check_version_spec("pylibcugraphops", hard_fail=False)
 
-PYG_AVAILABLE = check_module_requirements(
-    "torch_geometric", hard_fail=False
-) and check_module_requirements("torch_scatter", hard_fail=False)
+PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False) and check_version_spec("torch_scatter", hard_fail=False)
 
 if PYG_AVAILABLE:
     PyGData = importlib.import_module("torch_geometric.data").Data

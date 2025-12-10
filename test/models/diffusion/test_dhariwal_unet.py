@@ -22,7 +22,6 @@ from physicsnemo.models.diffusion import DhariwalUNet as UNet
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dhariwal_unet_forward(device):
     torch.manual_seed(0)
     model = UNet(img_resolution=64, in_channels=2, out_channels=2).to(device)
@@ -38,7 +37,6 @@ def test_dhariwal_unet_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dhariwal_unet_constructor(device):
     """Test the Dhariwal UNet constructor options"""
 
@@ -58,9 +56,11 @@ def test_dhariwal_unet_constructor(device):
 
 
 # Skip CPU tests because too slow
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_dhariwal_unet_optims(device):
     """Test Dhariwal UNet optimizations"""
+
+    if device == "cpu":
+        pytest.skip("CUDA only")
 
     def setup_model():
         model = UNet(
@@ -106,9 +106,12 @@ def test_dhariwal_unet_optims(device):
 
 
 # Skip CPU tests because too slow
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_dhariwal_unet_checkpoint(device):
     """Test Dhariwal UNet checkpoint save/load"""
+
+    if device == "cpu":
+        pytest.skip("CUDA only")
+
 
     model_1 = UNet(
         img_resolution=16,
@@ -136,7 +139,6 @@ def test_dhariwal_unet_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dhariwal_unet_deploy(device):
     """Test Dhariwal UNet deployment support"""
     model = UNet(

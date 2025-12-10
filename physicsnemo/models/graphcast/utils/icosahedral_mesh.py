@@ -17,10 +17,19 @@
 """Utils for creating icosahedral meshes."""
 
 import itertools
+import importlib
 from typing import List, NamedTuple, Sequence, Tuple
 
 import numpy as np
-from scipy.spatial import transform
+
+from physicsnemo.core.version_check import check_version_spec
+
+SCIPY_TRANSFORM_AVAILABLE = check_version_spec("scipy", hard_fail=False)
+
+if SCIPY_TRANSFORM_AVAILABLE:
+    transform = importlib.import_module("scipy.spatial")
+else:
+    transform = None
 
 
 class TriangularMesh(NamedTuple):
@@ -110,6 +119,14 @@ def get_icosahedron() -> TriangularMesh:
            counterclock-wise when looking from the outside).
 
     """
+    
+    if transform is None:
+        raise ImportError(
+            "scipy is not installed, cannot use get_icosahedron method. "
+            "The GraphCast model requires scipy for icosahedral mesh construction. "
+            "To install scipy, run: pip install scipy"
+        )
+
     phi = (1 + np.sqrt(5)) / 2
     vertices = []
     for c1 in [1.0, -1.0]:

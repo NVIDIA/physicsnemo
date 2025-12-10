@@ -24,7 +24,6 @@ from physicsnemo.models.rnn.rnn_seq2seq import Seq2SeqRNN
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_conv_rnn_one2many_forward(device, dimension):
     """Test model forward pass"""
@@ -55,7 +54,6 @@ def test_conv_rnn_one2many_forward(device, dimension):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_conv_rnn_one2many_checkpoint(device, dimension):
     """Test model checkpoint save/load"""
@@ -89,7 +87,6 @@ def test_conv_rnn_one2many_checkpoint(device, dimension):
     assert common.validate_checkpoint(model_1, model_2, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_conv_rnn_one2many_optimizations(device, dimension):
     """Test model optimizations"""
@@ -120,7 +117,6 @@ def test_conv_rnn_one2many_optimizations(device, dimension):
     assert common.validate_amp(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_conv_rnn_one2many_constructor(device):
     """Test model constructor"""
 
@@ -170,7 +166,6 @@ def test_conv_rnn_one2many_constructor(device):
         pass
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_conv_rnn_seq2seq_forward(device, dimension):
     """Test model forward pass"""
@@ -201,7 +196,6 @@ def test_conv_rnn_seq2seq_forward(device, dimension):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_conv_rnn_seq2seq_checkpoint(device, dimension):
     """Test model checkpoint save/load"""
@@ -235,7 +229,6 @@ def test_conv_rnn_seq2seq_checkpoint(device, dimension):
     assert common.validate_checkpoint(model_1, model_2, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [2, 3])
 def test_conv_rnn_seq2seq_optimizations(device, dimension):
     """Test model optimizations"""
@@ -266,7 +259,6 @@ def test_conv_rnn_seq2seq_optimizations(device, dimension):
     assert common.validate_amp(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_conv_rnn_seq2seq_constructor(device):
     """Test model constructor"""
 

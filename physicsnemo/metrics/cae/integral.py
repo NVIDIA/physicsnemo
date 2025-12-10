@@ -14,117 +14,139 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-import pyvista as pv
 
+from physicsnemo.core.version_check import check_version_spec
 
-def line_integral(
-    edges: np.ndarray,
-    points: np.ndarray,
-    field: np.ndarray,
-) -> float:
-    """
-    Compute integral along a line / edge. Currently assumes the curve in xy plane.
+PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
 
-    Parameters:
-    -----------
-    edges : np.ndarray
-        Edges of the curve in [M, 2] format
-    points : np.ndarray
-        Coordinates of points for the edge
-    field : np.ndarray
-        Field values at each edge center.
+if PV_AVAILABLE:
+    pv = importlib.import_module("pyvista")
 
-    Returns:
-    --------
-    float
-        Integral along the given curve / line.
-    """
-    tangents = []
-    lengths = []
+    def line_integral(
+        edges: np.ndarray,
+        points: np.ndarray,
+        field: np.ndarray,
+    ) -> float:
+        """
+        Compute integral along a line / edge. Currently assumes the curve in xy plane.
 
-    for i in range(edges.shape[0]):
-        vec = points[edges[i, 1]] - points[edges[i, 0]]
-        tangent = vec / np.linalg.norm(vec)
-        tangents.append(tangent)
-        lengths.append(np.linalg.norm(vec))
+        Parameters:
+        -----------
+        edges : np.ndarray
+            Edges of the curve in [M, 2] format
+        points : np.ndarray
+            Coordinates of points for the edge
+        field : np.ndarray
+            Field values at each edge center.
 
-    tangents = np.array(tangents)
-    lengths = np.array(lengths)
+        Returns:
+        --------
+        float
+            Integral along the given curve / line.
+        """
+        tangents = []
+        lengths = []
 
-    # integrate the results
-    if len(field.shape) == 2:
-        # Vector quantity
-        integral = np.sum(np.sum(field * tangents, axis=1) * lengths)
-    else:
-        # Scalar quantity
-        integral = np.sum(field * lengths)
+        for i in range(edges.shape[0]):
+            vec = points[edges[i, 1]] - points[edges[i, 0]]
+            tangent = vec / np.linalg.norm(vec)
+            tangents.append(tangent)
+            lengths.append(np.linalg.norm(vec))
 
-    return integral
+        tangents = np.array(tangents)
+        lengths = np.array(lengths)
 
-
-def surface_integral(
-    mesh: pv.PolyData,
-    data_type: str = "point_data",
-    array_name: Optional[Union[str, List[str]]] = None,
-) -> Dict[str, np.ndarray]:
-    """
-    Computes the surface integral of a given mesh
-
-    Parameters:
-    -----------
-    mesh : pv.PolyData
-        Mesh data with field information
-    data_type : str, optional
-        Whether to use "cell_data" or "point_data" to integrate. by default "point_data"
-    array_name : Optional[Union[str, List[str]]], optional
-        Array names to integrate. by default None which integrates all arrays.
-
-    Returns:
-    --------
-    Dict[np.ndarray]
-        Dictionary containing surface integrals for requested arrays.
-    """
-    # compute normals
-    mesh = mesh.compute_normals()
-
-    data = getattr(mesh, data_type)
-
-    if not data.keys():
-        raise ValueError(
-            f"No data arrays found using type: {data_type}, try switching between 'point_data' and 'cell_data'"
-        )
-
-    available_vars = data.keys()
-
-    if array_name is None:
-        data_arr = data.keys()
-    else:
-        if not isinstance(array_name, (list, tuple)):
-            data_arr = [array_name]
+        # integrate the results
+        if len(field.shape) == 2:
+            # Vector quantity
+            integral = np.sum(np.sum(field * tangents, axis=1) * lengths)
         else:
-            data_arr = array_name
+            # Scalar quantity
+            integral = np.sum(field * lengths)
 
-        if not set(data_arr) <= set(available_vars):
+        return integral
+
+
+    def surface_integral(
+        mesh: pv.PolyData,
+        data_type: str = "point_data",
+        array_name: Optional[Union[str, List[str]]] = None,
+    ) -> Dict[str, np.ndarray]:
+        """
+        Computes the surface integral of a given mesh
+
+        Parameters:
+        -----------
+        mesh : pv.PolyData
+            Mesh data with field information
+        data_type : str, optional
+            Whether to use "cell_data" or "point_data" to integrate. by default "point_data"
+        array_name : Optional[Union[str, List[str]]], optional
+            Array names to integrate. by default None which integrates all arrays.
+
+        Returns:
+        --------
+        Dict[np.ndarray]
+            Dictionary containing surface integrals for requested arrays.
+        """
+        # compute normals
+        mesh = mesh.compute_normals()
+
+        data = getattr(mesh, data_type)
+
+        if not data.keys():
             raise ValueError(
-                f"Requested vars not found in the provided mesh file. Choose from {available_vars}"
+                f"No data arrays found using type: {data_type}, try switching between 'point_data' and 'cell_data'"
             )
 
-    for arr in data_arr:
-        if len(data[arr].shape) == 1:
-            # Scalar quantity
-            data[f"integral_{arr}"] = data[arr]
-        elif len(data[arr].shape) == 2:
-            # Vector quantity
-            data[f"integral_{arr}"] = np.sum(data[arr] * data["Normals"], axis=1)
+        available_vars = data.keys()
 
-    # integrate the results
-    integrated = mesh.integrate_data()
+        if array_name is None:
+            data_arr = data.keys()
+        else:
+            if not isinstance(array_name, (list, tuple)):
+                data_arr = [array_name]
+            else:
+                data_arr = array_name
 
-    results = {}
-    for arr in data_arr:
-        results[f"integral_{arr}"] = np.array(integrated[f"integral_{arr}"])
+            if not set(data_arr) <= set(available_vars):
+                raise ValueError(
+                    f"Requested vars not found in the provided mesh file. Choose from {available_vars}"
+                )
 
-    return results
+        for arr in data_arr:
+            if len(data[arr].shape) == 1:
+                # Scalar quantity
+                data[f"integral_{arr}"] = data[arr]
+            elif len(data[arr].shape) == 2:
+                # Vector quantity
+                data[f"integral_{arr}"] = np.sum(data[arr] * data["Normals"], axis=1)
+
+        # integrate the results
+        integrated = mesh.integrate_data()
+
+        results = {}
+        for arr in data_arr:
+            results[f"integral_{arr}"] = np.array(integrated[f"integral_{arr}"])
+
+        return results
+
+else:
+    
+    def raise_missing_pyvista():
+        raise ImportError(
+            "pyvista is not installed, cannot use line_integral or surface_integral"
+            "Install pyvista from here: https://docs.pyvista.org/getting-started/installation.html"
+        )
+        
+    def line_integral(*args, **kwargs):
+        raise_missing_pyvista()
+    
+    def surface_integral(*args, **kwargs):
+        raise_missing_pyvista()
+        
+    

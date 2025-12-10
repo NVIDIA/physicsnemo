@@ -23,7 +23,6 @@ from physicsnemo.models.pangu import Pangu
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pangu_forward(device):
     """Test Pangu forward pass"""
     torch.manual_seed(0)
@@ -51,7 +50,6 @@ def test_pangu_forward(device):
     torch.cuda.empty_cache()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pangu_constructor(device):
     """Test Pangu constructor options"""
     # Define dictionary of constructor args
@@ -105,7 +103,6 @@ def test_pangu_constructor(device):
     torch.cuda.empty_cache()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pangu_optims(device):
     """Test Pangu optimizations"""
 
@@ -144,7 +141,6 @@ def test_pangu_optims(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pangu_deploy(device):
     """Test Pangu deployment support"""
     # Construct Pangu model

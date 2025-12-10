@@ -55,7 +55,6 @@ class CustomMetaData(ModelMetaData):
     auto_grad: bool = True
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_forward(device):
     """Test forward pass from PyTorch"""
     torch.manual_seed(0)
@@ -71,7 +70,6 @@ def test_from_torch_forward(device):
     registry.__restore_registry__()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_constructor(device):
     """Test constructor from PyTorch"""
 
@@ -84,7 +82,6 @@ def test_from_torch_constructor(device):
     registry.__restore_registry__()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_optims(device):
     """Test optimizations from PyTorch"""
 
@@ -123,7 +120,6 @@ def test_from_torch_optims(device):
     # registry.__restore_registry__()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_checkpoint(device):
     """Test checkpoint save/load from PyTorch"""
     # Construct CustomPhysicsNeMoModel
@@ -140,7 +136,6 @@ def test_from_torch_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_from_torch_deploy(device):
     """Test deployment support from PyTorch"""
     # Construct CustomPhysicsNeMoModel

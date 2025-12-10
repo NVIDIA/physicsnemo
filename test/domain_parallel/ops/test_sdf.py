@@ -17,7 +17,6 @@
 import numpy as np
 import pytest
 import torch
-from scipy.spatial import ConvexHull
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
 from physicsnemo.distributed import DistributedManager
@@ -26,7 +25,15 @@ from physicsnemo.nn.sdf import signed_distance_field
 
 from .utils import numerical_shard_tensor_check
 
+from physicsnemo.core.version_check import check_version_spec
 
+SCIPY_AVAILABLE = check_version_spec("scipy", hard_fail=False)
+
+if SCIPY_AVAILABLE:
+    from scipy.spatial import ConvexHull
+else:
+    pytest.skip("scipy is not installed, cannot use ConvexHull", allow_module_level=True)
+    
 # This is from the domino datapipe, too:
 def random_sample_on_unit_sphere(n_points):
     # Random points on the sphere:

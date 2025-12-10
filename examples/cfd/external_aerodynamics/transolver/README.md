@@ -42,8 +42,8 @@ as well as physicsnemo 25.11 or higher.
 Using `PhysicsNeMo-Curator`, the data needed to train can be setup easily.
 Please refer to [these instructions on getting started](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#what-is-physicsnemo-curator)
 with `PhysicsNeMo-Curator`.  For specifics of preparing the dataset for this example,
-see the [download](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md#download-drivaerml-dataset)
-and [preprocessing](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md)
+see the [download](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md#download-drivaerml-dataset)
+and [preprocessing](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md)
 instructions from `physicsnemo-curator`.  Users should apply the
 preprocessing steps locally to produce `zarr` output files.
 

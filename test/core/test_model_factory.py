@@ -22,7 +22,17 @@ import torch
 from physicsnemo.core import ModelRegistry, Module
 
 
-class MockModel(Module):
+# Fixture to clear registry between tests to avoid naming conflicts
+@pytest.fixture(autouse=True)
+def clear_registry():
+    """Clear and restore the model registry before and after each test"""
+    registry = ModelRegistry()
+    registry.__clear_registry__()
+    yield
+    registry.__restore_registry__()
+
+
+class MockModel(Module, _register=False):
     def __init__(self, layer_size=16):
         super().__init__()
         self.layer_size = layer_size
@@ -44,7 +54,6 @@ def _retrieve_model(model: Module, name: str):
     registry.__restore_registry__()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_register_and_factory(device):
     # Register and retrieve the MockModel
     with _retrieve_model(MockModel, "mock_model") as RetrievedModel:

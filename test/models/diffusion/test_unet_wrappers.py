@@ -24,7 +24,6 @@ from physicsnemo.models.diffusion import StormCastUNet, UNet
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_forwards(device):
     """Test forward passes of UNet wrappers"""
 
@@ -50,7 +49,6 @@ def test_unet_forwards(device):
     assert output.shape == (1, outc, res, res)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_fp16_forwards(device):
     """Test forward passes of UNet wrappers with fp16"""
 
@@ -91,7 +89,6 @@ def test_unet_fp16_forwards(device):
     assert output.shape == (1, outc, res, res)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_optims(device):
     """Test optimizations of U-Net wrappers"""
 
@@ -142,7 +139,6 @@ def test_unet_optims(device):
             assert common.validate_amp(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_checkpoint(device):
     """Test UNet wrapper checkpoint save/load"""
     # Construct UNet models
@@ -177,7 +173,6 @@ def test_unet_checkpoint(device):
     assert common.validate_checkpoint(model_1, model_2, (input_image,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_properties(device):
     """Test UNet wrappers amp_mode and profile_mode properties"""
 
@@ -234,7 +229,6 @@ def test_unet_properties(device):
             assert sub.profile_mode is False
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_unet_backward_compat(device):
     """Test backward compatibility of UNet wrappers"""
 

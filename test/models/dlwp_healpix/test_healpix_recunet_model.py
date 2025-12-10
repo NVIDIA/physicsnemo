@@ -165,7 +165,6 @@ def insolation_data():
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixRecUNet_initialize(device, encoder_dict, decoder_dict, pytestconfig):
     in_channels = 3
     out_channels = 3
@@ -270,7 +269,6 @@ def test_HEALPixRecUNet_initialize(device, encoder_dict, decoder_dict, pytestcon
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_HEALPixRecUNet_integration_steps(
     device, encoder_dict, decoder_dict, pytestconfig
 ):
@@ -298,7 +296,6 @@ def test_HEALPixRecUNet_integration_steps(
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @torch.no_grad()
 def test_HEALPixRecUNet_reset(
     device,
@@ -351,7 +348,6 @@ def test_HEALPixRecUNet_reset(
 
 
 @requires_module("omegaconf")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @torch.no_grad()
 def test_HEALPixRecUNet_forward(
     device,

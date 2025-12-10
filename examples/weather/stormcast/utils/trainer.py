@@ -22,7 +22,7 @@ import time
 import numpy as np
 import torch
 import psutil
-from physicsnemo.models import Module
+from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.metrics.diffusion import EDMLoss, EDMLossLogUniform
 from physicsnemo.models.diffusion.training_utils import InfiniteSampler

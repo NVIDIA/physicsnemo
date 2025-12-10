@@ -21,8 +21,12 @@ import torch
 from physicsnemo.models.diffusion import SongUNetPosEmbd as UNet
 from test import common
 
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
-@pytest.mark.parametrize("device", ["cuda:0"])
+
 def test_song_unet_global_indexing(device):
     torch.manual_seed(0)
     N_pos = 2
@@ -59,7 +63,6 @@ def test_song_unet_global_indexing(device):
     assert torch.equal(pos_embed, global_index)
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_constructor(device):
     """Test the Song UNet constructor options"""
 
@@ -108,7 +111,6 @@ def test_song_unet_constructor(device):
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution * 2)
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_position_embedding(device):
     # build unet
     img_resolution = 16
@@ -184,7 +186,6 @@ def test_fails_if_grid_is_invalid():
         ).to(memory_format=torch.channels_last)
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims(device):
     """Test Song UNet optimizations"""
 
@@ -228,7 +229,6 @@ def test_song_unet_optims(device):
         assert common.validate_combo_optims(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
     # Construct FNO models
@@ -268,7 +268,6 @@ def test_song_unet_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_son_unet_deploy(device):
     """Test Song UNet deployment support"""
     model = (

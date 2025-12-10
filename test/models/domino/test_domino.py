@@ -154,7 +154,7 @@ class model_params:
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0"])
+# @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("processor_type", ["unet", "conv"])
 def test_domino_forward(device, processor_type, pytestconfig):
     """Test domino forward pass"""

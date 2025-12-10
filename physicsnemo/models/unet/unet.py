@@ -25,7 +25,7 @@ import torch.utils.checkpoint as checkpoint
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.utils.version_utils import check_version_spec
+from physicsnemo.core.version_check import check_version_spec
 
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.10.0", hard_fail=False)
 

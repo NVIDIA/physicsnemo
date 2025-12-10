@@ -20,13 +20,11 @@ import torch
 from physicsnemo.nn import FourierFilter, FourierLayer, GaborFilter
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_layer_initialization(device):
     layer = FourierLayer(in_features=2, frequencies=["gaussian", 1, 3]).to(device)
     assert isinstance(layer, FourierLayer)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_layer_forward_pass(device):
     layer = FourierLayer(in_features=2, frequencies=["gaussian", 1, 3]).to(device)
     input_tensor = torch.randn(10, 2).to(device)
@@ -34,7 +32,6 @@ def test_fourier_layer_forward_pass(device):
     assert output_tensor.shape == (10, layer.out_features())
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_layer_sine_cosine_ranges(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     layer = FourierLayer(in_features=2, frequencies=["gaussian", 1, 3]).to(device)
@@ -43,7 +40,6 @@ def test_fourier_layer_sine_cosine_ranges(device):
     assert (output_tensor <= 1).all() and (output_tensor >= -1).all()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_filter_initialization(device):
     filter = FourierFilter(
         in_features=2, layer_size=32, nr_layers=2, input_scale=1.0
@@ -51,7 +47,6 @@ def test_fourier_filter_initialization(device):
     assert isinstance(filter, FourierFilter)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_filter_forward_pass(device):
     filter = FourierFilter(
         in_features=2, layer_size=32, nr_layers=2, input_scale=1.0
@@ -61,7 +56,6 @@ def test_fourier_filter_forward_pass(device):
     assert output_tensor.shape == (10, 32)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_filter_sine_value_ranges(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     filter = FourierFilter(
@@ -72,7 +66,6 @@ def test_fourier_filter_sine_value_ranges(device):
     assert (output_tensor <= 1).all() and (output_tensor >= -1).all()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fourier_filter_parameters_update(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     filter = FourierFilter(
@@ -90,7 +83,6 @@ def test_fourier_filter_parameters_update(device):
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gabor_filter_initialization(device):
     filter = GaborFilter(
         in_features=2, layer_size=32, nr_layers=2, input_scale=1.0, alpha=1.0, beta=2.0
@@ -98,7 +90,6 @@ def test_gabor_filter_initialization(device):
     assert isinstance(filter, GaborFilter)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gabor_filter_forward_pass(device):
     filter = GaborFilter(
         in_features=2, layer_size=32, nr_layers=2, input_scale=1.0, alpha=1.0, beta=2.0
@@ -108,7 +99,6 @@ def test_gabor_filter_forward_pass(device):
     assert output_tensor.shape == (10, 32)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gabor_filter_sine_value_ranges(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     filter = GaborFilter(
@@ -119,7 +109,6 @@ def test_gabor_filter_sine_value_ranges(device):
     assert (output_tensor <= 1).all() and (output_tensor >= -1).all()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gabor_filter_parameters_update(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     filter = GaborFilter(

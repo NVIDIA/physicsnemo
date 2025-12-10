@@ -23,7 +23,6 @@ from physicsnemo.models.fno import FNO
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4])
 def test_fno_forward(device, dimension):
     """Test FNO forward pass"""
@@ -59,7 +58,6 @@ def test_fno_forward(device, dimension):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fno_constructor(device):
     """Test FNO constructor options"""
 
@@ -116,7 +114,6 @@ def test_fno_constructor(device):
         pass
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4])
 def test_fno_optims(device, dimension):
     """Test FNO optimizations"""
@@ -170,7 +167,6 @@ def test_fno_optims(device, dimension):
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4])
 def test_fno_checkpoint(device, dimension):
     """Test FNO checkpoint save/load"""
@@ -213,7 +209,6 @@ def test_fno_checkpoint(device, dimension):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [1, 2, 3, 4])
 def test_fnodeploy(device, dimension):
     """Test FNO deployment support"""

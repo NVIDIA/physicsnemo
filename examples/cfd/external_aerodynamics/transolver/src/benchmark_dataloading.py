@@ -40,7 +40,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from physicsnemo.datapipes.cae.transolver_datapipe import (
     create_transolver_dataset,

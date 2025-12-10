@@ -43,8 +43,8 @@ import torchinfo
 import numpy as np
 
 # Physicsnemo imports ...
-from physicsnemo.launch.utils import load_checkpoint, save_checkpoint
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils import load_checkpoint, save_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.utils.profiling import profile, Profiler
 from physicsnemo.datapipes.cae.transolver_datapipe import (
@@ -60,9 +60,9 @@ from preprocess import (
 )
 
 # Special import, if transformer engine is available:
-from physicsnemo.utils.version_check import check_min_version
+from physicsnemo.core.version_check import check_version_spec
 
-TE_AVAILABLE = check_min_version("transformer_engine", "0.0.0", hard_fail=False)
+TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te

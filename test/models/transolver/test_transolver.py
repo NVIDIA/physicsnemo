@@ -34,7 +34,6 @@ from test.common import (
 from test.conftest import requires_module
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_transolver2d_forward(device):
     """Test Transolver2D forward pass"""
     torch.manual_seed(0)
@@ -72,7 +71,6 @@ def test_transolver2d_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_transolver_irregular_forward(device):
     """Test Transolver Irregular forward pass"""
     torch.manual_seed(0)
@@ -111,7 +109,6 @@ def test_transolver_irregular_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_transolver_optims(device):
     """Test transolver optimizations"""
 
@@ -223,7 +220,6 @@ def test_transolver_te(pytestconfig):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_transolver_checkpoint(device):
     """Test transolver checkpoint save/load"""
     # Construct transolver models
@@ -279,7 +275,6 @@ def test_transolver_checkpoint(device):
 
 
 @check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_transolver_deploy(device):
     """Test transolver deployment support"""
     # Construct transolver model

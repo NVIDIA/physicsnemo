@@ -27,8 +27,8 @@ import hydra
 import omegaconf
 from omegaconf import DictConfig
 from physicsnemo.models.transolver.transolver import Transolver
-from physicsnemo.launch.utils import load_checkpoint
-from physicsnemo.launch.logging import PythonLogger, RankZeroLoggingWrapper
+from physicsnemo.utils import load_checkpoint
+from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from sklearn.metrics import r2_score
 

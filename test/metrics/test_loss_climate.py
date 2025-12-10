@@ -33,7 +33,7 @@ class Model(torch.nn.Module):
     output_variables = ["tcwv", "t2m"]
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_MSE_SSIM(device):
     model = Model()
 
@@ -125,7 +125,7 @@ def test_MSE_SSIM(device):
     assert mse_ssim_loss(ones, zeros, model) == expected
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_SSIM(device):
     """Test SSIM loss in loss"""
     ssim_loss = SSIM(time_series_forecasting=False)

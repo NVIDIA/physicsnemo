@@ -41,7 +41,7 @@ import importlib
 
 import torch
 
-from physicsnemo.utils.version_utils import check_version_spec
+from physicsnemo.core.version_check import check_version_spec
 
 HEALPIXPAD_AVAILABLE = check_version_spec("earth2grid", "0.1.0", hard_fail=False)
 
@@ -174,13 +174,15 @@ class HEALPixPaddingv2(torch.nn.Module):
         torch.Tensor
             The padded tensor where each face's height and width are increased by 2*p
         """
-        torch.cuda.nvtx.range_push("HEALPixPaddingv2:forward")
+        if torch.cuda.is_available():
+            torch.cuda.nvtx.range_push("HEALPixPaddingv2:forward")
 
         x = self.unfold(x)
         xp = hpx_pad(x, self.padding)
         xp = self.fold(xp)
 
-        torch.cuda.nvtx.range_pop()
+        if torch.cuda.is_available():
+            torch.cuda.nvtx.range_pop()
 
         return xp
 
@@ -232,7 +234,8 @@ class HEALPixPadding(torch.nn.Module):
         torch.Tensor
             The padded tensor where each face's height and width are increased by 2*p
         """
-        torch.cuda.nvtx.range_push("HEALPixPadding:forward")
+        if torch.cuda.is_available():
+            torch.cuda.nvtx.range_push("HEALPixPadding:forward")
 
         # unfold faces from batch dim
         data = self.unfold(data)
@@ -324,7 +327,8 @@ class HEALPixPadding(torch.nn.Module):
         # fold faces into batch dim
         res = self.fold(res)
 
-        torch.cuda.nvtx.range_pop()
+        if torch.cuda.is_available():
+            torch.cuda.nvtx.range_pop()
 
         return res
 

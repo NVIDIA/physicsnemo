@@ -24,7 +24,6 @@ import torch
 from physicsnemo.nn.kan_layers import KolmogorovArnoldNetwork
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kan_initialization(device):
     layer = KolmogorovArnoldNetwork(4, 3, num_harmonics=7).to(device)
     assert layer.fourier_coeffs.shape == (2, 3, 4, 7)
@@ -32,7 +31,6 @@ def test_kan_initialization(device):
         assert layer.bias.shape == (1, 3)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("bias_flag", [True, False])
 def test_kan_forward_pass(device, bias_flag):
     batch, in_dim, out_dim = 8, 5, 2
@@ -47,7 +45,6 @@ def test_kan_forward_pass(device, bias_flag):
         assert p.grad is not None
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_kan_parameter_update(device):
     torch.manual_seed(0)
     kan = KolmogorovArnoldNetwork(3, 1, num_harmonics=3).to(device)

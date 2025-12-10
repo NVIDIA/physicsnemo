@@ -28,7 +28,6 @@ def ahmed_data_dir(nfs_data_dir):
 
 
 @requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
     import torch_geometric as pyg
 

@@ -46,7 +46,6 @@ def test_data(channels=2, img_shape=(721, 1440)):
     return channels, x, y, pred_tensor_np, targ_tensor_np, time_means
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_climate_acc_mse(test_data, device, rtol: float = 1e-3, atol: float = 1e-3):
     channels, lon, lat, pred_tensor_np, targ_tensor_np, time_means = test_data
     lat = torch.from_numpy(lat).to(device)
@@ -105,7 +104,6 @@ def test_climate_acc_mse(test_data, device, rtol: float = 1e-3, atol: float = 1e
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_climate_reductions(test_data, device, rtol: float = 1e-3, atol: float = 1e-3):
     channels, lon, lat, pred_tensor_np, targ_tensor_np, time_means = test_data
     pred_tensor = torch.from_numpy(pred_tensor_np).expand(channels, -1, -1).to(device)
@@ -248,7 +246,6 @@ def test_climate_reductions(test_data, device, rtol: float = 1e-3, atol: float =
         clim_red.global_var(torch.zeros((10,), device=device), lat)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_climate_efi(test_data, device, rtol: float = 1e-1, atol: float = 1e-1):
     one = torch.ones((1, 1), dtype=torch.float32, device=device)
     bin_edges = hist.linspace(-10 * one, 10 * one, 30)

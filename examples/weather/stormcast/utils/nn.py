@@ -17,7 +17,7 @@
 from collections.abc import Iterable
 
 import torch
-from physicsnemo.models import Module
+from physicsnemo.core import Module
 from physicsnemo.models.diffusion import EDMPrecond, StormCastUNet
 from physicsnemo.models.diffusion.sampling import deterministic_sampler
 

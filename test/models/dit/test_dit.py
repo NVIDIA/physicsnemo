@@ -34,7 +34,6 @@ from test.conftest import requires_module
 # --- Tests ---
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_dit_forward_accuracy(device):
     """Test DiT forward pass against a saved reference output."""
     torch.manual_seed(0)
@@ -61,7 +60,6 @@ def test_dit_forward_accuracy(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_dit_conditional_forward_accuracy(device):
     """Test conditional DiT forward pass against a saved reference output."""
     torch.manual_seed(0)
@@ -90,7 +88,6 @@ def test_dit_conditional_forward_accuracy(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dit_constructor(device):
     """Test different DiT constructor options and shape consistency."""
     input_size = (16, 32)
@@ -174,7 +171,7 @@ class CustomDetokenizer(DetokenizerModuleBase):
         pass
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
+@requires_module("transformer_engine")
 @pytest.mark.parametrize(
     "tokenizer",
     [CustomTokenizer(in_channels=3, hidden_size=64, patch_size=4), "patch_embed_2d"],
@@ -272,8 +269,11 @@ class _DiTBlockWrapper(nn.Module):
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_ditblock_forward_accuracy_timm(device):
+    
+    if device == "cpu":
+        pytest.skip("CUDA only")
+        
     torch.manual_seed(0)
     hidden_size = 128
     num_heads = 4
@@ -307,8 +307,11 @@ def test_ditblock_forward_accuracy_timm(device):
 
 
 @requires_module(["natten"])
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_ditblock_forward_accuracy_natten(device, pytestconfig):
+    
+    if device == "cpu":
+        pytest.skip("natten not available on CPU")
+    
     torch.manual_seed(0)
     hidden_size = 64
     num_heads = 4
@@ -346,7 +349,6 @@ def test_ditblock_forward_accuracy_natten(device, pytestconfig):
 
 
 @requires_module(["transformer_engine"])  # TE dependency
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_ditblock_forward_accuracy_transformer_engine(device, pytestconfig):
     torch.manual_seed(0)
     hidden_size = 128
@@ -380,7 +382,6 @@ def test_ditblock_forward_accuracy_transformer_engine(device, pytestconfig):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_ditblock_exceptions(device):
     # Per-sample dropout mismatched shape should raise ValueError
     hidden_size = 32
@@ -426,7 +427,6 @@ def test_ditblock_exceptions(device):
         _ = nat_block(x, c)  # missing required attn_kwargs: latent_hw
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_ditblock_intermediate_dropout_scalar_and_per_sample(device):
     torch.manual_seed(123)
     hidden_size = 64

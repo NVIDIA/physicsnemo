@@ -259,7 +259,6 @@ def setup_model_learnable_embd(img_resolution, C_x, C_cond, global_lr=False, see
 
 # The test function for patch-based deterministic_sampler
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_deterministic_sampler_full_domain_lead_time(device, pytestconfig):
     from physicsnemo.models.diffusion.sampling import deterministic_sampler
 
@@ -287,7 +286,6 @@ def test_deterministic_sampler_full_domain_lead_time(device, pytestconfig):
 
 # The test function for edm_sampler with rectangular domain and patching
 @requires_module("cftime")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_deterministic_sampler_rectangle_patching_lead_time(device, pytestconfig):
     from physicsnemo.models.diffusion.patching import GridPatching2D
     from physicsnemo.models.diffusion.sampling import deterministic_sampler
@@ -334,9 +332,11 @@ def test_deterministic_sampler_rectangle_patching_lead_time(device, pytestconfig
 # (tests differentiation through the patching and fusing)
 @requires_module("cftime")
 # NOTE: compiled backward fails on CPU for this test, so we only test on GPU
-# @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_deterministic_sampler_patching_differentiable(device, pytestconfig):
+    
+    if device == "cpu":
+        pytest.skip("Skip deterministic sampler patching differentiable on cpu")
+    
     from physicsnemo.models.diffusion.patching import GridPatching2D
     from physicsnemo.models.diffusion.sampling import deterministic_sampler
 

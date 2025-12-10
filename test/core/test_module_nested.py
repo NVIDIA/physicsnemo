@@ -120,7 +120,6 @@ def make_model():
     return m, Mt
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"], ids=["gpu", "cpu"])
 @pytest.mark.parametrize("override", [True, False], ids=["override", "no_override"])
 def test_save_load(device, override):
     m_orig, Mt = make_model()
@@ -157,7 +156,6 @@ def test_save_load(device, override):
     registry.__restore_registry__()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"], ids=["gpu", "cpu"])
 @pytest.mark.parametrize("override", [True, False], ids=["override", "no_override"])
 def test_load_from_checkpoint(device, override):
     # CJA - Had to add this, the model was still registered here ...
@@ -172,6 +170,7 @@ def test_load_from_checkpoint(device, override):
 
     m_orig, Mt = make_model()
     m_orig = m_orig.to(device)
+    
     if not override:
         m_loaded = physicsnemo.core.Module.from_checkpoint(file_name).to(device)
     else:

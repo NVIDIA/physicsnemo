@@ -23,7 +23,6 @@ from physicsnemo.models.pix2pix import Pix2Pix
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pix2pix_forward(device):
     """Test pix2pix forward pass"""
     torch.manual_seed(0)
@@ -45,7 +44,6 @@ def test_pix2pix_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pix2pix_constructor(device):
     """Test pix2pix constructor options"""
     # Define dictionary of constructor args
@@ -104,7 +102,6 @@ def test_pix2pix_constructor(device):
         pass
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pix2pix_optims(device):
     """Test pix2pix optimizations"""
 
@@ -139,7 +136,6 @@ def test_pix2pix_optims(device):
     assert common.validate_combo_optims(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pix2pix_checkpoint(device):
     """Test pix2pix checkpoint save/load"""
     # Construct pix2pix model
@@ -168,7 +164,6 @@ def test_pix2pix_checkpoint(device):
     assert common.validate_checkpoint(model_1, model_2, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_pix2pix_deploy(device):
     """Test pix2pix deployment support"""
     # Construct pix2pix model
@@ -188,7 +183,6 @@ def test_pix2pix_deploy(device):
     assert common.validate_onnx_runtime(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("upsample", [1, 2])
 def test_pix2pix_upsample(device, upsample):
     """Test pix2pix upsampling functionality"""

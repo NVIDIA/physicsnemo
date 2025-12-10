@@ -38,13 +38,13 @@ from physicsnemo.datapipes.cae.cae_dataset import (
     CAEDataset,
 )
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils.domino.utils import (
+from physicsnemo.models.domino.utils import (
     normalize,
     standardize,
     unnormalize,
     unstandardize,
 )
-from physicsnemo.utils.sdf import signed_distance_field
+from physicsnemo.nn.sdf import signed_distance_field
 
 
 @dataclass

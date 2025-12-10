@@ -23,14 +23,14 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.autograd.function import once_differentiable
 
-from physicsnemo.core.version_check import check_module_requirements
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.nn.fused_silu import silu_backward_for
 from physicsnemo.nn.layer_norm import get_layer_norm_class
 from physicsnemo.utils.profiling import profile
 
 from .utils import GraphType, concat_efeat, concat_efeat_hetero, sum_efeat
 
-NV_FUSER_AVAILABLE = check_module_requirements("nvfuser", hard_fail=False)
+NV_FUSER_AVAILABLE = check_version_spec("nvfuser", hard_fail=False)
 
 if NV_FUSER_AVAILABLE:
     nvfuser = importlib.import_module("nvfuser")

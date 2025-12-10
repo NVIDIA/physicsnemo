@@ -24,9 +24,12 @@ from test import common
 
 
 # Skip CPU tests because too slow
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_swinrnn_forward(device):
     """Test SwinRNN forward pass"""
+    
+    if device == "cpu":
+        pytest.skip("SwinRNN cpu test too slow")
+    
     torch.manual_seed(0)
     model = SwinRNN(
         img_size=(6, 32, 64),
@@ -54,7 +57,6 @@ def test_swinrnn_forward(device):
     torch.cuda.empty_cache()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_swinrnn_constructor(device):
     """Test SwinRNN constructor options"""
     # Define dictionary of constructor args
@@ -90,13 +92,13 @@ def test_swinrnn_constructor(device):
             kw_args["img_size"][2],
         )
     del model, invar, outvar
-    torch.cuda.empty_cache()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_swinrnn_optims(device):
     """Test SwinRNN optimizations"""
-
+    if device == "cpu":
+        pytest.skip("CUDA only")
+        
     def setup_model():
         """Setups up fresh SwinRNN model and inputs for each optim test"""
         model = SwinRNN(
@@ -130,9 +132,12 @@ def test_swinrnn_optims(device):
     torch.cuda.empty_cache()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_swinrnn_checkpoint(device):
     """Test SwinRNN checkpoint save/load"""
+    
+    if device == "cpu":
+        pytest.skip("CUDA only")
+    
     # Construct SwinRNN models
     model_1 = SwinRNN(
         img_size=(6, 32, 64),
@@ -164,9 +169,13 @@ def test_swinrnn_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_swinrnn_deploy(device):
     """Test SwinRNN deployment support"""
+    
+    
+    if device == "cpu":
+        pytest.skip("CUDA only")
+    
     # Construct SwinRNN model
     model = SwinRNN(
         img_size=(6, 32, 64),

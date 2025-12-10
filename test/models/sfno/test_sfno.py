@@ -41,7 +41,6 @@ def _create_model() -> physicsnemo.core.Module:
 
 
 @requires_module("makani")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_sfno_forward(pytestconfig, device):
     """Test SFNO forward pass."""
 
@@ -65,7 +64,6 @@ def test_sfno_forward(pytestconfig, device):
 
 
 @requires_module("makani")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_sfno_checkpoint(pytestconfig, device):
     """Test SFNO checkpoint save/load."""
 

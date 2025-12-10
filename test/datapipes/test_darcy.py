@@ -27,7 +27,6 @@ Tensor = torch.Tensor
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_constructor(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
@@ -51,7 +50,6 @@ def test_darcy_2d_constructor(device, pytestconfig):
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_device(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
@@ -80,7 +78,6 @@ def test_darcy_2d_device(device, pytestconfig):
 @requires_module("warp")
 @pytest.mark.parametrize("resolution", [128, 64])
 @pytest.mark.parametrize("batch_size", [1, 2, 3])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_darcy_2d_shape(resolution, batch_size, device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
 
@@ -118,9 +115,12 @@ def test_darcy_2d_shape(resolution, batch_size, device, pytestconfig):
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_darcy_cudagraphs(device, pytestconfig):
     from physicsnemo.datapipes.benchmarks.darcy import Darcy2D
+
+    # CUDA only:
+    if device == "cpu":
+        pytest.skip("CUDA only")
 
     # Preprocess function to convert dataloader output into Tuple of tensors
     def input_fn(data) -> Tuple[Tensor, ...]:

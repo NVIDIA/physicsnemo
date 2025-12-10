@@ -26,6 +26,11 @@ from physicsnemo.distributed import (
 )
 from physicsnemo.distributed.mappings import reduce_from_parallel_region
 
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
+
 
 def test_config():
     # Create world group that contains all processes that are part of this job

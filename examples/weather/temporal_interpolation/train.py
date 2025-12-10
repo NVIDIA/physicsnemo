@@ -28,11 +28,11 @@ from physicsnemo import Module
 from physicsnemo.datapipes.climate.climate import ClimateDataSourceSpec
 from physicsnemo.datapipes.climate.utils import invariant
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.launch.logging import LaunchLogger
-from physicsnemo.launch.logging.mlflow import initialize_mlflow
-from physicsnemo.launch.logging.wandb import initialize_wandb
+from physicsnemo.utils.logging import LaunchLogger
+from physicsnemo.utils.logging.mlflow import initialize_mlflow
+from physicsnemo.utils.logging.wandb import initialize_wandb
 from physicsnemo.models.afno import ModAFNO
-from physicsnemo.launch.utils import load_checkpoint
+from physicsnemo.utils import load_checkpoint
 
 from datapipe.climate_interp import InterpClimateDatapipe
 from utils import distribute, loss

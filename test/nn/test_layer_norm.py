@@ -76,7 +76,6 @@ def test_torch_fallback(monkeypatch):
         ("0", "torch"),
     ],
 )
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_force_env(force_val, expected_type, device, pytestconfig, monkeypatch):
     if device == "cpu":
         force_val = False
@@ -96,13 +95,14 @@ def test_force_env(force_val, expected_type, device, pytestconfig, monkeypatch):
         assert isinstance(ln, torch.nn.LayerNorm)
 
 
+@requires_module("transformer_engine")
 @pytest.mark.parametrize(
     "order",
     [
         0,
     ],
 )
-def test_serialization(order, monkeypatch, pytestconfig):
+def test_serialization(device, order, monkeypatch, pytestconfig):
     """
     This test checks that the LayerNorm class can be serialized and deserialized
     while switching between TE and torch layer norm.  Uses physicsnemo checkpoint

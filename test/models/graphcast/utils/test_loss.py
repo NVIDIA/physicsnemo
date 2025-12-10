@@ -16,12 +16,14 @@
 
 import torch
 
+from test.conftest import requires_module
+
 from physicsnemo.models.graphcast.utils.loss import (
     CellAreaWeightedLossFunction,
     CustomCellAreaWeightedLossFunction,
 )
 
-
+@requires_module("sklearn")
 def test_loss():
     """Tests if the custom loss function is equivalent to the default loss function."""
     pred1 = torch.rand(1, 2, 721, 1440, device="cuda")

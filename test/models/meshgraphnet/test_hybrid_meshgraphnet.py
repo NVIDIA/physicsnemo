@@ -31,7 +31,6 @@ dgl = pytest.importorskip("dgl")
 
 
 @requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hybrid_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet forward pass"""
 
@@ -74,7 +73,6 @@ def test_hybrid_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force
 
 
 @requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hybrid_meshgraphnet_constructor(
     device, pytestconfig, set_physicsnemo_force_te
 ):
@@ -136,7 +134,6 @@ def test_hybrid_meshgraphnet_constructor(
 
 
 @requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hybrid_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet optimizations"""
 
@@ -187,7 +184,6 @@ def test_hybrid_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_
 
 
 @requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hybrid_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet checkpoint save/load"""
 
@@ -234,7 +230,6 @@ def test_hybrid_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_fo
 
 @requires_module("dgl")
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_hybrid_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     """Test hybrid meshgraphnet deployment support"""
 

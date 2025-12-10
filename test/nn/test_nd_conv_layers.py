@@ -224,7 +224,6 @@ class SpectralConv4d(nn.Module):
         return x
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [1, 2, 3])
 def test_conv_nd(device, dimension):
     """compare output of ConvNdKernel1Layer with that of layer for specfic n_dim"""
@@ -265,7 +264,6 @@ def test_conv_nd(device, dimension):
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("dimension", [1, 2, 3])
 def test_conv_ndfc(device, dimension):
     """compare output of ConvNdFCLayer with that of layer for specfic n_dim"""
@@ -299,7 +297,6 @@ def test_conv_ndfc(device, dimension):
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_spec_conv_4d(device):
     """compare output of SpectralConv4d with that of layer used in literature."""
     bsize = 8

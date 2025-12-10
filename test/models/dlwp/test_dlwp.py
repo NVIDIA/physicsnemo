@@ -24,7 +24,6 @@ from physicsnemo.models.dlwp import DLWP
 from test import common
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dlwp_forward(device):
     """Test DLWP forward pass"""
     torch.manual_seed(0)
@@ -45,7 +44,6 @@ def test_dlwp_forward(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("nr_input_channels", [2])
 @pytest.mark.parametrize("nr_output_channels", [2])
 @pytest.mark.parametrize("nr_initial_channels", [32])
@@ -69,7 +67,6 @@ def test_dlwp_constructor(
     assert outvar.shape == (bsize, nr_output_channels, *invar.shape[2:])
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dlwp_optims(device):
     """Test DLWP optimizations"""
 
@@ -100,7 +97,6 @@ def test_dlwp_optims(device):
     assert common.validate_combo_optims(model, (invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dlwp_checkpoint(device):
     """Test DLWP checkpoint save/load"""
     # Construct DLWP models
@@ -123,7 +119,6 @@ def test_dlwp_checkpoint(device):
 common.check_ort_version()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dlwp_deploy(device):
     """Test DLWP deployment support"""
     # Construct DLWP model

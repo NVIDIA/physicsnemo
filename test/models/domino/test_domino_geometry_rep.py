@@ -23,7 +23,6 @@ import torch
 from .utils import validate_output_shape_and_values
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("act", ["relu", "gelu"])
 @pytest.mark.parametrize("fourier_features", [True, False])
 def test_geo_conv_out(device, act, fourier_features):
@@ -67,7 +66,6 @@ def test_geo_conv_out(device, act, fourier_features):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("act", ["relu", "gelu"])
 def test_geo_processor(device, act):
     """Test GeoProcessor CNN"""
@@ -92,7 +90,6 @@ def test_geo_processor(device, act):
     validate_output_shape_and_values(output, (2, 2, 16, 16, 16))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("geometry_encoding_type", ["both", "stl", "sdf"])
 @pytest.mark.parametrize("processor_type", ["unet", "conv"])
 def test_geometry_rep(

@@ -22,7 +22,6 @@ import torch
 from physicsnemo.nn import WeightFactLinear
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_weight_fact(device):
     """Test weight fact"""
 

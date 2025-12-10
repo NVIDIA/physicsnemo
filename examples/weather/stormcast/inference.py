@@ -21,7 +21,7 @@ import pandas as pd
 import hydra
 from physicsnemo.distributed import DistributedManager
 from omegaconf import DictConfig
-from physicsnemo.models import Module
+from physicsnemo.core import Module
 
 from datasets import dataset_classes
 from utils.io import (

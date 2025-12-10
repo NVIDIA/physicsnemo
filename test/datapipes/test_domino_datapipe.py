@@ -24,8 +24,8 @@ import numpy as np
 import pytest
 import torch
 import zarr
-from scipy.spatial import ConvexHull
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.cae.cae_dataset import CAEDataset
 from physicsnemo.datapipes.cae.domino_datapipe import (
     CachedDoMINODataset,
@@ -33,6 +33,14 @@ from physicsnemo.datapipes.cae.domino_datapipe import (
     DoMINODataPipe,
 )
 from test.conftest import requires_module
+
+if not check_version_spec("scipy", hard_fail=False):
+    pytest.skip(
+        "These tests require torch >= 2.6.0",
+        allow_module_level=True,
+    )
+else:
+    from scipy.spatial import ConvexHull
 
 Tensor = torch.Tensor
 

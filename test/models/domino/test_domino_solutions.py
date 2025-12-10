@@ -21,7 +21,6 @@ import torch.nn as nn
 from .utils import validate_output_shape_and_values
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("num_variables", [1, 3, 5])
 @pytest.mark.parametrize("num_sample_points", [1, 3, 7])
 @pytest.mark.parametrize("encode_parameters", [True, False])
@@ -106,7 +105,6 @@ def test_solution_calculator_volume(
     validate_output_shape_and_values(output, (2, 30, num_variables))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("num_variables", [1, 3, 5])
 @pytest.mark.parametrize("use_surface_normals", [True, False])
 @pytest.mark.parametrize("use_surface_area", [True, False])
@@ -195,7 +193,6 @@ def test_solution_calculator_surface(
     validate_output_shape_and_values(output, (2, 30, num_variables))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("r", [0.5, 1.0, 2.0])
 @pytest.mark.parametrize("num_points", [10, 50, 100])
 def test_sample_sphere(device, r, num_points):
@@ -214,7 +211,6 @@ def test_sample_sphere(device, r, num_points):
     assert (distances <= r + 1e-6).all(), "Some sampled points are outside the sphere"
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_sample_sphere_shell(device):
     """Test spherical shell sampling function"""
     from physicsnemo.models.domino.solutions import sample_sphere_shell

@@ -20,13 +20,11 @@ import torch
 from physicsnemo.nn import SirenLayer
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_siren_layer_initialization(device):
     layer = SirenLayer(in_features=2, out_features=2).to(device)
     assert isinstance(layer, SirenLayer)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_siren_layer_forward_pass(device):
     layer = SirenLayer(in_features=2, out_features=2).to(device)
     input_tensor = torch.randn(10, 2).to(device)
@@ -34,7 +32,6 @@ def test_siren_layer_forward_pass(device):
     assert output_tensor.shape == (10, 2)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_siren_layer_sine_cosine_ranges(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     layer = SirenLayer(in_features=2, out_features=2).to(device)
@@ -43,7 +40,6 @@ def test_siren_layer_sine_cosine_ranges(device):
     assert (output_tensor <= 1).all() and (output_tensor >= -1).all()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_siren_layer_parameters_update(device):
     input_tensor = torch.Tensor([[1, 1]]).to(device)
     layer = SirenLayer(in_features=2, out_features=2).to(device)

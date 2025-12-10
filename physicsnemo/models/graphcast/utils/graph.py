@@ -14,15 +14,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import logging
 
 import numpy as np
 import torch
-from sklearn.neighbors import NearestNeighbors
 from torch import Tensor
 
+from physicsnemo.core.version_check import check_version_spec
+
+SKLEARN_AVAILABLE = check_version_spec("scikit-learn", "0.20.0", hard_fail=False)
+
+if SKLEARN_AVAILABLE:
+    sklearn_neighbors = importlib.import_module("sklearn.neighbors")
+    NearestNeighbors = sklearn_neighbors.NearestNeighbors
+else:
+    NearestNeighbors = None
+
 from physicsnemo.models.graphcast.utils.graph_backend import (
-    DglGraphBackend,
     PyGGraphBackend,
 )
 from physicsnemo.nn.gnn_layers.utils import GraphType
@@ -73,13 +82,11 @@ class Graph:
         multimesh: bool = True,
         khop_neighbors: int = 0,
         dtype=torch.float,
-        backend: str = "dgl",
+        backend: str = "pyg",
     ) -> None:
         self.khop_neighbors = khop_neighbors
         self.dtype = dtype
-        if backend == "dgl":
-            self.backend = DglGraphBackend
-        elif backend == "pyg":
+        if backend == "pyg":
             self.backend = PyGGraphBackend
         else:
             raise ValueError(f"Unsupported backend: {backend}")
@@ -128,12 +135,7 @@ class Graph:
         )
         mesh_graph = self.backend.add_edge_features(mesh_graph, mesh_pos)
         mesh_graph = self.backend.add_node_features(mesh_graph, mesh_pos)
-        if self.backend.name == "dgl":
-            mesh_graph.ndata["lat_lon"] = xyz2latlon(mesh_pos)
-            # ensure fields set to dtype to avoid later conversions
-            mesh_graph.ndata["x"] = mesh_graph.ndata["x"].to(dtype=self.dtype)
-            mesh_graph.edata["x"] = mesh_graph.edata["x"].to(dtype=self.dtype)
-        elif self.backend.name == "pyg":
+        if self.backend.name == "pyg":
             mesh_graph.lat_lon = xyz2latlon(mesh_pos)
             # ensure fields set to dtype to avoid later conversions
             mesh_graph.x = mesh_graph.x.to(dtype=self.dtype)
@@ -163,6 +165,13 @@ class Graph:
         GraphType
             Graph2mesh graph.
         """
+        if NearestNeighbors is None:
+            raise ImportError(
+                "scikit-learn is not installed, cannot use create_g2m_graph method. "
+                "The GraphCast model requires scikit-learn for k-nearest neighbor computations. "
+                "To install scikit-learn, run: pip install scikit-learn"
+            )
+
         # get the max edge length of icosphere with max order
 
         max_edge_len = max_edge_length(
@@ -186,30 +195,8 @@ class Graph:
         g2m_graph = self.backend.create_heterograph(
             src, dst, ("grid", "g2m", "mesh"), dtype=torch.int32
         )
-        if self.backend.name == "dgl":
-            g2m_graph.srcdata["pos"] = cartesian_grid.to(torch.float32)
-            g2m_graph.dstdata["pos"] = torch.tensor(
-                self.mesh_vertices,
-                dtype=torch.float32,
-            )
-            g2m_graph.srcdata["lat_lon"] = self.lat_lon_grid_flat
-            g2m_graph.dstdata["lat_lon"] = xyz2latlon(g2m_graph.dstdata["pos"])
 
-            g2m_graph = self.backend.add_edge_features(
-                g2m_graph, (g2m_graph.srcdata["pos"], g2m_graph.dstdata["pos"])
-            )
-
-            # avoid potential conversions at later points
-            g2m_graph.srcdata["pos"] = g2m_graph.srcdata["pos"].to(dtype=self.dtype)
-            g2m_graph.dstdata["pos"] = g2m_graph.dstdata["pos"].to(dtype=self.dtype)
-            g2m_graph.ndata["pos"]["grid"] = g2m_graph.ndata["pos"]["grid"].to(
-                dtype=self.dtype
-            )
-            g2m_graph.ndata["pos"]["mesh"] = g2m_graph.ndata["pos"]["mesh"].to(
-                dtype=self.dtype
-            )
-            g2m_graph.edata["x"] = g2m_graph.edata["x"].to(dtype=self.dtype)
-        elif self.backend.name == "pyg":
+        if self.backend.name == "pyg":
             g2m_graph["grid"].pos = cartesian_grid.to(torch.float32)
             g2m_graph["mesh"].pos = torch.tensor(
                 self.mesh_vertices,
@@ -245,6 +232,13 @@ class Graph:
         GraphType
             Mesh2grid graph.
         """
+        if NearestNeighbors is None:
+            raise ImportError(
+                "scikit-learn is not installed, cannot use create_m2g_graph method. "
+                "The GraphCast model requires scikit-learn for k-nearest neighbor computations. "
+                "To install scikit-learn, run: pip install scikit-learn"
+            )
+
         # create the mesh2grid bipartite graph
         cartesian_grid = latlon2xyz(self.lat_lon_grid_flat)
         face_centroids = get_face_centroids(self.mesh_vertices, self.mesh_faces)
@@ -259,30 +253,8 @@ class Graph:
             src, dst, ("mesh", "m2g", "grid"), dtype=torch.int32
         )  # number of edges is 3,114,720, exactly matches with the paper
 
-        if self.backend.name == "dgl":
-            m2g_graph.srcdata["pos"] = torch.tensor(
-                self.mesh_vertices,
-                dtype=torch.float32,
-            )
-            m2g_graph.dstdata["pos"] = cartesian_grid.to(dtype=torch.float32)
 
-            m2g_graph.srcdata["lat_lon"] = xyz2latlon(m2g_graph.srcdata["pos"])
-            m2g_graph.dstdata["lat_lon"] = self.lat_lon_grid_flat
-
-            m2g_graph = self.backend.add_edge_features(
-                m2g_graph, (m2g_graph.srcdata["pos"], m2g_graph.dstdata["pos"])
-            )
-            # avoid potential conversions at later points
-            m2g_graph.srcdata["pos"] = m2g_graph.srcdata["pos"].to(dtype=self.dtype)
-            m2g_graph.dstdata["pos"] = m2g_graph.dstdata["pos"].to(dtype=self.dtype)
-            m2g_graph.ndata["pos"]["grid"] = m2g_graph.ndata["pos"]["grid"].to(
-                dtype=self.dtype
-            )
-            m2g_graph.ndata["pos"]["mesh"] = m2g_graph.ndata["pos"]["mesh"].to(
-                dtype=self.dtype
-            )
-            m2g_graph.edata["x"] = m2g_graph.edata["x"].to(dtype=self.dtype)
-        elif self.backend.name == "pyg":
+        if self.backend.name == "pyg":
             m2g_graph["mesh"].pos = torch.tensor(
                 self.mesh_vertices,
                 dtype=torch.float32,

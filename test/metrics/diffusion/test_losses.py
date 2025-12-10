@@ -233,7 +233,6 @@ def test_call_method_regressionloss():
 
 
 # More realistic test with a UNet model
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionloss_with_unet(device):
     res, inc, outc = 64, 2, 3
     model = UNet(
@@ -251,7 +250,6 @@ def test_call_method_regressionloss_with_unet(device):
 
 
 # More realistic test with a UNet model and lead-time conditioning
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionloss_with_lead_time_unet(device):
     res, inc, outc = 64, 3, 4
     N_pos, lead_time_channels = 2, 4
@@ -315,7 +313,6 @@ def test_call_method_regressionlossce():
 
 
 # More realistic test with a UNet model and lead-time conditioning
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_regressionlossce_with_unet(device):
     res, inc, outc = 64, 3, 4
     N_pos, lead_time_channels = 2, 4
@@ -461,7 +458,6 @@ def test_residualloss_call_method():
 
 
 # More realistic test with a UNet model
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_unet(device):
     res, inc, outc = 64, 2, 3
     N_pos = 2
@@ -495,7 +491,6 @@ def test_call_method_residualloss_with_unet(device):
 
 
 # Test with UNets and hr_mean_conditioning
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_unet_hr_mean_conditioning(device):
     res, inc, outc = 64, 2, 3
     N_pos = 2
@@ -527,7 +522,6 @@ def test_call_method_residualloss_with_unet_hr_mean_conditioning(device):
 
 
 # Test with UNets, hr_mean_conditioning, and lead-time aware embedding
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_call_method_residualloss_with_lt_unet_hr_mean_conditioning(device):
     res, inc, outc = 64, 2, 3
     N_pos, lead_time_channels = 2, 4

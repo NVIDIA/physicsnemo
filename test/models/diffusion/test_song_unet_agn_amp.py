@@ -21,8 +21,13 @@ import torch
 from physicsnemo.models.diffusion import SongUNet as UNet
 from test import common
 
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
-@pytest.mark.parametrize("device", ["cuda:0"])
+
+
 def test_song_unet_constructor(device):
     """Test the Song UNet constructor options"""
 
@@ -176,7 +181,6 @@ def test_song_unet_constructor(device):
         pass
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_optims(device):
     """Test Song UNet optimizations"""
 
@@ -221,7 +225,6 @@ def test_song_unet_optims(device):
         assert common.validate_combo_optims(model, (*invar,))
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
 
@@ -261,7 +264,6 @@ def test_song_unet_checkpoint(device):
 
 
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_son_unet_deploy(device):
     """Test Song UNet deployment support"""
     model = (

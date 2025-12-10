@@ -21,7 +21,6 @@ from physicsnemo.core.module import Module
 from test.conftest import requires_module
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_EDMPrecondSuperResolution_forward(device):
     b, c_target, x, y = 1, 3, 8, 8
     c_cond = 4
@@ -56,7 +55,6 @@ def test_EDMPrecondSuperResolution_forward(device):
 
 
 @requires_module("termcolor")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_EDMPrecondSuperResolution_serialization(tmp_path, pytestconfig, device):
     from physicsnemo.experimental.models.diffusion.preconditioning import (
         tEDMPrecondSuperRes,

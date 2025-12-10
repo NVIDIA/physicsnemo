@@ -64,7 +64,6 @@ def get_disagreements(inputs, bins, counts, test):
         print("True counts", trueh)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("input_shape", [(1, 72, 144)])
 def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
     DistributedManager._shared_state = {}
@@ -83,9 +82,13 @@ def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
     lin = hist.linspace(start, end, 10)
     assert lin.shape[0] == 11
     l_np = np.linspace(start.cpu(), end.cpu(), 11)
+    # Here, l_np is a *torch tensor* which is weird design from numpy.
+    # Since torch implements an array interface, numpy will dispatch
+    # the torch operations.  So... that's baffling.
     assert torch.allclose(
         lin,
-        torch.from_numpy(l_np).to(device),
+        # torch.from_numpy(l_np).to(device),
+        l_np,
         rtol=rtol,
         atol=atol,
     )
@@ -235,14 +238,12 @@ def fair_crps(pred, obs, dim=-1):
     return crps.kcrps(pred, obs, dim=dim, biased=False)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fair_crps_greater_than_zero(device):
     pred = torch.randn(5, 10, device=device)
     obs = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0], device=device)
     assert torch.all(fair_crps(pred, obs, dim=-1) > 0)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fair_crps_is_fair(device):
     # fair means that a random prediction should outperform a non-random one on average
     # This is not always true of ``crps``...try replacing fair_crps function
@@ -257,7 +258,6 @@ def test_fair_crps_is_fair(device):
     assert score_of_random.item() < score_of_cheating.item()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fair_crps_converges_to_crps(device):
     # for large ensemble fair cprs should be close to crps
 
@@ -278,7 +278,6 @@ def test_fair_crps_converges_to_crps(device):
     assert pytest.approx(fair_value, rel=1e-3) == expected
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_fair_crps_dim_arg_works(device):
     pred = torch.randn((5, 10, 100), device=device)
 
@@ -291,7 +290,6 @@ def test_fair_crps_dim_arg_works(device):
     assert value.shape == (b, c)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("num", [10, 23, 59])
 @pytest.mark.parametrize("biased", [True, False])
 def test_crps_finite(device, num, biased):
@@ -355,7 +353,6 @@ def test_crps_finite(device, num, biased):
     assert torch.all(torch.isclose(analytic, crps.kcrps(pred, obs, biased=True)))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_crps(device, rtol: float = 1e-3, atol: float = 1e-3):
     # Uses eq (5) from Gneiting et al. https://doi.org/10.1175/MWR2904.1
     # crps(N(0, 1), 0.0) = 2 / sqrt(2*pi) - 1/sqrt(pi) ~= 0.23...
@@ -541,7 +538,6 @@ def test_crps(device, rtol: float = 1e-3, atol: float = 1e-3):
     assert c.shape == z.shape
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("mean", [3.0])
 @pytest.mark.parametrize("variance", [0.1])
 def test_wasserstein(device, mean, variance, rtol: float = 1e-3, atol: float = 1e-3):
@@ -611,7 +607,6 @@ def test_wasserstein(device, mean, variance, rtol: float = 1e-3, atol: float = 1
     assert not torch.any(torch.isnan(w_mnorm))
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
     DistributedManager._shared_state = {}
     if (device == "cuda:0") and (not DistributedManager.is_initialized()):
@@ -713,7 +708,6 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
         del os.environ["MASTER_PORT"]
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
     x = torch.randn((10_000, 30, 30), device=device, dtype=torch.float32)
     y = torch.randn((30, 30), device=device, dtype=torch.float32)
@@ -783,7 +777,6 @@ def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
     one = torch.ones([1], device=device, dtype=torch.float32)
 
@@ -851,7 +844,6 @@ def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
         )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_power_spectrum(device):
     # Test the 2D power spectrum routine for correctness using a sine wave
     h, w = 32, 32

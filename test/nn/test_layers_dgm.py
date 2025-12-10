@@ -20,13 +20,11 @@ import torch
 from physicsnemo.nn import DGMLayer
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dgm_layer_initialization(device):
     layer = DGMLayer(2, 2, 3).to(device)
     assert isinstance(layer, DGMLayer)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dgm_layer_forward_pass(device):
     layer = DGMLayer(4, 3, 2).to(device)
     input_tensor_1 = torch.randn(2, 4).to(device)
@@ -35,7 +33,6 @@ def test_dgm_layer_forward_pass(device):
     assert output_tensor.shape == (2, 2)
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_dgm_layer_parameters_update(device):
     input_tensor_1 = torch.Tensor([[1, 1]]).to(device)
     input_tensor_2 = torch.Tensor([[2, 2]]).to(device)

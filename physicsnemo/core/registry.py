@@ -58,7 +58,7 @@ class ModelRegistry:
         entrypoints = entry_points(group="physicsnemo.models")
         for entry_point in entrypoints:
             registry[entry_point.name] = entry_point
-
+        
         # Pull in any modulus models for backwards compatibility
         entrypoints = entry_points(group="modulus.models")
         for entry_point in entrypoints:
@@ -143,6 +143,11 @@ class ModelRegistry:
         # If no name provided, use the model class name
         if name is None:
             name = model.__name__
+
+        # if this name is already used via entry points, don't re-register:
+        entrypoints = entry_points(group="physicsnemo.models")
+        if name in [entrypoint.name for entrypoint in entrypoints]:
+            return
 
         # Check if name already in use
         if name in self._model_registry:

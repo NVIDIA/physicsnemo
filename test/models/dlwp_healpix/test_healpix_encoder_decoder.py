@@ -28,7 +28,6 @@ from test.conftest import requires_module
 
 
 @requires_module("hydra")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetEncoder_initialize(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,  # for convolutional layer
@@ -72,7 +71,6 @@ def test_UNetEncoder_initialize(device, pytestconfig):
 
 
 @requires_module("hydra")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetEncoder_forward(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,  # for convolutional layer
@@ -121,7 +119,6 @@ def test_UNetEncoder_forward(device, pytestconfig):
 
 
 @requires_module("hydra")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetEncoder_reset(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix_layers import (
         ConvNeXtBlock,  # for convolutional layer
@@ -158,7 +155,6 @@ def test_UNetEncoder_reset(device, pytestconfig):
 
 
 @requires_module("hydra")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetDecoder_initilization(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,  # for the output layer
@@ -226,7 +222,6 @@ def test_UNetDecoder_initilization(device, pytestconfig):
 
 
 @requires_module("hydra")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetDecoder_forward(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,  # for the output layer
@@ -313,7 +308,6 @@ def test_UNetDecoder_forward(device, pytestconfig):
 
 
 @requires_module("hydra")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_UNetDecoder_reset(device, pytestconfig):
     from physicsnemo.models.dlwp_healpix_layers import (
         BasicConvBlock,  # for the output layer

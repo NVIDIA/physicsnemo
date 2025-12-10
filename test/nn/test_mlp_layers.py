@@ -23,7 +23,7 @@ from test.common import (
 )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+
 def test_mlp_forward_accuracy(device):
     torch.manual_seed(7)
     target_device = torch.device(device)

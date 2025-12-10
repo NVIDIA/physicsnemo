@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+
 import pytest
 import torch
 
@@ -23,7 +25,7 @@ from physicsnemo.nn.neighbors._radius_search._warp_impl import (
 )
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.skipif(sys.platform == "darwin", reason="Torch doesn't support pinned memory on mac")
 @pytest.mark.parametrize("return_dists", [True, False])
 @pytest.mark.parametrize("return_points", [True, False])
 @pytest.mark.parametrize("max_points", [5, None])
@@ -52,7 +54,7 @@ def test_radius_search(
     a better algorithm.
 
     the test here is to enforce agreement between the two utilities.
-    There is no reason to directly test the results: the algorithm
+    There is no reason "Torch doesn't support pinned memory on mac"m
     that would be written here is identical to the torch backend tools.
     """
 
@@ -113,7 +115,6 @@ def test_radius_search(
     else:
         indexes = results
 
-    print(f"Indexes shape: {indexes.shape}")
     # Basic shape checks - there should be one index array per query point
     if max_points is not None:
         assert indexes.shape[0] == query_space_points.shape[0]
@@ -149,7 +150,6 @@ def test_radius_search(
             assert (dists[mask][1:] == 0).all()
 
     if return_points:
-        print(points.shape)
         if max_points is not None:
             assert points.shape[0] == query_space_points.shape[0]
             assert points.shape[1] == max_points
@@ -183,7 +183,6 @@ def test_radius_search(
     # finds exactly one point within radius 0.1 (the 0.05 displaced point)
     # This is how many are possible by the data:
     expected_matches = min(int(radius / 0.05), 6)
-    print(radius, expected_matches)
     # expected_matches = 1
     if max_points is not None:
         # Some limit has been imposed:
@@ -193,8 +192,6 @@ def test_radius_search(
         # the first from the assertion.
 
         matches_per_query = (indexes != 0).sum(dim=1)
-        # print(torch.where(matches_per_query == 2))
-        # print(matches_per_query[1:20])
         assert (matches_per_query[1:] == expected_matches).all()
 
     else:
@@ -202,12 +199,8 @@ def test_radius_search(
         assert indexes.shape[1] == expected_matches * query_space_points.shape[0]
 
 
-@pytest.mark.parametrize(
-    "device",
-    [
-        "cpu",
-    ],
-)
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="Torch doesn't support pinned memory on mac")
 def test_radius_search_torch_compile_no_graph_break(device):
     # Cuda curnently disabled in this test, but it does work.
 
@@ -246,7 +239,12 @@ def test_radius_search_torch_compile_no_graph_break(device):
         assert torch.allclose(eager, compiled, atol=1e-6)
 
 
-def test_opcheck(device="cuda"):
+@pytest.mark.skipif(sys.platform == "darwin", reason="Torch doesn't support pinned memory on mac")
+def test_opcheck(device):
+    
+    if device == "cpu":
+        pytest.skip("CUDA only")
+    
     points = torch.randn(100, 3, device=device)
     queries = torch.randn(10, 3, device=device)
     radius = 0.5
@@ -257,7 +255,7 @@ def test_opcheck(device="cuda"):
     )
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.skipif(sys.platform == "darwin", reason="Torch doesn't support pinned memory on mac")
 @pytest.mark.parametrize("max_points", [22, None])
 def test_radius_search_comparison(device, max_points):
     torch.manual_seed(42)
@@ -295,12 +293,6 @@ def test_radius_search_comparison(device, max_points):
         )
 
     if max_points is not None:
-        print(f"out_points_warp shape: {out_points_warp.shape}")
-        print(f"out_points_torch shape: {out_points_torch.shape}")
-        # print(f'out_points_warp.sum(dim=(0)): {out_points_warp.sum(dim=(0))}')
-        # print(f'out_points_torch.sum(dim=(0)): {out_points_torch.sum(dim=(0))}')
-        print(f"out_points_warp[1]: {out_points_warp[1]}")
-        print(f"out_points_torch[1]: {out_points_torch[1]}")
         assert torch.allclose(out_points_warp.sum(dim=1), out_points_torch.sum(dim=1))
     else:
         assert torch.allclose(
@@ -313,7 +305,7 @@ def test_radius_search_comparison(device, max_points):
         assert torch.allclose(distance_warp.sum(), distance_torch.sum())
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.skipif(sys.platform == "darwin", reason="Torch doesn't support pinned memory on mac")
 @pytest.mark.parametrize("max_points", [8, None])
 def test_radius_search_gradients(device, max_points):
     # Gradients are only supported to flow through the output points.
@@ -330,9 +322,6 @@ def test_radius_search_gradients(device, max_points):
     # Create points and queries with gradients enabled
     points = torch.randn(n_points, 3, device=device, requires_grad=True)
     queries = torch.randn(n_queries, 3, device=device, requires_grad=True)
-
-    print(f"points shape: {points.shape}")
-    print(f"queries shape: {queries.shape}")
 
     grads = {}
     for backend in ["warp", "torch"]:
@@ -355,16 +344,48 @@ def test_radius_search_gradients(device, max_points):
             pts.grad.detach().clone() if pts.grad is not None else None,
             qrs.grad.detach().clone() if qrs.grad is not None else None,
         )
-    print(f"Index: {index}")
     # Compare gradients between backends
     pts_grad_warp, qrs_grad_warp = grads["warp"]
     pts_grad_torch, qrs_grad_torch = grads["torch"]
-
-    print(f"Warp points grad: {pts_grad_warp}")
-    print(f"Torch points grad: {pts_grad_torch}")
 
     assert torch.allclose(pts_grad_warp, pts_grad_torch, atol=1e-5), (
         "Point gradients do not match"
     )
 
     # assert torch.allclose(qrs_grad_warp, qrs_grad_torch, atol=1e-5), "Query gradients do not match"
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="Torch doesn't support pinned memory on mac")
+@pytest.mark.parametrize("precision", [torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize("max_points", [8, None])
+def test_radius_search_reduced_precision(device, precision, max_points):
+    """
+    This is a functionality based test.  We run in half precision and
+    make sure results are reasonable, but exact agreement from the alg is tested
+    elsewhere.
+    """
+
+    torch.manual_seed(42)
+    n_points = 88
+    n_queries = 57
+    radius = 0.5
+
+    # Create points and queries with gradients enabled
+    points = torch.randn(n_points, 3, device=device, requires_grad=True).to(
+        dtype=precision
+    )
+    queries = torch.randn(n_queries, 3, device=device, requires_grad=True).to(
+        dtype=precision
+    )
+
+    index, out_points = radius_search(
+        points,
+        queries,
+        radius=radius,
+        max_points=max_points,
+        return_dists=False,
+        return_points=True,
+        backend="warp",
+    )
+
+    assert out_points.dtype == points.dtype

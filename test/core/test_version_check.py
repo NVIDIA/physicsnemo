@@ -28,6 +28,9 @@ from physicsnemo.core.version_check import (
 
 def test_get_installed_version_found():
     """get_installed_version returns version string when package is installed"""
+    # Clear the LRU cache for testing:
+    get_installed_version.cache_clear()
+    
     with patch(
         "physicsnemo.core.version_check.metadata.version", return_value="2.6.0"
     ) as mock_version:

@@ -32,6 +32,13 @@ if not DEVICE_MESH_AVAILABLE:
     )
 
 
+@pytest.fixture(autouse=True)
+def skip_on_cpu(device):
+    if device == "cpu":
+        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
+
+
+
 distributed_test = pytest.mark.skipif(
     not torch.distributed.is_available(), reason="PyTorch distributed not available"
 )
