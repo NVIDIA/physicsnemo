@@ -78,7 +78,7 @@ def test_typhon_forward(device, use_geometry, use_global):
     ).to(device)
 
     local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
-
+    local_positions = local_emb[:, :, :3]
     kwargs = {}
     if use_geometry:
         kwargs["geometry"] = torch.randn(batch_size, n_geom_tokens, geometry_dim).to(
@@ -89,7 +89,7 @@ def test_typhon_forward(device, use_geometry, use_global):
             device
         )
 
-    outputs = model(local_emb, **kwargs)
+    outputs = model(local_emb, local_positions, **kwargs)
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
@@ -130,11 +130,14 @@ def test_typhon_forward_tuple_inputs(device):
 
     local_emb_1 = torch.randn(batch_size, n_tokens_1, functional_dims[0]).to(device)
     local_emb_2 = torch.randn(batch_size, n_tokens_2, functional_dims[1]).to(device)
+    local_positions_1 = local_emb_1[:, :, :3]
+    local_positions_2 = local_emb_2[:, :, :3]
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
     outputs = model(
         (local_emb_1, local_emb_2),
+        local_positions=(local_positions_1, local_positions_2),
         global_embedding=global_emb,
         geometry=geometry,
     )
@@ -181,10 +184,16 @@ def test_typhon_forward_with_local_features(device, pytestconfig):
 
     # For local features, the first 3 channels of local_emb should be coordinates
     local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    local_positions = local_emb[:, :, :3]
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
-    outputs = model(local_emb, global_embedding=global_emb, geometry=geometry)
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
@@ -225,12 +234,13 @@ def test_typhon_forward_accuracy_basic(device):
     n_global = 5
 
     local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
+    local_positions = local_emb[:, :, :3]
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
     assert validate_forward_accuracy(
         model,
-        (local_emb, global_emb, geometry),
+        (local_emb, local_positions, global_emb, geometry),
         file_name="typhon_basic_output.pth",
         atol=1e-3,
     )
@@ -270,12 +280,20 @@ def test_typhon_forward_accuracy_tuple(device):
 
     local_emb_1 = torch.randn(batch_size, n_tokens_1, functional_dims[0]).to(device)
     local_emb_2 = torch.randn(batch_size, n_tokens_2, functional_dims[1]).to(device)
+
+    local_positions_1 = local_emb_1[:, :, :3]
+    local_positions_2 = local_emb_2[:, :, :3]
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
     assert validate_forward_accuracy(
         model,
-        ((local_emb_1, local_emb_2), global_emb, geometry),
+        (
+            (local_emb_1, local_emb_2),
+            (local_positions_1, local_positions_2),
+            global_emb,
+            geometry,
+        ),
         file_name="typhon_tuple_output.pth",
         atol=1e-3,
     )
@@ -317,35 +335,36 @@ def test_typhon_optimizations(device):
         local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
         geometry = torch.randn(batch_size, n_tokens, 3).to(device)
         global_emb = torch.randn(batch_size, n_global, 16).to(device)
-
-        return model, local_emb, global_emb, geometry
+        local_positions = local_emb[:, :, :3]
+        return model, local_emb, local_positions, global_emb, geometry
 
     # Check CUDA graphs
-    model, local_emb, global_emb, geometry = setup_model()
+    model, local_emb, local_positions, global_emb, geometry = setup_model()
+
     assert validate_cuda_graphs(
         model,
-        (local_emb, global_emb, geometry),
+        (local_emb, local_positions, global_emb, geometry),
     )
 
     # Check JIT
-    model, local_emb, global_emb, geometry = setup_model()
+    model, local_emb, local_positions, global_emb, geometry = setup_model()
     assert validate_jit(
         model,
-        (local_emb, global_emb, geometry),
+        (local_emb, local_positions, global_emb, geometry),
     )
 
     # Check AMP
-    model, local_emb, global_emb, geometry = setup_model()
+    model, local_emb, local_positions, global_emb, geometry = setup_model()
     assert validate_amp(
         model,
-        (local_emb, global_emb, geometry),
+        (local_emb, local_positions, global_emb, geometry),
     )
 
     # Check Combo
-    model, local_emb, global_emb, geometry = setup_model()
+    model, local_emb, local_positions, global_emb, geometry = setup_model()
     assert validate_combo_optims(
         model,
-        (local_emb, global_emb, geometry),
+        (local_emb, local_positions, global_emb, geometry),
     )
 
 
@@ -386,8 +405,14 @@ def test_typhon_te_basic(device, pytestconfig):
     local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
+    local_positions = local_emb[:, :, :3]
 
-    outputs = model(local_emb, global_embedding=global_emb, geometry=geometry)
+    outputs = model(
+        local_emb,
+        local_positions=local_positions,
+        global_embedding=global_emb,
+        geometry=geometry,
+    )
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
@@ -447,11 +472,11 @@ def test_typhon_checkpoint(device):
     local_emb = torch.randn(batch_size, n_tokens, 32).to(device)
     geometry = torch.randn(batch_size, n_tokens, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
-
+    local_positions = local_emb[:, :, :3]
     assert validate_checkpoint(
         model_1,
         model_2,
-        (local_emb, global_emb, geometry),
+        (local_emb, local_positions, global_emb, geometry),
     )
 
 
@@ -512,7 +537,7 @@ def test_typhon_checkpoint_tuple(device):
     assert validate_checkpoint(
         model_1,
         model_2,
-        ((local_emb_1, local_emb_2), global_emb, geometry),
+        ((local_emb_1, local_emb_2), (None, None), global_emb, geometry),
     )
 
 
@@ -583,7 +608,9 @@ def test_typhon_activations(device, activation):
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
-    outputs = model(local_emb, global_embedding=global_emb, geometry=geometry)
+    outputs = model(
+        local_emb, local_positions=None, global_embedding=global_emb, geometry=geometry
+    )
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
@@ -628,7 +655,9 @@ def test_typhon_different_depths(device, n_layers):
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
-    outputs = model(local_emb, global_embedding=global_emb, geometry=geometry)
+    outputs = model(
+        local_emb, local_positions=None, global_embedding=global_emb, geometry=geometry
+    )
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
@@ -668,7 +697,9 @@ def test_typhon_different_slice_nums(device, slice_num):
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
-    outputs = model(local_emb, global_embedding=global_emb, geometry=geometry)
+    outputs = model(
+        local_emb, local_positions=None, global_embedding=global_emb, geometry=geometry
+    )
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
@@ -708,7 +739,9 @@ def test_typhon_different_hidden_sizes(device, n_hidden, n_head):
     geometry = torch.randn(batch_size, n_geom, 3).to(device)
     global_emb = torch.randn(batch_size, n_global, 16).to(device)
 
-    outputs = model(local_emb, global_embedding=global_emb, geometry=geometry)
+    outputs = model(
+        local_emb, local_positions=None, global_embedding=global_emb, geometry=geometry
+    )
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
