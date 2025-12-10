@@ -17,30 +17,30 @@
 defaults:
   - training: base
   - model: typhon
-  - datapipe: volume
+  - datapipe: surface
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "typhon/volume/bq"
+run_id: "typhon/surface/bq"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
 compile: false
 profile: false
 
+model:
+  functional_dim: 6
+  include_local_features: true # use local features
+  radii: [0.01, 0.05, 0.25, 1.0, 2.5, 5.0] # radius for local features
+  neighbors_in_radius: [4, 8, 16, 64, 128, 256]  # neighbors in radius for local features
+  n_hidden_local: 32 # hidden dimension for local features
+
 datapipe:
+  include_sdf: false
   include_geometry: true
   geometry_sampling: 300_000
   broadcast_global_features: false
 
-
-model:
-  functional_dim: 7
-  out_dim: 5
-  include_local_features: true # use local features
-  radii: [0.05, 0.25, 1.0, 2.5] # radius for local features
-  neighbors_in_radius: [8, 32, 64, 128] # neighbors in radius for local features
-  n_hidden_local: 32 # hidden dimension for local features
 
 # Logging configuration
 logging:

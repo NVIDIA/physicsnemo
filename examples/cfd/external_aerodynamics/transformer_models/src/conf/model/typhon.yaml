@@ -19,7 +19,7 @@ functional_dim: 6
 global_dim: 2
 geometry_dim: 3
 out_dim: 4
-n_layers: 14
+n_layers: 20
 n_hidden: 256
 dropout: 0.0
 n_head: 8

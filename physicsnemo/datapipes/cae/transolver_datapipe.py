@@ -209,18 +209,6 @@ class TransolverDataPipe(Dataset):
 
         embeddings = torch.cat(embeddings_inputs, dim=-1)
 
-        # Build fx:
-        fx_inputs = [
-            data_dict["air_density"],
-            data_dict["stream_velocity"],
-        ]
-        fx = torch.stack(fx_inputs, dim=-1)
-
-        if self.config.broadcast_global_features:
-            fx = fx.broadcast_to(embeddings.shape[0], -1)
-        else:
-            fx = fx.unsqueeze(0)
-
         fields = data_dict["surface_fields"]
         if idx is not None:
             fields = fields[idx]
@@ -228,11 +216,30 @@ class TransolverDataPipe(Dataset):
         if self.config.scaling_type is not None:
             fields = self.scale_model_targets(fields, self.config.surface_factors)
 
-        return {
-            "embeddings": embeddings,
-            "fx": fx,
-            "fields": fields,
-        }
+        if "air_density" in data_dict and "stream_velocity" in data_dict:
+            # Build fx:
+            fx_inputs = [
+                data_dict["air_density"],
+                data_dict["stream_velocity"],
+            ]
+            fx = torch.stack(fx_inputs, dim=-1)
+
+            if self.config.broadcast_global_features:
+                fx = fx.broadcast_to(embeddings.shape[0], -1)
+            else:
+                fx = fx.unsqueeze(0)
+
+            return {
+                "embeddings": embeddings,
+                "fx": fx,
+                "fields": fields,
+            }
+
+        else:
+            return {
+                "embeddings": embeddings,
+                "fields": fields,
+            }
 
     def preprocess_volume_data(
         self,
@@ -312,18 +319,6 @@ class TransolverDataPipe(Dataset):
 
         embeddings = torch.cat(embeddings_inputs, dim=-1)
 
-        # Build fx:
-        fx_inputs = [
-            data_dict["air_density"],
-            data_dict["stream_velocity"],
-        ]
-        fx = torch.stack(fx_inputs, dim=-1)
-
-        if self.config.broadcast_global_features:
-            fx = fx.broadcast_to(embeddings.shape[0], -1)
-        else:
-            fx = fx.unsqueeze(0)
-
         fields = data_dict["volume_fields"]
         if idx is not None:
             fields = fields[idx]
@@ -331,11 +326,29 @@ class TransolverDataPipe(Dataset):
         if self.config.scaling_type is not None:
             fields = self.scale_model_targets(fields, self.config.volume_factors)
 
-        return {
-            "embeddings": embeddings,
-            "fx": fx,
-            "fields": fields,
-        }
+        if "air_density" in data_dict and "stream_velocity" in data_dict:
+            # Build fx:
+            fx_inputs = [
+                data_dict["air_density"],
+                data_dict["stream_velocity"],
+            ]
+            fx = torch.stack(fx_inputs, dim=-1)
+
+            if self.config.broadcast_global_features:
+                fx = fx.broadcast_to(embeddings.shape[0], -1)
+            else:
+                fx = fx.unsqueeze(0)
+
+            return {
+                "embeddings": embeddings,
+                "fx": fx,
+                "fields": fields,
+            }
+        else:
+            return {
+                "embeddings": embeddings,
+                "fields": fields,
+            }
 
     def process_geometry(
         self,
@@ -564,8 +577,8 @@ class TransolverDataPipe(Dataset):
             field_max = factors["max"]
             fields = unnormalize(fields, field_max, field_min)
 
-        if air_density is not None and stream_velocity is not None:
-            fields = fields * air_density * stream_velocity**2
+        # if air_density is not None and stream_velocity is not None:
+        #     fields = fields * air_density * stream_velocity**2
 
         return fields
 

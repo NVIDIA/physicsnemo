@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
+# You may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
@@ -14,22 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: physicsnemo.experimental.models.typhon.Typhon
-functional_dim: 6
-global_dim: 2
-geometry_dim: 3
-out_dim: 4
-n_layers: 14
-n_hidden: 256
-dropout: 0.0
-n_head: 8
-act: "gelu"
-mlp_ratio: 2
-slice_num: 128
-use_te: false
-plus: false
-include_local_features: true # use local features
-radii: [0.05, 0.25, 1.0, 2.5] # radius for local features
-neighbors_in_radius: [8, 32, 64, 128] # neighbors in radius for local features
-n_hidden_local: 32 # hidden dimension for local features
+defaults:
+  -  core
 
+# Overrides for volume data:
+mode: volume
+
+# volume-speficic needs:
+data_keys:
+  - "volume_fields"
+  - "volume_mesh_centers"
+  - "stl_faces"
+  - "stl_centers"
+  - "stl_coordinates"
