@@ -340,7 +340,7 @@ def main(cfg: DictConfig) -> None:
                 "num_fno_layers": cfg.arch.ufno.num_fno_layers,
                 "num_unet_layers": cfg.arch.ufno.num_unet_layers,
                 "padding": cfg.arch.ufno.padding,
-                "activation_fn": cfg.arch.activation_fn,
+                "activation_fn": cfg.arch.ufno.activation_fn,
                 "use_amp": cfg.training.use_amp,
                 "use_graphs": cfg.training.use_graphs,
                 "variable": cfg.data.variable,
