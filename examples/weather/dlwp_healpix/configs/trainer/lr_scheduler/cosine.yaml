@@ -19,4 +19,3 @@ optimizer: ${model.optimizer}
 T_max: ${trainer.max_epochs}
 eta_min: 4e-5
 last_epoch: -1
-verbose: false

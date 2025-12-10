@@ -99,18 +99,23 @@ def train(cfg):
     iteration = 0
     epochs_since_improved = 0
 
+    # Determine checkpoint directory
+    if cfg.get("checkpoint_dir") is None:
+        # Fallback to default structure if not specified in config
+        cfg.checkpoint_dir = str(
+            Path(cfg.get("output_dir"), "tensorboard", "checkpoints")
+        )
+
+    checkpoint_dir = Path(cfg.checkpoint_dir)
+
     # Prepare training under consideration of checkpoint if given
     if cfg.get("checkpoint_name", None) is not None:
         checkpoint_path = Path(
-            cfg.get("output_dir"),
-            "tensorboard",
-            "checkpoints",
+            checkpoint_dir,
             "training-state-" + cfg.get("checkpoint_name") + ".mdlus",
         )
         optimizer_path = Path(
-            cfg.get("output_dir"),
-            "tensorboard",
-            "checkpoints",
+            checkpoint_dir,
             "optimizer-state-" + cfg.get("checkpoint_name") + ".ckpt",
         )
         if checkpoint_path.exists():

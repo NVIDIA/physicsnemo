@@ -22,6 +22,7 @@ defaults:
 
 experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}
 output_dir: outputs/${experiment_name}
+checkpoint_dir: ${output_dir}/tensorboard/checkpoints
 # checkpoints names are in the form training-state-<name>.mdlus
 checkpoint_name: last
 load_weights_only: false

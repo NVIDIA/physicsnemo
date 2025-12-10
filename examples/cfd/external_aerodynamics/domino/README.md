@@ -85,17 +85,17 @@ Please refer to
 with `PhysicsNeMo-Curator`.
 
 Download the DrivAer ML dataset using the
-[provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md#download-drivaerml-dataset).
+[provided instructions in PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md#download-drivaerml-dataset).
 The first step for running the DoMINO pipeline requires processing the raw data
 (vtp, vtu and stl) into either Zarr or NumPy format for training.
 Each of the raw simulations files are downloaded in `vtp`, `vtu` and `stl` formats.
 For instructions on running data processing to produce a DoMINO training ready dataset,
 please refer to
-[How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/domino/README.md).
+[How-to Curate data for DoMINO Model](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md).
 
 Caching is implemented in
-[`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1250).
-Optionally, users can run `cache_data.py` to save outputs
+[`CachedDoMINODataset`](https://github.com/NVIDIA/physicsnemo/blob/main/physicsnemo/datapipes/cae/domino_datapipe.py#L1056).
+Optionally, users can run `src/cache_data.py` to save outputs
 of DoMINO datapipe in the `.npy` files. The DoMINO datapipe is set up to calculate
 Signed Distance Field and Nearest Neighbor interpolations on-the-fly during
 training. Caching will save these as a preprocessing step and can be used in
