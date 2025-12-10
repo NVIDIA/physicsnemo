@@ -5,8 +5,8 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Test (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
+  test-pip:
+    name: Test with pip (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -21,11 +21,42 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Install package
+    - name: Install package with pip
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
+        # pip 25.1+ supports dependency groups natively via --group
+        pip install -e . --group dev
 
     - name: Run tests
       run: |
         pytest -q
+
+  test-uv:
+    name: Test with uv (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11",]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Install package with uv
+      run: |
+        # Install core dependencies and development group
+        uv sync --group dev
+
+    - name: Run tests
+      run: |
+        uv run pytest -q
