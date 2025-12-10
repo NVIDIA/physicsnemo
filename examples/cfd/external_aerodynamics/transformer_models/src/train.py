@@ -575,7 +575,7 @@ def val_epoch(
                 total_metrics = metrics
             else:
                 total_metrics = {
-                    k: total_metrics[k] + metrics[k].item() for k in metrics.keys()
+                    k: total_metrics[k] + metrics[k] for k in metrics.keys()
                 }
 
             # Logging
