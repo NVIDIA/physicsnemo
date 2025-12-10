@@ -29,7 +29,10 @@ hydra:
 
 # Data configuration
 data:
-  data_path: /home/wdyab/physicsnemo/data_lustre
+  # Path to the dataset directory containing CO2 sequestration simulation data.
+  # Update this path to point to your local data directory.
+  # Expected structure: data_path/{train,val,test}/*.npy or similar
+  data_path: ./data  # Default: relative path; update to your data location
   variable: saturation  # 'pressure' or 'saturation'
   normalize: false
   num_workers: null  # Auto-set to 2 × num_gpus
