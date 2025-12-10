@@ -29,7 +29,7 @@ jobs:
 
     - name: Run tests
       run: |
-        pytest -q
+        pytest -q test/
 
   test-uv:
     name: Test with uv (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
@@ -55,8 +55,8 @@ jobs:
     - name: Install package with uv
       run: |
         # Install core dependencies and development group
-        uv sync --group dev
+        UV_PREVIEW=1 uv sync --group dev --preview-features extra-build-dependencies
 
     - name: Run tests
       run: |
-        uv run pytest -q
+        uv run pytest -q test/
