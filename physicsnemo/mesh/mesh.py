@@ -1020,6 +1020,8 @@ class Mesh:
         ValueError
             If both point_scalars and cell_scalars are specified,
             or if n_spatial_dims is not supported by the chosen backend.
+        ImportError
+            If the chosen backend (matplotlib or pyvista) is not installed.
 
         Examples
         --------
