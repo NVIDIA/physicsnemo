@@ -168,21 +168,29 @@ class Mesh:
         self.cells = cells
 
         # For data fields, convert inputs to TensorDicts if needed
-        if not isinstance(point_data, TensorDict):
+        if isinstance(point_data, TensorDict):
+            point_data.batch_size = torch.Size([self.n_points])  # Ensure shape-compatible
+        else:
             point_data = TensorDict(
                 {} if point_data is None else dict(point_data),
                 batch_size=torch.Size([self.n_points]),
                 device=self.points.device,
             )
         self.point_data = point_data
-        if not isinstance(cell_data, TensorDict):
+
+        if isinstance(cell_data, TensorDict):
+            cell_data.batch_size = torch.Size([self.n_cells])  # Ensure shape-compatible
+        else:
             cell_data = TensorDict(
                 {} if cell_data is None else dict(cell_data),
                 batch_size=torch.Size([self.n_cells]),
                 device=self.cells.device,
             )
         self.cell_data = cell_data
-        if not isinstance(global_data, TensorDict):
+
+        if isinstance(global_data, TensorDict):
+            global_data.batch_size = torch.Size([])  # Ensure shape-compatible
+        else:
             global_data = TensorDict(
                 {} if global_data is None else dict(global_data),
                 batch_size=torch.Size([]),
