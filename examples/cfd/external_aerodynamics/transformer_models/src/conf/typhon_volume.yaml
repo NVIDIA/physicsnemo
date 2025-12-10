@@ -17,7 +17,7 @@
 defaults:
   - training: base
   - model: typhon
-  - data: volume
+  - datapipe: volume
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
