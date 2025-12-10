@@ -609,7 +609,7 @@ def test_wasserstein(device, mean, variance, rtol: float = 1e-3, atol: float = 1
 
 def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
     
-    if nottorch.cuda.is_available():
+    if not torch.cuda.is_available():
         pytest.skip("CUDA required for this test.")
     
     DistributedManager._shared_state = {}
