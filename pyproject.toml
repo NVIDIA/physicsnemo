@@ -59,21 +59,25 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 #####################################################################
 
 [tool.uv]
-no-build-isolation-package = [
-    "torch_scatter",
-    "torch_cluster",
-    "earth2grid",
-]
 managed = true
 
-# torch-sparse requires us to tell uv about it's dependency on torch.
 [tool.uv.extra-build-dependencies]
 torch-sparse = ["torch"]
+torch-cluster = ["torch"]
+torch-scatter = ["torch"]
 earth2grid = ["setuptools", "torch"] 
 
-# Earth2 grid is not on pypi ....
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
+
 [tool.uv.sources]
 earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/main.tar.gz" }
+cuml-cu13 = { index = "nvidia" }
+pylibraft-cu13 = { index = "nvidia" }
+cuml-cu12 = { index = "nvidia" } # TODO setup optional install groups for CUDA 12 installations
+pylibraft-cu12 = { index = "nvidia" }
 
 #####################################################################
 # Flags Controlling the local build of physicsnemo
@@ -132,11 +136,11 @@ utils-extras = [
     "line_profiler",
     "vtk",
     "stl",
-    "rmm",
-    "cupy",
+    "pylibraft-cu13", # Provides rmm
+    "cupy-cuda13x",
 ]
 nn-extras = [
-    "cuml",
+    "cuml-cu13",
     "transformer_engine[pytorch]",
     "scipy",
     "natten",
