@@ -17,15 +17,23 @@ def load(
 ) -> Mesh:
     """Create a Möbius strip surface in 3D space.
 
-    Args:
-        radius: Radius of the center circle
-        width: Width of the strip
-        n_circ: Number of points around the circle
-        n_width: Number of points across the width
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the center circle.
+    width : float
+        Width of the strip.
+    n_circ : int
+        Number of points around the circle.
+    n_width : int
+        Number of points across the width.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3 (non-orientable)
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3 (non-orientable).
     """
     if n_circ < 3:
         raise ValueError(f"n_circ must be at least 3, got {n_circ=}")

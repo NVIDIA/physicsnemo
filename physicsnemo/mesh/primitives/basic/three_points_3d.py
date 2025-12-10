@@ -11,11 +11,15 @@ from physicsnemo.mesh.mesh import Mesh
 def load(device: str = "cpu") -> Mesh:
     """Create a mesh with three points in 3D space.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=0, n_spatial_dims=3, n_cells=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=0, n_spatial_dims=3, n_cells=3.
     """
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]],

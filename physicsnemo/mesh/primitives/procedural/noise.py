@@ -22,29 +22,36 @@ def perlin_noise_nd(
     - Hash-based pseudo-random gradients
     - n-linear interpolation in hypercube
 
-    Args:
-        points: (N, n_dims) tensor of positions to evaluate noise at. Can be any
-            number of dimensions (1D, 2D, 3D, 4D, etc.)
-        scale: Frequency of noise. Larger values create more variation (smaller features).
-            Default 1.0 creates features of size ~1 unit.
-        seed: Random seed for reproducibility. Same seed produces same noise pattern.
+    Parameters
+    ----------
+    points : torch.Tensor
+        (N, n_dims) tensor of positions to evaluate noise at. Can be any
+        number of dimensions (1D, 2D, 3D, 4D, etc.).
+    scale : float
+        Frequency of noise. Larger values create more variation (smaller features).
+        Default 1.0 creates features of size ~1 unit.
+    seed : int
+        Random seed for reproducibility. Same seed produces same noise pattern.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         (N,) tensor of noise values in approximately [-1, 1].
 
-    Example:
-        >>> # 2D noise for texture generation
-        >>> points = torch.rand(100, 2)
-        >>> noise = perlin_noise_nd(points, scale=2.0, seed=42)
-        >>>
-        >>> # 3D noise for volumetric data
-        >>> centroids = mesh.cell_centroids  # (n_cells, 3)
-        >>> noise = perlin_noise_nd(centroids, scale=0.5, seed=123)
-        >>> mesh.cell_data["noise"] = noise
-        >>>
-        >>> # Works on GPU
-        >>> points_gpu = points.cuda()
-        >>> noise_gpu = perlin_noise_nd(points_gpu, scale=1.0, seed=42)
+    Examples
+    --------
+    >>> # 2D noise for texture generation
+    >>> points = torch.rand(100, 2)
+    >>> noise = perlin_noise_nd(points, scale=2.0, seed=42)
+    >>>
+    >>> # 3D noise for volumetric data
+    >>> centroids = mesh.cell_centroids  # (n_cells, 3)
+    >>> noise = perlin_noise_nd(centroids, scale=0.5, seed=123)
+    >>> mesh.cell_data["noise"] = noise
+    >>>
+    >>> # Works on GPU
+    >>> points_gpu = points.cuda()  # doctest: +SKIP
+    >>> noise_gpu = perlin_noise_nd(points_gpu, scale=1.0, seed=42)  # doctest: +SKIP
     """
     device = points.device
     n_dims = points.shape[-1]
@@ -147,13 +154,19 @@ def perlin_noise_1d(
 
     Convenience wrapper for perlin_noise_nd with 1D points.
 
-    Args:
-        points: (N, 1) tensor of 1D positions
-        scale: Frequency of noise
-        seed: Random seed
+    Parameters
+    ----------
+    points : torch.Tensor
+        (N, 1) tensor of 1D positions.
+    scale : float
+        Frequency of noise.
+    seed : int
+        Random seed.
 
-    Returns:
-        (N,) tensor of noise values
+    Returns
+    -------
+    torch.Tensor
+        (N,) tensor of noise values.
     """
     return perlin_noise_nd(points, scale, seed)
 
@@ -165,13 +178,19 @@ def perlin_noise_2d(
 
     Convenience wrapper for perlin_noise_nd with 2D points.
 
-    Args:
-        points: (N, 2) tensor of 2D positions
-        scale: Frequency of noise
-        seed: Random seed
+    Parameters
+    ----------
+    points : torch.Tensor
+        (N, 2) tensor of 2D positions.
+    scale : float
+        Frequency of noise.
+    seed : int
+        Random seed.
 
-    Returns:
-        (N,) tensor of noise values
+    Returns
+    -------
+    torch.Tensor
+        (N,) tensor of noise values.
     """
     return perlin_noise_nd(points, scale, seed)
 
@@ -183,12 +202,18 @@ def perlin_noise_3d(
 
     Convenience wrapper for perlin_noise_nd with 3D points.
 
-    Args:
-        points: (N, 3) tensor of 3D positions
-        scale: Frequency of noise
-        seed: Random seed
+    Parameters
+    ----------
+    points : torch.Tensor
+        (N, 3) tensor of 3D positions.
+    scale : float
+        Frequency of noise.
+    seed : int
+        Random seed.
 
-    Returns:
-        (N,) tensor of noise values
+    Returns
+    -------
+    torch.Tensor
+        (N,) tensor of noise values.
     """
     return perlin_noise_nd(points, scale, seed)

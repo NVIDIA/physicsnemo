@@ -29,29 +29,38 @@ def scatter_aggregate(
     3. Scatter-add weights to compute normalization
     4. Divide aggregated data by total weights
 
-    Args:
-        src_data: Source data to aggregate, shape (n_src, *data_shape)
-        src_to_dst_mapping: Mapping from each source to its destination index,
-            shape (n_src,). Each value should be in [0, n_dst).
-        n_dst: Number of destination elements
-        weights: Optional weights for each source element, shape (n_src,).
-            If None, uses uniform weights of 1.0.
-        aggregation: Aggregation mode:
-            - "mean": Weighted mean (default)
-            - "sum": Weighted sum (no normalization)
-            - "weighted_mean": Same as "mean" (for clarity)
+    Parameters
+    ----------
+    src_data : torch.Tensor
+        Source data to aggregate, shape (n_src, *data_shape).
+    src_to_dst_mapping : torch.Tensor
+        Mapping from each source to its destination index,
+        shape (n_src,). Each value should be in [0, n_dst).
+    n_dst : int
+        Number of destination elements.
+    weights : torch.Tensor or None
+        Optional weights for each source element, shape (n_src,).
+        If None, uses uniform weights of 1.0.
+    aggregation : str
+        Aggregation mode:
+        - "mean": Weighted mean
+        - "sum": Weighted sum (no normalization)
+        - "weighted_mean": Same as "mean" (for clarity)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Aggregated data at destinations, shape (n_dst, *data_shape).
         For "mean" mode, values are weighted averages.
         For "sum" mode, values are weighted sums.
 
-    Example:
-        >>> # Aggregate cell data to points
-        >>> src_data = torch.tensor([[1.0], [2.0], [3.0]])  # 3 cells
-        >>> src_to_dst = torch.tensor([0, 0, 1])  # map to 2 points
-        >>> result = scatter_aggregate(src_data, src_to_dst, n_dst=2)
-        >>> # result = [[1.5], [3.0]]  # point 0 gets mean of cells 0,1
+    Examples
+    --------
+    >>> # Aggregate cell data to points
+    >>> src_data = torch.tensor([[1.0], [2.0], [3.0]])  # 3 cells
+    >>> src_to_dst = torch.tensor([0, 0, 1])  # map to 2 points
+    >>> result = scatter_aggregate(src_data, src_to_dst, n_dst=2)
+    >>> # result = [[1.5], [3.0]]  # point 0 gets mean of cells 0,1
     """
     device = src_data.device
     dtype = src_data.dtype

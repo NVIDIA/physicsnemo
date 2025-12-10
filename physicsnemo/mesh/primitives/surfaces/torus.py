@@ -17,15 +17,23 @@ def load(
 ) -> Mesh:
     """Create a torus surface in 3D space.
 
-    Args:
-        major_radius: Distance from center to tube center
-        minor_radius: Radius of the tube
-        n_major: Number of points around the major circle
-        n_minor: Number of points around the minor circle
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    major_radius : float
+        Distance from center to tube center.
+    minor_radius : float
+        Radius of the tube.
+    n_major : int
+        Number of points around the major circle.
+    n_minor : int
+        Number of points around the minor circle.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_major < 3:
         raise ValueError(f"n_major must be at least 3, got {n_major=}")

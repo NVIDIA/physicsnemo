@@ -19,17 +19,27 @@ def load(
 ) -> Mesh:
     """Create a structured triangular grid in 2D space.
 
-    Args:
-        x_min: Minimum x coordinate
-        x_max: Maximum x coordinate
-        y_min: Minimum y coordinate
-        y_max: Maximum y coordinate
-        n_x: Number of points in x-direction
-        n_y: Number of points in y-direction
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    x_min : float
+        Minimum x coordinate.
+    x_max : float
+        Maximum x coordinate.
+    y_min : float
+        Minimum y coordinate.
+    y_max : float
+        Maximum y coordinate.
+    n_x : int
+        Number of points in x-direction.
+    n_y : int
+        Number of points in y-direction.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_x < 2:
         raise ValueError(f"n_x must be at least 2, got {n_x=}")

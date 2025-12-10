@@ -17,13 +17,19 @@ def load(scale: float = 1.0, n_points: int = 100, device: str = "cpu") -> Mesh:
         y = cos(t) - 2*cos(2*t)
         z = -sin(3*t)
 
-    Args:
-        scale: Overall scale factor
-        n_points: Number of points around the knot
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    scale : float
+        Overall scale factor.
+    n_points : int
+        Number of points around the knot.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points.
     """
     if n_points < 3:
         raise ValueError(f"n_points must be at least 3, got {n_points=}")

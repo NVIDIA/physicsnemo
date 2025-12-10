@@ -14,23 +14,33 @@ def process_scalars(
 ) -> tuple[torch.Tensor | None, Literal["points", "cells", None]]:
     """Process scalar specification into concrete tensor values.
 
-    Args:
-        scalar_spec: Scalar specification, can be:
-            - None: no scalars to display
-            - torch.Tensor: direct tensor values
-            - str or tuple[str, ...]: key(s) to lookup in data_dict
-        data_dict: TensorDict containing data (point_data or cell_data)
-        n_expected: Expected number of scalars (n_points or n_cells)
-        name: Name for error messages ("point" or "cell")
+    Parameters
+    ----------
+    scalar_spec : torch.Tensor or str or tuple[str, ...] or None
+        Scalar specification, can be:
+        - None: no scalars to display
+        - torch.Tensor: direct tensor values
+        - str or tuple[str, ...]: key(s) to lookup in data_dict
+    data_dict : TensorDict
+        TensorDict containing data (point_data or cell_data).
+    n_expected : int
+        Expected number of scalars (n_points or n_cells).
+    name : str
+        Name for error messages ("point" or "cell").
 
-    Returns:
+    Returns
+    -------
+    tuple
         Tuple of (scalar_values, source_type) where:
-            - scalar_values is None if scalar_spec is None, otherwise a 1D tensor
-            - source_type indicates whether this is "points", "cells", or None
+        - scalar_values is None if scalar_spec is None, otherwise a 1D tensor
+        - source_type indicates whether this is "points", "cells", or None
 
-    Raises:
-        ValueError: If scalar specification is invalid or tensor has wrong shape
-        KeyError: If specified key is not found in data_dict
+    Raises
+    ------
+    ValueError
+        If scalar specification is invalid or tensor has wrong shape.
+    KeyError
+        If specified key is not found in data_dict.
     """
     if scalar_spec is None:
         return None, None
@@ -100,19 +110,30 @@ def validate_and_process_scalars(
 ]:
     """Validate and process both point and cell scalars.
 
-    Args:
-        point_scalars: Point scalar specification
-        cell_scalars: Cell scalar specification
-        point_data: TensorDict with point data
-        cell_data: TensorDict with cell data
-        n_points: Number of points in mesh
-        n_cells: Number of cells in mesh
+    Parameters
+    ----------
+    point_scalars : torch.Tensor or str or tuple[str, ...] or None
+        Point scalar specification.
+    cell_scalars : torch.Tensor or str or tuple[str, ...] or None
+        Cell scalar specification.
+    point_data : TensorDict
+        TensorDict with point data.
+    cell_data : TensorDict
+        TensorDict with cell data.
+    n_points : int
+        Number of points in mesh.
+    n_cells : int
+        Number of cells in mesh.
 
-    Returns:
-        Tuple of (point_scalar_values, cell_scalar_values, active_scalar_source)
+    Returns
+    -------
+    tuple
+        Tuple of (point_scalar_values, cell_scalar_values, active_scalar_source).
 
-    Raises:
-        ValueError: If both point_scalars and cell_scalars are specified (mutually exclusive)
+    Raises
+    ------
+    ValueError
+        If both point_scalars and cell_scalars are specified (mutually exclusive).
     """
     ### Validate mutual exclusivity
     if point_scalars is not None and cell_scalars is not None:

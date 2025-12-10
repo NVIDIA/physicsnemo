@@ -17,15 +17,23 @@ def load(
 ) -> Mesh:
     """Create a circular arc in 2D space.
 
-    Args:
-        radius: Radius of the arc
-        start_angle: Starting angle in radians
-        end_angle: Ending angle in radians
-        n_points: Number of points along the arc
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the arc.
+    start_angle : float
+        Starting angle in radians.
+    end_angle : float
+        Ending angle in radians.
+    n_points : int
+        Number of points along the arc.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points-1
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points-1.
     """
     if n_points < 2:
         raise ValueError(f"n_points must be at least 2, got {n_points=}")

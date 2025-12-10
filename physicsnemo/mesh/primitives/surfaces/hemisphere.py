@@ -16,14 +16,21 @@ def load(
 ) -> Mesh:
     """Create a hemisphere surface in 3D space.
 
-    Args:
-        radius: Radius of the hemisphere
-        theta_resolution: Number of points around the equator
-        phi_resolution: Number of points from equator to pole
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the hemisphere.
+    theta_resolution : int
+        Number of points around the equator.
+    phi_resolution : int
+        Number of points from equator to pole.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if theta_resolution < 3:
         raise ValueError(

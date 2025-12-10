@@ -17,15 +17,23 @@ def load(
 ) -> Mesh:
     """Create a cone surface in 3D space.
 
-    Args:
-        radius: Radius of the base
-        height: Height of the cone
-        n_circ: Number of points around the base circumference
-        n_height: Number of points along the height
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the base.
+    height : float
+        Height of the cone.
+    n_circ : int
+        Number of points around the base circumference.
+    n_height : int
+        Number of points along the height.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_circ < 3:
         raise ValueError(f"n_circ must be at least 3, got {n_circ=}")

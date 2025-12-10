@@ -16,14 +16,21 @@ def load(
 ) -> Mesh:
     """Create a closed ellipse curve in 2D space.
 
-    Args:
-        semi_major_axis: Length of semi-major axis (x-direction)
-        semi_minor_axis: Length of semi-minor axis (y-direction)
-        n_points: Number of points around the ellipse
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    semi_major_axis : float
+        Length of semi-major axis (x-direction).
+    semi_minor_axis : float
+        Length of semi-minor axis (y-direction).
+    n_points : int
+        Number of points around the ellipse.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points.
     """
     if n_points < 3:
         raise ValueError(f"n_points must be at least 3, got {n_points=}")

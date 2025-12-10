@@ -15,11 +15,15 @@ def load(device: str = "cpu") -> Mesh:
     A textured sphere representing Earth. Note that texture coordinates
     are lost during conversion, but the geometry is preserved.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     pv_mesh = pv.examples.load_globe()
     mesh = from_pyvista(pv_mesh, manifold_dim=2)

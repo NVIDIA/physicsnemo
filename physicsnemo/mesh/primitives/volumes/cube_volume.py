@@ -12,13 +12,19 @@ from physicsnemo.mesh.mesh import Mesh
 def load(size: float = 1.0, n_subdivisions: int = 5, device: str = "cpu") -> Mesh:
     """Create a tetrahedral volume mesh of a cube.
 
-    Args:
-        size: Side length of the cube
-        n_subdivisions: Number of subdivisions per edge
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    size : float
+        Side length of the cube.
+    n_subdivisions : int
+        Number of subdivisions per edge.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=3, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     if n_subdivisions < 1:
         raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")

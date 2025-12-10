@@ -7,12 +7,17 @@ from tensordict import TensorDict
 def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
     """Format a complete Mesh representation.
 
-    Args:
-        mesh: The Mesh instance to format
-        exclude_cache: If True, exclude _cache subdictionaries from output
+    Parameters
+    ----------
+    mesh : Mesh
+        The Mesh instance to format.
+    exclude_cache : bool
+        If True, exclude _cache subdictionaries from output.
 
-    Returns:
-        Formatted string representation of the mesh
+    Returns
+    -------
+    str
+        Formatted string representation of the mesh.
     """
     ### Build the first line with class name and key properties
     # These properties are guaranteed by __post_init__
@@ -59,12 +64,17 @@ def format_mesh_repr(mesh, exclude_cache: bool = False) -> str:
 def _count_tensordict_fields(td: TensorDict, exclude_cache: bool = False) -> int:
     """Recursively count total number of fields in a TensorDict.
 
-    Args:
-        td: TensorDict to count fields in
-        exclude_cache: If True, skip _cache keys
+    Parameters
+    ----------
+    td : TensorDict
+        TensorDict to count fields in.
+    exclude_cache : bool
+        If True, skip _cache keys.
 
-    Returns:
-        Total number of fields including nested fields
+    Returns
+    -------
+    int
+        Total number of fields including nested fields.
     """
     count = 0
 
@@ -85,12 +95,17 @@ def _count_tensordict_fields(td: TensorDict, exclude_cache: bool = False) -> int
 def _get_trailing_shape(tensor: torch.Tensor, batch_dims: int) -> tuple:
     """Extract shape dimensions after the batch dimensions.
 
-    Args:
-        tensor: Tensor to extract shape from
-        batch_dims: Number of leading batch dimensions to skip
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Tensor to extract shape from.
+    batch_dims : int
+        Number of leading batch dimensions to skip.
 
-    Returns:
-        Tuple of trailing dimensions
+    Returns
+    -------
+    tuple
+        Tuple of trailing dimensions.
     """
     if batch_dims >= len(tensor.shape):
         return ()
@@ -102,14 +117,21 @@ def _format_tensordict_repr(
 ) -> str:
     """Format a TensorDict with proper indentation and colon alignment.
 
-    Args:
-        td: TensorDict to format
-        batch_dims: Number of batch dimensions (for computing trailing shapes)
-        indent_level: Current indentation level
-        exclude_cache: If True, skip _cache entries
+    Parameters
+    ----------
+    td : TensorDict
+        TensorDict to format.
+    batch_dims : int
+        Number of batch dimensions (for computing trailing shapes).
+    indent_level : int
+        Current indentation level.
+    exclude_cache : bool
+        If True, skip _cache entries.
 
-    Returns:
-        Formatted string representation
+    Returns
+    -------
+    str
+        Formatted string representation.
     """
     # Get all keys, excluding _cache if requested
     all_keys = [k for k in td.keys() if not (exclude_cache and k == "_cache")]

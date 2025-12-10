@@ -11,13 +11,19 @@ from physicsnemo.mesh.mesh import Mesh
 def load(size: float = 1.0, n_subdivisions: int = 5, device: str = "cpu") -> Mesh:
     """Create an L-shaped non-convex domain in 2D space.
 
-    Args:
-        size: Size of the L-shape
-        n_subdivisions: Number of subdivisions per edge
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    size : float
+        Size of the L-shape.
+    n_subdivisions : int
+        Number of subdivisions per edge.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_subdivisions < 1:
         raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")

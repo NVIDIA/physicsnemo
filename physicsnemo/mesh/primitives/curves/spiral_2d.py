@@ -18,14 +18,21 @@ def load(
 
     The spiral follows r = spacing * theta.
 
-    Args:
-        n_turns: Number of complete turns
-        spacing: Radial spacing between turns
-        n_points: Number of points along the spiral
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    n_turns : float
+        Number of complete turns.
+    spacing : float
+        Radial spacing between turns.
+    n_points : int
+        Number of points along the spiral.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points-1
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points-1.
     """
     if n_points < 2:
         raise ValueError(f"n_points must be at least 2, got {n_points=}")

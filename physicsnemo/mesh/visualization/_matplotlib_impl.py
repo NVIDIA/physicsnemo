@@ -32,23 +32,39 @@ def draw_mesh_matplotlib(
 
     Supports 0D, 1D, 2D, and 3D spatial dimensions with appropriate matplotlib primitives.
 
-    Args:
-        mesh: Mesh object to visualize
-        point_scalar_values: Processed point scalar values (1D tensor or None)
-        cell_scalar_values: Processed cell scalar values (1D tensor or None)
-        active_scalar_source: Which scalar source is active ("points", "cells", or None)
-        show: Whether to call plt.show()
-        cmap: Colormap name
-        vmin: Minimum value for colormap normalization
-        vmax: Maximum value for colormap normalization
-        alpha_points: Opacity for points (0-1)
-        alpha_cells: Opacity for cells (0-1)
-        alpha_edges: Opacity for edges (0-1)
-        show_edges: Whether to draw cell edges
-        ax: Existing matplotlib axes (if None, creates new figure)
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh object to visualize.
+    point_scalar_values : torch.Tensor or None
+        Processed point scalar values (1D tensor or None).
+    cell_scalar_values : torch.Tensor or None
+        Processed cell scalar values (1D tensor or None).
+    active_scalar_source : {"points", "cells", None}
+        Which scalar source is active ("points", "cells", or None).
+    show : bool
+        Whether to call plt.show().
+    cmap : str
+        Colormap name.
+    vmin : float or None
+        Minimum value for colormap normalization.
+    vmax : float or None
+        Maximum value for colormap normalization.
+    alpha_points : float
+        Opacity for points (0-1).
+    alpha_cells : float
+        Opacity for cells (0-1).
+    alpha_edges : float
+        Opacity for edges (0-1).
+    show_edges : bool
+        Whether to draw cell edges.
+    ax : matplotlib.axes.Axes or None
+        Existing matplotlib axes (if None, creates new figure).
 
-    Returns:
-        matplotlib.axes.Axes object
+    Returns
+    -------
+    matplotlib.axes.Axes
+        Matplotlib axes object.
     """
     ### Convert mesh data to numpy
     points_np = mesh.points.cpu().numpy()

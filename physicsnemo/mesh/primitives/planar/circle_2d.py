@@ -17,14 +17,21 @@ def load(
 ) -> Mesh:
     """Create a filled disk (circle) triangulated in 2D space.
 
-    Args:
-        radius: Radius of the disk
-        n_radial: Number of points in radial direction
-        n_angular: Number of points around the circumference
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the disk.
+    n_radial : int
+        Number of points in radial direction.
+    n_angular : int
+        Number of points around the circumference.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     # Use PyVista to create a disk
     pv_disk = pv.Disc(

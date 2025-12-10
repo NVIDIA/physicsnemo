@@ -16,14 +16,21 @@ def load(
 ) -> Mesh:
     """Create a zigzag polyline in 2D space.
 
-    Args:
-        n_segments: Number of segments in the polyline
-        amplitude: Amplitude of the zigzag
-        wavelength: Wavelength of the zigzag pattern
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    n_segments : int
+        Number of segments in the polyline.
+    amplitude : float
+        Amplitude of the zigzag.
+    wavelength : float
+        Wavelength of the zigzag pattern.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_segments
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_segments.
     """
     if n_segments < 1:
         raise ValueError(f"n_segments must be at least 1, got {n_segments=}")

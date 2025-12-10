@@ -13,13 +13,19 @@ def load(
 ) -> Mesh:
     """Create an equilateral triangle in 2D space.
 
-    Args:
-        side_length: Length of each side
-        n_subdivisions: Number of subdivision levels
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    side_length : float
+        Length of each side.
+    n_subdivisions : int
+        Number of subdivision levels.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_subdivisions < 0:
         raise ValueError(f"n_subdivisions must be non-negative, got {n_subdivisions=}")

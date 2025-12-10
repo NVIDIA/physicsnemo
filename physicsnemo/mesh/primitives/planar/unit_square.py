@@ -11,12 +11,17 @@ from physicsnemo.mesh.mesh import Mesh
 def load(n_subdivisions: int = 1, device: str = "cpu") -> Mesh:
     """Create a triangulated unit square in 2D space.
 
-    Args:
-        n_subdivisions: Number of subdivision levels (0 = 2 triangles)
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    n_subdivisions : int
+        Number of subdivision levels (0 = 2 triangles).
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_subdivisions < 0:
         raise ValueError(f"n_subdivisions must be non-negative, got {n_subdivisions=}")

@@ -14,11 +14,15 @@ def load(device: str = "cpu") -> Mesh:
 
     A classic finite element test case consisting of tetrahedral elements.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=3, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     pv_mesh = pv.examples.load_tetbeam()
     mesh = from_pyvista(pv_mesh, manifold_dim=3)

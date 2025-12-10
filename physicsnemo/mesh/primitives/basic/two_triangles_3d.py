@@ -13,11 +13,15 @@ def load(device: str = "cpu") -> Mesh:
 
     The triangles share a common edge, forming a simple surface patch.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3, n_cells=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3, n_cells=2.
     """
     points = torch.tensor(
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [1.5, 0.5, 0.5]],

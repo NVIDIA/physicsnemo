@@ -18,15 +18,23 @@ def load(
 ) -> Mesh:
     """Create an annulus (ring) triangulated in 2D space.
 
-    Args:
-        inner_radius: Inner radius of the annulus
-        outer_radius: Outer radius of the annulus
-        n_radial: Number of points in radial direction
-        n_angular: Number of points around the circumference
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    inner_radius : float
+        Inner radius of the annulus.
+    outer_radius : float
+        Outer radius of the annulus.
+    n_radial : int
+        Number of points in radial direction.
+    n_angular : int
+        Number of points around the circumference.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if inner_radius >= outer_radius:
         raise ValueError(

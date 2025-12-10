@@ -13,13 +13,19 @@ def load(n_sides: int = 6, radius: float = 1.0, device: str = "cpu") -> Mesh:
 
     The polygon is triangulated by connecting all vertices to the center point.
 
-    Args:
-        n_sides: Number of sides (must be >= 3)
-        radius: Distance from center to vertices
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    n_sides : int
+        Number of sides (must be >= 3).
+    radius : float
+        Distance from center to vertices.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
     if n_sides < 3:
         raise ValueError(f"n_sides must be at least 3, got {n_sides=}")

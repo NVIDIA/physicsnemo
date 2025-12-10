@@ -17,15 +17,23 @@ def load(
 ) -> Mesh:
     """Create a closed circle curve in 3D space.
 
-    Args:
-        radius: Radius of the circle
-        center: Center point (x, y, z)
-        normal: Normal vector to the circle plane (will be normalized)
-        n_points: Number of points around the circle
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the circle.
+    center : tuple[float, float, float]
+        Center point (x, y, z).
+    normal : tuple[float, float, float]
+        Normal vector to the circle plane (will be normalized).
+    n_points : int
+        Number of points around the circle.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points.
     """
     if n_points < 3:
         raise ValueError(f"n_points must be at least 3, got {n_points=}")

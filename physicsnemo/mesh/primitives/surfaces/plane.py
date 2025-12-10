@@ -16,14 +16,21 @@ def load(
 ) -> Mesh:
     """Create a flat triangulated plane in 3D space.
 
-    Args:
-        size: Size of the plane (length of each side)
-        n_subdivisions: Number of subdivisions per edge
-        normal: Normal vector to the plane (will be normalized)
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    size : float
+        Size of the plane (length of each side).
+    n_subdivisions : int
+        Number of subdivisions per edge.
+    normal : tuple[float, float, float]
+        Normal vector to the plane (will be normalized).
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_subdivisions < 1:
         raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")

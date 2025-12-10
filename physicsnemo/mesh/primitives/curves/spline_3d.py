@@ -15,11 +15,15 @@ def load(device: str = "cpu") -> Mesh:
     This loads the built-in PyVista spline example, which is a smooth
     3D curve useful for testing 1D operations in 3D space.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=3.
     """
     pv_mesh = pv.examples.load_spline()
     mesh = from_pyvista(pv_mesh, manifold_dim=1)

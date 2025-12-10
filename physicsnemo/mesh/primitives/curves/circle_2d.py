@@ -11,13 +11,19 @@ from physicsnemo.mesh.mesh import Mesh
 def load(radius: float = 1.0, n_points: int = 32, device: str = "cpu") -> Mesh:
     """Create a closed circle curve in 2D space.
 
-    Args:
-        radius: Radius of the circle
-        n_points: Number of points around the circle
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the circle.
+    n_points : int
+        Number of points around the circle.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=2, n_cells=n_points.
     """
     if n_points < 3:
         raise ValueError(f"n_points must be at least 3, got {n_points=}")

@@ -16,14 +16,21 @@ def load(
 ) -> Mesh:
     """Create a flat disk in 3D space (lying in xy-plane).
 
-    Args:
-        radius: Radius of the disk
-        n_radial: Number of points in radial direction
-        n_angular: Number of points around the circumference
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the disk.
+    n_radial : int
+        Number of points in radial direction.
+    n_angular : int
+        Number of points around the circumference.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     if n_radial < 1:
         raise ValueError(f"n_radial must be at least 1, got {n_radial=}")

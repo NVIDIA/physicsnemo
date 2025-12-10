@@ -11,12 +11,17 @@ from physicsnemo.mesh.mesh import Mesh
 def load(size: float = 1.0, device: str = "cpu") -> Mesh:
     """Create a regular octahedron surface in 3D space.
 
-    Args:
-        size: Distance from center to vertex
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    size : float
+        Distance from center to vertex.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     # 6 vertices (axis-aligned)
     vertices = [

@@ -11,12 +11,17 @@ from physicsnemo.mesh.mesh import Mesh
 def load(radius: float = 1.0, device: str = "cpu") -> Mesh:
     """Create a regular icosahedron surface in 3D space.
 
-    Args:
-        radius: Distance from center to vertex
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Distance from center to vertex.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     phi = (1.0 + (5.0**0.5)) / 2.0  # Golden ratio
 

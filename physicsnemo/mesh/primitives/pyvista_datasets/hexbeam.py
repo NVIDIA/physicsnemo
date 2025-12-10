@@ -15,11 +15,15 @@ def load(device: str = "cpu") -> Mesh:
     The hexahedral cells are automatically tessellated into
     tetrahedra during conversion.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=3, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     pv_mesh = pv.examples.load_hexbeam()
     mesh = from_pyvista(pv_mesh, manifold_dim=3)

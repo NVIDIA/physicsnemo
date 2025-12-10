@@ -17,15 +17,23 @@ def load(
 ) -> Mesh:
     """Create a helical curve in 3D space.
 
-    Args:
-        radius: Radius of the helix
-        height: Total height of the helix
-        n_turns: Number of complete turns
-        n_points: Number of points along the helix
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the helix.
+    height : float
+        Total height of the helix.
+    n_turns : float
+        Number of complete turns.
+    n_points : int
+        Number of points along the helix.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points-1
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=1, n_spatial_dims=3, n_cells=n_points-1.
     """
     if n_points < 2:
         raise ValueError(f"n_points must be at least 2, got {n_points=}")

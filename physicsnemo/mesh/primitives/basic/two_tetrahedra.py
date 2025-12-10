@@ -14,11 +14,15 @@ def load(device: str = "cpu") -> Mesh:
     The tetrahedra share a common triangular face, forming a simple
     volumetric region.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=3, n_spatial_dims=3, n_cells=2
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=3, n_spatial_dims=3, n_cells=2.
     """
     points = torch.tensor(
         [

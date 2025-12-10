@@ -15,11 +15,15 @@ def load(device: str = "cpu") -> Mesh:
     The Stanford bunny is a classic test model in computer graphics.
     PyVista caches the downloaded file automatically.
 
-    Args:
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     pv_mesh = pv.examples.download_bunny()
     mesh = from_pyvista(pv_mesh, manifold_dim=2)

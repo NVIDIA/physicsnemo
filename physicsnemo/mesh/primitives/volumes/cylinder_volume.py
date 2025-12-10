@@ -17,14 +17,21 @@ def load(
 ) -> Mesh:
     """Create a tetrahedral volume mesh of a cylinder.
 
-    Args:
-        radius: Radius of the cylinder
-        height: Height of the cylinder
-        resolution: Resolution of the surface mesh
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the cylinder.
+    height : float
+        Height of the cylinder.
+    resolution : int
+        Resolution of the surface mesh.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=3, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
     # Create surface cylinder
     surface = pv.Cylinder(

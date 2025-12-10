@@ -11,12 +11,17 @@ from physicsnemo.mesh.mesh import Mesh
 def load(side_length: float = 1.0, device: str = "cpu") -> Mesh:
     """Create a regular tetrahedron surface in 3D space.
 
-    Args:
-        side_length: Length of each edge
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    side_length : float
+        Length of each edge.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     # Regular tetrahedron vertices
     # Place center at origin

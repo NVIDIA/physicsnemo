@@ -15,13 +15,19 @@ def load(
 ) -> Mesh:
     """Add Gaussian noise to mesh vertex positions.
 
-    Args:
-        base_mesh: Input mesh to perturb
-        noise_scale: Standard deviation of Gaussian noise
-        seed: Random seed for reproducibility
+    Parameters
+    ----------
+    base_mesh : Mesh
+        Input mesh to perturb.
+    noise_scale : float
+        Standard deviation of Gaussian noise.
+    seed : int
+        Random seed for reproducibility.
 
-    Returns:
-        Mesh with same connectivity but perturbed vertex positions
+    Returns
+    -------
+    Mesh
+        Mesh with same connectivity but perturbed vertex positions.
     """
     generator = torch.Generator(device=base_mesh.points.device).manual_seed(seed)
 

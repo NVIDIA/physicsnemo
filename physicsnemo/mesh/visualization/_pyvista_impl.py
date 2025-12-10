@@ -25,22 +25,37 @@ def draw_mesh_pyvista(
 ):
     """Draw mesh using PyVista backend.
 
-    Args:
-        mesh: Mesh object to visualize
-        point_scalar_values: Processed point scalar values (1D tensor or None)
-        cell_scalar_values: Processed cell scalar values (1D tensor or None)
-        active_scalar_source: Which scalar source is active ("points", "cells", or None)
-        show: Whether to call plotter.show()
-        cmap: Colormap name
-        vmin: Minimum value for colormap normalization (clim)
-        vmax: Maximum value for colormap normalization (clim)
-        alpha_points: Opacity for points (0-1)
-        alpha_cells: Opacity for cells (0-1)
-        show_edges: Whether to draw cell edges
-        **kwargs: Additional backend-specific arguments passed to PyVista
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh object to visualize.
+    point_scalar_values : torch.Tensor or None
+        Processed point scalar values (1D tensor or None).
+    cell_scalar_values : torch.Tensor or None
+        Processed cell scalar values (1D tensor or None).
+    active_scalar_source : {"points", "cells", None}
+        Which scalar source is active ("points", "cells", or None).
+    show : bool
+        Whether to call plotter.show().
+    cmap : str
+        Colormap name.
+    vmin : float or None
+        Minimum value for colormap normalization (clim).
+    vmax : float or None
+        Maximum value for colormap normalization (clim).
+    alpha_points : float
+        Opacity for points (0-1).
+    alpha_cells : float
+        Opacity for cells (0-1).
+    show_edges : bool
+        Whether to draw cell edges.
+    **kwargs : dict
+        Additional backend-specific arguments passed to PyVista.
 
-    Returns:
-        pyvista.Plotter object (even if show=True, returns before calling .show())
+    Returns
+    -------
+    pyvista.Plotter
+        PyVista plotter object (even if show=True, returns before calling .show()).
     """
     ### Convert mesh to PyVista format
     from physicsnemo.mesh.io.io_pyvista import to_pyvista

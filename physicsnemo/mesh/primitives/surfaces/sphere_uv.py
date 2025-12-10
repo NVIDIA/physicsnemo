@@ -17,14 +17,21 @@ def load(
 ) -> Mesh:
     """Create a UV sphere using latitude/longitude parameterization.
 
-    Args:
-        radius: Radius of the sphere
-        theta_resolution: Number of points around the equator
-        phi_resolution: Number of points from pole to pole
-        device: Compute device ('cpu' or 'cuda')
+    Parameters
+    ----------
+    radius : float
+        Radius of the sphere.
+    theta_resolution : int
+        Number of points around the equator.
+    phi_resolution : int
+        Number of points from pole to pole.
+    device : str
+        Compute device ('cpu' or 'cuda').
 
-    Returns:
-        Mesh with n_manifold_dims=2, n_spatial_dims=3
+    Returns
+    -------
+    Mesh
+        Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
     pv_sphere = pv.Sphere(
         radius=radius,

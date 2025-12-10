@@ -28,7 +28,9 @@ if TYPE_CHECKING:
 def _strip_all_caches(mesh: "Mesh") -> tuple[TensorDict, TensorDict, TensorDict]:
     """Strip _cache from all data containers. Safe default for transformations.
 
-    Returns:
+    Returns
+    -------
+    tuple[TensorDict, TensorDict, TensorDict]
         Tuple of (point_data, cell_data, global_data) with _cache excluded from each.
     """
     return (
@@ -49,14 +51,21 @@ def _transform_tensordict(
 ) -> TensorDict:
     """Transform all vector/tensor fields in a TensorDict.
 
-    Args:
-        data: TensorDict with cache already stripped
-        matrix: Transformation matrix
-        n_spatial_dims: Expected spatial dimensionality
-        field_type: Description for error messages (e.g., "point_data", "global_data")
+    Parameters
+    ----------
+    data : TensorDict
+        TensorDict with cache already stripped.
+    matrix : torch.Tensor
+        Transformation matrix.
+    n_spatial_dims : int
+        Expected spatial dimensionality.
+    field_type : str
+        Description for error messages (e.g., "point_data", "global_data").
 
-    Returns:
-        TensorDict with transformed fields
+    Returns
+    -------
+    TensorDict
+        TensorDict with transformed fields.
     """
     batch_size = data.batch_size
     has_batch_dim = len(batch_size) > 0
@@ -133,13 +142,19 @@ def _build_rotation_matrix(
 ) -> torch.Tensor:
     """Build rotation matrix for 2D or 3D.
 
-    Args:
-        angle: Rotation angle in radians
-        axis: Rotation axis vector. None for 2D, shape (3,) for 3D.
-        device: Target device for the output matrix
+    Parameters
+    ----------
+    angle : float or torch.Tensor
+        Rotation angle in radians.
+    axis : torch.Tensor or None
+        Rotation axis vector. None for 2D, shape (3,) for 3D.
+    device : device
+        Target device for the output matrix.
 
-    Returns:
-        Rotation matrix: 2×2 if axis is None, 3×3 if axis has shape (3,)
+    Returns
+    -------
+    torch.Tensor
+        Rotation matrix: 2×2 if axis is None, 3×3 if axis has shape (3,).
     """
     angle = torch.as_tensor(angle, device=device)
     c, s = torch.cos(angle), torch.sin(angle)
@@ -186,20 +201,31 @@ def transform(
 ) -> "Mesh":
     """Apply a linear transformation to the mesh.
 
-    Args:
-        mesh: Input mesh to transform
-        matrix: Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims)
-        transform_point_data: If True, transform vector/tensor fields in point_data
-        transform_cell_data: If True, transform vector/tensor fields in cell_data
-        transform_global_data: If True, transform vector/tensor fields in global_data
-        assume_invertible: Controls cache propagation for square matrices:
-            - True: Assume matrix is invertible, propagate caches (compile-safe)
-            - False: Assume matrix is singular, skip cache propagation (compile-safe)
-            - None: Check determinant at runtime (may cause graph breaks under torch.compile)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to transform.
+    matrix : torch.Tensor
+        Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims).
+    transform_point_data : bool
+        If True, transform vector/tensor fields in point_data.
+    transform_cell_data : bool
+        If True, transform vector/tensor fields in cell_data.
+    transform_global_data : bool
+        If True, transform vector/tensor fields in global_data.
+    assume_invertible : bool or None
+        Controls cache propagation for square matrices:
+        - True: Assume matrix is invertible, propagate caches (compile-safe)
+        - False: Assume matrix is singular, skip cache propagation (compile-safe)
+        - None: Check determinant at runtime (may cause graph breaks under torch.compile)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         New Mesh with transformed geometry and appropriately updated caches.
 
+    Notes
+    -----
     Cache Handling:
         - areas: For square invertible matrices:
             - Full-dimensional meshes: scaled by |det|
@@ -300,13 +326,20 @@ def translate(
     Translation only affects point positions and centroids. Vector/tensor fields
     are unchanged by translation (they represent directions, not positions).
 
-    Args:
-        mesh: Input mesh to translate
-        offset: Translation vector, shape (n_spatial_dims,)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to translate.
+    offset : torch.Tensor or list or tuple
+        Translation vector, shape (n_spatial_dims,).
 
-    Returns:
+    Returns
+    -------
+    Mesh
         New Mesh with translated geometry.
 
+    Notes
+    -----
     Cache Handling:
         - areas: Unchanged
         - centroids: Translated
@@ -361,18 +394,30 @@ def rotate(
 ) -> "Mesh":
     """Rotate the mesh about an axis by a specified angle.
 
-    Args:
-        mesh: Input mesh to rotate
-        angle: Rotation angle in radians (counterclockwise, right-hand rule)
-        axis: Rotation axis vector. None for 2D, shape (3,) for 3D.
-        center: Center point for rotation. If None, rotates about the origin.
-        transform_point_data: If True, rotate vector/tensor fields in point_data
-        transform_cell_data: If True, rotate vector/tensor fields in cell_data
-        transform_global_data: If True, rotate vector/tensor fields in global_data
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to rotate.
+    angle : float
+        Rotation angle in radians (counterclockwise, right-hand rule).
+    axis : torch.Tensor or list or tuple or None
+        Rotation axis vector. None for 2D, shape (3,) for 3D.
+    center : torch.Tensor or list or tuple or None
+        Center point for rotation. If None, rotates about the origin.
+    transform_point_data : bool
+        If True, rotate vector/tensor fields in point_data.
+    transform_cell_data : bool
+        If True, rotate vector/tensor fields in cell_data.
+    transform_global_data : bool
+        If True, rotate vector/tensor fields in global_data.
 
-    Returns:
+    Returns
+    -------
+    Mesh
         New Mesh with rotated geometry.
 
+    Notes
+    -----
     Cache Handling:
         - areas: Unchanged (rotation preserves volumes)
         - centroids: Rotated
@@ -432,21 +477,33 @@ def scale(
 ) -> "Mesh":
     """Scale the mesh by specified factor(s).
 
-    Args:
-        mesh: Input mesh to scale
-        factor: Scale factor(s). Scalar for uniform, vector for non-uniform.
-        center: Center point for scaling. If None, scales about the origin.
-        transform_point_data: If True, scale vector/tensor fields in point_data
-        transform_cell_data: If True, scale vector/tensor fields in cell_data
-        transform_global_data: If True, scale vector/tensor fields in global_data
-        assume_invertible: Controls cache propagation:
-            - True: Assume all factors are non-zero, propagate caches (compile-safe)
-            - False: Assume some factor is zero, skip cache propagation (compile-safe)
-            - None: Check determinant at runtime (may cause graph breaks under torch.compile)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to scale.
+    factor : float or torch.Tensor or list or tuple
+        Scale factor(s). Scalar for uniform, vector for non-uniform.
+    center : torch.Tensor or list or tuple or None
+        Center point for scaling. If None, scales about the origin.
+    transform_point_data : bool
+        If True, scale vector/tensor fields in point_data.
+    transform_cell_data : bool
+        If True, scale vector/tensor fields in cell_data.
+    transform_global_data : bool
+        If True, scale vector/tensor fields in global_data.
+    assume_invertible : bool or None
+        Controls cache propagation:
+        - True: Assume all factors are non-zero, propagate caches (compile-safe)
+        - False: Assume some factor is zero, skip cache propagation (compile-safe)
+        - None: Check determinant at runtime (may cause graph breaks under torch.compile)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         New Mesh with scaled geometry.
 
+    Notes
+    -----
     Cache Handling:
         - areas: Scaled correctly. For non-isotropic transforms of codimension-1
                  embedded manifolds, per-element scaling is computed using normals.

@@ -11,18 +11,24 @@ from tensordict import TensorDict
 def get_cached(data: TensorDict, key: str) -> torch.Tensor | None:
     """Get a cached value from a TensorDict.
 
-    Args:
-        data: TensorDict containing potentially cached data
-        key: Name of the cached value (without "_cache" prefix)
+    Parameters
+    ----------
+    data : TensorDict
+        TensorDict containing potentially cached data.
+    key : str
+        Name of the cached value (without "_cache" prefix).
 
-    Returns:
-        The cached tensor if it exists, None otherwise
+    Returns
+    -------
+    torch.Tensor or None
+        The cached tensor if it exists, None otherwise.
 
-    Example:
-        >>> cached_areas = get_cached(mesh.cell_data, "areas")
-        >>> if cached_areas is None:
-        >>>     # Compute areas
-        >>>     ...
+    Examples
+    --------
+    >>> cached_areas = get_cached(mesh.cell_data, "areas")
+    >>> if cached_areas is None:
+    ...     # Compute areas
+    ...     pass
     """
     return data.get(("_cache", key), None)
 
@@ -33,13 +39,18 @@ def set_cached(data: TensorDict, key: str, value: torch.Tensor) -> None:
     Creates the "_cache" sub-TensorDict if it doesn't exist, then stores
     the value under ("_cache", key).
 
-    Args:
-        data: TensorDict to store cached value in
-        key: Name of the cached value (without "_cache" prefix)
-        value: Tensor to cache
+    Parameters
+    ----------
+    data : TensorDict
+        TensorDict to store cached value in.
+    key : str
+        Name of the cached value (without "_cache" prefix).
+    value : torch.Tensor
+        Tensor to cache.
 
-    Example:
-        >>> set_cached(mesh.cell_data, "areas", computed_areas)
+    Examples
+    --------
+    >>> set_cached(mesh.cell_data, "areas", computed_areas)
     """
     if "_cache" not in data:
         data["_cache"] = TensorDict({}, batch_size=data.batch_size, device=data.device)

@@ -14,19 +14,26 @@ def from_pyvista(
 ) -> Mesh:
     """Convert a PyVista mesh to a physicsnemo.mesh Mesh.
 
-    Args:
-        pyvista_mesh: Input PyVista mesh (PolyData, UnstructuredGrid, or PointSet)
-        manifold_dim: Manifold dimension (0, 1, 2, or 3), or "auto" to detect automatically.
-            - 0: Point cloud (vertices only)
-            - 1: Line mesh (edge cells)
-            - 2: Surface mesh (triangular cells)
-            - 3: Volume mesh (tetrahedral cells)
+    Parameters
+    ----------
+    pyvista_mesh : pv.PolyData or pv.UnstructuredGrid or pv.PointSet
+        Input PyVista mesh (PolyData, UnstructuredGrid, or PointSet).
+    manifold_dim : int or {"auto"}
+        Manifold dimension (0, 1, 2, or 3), or "auto" to detect automatically.
+        - 0: Point cloud (vertices only)
+        - 1: Line mesh (edge cells)
+        - 2: Surface mesh (triangular cells)
+        - 3: Volume mesh (tetrahedral cells)
 
-    Returns:
-        Mesh object with converted geometry and data
+    Returns
+    -------
+    Mesh
+        Mesh object with converted geometry and data.
 
-    Raises:
-        ValueError: If manifold dimension cannot be determined or is invalid
+    Raises
+    ------
+    ValueError
+        If manifold dimension cannot be determined or is invalid.
     """
     ### Determine the manifold dimension
     if manifold_dim == "auto":
@@ -192,14 +199,20 @@ def from_pyvista(
 def to_pyvista(mesh: Mesh) -> pv.PolyData | pv.UnstructuredGrid | pv.PointSet:
     """Convert a physicsnemo.mesh Mesh to a PyVista mesh.
 
-    Args:
-        mesh: Input physicsnemo.mesh Mesh object
+    Parameters
+    ----------
+    mesh : Mesh
+        Input physicsnemo.mesh Mesh object.
 
-    Returns:
-        PyVista mesh (PointSet for 0D, PolyData for 1D/2D, UnstructuredGrid for 3D)
+    Returns
+    -------
+    pv.PolyData or pv.UnstructuredGrid or pv.PointSet
+        PyVista mesh (PointSet for 0D, PolyData for 1D/2D, UnstructuredGrid for 3D).
 
-    Raises:
-        ValueError: If manifold dimension is not supported
+    Raises
+    ------
+    ValueError
+        If manifold dimension is not supported.
     """
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
     points_np = mesh.points.cpu().numpy()
@@ -294,7 +307,20 @@ def to_pyvista(mesh: Mesh) -> pv.PolyData | pv.UnstructuredGrid | pv.PointSet:
 
 
 def _get_count_safely(obj, attr: str) -> int:
-    """Safely get count from an attribute, returning 0 if it doesn't exist or is None."""
+    """Safely get count from an attribute, returning 0 if it doesn't exist or is None.
+
+    Parameters
+    ----------
+    obj : object
+        Object to get attribute from.
+    attr : str
+        Name of the attribute.
+
+    Returns
+    -------
+    int
+        Count value, or 0 if attribute doesn't exist or is None.
+    """
     try:
         value = getattr(obj, attr, None)
         if value is None:

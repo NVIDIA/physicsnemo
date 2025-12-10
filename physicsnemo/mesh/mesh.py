@@ -237,7 +237,9 @@ class Mesh:
             - Edges in 3D: codimension = 3 - 1 = 2 (codimension-2)
             - Points in 2D: codimension = 2 - 0 = 2 (codimension-2)
 
-        Returns:
+        Returns
+        -------
+        int
             The codimension of the mesh (always non-negative).
         """
         return self.n_spatial_dims - self.n_manifold_dims
@@ -252,7 +254,9 @@ class Mesh:
 
         The result is cached in cell_data["_cache"]["centroids"] for efficiency.
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Tensor of shape (n_cells, n_spatial_dims) containing the centroid of each cell.
         """
         cached = get_cached(self.cell_data, "centroids")
@@ -272,7 +276,9 @@ class Mesh:
             Volume = (1/n!) * sqrt(det(E^T @ E))
         where E is the matrix with columns (v1-v0, v2-v0, ..., vn-v0).
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Tensor of shape (n_cells,) containing the volume of each cell.
         """
         cached = get_cached(self.cell_data, "areas")
@@ -327,11 +333,15 @@ class Mesh:
         - 3D: Standard cross product of two edge vectors
         - nD: Determinant-based formula for (n-1) edge vectors in n-space
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Tensor of shape (n_cells, n_spatial_dims) containing unit normal vectors.
 
-        Raises:
-            ValueError: If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
+        Raises
+        ------
+        ValueError
+            If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
         """
         cached = get_cached(self.cell_data, "normals")
         if cached is None:
@@ -405,15 +415,20 @@ class Mesh:
 
         The result is cached in point_data["_cache"]["normals"] for efficiency.
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Tensor of shape (n_points, n_spatial_dims) containing unit normal vectors
             at each vertex. For isolated points (with no adjacent cells), the normal
             is a zero vector.
 
-        Raises:
-            ValueError: If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
+        Raises
+        ------
+        ValueError
+            If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
 
-        Example:
+        Examples
+        --------
             >>> # Triangle mesh in 3D
             >>> mesh = create_triangle_mesh_3d()
             >>> normals = mesh.point_normals  # (n_points, 3)
@@ -497,6 +512,29 @@ class Mesh:
     def merge(
         cls, meshes: Sequence["Mesh"], global_data_strategy: Literal["stack"] = "stack"
     ) -> "Mesh":
+        """Merge multiple meshes into a single mesh.
+
+        Parameters
+        ----------
+        meshes : Sequence[Mesh]
+            List of Mesh objects to merge.
+        global_data_strategy : {"stack"}
+            Strategy for handling global_data. Currently only "stack" is supported,
+            which stacks global_data fields along a new dimension.
+
+        Returns
+        -------
+        Mesh
+            A new Mesh object containing all the merged data.
+
+        Raises
+        ------
+        ValueError
+            If the meshes list is empty, or if meshes have inconsistent dimensions
+            or cell_data keys.
+        TypeError
+            If any element in meshes is not a Mesh object.
+        """
         ### Validate inputs
         if not torch.compiler.is_compiling():
             if len(meshes) == 0:
@@ -555,8 +593,15 @@ class Mesh:
     def slice_points(self, indices: int | slice | torch.Tensor) -> "Mesh":
         """Returns a new Mesh with a subset of the points.
 
-        Args:
-            indices: Indices or mask to select points.
+        Parameters
+        ----------
+        indices : int or slice or torch.Tensor
+            Indices or mask to select points.
+
+        Returns
+        -------
+        Mesh
+            New Mesh with subset of points.
         """
         new_point_data: TensorDict = self.point_data[indices]  # type: ignore
         return Mesh(
@@ -570,8 +615,15 @@ class Mesh:
     def slice_cells(self, indices: int | slice | torch.Tensor) -> "Mesh":
         """Returns a new Mesh with a subset of the cells.
 
-        Args:
-            indices: Indices or mask to select cells.
+        Parameters
+        ----------
+        indices : int or slice or torch.Tensor
+            Indices or mask to select cells.
+
+        Returns
+        -------
+        Mesh
+            New Mesh with subset of cells.
         """
         new_cell_data: TensorDict = self.cell_data[indices]  # type: ignore
         return Mesh(
@@ -589,20 +641,27 @@ class Mesh:
         that contain that point. The resulting point data is added to the mesh's
         point_data dictionary. Original cell data is preserved.
 
-        Args:
-            overwrite_keys: If True, silently overwrite any existing point_data keys.
-                If False (default), raise an error if a key already exists in point_data.
+        Parameters
+        ----------
+        overwrite_keys : bool
+            If True, silently overwrite any existing point_data keys.
+            If False, raise an error if a key already exists in point_data.
 
-        Returns:
+        Returns
+        -------
+        Mesh
             New Mesh with converted data added to point_data. Original cell_data is preserved.
 
-        Raises:
-            ValueError: If a cell_data key already exists in point_data and overwrite_keys=False.
+        Raises
+        ------
+        ValueError
+            If a cell_data key already exists in point_data and overwrite_keys=False.
 
-        Example:
-            >>> mesh = Mesh(points, cells, cell_data={"pressure": cell_pressures})
-            >>> mesh_with_point_data = mesh.cell_data_to_point_data()
-            >>> # Now mesh has both cell_data["pressure"] and point_data["pressure"]
+        Examples
+        --------
+        >>> mesh = Mesh(points, cells, cell_data={"pressure": cell_pressures})
+        >>> mesh_with_point_data = mesh.cell_data_to_point_data()
+        >>> # Now mesh has both cell_data["pressure"] and point_data["pressure"]
         """
         ### Check for key conflicts
         if not overwrite_keys:
@@ -662,20 +721,27 @@ class Mesh:
         (vertices) that define that cell. The resulting cell data is added to the mesh's
         cell_data dictionary. Original point data is preserved.
 
-        Args:
-            overwrite_keys: If True, silently overwrite any existing cell_data keys.
-                If False (default), raise an error if a key already exists in cell_data.
+        Parameters
+        ----------
+        overwrite_keys : bool
+            If True, silently overwrite any existing cell_data keys.
+            If False, raise an error if a key already exists in cell_data.
 
-        Returns:
+        Returns
+        -------
+        Mesh
             New Mesh with converted data added to cell_data. Original point_data is preserved.
 
-        Raises:
-            ValueError: If a point_data key already exists in cell_data and overwrite_keys=False.
+        Raises
+        ------
+        ValueError
+            If a point_data key already exists in cell_data and overwrite_keys=False.
 
-        Example:
-            >>> mesh = Mesh(points, cells, point_data={"temperature": point_temps})
-            >>> mesh_with_cell_data = mesh.point_data_to_cell_data()
-            >>> # Now mesh has both point_data["temperature"] and cell_data["temperature"]
+        Examples
+        --------
+        >>> mesh = Mesh(points, cells, point_data={"temperature": point_temps})
+        >>> mesh_with_cell_data = mesh.point_data_to_cell_data()
+        >>> # Now mesh has both point_data["temperature"] and cell_data["temperature"]
         """
         ### Check for key conflicts
         if not overwrite_keys:
@@ -722,24 +788,34 @@ class Mesh:
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
         - cell data: Zero-valued padding for all cell data fields
 
-        Args:
-            target_n_points: Target number of points. If None, no point padding is applied.
-                Must be >= current n_points if specified.
-            target_n_cells: Target number of cells. If None, no cell padding is applied.
-                Must be >= current n_cells if specified.
+        Parameters
+        ----------
+        target_n_points : int or None, optional
+            Target number of points. If None, no point padding is applied.
+            Must be >= current n_points if specified.
+        target_n_cells : int or None, optional
+            Target number of cells. If None, no cell padding is applied.
+            Must be >= current n_cells if specified.
+        data_padding_value : float
+            Value to use for padding data fields.
 
-        Returns:
+        Returns
+        -------
+        Mesh
             A new Mesh with padded arrays. If both targets are None or equal to
             current sizes, returns self unchanged.
 
-        Raises:
-            ValueError: If target sizes are less than current sizes.
+        Raises
+        ------
+        ValueError
+            If target sizes are less than current sizes.
 
-        Example:
-            >>> mesh = Mesh(points, cells, "no_slip")  # 100 points, 200 cells
-            >>> padded = mesh.pad(target_n_points=128, target_n_cells=256)
-            >>> padded.n_points  # 128
-            >>> padded.n_cells   # 256
+        Examples
+        --------
+        >>> mesh = Mesh(points, cells, "no_slip")  # 100 points, 200 cells
+        >>> padded = mesh.pad(target_n_points=128, target_n_cells=256)
+        >>> padded.n_points  # 128
+        >>> padded.n_cells   # 256
         """
         # Validate inputs
         if not torch.compiler.is_compiling():
@@ -784,24 +860,32 @@ class Mesh:
         This method computes the target sizes as floor(power^n) for the smallest n such that
         the result is >= the current size, then calls .pad() to perform the actual padding.
 
-        Args:
-            power: Base for computing the next power. Must be > 1. Default is 1.5,
-                which provides a good balance between memory efficiency and compile
-                cache hits.
+        Parameters
+        ----------
+        power : float
+            Base for computing the next power. Must be > 1.
+            Provides a good balance between memory efficiency and compile cache hits.
+        data_padding_value : float
+            Value to use for padding data fields.
 
-        Returns:
+        Returns
+        -------
+        Mesh
             A new Mesh with padded points and cells arrays. The padding uses
             null elements that don't affect geometric computations.
 
-        Raises:
-            ValueError: If power <= 1.
+        Raises
+        ------
+        ValueError
+            If power <= 1.
 
-        Example:
-            >>> mesh = Mesh(points, cells, "no_slip")  # 100 points, 200 cells
-            >>> padded = mesh.pad_to_next_power(power=1.5)
-            >>> # Points padded to floor(1.5^n) >= 100, cells to floor(1.5^m) >= 200
-            >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 216 cells
-            >>> # Padding cells have zero area and don't affect computations
+        Examples
+        --------
+        >>> mesh = Mesh(points, cells, "no_slip")  # 100 points, 200 cells
+        >>> padded = mesh.pad_to_next_power(power=1.5)
+        >>> # Points padded to floor(1.5^n) >= 100, cells to floor(1.5^m) >= 200
+        >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 216 cells
+        >>> # Padding cells have zero area and don't affect computations
         """
         if not torch.compiler.is_compiling():
             if power <= 1:
@@ -847,65 +931,82 @@ class Mesh:
         Provides interactive 3D or 2D visualization with support for scalar data
         coloring, transparency control, and automatic backend selection.
 
-        Args:
-            backend: Visualization backend to use:
-                - "auto": Automatically select based on n_spatial_dims
-                  (matplotlib for 0D/1D/2D, PyVista for 3D)
-                - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
-                - "pyvista": Force PyVista backend (requires n_spatial_dims <= 3)
-            show: Whether to display the plot immediately (calls plt.show() or
-                plotter.show()). If False, returns the plotter/axes for further
-                customization before display.
-            point_scalars: Scalar data to color points. Mutually exclusive with
-                cell_scalars. Can be:
-                - None: Points use neutral color (black)
-                - torch.Tensor: Direct scalar values, shape (n_points,) or
-                  (n_points, ...) where trailing dimensions are L2-normed
-                - str or tuple[str, ...]: Key to lookup in mesh.point_data
-            cell_scalars: Scalar data to color cells. Mutually exclusive with
-                point_scalars. Can be:
-                - None: Cells use neutral color (lightblue if no scalars,
-                  lightgray if point_scalars active)
-                - torch.Tensor: Direct scalar values, shape (n_cells,) or
-                  (n_cells, ...) where trailing dimensions are L2-normed
-                - str or tuple[str, ...]: Key to lookup in mesh.cell_data
-            cmap: Colormap name for scalar visualization (default: "viridis")
-            vmin: Minimum value for colormap normalization. If None, uses data min.
-            vmax: Maximum value for colormap normalization. If None, uses data max.
-            alpha_points: Opacity for points, range [0, 1] (default: 1.0)
-            alpha_cells: Opacity for cells/faces, range [0, 1] (default: 0.3)
-            alpha_edges: Opacity for cell edges, range [0, 1] (default: 0.7)
-            show_edges: Whether to draw cell edges (default: True)
-            ax: (matplotlib only) Existing matplotlib axes to plot on. If None,
-                creates new figure and axes.
-            **kwargs: Additional backend-specific keyword arguments
+        Parameters
+        ----------
+        backend : {"auto", "matplotlib", "pyvista"}
+            Visualization backend to use:
+            - "auto": Automatically select based on n_spatial_dims
+              (matplotlib for 0D/1D/2D, PyVista for 3D)
+            - "matplotlib": Force matplotlib backend (supports 3D via mplot3d)
+            - "pyvista": Force PyVista backend (requires n_spatial_dims <= 3)
+        show : bool
+            Whether to display the plot immediately (calls plt.show() or
+            plotter.show()). If False, returns the plotter/axes for further
+            customization before display.
+        point_scalars : torch.Tensor or str or tuple[str, ...], optional
+            Scalar data to color points. Mutually exclusive with cell_scalars. Can be:
+            - None: Points use neutral color (black)
+            - torch.Tensor: Direct scalar values, shape (n_points,) or
+              (n_points, ...) where trailing dimensions are L2-normed
+            - str or tuple[str, ...]: Key to lookup in mesh.point_data
+        cell_scalars : torch.Tensor or str or tuple[str, ...], optional
+            Scalar data to color cells. Mutually exclusive with point_scalars. Can be:
+            - None: Cells use neutral color (lightblue if no scalars,
+              lightgray if point_scalars active)
+            - torch.Tensor: Direct scalar values, shape (n_cells,) or
+              (n_cells, ...) where trailing dimensions are L2-normed
+            - str or tuple[str, ...]: Key to lookup in mesh.cell_data
+        cmap : str
+            Colormap name for scalar visualization.
+        vmin : float, optional
+            Minimum value for colormap normalization. If None, uses data min.
+        vmax : float, optional
+            Maximum value for colormap normalization. If None, uses data max.
+        alpha_points : float
+            Opacity for points, range [0, 1].
+        alpha_cells : float
+            Opacity for cells/faces, range [0, 1].
+        alpha_edges : float
+            Opacity for cell edges, range [0, 1].
+        show_edges : bool
+            Whether to draw cell edges.
+        ax : matplotlib.axes.Axes, optional
+            (matplotlib only) Existing matplotlib axes to plot on. If None,
+            creates new figure and axes.
+        **kwargs : dict
+            Additional backend-specific keyword arguments.
 
-        Returns:
+        Returns
+        -------
+        matplotlib.axes.Axes or pyvista.Plotter
             - matplotlib backend: matplotlib.axes.Axes object
             - PyVista backend: pyvista.Plotter object
 
-        Raises:
-            ValueError: If both point_scalars and cell_scalars are specified,
-                or if n_spatial_dims is not supported by the chosen backend.
+        Raises
+        ------
+        ValueError
+            If both point_scalars and cell_scalars are specified,
+            or if n_spatial_dims is not supported by the chosen backend.
 
-        Example:
-            >>> # Draw mesh with automatic backend selection
-            >>> mesh.draw()
-            >>>
-            >>> # Color cells by pressure data
-            >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")
-            >>>
-            >>> # Color points by velocity magnitude (computing norm of vector field)
-            >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)
-            >>>
-            >>> # Use nested TensorDict key
-            >>> mesh.draw(cell_scalars=("flow", "temperature"))
-            >>>
-            >>> # Customize and display later
-            >>> ax = mesh.draw(show=False, backend="matplotlib")
-            >>> ax.set_title("My Mesh")
-            >>> import matplotlib.pyplot as plt
-            >>> plt.show()
+        Examples
+        --------
+        >>> # Draw mesh with automatic backend selection
+        >>> mesh.draw()
+        >>>
+        >>> # Color cells by pressure data
+        >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")
+        >>>
+        >>> # Color points by velocity magnitude (computing norm of vector field)
+        >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)
+        >>>
+        >>> # Use nested TensorDict key
+        >>> mesh.draw(cell_scalars=("flow", "temperature"))
+        >>>
+        >>> # Customize and display later
+        >>> ax = mesh.draw(show=False, backend="matplotlib")
+        >>> ax.set_title("My Mesh")
+        >>> import matplotlib.pyplot as plt
+        >>> plt.show()
         """
         return draw_mesh(
             mesh=self,
@@ -932,11 +1033,15 @@ class Mesh:
 
         Convenience wrapper for physicsnemo.mesh.transformations.translate().
 
-        Args:
-            offset: Translation vector, shape (n_spatial_dims,)
+        Parameters
+        ----------
+        offset : torch.Tensor or list or tuple
+            Translation vector, shape (n_spatial_dims,).
 
-        Returns:
-            New Mesh with translated geometry
+        Returns
+        -------
+        Mesh
+            New Mesh with translated geometry.
         """
         return translate(self, offset)
 
@@ -953,16 +1058,25 @@ class Mesh:
 
         Convenience wrapper for physicsnemo.mesh.transformations.rotate().
 
-        Args:
-            angle: Rotation angle in radians
-            axis: Rotation axis vector. None for 2D, shape (3,) for 3D.
-            center: Center point for rotation (optional)
-            transform_point_data: If True, rotate vector/tensor fields in point_data
-            transform_cell_data: If True, rotate vector/tensor fields in cell_data
-            transform_global_data: If True, rotate vector/tensor fields in global_data
+        Parameters
+        ----------
+        angle : float
+            Rotation angle in radians.
+        axis : torch.Tensor or list or tuple, optional
+            Rotation axis vector. None for 2D, shape (3,) for 3D.
+        center : torch.Tensor or list or tuple, optional
+            Center point for rotation.
+        transform_point_data : bool
+            If True, rotate vector/tensor fields in point_data.
+        transform_cell_data : bool
+            If True, rotate vector/tensor fields in cell_data.
+        transform_global_data : bool
+            If True, rotate vector/tensor fields in global_data.
 
-        Returns:
-            New Mesh with rotated geometry
+        Returns
+        -------
+        Mesh
+            New Mesh with rotated geometry.
         """
         return rotate(
             self, angle, axis, center,
@@ -982,19 +1096,28 @@ class Mesh:
 
         Convenience wrapper for physicsnemo.mesh.transformations.scale().
 
-        Args:
-            factor: Scale factor (scalar) or factors (per-dimension)
-            center: Center point for scaling (optional)
-            transform_point_data: If True, scale vector/tensor fields in point_data
-            transform_cell_data: If True, scale vector/tensor fields in cell_data
-            transform_global_data: If True, scale vector/tensor fields in global_data
-            assume_invertible: Controls cache propagation:
-                - True: Assume all factors are non-zero (compile-safe)
-                - False: Skip cache propagation (compile-safe)
-                - None: Check at runtime (may cause graph breaks)
+        Parameters
+        ----------
+        factor : float or torch.Tensor
+            Scale factor (scalar) or factors (per-dimension).
+        center : torch.Tensor, optional
+            Center point for scaling.
+        transform_point_data : bool
+            If True, scale vector/tensor fields in point_data.
+        transform_cell_data : bool
+            If True, scale vector/tensor fields in cell_data.
+        transform_global_data : bool
+            If True, scale vector/tensor fields in global_data.
+        assume_invertible : bool or None, optional
+            Controls cache propagation:
+            - True: Assume all factors are non-zero (compile-safe).
+            - False: Skip cache propagation (compile-safe).
+            - None: Check at runtime (may cause graph breaks).
 
-        Returns:
-            New Mesh with scaled geometry
+        Returns
+        -------
+        Mesh
+            New Mesh with scaled geometry.
         """
         return scale(
             self, factor, center,
@@ -1014,18 +1137,26 @@ class Mesh:
 
         Convenience wrapper for physicsnemo.mesh.transformations.transform().
 
-        Args:
-            matrix: Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims)
-            transform_point_data: If True, transform vector/tensor fields in point_data
-            transform_cell_data: If True, transform vector/tensor fields in cell_data
-            transform_global_data: If True, transform vector/tensor fields in global_data
-            assume_invertible: Controls cache propagation for square matrices:
-                - True: Assume matrix is invertible (compile-safe)
-                - False: Skip cache propagation (compile-safe)
-                - None: Check at runtime (may cause graph breaks)
+        Parameters
+        ----------
+        matrix : torch.Tensor
+            Transformation matrix, shape (new_n_spatial_dims, n_spatial_dims).
+        transform_point_data : bool
+            If True, transform vector/tensor fields in point_data.
+        transform_cell_data : bool
+            If True, transform vector/tensor fields in cell_data.
+        transform_global_data : bool
+            If True, transform vector/tensor fields in global_data.
+        assume_invertible : bool or None, optional
+            Controls cache propagation for square matrices:
+            - True: Assume matrix is invertible (compile-safe).
+            - False: Skip cache propagation (compile-safe).
+            - None: Check at runtime (may cause graph breaks).
 
-        Returns:
-            New Mesh with transformed geometry
+        Returns
+        -------
+        Mesh
+            New Mesh with transformed geometry.
         """
         return transform(
             self, matrix,
