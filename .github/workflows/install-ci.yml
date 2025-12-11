@@ -2,7 +2,12 @@ name: Install CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main, v2.0-refactor]
+  schedule:
+    - cron: '0 6 * * *'  # 6 AM UTC daily
+  workflow_dispatch:  # Allows manual triggering from GitHub UI
 
 jobs:
   test-pip:
