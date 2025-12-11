@@ -32,7 +32,7 @@ from physicsnemo.utils import load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from sklearn.metrics import r2_score
-from metrics_new import metrics_fn_surface, metrics_fn_volume
+from metrics import metrics_fn_surface, metrics_fn_volume
 
 from physicsnemo.distributed import DistributedManager
 
@@ -255,8 +255,8 @@ def inference(cfg: DictConfig) -> None:
     logger.info(f"Number of parameters: {num_params}")
 
     # Load the normalization file from configured directory (defaults to current dir)
-    norm_dir = getattr(cfg.datapipe, "normalization_dir", ".")
-    if cfg.datapipe.mode == "surface" or cfg.datapipe.mode == "combined":
+    norm_dir = getattr(cfg.data, "normalization_dir", ".")
+    if cfg.data.mode == "surface" or cfg.data.mode == "combined":
         norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
         norm_data = np.load(norm_file)
         surface_factors = {
@@ -266,7 +266,7 @@ def inference(cfg: DictConfig) -> None:
     else:
         surface_factors = None
 
-    if cfg.datapipe.mode == "volume" or cfg.datapipe.mode == "combined":
+    if cfg.data.mode == "volume" or cfg.data.mode == "combined":
         norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
         norm_data = np.load(norm_file)
         volume_factors = {
@@ -284,19 +284,19 @@ def inference(cfg: DictConfig) -> None:
     # so there is not downsampling.  We still batch it in the inference script
     # for memory usage constraints.
 
-    batch_resolution = cfg.datapipe.resolution
-    cfg.datapipe.resolution = None
+    batch_resolution = cfg.data.resolution
+    cfg.data.resolution = None
     ## Make sure to read the whole data sample for volume:
-    if cfg.datapipe.mode == "volume":
-        cfg.datapipe.volume_sample_from_disk = False
+    if cfg.data.mode == "volume":
+        cfg.data.volume_sample_from_disk = False
 
     # And we need the mesh features for drag, lift in surface data:
-    if cfg.datapipe.mode == "surface":
-        cfg.datapipe.return_mesh_features = True
+    if cfg.data.mode == "surface":
+        cfg.data.return_mesh_features = True
 
     # Validation dataset
     val_dataset = create_transolver_dataset(
-        cfg.datapipe,
+        cfg.data,
         phase="val",
         surface_factors=surface_factors,
         volume_factors=volume_factors,
@@ -311,7 +311,7 @@ def inference(cfg: DictConfig) -> None:
                     batch,
                     model,
                     cfg.precision,
-                    cfg.datapipe.mode,
+                    cfg.data.mode,
                     batch_resolution,
                     output_pad_size,
                     dist_manager,
@@ -326,7 +326,7 @@ def inference(cfg: DictConfig) -> None:
         air_density = batch["air_density"] if "air_density" in batch.keys() else None
         stream_velocity = batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
 
-        if cfg.datapipe.mode == "surface":
+        if cfg.data.mode == "surface":
             coeff = 1.0
 
             if stream_velocity is not None:
@@ -435,7 +435,7 @@ def inference(cfg: DictConfig) -> None:
                 ]
             )
 
-        elif cfg.datapipe.mode == "volume":
+        elif cfg.data.mode == "volume":
             if stream_velocity is not None:
                 global_predictions[:, :, 3] = global_predictions[:, :, 3] * stream_velocity**2.0 * air_density
                 global_targets[:, :, 3] = global_targets[:, :, 3] * stream_velocity**2.0 * air_density
@@ -510,7 +510,7 @@ def inference(cfg: DictConfig) -> None:
                 ]
             )
 
-    if cfg.datapipe.mode == "surface":
+    if cfg.data.mode == "surface":
         pred_drag_coeffs = [r[8] for r in results]
         pred_lift_coeffs = [r[9] for r in results]
         true_drag_coeffs = [r[10] for r in results]
@@ -547,7 +547,7 @@ def inference(cfg: DictConfig) -> None:
             writer.writerows(results)
         logger.info(f"Results saved to {csv_filename}")
 
-    elif cfg.datapipe.mode == "volume":
+    elif cfg.data.mode == "volume":
         headers = [
             "Batch",
             "Loss",
