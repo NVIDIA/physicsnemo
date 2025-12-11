@@ -89,15 +89,6 @@ Install the requirements using:
 pip install -r requirements.txt
 ```
 
-For multi-worker DataLoader support, generate index files for the TFRecord files
-after downloading:
-
-```bash
-python -m tfrecord.tools.tfrecord2idx /data/Water/train.tfrecord /data/Water/train.tfindex
-python -m tfrecord.tools.tfrecord2idx /data/Water/valid.tfrecord /data/Water/valid.tfindex
-python -m tfrecord.tools.tfrecord2idx /data/Water/test.tfrecord /data/Water/test.tfindex
-```
-
 To download the data from DeepMind's repo, run:
 
 ```bash

@@ -83,14 +83,6 @@ Install the requirements using:
 pip install -r requirements.txt
 ```
 
-For multi-worker DataLoader support, generate index files for the TFRecord files:
-
-```bash
-python -m tfrecord.tools.tfrecord2idx raw_dataset/cylinder_flow/train.tfrecord raw_dataset/cylinder_flow/train.tfindex
-python -m tfrecord.tools.tfrecord2idx raw_dataset/cylinder_flow/valid.tfrecord raw_dataset/cylinder_flow/valid.tfindex
-python -m tfrecord.tools.tfrecord2idx raw_dataset/cylinder_flow/test.tfrecord raw_dataset/cylinder_flow/test.tfindex
-```
-
 ## Getting Started
 
 To download the data from DeepMind's repo, run
