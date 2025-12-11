@@ -9,10 +9,8 @@ authors = [
 description = "A deep learning framework for AI-driven multi-physics systems"
 readme = "README.md"
 
-# Python 3.10 is EOL in 2026.  Migrating to 3.11+
-# Pytorch support for torch.compile in 3.14 is not ready as of Dec 2025.
-# Remove constraint against 3.14 when it arrives.
-requires-python = ">=3.10,<3.14"
+
+requires-python = ">=3.11,<3.14"
 
 license = "Apache-2.0"
 
