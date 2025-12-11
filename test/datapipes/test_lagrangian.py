@@ -22,8 +22,6 @@ from test.conftest import requires_module
 
 from . import common
 
-dgl = pytest.importorskip("dgl")
-
 
 Tensor = torch.Tensor
 
@@ -33,8 +31,7 @@ def data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/water")
 
 
-@requires_module(["tensorflow", "torch_geometric", "torch_scatter"])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module(["torch_geometric", "torch_scatter"])
 def test_lagrangian_dataset_constructor(data_dir, device, pytestconfig):
     from torch_geometric.data import Data as PyGData
 
@@ -60,37 +57,7 @@ def test_lagrangian_dataset_constructor(data_dir, device, pytestconfig):
     assert graph.y.shape[-1] > 0  # node targets
 
 
-@requires_module(["tensorflow", "dgl"])
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_lagrangian_dataset_constructor_dgl(data_dir, device, pytestconfig):
-    from physicsnemo.datapipes.gnn.lagrangian_dataset_dgl import LagrangianDataset
-
-    # Test successful construction
-    dataset = LagrangianDataset(
-        data_dir=data_dir,
-        split="valid",
-        num_sequences=2,  # Use a small number for testing
-        num_steps=10,  # Use a small number for testing
-    )
-
-    # iterate datapipe is iterable
-    common.check_datapipe_iterable(dataset)
-
-    # Test getting an item
-    graph = dataset[0]
-    # new DGL (2.4+) uses dgl.heterograph.DGLGraph, previous DGL is dgl.DGLGraph
-    assert isinstance(graph, dgl.DGLGraph) or isinstance(
-        graph, dgl.heterograph.DGLGraph
-    )
-
-    # Test graph properties
-    assert "x" in graph.ndata
-    assert "y" in graph.ndata
-    assert graph.ndata["x"].shape[-1] > 0  # node features
-    assert graph.ndata["y"].shape[-1] > 0  # node targets
-
-
-@requires_module(["tensorflow", "torch_geometric", "torch_scatter"])
+@requires_module(["torch_geometric", "torch_scatter"])
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_graph_construction(device, pytestconfig):
     from physicsnemo.datapipes.gnn.lagrangian_dataset import compute_edge_index

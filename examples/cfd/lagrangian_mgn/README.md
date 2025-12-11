@@ -80,11 +80,22 @@ command line or in the config file.
 
 ## Getting Started
 
-This example requires the `tensorflow` library to load the data in the `.tfrecord`
-format. Install with:
+This example uses the lightweight `tfrecord` package to load the data in the `.tfrecord`
+format.
+
+Install the requirements using:
 
 ```bash
-pip install "tensorflow<=2.17.1"
+pip install -r requirements.txt
+```
+
+For multi-worker DataLoader support, generate index files for the TFRecord files
+after downloading:
+
+```bash
+python -m tfrecord.tools.tfrecord2idx /data/Water/train.tfrecord /data/Water/train.tfindex
+python -m tfrecord.tools.tfrecord2idx /data/Water/valid.tfrecord /data/Water/valid.tfindex
+python -m tfrecord.tools.tfrecord2idx /data/Water/test.tfrecord /data/Water/test.tfindex
 ```
 
 To download the data from DeepMind's repo, run:

@@ -74,16 +74,21 @@ GPUs, leveraging data parallelism for 25 epochs.
 
 ## Prerequisites
 
-This example requires the `tensorflow` library to load the data in the `.tfrecord`
+This example uses the lightweight `tfrecord` package to load the data in the `.tfrecord`
 format.
-
-Note: If installing tensorflow inside the PhysicsNeMo docker container, it's recommended
-to use `pip install "tensorflow<=2.17.1"`
 
 Install the requirements using:
 
 ```bash
 pip install -r requirements.txt
+```
+
+For multi-worker DataLoader support, generate index files for the TFRecord files:
+
+```bash
+python -m tfrecord.tools.tfrecord2idx raw_dataset/cylinder_flow/train.tfrecord raw_dataset/cylinder_flow/train.tfindex
+python -m tfrecord.tools.tfrecord2idx raw_dataset/cylinder_flow/valid.tfrecord raw_dataset/cylinder_flow/valid.tfindex
+python -m tfrecord.tools.tfrecord2idx raw_dataset/cylinder_flow/test.tfrecord raw_dataset/cylinder_flow/test.tfindex
 ```
 
 ## Getting Started

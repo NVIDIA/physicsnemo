@@ -15,31 +15,20 @@
 # limitations under the License.
 
 # ruff: noqa: S101
-import functools
 import json
 import logging
 import os
 from collections.abc import Sequence
 from typing import Optional
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import Dataset
 from torch_geometric.data import Data as PyGData
 
-try:
-    import tensorflow.compat.v1 as tf
-except ImportError:
-    raise ImportError(
-        "Mesh Graph Net Datapipe requires the Tensorflow library. "
-        'Install: pip install "tensorflow<=2.17.1"'
-    )
-
-from .lagrangian_reading_utils import parse_serialized_simulation_example
-
-# Hide GPU from visible devices for TF
-tf.config.set_visible_devices([], "GPU")
+from tfrecord.torch.dataset import TFRecordDataset
 
 logger = logging.getLogger("lmgn")
 
@@ -185,20 +174,21 @@ class LagrangianDataset(Dataset):
 
         # Create the node features.
         logger.info(f"Preparing the {split} dataset...")
-        dataset_iterator = self._load_tf_data(self.data_dir, self.split)
+        tfrecord_dataset = self._load_tfrecord_dataset(self.data_dir, self.split)
         self.node_type = []
         self.rollout_mask = []
         self.node_features = []
-        for i in range(self.num_sequences):
-            data_np = dataset_iterator.get_next()
+        for i, data_np in enumerate(tfrecord_dataset):
+            if i >= self.num_sequences:
+                break
 
             position = torch.from_numpy(
-                data_np[1]["position"][: self.num_steps].numpy()
-            )  # (num_steps, num_particles, 2)
+                data_np["position"][: self.num_steps]
+            )  # (num_steps, num_particles, dim)
             assert position.shape[0] == self.num_steps, f"{self.num_steps=}, {i=}"
 
             node_type = torch.from_numpy(
-                data_np[0]["particle_type"].numpy()
+                data_np["particle_type"]
             )  # (num_particles,)
             assert node_type.shape[0] == position.shape[1], f"{i=}"
 
@@ -517,47 +507,111 @@ class LagrangianDataset(Dataset):
         """
         return torch.clamp(position, min=bounds[0] + eps, max=bounds[1] - eps)
 
-    def _load_tf_data(self, path, split):
-        """Loads TensorFlow dataset from path.
+    def _load_tfrecord_dataset(self, path, split):
+        """Load TFRecord dataset using the tfrecord package.
+
+        Utility for loading the .tfrecord dataset from DeepMind's Learning to Simulate:
+        https://github.com/google-deepmind/deepmind-research/tree/master/learning_to_simulate
 
         Parameters
         ----------
         path : str
-            Dataset path
+            Path to the directory containing TFRecord files and metadata.json.
         split : str
-            Dataset split
+            Dataset split name (e.g., "train", "valid", "test").
 
         Returns
         -------
-        tf.data.Iterator
-            Dataset iterator
-        """
-        dataset = self._load_dataset(path, split)
-        dataset_iterator = tf.data.make_one_shot_iterator(dataset)
-        return dataset_iterator
-
-    def _load_dataset(self, path, split):
-        """Creates TensorFlow dataset from TFRecord files.
-
-        Parameters
-        ----------
-        path : str
-            Dataset path
-        split : str
-            Dataset split
-
-        Returns
-        -------
-        tf.data.Dataset
-            Processed dataset
+        TFRecordDataset
+            An iterable dataset that yields decoded records.
         """
         with open(os.path.join(path, "metadata.json"), "r") as fp:
             meta = json.loads(fp.read())
-        dataset = tf.data.TFRecordDataset(os.path.join(path, split + ".tfrecord"))
-        return dataset.map(
-            functools.partial(parse_serialized_simulation_example, metadata=meta),
-            num_parallel_calls=8,
-        ).prefetch(tf.data.AUTOTUNE)
+
+        tfrecord_path = os.path.join(path, split + ".tfrecord")
+        # Check for index file (enables multi-worker DataLoader).
+        index_path = os.path.join(path, split + ".tfindex")
+        if not os.path.exists(index_path):
+            index_path = None
+
+        # Define context (static) feature description.
+        description = {
+            "key": "int",
+            "particle_type": "byte",
+        }
+
+        # Define sequence feature description for SequenceExample format.
+        sequence_description = {
+            "position": "byte",
+        }
+        if "context_mean" in meta:
+            sequence_description["step_context"] = "byte"
+
+        # Create dataset with transform to decode records.
+        dataset = TFRecordDataset(
+            tfrecord_path,
+            index_path,
+            description,
+            transform=lambda rec: self._decode_record(rec, meta),
+            sequence_description=sequence_description,
+        )
+        return dataset
+
+    @staticmethod
+    def _decode_record(rec: tuple, meta: dict) -> dict:
+        """Decode raw bytes from TFRecord SequenceExample into numpy arrays.
+
+        The tfrecord package parses the TFRecord and provides raw bytes
+        for each feature, which are decoded using numpy.
+
+        Parameters
+        ----------
+        rec : tuple
+            Tuple of (context_dict, sequence_dict) from tfrecord package.
+        meta : dict
+            Metadata dictionary containing sequence_length and dim.
+
+        Returns
+        -------
+        dict
+            Dictionary with 'position' and 'particle_type' arrays.
+        """
+        context, sequence = rec
+
+        # Decode particle_type from context (int64 encoded as bytes).
+        # Use .copy() to make array writable (np.frombuffer returns read-only view).
+        particle_type = np.frombuffer(context["particle_type"], dtype=np.int64).copy()
+
+        # Decode position from sequence features.
+        # Each element in sequence["position"] is bytes for one timestep.
+        position_list = []
+        for pos_bytes in sequence["position"]:
+            pos = np.frombuffer(pos_bytes, dtype=np.float32)
+            position_list.append(pos)
+
+        # Stack positions: shape (num_steps, num_particles * dim).
+        # np.stack creates a new writable array from the read-only views.
+        position = np.stack(position_list, axis=0)
+        # Reshape to (num_steps, num_particles, dim).
+        num_steps = position.shape[0]
+        dim = meta["dim"]
+        num_particles = position.shape[1] // dim
+        position = position.reshape(num_steps, num_particles, dim)
+
+        result = {
+            "position": np.ascontiguousarray(position),
+            "particle_type": particle_type,
+        }
+
+        # Handle optional step_context.
+        if "step_context" in sequence:
+            context_list = []
+            for ctx_bytes in sequence["step_context"]:
+                ctx = np.frombuffer(ctx_bytes, dtype=np.float32)
+                context_list.append(ctx)
+            result["step_context"] = np.ascontiguousarray(np.stack(context_list, axis=0))
+
+        return result
 
     def get_kinematic_mask(self, graph_idx: int) -> Tensor:
         """Returns mask for kinematic particles in a graph.
