@@ -185,14 +185,14 @@ def draw_mesh_matplotlib(
     elif mesh.n_spatial_dims == 3:
         ax.set_xlabel("x")
         ax.set_ylabel("y")
-        ax.set_zlabel("z")
+        ax.set_zlabel("z")  # ty: ignore[possibly-missing-attribute]
 
         ### Make 3D axes equal by adjusting limits to have same range
-        ax.set_box_aspect((1, 1, 1))
+        ax.set_box_aspect((1, 1, 1))  # ty: ignore[invalid-argument-type]
 
-        xlim = ax.get_xlim3d()
-        ylim = ax.get_ylim3d()
-        zlim = ax.get_zlim3d()
+        xlim = ax.get_xlim3d()  # ty: ignore[possibly-missing-attribute]
+        ylim = ax.get_ylim3d()  # ty: ignore[possibly-missing-attribute]
+        zlim = ax.get_zlim3d()  # ty: ignore[possibly-missing-attribute]
 
         x_range = abs(xlim[1] - xlim[0])
         x_middle = np.mean(xlim)
@@ -204,9 +204,9 @@ def draw_mesh_matplotlib(
         # Use the maximum range to ensure all axes have equal scale
         plot_radius = 0.5 * max([x_range, y_range, z_range])
 
-        ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])
-        ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])
-        ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])
+        ax.set_xlim3d([x_middle - plot_radius, x_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
+        ax.set_ylim3d([y_middle - plot_radius, y_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
+        ax.set_zlim3d([z_middle - plot_radius, z_middle + plot_radius])  # ty: ignore[possibly-missing-attribute]
 
     if show:
         plt.show()
