@@ -620,7 +620,15 @@ class Mesh:
             global_data=global_data,
         )
 
-    def slice_points(self, indices: int | slice | torch.Tensor) -> "Mesh":
+    def slice_points(
+        self,
+        indices: int
+        | slice
+        | type(Ellipsis)
+        | None
+        | torch.Tensor
+        | Sequence[int | bool],
+    ) -> "Mesh":
         """Returns a new Mesh with a subset of the points.
 
         Parameters
@@ -633,6 +641,8 @@ class Mesh:
         Mesh
             New Mesh with subset of points.
         """
+        if isinstance(indices, int):
+            indices = torch.tensor([indices], device=self.points.device)
         new_point_data: TensorDict = self.point_data[indices]  # type: ignore
         return Mesh(
             points=self.points[indices],
@@ -642,7 +652,15 @@ class Mesh:
             global_data=self.global_data,
         )
 
-    def slice_cells(self, indices: int | slice | torch.Tensor) -> "Mesh":
+    def slice_cells(
+        self,
+        indices: int
+        | slice
+        | type(Ellipsis)
+        | None
+        | torch.Tensor
+        | Sequence[int | bool | slice],
+    ) -> "Mesh":
         """Returns a new Mesh with a subset of the cells.
 
         Parameters
@@ -655,6 +673,8 @@ class Mesh:
         Mesh
             New Mesh with subset of cells.
         """
+        if isinstance(indices, int):
+            indices = torch.tensor([indices], device=self.cells.device)
         new_cell_data: TensorDict = self.cell_data[indices]  # type: ignore
         return Mesh(
             points=self.points,
