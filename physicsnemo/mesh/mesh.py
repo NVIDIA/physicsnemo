@@ -1131,8 +1131,13 @@ class Mesh:
             New Mesh with rotated geometry.
         """
         return rotate(
-            self, angle, axis, center,
-            transform_point_data, transform_cell_data, transform_global_data,
+            self,
+            angle,
+            axis,
+            center,
+            transform_point_data,
+            transform_cell_data,
+            transform_global_data,
         )
 
     def scale(
@@ -1172,8 +1177,12 @@ class Mesh:
             New Mesh with scaled geometry.
         """
         return scale(
-            self, factor, center,
-            transform_point_data, transform_cell_data, transform_global_data,
+            self,
+            factor,
+            center,
+            transform_point_data,
+            transform_cell_data,
+            transform_global_data,
             assume_invertible,
         )
 
@@ -1211,8 +1220,11 @@ class Mesh:
             New Mesh with transformed geometry.
         """
         return transform(
-            self, matrix,
-            transform_point_data, transform_cell_data, transform_global_data,
+            self,
+            matrix,
+            transform_point_data,
+            transform_cell_data,
+            transform_global_data,
             assume_invertible,
         )
 
