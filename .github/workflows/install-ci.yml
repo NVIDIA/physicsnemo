@@ -13,6 +13,8 @@ jobs:
   test-pip:
     name: Test with pip (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Only run pip tests for scheduled and manual dispatch jobs
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +44,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # For push/PR: only ubuntu. For schedule/manual: full matrix
+        os: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
         python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
 
     steps:
@@ -53,9 +56,14 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install uv
-      run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      uses: nick-fields/retry@v3
+      # uv download can be flaky.  Wrapping in a retry:
+      with:
+        timeout_minutes: 5
+        max_attempts: 3
+        command: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Install package with uv
       run: |
