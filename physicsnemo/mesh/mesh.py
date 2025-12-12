@@ -29,14 +29,14 @@ class Mesh:
     dimensions. Consider these familiar examples of an n-dimensional simplex
     (an **n-simplex**):
 
-    =========  ===========  =========================================
-               Common Name  Description
-    =========  ===========  =========================================
-    0-simplex  Point        A single vertex
-    1-simplex  Edge         Connects 2 points
-    2-simplex  Triangle     Connects 3 points; bounded by 3 edges
-    3-simplex  Tetrahedron  Connects 4 points; bounded by 4 triangles
-    =========  ===========  =========================================
+    =========  ====================  =========================================
+               Common Name           Description
+    =========  ====================  =========================================
+    0-simplex  Point                 A single vertex
+    1-simplex  Line Segment / Edge   Connects 2 points; boundary: 2 0-simplices
+    2-simplex  Triangle              Connects 3 points; boundary: 3 1-simplices
+    3-simplex  Tetrahedron           Connects 4 points; boundary: 4 2-simplices
+    =========  ====================  =========================================
 
     **Manifold Dimension**
 
