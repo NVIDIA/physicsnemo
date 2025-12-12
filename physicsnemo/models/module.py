@@ -541,7 +541,7 @@ class Module(torch.nn.Module):
                 with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                     tmp_path = tmp.name
 
-                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as archive:
                     # Save model state dict
                     state_dict_buffer = io.BytesIO()
                     torch.save(self.state_dict(), state_dict_buffer)

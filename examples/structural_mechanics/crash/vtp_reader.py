@@ -55,13 +55,14 @@ def extract_mesh_connectivity_from_polydata(poly: pv.PolyData):
 
 
 def load_vtp_file(vtp_path):
-    """Load positions over time and connectivity from a single VTP file.
+    """Load positions over time, connectivity, and other point data from a single VTP file.
 
     Expects displacement fields in point_data named like:
       - displacement_t0.000, displacement_t0.005, ..., displacement_t0.100
     Returns:
         pos_raw: (timesteps, num_nodes, 3) absolute positions (coords + displacement_t)
         mesh_connectivity: list[list[int]]
+        point_data_dict: dict of other point data arrays (e.g., thickness)
     """
     poly = pv.read(vtp_path)
     if not isinstance(poly, pv.PolyData):
@@ -104,7 +105,14 @@ def load_vtp_file(vtp_path):
 
     pos_raw = np.stack(pos_list, axis=0)
     mesh_connectivity = extract_mesh_connectivity_from_polydata(poly)
-    return pos_raw, mesh_connectivity
+
+    # Extract all other point data fields (not displacement fields)
+    point_data_dict = {}
+    for name in poly.point_data.keys():
+        if not name.startswith("displacement_"):
+            point_data_dict[name] = np.asarray(poly.point_data[name])
+
+    return pos_raw, mesh_connectivity, point_data_dict
 
 
 def build_edges_from_mesh_connectivity(mesh_connectivity):
@@ -178,7 +186,7 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
         output_dir = f"./output_{os.path.splitext(os.path.basename(vtp_path))[0]}"
         os.makedirs(output_dir, exist_ok=True)
 
-        pos_raw, mesh_connectivity = load_vtp_file(vtp_path)
+        pos_raw, mesh_connectivity, point_data_dict = load_vtp_file(vtp_path)
 
         # Use unfiltered data
         filtered_pos_raw = pos_raw
@@ -200,7 +208,11 @@ def process_vtp_data(data_dir, num_samples=2, write_vtp=False, logger=None):
             write_vtp=write_vtp,
             logger=logger,
         )
-        point_data_all.append({"coords": mesh_pos_all})
+
+        # Create record with coords and all other point data fields
+        record = {"coords": mesh_pos_all}
+        record.update(point_data_dict)  # Add thickness and any other fields
+        point_data_all.append(record)
 
         processed_runs += 1
         if processed_runs >= num_samples:
@@ -225,7 +237,7 @@ class Reader:
         logger=None,
         **kwargs,
     ):
-        write_vtp = False if split == "train" else True
+        write_vtp = False if split in ("train", "validation") else True
         return process_vtp_data(
             data_dir=data_dir,
             num_samples=num_samples,

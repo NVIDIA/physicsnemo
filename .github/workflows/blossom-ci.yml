@@ -62,7 +62,8 @@ jobs:
            github.actor == 'peterdsharpe' ||
            github.actor == 'coreyjadams' ||
            github.actor == 'CharlelieLrt' ||
-           github.actor == 'abokov-nv'
+           github.actor == 'abokov-nv' ||
+           github.actor == 'saikrishnanc-nv'
          )  
     steps:
       - name: Check if comment is issued by authorized person

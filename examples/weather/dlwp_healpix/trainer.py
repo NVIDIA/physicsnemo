@@ -53,6 +53,7 @@ class Trainer:
         device: torch.device = torch.device("cpu"),
         output_dir: str = "/outputs/",
         max_norm: float = None,
+        checkpoint_dir: str = None,
     ):
         """
         Constructor.
@@ -105,6 +106,10 @@ class Trainer:
             num_shards=self.dist.world_size, shard_id=self.dist.rank
         )
         self.output_dir_tb = os.path.join(output_dir, "tensorboard")
+        if checkpoint_dir is None:
+            self.checkpoint_dir = os.path.join(self.output_dir_tb, "checkpoints")
+        else:
+            self.checkpoint_dir = checkpoint_dir
 
         # set the other parameters
         self.optimizer = optimizer
@@ -524,7 +529,7 @@ class Trainer:
                         iteration,
                         validation_error,
                         epochs_since_improved,
-                        self.output_dir_tb,
+                        self.checkpoint_dir,
                     ),
                 )
                 thread.start()

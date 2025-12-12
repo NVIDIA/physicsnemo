@@ -14,29 +14,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-defaults:
-  - _self_
-  - data: era5_hpx32_dlom_sst-z1000-ws_48H-dt
-  - model: coupled_hpx_unet_dlom
-  - trainer: dlom
+# Data processing and loading utilities
 
-experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}
-output_dir: outputs/${experiment_name}
-# checkpoints names are in the form training-state-<name>.mdlus
-checkpoint_name: last
-load_weights_only: false
-seed: 0
+# Import data processing utilities
+from .graph_builder import ReservoirGraphBuilder
+from sim_utils import EclReader, Grid, Well, Completion
+from .dataloader import (
+    GraphDataset,
+    create_dataloader,
+    load_stats,
+    find_pt_files,
+    custom_collate_fn,
+)
 
-# Training specifications
-batch_size: 64
-learning_rate: 1e-4
-num_workers: 8
-
-# Distributed setup (multi GPU)
-port: 29450
-master_address: localhost
-
-hydra:
-  verbose: true
-  run:
-    dir: ${output_dir}
+__all__ = [
+    # Data processing
+    "ReservoirGraphBuilder",
+    "EclReader",
+    "Grid",
+    "Well",
+    "Completion",
+    # Data loading
+    "GraphDataset",
+    "create_dataloader",
+    "load_stats",
+    "find_pt_files",
+    "custom_collate_fn",
+]

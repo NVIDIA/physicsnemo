@@ -25,6 +25,8 @@ profiles:
         region_name: us-west-2
         base_path: cmip6-pds
         signature_version: UNSIGNED
+        rust_client:
+          skip_signature: True
 cache:
   location: /tmp/.cache
   size_mb: 5000

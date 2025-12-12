@@ -330,8 +330,8 @@ def main(cfg: DictConfig) -> None:
     # initialize loggers
     if dist.rank == 0:
         initialize_wandb(
-            project="GraphCast",
-            entity="PhysicsNeMo",
+            project=cfg.get("wb_project", "GraphCast"),
+            entity=cfg.get("wb_entity", "PhysicsNeMo"),
             name=f"GraphCast-{HydraConfig.get().job.name}",
             group="group",
             mode=cfg.wb_mode,

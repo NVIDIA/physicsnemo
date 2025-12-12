@@ -467,3 +467,171 @@ class FIGConvUNetTimeConditionalRollout(FIGConvUNet):
             outputs.append(y_t)
 
         return torch.stack(outputs, dim=0)  # [T, N, 3]
+
+
+class FIGConvUNetOneStepRollout(FIGConvUNet):
+    """
+    FIGConvUNet with one-step rollout for crash simulation.
+
+    - Training: teacher forcing (uses GT positions at each step)
+    - Inference: autoregressive (uses predictions)
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.dt: float = kwargs.pop("dt", 5e-3)
+        self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
+        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+        super().__init__(*args, **kwargs)
+
+    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+        """
+        Args:
+            Sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [T, N, 3] rollout of predicted positions
+        """
+        inputs = sample.node_features
+        x0 = inputs["coords"]  # initial pos [N, 3]
+        features = inputs.get("features", x0.new_zeros((x0.size(0), 0)))  # [N, F]
+
+        # Ground truth sequence [T, N, 3]
+        N = x0.size(0)
+        gt_seq = torch.cat(
+            [x0.unsqueeze(0), sample.node_target.view(N, -1, 3).transpose(0, 1)],
+            dim=0,
+        )
+
+        outputs: list[torch.Tensor] = []
+        # First step: backstep to create y_-1
+        y_t0 = gt_seq[0] - self.initial_vel * self.dt
+        y_t1 = gt_seq[0]
+
+        for t in range(self.rollout_steps):
+            # In training mode (except first step), use ground truth positions
+            if self.training and t > 0:
+                y_t0, y_t1 = gt_seq[t - 1], gt_seq[t]
+
+            # Prepare vertices for FIGConvUNet: [1, N, 3]
+            vertices = y_t1.unsqueeze(0)  # [1, N, 3]
+
+            vel = (y_t1 - y_t0) / self.dt
+            vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
+                data_stats["node"]["norm_vel_std"] + EPS
+            )
+
+            # [1, N, 3 + F]
+            fx_t = torch.cat([vel_norm, features], dim=-1).unsqueeze(0)
+
+            def step_fn(verts, feats):
+                out, _ = super(FIGConvUNetOneStepRollout, self).forward(
+                    vertices=verts, features=feats
+                )
+                return out
+
+            if self.training:
+                outf = ckpt(
+                    step_fn,
+                    vertices,
+                    fx_t,
+                    use_reentrant=False,
+                ).squeeze(0)  # [N, 3]
+            else:
+                outf = step_fn(vertices, fx_t).squeeze(0)  # [N, 3]
+
+            acc = (
+                outf * data_stats["node"]["norm_acc_std"]
+                + data_stats["node"]["norm_acc_mean"]
+            )
+            vel_pred = self.dt * acc + vel
+            y_t2_pred = self.dt * vel_pred + y_t1
+
+            outputs.append(y_t2_pred)
+
+            if not self.training:
+                # autoregressive update for inference
+                y_t0, y_t1 = y_t1, y_t2_pred
+
+        return torch.stack(outputs, dim=0)  # [T, N, 3]
+
+
+class FIGConvUNetAutoregressiveRolloutTraining(FIGConvUNet):
+    """
+    FIGConvUNet with autoregressive rollout training for crash simulation.
+
+    Predicts sequence by autoregressively updating velocity and position
+    using predicted accelerations. Supports gradient checkpointing during training.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.dt: float = kwargs.pop("dt")
+        self.initial_vel: torch.Tensor = kwargs.pop("initial_vel")
+        self.rollout_steps: int = kwargs.pop("num_time_steps") - 1
+        super().__init__(*args, **kwargs)
+
+    def forward(self, sample: SimSample, data_stats: dict) -> torch.Tensor:
+        """
+        Args:
+            sample: SimSample containing node_features and node_target
+            data_stats: dict containing normalization stats
+        Returns:
+            [T, N, 3] rollout of predicted positions
+        """
+        inputs = sample.node_features
+        coords = inputs["coords"]  # [N, 3]
+        features = inputs.get("features", coords.new_zeros((coords.size(0), 0)))
+        N = coords.size(0)
+        device = coords.device
+
+        # Initial states
+        y_t1 = coords  # [N, 3]
+        y_t0 = y_t1 - self.initial_vel * self.dt  # backstep using initial velocity
+
+        outputs: list[torch.Tensor] = []
+        for t in range(self.rollout_steps):
+            time_t = 0.0 if self.rollout_steps <= 1 else t / (self.rollout_steps - 1)
+            time_t = torch.tensor([time_t], device=device, dtype=torch.float32)
+
+            # Velocity normalization
+            vel = (y_t1 - y_t0) / self.dt
+            vel_norm = (vel - data_stats["node"]["norm_vel_mean"]) / (
+                data_stats["node"]["norm_vel_std"] + EPS
+            )
+
+            # Prepare vertices for FIGConvUNet: [1, N, 3]
+            vertices = y_t1.unsqueeze(0)  # [1, N, 3]
+
+            # Prepare features: vel_norm + features + time [N, 3+F+1]
+            fx_t = torch.cat(
+                [vel_norm, features, time_t.expand(N, 1)], dim=-1
+            )  # [N, 3+F+1]
+            fx_t = fx_t.unsqueeze(0)  # [1, N, 3+F+1]
+
+            def step_fn(verts, feats):
+                out, _ = super(FIGConvUNetAutoregressiveRolloutTraining, self).forward(
+                    vertices=verts, features=feats
+                )
+                return out
+
+            if self.training:
+                outf = ckpt(
+                    step_fn,
+                    vertices,
+                    fx_t,
+                    use_reentrant=False,
+                ).squeeze(0)  # [N, 3]
+            else:
+                outf = step_fn(vertices, fx_t).squeeze(0)  # [N, 3]
+
+            # De-normalize acceleration
+            acc = (
+                outf * data_stats["node"]["norm_acc_std"]
+                + data_stats["node"]["norm_acc_mean"]
+            )
+            vel = self.dt * acc + vel
+            y_t2 = self.dt * vel + y_t1
+
+            outputs.append(y_t2)
+            y_t1, y_t0 = y_t2, y_t1
+
+        return torch.stack(outputs, dim=0)  # [T, N, 3]

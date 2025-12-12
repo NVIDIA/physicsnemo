@@ -54,16 +54,21 @@ class OptimizerConfig:
 
     Attributes
     ----------
-    optimizer_cls: type[Optimizer]
-        The optimizer class to use. Defaults to AdamW.
-    optimizer_kwargs: dict[str, Any]
+    optimizer_cls: type
+        The optimizer class to use. Defaults to `AdamW`.
+    optimizer_kwargs: dict
         Keyword arguments to pass to the optimizer constructor.
         Defaults to {"lr": 1e-4}.
-    scheduler_cls: type[_LRScheduler] | None
+    scheduler_cls: type or None
         The learning rate scheduler class to use. If None, no
         scheduler will be configured.
-    scheduler_kwargs: dict[str, Any]
+    scheduler_kwargs: dict
         Keyword arguments to pass to the scheduler constructor.
+
+    See Also
+    --------
+    TrainingConfig : Uses this config for optimizer setup
+    Driver : Configures optimizer using this config
     """
 
     optimizer_cls: type[Optimizer] = AdamW
@@ -160,25 +165,32 @@ class TrainingConfig:
 
     Attributes
     ----------
-    train_datapool: p.DataPool
+    train_datapool: :class:`~physicsnemo.active_learning.protocols.DataPool`
         The pool of labeled data to use for training.
     max_training_epochs: int
         The maximum number of epochs to train for. If ``max_fine_tuning_epochs``
         isn't specified, this value is used for all active learning steps.
-    val_datapool: p.DataPool | None
+    val_datapool: :class:`~physicsnemo.active_learning.protocols.DataPool` or None
         Optional pool of data to use for validation during training.
-    optimizer_config: OptimizerConfig
+    optimizer_config: :class:`OptimizerConfig`
         Configuration for the optimizer and scheduler. Defaults to
         AdamW with lr=1e-4, no scheduler.
-    max_fine_tuning_epochs: int | None
+    max_fine_tuning_epochs: int or None
         The maximum number of epochs used during fine-tuning steps, i.e. after
-        the first active learning step. If ``None``, then the fine-tuning will
+        the first active learning step. If None, then the fine-tuning will
         be performed for the duration of the active learning loop.
-    train_loop_fn: p.TrainingLoop
+    train_loop_fn: :class:`~physicsnemo.active_learning.protocols.TrainingLoop`
         The training loop function that orchestrates the training process.
-        This defaults to a concrete implementation, ``DefaultTrainingLoop``,
+        This defaults to a concrete implementation, :class:`~physicsnemo.active_learning.loop.DefaultTrainingLoop`,
         which provides a very typical loop that includes the use of static
         capture, etc.
+
+    See Also
+    --------
+    Driver : Uses this config for training
+    OptimizerConfig : Optimizer configuration
+    StrategiesConfig : Strategies configuration
+    DefaultTrainingLoop : Default training loop implementation
     """
 
     train_datapool: p.DataPool
@@ -325,20 +337,29 @@ class StrategiesConfig:
 
     Attributes
     ----------
-    query_strategies: list[p.QueryStrategy]
-        The query strategies to use for selecting data to label.
-    queue_cls: type[p.AbstractQueue]
+    query_strategies: list
+        The query strategies to use for selecting data to label. Each element should be a
+        :class:`~physicsnemo.active_learning.protocols.QueryStrategy` instance.
+    queue_cls: type
         The queue implementation to use for passing data between
-        query and labeling phases.
-    label_strategy: p.LabelStrategy | None
+        query and labeling phases. Should implement :class:`~physicsnemo.active_learning.protocols.AbstractQueue`.
+    label_strategy: :class:`~physicsnemo.active_learning.protocols.LabelStrategy` or None
         The strategy to use for labeling queried data. If None,
         labeling will be skipped.
-    metrology_strategies: list[p.MetrologyStrategy] | None
-        Strategies for measuring model performance and uncertainty.
+    metrology_strategies: list or None
+        Strategies for measuring model performance and uncertainty. Each element should be a
+        :class:`~physicsnemo.active_learning.protocols.MetrologyStrategy` instance.
         If None, metrology will be skipped.
-    unlabeled_datapool: p.DataPool | None
+    unlabeled_datapool: :class:`~physicsnemo.active_learning.protocols.DataPool` or None
         Pool of unlabeled data that query strategies can sample from.
         Not all strategies require this (some may generate synthetic data).
+
+    See Also
+    --------
+    Driver : Uses this config for strategy orchestration
+    QueryStrategy : Query strategy protocol
+    LabelStrategy : Label strategy protocol
+    MetrologyStrategy : Metrology strategy protocol
     """
 
     query_strategies: list[p.QueryStrategy]
@@ -534,50 +555,58 @@ class DriverConfig:
     ----------
     batch_size: int
         The batch size to use for data loaders.
-    max_active_learning_steps: int | None, default None
+    max_active_learning_steps: int or None
         Maximum number of AL iterations to perform. None means infinite.
-    run_id: str, default auto-generated UUID
+    run_id: str
         Unique identifier for this run. Auto-generated if not provided.
-    fine_tuning_lr: float | None, default None
+    fine_tuning_lr: float or None
         Learning rate to switch to after the first AL step for fine-tuning.
-    reset_optim_states: bool, default True
-        Whether to reset optimizer states between AL steps.
-    skip_training: bool, default False
-        If True, skip the training phase entirely.
-    skip_metrology: bool, default False
-        If True, skip the metrology phase entirely.
-    skip_labeling: bool, default False
-        If True, skip the labeling phase entirely.
-    checkpoint_interval: int, default 1
-        Save model checkpoint every N AL steps. 0 disables checkpointing.
-    checkpoint_on_training: bool, default False
-        If True, save checkpoint at the start of the training phase.
-    checkpoint_on_metrology: bool, default False
-        If True, save checkpoint at the start of the metrology phase.
-    checkpoint_on_query: bool, default False
-        If True, save checkpoint at the start of the query phase.
-    checkpoint_on_labeling: bool, default True
-        If True, save checkpoint at the start of the labeling phase.
-    model_checkpoint_frequency: int, default 0
+    reset_optim_states: bool
+        Whether to reset optimizer states between AL steps. Defaults to True.
+    skip_training: bool
+        If True, skip the training phase entirely. Defaults to False.
+    skip_metrology: bool
+        If True, skip the metrology phase entirely. Defaults to False.
+    skip_labeling: bool
+        If True, skip the labeling phase entirely. Defaults to False.
+    checkpoint_interval: int
+        Save model checkpoint every N AL steps. 0 disables checkpointing. Defaults to 1.
+    checkpoint_on_training: bool
+        If True, save checkpoint at the start of the training phase. Defaults to False.
+    checkpoint_on_metrology: bool
+        If True, save checkpoint at the start of the metrology phase. Defaults to False.
+    checkpoint_on_query: bool
+        If True, save checkpoint at the start of the query phase. Defaults to False.
+    checkpoint_on_labeling: bool
+        If True, save checkpoint at the start of the labeling phase. Defaults to True.
+    model_checkpoint_frequency: int
         Save model weights every N epochs during training. 0 means only save
-        between active learning phases. Useful for mid-training restarts.
-    root_log_dir: str | Path, default Path.cwd() / "active_learning_logs"
+        between active learning phases. Useful for mid-training restarts. Defaults to 0.
+    root_log_dir: str or :class:`pathlib.Path`
         Directory to save logs and checkpoints to. Defaults to
         an 'active_learning_logs' directory in the current working directory.
-    dist_manager: DistributedManager | None, default None
+    dist_manager: :class:`~physicsnemo.distributed.DistributedManager` or None
         Manager for distributed training configuration.
-    collate_fn: callable | None, default None
+    collate_fn: callable or None
         Custom collate function for batching data.
-    num_dataloader_workers: int, default 0
-        Number of worker processes for data loading.
-    device: str | torch.device | None, default None
+    num_dataloader_workers: int
+        Number of worker processes for data loading. Defaults to 0.
+    device: str or `torch.device` or None
         Device to use for model and data. This is intended for single process
         workflows; for distributed workflows, the device should be set in
-        ``DistributedManager`` instead. If not specified, then the device
+        :class:`~physicsnemo.distributed.DistributedManager` instead. If not specified, then the device
         will default to ``torch.get_default_device()``.
-    dtype: torch.dtype | None, default None
+    dtype: `torch.dtype` or None
         The dtype to use for model and data, and AMP contexts. If not provided,
         then the dtype will default to ``torch.get_default_dtype()``.
+
+    See Also
+    --------
+    Driver : Uses this config for orchestration
+    TrainingConfig : Training configuration
+    StrategiesConfig : Strategies configuration
+    DataPool : Data pool protocol
+    AbstractQueue : Queue protocol
     """
 
     batch_size: int

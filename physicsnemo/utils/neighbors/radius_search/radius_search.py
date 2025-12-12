@@ -60,6 +60,10 @@ def radius_search(
     the outputs may be ordered differently by the two backends.  Do not rely on the exact order of
     the neighbors in the outputs.
 
+    Note:
+        With the Warp backend, there will be an automatic casting of inputs to float32 from reduced precision,
+        and results will be returned in their original precision.
+
     Args:
         points (torch.Tensor): The reference point cloud tensor of shape (N, 3) where N is the number
             of points.

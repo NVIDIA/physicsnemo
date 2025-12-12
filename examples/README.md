@@ -70,6 +70,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Medium-range global weather forecast using Mixture of Experts](./weather/mixture_of_experts/)|MoE Model|
 |[Generative Data Assimilation of Sparse Weather Observations](./weather/regen/)|Denoising Diffusion Model|
 |[Flood Forecasting](./weather/flood_modeling/)|GNN + KAN|
+|[Temporal Interpolation of Weather Forecasts](./weather/temporal_interpolation/)|ModAFNO|
 
 ### Structural Mechanics
 
