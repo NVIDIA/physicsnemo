@@ -56,9 +56,9 @@ def perlin_noise_nd(
     device = points.device
     n_dims = points.shape[-1]
 
-    ### Create permutation table from seed
-    torch.manual_seed(seed)
-    perm = torch.randperm(256, dtype=torch.long, device=device)
+    ### Create permutation table from seed (using local generator to avoid global state mutation)
+    generator = torch.Generator(device=device).manual_seed(seed)
+    perm = torch.randperm(256, dtype=torch.long, device=device, generator=generator)
     perm = torch.cat([perm, perm])  # Duplicate for wrapping
 
     ### Scale points and decompose into lattice + fractional parts
