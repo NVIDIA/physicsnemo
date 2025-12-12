@@ -547,7 +547,8 @@ class Mesh:
         Parameters
         ----------
         meshes : Sequence[Mesh]
-            List of Mesh objects to merge.
+            List of Mesh objects to merge. All constituent tensors across all
+            meshes must reside on the same device.
         global_data_strategy : {"stack"}
             Strategy for handling global_data. Currently only "stack" is supported,
             which stacks global_data fields along a new dimension.
@@ -564,6 +565,8 @@ class Mesh:
             or cell_data keys.
         TypeError
             If any element in meshes is not a Mesh object.
+        RuntimeError
+            If tensors from different meshes reside on different devices.
         """
         ### Validate inputs
         if not torch.compiler.is_compiling():
