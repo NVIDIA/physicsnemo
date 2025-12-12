@@ -191,7 +191,9 @@ class Mesh:
 
         # For data fields, convert inputs to TensorDicts if needed
         if isinstance(point_data, TensorDict):
-            point_data.batch_size = torch.Size([self.n_points])  # Ensure shape-compatible
+            point_data.batch_size = torch.Size(
+                [self.n_points]
+            )  # Ensure shape-compatible
         else:
             point_data = TensorDict(
                 {} if point_data is None else dict(point_data),
