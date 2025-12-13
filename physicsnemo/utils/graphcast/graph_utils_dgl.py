@@ -130,7 +130,7 @@ def add_edge_features(graph: DGLGraph, pos: Tensor, normalize: bool = True) -> D
     try:
         testing.assert_close(dst_pos[:, 1], torch.zeros_like(dst_pos[:, 1]))
     except ValueError:
-        raise ValueError("Invalid projection of edge nodes to local ccordinate system")
+        raise ValueError("Invalid projection of edge nodes to local coordinate system")
     src_pos = geospatial_rotation(src_pos, theta=theta_polar, axis="y", unit="rad")
     dst_pos = geospatial_rotation(dst_pos, theta=theta_polar, axis="y", unit="rad")
     # x values should be one, y & z values should be zero
@@ -139,7 +139,7 @@ def add_edge_features(graph: DGLGraph, pos: Tensor, normalize: bool = True) -> D
         testing.assert_close(dst_pos[:, 1], torch.zeros_like(dst_pos[:, 1]))
         testing.assert_close(dst_pos[:, 2], torch.zeros_like(dst_pos[:, 2]))
     except ValueError:
-        raise ValueError("Invalid projection of edge nodes to local ccordinate system")
+        raise ValueError("Invalid projection of edge nodes to local coordinate system")
 
     # prepare edge features
     disp = src_pos - dst_pos

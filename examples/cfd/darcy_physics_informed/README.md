@@ -12,7 +12,7 @@ the equation residual loss. [PhysicsNeMo Sym](https://github.com/NVIDIA/physicsn
 has utilities tailored for physics-informed machine learning. It also presents an
 abstracted APIs that allows users to think and model the problem from the lens of
 equations, constraints, etc. In this example, we will only levarage the physics-informed
-utilites to see how we can add physics to an existing data-driven model with ease while
+utilities to see how we can add physics to an existing data-driven model with ease while
 still maintaining the flexibility to define our own training loop and other details.
 For a more abstracted definition of these type of problems, where the training loop
 definition and other things is taken care of implictily, you may refer
@@ -31,7 +31,7 @@ python download_data.py
 
 Do demonstrate the usefulness of the Physics loss, we will deliberately choose a smaller
 dataset size of 100 samples. In such regiemes, the effect of physics loss is more
-evident, as it regularizes the model in the absense of large data.
+evident, as it regularizes the model in the absence of large data.
 
 ## Model overview and architecture
 
@@ -52,7 +52,7 @@ and contrast the two approaches.
 
 In this example we will use the `PDE` class from PhysicsNeMo-Sym to symbolically define
 the PDEs and use the `PhysicsInformer` utility to introduce the PDE
-constraints. Defining the PDEs sympolically is very convinient and most natural way to
+constraints. Defining the PDEs sympolically is very convenient and most natural way to
 define these PDEs and allows us to print the equations to check for correctness.
 This also abstracts out the
 complexity of converting the equation into a pytorch representation. PhysicsNeMo Sym also
@@ -65,14 +65,14 @@ applications.
 To get started with the example, simply run,
 
 ```bash
-python 
+python
 darcy_physics_informed_deeponet.py
 ```
 
 or
 
 ```bash
-python 
+python
 darcy_physics_informed_fno.py
 ```
 

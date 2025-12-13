@@ -24,8 +24,8 @@ with irregular triangle 2D meshes, each for 401 time steps with a time step size
 
 The model is auto-regressive. It first encodes the graph state into a latent vector
 via a Graph
-Nueral Network. Then a multi-head temporal model takes the initial condition tokens
-and pysical paramerters
+Neural Network. Then a multi-head temporal model takes the initial condition tokens
+and physical parameters
 as the input and predicts the solution for the following sequence in the latent space
 just like a language model.
 
