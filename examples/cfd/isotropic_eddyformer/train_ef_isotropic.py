@@ -1,23 +1,28 @@
 import hydra
+from tqdm import tqdm
+
 from typing import Tuple
 from torch import Tensor
 from omegaconf import DictConfig
 
 import os
+import collections
 import numpy as np
 
 import torch
 from torch.optim import Adam
-from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.parallel import DistributedDataParallel
 
 from physicsnemo.models.eddyformer import EddyFormer, EddyFormerConfig
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.utils import StaticCaptureTraining
+from physicsnemo.utils import StaticCaptureTraining, StaticCaptureEvaluateNoGrad
 from physicsnemo.launch.utils import save_checkpoint
 from physicsnemo.launch.logging import PythonLogger, LaunchLogger
 
+
+def rel_l2(pred: Tensor, target: Tensor) -> Tensor:
+    return torch.linalg.norm(pred - target) / torch.linalg.norm(target)
 
 class Re94(Dataset):
 
@@ -27,12 +32,16 @@ class Re94(Dataset):
     n: int = 50
     dt: float = 0.1
 
-    def __init__(self, root: str, split: str, *, t: float = 0.5) -> None:
+    def __init__(self, root: str, split: str, *, t: float = 0.5,
+                 n: int = 50, dt: float = 0.1) -> None:
         """
         """
         super().__init__()
         self.root = root
         self.t = t
+
+        self.n = n
+        self.dt = dt
 
         self.file = []
         for fname in sorted(os.listdir(root)):
@@ -57,6 +66,12 @@ class Re94(Dataset):
 
         data = np.load(f"{self.root}/{self.file[file_idx]}", allow_pickle=True).item()
         return torch.from_numpy(data["u"][time_idx]), torch.from_numpy(data["u"][time_idx + self.stride])
+
+    def metric(self, pred: Tensor, target: Tensor) -> dict[str, float]:
+        """
+        """
+        l2 = [rel_l2(pred[..., i], target[..., i]).item() for i in range(3)]
+        return { f"err_{ax}": value for ax, value in (zip("xyz", l2)) }
 
 @hydra.main(version_base="1.3", config_path=".", config_name="config.yaml")
 def isotropic_trainer(cfg: DictConfig) -> None:
@@ -110,27 +125,37 @@ def isotropic_trainer(cfg: DictConfig) -> None:
     dataset = Re94(root=cfg.training.dataset, split="train", t=cfg.training.t)
     dataloader = DataLoader(dataset, cfg.training.batch_size, shuffle=True)
 
-    testset = Re94(root=cfg.training.dataset, split="test", t=cfg.training.t)
-    testloader = DataLoader(testset)
-
-    # define relative l2 error as the loss function
-    def loss_fun(pred: Tensor, target: Tensor) -> Tensor:
-        return torch.linalg.norm(pred - target) / torch.linalg.norm(target)
+    testset = Re94(root=cfg.training.dataset, split="test", t=cfg.training.t, n=40, dt=0.5)
+    testloader = DataLoader(testset, batch_size=None)
 
     # define training step
     @StaticCaptureTraining(
         model=model,
         optim=optimizer,
         logger=log,
+        use_graphs=False,
         use_amp=cfg.training.amp,
-        use_graphs=False
+        compile=cfg.training.compile
     )
     def training_step(input: Tensor, target: Tensor) -> Tensor:
         pred = torch.vmap(model)(input)
-        loss = torch.vmap(loss_fun)(pred, target)
+        loss = torch.vmap(rel_l2)(pred, target)
         return torch.mean(loss)
 
+    # define evaluation step
+    @StaticCaptureEvaluateNoGrad(
+        model=model,
+        logger=log,
+        use_graphs=False,
+        use_amp=cfg.training.amp,
+        compile=cfg.training.compile
+    )
+    def forward_eval(input):
+        return model(input)
+
     it = 0
+
+    model.train()
     log.info("Training started")
 
     for epoch in range(cfg.training.num_epochs):
@@ -145,6 +170,27 @@ def isotropic_trainer(cfg: DictConfig) -> None:
 
             if it and it % cfg.training.ckpt_every == 0 and dist.rank == 0:
                 save_checkpoint(f"{cfg.training.result_dir}/ckpt.pt", model, optimizer, epoch=it)
+
+            if it and it % cfg.training.test_every == 0:
+
+                model.eval()
+                metrics = collections.defaultdict(float)
+
+                for input, target in tqdm(testloader, desc="Test"):
+
+                    input = input.to(dist.device)
+                    target = target.to(dist.device)
+
+                    pred = forward_eval(input)
+                    metric = testset.metric(pred, target)
+
+                    for key, value in metric.items():
+                        metrics[key] += value / len(testset)
+
+                with LaunchLogger("test", epoch=epoch) as logger:
+                    logger.log_minibatch(metrics)
+
+                model.train()
 
     log.success("Training completed")
     save_checkpoint(f"{cfg.training.result_dir}/ckpt.pt", model, optimizer)

@@ -21,7 +21,9 @@ training:
   result_dir: outputs/ef-leg-re94
   t: 0.5
   amp: false
+  compile: true
   batch_size: 4
   num_epochs: 1
   learning_rate: 1e-3
+  test_every: 100
   ckpt_every: 1000

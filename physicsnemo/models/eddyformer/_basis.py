@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 
 import numpy as np
-import functools
 
 class Basis(Protocol):
 
@@ -96,10 +95,10 @@ class Legendre(nn.Module, Basis):
     def modal(self, vals: Tensor) -> Tensor:
         norm = 2 * torch.arange(self.m, device=vals.device) + 1
         coef = self.f * norm * self.quad[:, None]
-        return torch.tensordot(coef.T, vals, dims=1)
+        return torch.tensordot(coef.to(vals.dtype).T, vals, dims=1)
 
     def nodal(self, coef: Tensor) -> Tensor:
-        return Legendre.at(self, coef, self.grid)
+        return Legendre.at(self, coef, self.grid.to(coef.dtype))
 
 class LegendreSEM(Legendre):
 
@@ -119,17 +118,17 @@ class LegendreSEM(Legendre):
     def modal(self, vals: Tensor) -> Tensor:
         """
         """
-        xs = self.grid
+        xs = self.grid.to(vals.dtype)
         for _ in range(vals.ndim - 1):
             xs = xs.unsqueeze(-1)
 
         coef = super().modal(vals - (1 - xs) * vals[0] - xs * vals[-1])[:-2]
-        return torch.concat([vals[[0, -1], ...], torch.tensordot(self.inv, coef, 1)], axis=0)
+        return torch.concat([vals[[0, -1], ...], torch.tensordot(self.inv.to(coef.dtype), coef, 1)], axis=0)
 
     def nodal(self, coef: Tensor) -> Tensor:
         """
         """
-        xs = self.grid
+        xs = self.grid.to(coef.dtype)
         for _ in range(coef.ndim - 1):
             xs = xs.unsqueeze(-1)
 

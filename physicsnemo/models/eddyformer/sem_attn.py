@@ -73,5 +73,8 @@ class SEMAttn(Module):
         """
         q, k, v = (self.project(ϕ, name) for name in "QKV")
 
+        q = q.to(v.dtype)
+        k = k.to(v.dtype)
+
         attn = nn.functional.scaled_dot_product_attention(q, k, v)
         return ϕ.new(self.out(attn.reshape(*ϕ.mode, *ϕ.mesh, -1)))
