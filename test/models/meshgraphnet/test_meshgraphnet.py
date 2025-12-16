@@ -19,26 +19,34 @@ import random
 import sys
 
 import numpy as np
-import pytest
 import torch
+import torch_geometric as pyg
 
 script_path = os.path.abspath(__file__)
 sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
 
 from test import common
-from test.conftest import requires_module
-
-dgl = pytest.importorskip("dgl")
 
 
-@requires_module("dgl")
+def rand_graph(num_nodes, num_edges, device=None):
+    """Create a random graph."""
+    src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
+    dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
+    graph = pyg.data.Data(
+        edge_index=torch.stack([src, dst], dim=0),
+        num_nodes=num_nodes,
+    )
+    if device is not None:
+        graph = graph.to(device)
+    return graph
+
+
 def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet forward pass"""
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
 
     torch.manual_seed(0)
-    dgl.seed(0)
     np.random.seed(0)
     # Construct MGN model
     model = MeshGraphNet(
@@ -55,10 +63,15 @@ def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     for _ in range(bsize):
         src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
         dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
-        graphs.append(dgl.graph((src, dst)).to(device))
-    graph = dgl.batch(graphs)
-    node_features = torch.randn(graph.num_nodes(), 4).to(device)
-    edge_features = torch.randn(graph.num_edges(), 3).to(device)
+        graphs.append(
+            pyg.data.Data(
+                edge_index=torch.stack([src, dst], dim=0),
+                num_nodes=num_nodes,
+            ).to(device)
+        )
+    graph = pyg.data.Batch.from_data_list(graphs)
+    node_features = torch.randn(graph.num_nodes, 4).to(device)
+    edge_features = torch.randn(graph.num_edges, 3).to(device)
     assert common.validate_forward_accuracy(
         model,
         (node_features, edge_features, graph),
@@ -66,7 +79,6 @@ def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
     )
 
 
-@requires_module("dgl")
 def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet constructor options"""
 
@@ -110,8 +122,8 @@ def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te
 
         bsize = random.randint(1, 16)
         num_nodes, num_edges = random.randint(10, 25), random.randint(10, 20)
-        graph = dgl.batch(
-            [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+        graph = pyg.data.Batch.from_data_list(
+            [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
         )
         node_features = torch.randn(bsize * num_nodes, kw_args["input_dim_nodes"]).to(
             device
@@ -123,7 +135,6 @@ def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te
         assert outvar.shape == (bsize * num_nodes, kw_args["output_dim"])
 
 
-@requires_module("dgl")
 def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     """Test meshgraphnet optimizations"""
 
@@ -140,8 +151,8 @@ def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
 
         bsize = random.randint(1, 8)
         num_nodes, num_edges = random.randint(15, 30), random.randint(15, 25)
-        graph = dgl.batch(
-            [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+        graph = pyg.data.Batch.from_data_list(
+            [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
         )
         node_features = torch.randn(bsize * num_nodes, 2).to(device)
         edge_features = torch.randn(bsize * num_edges, 2).to(device)
@@ -161,7 +172,6 @@ def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
     assert common.validate_combo_optims(model, (*invar,))
 
 
-@requires_module("dgl")
 def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te):
     """Test meshgraphnet checkpoint save/load"""
 
@@ -182,8 +192,8 @@ def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te)
 
     bsize = random.randint(1, 8)
     num_nodes, num_edges = random.randint(5, 15), random.randint(10, 25)
-    graph = dgl.batch(
-        [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+    graph = pyg.data.Batch.from_data_list(
+        [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
     )
     node_features = torch.randn(bsize * num_nodes, 4).to(device)
     edge_features = torch.randn(bsize * num_edges, 3).to(device)
@@ -198,7 +208,6 @@ def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te)
     )
 
 
-@requires_module("dgl")
 @common.check_ort_version()
 def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     """Test mesh-graph net deployment support"""
@@ -214,8 +223,8 @@ def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
 
     bsize = random.randint(1, 8)
     num_nodes, num_edges = random.randint(5, 10), random.randint(10, 15)
-    graph = dgl.batch(
-        [dgl.rand_graph(num_nodes, num_edges).to(device) for _ in range(bsize)]
+    graph = pyg.data.Batch.from_data_list(
+        [rand_graph(num_nodes, num_edges, device) for _ in range(bsize)]
     )
     node_features = torch.randn(bsize * num_nodes, 4).to(device)
     edge_features = torch.randn(bsize * num_edges, 3).to(device)
