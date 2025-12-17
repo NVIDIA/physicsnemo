@@ -6,3 +6,4 @@ warp-lang>=1.7.0
 termcolor>=2.1.1
 mlflow>=2.1.1
 torchinfo
+tensorboard
