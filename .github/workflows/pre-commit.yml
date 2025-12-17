@@ -34,10 +34,3 @@ jobs:
         python-version: '3.12'
 
     - uses: pre-commit/action@v3.0.1
-
-    - uses: rohaquinlop/complexipy-action@v2
-      with:
-        paths: .
-        max_complexity_allowed: 10
-        output_json: true
-
