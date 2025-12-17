@@ -45,7 +45,7 @@ def main(cfg: DictConfig) -> None:
     train_img = 2 * train_img - 1
     valid_img = 2 * valid_img - 1
 
-    device = torch.device("cuda:1")
+    device = torch.device("cuda:0")
 
     classifier = UNetEncoder(in_channels=1, out_channels=2).to(device)
 
