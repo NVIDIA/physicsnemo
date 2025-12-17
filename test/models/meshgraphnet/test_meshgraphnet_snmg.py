@@ -19,12 +19,30 @@ import os
 import numpy as np
 import pytest
 import torch
-from meshgraphnet.utils import get_random_graph
 
 from physicsnemo.distributed import DistributedManager, mark_module_as_shared
 from test.conftest import requires_module
 
 torch.backends.cuda.matmul.allow_tf32 = False
+
+
+def get_random_graph(
+    num_nodes: int, min_degree: int, max_degree: int
+) -> torch.Tensor:  # pragma: no cover
+    """utility function which creates a random CSC-graph structure
+    defined by an offsets and indices buffer based on a given number of
+    nodes, and minimum and maximum node degree.
+    """
+    offsets = torch.empty(num_nodes + 1, dtype=torch.int64)
+    offsets[0] = 0
+    offsets[1:] = torch.randint(
+        min_degree, max_degree + 1, (num_nodes,), dtype=torch.int64
+    )
+    offsets = offsets.cumsum(dim=0)
+    num_indices = offsets[-1].item()
+    indices = torch.randint(0, num_nodes, (num_indices,), dtype=torch.int64)
+
+    return offsets, indices
 
 
 def run_test_distributed_meshgraphnet(rank, world_size, dtype, partition_scheme):

@@ -24,23 +24,7 @@ pytest.importorskip("torch_geometric")
 
 from test import common
 from test.conftest import requires_module
-
-
-@requires_module("torch_geometric")
-def rand_graph(num_nodes, num_edges, device=None):
-    """Create a random graph."""
-
-    import torch_geometric as pyg
-
-    src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
-    dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
-    graph = pyg.data.Data(
-        edge_index=torch.stack([src, dst], dim=0),
-        num_nodes=num_nodes,
-    )
-    if device is not None:
-        graph = graph.to(device)
-    return graph
+from test.models.meshgraphnet.utils import rand_graph
 
 
 @requires_module("torch_geometric")
