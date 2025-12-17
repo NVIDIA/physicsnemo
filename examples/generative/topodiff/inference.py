@@ -54,7 +54,7 @@ def main(cfg: DictConfig) -> None:
         2000,
     )
 
-    device = torch.device("cuda:1")
+    device = torch.device("cuda:0")
     model = TopoDiff(64, 6, 1, model_channels=128, attn_resolutions=[16, 8])
     model.load_state_dict(torch.load(cfg.model_path_diffusion))
     model.to(device)
