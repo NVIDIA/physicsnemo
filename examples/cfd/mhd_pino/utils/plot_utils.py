@@ -132,7 +132,7 @@ def plot_predictions_mhd(
         plt.subplot(len(names), 4, index * 4 + 1)
         plt.pcolormesh(X, Y, u0, cmap=cmap, shading=shading)
         plt.colorbar()
-        plt.title(f"Intial Condition ${name}_0(x,y)$")
+        plt.title(f"Initial Condition ${name}_0(x,y)$")
         plt.tight_layout()
         plt.axis("square")
         plt.axis("off")

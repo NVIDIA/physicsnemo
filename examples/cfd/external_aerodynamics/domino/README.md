@@ -129,7 +129,7 @@ To facilitate setting reasonable values of these, you can use the
 `compute_statistics.py` script.  This will load the core dataset as defined
 in your `config.yaml` file, loop over several events (200, by default), and
 both print and store the surface/volume field statistics as well as the
-coordinate statistics.  
+coordinate statistics.
 
 > Note that, for volumetric fields especially, the min/max found may be
 > significantly outside the surface region.  Many simulations extend volumetric
@@ -190,7 +190,7 @@ tutorials such as [`ShardTensor`](https://docs.nvidia.com/deeplearning/physicsne
 
 In DoMINO specifically, domain parallelism has been enabled in two ways, which
 can be used concurrently or separately.  First, the input sampled volumetric
-and surface points can be sharded to accomodate higher resolution point sampling
+and surface points can be sharded to accommodate higher resolution point sampling
 Second, the latent space of the model - typically a regularlized grid - can be
 sharded to reduce computational complexity of the latent processing.  When training
 with sharded models in DoMINO, the primary objective is to enable higher

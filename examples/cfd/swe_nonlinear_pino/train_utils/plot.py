@@ -66,7 +66,7 @@ def plot_predictions(
     plt.colorbar()
     # plt.xlabel('$x$')
     # plt.ylabel('$y$')
-    plt.title("Intial Condition $\eta(x,y)$")
+    plt.title("Initial Condition $\eta(x,y)$")
     plt.tight_layout()
     plt.axis("square")
 
@@ -106,7 +106,7 @@ def plot_predictions(
     plt.colorbar()
     # plt.xlabel('$x$')
     # plt.ylabel('$y$')
-    plt.title("Intial Condition $u(x,y)$")
+    plt.title("Initial Condition $u(x,y)$")
     plt.tight_layout()
     plt.axis("square")
 
@@ -145,7 +145,7 @@ def plot_predictions(
     plt.colorbar()
     # plt.xlabel('$x$')
     # plt.ylabel('$y$')
-    plt.title("Intial Condition $v(x,y)$")
+    plt.title("Initial Condition $v(x,y)$")
     plt.tight_layout()
     plt.axis("square")
 

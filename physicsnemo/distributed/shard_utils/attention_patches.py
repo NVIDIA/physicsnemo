@@ -85,7 +85,7 @@ def stable_signed_accumulate(
         Tuple[torch.Tensor, torch.Tensor]: Updated (log_abs, sign) pair for accumulated output
 
     The block attention algorithm needs to continuously accumulate the output of each block,
-    however, the normalization is done in log space.  This function accomodates that by
+    however, the normalization is done in log space.  This function accommodates that by
     accumulating the output in log space using log space normalizations.  Note that because
     the output of an attention block can be negative, we must use both log(|O|) and sign(O)
     for each term.

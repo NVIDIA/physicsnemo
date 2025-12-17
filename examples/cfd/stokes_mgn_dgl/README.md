@@ -3,7 +3,7 @@
 This example demonstrates how to train the MeshGraphNet model to learn the flow field
 of Stokes flow and further
 improve the accuary of the model predictions by physics-informed inference. This example
-also demonstrates how to use physics utilites from
+also demonstrates how to use physics utilities from
 [PhysicsNeMo-Sym](https://github.com/NVIDIA/physicsnemo-sym) to introduce physics-based
 constraints.
 
@@ -52,7 +52,7 @@ helps the PINN model converge faster than training from scratch.
 
 Our dataset provides  numerical simulations of Stokes flow in a pipe domain obstructed
 by a random polygon. It contains 1000 random samples and all the simulations were
-performed using Fenics. For each sample, the numerical solution cotains the mesh and
+performed using Fenics. For each sample, the numerical solution contains the mesh and
 the flow information about velocity, pressure, and markers identifying different
 boundaries within the domain.
 
@@ -82,7 +82,7 @@ set to 1. Summation aggregation is used in the
 processor for message aggregation. A learning rate of 0.0001 is used, decaying
 exponentially with a rate of 0.99985.
 
-![Comparison of the MeshGraphNet prediction and the filetered prediction against the
+![Comparison of the MeshGraphNet prediction and the filtered prediction against the
 ground truth for velocity and pressure for one
 of the samples from the test dataset.](../../../docs/img/stokes.png)
 

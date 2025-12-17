@@ -28,7 +28,7 @@ try:
     from nvfuser import DataType, FusionDefinition
 except ImportError:
     logger.error(
-        "An error occured. Either nvfuser is not installed or the version is "
+        "An error occurred. Either nvfuser is not installed or the version is "
         "incompatible. Please retry after installing correct version of nvfuser. "
         "The new version of nvfuser should be available in PyTorch container version "
         ">= 23.10. "
