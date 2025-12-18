@@ -18,10 +18,10 @@ import importlib.util
 import os
 import sys
 import sysconfig
+import tomllib
 from pathlib import Path
 from typing import Dict, List, Set
 
-import tomllib
 from importlinter import Contract, ContractCheck, fields, output
 from packaging.requirements import Requirement
 

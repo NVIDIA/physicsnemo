@@ -23,19 +23,9 @@ from typing import TYPE_CHECKING, Dict, List, Union
 if TYPE_CHECKING:
     from physicsnemo.core.module import Module
 
-# NOTE: This is for backport compatibility, some entry points seem to be using this old class
-# Exact cause of this is unknown but it seems to be related to multiple versions
-# of importlib being present in the environment
 ENTRY_POINT_CLASSES = [
     EntryPoint,
 ]
-# This is now deprecated, since EntryPoint is python 3.10 or higher.
-# try:
-#     from importlib_metadata import EntryPoint as EntryPointOld  # noqa: E402
-
-#     ENTRY_POINT_CLASSES.append(EntryPointOld)
-# except ImportError:
-#     pass
 
 
 # This model registry follows conventions similar to fsspec,
@@ -58,7 +48,7 @@ class ModelRegistry:
         entrypoints = entry_points(group="physicsnemo.models")
         for entry_point in entrypoints:
             registry[entry_point.name] = entry_point
-        
+
         # Pull in any modulus models for backwards compatibility
         entrypoints = entry_points(group="modulus.models")
         for entry_point in entrypoints:
@@ -118,36 +108,12 @@ class ModelRegistry:
         >>> # Instantiate the model
         >>> model = ModelClass(hidden_size=128)
 
-        Example 2: Register a model class with a custom name:
-
-        >>> from physicsnemo.core import Module, ModelRegistry
-        >>> # Define a custom model class
-        >>> class MyCustomModel(Module):
-        ...     def __init__(self, hidden_size):
-        ...         super().__init__()
-        ...         self.hidden_size = hidden_size
-        ...
-        ...     def forward(self, x):
-        ...         return x
-        >>> # Get the registry instance
-        >>> registry = ModelRegistry()
-        >>> # Register the model with a custom name
-        >>> registry.register(AdvancedModel, name='my_advanced_model_v1')
-        >>> # Retrieve the model class from the registry using the custom name
-        >>> ModelClass = registry.factory('my_advanced_model_v1')
-        >>> # Instantiate the model
-        >>> model = ModelClass(hidden_size=128)
 
         """
 
         # If no name provided, use the model class name
         if name is None:
             name = model.__name__
-
-        # if this name is already used via entry points, don't re-register:
-        entrypoints = entry_points(group="physicsnemo.models")
-        if name in [entrypoint.name for entrypoint in entrypoints]:
-            return
 
         # Check if name already in use
         if name in self._model_registry:
@@ -186,8 +152,8 @@ class ModelRegistry:
             return model
 
         raise KeyError(
-            f"No model is registered under the name {name}.\n"
-            f"Current registered models are: {sorted(self.list_models())}"
+            f"No model is registered under the name {name}. "
+            f"Current registered models are:\n{sorted(self.list_models())}"
         )
 
     def list_models(self) -> List[str]:

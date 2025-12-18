@@ -187,6 +187,10 @@ class CustomDetokenizer(DetokenizerModuleBase):
 )
 def test_dit_checkpoint(device, tokenizer, detokenizer):
     """Test DiT checkpoint save/load with custom Modules"""
+
+    if device == "cpu":
+        pytest.skip("Skipping DiT checkpoint test on CPU since TE is CUDA-only")
+
     model_1 = (
         DiT(
             input_size=(16, 16),
@@ -270,10 +274,9 @@ class _DiTBlockWrapper(nn.Module):
 
 
 def test_ditblock_forward_accuracy_timm(device):
-    
     if device == "cpu":
         pytest.skip("CUDA only")
-        
+
     torch.manual_seed(0)
     hidden_size = 128
     num_heads = 4
@@ -308,10 +311,9 @@ def test_ditblock_forward_accuracy_timm(device):
 
 @requires_module(["natten"])
 def test_ditblock_forward_accuracy_natten(device, pytestconfig):
-    
     if device == "cpu":
         pytest.skip("natten not available on CPU")
-    
+
     torch.manual_seed(0)
     hidden_size = 64
     num_heads = 4
@@ -350,6 +352,9 @@ def test_ditblock_forward_accuracy_natten(device, pytestconfig):
 
 @requires_module(["transformer_engine"])  # TE dependency
 def test_ditblock_forward_accuracy_transformer_engine(device, pytestconfig):
+    if device == "cpu":
+        pytest.skip("Skipping DiT checkpoint test on CPU since TE is CUDA-only")
+
     torch.manual_seed(0)
     hidden_size = 128
     num_heads = 8

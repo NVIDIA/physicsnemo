@@ -32,7 +32,6 @@ def skip_on_cpu(device):
         pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
 
 
-
 @pytest.mark.multigpu_static
 def test_scatter_v():
     manager = DistributedManager()

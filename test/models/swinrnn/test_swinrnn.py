@@ -26,10 +26,10 @@ from test import common
 # Skip CPU tests because too slow
 def test_swinrnn_forward(device):
     """Test SwinRNN forward pass"""
-    
+
     if device == "cpu":
         pytest.skip("SwinRNN cpu test too slow")
-    
+
     torch.manual_seed(0)
     model = SwinRNN(
         img_size=(6, 32, 64),
@@ -98,7 +98,7 @@ def test_swinrnn_optims(device):
     """Test SwinRNN optimizations"""
     if device == "cpu":
         pytest.skip("CUDA only")
-        
+
     def setup_model():
         """Setups up fresh SwinRNN model and inputs for each optim test"""
         model = SwinRNN(
@@ -134,10 +134,10 @@ def test_swinrnn_optims(device):
 
 def test_swinrnn_checkpoint(device):
     """Test SwinRNN checkpoint save/load"""
-    
+
     if device == "cpu":
         pytest.skip("CUDA only")
-    
+
     # Construct SwinRNN models
     model_1 = SwinRNN(
         img_size=(6, 32, 64),
@@ -171,11 +171,10 @@ def test_swinrnn_checkpoint(device):
 @common.check_ort_version()
 def test_swinrnn_deploy(device):
     """Test SwinRNN deployment support"""
-    
-    
+
     if device == "cpu":
         pytest.skip("CUDA only")
-    
+
     # Construct SwinRNN model
     model = SwinRNN(
         img_size=(6, 32, 64),

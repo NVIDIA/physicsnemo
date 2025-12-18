@@ -6,7 +6,7 @@ interoperability of PhysicsNeMo, PhysicsNeMo-Sym and PyTorch. This example adopt
 where appropriate utilities are imported from `physicsnemo`, `physicsnemo.sym`
 and `torch` to define the training pipeline.
 
-Specifically, this example demonstrates how the geometry and physics utilites from
+Specifically, this example demonstrates how the geometry and physics utilities from
 PhysicsNeMo-Sym can be used in custom training pipelines to handle geometry objects
 (typically found in Computer Aided Engineering (CAE)) workflows and introduce physics
 residual and boundary condition losses.

@@ -20,8 +20,16 @@ import torch
 
 import physicsnemo
 from physicsnemo.core.registry import ModelRegistry
+from physicsnemo.core.version_check import check_version_spec
 from test import common
 from test.conftest import requires_module
+
+MAKANI_AVAILABLE = check_version_spec("makani", "0.2.0", hard_fail=False)
+
+if not MAKANI_AVAILABLE:
+    pytest.skip(
+        "makani not installed at the minimum version (0.2.0)", allow_module_level=True
+    )
 
 IN_OUT_SHAPE = [32, 32]
 INP_CHANS = 2

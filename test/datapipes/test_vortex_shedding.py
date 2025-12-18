@@ -14,9 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 import pytest
-import torch
 
 from test.conftest import requires_module
 
@@ -28,12 +26,11 @@ def data_dir(nfs_data_dir):
     return nfs_data_dir.joinpath("datasets/vortex_shedding/cylinder_flow")
 
 
-@requires_module(["tensorflow"])
+@requires_module(["tfrecord"])
 @pytest.mark.parametrize(
     "split, num_nodes, num_edges",
     [("train", 1876, 10788), ("valid", 1896, 10908), ("test", 1923, 11070)],
 )
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_vortex_shedding_constructor(
     data_dir, split, num_nodes, num_edges, device, pytestconfig
 ):

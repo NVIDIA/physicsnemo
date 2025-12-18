@@ -66,13 +66,6 @@ def get_disagreements(inputs, bins, counts, test):
 
 @pytest.mark.parametrize("input_shape", [(1, 72, 144)])
 def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
-    DistributedManager._shared_state = {}
-    if (device == "cuda:0") and (not DistributedManager.is_initialized()):
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = "12345"
-        os.environ["RANK"] = "0"
-        os.environ["WORLD_SIZE"] = "1"
-        DistributedManager.initialize()
     x = torch.randn([10, *input_shape], device=device)
     y = torch.randn([5, *input_shape], device=device)
 
@@ -85,13 +78,11 @@ def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
     # Here, l_np is a *torch tensor* which is weird design from numpy.
     # Since torch implements an array interface, numpy will dispatch
     # the torch operations.  So... that's baffling.
-    assert torch.allclose(
-        lin,
-        # torch.from_numpy(l_np).to(device),
-        l_np,
-        rtol=rtol,
-        atol=atol,
-    )
+    if isinstance(l_np, np.ndarray):
+        l_np = torch.from_numpy(l_np).to(device)
+    else:
+        l_np = l_np.to(device)
+    assert torch.allclose(lin, l_np, rtol=rtol, atol=atol)
 
     # Test histogram correctness
     xx = x[:, 0, 0, 0]
@@ -226,12 +217,6 @@ def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
         rtol=rtol,
         atol=atol,
     )
-    if device == "cuda:0":
-        DistributedManager.cleanup()
-        del os.environ["RANK"]
-        del os.environ["WORLD_SIZE"]
-        del os.environ["MASTER_ADDR"]
-        del os.environ["MASTER_PORT"]
 
 
 def fair_crps(pred, obs, dim=-1):
@@ -608,6 +593,9 @@ def test_wasserstein(device, mean, variance, rtol: float = 1e-3, atol: float = 1
 
 
 def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required for this test.")
+
     DistributedManager._shared_state = {}
     if (device == "cuda:0") and (not DistributedManager.is_initialized()):
         os.environ["MASTER_ADDR"] = "localhost"

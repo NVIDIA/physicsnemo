@@ -24,7 +24,7 @@ import torch
 
 from physicsnemo.active_learning import protocols as p
 from physicsnemo.active_learning._registry import registry
-from physicsnemo.core import Module, ModelRegistry
+from physicsnemo.core import ModelRegistry, Module
 
 
 # Fixture to clear model registry between tests to avoid naming conflicts
@@ -109,7 +109,7 @@ class MockDataStructure:
     targets: torch.Tensor | None = None
 
 
-class MockModule(Module, _register=False):
+class MockModule(Module):
     """A mock module that implements a linear layer and stands-in for a non-learner module."""
 
     def __init__(self):

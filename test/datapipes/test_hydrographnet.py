@@ -21,10 +21,8 @@ Unit tests for the HydroGraphDataset datapipe.
 import shutil
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
-from torch.testing import assert_close
 
 from test.conftest import requires_module
 

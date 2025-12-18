@@ -21,25 +21,11 @@ import torch
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
-from physicsnemo.nn.gnn_layers.graph import CuGraphCSC
 from physicsnemo.nn.gnn_layers.graph_types import (
-    CUGRAPH_OPS_AVAILABLE,
     PYG_AVAILABLE,
     GraphType,
     raise_missing_pyg_error,
 )
-
-if CUGRAPH_OPS_AVAILABLE:
-    pylibcugraphops_operators = importlib.import_module(
-        "pylibcugraphops.pytorch.operators"
-    )
-    agg_concat_e2n = pylibcugraphops_operators.agg_concat_e2n
-    update_efeat_bipartite_e2e = pylibcugraphops_operators.update_efeat_bipartite_e2e
-    update_efeat_static_e2e = pylibcugraphops_operators.update_efeat_static_e2e
-else:
-    agg_concat_e2n = None
-    update_efeat_bipartite_e2e = None
-    update_efeat_static_e2e = None
 
 
 def checkpoint_identity(layer: Callable, *args: Any, **kwargs: Any) -> Any:
@@ -169,42 +155,14 @@ if PYG_AVAILABLE:
             Concatenated edge features with source and destination node features.
         """
         if isinstance(nfeat, Tensor):
-            if isinstance(graph, CuGraphCSC):
-                if graph.is_distributed:
-                    src_feat = graph.get_src_node_features_in_local_graph(nfeat)
-                    # torch.int64 to avoid indexing overflows due tu current behavior of cugraph-ops
-                    bipartite_graph = graph.to_bipartite_csc(dtype=torch.int64)
-                    dst_feat = nfeat
-                    efeat = update_efeat_bipartite_e2e(
-                        efeat, src_feat, dst_feat, bipartite_graph, "concat"
-                    )
-
-                else:
-                    static_graph = graph.to_static_csc()
-                    efeat = update_efeat_static_e2e(
-                        efeat,
-                        nfeat,
-                        static_graph,
-                        mode="concat",
-                        use_source_emb=True,
-                        use_target_emb=True,
-                    )
-            elif isinstance(graph, (PyGData, PyGHeteroData)):
+            if isinstance(graph, (PyGData, PyGHeteroData)):
                 efeat = concat_efeat_pyg(efeat, nfeat, graph)
             else:
                 raise ValueError(f"Unsupported graph type: {type(graph)}")
         elif isinstance(nfeat, Tuple):
             src_feat, dst_feat = nfeat
             # update edge features through concatenating edge and node features
-            if isinstance(graph, CuGraphCSC):
-                if graph.is_distributed:
-                    src_feat = graph.get_src_node_features_in_local_graph(src_feat)
-                # torch.int64 to avoid indexing overflows due tu current behavior of cugraph-ops
-                bipartite_graph = graph.to_bipartite_csc(dtype=torch.int64)
-                efeat = update_efeat_bipartite_e2e(
-                    efeat, src_feat, dst_feat, bipartite_graph, "concat"
-                )
-            elif isinstance(graph, (PyGData, PyGHeteroData)):
+            if isinstance(graph, (PyGData, PyGHeteroData)):
                 efeat = concat_efeat_pyg(efeat, (src_feat, dst_feat), graph)
             else:
                 raise ValueError(f"Unsupported graph type: {type(graph)}")
@@ -223,11 +181,7 @@ if PYG_AVAILABLE:
         Use for heterogeneous graphs.
         """
 
-        if isinstance(graph, CuGraphCSC):
-            raise NotImplementedError(
-                "concat_efeat_hetero is not supported for CuGraphCSC graphs yet."
-            )
-        elif isinstance(graph, PyGData):
+        if isinstance(graph, PyGData):
             efeat = concat_efeat_pyg(
                 torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph
             )
@@ -290,21 +244,7 @@ if PYG_AVAILABLE:
             Sum of edge features with source and destination node features.
         """
         if isinstance(nfeat, Tensor):
-            if isinstance(graph, CuGraphCSC):
-                if graph.is_distributed:
-                    src_feat = graph.get_src_node_features_in_local_graph(nfeat)
-                    dst_feat = nfeat
-                    bipartite_graph = graph.to_bipartite_csc()
-                    sum_efeat = update_efeat_bipartite_e2e(
-                        efeat, src_feat, dst_feat, bipartite_graph, mode="sum"
-                    )
-
-                else:
-                    static_graph = graph.to_static_csc()
-                    sum_efeat = update_efeat_bipartite_e2e(
-                        efeat, nfeat, static_graph, mode="sum"
-                    )
-            elif isinstance(graph, PyGData):
+            if isinstance(graph, PyGData):
                 src_feat, dst_feat = nfeat, nfeat
                 src, dst = graph.edge_index.long()
                 sum_efeat = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
@@ -312,15 +252,7 @@ if PYG_AVAILABLE:
                 raise ValueError(f"Unsupported graph type: {type(graph)}")
         else:
             src_feat, dst_feat = nfeat
-            if isinstance(graph, CuGraphCSC):
-                if graph.is_distributed:
-                    src_feat = graph.get_src_node_features_in_local_graph(src_feat)
-
-                bipartite_graph = graph.to_bipartite_csc()
-                sum_efeat = update_efeat_bipartite_e2e(
-                    efeat, src_feat, dst_feat, bipartite_graph, mode="sum"
-                )
-            elif isinstance(graph, (PyGData, PyGHeteroData)):
+            if isinstance(graph, (PyGData, PyGHeteroData)):
                 if isinstance(graph, PyGHeteroData):
                     src, dst = graph[graph.edge_types[0]].edge_index.long()
                 else:
@@ -378,14 +310,7 @@ if PYG_AVAILABLE:
             If aggregation method is not sum or mean.
         """
 
-        if isinstance(graph, CuGraphCSC):
-            # in this case, we don't have to distinguish a distributed setting
-            # or the defalt setting as both efeat and nfeat are already
-            # gurantueed to be on the same rank on both cases due to our
-            # partitioning scheme
-            static_graph = graph.to_static_csc()
-            cat_feat = agg_concat_e2n(nfeat, efeat, static_graph, aggregation)
-        elif isinstance(graph, (PyGData, PyGHeteroData)):
+        if isinstance(graph, (PyGData, PyGHeteroData)):
             cat_feat = agg_concat_pyg(efeat, nfeat, graph, aggregation)
         else:
             raise ValueError(f"Unsupported graph type: {type(graph)}")
@@ -427,11 +352,7 @@ if PYG_AVAILABLE:
             If aggregation method is not sum or mean.
         """
 
-        if isinstance(graph, CuGraphCSC):
-            raise NotImplementedError(
-                "aggregate_and_concat_hetero is not supported for CuGraphCSC graphs yet."
-            )
-        elif isinstance(graph, PyGData):
+        if isinstance(graph, PyGData):
             cat_feat = agg_concat_pyg(
                 torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph, aggregation
             )

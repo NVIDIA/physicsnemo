@@ -109,7 +109,9 @@ class MeshGraphNet(Module):
     ...         input_dim_edges=3,
     ...         output_dim=2,
     ...     )
-    >>> graph = dgl.rand_graph(10, 5)
+    >>> from torch_geometric.data import Data
+    >>> edge_index = torch.randint(0, 10, (2, 5))
+    >>> graph = Data(edge_index=edge_index)
     >>> node_features = torch.randn(10, 4)
     >>> edge_features = torch.randn(5, 3)
     >>> output = model(node_features, edge_features, graph)

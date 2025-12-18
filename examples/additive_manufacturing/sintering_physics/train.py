@@ -56,7 +56,7 @@ from physicsnemo.utils.logging import (
     PythonLogger,
     RankZeroLoggingWrapper,
 )
-from physicsnemo.models.vfgn.graph_network_modules import LearnedSimulator
+from physicsnemo.models.vfgn.graph_network_modules import VFGNLearnedSimulator
 
 physical_devices = tf.config.list_physical_devices("GPU")
 try:
@@ -119,7 +119,7 @@ def Train(rank_zero_logger, dist, cfg: DictConfig):
         "velocity": velocity_stats,
         "context": context_stats,
     }
-    model = LearnedSimulator(
+    model = VFGNLearnedSimulator(
         num_dimensions=metadata["dim"] * cfg.train_options.pred_len,
         num_seq=cfg.train_options.input_seq_len,
         boundaries=torch.DoubleTensor(metadata["bounds"]),
@@ -523,7 +523,7 @@ def Test(rank_zero_logger, dist, cfg):
         "context": context_stats,
     }
 
-    model = LearnedSimulator(
+    model = VFGNLearnedSimulator(
         num_dimensions=metadata["dim"] * cfg.train_options.pred_len,
         num_seq=cfg.train_options.input_seq_len,
         boundaries=torch.DoubleTensor(metadata["bounds"]),

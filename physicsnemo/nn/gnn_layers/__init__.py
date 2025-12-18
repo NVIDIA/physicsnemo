@@ -21,4 +21,3 @@ from .distributed_graph import (
     partition_graph_nodewise,
     partition_graph_with_id_mapping,
 )
-from .graph import CuGraphCSC

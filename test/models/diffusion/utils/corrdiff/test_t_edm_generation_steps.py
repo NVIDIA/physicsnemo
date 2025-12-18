@@ -16,7 +16,6 @@
 
 from functools import partial
 
-import pytest
 import torch
 
 from test.conftest import requires_module

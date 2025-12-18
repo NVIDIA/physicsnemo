@@ -14,15 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import torch
 from utils import create_random_input, fix_random_seeds
 
 from test.conftest import requires_module
 
 
-@requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
+@requires_module(["torch_geometric", "torch_sparse"])
 def test_grad_checkpointing(
     device, pytestconfig, set_physicsnemo_force_te, num_channels=2, res_h=15, res_w=15
 ):

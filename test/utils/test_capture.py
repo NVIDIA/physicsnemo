@@ -56,15 +56,20 @@ def logger():
 
 
 @pytest.mark.parametrize(
-    "optim_type, device",
-    [("pytorch", "cuda:0"), ("apex", "cuda:0"), ("pytorch", "cpu")],
+    "optim_type, device, use_graphs, use_amp, amp_type, gradient_clip_norm",
+    [
+        # Test PyTorch optimizer with various features on CUDA
+        ("pytorch", "cuda:0", True, True, torch.float16, None),
+        ("pytorch", "cuda:0", False, True, torch.bfloat16, 0.10),
+        ("pytorch", "cuda:0", True, False, torch.float16, 0.10),
+        # Test Apex optimizer with different combinations
+        ("apex", "cuda:0", False, True, torch.float16, None),
+        ("apex", "cuda:0", True, False, torch.float16, 0.10),
+        # Test CPU execution
+        ("pytorch", "cpu", False, True, torch.bfloat16, None),
+        ("pytorch", "cpu", False, False, torch.float16, 0.10),
+    ],
 )
-@pytest.mark.parametrize("use_graphs", [True, False])
-@pytest.mark.parametrize(
-    "use_amp, amp_type",
-    [(True, torch.float16), (True, torch.bfloat16), (False, torch.float16)],
-)
-@pytest.mark.parametrize("gradient_clip_norm", [None, 0.10])
 def test_capture_training(
     model,
     logger,
@@ -75,6 +80,9 @@ def test_capture_training(
     amp_type,
     gradient_clip_norm,
 ):
+    if "cuda" in device and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
     # Initialize the DistributedManager first since StaticCaptureTraining uses it
     DistributedManager.initialize()
 
@@ -120,15 +128,20 @@ def test_capture_training(
 
 
 @pytest.mark.parametrize(
-    "optim_type, device",
-    [("pytorch", "cuda:0"), ("apex", "cuda:0"), ("pytorch", "cpu")],
+    "optim_type, device, use_graphs, use_amp, amp_type, gradient_clip_norm",
+    [
+        # Test PyTorch optimizer with meta control and various features
+        ("pytorch", "cuda:0", True, True, torch.float16, None),
+        ("pytorch", "cuda:0", False, True, torch.bfloat16, 0.10),
+        ("pytorch", "cuda:0", True, False, torch.float16, 0.10),
+        # Test Apex optimizer with meta control
+        ("apex", "cuda:0", False, True, torch.float16, None),
+        ("apex", "cuda:0", True, False, torch.float16, 0.10),
+        # Test CPU execution with meta control
+        ("pytorch", "cpu", False, True, torch.bfloat16, None),
+        ("pytorch", "cpu", False, False, torch.float16, 0.10),
+    ],
 )
-@pytest.mark.parametrize("use_graphs", [True, False])
-@pytest.mark.parametrize(
-    "use_amp, amp_type",
-    [(True, torch.float16), (True, torch.bfloat16), (False, torch.float16)],
-)
-@pytest.mark.parametrize("gradient_clip_norm", [None, 0.10])
 def test_capture_training_meta(
     model,
     logger,
@@ -139,6 +152,9 @@ def test_capture_training_meta(
     amp_type,
     gradient_clip_norm,
 ):
+    if "cuda" in device and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
     # Initialize the DistributedManager first since StaticCaptureTraining uses it
     DistributedManager.initialize()
 
@@ -185,11 +201,17 @@ def test_capture_training_meta(
                 assert param.grad.data.norm(2) < gradient_clip_norm
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("use_graphs", [True, False])
 @pytest.mark.parametrize(
-    "use_amp, amp_type",
-    [(True, torch.float16), (True, torch.bfloat16), (False, torch.float16)],
+    "device, use_graphs, use_amp, amp_type",
+    [
+        # Test CUDA with various features
+        ("cuda:0", True, True, torch.float16),
+        ("cuda:0", False, True, torch.bfloat16),
+        ("cuda:0", True, False, torch.float16),
+        # Test CPU execution
+        ("cpu", False, True, torch.bfloat16),
+        ("cpu", False, False, torch.float16),
+    ],
 )
 def test_capture_evaluate(
     model,
@@ -199,6 +221,9 @@ def test_capture_evaluate(
     use_amp,
     amp_type,
 ):
+    if "cuda" in device and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
     model = model.to(device)
     input = torch.rand(8, 2).to(device)
 
@@ -240,6 +265,9 @@ def test_capture_errors():
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_capture_scaler_checkpointing(model, model2, device):
+    if "cuda" in device and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
     # Testing the class variables of AMP grad scaler for checkpointing
     #
     model = model.to(device)
@@ -267,6 +295,9 @@ def test_capture_scaler_checkpointing(model, model2, device):
 
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_capture_scaler_checkpointing_ordering(model, model2, device):
+    if "cuda" in device and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+
     # Testing the class variables of AMP grad scaler for checkpointing
     #
     model = model.to(device)

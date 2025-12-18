@@ -18,10 +18,7 @@
 import pytest
 import torch
 
-from test.conftest import requires_module
 
-
-@requires_module("dgl")
 @pytest.mark.parametrize("latlon", [[-27.0, 48.0], [0, 0], [62.0, -45.0]])
 def test_coordinate_transform(latlon, pytestconfig):
     """Test coordinate transformation from latlon to xyz and back."""

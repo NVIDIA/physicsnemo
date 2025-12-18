@@ -207,7 +207,7 @@ class DiT(Module):
             )
         else:
             if not isinstance(tokenizer, TokenizerModuleBase):
-                raise TypeError("tokenizer must be a string or a physicsnemo.models.Module instance subclassing physicsnemo.experimental.models.dit.layers.TokenizerModuleBase")
+                raise TypeError("tokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.experimental.models.dit.layers.TokenizerModuleBase")
             self.tokenizer = tokenizer
 
         self.t_embedder = PositionalEmbedding(hidden_size, amp_mode=self.meta.amp_gpu, learnable=True, **timestep_embed_kwargs)
@@ -238,7 +238,7 @@ class DiT(Module):
             )
         else:
             if not isinstance(detokenizer, DetokenizerModuleBase):
-                raise TypeError("detokenizer must be a string or a physicsnemo.models.Module instance subclassing physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase")
+                raise TypeError("detokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.experimental.models.dit.layers.DetokenizerModuleBase")
             self.detokenizer = detokenizer
 
 

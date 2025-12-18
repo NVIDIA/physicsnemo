@@ -108,13 +108,13 @@ Operator (TFNO) in the same pipeline. The only difference with a TFNO model
 is that the weights are factorized using TensorLy.
 
 In this example, we will also use the `PDE` class from PhysicsNeMo-Sym to symbolically define
-the PDEs. This is very convinient and most natural way to define these PDEs and allows
+the PDEs. This is very convenient and most natural way to define these PDEs and allows
 us to print the equations to check for correctness. This also abstracts out the
 complexity of converting the equation into a pytorch representation. PhysicsNeMo Sym also
 provides several complex, well-tested PDEs like 3D Navier-Stokes, Linear elasticity,
 Electromagnetics, etc. pre-defined which can be used directly in physics-informing
 applications. We will also give you the option to choose between the
-derivative functions from PhysicsNeMo-Sym or from the original paper.  
+derivative functions from PhysicsNeMo-Sym or from the original paper.
 
 ## Getting Started
 

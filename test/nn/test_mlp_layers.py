@@ -14,14 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import torch
 
 from physicsnemo.nn import Mlp
 from test.common import (
     validate_forward_accuracy,
 )
-
 
 
 def test_mlp_forward_accuracy(device):

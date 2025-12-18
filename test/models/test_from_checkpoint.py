@@ -33,7 +33,7 @@ def clear_registry():
     registry.__restore_registry__()
 
 
-class MockModel(physicsnemo.core.Module, _register=False):
+class MockModel(physicsnemo.core.Module):
     """Fake model"""
 
     def __init__(self, layer_size=16):
@@ -42,7 +42,7 @@ class MockModel(physicsnemo.core.Module, _register=False):
         self.layer = torch.nn.Linear(layer_size, layer_size)
 
 
-class NewMockModel(physicsnemo.core.Module, _register=False):
+class NewMockModel(physicsnemo.core.Module):
     """Fake model"""
 
     def __init__(self, layer_size=16):
@@ -51,7 +51,7 @@ class NewMockModel(physicsnemo.core.Module, _register=False):
         self.layer = torch.nn.Linear(layer_size, layer_size)
 
 
-class MockModelNoOverride(physicsnemo.core.Module, _register=False):
+class MockModelNoOverride(physicsnemo.core.Module):
     """Fake model"""
 
     def __init__(self, value1, value2, x):
@@ -61,7 +61,7 @@ class MockModelNoOverride(physicsnemo.core.Module, _register=False):
         self.x = x
 
 
-class MockModelWithOverride(physicsnemo.core.Module, _register=False):
+class MockModelWithOverride(physicsnemo.core.Module):
     """Fake model"""
 
     _overridable_args = {"value2", "x"}

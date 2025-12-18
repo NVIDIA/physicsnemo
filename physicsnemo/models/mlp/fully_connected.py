@@ -41,7 +41,7 @@ class MetaData(ModelMetaData):
     auto_grad: bool = True
 
 
-class FullyConnected(Module, _register=True):
+class FullyConnected(Module):
     """A densely-connected MLP architecture
 
     Parameters

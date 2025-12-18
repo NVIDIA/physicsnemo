@@ -333,10 +333,9 @@ def test_deterministic_sampler_rectangle_patching_lead_time(device, pytestconfig
 @requires_module("cftime")
 # NOTE: compiled backward fails on CPU for this test, so we only test on GPU
 def test_deterministic_sampler_patching_differentiable(device, pytestconfig):
-    
     if device == "cpu":
         pytest.skip("Skip deterministic sampler patching differentiable on cpu")
-    
+
     from physicsnemo.models.diffusion.patching import GridPatching2D
     from physicsnemo.models.diffusion.sampling import deterministic_sampler
 

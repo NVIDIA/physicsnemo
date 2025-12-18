@@ -87,6 +87,7 @@ def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
     assert validate_forward_accuracy(
         model,
         (node_features, edge_features, g0, ms_edges0, ms_ids0),
+        file_name="models/data/bistridemeshgraphnet_output.pth",
     )
 
 

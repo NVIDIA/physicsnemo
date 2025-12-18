@@ -37,9 +37,8 @@ def disable_flash_attention(monkeypatch):
 # te_version = "2.0.6"
 
 
-@requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_graphcast_forward(
     device,
     backend,
@@ -82,9 +81,8 @@ def test_graphcast_forward(
     )
 
 
-@requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_graphcast_constructor(
     device,
     backend,
@@ -142,8 +140,8 @@ def test_graphcast_constructor(
         )
 
 
-@requires_module(["dgl", "transformer_engine"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse", "transformer_engine"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_graphcast_te_constructor(
     backend,
     pytestconfig,
@@ -205,9 +203,8 @@ def test_graphcast_te_constructor(
         )
 
 
-@requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_graphcast_constructor_backward_compatibility(
     device,
     backend,
@@ -239,9 +236,8 @@ def test_graphcast_constructor_backward_compatibility(
     assert model_1_params == model_2_params
 
 
-@requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_GraphCast_optims(
     device,
     backend,
@@ -294,8 +290,8 @@ def test_GraphCast_optims(
     assert common.validate_combo_optims(model, (*invar,))
 
 
-@requires_module(["dgl", "transformer_engine"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse", "transformer_engine"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_GraphCast_te_optims(
     backend,
     pytestconfig,
@@ -352,9 +348,8 @@ def test_GraphCast_te_optims(
     assert common.validate_combo_optims(model, (*invar,))
 
 
-@requires_module("dgl")
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_graphcast_checkpoint(
     device,
     backend,
@@ -396,8 +391,8 @@ def test_graphcast_checkpoint(
     )
 
 
-@requires_module(["dgl", "transformer_engine"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@requires_module(["torch_geometric", "torch_sparse", "transformer_engine"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_graphcast_checkpoint_te(
     backend,
     pytestconfig,
@@ -443,10 +438,9 @@ def test_graphcast_checkpoint_te(
     )
 
 
-@requires_module("dgl")
+@requires_module(["torch_geometric", "torch_sparse"])
 @common.check_ort_version()
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_GraphCast_deploy(
     device,
     backend,
@@ -484,9 +478,9 @@ def test_GraphCast_deploy(
     assert common.validate_onnx_runtime(model, x)
 
 
-@requires_module(["dgl", "transformer_engine"])
+@requires_module(["torch_geometric", "torch_sparse", "transformer_engine"])
 @common.check_ort_version()
-@pytest.mark.parametrize("backend", ["dgl", "pyg"])
+@pytest.mark.parametrize("backend", ["pyg"])
 def test_GraphCast_deploy_te(
     backend,
     pytestconfig,

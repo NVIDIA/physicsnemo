@@ -182,11 +182,11 @@ train: # Training configurable parameters
   dataloader:
     batch_size: 1
     preload_depth: 1
-    pin_memory: True # if the preprocessing is outputing GPU data, set this to false
+    pin_memory: True # if the preprocessing is outputting GPU data, set this to false
   sampler:
     shuffle: true
     drop_last: false
-  checkpoint_dir: /user/models/ # Use only for retraining
+  checkpoint_dir: /user/models/ # deprecated: Use only for retraining
   add_physics_loss: false
   lr_scheduler:
     name: MultiStepLR # Also supports CosineAnnealingLR  
@@ -216,7 +216,7 @@ val: # Validation configurable parameters
   dataloader:
     batch_size: 1
     preload_depth: 1
-    pin_memory: true # if the preprocessing is outputing GPU data, set this to false
+    pin_memory: true # if the preprocessing is outputting GPU data, set this to false
   sampler:
     shuffle: true
     drop_last: false

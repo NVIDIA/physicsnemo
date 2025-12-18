@@ -814,7 +814,7 @@ class SongUNetPosEmbd(SongUNet):
     --------
     >>> import torch
     >>> from physicsnemo.models.diffusion.song_unet import SongUNetPosEmbd
-    >>> from physicsnemo.utils.patching import GridPatching2D
+    >>> from physicsnemo.models.diffusion.patching import GridPatching2D
     >>>
     >>> # Model initialization - in_channels must include both original input channels (2)
     >>> # and the positional embedding channels (N_grid_channels=4 by default)
@@ -1047,7 +1047,7 @@ class SongUNetPosEmbd(SongUNet):
         Example
         -------
         >>> # Create global indices using patching utility:
-        >>> from physicsnemo.utils.patching import GridPatching2D
+        >>> from physicsnemo.models.diffusion.patching import GridPatching2D
         >>> patching = GridPatching2D(img_shape=(16, 16), patch_shape=(8, 8))
         >>> global_index = patching.global_index(batch_size=3)
         >>> print(global_index.shape)
@@ -1061,9 +1061,9 @@ class SongUNetPosEmbd(SongUNet):
               Patches are processed independently by the model, and the ``global_index`` parameter
               is used to select the grid of positional embeddings corresponding
               to each patch.
-            - See this method from :class:`physicsnemo.utils.patching.BasePatching2D`
+            - See this method from :class:`physicsnemo.models.diffusion.patching.BasePatching2D`
               for generating the ``global_index`` parameter:
-              :meth:`~physicsnemo.utils.patching.BasePatching2D.global_index`.
+              :meth:`~physicsnemo.models.diffusion.patching.BasePatching2D.global_index`.
         """
 
         # dtype casting of embeddings
@@ -1187,7 +1187,7 @@ class SongUNetPosEmbd(SongUNet):
             Each selected embedding should correspond to the portion of the embedding grid
             that corresponds to the batch element in ``x``.
             Typically this should be based on
-            :meth:`physicsnemo.utils.patching.BasePatching2D.apply` method to
+            :meth:`physicsnemo.models.diffusion.patching.BasePatching2D.apply` method to
             maintain consistency with patch extraction.
         lead_time_label : Optional[torch.Tensor], default=None
             Tensor of shape :math:`(B,)` that corresponds to the lead-time
@@ -1210,15 +1210,15 @@ class SongUNetPosEmbd(SongUNet):
               to select the grid of positional embeddings corresponding to each
               patch.
             - See the method
-              :meth:`~physicsnemo.utils.patching.BasePatching2D.apply` from
-              :class:`physicsnemo.utils.patching.BasePatching2D` for generating
+              :meth:`~physicsnemo.models.diffusion.patching.BasePatching2D.apply` from
+              :class:`physicsnemo.models.diffusion.patching.BasePatching2D` for generating
               the ``embedding_selector`` parameter, as well as the example
               below.
 
         Example
         -------
         >>> # Define a selector function with a patching utility:
-        >>> from physicsnemo.utils.patching import GridPatching2D
+        >>> from physicsnemo.models.diffusion.patching import GridPatching2D
         >>> patching = GridPatching2D(img_shape=(16, 16), patch_shape=(8, 8))
         >>> B = 4
         >>> def embedding_selector(emb):
@@ -1435,7 +1435,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
     --------
     >>> import torch
     >>> from physicsnemo.models.diffusion.song_unet import SongUNetPosLtEmbd
-    >>> from physicsnemo.utils.patching import GridPatching2D
+    >>> from physicsnemo.models.diffusion.patching import GridPatching2D
     >>>
     >>> # Model initialization - in_channels must include original input channels (2),
     >>> # positional embedding channels (N_grid_channels=4 by default) and

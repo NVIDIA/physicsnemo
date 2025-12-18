@@ -12,7 +12,7 @@ containers=
 layers = 
    experimental
    active_learning
-   models  : registry : datapipes : metrics : domain_parallel
+   models : datapipes : metrics : domain_parallel
    nn
    utils
    distributed 

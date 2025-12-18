@@ -17,7 +17,6 @@
 from functools import partial
 from typing import Callable, Optional
 
-import pytest
 import torch
 
 from test.conftest import requires_module
@@ -47,11 +46,11 @@ class MockNet:
 
 @requires_module("cftime")
 def test_regression_step(device, pytestconfig):
-    from physicsnemo.models.diffusion import UNet
+    from physicsnemo.models.diffusion import CorrDiffRegressionUNet
     from physicsnemo.models.diffusion.corrdiff_utils import regression_step
 
     # define the net
-    mock_unet = UNet(
+    mock_unet = CorrDiffRegressionUNet(
         img_resolution=[16, 16],
         img_in_channels=8,
         img_out_channels=2,

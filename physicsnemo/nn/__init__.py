@@ -14,6 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Expose physicsnemo.core.Module for easy access to the base class
+from physicsnemo.core import Module
+
 from .activations import (
     CappedGELU,
     CappedLeakyReLU,

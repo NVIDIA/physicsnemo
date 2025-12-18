@@ -61,7 +61,6 @@ class trainer_helper:
     device: str
 
 
-
 def test_BaseMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
     mse_func = BaseMSE()
     mse_func.setup(None)  # for coverage
@@ -130,7 +129,6 @@ def test_BaseMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
         rtol=rtol,
         atol=atol,
     )
-
 
 
 def test_WeightedMSE(device, test_data, rtol: float = 1e-3, atol: float = 1e-3):
@@ -237,7 +235,6 @@ def dataset_name():
 
 
 @requires_module("xarray")
-
 def test_OceanMSE(
     data_dir,
     dataset_name,
@@ -316,7 +313,6 @@ def test_OceanMSE(
 
 
 @requires_module("xarray")
-
 def test_WeightedOceanMSE(
     data_dir,
     dataset_name,

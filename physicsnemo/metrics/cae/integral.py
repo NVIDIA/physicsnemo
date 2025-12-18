@@ -70,7 +70,6 @@ if PV_AVAILABLE:
 
         return integral
 
-
     def surface_integral(
         mesh: pv.PolyData,
         data_type: str = "point_data",
@@ -136,17 +135,15 @@ if PV_AVAILABLE:
         return results
 
 else:
-    
+
     def raise_missing_pyvista():
         raise ImportError(
             "pyvista is not installed, cannot use line_integral or surface_integral"
             "Install pyvista from here: https://docs.pyvista.org/getting-started/installation.html"
         )
-        
+
     def line_integral(*args, **kwargs):
         raise_missing_pyvista()
-    
+
     def surface_integral(*args, **kwargs):
         raise_missing_pyvista()
-        
-    

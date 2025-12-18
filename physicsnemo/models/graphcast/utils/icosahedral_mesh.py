@@ -16,8 +16,8 @@
 # ruff: noqa: S101
 """Utils for creating icosahedral meshes."""
 
-import itertools
 import importlib
+import itertools
 from typing import List, NamedTuple, Sequence, Tuple
 
 import numpy as np
@@ -27,7 +27,7 @@ from physicsnemo.core.version_check import check_version_spec
 SCIPY_TRANSFORM_AVAILABLE = check_version_spec("scipy", hard_fail=False)
 
 if SCIPY_TRANSFORM_AVAILABLE:
-    transform = importlib.import_module("scipy.spatial")
+    transform = importlib.import_module("scipy.spatial").transform
 else:
     transform = None
 
@@ -119,7 +119,7 @@ def get_icosahedron() -> TriangularMesh:
            counterclock-wise when looking from the outside).
 
     """
-    
+
     if transform is None:
         raise ImportError(
             "scipy is not installed, cannot use get_icosahedron method. "

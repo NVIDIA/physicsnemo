@@ -19,10 +19,10 @@ import os
 
 import torch
 
-from physicsnemo.core.version_check import check_module_requirements
+from physicsnemo.core.version_check import check_version_spec
 
-RMM_AVAILABLE = check_module_requirements("rmm", "2.6.0", hard_fail=False)
-CUPY_AVAILABLE = check_module_requirements("cupy", "12.0.0", hard_fail=False)
+RMM_AVAILABLE = check_version_spec("rmm", "2.6.0", hard_fail=False)
+CUPY_AVAILABLE = check_version_spec("cupy", "12.0.0", hard_fail=False)
 
 """
 Using a unifed gpu memory provider, we consolidate the pool into just a

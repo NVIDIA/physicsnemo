@@ -389,7 +389,7 @@ class DistributedManager(object):
         to one of the options above.
         """
         if DistributedManager.is_initialized():
-            warn("Distributed manager is already intialized")
+            warn("Distributed manager is already initialized")
             return
 
         addr = os.getenv("MASTER_ADDR", "localhost")

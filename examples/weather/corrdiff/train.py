@@ -30,7 +30,10 @@ import nvtx
 import wandb
 
 from physicsnemo import Module
-from physicsnemo.models.diffusion import UNet, EDMPrecondSuperResolution
+from physicsnemo.models.diffusion import (
+    CorrDiffRegressionUNet,
+    EDMPrecondSuperResolution,
+)
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.metrics.diffusion import RegressionLoss, ResidualLoss, RegressionLossCE
 from physicsnemo.models.diffusion.patching import RandomPatching2D
@@ -297,7 +300,7 @@ def main(cfg: DictConfig) -> None:
         model_args["amp_mode"] = enable_amp
 
     if cfg.model.name == "regression":
-        model = UNet(
+        model = CorrDiffRegressionUNet(
             img_in_channels=img_in_channels + model_args["N_grid_channels"],
             **model_args,
         )
@@ -305,7 +308,7 @@ def main(cfg: DictConfig) -> None:
         cfg.model.name == "lt_aware_ce_regression"
         or cfg.model.name == "lt_aware_regression"
     ):
-        model = UNet(
+        model = CorrDiffRegressionUNet(
             img_in_channels=img_in_channels
             + model_args["N_grid_channels"]
             + model_args["lead_time_channels"],

@@ -17,7 +17,6 @@
 import random
 from dataclasses import dataclass
 
-import pytest
 import torch
 
 from physicsnemo.core.module import ModelMetaData, Module
@@ -123,7 +122,9 @@ def test_from_torch_optims(device):
 def test_from_torch_checkpoint(device):
     """Test checkpoint save/load from PyTorch"""
     # Construct CustomPhysicsNeMoModel
-    CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
+    CustomPhysicsNeMoModel = Module.from_torch(
+        CustomModel, CustomMetaData(), register=True
+    )
     model_1 = CustomPhysicsNeMoModel(in_features=4, out_features=4).to(device)
 
     model_2 = CustomPhysicsNeMoModel(in_features=4, out_features=4).to(device)

@@ -24,9 +24,9 @@ import torch
 import xarray
 
 import physicsnemo  # noqa: F401 for docs
+from physicsnemo.core import filesystem
 from physicsnemo.models.dlwp import DLWP
 from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
-from physicsnemo.utils import filesystem
 from physicsnemo.utils.zenith_angle import cos_zenith_angle
 
 logger = logging.getLogger(__name__)

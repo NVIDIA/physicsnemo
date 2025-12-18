@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.diffusion import UNet
+from physicsnemo.models.diffusion import CorrDiffRegressionUNet
 from physicsnemo.models.diffusion.patching import RandomPatching2D
 
 
@@ -142,7 +142,7 @@ def test_call_method_residualloss_with_unet(device):
 
     res, inc, outc = 64, 2, 3
     N_pos = 2
-    regression_model = UNet(
+    regression_model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos,
         img_out_channels=outc,
@@ -181,7 +181,7 @@ def test_call_method_residualloss_with_unet_hr_mean_conditioning(device):
 
     res, inc, outc = 64, 2, 3
     N_pos = 2
-    regression_model = UNet(
+    regression_model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos,
         img_out_channels=outc,
@@ -223,7 +223,7 @@ def test_call_method_residualloss_with_lt_unet_hr_mean_conditioning(device):
     res, inc, outc = 64, 2, 3
     N_pos, lead_time_channels = 2, 4
     prob_channels = [0, 2]
-    regression_model = UNet(
+    regression_model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc + N_pos + lead_time_channels,
         img_out_channels=outc,

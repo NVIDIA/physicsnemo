@@ -31,15 +31,10 @@ from physicsnemo.core.version_check import check_version_spec
 
 VTK_AVAILABLE = check_version_spec("vtk", "9.0.0", hard_fail=False)
 
-# import vtk
-# from vtk import vtkDataSetTriangleFilter
-# from vtk.util import numpy_support
-
-
 if VTK_AVAILABLE:
     vtk = importlib.import_module("vtk")
     vtkDataSetTriangleFilter = vtk.vtkDataSetTriangleFilter
-    numpy_support = vtk.util.numpy_support
+    numpy_support = importlib.import_module("vtk.util.numpy_support")
 
     def write_to_vtp(polydata: "vtk.vtkPolyData", filename: str) -> None:
         """Write VTK polydata to a VTP (VTK PolyData) file format.

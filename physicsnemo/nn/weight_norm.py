@@ -37,7 +37,7 @@ class WeightNormLinear(nn.Module):
 
     Example
     -------
-    >>> wnorm = physicsnemo.models.layers.WeightNormLinear(2,4)
+    >>> wnorm = physicsnemo.nn.WeightNormLinear(2,4)
     >>> input = torch.rand(2,2)
     >>> output = wnorm(input)
     >>> output.size()

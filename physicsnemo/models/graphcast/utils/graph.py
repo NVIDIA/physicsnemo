@@ -22,15 +22,6 @@ import torch
 from torch import Tensor
 
 from physicsnemo.core.version_check import check_version_spec
-
-SKLEARN_AVAILABLE = check_version_spec("scikit-learn", "0.20.0", hard_fail=False)
-
-if SKLEARN_AVAILABLE:
-    sklearn_neighbors = importlib.import_module("sklearn.neighbors")
-    NearestNeighbors = sklearn_neighbors.NearestNeighbors
-else:
-    NearestNeighbors = None
-
 from physicsnemo.models.graphcast.utils.graph_backend import (
     PyGGraphBackend,
 )
@@ -47,6 +38,15 @@ from .icosahedral_mesh import (
     get_hierarchy_of_triangular_meshes_for_sphere,
     merge_meshes,
 )
+
+SKLEARN_AVAILABLE = check_version_spec("scikit-learn", "0.20.0", hard_fail=False)
+
+if SKLEARN_AVAILABLE:
+    sklearn_neighbors = importlib.import_module("sklearn.neighbors")
+    NearestNeighbors = sklearn_neighbors.NearestNeighbors
+else:
+    NearestNeighbors = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +252,6 @@ class Graph:
         m2g_graph = self.backend.create_heterograph(
             src, dst, ("mesh", "m2g", "grid"), dtype=torch.int32
         )  # number of edges is 3,114,720, exactly matches with the paper
-
 
         if self.backend.name == "pyg":
             m2g_graph["mesh"].pos = torch.tensor(

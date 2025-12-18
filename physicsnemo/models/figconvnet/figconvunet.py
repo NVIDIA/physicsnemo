@@ -30,6 +30,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.figconvnet.base_model import BaseModel
 from physicsnemo.models.figconvnet.components.encodings import SinusoidalEncoding
 from physicsnemo.models.figconvnet.components.mlp import MLP
@@ -52,7 +53,6 @@ from physicsnemo.models.figconvnet.point_feature_grid_conv import (
     GridFeatureMemoryFormatConverter,
 )
 from physicsnemo.models.figconvnet.point_feature_grid_ops import PointFeatureToGrid
-from physicsnemo.models.meta import ModelMetaData
 from physicsnemo.utils.profiling import profile
 
 memory_format_to_axis_index = {

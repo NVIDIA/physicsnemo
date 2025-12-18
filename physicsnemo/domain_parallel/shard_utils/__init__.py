@@ -19,7 +19,7 @@ import torch
 from physicsnemo.core.version_check import check_version_spec
 
 # Prevent importing this module if the minimum version of pytorch is not met.
-ST_AVAILABLE = check_version_spec("torch", "2.6.0", hard_fail=False)
+ST_AVAILABLE = check_version_spec("torch", "2.6.0a0", hard_fail=False)
 
 if ST_AVAILABLE:
     from physicsnemo.domain_parallel.shard_tensor import ShardTensor

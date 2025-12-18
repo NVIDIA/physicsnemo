@@ -57,7 +57,7 @@ class LaunchLogger(object):
 
     Example
     -------
-    >>> from physicsnemo.launch.logging import LaunchLogger
+    >>> from physicsnemo.utils.logging import LaunchLogger
     >>> LaunchLogger.initialize()
     >>> epochs = 3
     >>> for i in range(epochs):

@@ -24,7 +24,7 @@ from test import common
 from test.conftest import requires_module
 
 
-@requires_module("dgl")
+@requires_module(["torch_geometric", "torch_sparse"])
 @pytest.mark.parametrize("recomp_act", [False, True])
 def test_concat_trick(pytestconfig, recomp_act, num_channels=2, res_h=11, res_w=20):
     """Test concat trick"""

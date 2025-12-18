@@ -17,9 +17,9 @@
 import importlib
 from typing import List
 
-from physicsnemo.core.version_check import check_module_requirements
+from physicsnemo.core.version_check import check_version_spec
 
-VTK_AVAILABLE = check_module_requirements("vtk", hard_fail=False)
+VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
 
 if VTK_AVAILABLE:
     vtk = importlib.import_module("vtk")

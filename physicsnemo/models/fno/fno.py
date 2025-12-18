@@ -829,6 +829,7 @@ class FNO(Module):
     Example
     -------
     >>> # define the 2d FNO model
+    >>> import physicsnemo
     >>> model = physicsnemo.models.fno.FNO(
     ...     in_channels=4,
     ...     out_channels=3,

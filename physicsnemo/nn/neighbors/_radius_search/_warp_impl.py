@@ -100,7 +100,8 @@ if WARP_AVAILABLE:
         torch.cumsum(torch_result_count, dim=0, out=torch_offset[1:])
 
         # Create a pinned buffer on CPU to receive the count
-        pinned_buffer = torch.zeros(1, dtype=torch.int32, pin_memory=True)
+        pin_memory = torch.cuda.is_available()
+        pinned_buffer = torch.zeros(1, dtype=torch.int32, pin_memory=pin_memory)
         # Copy the last element to pinned memory
         pinned_buffer.copy_(torch_offset[-1:])
         total_count = pinned_buffer.item()

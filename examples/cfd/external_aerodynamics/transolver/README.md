@@ -55,7 +55,7 @@ parameters that may be of special interest.
 
 3. Use the trained model to perform inference.  This example contains two
 inference examples: one for inference on the validation set, already in
-Zarr format.  The `.vtp` inference pipeline is being updated to accomodate Transolver.
+Zarr format.  The `.vtp` inference pipeline is being updated to accommodate Transolver.
 
 The following sections contain further details on the training and inference
 recipe.
@@ -87,7 +87,7 @@ fields).  Downsampling happens in the preprocessing pipeline.
 
 During training, the configuration uses a flat learning rate that decays every 100
 epochs, and bfloat16 format by default.  The scheduler and learning rate
-may be configured.  
+may be configured.
 
 The Optimizer for this training is the `Muon` optimizer - available only in
 `pytorch>=2.9.0`.  While not strictly required, we have found the `muon` optimizer

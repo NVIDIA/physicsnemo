@@ -32,7 +32,7 @@ def clear_registry():
     registry.__restore_registry__()
 
 
-class MockModel(Module, _register=False):
+class MockModel(Module):
     def __init__(self, layer_size=16):
         super().__init__()
         self.layer_size = layer_size

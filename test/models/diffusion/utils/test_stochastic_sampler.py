@@ -16,7 +16,6 @@
 
 from typing import Callable, Optional
 
-import pytest
 import torch
 from torch import Tensor
 

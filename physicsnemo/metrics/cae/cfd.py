@@ -14,8 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib    
-
+import importlib
 from typing import List, Tuple, Union
 
 import numpy as np
@@ -27,6 +26,7 @@ from physicsnemo.core.version_check import check_version_spec
 PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
 
 if PV_AVAILABLE:
+    pv = importlib.import_module("pyvista")
 
     def compute_frontal_area(mesh: pv.PolyData, direction: str = "x"):
         """
@@ -84,7 +84,6 @@ if PV_AVAILABLE:
 
         return merged.area
 
-
     def compute_force_coefficients(
         normals: np.ndarray,
         area: np.ndarray,
@@ -135,7 +134,6 @@ if PV_AVAILABLE:
 
         return c_total, c_p, c_f
 
-
     def dominant_freq_calc(
         signal: List[Union[int, float]], sample_spacing: float = 1
     ) -> float:
@@ -163,7 +161,6 @@ if PV_AVAILABLE:
         dom_freq = fftfreq(N, sample_spacing)[dom_idx]
 
         return np.abs(dom_freq)
-
 
     def compute_p_q_r(
         velocity_grad: torch.Tensor,
@@ -223,7 +220,6 @@ if PV_AVAILABLE:
         R = R / torch.mean(trace_strain2**1.5, dim=-1, keepdim=True)
 
         return P, Q, R
-
 
     def compute_tke_spectrum(
         field: np.ndarray, length: float = None
@@ -298,23 +294,24 @@ if PV_AVAILABLE:
         return mk, E, wave_numbers, tke_spectrum
 
 else:
-    
+
     def raise_missing_pyvista():
         raise ImportError(
             "pyvista is not installed, cannot use compute_frontal_area, compute_force_coefficients, dominant_freq_calc, compute_p_q_r, compute_tke_spectrum"
             "Install pyvista from here: https://docs.pyvista.org/getting-started/installation.html"
         )
+
     def compute_frontal_area(*args, **kwargs):
         raise_missing_pyvista()
-    
+
     def compute_force_coefficients(*args, **kwargs):
         raise_missing_pyvista()
-        
+
     def dominant_freq_calc(*args, **kwargs):
         raise_missing_pyvista()
-        
+
     def compute_p_q_r(*args, **kwargs):
         raise_missing_pyvista()
-        
+
     def compute_tke_spectrum(*args, **kwargs):
         raise_missing_pyvista()

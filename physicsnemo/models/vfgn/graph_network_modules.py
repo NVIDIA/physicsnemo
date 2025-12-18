@@ -20,6 +20,7 @@
 
 import importlib
 import random
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,9 +30,9 @@ from torch import Tensor
 from torch.nn import Embedding, Linear, ReLU
 from torch.utils.checkpoint import checkpoint
 
+from physicsnemo.core import Module
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn.module import Module
 
 TORCH_SCATTER_AVAILABLE = check_version_spec("torch_scatter", hard_fail=False)
 
@@ -40,7 +41,7 @@ STD_EPSILON = 1e-8
 
 @dataclass
 class MetaData(ModelMetaData):
-    name: str = "VFGN"
+    name: str = "VFGNLearnedSimulator"
     # Optimization
     jit: bool = False
     cuda_graphs: bool = True
@@ -589,7 +590,7 @@ class EncodeProcessDecode(Module):
         return x
 
 
-class LearnedSimulator(Module):
+class VFGNLearnedSimulator(Module):
     """
     Construct the Simulator model architecture
 
@@ -616,7 +617,7 @@ class LearnedSimulator(Module):
 
     Example
     -------
-    # >>> model = physicsnemo.models.graph_network.LearnedSimulator(
+    # >>> model = physicsnemo.models.graph_network.VFGNLearnedSimulator(
     # ... num_dimensions=3*5, # metadata['dim'] * PREDICT_LENGTH
     # ... num_seq=2,
     # ... boundaries=128)
@@ -640,7 +641,7 @@ class LearnedSimulator(Module):
         connectivity_param: float = 0.015,
     ):
         if not (num_dimensions >= 0 and num_seq >= 3):
-            raise ValueError("Invalid arch params - LearnedSimulator")
+            raise ValueError("Invalid arch params - VFGNLearnedSimulator")
         super().__init__(meta=MetaData(name="vfgn_simulator"))
 
         # network parameters
@@ -681,7 +682,7 @@ class LearnedSimulator(Module):
 
     def to(self, device):
         """Device transfer"""
-        new_self = super(LearnedSimulator, self).to(device)
+        new_self = super(VFGNLearnedSimulator, self).to(device)
         new_self._boundaries = self._boundaries.to(device)
         for key in self._normalization_stats:
             new_self._normalization_stats[key].to(device)
@@ -977,7 +978,7 @@ class LearnedSimulator(Module):
         particle_types=None,
     ) -> Tensor:
         """
-        Inference with the LearnedSimulator network
+        Inference with the VFGNLearnedSimulator network
 
         Args:
         position_sequence: Model inference input tensor
@@ -1035,7 +1036,7 @@ class LearnedSimulator(Module):
         particle_types=None,
     ) -> Tensor:
         """
-        Training step with the LearnedSimulator network,
+        Training step with the VFGNLearnedSimulator network,
         Produces normalized and predicted nodal acceleration.
 
         Args:
@@ -1124,3 +1125,63 @@ class LearnedSimulator(Module):
         ) / acceleration_stats.std
         normalized_acceleration = torch.tile(normalized_acceleration, [predict_length])
         return normalized_acceleration
+
+
+class LearnedSimulator(VFGNLearnedSimulator):
+    """
+    NOTE: This is a deprecated version of the VFGNLearnedSimulator model.
+    This is kept for backwards compatibility and to allow loading old models.
+    Please use the VFGNLearnedSimulator model instead.
+
+    Construct the Simulator model architecture
+
+    Parameters
+    ----------
+    num_dimensions : int
+        Number of dimensions to make the prediction
+    num_seq : int
+        Number of sintering steps
+    boundaries : list[list[float]]
+        boundary value that the object is placed/ normalized in,
+        i.e.[[-5.0, 5.0], [-5.0, 5.0], [-5.0, 5.0]]
+    num_particle_types : int
+        Number of types to differentiate the different nodes, i.e. fixed/ moving nodes
+    particle_type_embedding_size: int
+        positional embedding dimension with different particle types,
+        in torch.nn.Embedding()
+    normalization_stats: dict{list[float]}
+        Stored in metadata.json
+        {'acceleration': acceleration_stats, 'velocity': velocity_stats, 'context': context_stats}
+    graph_mode : str, optional
+    connectivity_param: float
+        Distance to normalize the displacement between nodes
+    """
+
+    def __init__(
+        self,
+        num_dimensions: int = 3,
+        num_seq: int = 5,
+        boundaries: list[list[float]] = None,
+        num_particle_types: int = 3,
+        particle_type_embedding_size: int = 16,
+        normalization_stats: map = None,
+        graph_mode: str = "radius",
+        connectivity_param: float = 0.015,
+    ):
+        warnings.warn(
+            "LearnedSimulator is deprecated and will be removed in a future version. "
+            "Please use VFGNLearnedSimulator instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        super().__init__(
+            num_dimensions=num_dimensions,
+            num_seq=num_seq,
+            boundaries=boundaries,
+            num_particle_types=num_particle_types,
+            particle_type_embedding_size=particle_type_embedding_size,
+            normalization_stats=normalization_stats,
+            graph_mode=graph_mode,
+            connectivity_param=connectivity_param,
+        )

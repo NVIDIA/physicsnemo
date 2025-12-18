@@ -99,8 +99,6 @@ def test_HEALPixUnfoldFaces_forward(device, pytestconfig):
     assert outvar.shape == output_size
 
 
-
-
 @requires_module("hydra")
 @pytest.mark.parametrize("padding", [2, 3, 4])
 def test_HEALPixPadding_initialization(device, padding, pytestconfig):

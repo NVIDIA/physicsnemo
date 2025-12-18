@@ -57,7 +57,7 @@ class WeightFactLinear(nn.Module):
 
     Example
     -------
-    >>> wfact = physicsnemo.models.layers.WeightFactLinear(2,4)
+    >>> wfact = physicsnemo.nn.WeightFactLinear(2,4)
     >>> input = torch.rand(2,2)
     >>> output = wfact(input)
     >>> output.size()

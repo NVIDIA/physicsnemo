@@ -112,7 +112,6 @@ def test_dhariwal_unet_checkpoint(device):
     if device == "cpu":
         pytest.skip("CUDA only")
 
-
     model_1 = UNet(
         img_resolution=16,
         in_channels=2,

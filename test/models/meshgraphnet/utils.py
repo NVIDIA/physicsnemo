@@ -14,23 +14,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import torch
 
 
-def get_random_graph(
-    num_nodes: int, min_degree: int, max_degree: int
-) -> torch.Tensor:  # pragma: no cover
-    """utility function which creates a random CSC-graph structure
-    defined by an offsets and indices buffer based on a given number of
-    nodes, and minimum and maximum node degree.
-    """
-    offsets = torch.empty(num_nodes + 1, dtype=torch.int64)
-    offsets[0] = 0
-    offsets[1:] = torch.randint(
-        min_degree, max_degree + 1, (num_nodes,), dtype=torch.int64
-    )
-    offsets = offsets.cumsum(dim=0)
-    num_indices = offsets[-1].item()
-    indices = torch.randint(0, num_nodes, (num_indices,), dtype=torch.int64)
+def rand_graph(num_nodes, num_edges, device=None):
+    """Create a random graph."""
 
-    return offsets, indices
+    import torch_geometric as pyg
+
+    src = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
+    dst = torch.tensor([np.random.randint(num_nodes) for _ in range(num_edges)])
+    graph = pyg.data.Data(
+        edge_index=torch.stack([src, dst], dim=0),
+        num_nodes=num_nodes,
+    )
+    if device is not None:
+        graph = graph.to(device)
+    return graph

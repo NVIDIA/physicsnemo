@@ -1,6 +1,7 @@
 install:
 	pip install --upgrade pip && \
 		pip install -e .
+	pip install tfrecord # Putting this here till we update the container.
 
 editable-install:
 	pip install --upgrade pip && \

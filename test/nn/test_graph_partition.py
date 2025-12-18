@@ -17,8 +17,6 @@
 import pytest
 import torch
 
-from test.conftest import requires_module
-
 
 @pytest.fixture
 def global_graph():

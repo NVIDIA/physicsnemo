@@ -16,12 +16,12 @@
 
 import torch
 
-from test.conftest import requires_module
-
 from physicsnemo.models.graphcast.utils.loss import (
     CellAreaWeightedLossFunction,
     CustomCellAreaWeightedLossFunction,
 )
+from test.conftest import requires_module
+
 
 @requires_module("sklearn")
 def test_loss():

@@ -29,11 +29,11 @@ from physicsnemo.distributed import (
 )
 from physicsnemo.distributed.utils import _reduce
 
+
 @pytest.fixture(autouse=True)
 def skip_on_cpu(device):
     if device == "cpu":
         pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
-
 
 
 def run_test_reduce_loss(rank, world_size):

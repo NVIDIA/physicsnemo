@@ -68,9 +68,9 @@ def cos_zenith_angle(
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> angle = cos_zenith_angle(model_time, lat=360, lon=120)
-    >>> abs(angle - -0.447817277) < 1e-6
+    >>> bool(abs(angle - -0.447817277) < 1e-6)
     True
     """
     lon_rad = np.deg2rad(lon, dtype=dtype)
@@ -98,9 +98,9 @@ def cos_zenith_angle_from_timestamp(
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> angle = cos_zenith_angle_from_timestamp(model_time.timestamp(), lat=360, lon=120)
-    >>> abs(angle - -0.447817277) < 1e-6
+    >>> bool(abs(angle - -0.447817277) < 1e-6)
     True
     """
     lon_rad = np.deg2rad(lon, dtype=dtype)
@@ -308,8 +308,8 @@ def _days_from_2000(model_time):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
-    >>> _days_from_2000(model_time)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> float(_days_from_2000(model_time))
     731.0
     """
     if isinstance(model_time, datetime.datetime):
@@ -346,10 +346,10 @@ def _greenwich_mean_sidereal_time(jul_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> g_time = _greenwich_mean_sidereal_time(c)
-    >>> abs(g_time - 4.903831411) < 1e-8
+    >>> bool(abs(g_time - 4.903831411) < 1e-8)
     True
     """
     theta = 67310.54841 + jul_centuries * (
@@ -372,10 +372,10 @@ def _local_mean_sidereal_time(julian_centuries, longitude):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> l_time = _local_mean_sidereal_time(c, np.deg2rad(90))
-    >>> abs(l_time - 6.474627737) < 1e-8
+    >>> bool(abs(l_time - 6.474627737) < 1e-8)
     True
     """
     return _greenwich_mean_sidereal_time(julian_centuries) + longitude
@@ -389,10 +389,10 @@ def _sun_ecliptic_longitude(julian_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> lon = _sun_ecliptic_longitude(c)
-    >>> abs(lon - 17.469114444) < 1e-8
+    >>> bool(abs(lon - 17.469114444) < 1e-8)
     True
     """
 
@@ -428,10 +428,10 @@ def _obliquity_star(julian_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> julian_centuries = _days_from_2000(model_time) / 36525.0
     >>> obl = _obliquity_star(julian_centuries)
-    >>> abs(obl - 0.409088056) < 1e-8
+    >>> bool(abs(obl - 0.409088056) < 1e-8)
     True
     """
     return np.deg2rad(
@@ -457,12 +457,12 @@ def _right_ascension_declination(julian_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> out1, out2 = _right_ascension_declination(c)
-    >>> abs(out1 - -1.363787213) < 1e-8
+    >>> bool(abs(out1 - -1.363787213) < 1e-8)
     True
-    >>> abs(out2 - -0.401270126) < 1e-8
+    >>> bool(abs(out2 - -0.401270126) < 1e-8)
     True
     """
     eps = _obliquity_star(julian_centuries)

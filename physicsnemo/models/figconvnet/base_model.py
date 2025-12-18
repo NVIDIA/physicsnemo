@@ -18,7 +18,7 @@ from typing import Any, Dict, Tuple
 
 import torch
 
-from physicsnemo.models.module import Module
+from physicsnemo.core.module import Module
 
 
 class BaseModel(Module):

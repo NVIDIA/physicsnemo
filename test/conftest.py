@@ -18,9 +18,9 @@ import importlib
 import os
 import pathlib
 from collections import defaultdict
-import torch
 
 import pytest
+import torch
 
 NFS_DATA_PATH = "/data/nfs/modulus-data"
 

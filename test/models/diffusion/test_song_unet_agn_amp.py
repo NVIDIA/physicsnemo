@@ -20,16 +20,15 @@ import torch
 
 from physicsnemo.models.diffusion import SongUNet as UNet
 from test import common
-
-@pytest.fixture(autouse=True)
-def skip_on_cpu(device):
-    if device == "cpu":
-        pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
+from test.conftest import requires_module
 
 
-
-def test_song_unet_constructor(device):
+@requires_module("apex")
+def test_song_unet_constructor(apex_device):
     """Test the Song UNet constructor options"""
+
+    if "cpu" in apex_device:
+        pytest.skip("Apex GN is not supported on CPU")
 
     # DDM++
     img_resolution = 16
@@ -43,12 +42,12 @@ def test_song_unet_constructor(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
+    noise_labels = torch.randn([1]).to(apex_device)
+    class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
+    input_image = torch.ones([1, 2, 16, 16]).to(apex_device)
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
@@ -65,12 +64,12 @@ def test_song_unet_constructor(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
+    noise_labels = torch.randn([1]).to(apex_device)
+    class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
+    input_image = torch.ones([1, 2, 16, 16]).to(apex_device)
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert model.spatial_emb.shape == (
@@ -93,12 +92,12 @@ def test_song_unet_constructor(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
+    noise_labels = torch.randn([1]).to(apex_device)
+    class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
+    input_image = torch.ones([1, 2, 16, 16]).to(apex_device)
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
     assert output_image.shape == (1, out_channels, img_resolution, img_resolution)
@@ -116,13 +115,13 @@ def test_song_unet_constructor(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
+    noise_labels = torch.randn([1]).to(apex_device)
+    class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
     input_image = torch.ones([1, out_channels, img_resolution, img_resolution * 2]).to(
-        device
+        apex_device
     )
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=True):
         output_image = model(input_image, noise_labels, class_labels)
@@ -139,7 +138,7 @@ def test_song_unet_constructor(device):
                 use_apex_gn=True,
                 amp_mode=True,
             )
-            .to(device)
+            .to(apex_device)
             .to(memory_format=torch.channels_last)
         )
         raise AssertionError("Failed to error for invalid argument")
@@ -156,7 +155,7 @@ def test_song_unet_constructor(device):
                 use_apex_gn=True,
                 amp_mode=True,
             )
-            .to(device)
+            .to(apex_device)
             .to(memory_format=torch.channels_last)
         )
         raise AssertionError("Failed to error for invalid argument")
@@ -173,7 +172,7 @@ def test_song_unet_constructor(device):
                 use_apex_gn=True,
                 amp_mode=True,
             )
-            .to(device)
+            .to(apex_device)
             .to(memory_format=torch.channels_last)
         )
         raise AssertionError("Failed to error for invalid argument")
@@ -181,8 +180,12 @@ def test_song_unet_constructor(device):
         pass
 
 
-def test_song_unet_optims(device):
+@requires_module("apex")
+def test_song_unet_optims(apex_device):
     """Test Song UNet optimizations"""
+
+    if "cpu" in apex_device:
+        pytest.skip("Apex GN is not supported on CPU")
 
     def setup_model():
         model = (
@@ -197,12 +200,12 @@ def test_song_unet_optims(device):
                 use_apex_gn=True,
                 amp_mode=True,
             )
-            .to(device)
+            .to(apex_device)
             .to(memory_format=torch.channels_last)
         )
-        noise_labels = torch.randn([1]).to(device)
-        class_labels = torch.randint(0, 1, (1, 1)).to(device)
-        input_image = torch.ones([1, 2, 16, 16]).to(device)
+        noise_labels = torch.randn([1]).to(apex_device)
+        class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
+        input_image = torch.ones([1, 2, 16, 16]).to(apex_device)
 
         return model, [input_image, noise_labels, class_labels]
 
@@ -225,8 +228,12 @@ def test_song_unet_optims(device):
         assert common.validate_combo_optims(model, (*invar,))
 
 
-def test_song_unet_checkpoint(device):
+@requires_module("apex")
+def test_song_unet_checkpoint(apex_device):
     """Test Song UNet checkpoint save/load"""
+
+    if "cpu" in apex_device:
+        pytest.skip("Apex GN is not supported on CPU")
 
     model_1 = (
         UNet(
@@ -236,7 +243,7 @@ def test_song_unet_checkpoint(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
 
@@ -248,13 +255,13 @@ def test_song_unet_checkpoint(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
 
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
+    noise_labels = torch.randn([1]).to(apex_device)
+    class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
+    input_image = torch.ones([1, 2, 16, 16]).to(apex_device)
     assert common.validate_checkpoint(
         model_1,
         model_2,
@@ -263,8 +270,9 @@ def test_song_unet_checkpoint(device):
     )
 
 
+@requires_module("apex")
 @common.check_ort_version()
-def test_son_unet_deploy(device):
+def test_son_unet_deploy(apex_device):
     """Test Song UNet deployment support"""
     model = (
         UNet(
@@ -278,13 +286,13 @@ def test_son_unet_deploy(device):
             use_apex_gn=True,
             amp_mode=True,
         )
-        .to(device)
+        .to(apex_device)
         .to(memory_format=torch.channels_last)
     )
 
-    noise_labels = torch.randn([1]).to(device)
-    class_labels = torch.randint(0, 1, (1, 1)).to(device)
-    input_image = torch.ones([1, 2, 16, 16]).to(device)
+    noise_labels = torch.randn([1]).to(apex_device)
+    class_labels = torch.randint(0, 1, (1, 1)).to(apex_device)
+    input_image = torch.ones([1, 2, 16, 16]).to(apex_device)
 
     assert common.validate_onnx_export(
         model, (*[input_image, noise_labels, class_labels],)

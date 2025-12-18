@@ -7,6 +7,8 @@
 [![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Install CI](https://github.com/coreyjadams/physicsnemo/actions/workflows/install-ci.yml/badge.svg)](https://github.com/coreyjadams/physicsnemo/actions/workflows/install-ci.yml)
+
 <!-- markdownlint-enable -->
 [**NVIDIA PhysicsNeMo**](#what-is-physicsnemo)
 | [**Documentation**](https://docs.nvidia.com/deeplearning/physicsnemo/physicsnemo-core/index.html)

@@ -26,6 +26,7 @@ import torch
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
+from physicsnemo.core.version_check import get_installed_version
 from physicsnemo.utils import load_checkpoint, save_checkpoint
 from test.conftest import requires_module
 
@@ -39,6 +40,13 @@ def reload_layer_norm():
     return importlib.import_module(LAYER_NORM_PATH)
 
 
+@pytest.fixture(autouse=True)
+def clear_version_check_cache():
+    get_installed_version.cache_clear()
+    yield
+    get_installed_version.cache_clear()
+
+
 def test_torch_fallback(monkeypatch):
     """
     This test pretends that transformer_engine.pytorch is not available,
@@ -48,6 +56,19 @@ def test_torch_fallback(monkeypatch):
     monkeypatch.delenv("PHYSICSNEMO_FORCE_TE", raising=False)
     monkeypatch.setitem(sys.modules, "transformer_engine.pytorch", None)
     monkeypatch.setitem(sys.modules, "transformer_engine", None)
+
+    # Patch check_version_spec to return False for transformer_engine
+    from physicsnemo.core import version_check
+
+    original_check = version_check.check_version_spec
+
+    def fake_check_version_spec(module_name, *args, **kwargs):
+        if module_name == "transformer_engine":
+            return False
+        # For other modules, use the original function
+        return original_check(module_name, *args, **kwargs)
+
+    monkeypatch.setattr(version_check, "check_version_spec", fake_check_version_spec)
 
     # Patch importlib to simulate ImportError
     orig_import = builtins.__import__

@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from physicsnemo.models.diffusion import StormCastUNet, UNet
+from physicsnemo.models.diffusion import CorrDiffRegressionUNet, StormCastUNet
 from test import common
 
 
@@ -29,7 +29,7 @@ def test_unet_forwards(device):
 
     # Construct the UNet model
     res, inc, outc = 64, 2, 3
-    model = UNet(
+    model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -54,7 +54,7 @@ def test_unet_fp16_forwards(device):
 
     # Construct the UNet model
     res, inc, outc = 64, 2, 3
-    model_fp16 = UNet(
+    model_fp16 = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -62,7 +62,7 @@ def test_unet_fp16_forwards(device):
         use_fp16=True,
     ).to(device)
 
-    model_fp32 = UNet(
+    model_fp32 = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -95,7 +95,7 @@ def test_unet_optims(device):
     res, inc, outc = 64, 2, 3
 
     def setup_model():
-        model = UNet(
+        model = CorrDiffRegressionUNet(
             img_resolution=res,
             img_in_channels=inc,
             img_out_channels=outc,
@@ -143,13 +143,13 @@ def test_unet_checkpoint(device):
     """Test UNet wrapper checkpoint save/load"""
     # Construct UNet models
     res, inc, outc = 64, 2, 3
-    model_1 = UNet(
+    model_1 = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
         model_type="SongUNet",
     ).to(device)
-    model_2 = UNet(
+    model_2 = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -178,7 +178,7 @@ def test_unet_properties(device):
 
     res, inc, outc = 32, 1, 1
 
-    model = UNet(
+    model = CorrDiffRegressionUNet(
         img_resolution=res,
         img_in_channels=inc,
         img_out_channels=outc,
@@ -233,7 +233,7 @@ def test_unet_backward_compat(device):
     """Test backward compatibility of UNet wrappers"""
 
     # Construct Load UNet from older version
-    UNet.from_checkpoint(
+    CorrDiffRegressionUNet.from_checkpoint(
         file_name=(
             str(
                 Path(__file__).parents[1].resolve()

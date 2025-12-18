@@ -23,40 +23,23 @@ from typing import TypeAlias
 
 from physicsnemo.core.version_check import check_version_spec
 
-CUGRAPH_OPS_AVAILABLE = check_version_spec("pylibcugraphops", hard_fail=False)
-
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False) and check_version_spec("torch_scatter", hard_fail=False)
+PYG_AVAILABLE = check_version_spec(
+    "torch_geometric", hard_fail=False
+) and check_version_spec("torch_scatter", hard_fail=False)
 
 if PYG_AVAILABLE:
     PyGData = importlib.import_module("torch_geometric.data").Data
     PyGHeteroData = importlib.import_module("torch_geometric.data").HeteroData
 
-    if CUGRAPH_OPS_AVAILABLE:
-        CuGraphCSC = importlib.import_module("pylibcugraphops").CuGraphCSC
-        GraphType: TypeAlias = PyGData | PyGHeteroData | CuGraphCSC
-
-    else:
-        GraphType: TypeAlias = PyGData | PyGHeteroData
+    GraphType: TypeAlias = PyGData | PyGHeteroData
 
 else:
-    if CUGRAPH_OPS_AVAILABLE:
-        CuGraphCSC = importlib.import_module("pylibcugraphops").CuGraphCSC
-        GraphType: TypeAlias = CuGraphCSC
-    else:
-        GraphType: TypeAlias = None
+    GraphType: TypeAlias = None
 
 
 def raise_missing_pyg_error():
     msg = "MeshGraphNet requires PyTorch Geometric and torch_scatter.\n"
     "Install it from here:\n"
     "  https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html\n"
-
-    raise ImportError(msg)
-
-
-def raise_missing_cugraph_ops_error():
-    msg = "MeshGraphNet requires cugraph-ops.\n"
-    "Install it from here:\n"
-    "  https://github.com/rapidsai/cugraph-ops\n"
 
     raise ImportError(msg)

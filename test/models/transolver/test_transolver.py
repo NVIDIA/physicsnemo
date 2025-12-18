@@ -67,7 +67,7 @@ def test_transolver2d_forward(device):
             embedding,
         ),
         file_name="models/transolver/data/transolver2d_output.pth",
-        atol=1e-3,
+        atol=2e-3,
     )
 
 

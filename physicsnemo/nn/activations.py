@@ -17,7 +17,7 @@
 import torch
 import torch.nn as nn
 
-# import physicsnemo  # noqa: F401 for docs
+import physicsnemo  # noqa: F401 for docs
 
 Tensor = torch.Tensor
 
@@ -29,7 +29,7 @@ class Identity(nn.Module):
 
     Example
     -------
-    >>> idnt_func = physicsnemo.models.layers.Identity()
+    >>> idnt_func = physicsnemo.nn.Identity()
     >>> input = torch.randn(2, 2)
     >>> output = idnt_func(input)
     >>> torch.allclose(input, output)
@@ -56,7 +56,7 @@ class Stan(nn.Module):
 
     Example
     -------
-    >>> stan_func = physicsnemo.models.layers.Stan(out_features=1)
+    >>> stan_func = physicsnemo.nn.Stan(out_features=1)
     >>> input = torch.Tensor([[0],[1],[2]])
     >>> stan_func(input)
     tensor([[0.0000],
@@ -85,7 +85,7 @@ class SquarePlus(nn.Module):
 
     Example
     -------
-    >>> sqr_func = physicsnemo.models.layers.SquarePlus()
+    >>> sqr_func = physicsnemo.nn.SquarePlus()
     >>> input = torch.Tensor([[1,2],[3,4]])
     >>> sqr_func(input)
     tensor([[1.6180, 2.4142],
@@ -106,7 +106,7 @@ class CappedLeakyReLU(torch.nn.Module):
 
     Example
     -------
-    >>> capped_leakyReLU_func = physicsnemo.models.layers.CappedLeakyReLU()
+    >>> capped_leakyReLU_func = physicsnemo.nn.CappedLeakyReLU()
     >>> input = torch.Tensor([[-2,-1],[0,1],[2,3]])
     >>> capped_leakyReLU_func(input)
     tensor([[-0.0200, -0.0100],
@@ -140,7 +140,7 @@ class CappedGELU(torch.nn.Module):
 
     Example
     -------
-    >>> capped_gelu_func = physicsnemo.models.layers.CappedGELU()
+    >>> capped_gelu_func = physicsnemo.nn.CappedGELU()
     >>> input = torch.Tensor([[-2,-1],[0,1],[2,3]])
     >>> capped_gelu_func(input)
     tensor([[-0.0455, -0.1587],

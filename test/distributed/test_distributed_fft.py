@@ -23,11 +23,11 @@ import torch.distributed as dist
 from physicsnemo.distributed import DistributedManager
 from physicsnemo.distributed.fft import DistributedRFFT2
 
+
 @pytest.fixture(autouse=True)
 def skip_on_cpu(device):
     if device == "cpu":
         pytest.skip("Skip SongUNetPosLtEmbd AMP/agnostic tests on cpu")
-
 
 
 def distributed_setup(rank, model_parallel_size, verbose):

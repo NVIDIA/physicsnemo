@@ -16,7 +16,6 @@
 
 import random
 
-import pytest
 import torch
 
 from physicsnemo.nn import WeightNormLinear

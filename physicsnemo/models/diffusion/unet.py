@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import importlib
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Set, Tuple, Union
 
@@ -44,7 +45,7 @@ class MetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class UNet(Module):  # TODO a lot of redundancy, need to clean up
+class CorrDiffRegressionUNet(Module):  # TODO a lot of redundancy, need to clean up
     r"""
     This interface provides a U-Net wrapper for CorrDiff deterministic
     regression model (and other deterministic downsampling models).
@@ -298,6 +299,94 @@ class UNet(Module):  # TODO a lot of redundancy, need to clean up
             The tensor representation of the provided sigma value(s).
         """
         return torch.as_tensor(sigma)
+
+
+class UNet(CorrDiffRegressionUNet):
+    """
+    NOTE: This is a deprecated version of the CorrDiffRegressionUNet model.
+    This is kept for backwards compatibility and to allow loading old models.
+    Please use the CorrDiffRegressionUNet model instead.
+
+    This interface provides a U-Net wrapper for CorrDiff deterministic
+    regression model (and other deterministic downsampling models).
+    It supports the following architectures:
+
+    - :class:`~physicsnemo.models.diffusion.song_unet.SongUNet`
+
+    - :class:`~physicsnemo.models.diffusion.song_unet.SongUNetPosEmbd`
+
+    - :class:`~physicsnemo.models.diffusion.song_unet.SongUNetPosLtEmbd`
+
+    - :class:`~physicsnemo.models.diffusion.dhariwal_unet.DhariwalUNet`
+
+    It shares the same architeture as a conditional diffusion model. It does so
+    by concatenating a conditioning image to a zero-filled latent state, and by
+    setting the noise level and the class labels to zero.
+
+    Parameters
+    -----------
+    img_resolution : Union[int, Tuple[int, int]]
+        The resolution of the input/output image. If a single int is provided,
+        then the image is assumed to be square.
+    img_in_channels : int
+        Number of channels in the input image.
+    img_out_channels : int
+        Number of channels in the output image.
+    use_fp16: bool, optional, default=False
+        Execute the underlying model at FP16 precision.
+    model_type: Literal['SongUNet', 'SongUNetPosEmbd', 'SongUNetPosLtEmbd',
+    'DhariwalUNet'], default='SongUNetPosEmbd'
+        Class name of the underlying architecture. Must be one of the following:
+        'SongUNet', 'SongUNetPosEmbd', 'SongUNetPosLtEmbd', 'DhariwalUNet'.
+    **model_kwargs : dict
+        Keyword arguments passed to the underlying architecture `__init__` method.
+
+    Please refer to the documentation of these classes for details on how to call
+    and use these models directly.
+
+    Forward
+    -------
+    x : torch.Tensor
+        The input tensor, typically zero-filled, of shape :math:`(B, C_{in}, H_{in}, W_{in})`.
+    img_lr : torch.Tensor
+        Conditioning image of shape :math:`(B, C_{lr}, H_{in}, W_{in})`.
+    **model_kwargs : dict
+        Additional keyword arguments to pass to the underlying architecture
+        forward method.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, H_{in}, W_{in})` (same
+        spatial dimensions as the input).
+    """
+
+    def __init__(
+        self,
+        img_resolution: Union[int, Tuple[int, int]],
+        img_in_channels: int,
+        img_out_channels: int,
+        use_fp16: bool = False,
+        model_type: Literal[
+            "SongUNetPosEmbd", "SongUNetPosLtEmbd", "SongUNet", "DhariwalUNet"
+        ] = "SongUNetPosEmbd",
+        **model_kwargs: dict,
+    ):
+        warnings.warn(
+            "UNet is deprecated and will be removed in a future version. "
+            "Please use CorrDiffRegressionUNet instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        super().__init__(
+            img_resolution=img_resolution,
+            img_in_channels=img_in_channels,
+            img_out_channels=img_out_channels,
+            use_fp16=use_fp16,
+            model_type=model_type,
+            **model_kwargs,
+        )
 
 
 # TODO: implement amp_mode and profile_mode properties for StormCastUNet (same

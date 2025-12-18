@@ -111,7 +111,9 @@ class TorchModel(torch.nn.Module):
 
 
 def make_model():
-    Mt = physicsnemo.core.Module.from_torch(TorchModel, meta=TorchModelMetaData())
+    Mt = physicsnemo.core.Module.from_torch(
+        TorchModel, meta=TorchModelMetaData(), register=True
+    )
     m21 = Mt(21.0)
     m22 = M1(22.0)
     m11 = M1(11.0)
@@ -170,7 +172,7 @@ def test_load_from_checkpoint(device, override):
 
     m_orig, Mt = make_model()
     m_orig = m_orig.to(device)
-    
+
     if not override:
         m_loaded = physicsnemo.core.Module.from_checkpoint(file_name).to(device)
     else:

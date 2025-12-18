@@ -26,6 +26,7 @@ from physicsnemo.distributed import (
 )
 from physicsnemo.distributed.mappings import reduce_from_parallel_region
 
+
 @pytest.fixture(autouse=True)
 def skip_on_cpu(device):
     if device == "cpu":

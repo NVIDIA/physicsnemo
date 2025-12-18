@@ -289,11 +289,10 @@ def test_song_unet_optims(device):
 # Skip CPU tests because too slow
 def test_song_unet_checkpoint(device):
     """Test Song UNet checkpoint save/load"""
-    
+
     if device == "cpu":
         pytest.skip("Skip SongUNetPosEmbd on cpu")
 
-    
     # Construct FNO models
     model_1 = UNet(
         img_resolution=16,

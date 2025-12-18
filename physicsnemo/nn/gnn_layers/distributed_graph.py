@@ -700,7 +700,7 @@ def partition_graph_by_coordinate_bbox(
     Examples
     --------
     >>> import torch
-    >>> from physicsnemo.models.gnn_layers import partition_graph_by_coordinate_bbox
+    >>> from physicsnemo.nn.gnn_layers import partition_graph_by_coordinate_bbox
     >>> # simple graph with a degree of 2 per node
     >>> num_src_nodes = 8
     >>> num_dst_nodes = 4

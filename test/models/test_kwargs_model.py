@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from physicsnemo.core import Module, ModelRegistry
+from physicsnemo.core import ModelRegistry, Module
 
 
 # Fixture to clear registry between tests to avoid naming conflicts
@@ -32,7 +32,7 @@ def clear_registry():
     registry.__restore_registry__()
 
 
-class MockModel(Module, _register=False):
+class MockModel(Module):
     """Fake model"""
 
     def __init__(self, input_size=16, output_size=16, **other_kwargs):

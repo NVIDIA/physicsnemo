@@ -9,10 +9,8 @@ authors = [
 description = "A deep learning framework for AI-driven multi-physics systems"
 readme = "README.md"
 
-# Python 3.10 is EOL in 2026.  Migrating to 3.11+
-# Pytorch support for torch.compile in 3.14 is not ready as of Dec 2025.
-# Remove constraint against 3.14 when it arrives.
-requires-python = ">=3.10,<3.14"
+
+requires-python = ">=3.11,<3.14"
 
 license = "Apache-2.0"
 
@@ -45,6 +43,7 @@ dependencies = [
     "zarr>=2.18.3",
     "hydra-core>=1.3.2",
     "tensordict>=0.10.0",
+    "omegaconf>=2.3.0",
 ]
 
 [project.urls]
@@ -60,21 +59,25 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 #####################################################################
 
 [tool.uv]
-no-build-isolation-package = [
-    "torch_scatter",
-    "torch_cluster",
-    "earth2grid",
-]
 managed = true
 
-# torch-sparse requires us to tell uv about it's dependency on torch.
 [tool.uv.extra-build-dependencies]
 torch-sparse = ["torch"]
+torch-cluster = ["torch"]
+torch-scatter = ["torch"]
 earth2grid = ["setuptools", "torch"] 
 
-# Earth2 grid is not on pypi ....
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
+
 [tool.uv.sources]
 earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/main.tar.gz" }
+cuml-cu13 = { index = "nvidia" }
+pylibraft-cu13 = { index = "nvidia" }
+cuml-cu12 = { index = "nvidia" } # TODO setup optional install groups for CUDA 12 installations
+pylibraft-cu12 = { index = "nvidia" }
 
 #####################################################################
 # Flags Controlling the local build of physicsnemo
@@ -106,6 +109,7 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "coverage>=7.13.0",
     "import-linter>=2.7",
     "interrogate>=1.7.0",
     "onnx>=1.20.0",
@@ -133,11 +137,11 @@ utils-extras = [
     "line_profiler",
     "vtk",
     "stl",
-    "rmm",
-    "cupy",
+    "pylibraft-cu13", # Provides rmm
+    "cupy-cuda13x",
 ]
 nn-extras = [
-    "cuml",
+    "cuml-cu13",
     "transformer_engine[pytorch]",
     "scipy",
     "natten",
@@ -152,7 +156,7 @@ model-extras = [
 ]
 datapipes-extras = [
     "dask",
-    "tensorflow",
+    "tfrecord",
     "nvidia-physicsnemo[model-extras]",
 ]
 
@@ -180,7 +184,7 @@ healpix = [
 lint.select = ["E", "F", "S", "I", "PERF"]
 lint.fixable = ["I"]
 
-# Never enforce `E402`, `E501` (line length violations),
+# Never enforce `E501` (line length violations),
 # and `S311` (random number generators)
 lint.ignore = ["E501", "S311"]
 
@@ -198,17 +202,84 @@ exclude = ["docs", "physicsnemo/experimental"]
 
 
 [project.entry-points."physicsnemo.models"]
+# AFNO
 AFNO = "physicsnemo.models.afno:AFNO"
-DLWP = "physicsnemo.models.dlwp:DLWP"
-FNO = "physicsnemo.models.fno:FNO"
-GraphCastNet = "physicsnemo.models.graphcast:GraphCastNet"
-MeshGraphNet = "physicsnemo.models.meshgraphnet:MeshGraphNet"
-FullyConnected = "physicsnemo.models.mlp:FullyConnected"
-Pix2Pix = "physicsnemo.models.pix2pix:Pix2Pix"
-One2ManyRNN = "physicsnemo.models.rnn:One2ManyRNN"
-SRResNet = "physicsnemo.models.srrn:SRResNet"
-Pangu = "physicsnemo.models.pangu:Pangu"
-Fengwu = "physicsnemo.models.fengwu:Fengwu"
-SwinRNN = "physicsnemo.models.swinvrnn:SwinRNN"
+DistributedAFNO = "physicsnemo.models.afno:DistributedAFNO"
+ModAFNO = "physicsnemo.models.afno:ModAFNO"
+
+# Diffusion UNets
+SongUNet = "physicsnemo.models.diffusion:SongUNet"
+SongUNetPosEmbd = "physicsnemo.models.diffusion:SongUNetPosEmbd"
+SongUNetPosLtEmbd = "physicsnemo.models.diffusion:SongUNetPosLtEmbd"
+DhariwalUNet = "physicsnemo.models.diffusion:DhariwalUNet"
+
+# Diffusion wrappers
+CorrDiffRegressionUNet = "physicsnemo.models.diffusion:CorrDiffRegressionUNet"
+StormCastUNet = "physicsnemo.models.diffusion:StormCastUNet"
+
+# Diffusion Preconditioners
+EDMPrecond = "physicsnemo.models.diffusion:EDMPrecond"
+EDMPrecondSuperResolution = "physicsnemo.models.diffusion:EDMPrecondSuperResolution"
 EDMPrecondSR = "physicsnemo.models.diffusion:EDMPrecondSR"
-UNet = "physicsnemo.models.diffusion:UNet"
+VEPrecond = "physicsnemo.models.diffusion:VEPrecond"
+VPPrecond = "physicsnemo.models.diffusion:VPPrecond"
+iDDPMPrecond = "physicsnemo.models.diffusion:iDDPMPrecond"
+VEPrecond_dfsr_cond = "physicsnemo.models.diffusion:VEPrecond_dfsr_cond"
+VEPrecond_dfsr = "physicsnemo.models.diffusion:VEPrecond_dfsr"
+
+# DLWP
+DLWP = "physicsnemo.models.dlwp:DLWP"
+
+# DLWP HEALPix
+HEALPixRecUNet = "physicsnemo.models.dlwp_healpix:HEALPixRecUNet"
+HEALPixUNet = "physicsnemo.models.dlwp_healpix:HEALPixUNet"
+
+# DPOT
+DPOTNet = "physicsnemo.models.dpot:DPOTNet"
+
+# Fengwu
+Fengwu = "physicsnemo.models.fengwu:Fengwu"
+
+# FIGConvNet
+FIGConvUNet = "physicsnemo.models.figconvnet:FIGConvUNet"
+
+# FNO
+FNO = "physicsnemo.models.fno:FNO"
+
+# GraphCast
+GraphCastNet = "physicsnemo.models.graphcast:GraphCastNet"
+
+# MeshGraphNets
+MeshGraphNet = "physicsnemo.models.meshgraphnet:MeshGraphNet"
+BiStrideMeshGraphNet = "physicsnemo.models.meshgraphnet:BiStrideMeshGraphNet"
+MeshGraphKAN = "physicsnemo.models.meshgraphnet:MeshGraphKAN"
+HybridMeshGraphNet = "physicsnemo.models.meshgraphnet:HybridMeshGraphNet"
+
+# MLP
+FullyConnected = "physicsnemo.models.mlp:FullyConnected"
+
+# Pangu
+Pangu = "physicsnemo.models.pangu:Pangu"
+
+# Pix2Pix
+Pix2Pix = "physicsnemo.models.pix2pix:Pix2Pix"
+Pix2PixUnet = "physicsnemo.models.pix2pix:Pix2PixUnet"
+
+# RNNs
+One2ManyRNN = "physicsnemo.models.rnn:One2ManyRNN"
+Seq2SeqRNN = "physicsnemo.models.rnn:Seq2SeqRNN"
+
+# SRNNs
+SRResNet = "physicsnemo.models.srrn:SRResNet"
+
+# SwinRNN
+SwinRNN = "physicsnemo.models.swinvrnn:SwinRNN"
+
+# TopoDiff
+TopoDiff = "physicsnemo.models.topodiff:TopoDiff"
+
+# Transolver
+Transolver = "physicsnemo.models.transolver:Transolver"
+
+# VFGN
+VFGN = "physicsnemo.models.vfgn:VFGNLearnedSimulator"

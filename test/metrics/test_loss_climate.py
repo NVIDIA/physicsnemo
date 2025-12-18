@@ -33,7 +33,6 @@ class Model(torch.nn.Module):
     output_variables = ["tcwv", "t2m"]
 
 
-
 def test_MSE_SSIM(device):
     model = Model()
 
@@ -123,7 +122,6 @@ def test_MSE_SSIM(device):
     # difference is c * h * w
     expected = ones[0, 0, 0, ...].sum()
     assert mse_ssim_loss(ones, zeros, model) == expected
-
 
 
 def test_SSIM(device):
