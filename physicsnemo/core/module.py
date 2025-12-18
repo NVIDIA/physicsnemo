@@ -324,13 +324,14 @@ class Module(torch.nn.Module):
         AttributeError
             If the class cannot be found.
         """
+
         _cls_name = arg_dict["__name__"]
         registry = ModelRegistry()
 
         if cls.__name__ == arg_dict["__name__"]:  # If cls is the class
-            return cls
+            _cls = cls
         elif _cls_name in registry.list_models():  # Built in registry
-            return registry.factory(_cls_name)
+            _cls = registry.factory(_cls_name)
         else:
             try:
                 # Check if module is using modulus import and change it to physicsnemo instead
@@ -352,7 +353,10 @@ class Module(torch.nn.Module):
                 _cls = cls
 
         # This works with the importlib.metadata.EntryPoint
-        if isinstance(_cls, importlib.metadata.EntryPoint):
+        # if isinstance(_cls, importlib.metadata.EntryPoint):
+        if "EntryPoint" in str(type(_cls)):
+            # I hate myself for this.  Somehow, we've got crossvoer pollution from
+            # importlib_metadata.EntryPoint.
             _cls = _cls.load()
 
         return _cls

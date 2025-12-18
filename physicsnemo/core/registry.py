@@ -23,10 +23,6 @@ from typing import TYPE_CHECKING, Dict, List, Union
 if TYPE_CHECKING:
     from physicsnemo.core.module import Module
 
-ENTRY_POINT_CLASSES = [
-    EntryPoint,
-]
-
 
 # This model registry follows conventions similar to fsspec,
 # https://github.com/fsspec/filesystem_spec/blob/master/fsspec/registry.py#L62C2-L62C2
@@ -147,8 +143,10 @@ class ModelRegistry:
 
         model = self._model_registry.get(name)
         if model is not None:
-            if isinstance(model, tuple(ENTRY_POINT_CLASSES)):
+            if isinstance(model, EntryPoint):
                 model = model.load()
+                # Update the registry with the loaded object:
+                self._model_registry[name] = model
             return model
 
         raise KeyError(
