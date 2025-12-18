@@ -629,7 +629,7 @@ class Mesh:
         self,
         indices: int
         | slice
-        | type(Ellipsis)
+        | type(Ellipsis)  # ty: ignore[invalid-type-form]
         | None
         | torch.Tensor
         | Sequence[int | bool],
@@ -661,7 +661,7 @@ class Mesh:
         self,
         indices: int
         | slice
-        | type(Ellipsis)
+        | type(Ellipsis)  # ty: ignore[invalid-type-form]
         | None
         | torch.Tensor
         | Sequence[int | bool | slice],
