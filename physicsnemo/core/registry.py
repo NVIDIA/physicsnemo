@@ -166,7 +166,7 @@ class ModelRegistry:
 
         raise KeyError(
             f"No model is registered under the name {name}. "
-            f"Current registered models are:\n{sorted(self.list_models())}"
+            f"Current registered models are: {sorted(self.list_models())}"
         )
 
     def list_models(self) -> List[str]:

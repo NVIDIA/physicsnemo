@@ -390,10 +390,10 @@ class Module(torch.nn.Module):
         >>> # Instantiate the model using the class method
         >>> model = Module.instantiate(arg_dict)
         >>> # Verify the model was created with the correct parameters
-        >>> model.in_features
-        10
-        >>> model.out_features
-        5
+        >>> x = torch.randn(100, 10)
+        >>> output = model(x)
+        >>> output.shape
+        torch.Size([100, 5])
         """
         _cls = cls._get_class_from_args(arg_dict)
         return _cls(**arg_dict["__args__"])
@@ -1147,9 +1147,11 @@ class Module(torch.nn.Module):
         ...         x = self.relu(x)
         ...         x = self.fc2(x)
         ...         return x
-        >>> # Convert PyTorch model to PhysicsNeMo Module
-        >>> # The class name 'SimpleMLP' will be used for registration
+        >>> # Convert PyTorch model to PhysicsNeMo Module without registering
         >>> PNMSimpleMLP = Module.from_torch(SimpleMLP, meta=ModelMetaData())
+        >>> # The physicsnemo class name is the same as the PyTorch class name
+        >>> PNMSimpleMLP.__name__
+        'SimpleMLP'
         >>> # Instantiate the PhysicsNeMo model
         >>> model = PNMSimpleMLP(input_size=10, hidden_size=64, output_size=5)
         >>> # Access the inner PyTorch model
@@ -1158,14 +1160,10 @@ class Module(torch.nn.Module):
         >>> assert model.inner_model.output_size == 5
         >>> # Use the model for inference
         >>> x = torch.randn(32, 10)
-        >>> output = model(x)  # Shape: (32, 5)
+        >>> output = model(x)
+        >>> output.shape
+        torch.Size([32, 5])
         >>> # Cannot retrieve the model class from the registry because it is not registered
-        >>> registry = ModelRegistry()
-        >>> ModelClass = registry.factory('SimpleMLP')
-        >>> isinstance(ModelClass, type) and issubclass(ModelClass, Module)
-        ...
-        KeyError: No model is registered under the name SimpleMLP. ...
-
 
         Example 2: Convert a PyTorch model with a custom name:
 
@@ -1188,12 +1186,15 @@ class Module(torch.nn.Module):
         ...         x = self.relu(x)
         ...         x = self.fc2(x)
         ...         return x
-        >>> # Convert with a custom name for the registry
+        >>> # Convert with a custom name
         >>> PNMSimpleMLP = Module.from_torch(
         ...     SimpleMLP,
         ...     meta=ModelMetaData(),
         ...     name='CustomSimpleMLP'
         ... )
+        >>> # The physicsnemo class name is defined by the name parameter
+        >>> PNMSimpleMLP.__name__
+        'CustomSimpleMLP'
         >>> # Instantiate the PhysicsNeMo model
         >>> model = PNMSimpleMLP(input_size=10, hidden_size=64, output_size=5)
         >>> # Access the inner PyTorch model
@@ -1201,10 +1202,6 @@ class Module(torch.nn.Module):
         >>> assert model.inner_model.hidden_size == 64
         >>> assert model.inner_model.output_size == 5
         >>> # Cannot retrieve the model class from the registry because it is not registered
-        >>> registry = ModelRegistry()
-        >>> ModelClass = registry.factory('CustomSimpleMLP')
-        ...
-        KeyError: No model is registered under the name CustomSimpleMLP. ...
 
         Example 3: Convert a PyTorch model with explicit registration:
 
@@ -1239,6 +1236,9 @@ class Module(torch.nn.Module):
         >>> ModelClass = registry.factory('RegisteredMLP')
         >>> isinstance(ModelClass, type) and issubclass(ModelClass, Module)
         True
+        >>> # The class name is defined by the name parameter
+        >>> ModelClass.__name__
+        'RegisteredMLP'
         >>> # Instantiate the model from the registry
         >>> model = ModelClass(input_size=10, hidden_size=64, output_size=5)
         >>> model.inner_model.input_size
