@@ -4,8 +4,15 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
+from physicsnemo.core.version_check import check_version_spec
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+# Check availability at module load (add new backends here)
+BACKENDS_INSTALLED: dict[str, bool] = {
+    name: check_version_spec(name) for name in ["matplotlib", "pyvista"]
+}
 
 
 def draw_mesh(
@@ -91,6 +98,9 @@ def draw_mesh(
         If both point_scalars and cell_scalars are specified,
         or if n_spatial_dims is not supported by the chosen backend,
         or if backend selection fails.
+        or if `ax` is provided for PyVista backend.
+    ImportError
+        If the requested backend is not installed.
 
     Examples
     --------
@@ -127,33 +137,45 @@ def draw_mesh(
         )
     )
 
-    ### Determine backend
+    ### Validate spatial dimensions
+    if mesh.n_spatial_dims > 3:
+        raise ValueError(
+            f"Visualization does not support {mesh.n_spatial_dims=}.\n"
+            "Maximum spatial dimensions: 3."
+        )
+
+    ### Determine and validate backend
     if backend == "auto":
-        if mesh.n_spatial_dims in {0, 1, 2}:
-            backend = "matplotlib"
-        elif mesh.n_spatial_dims == 3:
-            backend = "pyvista"
-        else:
-            raise ValueError(
-                f"Cannot automatically select backend for {mesh.n_spatial_dims=}.\n"
-                f"Supported spatial dimensions: 0, 1, 2, 3.\n"
-                f"Please specify backend explicitly."
+        # Check that at least one backend is available
+        if not any(BACKENDS_INSTALLED.values()):
+            options = ", ".join(BACKENDS_INSTALLED)
+            raise ImportError(
+                f"No visualization backend available. Install one of: {options}"
             )
 
-    ### Validate backend compatibility
-    if backend == "pyvista" and mesh.n_spatial_dims > 3:
+        # Auto-select based on spatial dimensions with fallback
+        if mesh.n_spatial_dims <= 2:
+            # Prefer matplotlib for 0D/1D/2D
+            backend = "matplotlib" if BACKENDS_INSTALLED["matplotlib"] else "pyvista"
+        else:
+            # Prefer pyvista for 3D
+            backend = "pyvista" if BACKENDS_INSTALLED["pyvista"] else "matplotlib"
+
+    elif backend in BACKENDS_INSTALLED:
+        if not BACKENDS_INSTALLED[backend]:
+            alternatives = [
+                n for n, ok in BACKENDS_INSTALLED.items() if ok and n != backend
+            ]
+            alt_hint = f" ({', '.join(alternatives)} available)" if alternatives else ""
+            raise ImportError(f"{backend} is not installed{alt_hint}.")
+
+    else:
+        supported = ", ".join(repr(b) for b in BACKENDS_INSTALLED)
         raise ValueError(
-            f"PyVista backend does not support {mesh.n_spatial_dims=}.\n"
-            f"Maximum spatial dimensions for PyVista: 3."
+            f"Unknown {backend=!r}. Supported backends: {supported}, 'auto'."
         )
 
-    if backend == "matplotlib" and mesh.n_spatial_dims > 3:
-        raise ValueError(
-            f"Matplotlib backend does not support {mesh.n_spatial_dims=}.\n"
-            f"Maximum spatial dimensions for matplotlib: 3."
-        )
-
-    ### Dispatch to appropriate backend
+    ### Dispatch to backend
     if backend == "matplotlib":
         from physicsnemo.mesh.visualization._matplotlib_impl import draw_mesh_matplotlib
 
@@ -199,7 +221,8 @@ def draw_mesh(
         )
 
     else:
+        # Unreachable after validation above, but kept for exhaustiveness
+        supported = ", ".join(repr(b) for b in BACKENDS_INSTALLED)
         raise ValueError(
-            f"Unknown backend: {backend!r}. "
-            f"Supported backends: 'matplotlib', 'pyvista', 'auto'."
+            f"Unknown {backend=!r}. Supported backends: {supported}, 'auto'."
         )
