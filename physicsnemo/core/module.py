@@ -353,10 +353,7 @@ class Module(torch.nn.Module):
                 _cls = cls
 
         # This works with the importlib.metadata.EntryPoint
-        # if isinstance(_cls, importlib.metadata.EntryPoint):
-        if "EntryPoint" in str(type(_cls)):
-            # I hate myself for this.  Somehow, we've got crossvoer pollution from
-            # importlib_metadata.EntryPoint.
+        if isinstance(_cls, importlib.metadata.EntryPoint):
             _cls = _cls.load()
 
         return _cls
@@ -384,7 +381,7 @@ class Module(torch.nn.Module):
 
         Examples
         --------
-        >>> from physicsnemo.core.module import Module
+        >>> from physicsnemo.core.module import Module  # doctest: +SKIP
         >>> # Define the argument dictionary with the three required keys
         >>> arg_dict = {
         ...     '__name__': 'FullyConnected',

@@ -223,8 +223,6 @@ EDMPrecondSR = "physicsnemo.models.diffusion:EDMPrecondSR"
 VEPrecond = "physicsnemo.models.diffusion:VEPrecond"
 VPPrecond = "physicsnemo.models.diffusion:VPPrecond"
 iDDPMPrecond = "physicsnemo.models.diffusion:iDDPMPrecond"
-VEPrecond_dfsr_cond = "physicsnemo.models.diffusion:VEPrecond_dfsr_cond"
-VEPrecond_dfsr = "physicsnemo.models.diffusion:VEPrecond_dfsr"
 
 # DLWP
 DLWP = "physicsnemo.models.dlwp:DLWP"
