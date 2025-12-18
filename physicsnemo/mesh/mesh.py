@@ -833,7 +833,7 @@ class Mesh:
         self,
         target_n_points: int | None = None,
         target_n_cells: int | None = None,
-        data_padding_value: float = 0.0,
+        data_padding_value: float = torch.nan,
     ) -> "Mesh":
         """Pad points and cells arrays to specified sizes.
 
@@ -841,7 +841,7 @@ class Mesh:
         Padding uses null/degenerate elements that don't affect computations:
         - Points: Additional points at the last existing point (preserves bounding box)
         - cells: Degenerate cells with all vertices at the last existing point (zero area)
-        - cell data: Zero-valued padding for all cell data fields
+        - cell data: NaN-valued padding for all cell data fields (default)
 
         Parameters
         ----------
@@ -852,7 +852,7 @@ class Mesh:
             Target number of cells. If None, no cell padding is applied.
             Must be >= current n_cells if specified.
         data_padding_value : float
-            Value to use for padding data fields.
+            Value to use for padding data fields. Defaults to NaN.
 
         Returns
         -------
@@ -904,7 +904,7 @@ class Mesh:
         )
 
     def pad_to_next_power(
-        self, power: float = 1.5, data_padding_value: float = 0.0
+        self, power: float = 1.5, data_padding_value: float = torch.nan
     ) -> "Mesh":
         """Pads points and cells arrays to their next power of `power` (integer-floored).
 
@@ -921,7 +921,7 @@ class Mesh:
             Base for computing the next power. Must be > 1.
             Provides a good balance between memory efficiency and compile cache hits.
         data_padding_value : float
-            Value to use for padding data fields.
+            Value to use for padding data fields. Defaults to NaN.
 
         Returns
         -------
