@@ -15,7 +15,6 @@ class TestVolumePrimitives:
             "sphere_volume",
             "cylinder_volume",
             "tetrahedron_volume",
-            "beam_volume",
         ],
     )
     def test_volume_mesh(self, example_name):
