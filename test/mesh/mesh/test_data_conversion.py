@@ -13,7 +13,9 @@ from physicsnemo.mesh.utilities import get_cached
 ### Helper Functions ###
 
 
-def create_simple_mesh(n_spatial_dims: int, n_manifold_dims: int, device: torch.device | str = "cpu"):
+def create_simple_mesh(
+    n_spatial_dims: int, n_manifold_dims: int, device: torch.device | str = "cpu"
+):
     """Create a simple mesh for testing."""
     if n_manifold_dims > n_spatial_dims:
         raise ValueError(

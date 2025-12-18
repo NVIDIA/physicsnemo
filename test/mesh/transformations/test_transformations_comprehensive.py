@@ -380,9 +380,7 @@ class TestScaleWithCenter:
 
         mesh.point_data["vec"] = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
 
-        scaled = scale(
-            mesh, factor=2.0, center=[1.0, 0.0], transform_point_data=True
-        )
+        scaled = scale(mesh, factor=2.0, center=[1.0, 0.0], transform_point_data=True)
 
         # Vectors should be scaled
         expected_vec = mesh.point_data["vec"] * 2.0

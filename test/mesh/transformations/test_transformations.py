@@ -465,7 +465,9 @@ class TestNonIsotropicAreaScaling:
 
         # Area should scale by 2 × 3 = 6 (xy-plane is stretched by x and y factors)
         expected_area = original_area * 6.0
-        assert torch.allclose(get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5), (
+        assert torch.allclose(
+            get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5
+        ), (
             f"Expected area {expected_area.item()}, got {get_cached(scaled.cell_data, 'areas').item()}"
         )
 
@@ -491,7 +493,9 @@ class TestNonIsotropicAreaScaling:
 
         # Area should scale by 2 × 5 = 10 (xz-plane is stretched by x and z factors)
         expected_area = original_area * 10.0
-        assert torch.allclose(get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5)
+        assert torch.allclose(
+            get_cached(scaled.cell_data, "areas"), expected_area, atol=1e-5
+        )
 
     def test_anisotropic_scale_diagonal_surface_3d(self, device):
         """Test anisotropic scaling of a diagonal surface in 3D.

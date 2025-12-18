@@ -214,7 +214,9 @@ class TestPointNormals:
 
         ### Compute normals with both implementations
         # Use compute_point_normals with weighting="unweighted" to match PyVista/VTK
-        mesh_normals = mesh.compute_point_normals(weighting="unweighted")  # (n_points, 3)
+        mesh_normals = mesh.compute_point_normals(
+            weighting="unweighted"
+        )  # (n_points, 3)
         pv_normed = pv_mesh.compute_normals(cell_normals=False, point_normals=True)
         pv_normals = pv_normed.point_data["Normals"]  # shape: (n_points, 3)
 

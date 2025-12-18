@@ -328,7 +328,9 @@ class TestSlicingEdgeCases:
         assert sliced.n_cells == 1
         # Point 3 is not referenced by any cell but still exists
 
-    @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)])
+    @pytest.mark.parametrize(
+        "device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)]
+    )
     def test_slicing_preserves_device(self, device):
         """Sliced mesh should remain on the same device."""
         if device == "cuda" and not torch.cuda.is_available():
@@ -361,8 +363,3 @@ class TestSlicingEdgeCases:
         assert sliced.n_points == 4
         assert sliced.n_cells == 2
         assert sliced.cells.tolist() == [[0, 1, 2], [0, 2, 3]]
-
-
-
-
-
