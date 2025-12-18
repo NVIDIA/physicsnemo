@@ -4,6 +4,7 @@ Dimensional: 2D manifold in 2D space.
 """
 
 import pyvista as pv
+import torch
 
 from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
