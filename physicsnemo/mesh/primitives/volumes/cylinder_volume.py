@@ -13,7 +13,7 @@ def load(
     radius: float = 1.0,
     height: float = 2.0,
     resolution: int = 20,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a tetrahedral volume mesh of a cylinder.
 

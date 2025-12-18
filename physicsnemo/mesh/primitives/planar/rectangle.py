@@ -13,7 +13,7 @@ def load(
     height: float = 1.0,
     n_x: int = 10,
     n_y: int = 5,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a triangulated rectangle in 2D space.
 

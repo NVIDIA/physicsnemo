@@ -14,7 +14,7 @@ def load(
     n_y: int = 11,
     perturbation_scale: float = 0.05,
     seed: int = 0,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a perturbed structured grid in 2D space.
 

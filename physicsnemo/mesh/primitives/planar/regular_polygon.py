@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(n_sides: int = 6, radius: float = 1.0, device: str = "cpu") -> Mesh:
+def load(n_sides: int = 6, radius: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
     """Create a regular polygon triangulated in 2D space.
 
     The polygon is triangulated by connecting all vertices to the center point.

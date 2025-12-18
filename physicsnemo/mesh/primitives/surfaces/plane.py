@@ -12,7 +12,7 @@ def load(
     size: float = 2.0,
     n_subdivisions: int = 10,
     normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a flat triangulated plane in 3D space.
 

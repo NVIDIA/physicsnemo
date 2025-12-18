@@ -12,7 +12,7 @@ def load(
     start: tuple[float, float] = (0.0, 0.0),
     end: tuple[float, float] = (1.0, 1.0),
     n_points: int = 10,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a straight line segment in 2D space.
 

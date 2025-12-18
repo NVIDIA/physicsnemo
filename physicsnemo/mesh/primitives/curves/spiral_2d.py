@@ -12,7 +12,7 @@ def load(
     n_turns: float = 3.0,
     spacing: float = 0.5,
     n_points: int = 100,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create an Archimedean spiral in 2D space.
 

@@ -9,7 +9,7 @@ from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(size: float = 1.0, n_subdivisions: int = 5, device: str = "cpu") -> Mesh:
+def load(size: float = 1.0, n_subdivisions: int = 5, device: torch.device | str = "cpu") -> Mesh:
     """Create a tetrahedral volume mesh of a cube.
 
     Parameters

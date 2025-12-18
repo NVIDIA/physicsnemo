@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh:
     """Create a mesh with a single triangle in 3D space.
 
     Parameters

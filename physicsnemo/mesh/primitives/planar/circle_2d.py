@@ -13,7 +13,7 @@ def load(
     radius: float = 1.0,
     n_radial: int = 10,
     n_angular: int = 32,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a filled disk (circle) triangulated in 2D space.
 

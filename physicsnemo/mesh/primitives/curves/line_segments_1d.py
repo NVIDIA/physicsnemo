@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(n_segments: int = 3, gap: float = 0.2, device: str = "cpu") -> Mesh:
+def load(n_segments: int = 3, gap: float = 0.2, device: torch.device | str = "cpu") -> Mesh:
     """Create multiple disconnected line segments in 1D space.
 
     Parameters

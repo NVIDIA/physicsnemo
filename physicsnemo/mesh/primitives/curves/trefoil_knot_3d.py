@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(scale: float = 1.0, n_points: int = 100, device: str = "cpu") -> Mesh:
+def load(scale: float = 1.0, n_points: int = 100, device: torch.device | str = "cpu") -> Mesh:
     """Create a trefoil knot curve in 3D space.
 
     The trefoil knot is the simplest nontrivial knot.

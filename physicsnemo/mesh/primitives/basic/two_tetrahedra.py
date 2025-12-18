@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh:
     """Create a mesh with two tetrahedra in 3D space.
 
     The tetrahedra share a common triangular face, forming a simple

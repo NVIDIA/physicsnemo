@@ -9,7 +9,7 @@ from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh:
     """Load Stanford bunny surface mesh from PyVista examples.
 
     The Stanford bunny is a classic test model in computer graphics.

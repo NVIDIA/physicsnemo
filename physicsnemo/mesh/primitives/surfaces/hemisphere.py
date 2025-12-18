@@ -12,7 +12,7 @@ def load(
     radius: float = 1.0,
     theta_resolution: int = 30,
     phi_resolution: int = 15,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a hemisphere surface in 3D space.
 

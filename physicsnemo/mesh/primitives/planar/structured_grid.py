@@ -15,7 +15,7 @@ def load(
     y_max: float = 1.0,
     n_x: int = 11,
     n_y: int = 11,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a structured triangular grid in 2D space.
 

@@ -9,7 +9,7 @@ from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(size: float = 1.0, device: str = "cpu") -> Mesh:
+def load(size: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
     """Create a cube surface triangulated in 3D space.
 
     Parameters

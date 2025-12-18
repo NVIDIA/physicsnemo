@@ -13,7 +13,7 @@ def load(
     center: tuple[float, float, float] = (0.0, 0.0, 0.0),
     normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
     n_points: int = 32,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a closed circle curve in 3D space.
 

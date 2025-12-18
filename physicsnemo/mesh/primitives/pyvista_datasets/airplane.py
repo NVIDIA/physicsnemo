@@ -9,7 +9,7 @@ from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh:
     """Load airplane surface mesh from PyVista examples.
 
     This is a classic test case for surface mesh algorithms.

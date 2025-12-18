@@ -13,7 +13,7 @@ def load(
     radius: float = 1.0,
     theta_resolution: int = 30,
     phi_resolution: int = 30,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a UV sphere using latitude/longitude parameterization.
 

@@ -13,7 +13,7 @@ def load(
     start_angle: float = 0.0,
     end_angle: float = float(torch.pi / 2),
     n_points: int = 20,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a circular arc in 2D space.
 

@@ -9,7 +9,7 @@ from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(radius: float = 1.0, resolution: int = 20, device: str = "cpu") -> Mesh:
+def load(radius: float = 1.0, resolution: int = 20, device: torch.device | str = "cpu") -> Mesh:
     """Create a tetrahedral volume mesh of a sphere.
 
     Parameters

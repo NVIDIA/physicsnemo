@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(length: float = 1.0, n_points: int = 2, device: str = "cpu") -> Mesh:
+def load(length: float = 1.0, n_points: int = 2, device: torch.device | str = "cpu") -> Mesh:
     """Create a line segment in 1D space.
 
     Parameters

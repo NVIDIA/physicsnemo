@@ -13,7 +13,7 @@ def load(
     width: float = 0.3,
     n_circ: int = 48,
     n_width: int = 5,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a Möbius strip surface in 3D space.
 

@@ -19,7 +19,7 @@ from physicsnemo.mesh.utilities import get_cached
 
 
 def create_mesh_with_caches(
-    n_spatial_dims: int, n_manifold_dims: int, device: str = "cpu"
+    n_spatial_dims: int, n_manifold_dims: int, device: torch.device | str = "cpu"
 ):
     """Create a mesh and pre-compute all caches."""
     from physicsnemo.mesh.mesh import Mesh

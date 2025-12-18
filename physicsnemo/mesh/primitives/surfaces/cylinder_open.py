@@ -13,7 +13,7 @@ def load(
     height: float = 2.0,
     n_circ: int = 32,
     n_height: int = 10,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create an open cylinder surface (without caps) in 3D space.
 

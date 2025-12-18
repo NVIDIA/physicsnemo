@@ -12,7 +12,7 @@ def load(
     semi_major_axis: float = 2.0,
     semi_minor_axis: float = 1.0,
     n_points: int = 48,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a closed ellipse curve in 2D space.
 

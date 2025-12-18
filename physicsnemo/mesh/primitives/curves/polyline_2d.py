@@ -12,7 +12,7 @@ def load(
     n_segments: int = 10,
     amplitude: float = 0.5,
     wavelength: float = 1.0,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a zigzag polyline in 2D space.
 

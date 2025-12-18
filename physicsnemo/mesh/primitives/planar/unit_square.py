@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(n_subdivisions: int = 1, device: str = "cpu") -> Mesh:
+def load(n_subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh:
     """Create a triangulated unit square in 2D space.
 
     Parameters

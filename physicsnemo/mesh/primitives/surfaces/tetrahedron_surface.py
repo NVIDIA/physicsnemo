@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(side_length: float = 1.0, device: str = "cpu") -> Mesh:
+def load(side_length: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
     """Create a regular tetrahedron surface in 3D space.
 
     Parameters

@@ -75,7 +75,7 @@ DIMENSION_CONFIGS_CODIM1 = [
 def create_simple_mesh(
     n_spatial_dims: int,
     n_manifold_dims: int,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ):
     """Create a simple mesh for testing.
 
@@ -163,7 +163,7 @@ def create_simple_mesh(
 def create_single_cell_mesh(
     n_spatial_dims: int,
     n_manifold_dims: int,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ):
     """Create a mesh with a single cell."""
     from physicsnemo.mesh.mesh import Mesh

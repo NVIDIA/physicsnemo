@@ -13,7 +13,7 @@ def load(
     height: float = 5.0,
     n_turns: float = 3.0,
     n_points: int = 100,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a helical curve in 3D space.
 

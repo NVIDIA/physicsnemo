@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(size: float = 1.0, n_subdivisions: int = 5, device: str = "cpu") -> Mesh:
+def load(size: float = 1.0, n_subdivisions: int = 5, device: torch.device | str = "cpu") -> Mesh:
     """Create an L-shaped non-convex domain in 2D space.
 
     Parameters

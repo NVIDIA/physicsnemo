@@ -13,7 +13,7 @@ def load(
     minor_radius: float = 0.3,
     n_major: int = 48,
     n_minor: int = 24,
-    device: str = "cpu",
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create a torus surface in 3D space.
 

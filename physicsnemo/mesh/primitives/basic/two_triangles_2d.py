@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(device: str = "cpu") -> Mesh:
+def load(device: torch.device | str = "cpu") -> Mesh:
     """Create a mesh with two triangles in 2D space.
 
     The triangles share a common edge, forming a simple quadrilateral

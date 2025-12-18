@@ -8,7 +8,7 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(radius: float = 1.0, n_points: int = 32, device: str = "cpu") -> Mesh:
+def load(radius: float = 1.0, n_points: int = 32, device: torch.device | str = "cpu") -> Mesh:
     """Create a closed circle curve in 2D space.
 
     Parameters
