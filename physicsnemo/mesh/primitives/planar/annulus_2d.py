@@ -3,10 +3,8 @@
 Dimensional: 2D manifold in 2D space.
 """
 
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
@@ -29,37 +27,85 @@ def load(
         Number of points in radial direction.
     n_angular : int
         Number of points around the circumference.
-    device : str
+    device : torch.device or str
         Compute device ('cpu' or 'cuda').
 
     Returns
     -------
     Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
+
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.planar import annulus_2d
+    >>> mesh = annulus_2d.load()
+    >>> mesh.n_manifold_dims, mesh.n_spatial_dims
+    (2, 2)
     """
     if inner_radius >= outer_radius:
         raise ValueError(
             f"inner_radius must be < outer_radius, got {inner_radius=}, {outer_radius=}"
         )
+    if n_radial < 2:
+        raise ValueError(f"n_radial must be at least 2, got {n_radial=}")
+    if n_angular < 3:
+        raise ValueError(f"n_angular must be at least 3, got {n_angular=}")
 
-    # Use PyVista to create a disk with a hole
-    pv_disk = pv.Disc(
-        center=(0.0, 0.0, 0.0),
-        inner=inner_radius,
-        outer=outer_radius,
-        r_res=n_radial,
-        c_res=n_angular,
-    )
+    ### Generate points via polar coordinate grid
+    r = torch.linspace(inner_radius, outer_radius, n_radial, device=device)
+    theta = torch.linspace(0, 2 * torch.pi, n_angular + 1, device=device)[:-1]
+    r_grid, theta_grid = torch.meshgrid(r, theta, indexing="ij")
 
-    # Extract only x and y coordinates (discard z)
-    mesh = from_pyvista(pv_disk, manifold_dim=2)
+    x = r_grid * torch.cos(theta_grid)
+    y = r_grid * torch.sin(theta_grid)
+    points = torch.stack([x.flatten(), y.flatten()], dim=1)
 
-    # Project to 2D by removing z coordinate
-    points_2d = mesh.points[:, :2]
-    mesh = Mesh(points=points_2d, cells=mesh.cells)
+    ### Generate triangle connectivity (vectorized)
+    cells = _triangulate_ring_quads(n_radial - 1, n_angular, ring_offset=0, device=device)
 
-    # Move to specified device
-    if device != str(mesh.points.device):
-        mesh = mesh.to(device)
+    return Mesh(points=points, cells=cells)
 
-    return mesh
+
+def _triangulate_ring_quads(
+    n_rings: int, n_angular: int, ring_offset: int, device: torch.device | str
+) -> torch.Tensor:
+    """Triangulate quads between concentric rings (vectorized).
+
+    Each ring has n_angular points. Quads connect ring i to ring i+1.
+
+    Parameters
+    ----------
+    n_rings : int
+        Number of ring pairs to triangulate (quads between ring i and ring i+1).
+    n_angular : int
+        Number of points per ring.
+    ring_offset : int
+        Starting point index of the first ring.
+    device : torch.device or str
+        Compute device.
+
+    Returns
+    -------
+    torch.Tensor
+        Triangle connectivity with shape (n_rings * n_angular * 2, 3).
+    """
+    if n_rings == 0:
+        return torch.empty(0, 3, dtype=torch.int64, device=device)
+
+    # Grid indices for (ring, sector)
+    i = torch.arange(n_rings, device=device)
+    j = torch.arange(n_angular, device=device)
+    i_grid, j_grid = torch.meshgrid(i, j, indexing="ij")
+    j_next = (j_grid + 1) % n_angular
+
+    # Four corners of each quad
+    p00 = ring_offset + i_grid * n_angular + j_grid  # inner ring, current angle
+    p01 = ring_offset + i_grid * n_angular + j_next  # inner ring, next angle
+    p10 = ring_offset + (i_grid + 1) * n_angular + j_grid  # outer ring, current angle
+    p11 = ring_offset + (i_grid + 1) * n_angular + j_next  # outer ring, next angle
+
+    # Two triangles per quad, stacked and interleaved
+    tri1 = torch.stack([p00, p10, p11], dim=-1)  # shape: (n_rings, n_angular, 3)
+    tri2 = torch.stack([p00, p11, p01], dim=-1)
+
+    return torch.stack([tri1, tri2], dim=2).reshape(-1, 3)
