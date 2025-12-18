@@ -9,7 +9,9 @@ from physicsnemo.mesh.mesh import Mesh
 
 
 def load(
-    side_length: float = 1.0, n_subdivisions: int = 0, device: torch.device | str = "cpu"
+    side_length: float = 1.0,
+    n_subdivisions: int = 0,
+    device: torch.device | str = "cpu",
 ) -> Mesh:
     """Create an equilateral triangle in 2D space.
 

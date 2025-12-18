@@ -127,7 +127,9 @@ def _transform_tensordict(
             f"Expected all spatial dimensions to be {n_spatial_dims}, but got {shape}"
         )
 
-    transformed = data.exclude("_cache").named_apply(transform_field, batch_size=batch_size)
+    transformed = data.exclude("_cache").named_apply(
+        transform_field, batch_size=batch_size
+    )
     data.update(transformed)
     return data
 
@@ -178,11 +180,13 @@ def _build_rotation_matrix(
     zero = torch.zeros((), device=device, dtype=u.dtype)
 
     # Skew-symmetric cross-product matrix [u]_×
-    u_cross = torch.stack([
-        torch.stack([zero, -uz, uy]),
-        torch.stack([uz, zero, -ux]),
-        torch.stack([-uy, ux, zero]),
-    ])
+    u_cross = torch.stack(
+        [
+            torch.stack([zero, -uz, uy]),
+            torch.stack([uz, zero, -ux]),
+            torch.stack([-uy, ux, zero]),
+        ]
+    )
 
     identity = torch.eye(3, device=device, dtype=u.dtype)
     return c * identity + s * u_cross + (1 - c) * u.outer(u)
@@ -281,15 +285,25 @@ def transform(
                     transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
                     norm_scale = transformed.norm(dim=-1)  # [n_points]
                     if (areas := get_cached(mesh.point_data, "areas")) is not None:
-                        set_cached(new_point_data, "areas", areas * det_abs * norm_scale)
-                    set_cached(new_point_data, "normals", det_sign * F.normalize(transformed, dim=-1))
+                        set_cached(
+                            new_point_data, "areas", areas * det_abs * norm_scale
+                        )
+                    set_cached(
+                        new_point_data,
+                        "normals",
+                        det_sign * F.normalize(transformed, dim=-1),
+                    )
 
                 if (v := get_cached(mesh.cell_data, "normals")) is not None:
                     transformed = torch.linalg.solve(matrix.T, v.T).T  # M^{-T} n
                     norm_scale = transformed.norm(dim=-1)  # [n_cells]
                     if (areas := get_cached(mesh.cell_data, "areas")) is not None:
                         set_cached(new_cell_data, "areas", areas * det_abs * norm_scale)
-                    set_cached(new_cell_data, "normals", det_sign * F.normalize(transformed, dim=-1))
+                    set_cached(
+                        new_cell_data,
+                        "normals",
+                        det_sign * F.normalize(transformed, dim=-1),
+                    )
 
             # Higher codimension: areas invalidated (would need full tangent basis)
             # Normals for higher codimension are not well-defined as single vectors
@@ -304,7 +318,9 @@ def transform(
     if transform_cell_data:
         _transform_tensordict(new_cell_data, matrix, mesh.n_spatial_dims, "cell_data")
     if transform_global_data:
-        _transform_tensordict(new_global_data, matrix, mesh.n_spatial_dims, "global_data")
+        _transform_tensordict(
+            new_global_data, matrix, mesh.n_spatial_dims, "global_data"
+        )
 
     from physicsnemo.mesh.mesh import Mesh
 
@@ -516,7 +532,10 @@ def scale(
     )
     if factor_tensor.ndim == 0:
         factor_tensor = factor_tensor.expand(mesh.n_spatial_dims)
-    elif not torch.compiler.is_compiling() and factor_tensor.shape[-1] != mesh.n_spatial_dims:
+    elif (
+        not torch.compiler.is_compiling()
+        and factor_tensor.shape[-1] != mesh.n_spatial_dims
+    ):
         raise ValueError(
             f"factor must be scalar or shape ({mesh.n_spatial_dims},), "
             f"got {factor_tensor.shape}"

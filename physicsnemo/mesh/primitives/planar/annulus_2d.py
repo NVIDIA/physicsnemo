@@ -61,7 +61,9 @@ def load(
     points = torch.stack([x.flatten(), y.flatten()], dim=1)
 
     ### Generate triangle connectivity (vectorized)
-    cells = _triangulate_ring_quads(n_radial - 1, n_angular, ring_offset=0, device=device)
+    cells = _triangulate_ring_quads(
+        n_radial - 1, n_angular, ring_offset=0, device=device
+    )
 
     return Mesh(points=points, cells=cells)
 

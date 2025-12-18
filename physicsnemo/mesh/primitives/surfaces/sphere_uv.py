@@ -48,7 +48,9 @@ def load(
     if radius <= 0:
         raise ValueError(f"radius must be positive, got {radius=}")
     if theta_resolution < 3:
-        raise ValueError(f"theta_resolution must be at least 3, got {theta_resolution=}")
+        raise ValueError(
+            f"theta_resolution must be at least 3, got {theta_resolution=}"
+        )
     if phi_resolution < 3:
         raise ValueError(f"phi_resolution must be at least 3, got {phi_resolution=}")
 
@@ -61,7 +63,12 @@ def load(
     south_pole = torch.tensor([[0.0, 0.0, -radius]], device=device)
 
     # Interior rings via spherical coordinates
-    phi = torch.linspace(torch.pi / (n_phi - 1), torch.pi * (n_phi - 2) / (n_phi - 1), n_rings, device=device)
+    phi = torch.linspace(
+        torch.pi / (n_phi - 1),
+        torch.pi * (n_phi - 2) / (n_phi - 1),
+        n_rings,
+        device=device,
+    )
     theta = torch.linspace(0, 2 * torch.pi, n_theta + 1, device=device)[:-1]
     phi_grid, theta_grid = torch.meshgrid(phi, theta, indexing="ij")
 

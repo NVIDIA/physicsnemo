@@ -59,7 +59,8 @@ def from_pyvista(
                 n_faces = sum(
                     len(cells)
                     for cell_type, cells in cells_dict.items()
-                    if cell_type in [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
+                    if cell_type
+                    in [pv.CellType.TRIANGLE, pv.CellType.QUAD, pv.CellType.POLYGON]
                 )
 
             # Check for 3D volume cells

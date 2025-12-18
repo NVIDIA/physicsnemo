@@ -221,4 +221,6 @@ def draw_mesh(
         )
 
     else:
-        raise AssertionError(f"Unreachable: {backend=!r} passed validation but has no dispatch.")
+        raise AssertionError(
+            f"Unreachable: {backend=!r} passed validation but has no dispatch."
+        )
