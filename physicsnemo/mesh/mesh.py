@@ -636,24 +636,84 @@ class Mesh:
     ) -> "Mesh":
         """Returns a new Mesh with a subset of the points.
 
+        This method filters points and automatically updates cells to maintain
+        consistency. Cells that reference any removed points are also removed,
+        and the remaining cells have their indices remapped to the new point
+        numbering.
+
         Parameters
         ----------
-        indices : int or slice or torch.Tensor
-            Indices or mask to select points.
+        indices : int or slice or Ellipsis or None or torch.Tensor or Sequence
+            Indices or mask to select points. Supports:
+            - ``int``: Single point index
+            - ``slice``: Python slice object
+            - ``Ellipsis`` or ``None``: Keep all points (returns self)
+            - ``torch.Tensor``: Integer indices or boolean mask
+            - ``Sequence[int | bool]``: List/tuple of indices or boolean mask
 
         Returns
         -------
         Mesh
-            New Mesh with subset of points.
+            New Mesh with subset of points. Cells that reference any removed
+            points are also removed, and remaining cell indices are remapped.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
+        >>> # Create a mesh with 4 points and 2 triangular cells
+        >>> points = torch.tensor([[0., 0.], [1., 0.], [1., 1.], [0., 1.]])
+        >>> cells = torch.tensor([[0, 1, 2], [0, 2, 3]])
+        >>> mesh = Mesh(points=points, cells=cells)
+        >>> # Keep only points 0 and 2 - both cells are removed (they need points 1 or 3)
+        >>> sliced = mesh.slice_points([0, 2])
+        >>> sliced.n_points, sliced.n_cells
+        (2, 0)
+        >>> # Keep points 0, 1, 2 - first cell is preserved with remapped indices
+        >>> sliced = mesh.slice_points([0, 1, 2])
+        >>> sliced.n_points, sliced.n_cells
+        (3, 1)
+        >>> sliced.cells.tolist()
+        [[0, 1, 2]]
         """
+        ### Handle no-op cases: None or Ellipsis means keep all points
+        if indices is None or indices is ...:
+            return self
+
+        ### Normalize indices to a 1D tensor of point indices to keep
+        all_indices = torch.arange(self.n_points, device=self.points.device)
         if isinstance(indices, int):
-            indices = torch.tensor([indices], device=self.points.device)
-        new_point_data: TensorDict = self.point_data[indices]  # type: ignore
+            kept_indices = torch.tensor([indices], device=self.points.device)
+        else:
+            # Works for slice, Tensor (int or bool), and Sequence
+            kept_indices = all_indices[indices]
+
+        ### Build old-to-new point index mapping
+        # old_to_new[old_idx] = new_idx if kept, else -1
+        old_to_new = torch.full(
+            (self.n_points,), -1, dtype=torch.long, device=self.points.device
+        )
+        old_to_new[kept_indices] = torch.arange(
+            len(kept_indices), dtype=torch.long, device=self.points.device
+        )
+
+        ### Remap cells and filter out cells with any removed vertices
+        remapped_cells = old_to_new[self.cells]  # (n_cells, n_verts_per_cell)
+        valid_cells_mask = (remapped_cells >= 0).all(dim=-1)  # cells with all verts kept
+
+        ### Extract valid cells with remapped indices
+        new_cells = remapped_cells[valid_cells_mask]
+        new_cell_data: TensorDict = self.cell_data[valid_cells_mask]  # type: ignore
+
+        ### Slice points and point_data
+        new_points = self.points[kept_indices]
+        new_point_data: TensorDict = self.point_data[kept_indices]  # type: ignore
+
         return Mesh(
-            points=self.points[indices],
-            cells=self.cells,
+            points=new_points,
+            cells=new_cells,
             point_data=new_point_data,
-            cell_data=self.cell_data,
+            cell_data=new_cell_data,
             global_data=self.global_data,
         )
 
