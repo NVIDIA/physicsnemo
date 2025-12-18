@@ -225,44 +225,6 @@ def create_single_cell_mesh(
 ### Assertion Helpers ###
 
 
-def assert_mesh_valid(mesh, strict: bool = True) -> None:
-    """Assert that a mesh is valid and well-formed."""
-    assert mesh.n_points > 0, "Mesh must have at least one point"
-    assert mesh.points.ndim == 2, f"Points must be 2D tensor, got {mesh.points.ndim=}"
-    assert mesh.points.shape[1] == mesh.n_spatial_dims, (
-        f"Points shape mismatch: {mesh.points.shape[1]=} != {mesh.n_spatial_dims=}"
-    )
-
-    if mesh.n_cells > 0:
-        assert mesh.cells.ndim == 2, f"Cells must be 2D tensor, got {mesh.cells.ndim=}"
-        assert mesh.cells.shape[1] == mesh.n_manifold_dims + 1, (
-            f"Cells shape mismatch: {mesh.cells.shape[1]=} != {mesh.n_manifold_dims + 1=}"
-        )
-        assert torch.all(mesh.cells >= 0), "Cell indices must be non-negative"
-        assert torch.all(mesh.cells < mesh.n_points), (
-            f"Cell indices out of bounds: max={mesh.cells.max()}, n_points={mesh.n_points}"
-        )
-
-    assert mesh.points.dtype in [
-        torch.float32,
-        torch.float64,
-    ], f"Points must be float type, got {mesh.points.dtype=}"
-    assert mesh.cells.dtype == torch.int64, (
-        f"Cells must be int64, got {mesh.cells.dtype=}"
-    )
-    assert mesh.points.device == mesh.cells.device, (
-        f"Device mismatch: {mesh.points.device=} != {mesh.cells.device=}"
-    )
-
-    if strict and mesh.n_cells > 0:
-        for i in range(mesh.n_cells):
-            cell_verts = mesh.cells[i]
-            unique_verts = torch.unique(cell_verts)
-            assert len(unique_verts) == len(cell_verts), (
-                f"Cell {i} has duplicate vertices: {cell_verts.tolist()}"
-            )
-
-
 def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
     """Assert tensor is on expected device."""
     actual_device = tensor.device.type
