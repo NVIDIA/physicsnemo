@@ -115,7 +115,6 @@ Tetrahedral volume meshes.
 | `sphere_volume` | 3D→3D | Tetrahedral sphere mesh | Delaunay |
 | `cylinder_volume` | 3D→3D | Tetrahedral cylinder mesh | Delaunay |
 | `tetrahedron_volume` | 3D→3D | Single tetrahedron | Minimal volume mesh |
-| `beam_volume` | 3D→3D | Beam from PyVista (FEA test case) | Structured |
 
 ### procedural/ - Mesh Variations and Noise Generation
 
