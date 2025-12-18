@@ -5,7 +5,6 @@ Includes tetrahedral meshes of cubes, spheres, cylinders, and other
 """
 
 from physicsnemo.mesh.primitives.volumes import (
-    beam_volume,
     cube_volume,
     cylinder_volume,
     sphere_volume,
@@ -17,5 +16,4 @@ __all__ = [
     "sphere_volume",
     "cylinder_volume",
     "tetrahedron_volume",
-    "beam_volume",
 ]
