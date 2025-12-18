@@ -221,8 +221,4 @@ def draw_mesh(
         )
 
     else:
-        # Unreachable after validation above, but kept for exhaustiveness
-        supported = ", ".join(repr(b) for b in BACKENDS_INSTALLED)
-        raise ValueError(
-            f"Unknown {backend=!r}. Supported backends: {supported}, 'auto'."
-        )
+        raise AssertionError(f"Unreachable: {backend=!r} passed validation but has no dispatch.")
