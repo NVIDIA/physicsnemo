@@ -1203,7 +1203,6 @@ class Module(torch.nn.Module):
         >>> assert model.inner_model.output_size == 5
         >>> # Cannot retrieve the model class from the registry because it is not registered
 
-        Example 3: Convert a PyTorch model with explicit registration:
 
         >>> import torch
         >>> import torch.nn as nn
