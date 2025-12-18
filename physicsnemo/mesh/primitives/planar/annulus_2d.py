@@ -96,13 +96,13 @@ def _triangulate_ring_quads(
     i = torch.arange(n_rings, device=device)
     j = torch.arange(n_angular, device=device)
     i_grid, j_grid = torch.meshgrid(i, j, indexing="ij")
-    j_next = (j_grid + 1) % n_angular
 
     # Four corners of each quad
     p00 = ring_offset + i_grid * n_angular + j_grid  # inner ring, current angle
-    p01 = ring_offset + i_grid * n_angular + j_next  # inner ring, next angle
     p10 = ring_offset + (i_grid + 1) * n_angular + j_grid  # outer ring, current angle
-    p11 = ring_offset + (i_grid + 1) * n_angular + j_next  # outer ring, next angle
+    # Roll along angular dimension for "next angle" neighbors (wraps around)
+    p01 = torch.roll(p00, shifts=-1, dims=1)  # inner ring, next angle
+    p11 = torch.roll(p10, shifts=-1, dims=1)  # outer ring, next angle
 
     # Two triangles per quad, stacked and interleaved
     tri1 = torch.stack([p00, p10, p11], dim=-1)  # shape: (n_rings, n_angular, 3)
