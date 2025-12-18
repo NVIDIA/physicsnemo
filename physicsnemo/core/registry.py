@@ -20,25 +20,12 @@ import warnings
 from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Dict, List, Union
 
-from importlib_metadata import EntryPoint as ImportlibMetadataEntryPoint
-
 if TYPE_CHECKING:
     from physicsnemo.core.module import Module
 
-# NOTE: This is for backport compatibility, some entry points seem to be using this old class
-# Exact cause of this is unknown but it seems to be related to multiple versions
-# of importlib being present in the environment
 ENTRY_POINT_CLASSES = [
     EntryPoint,
-    ImportlibMetadataEntryPoint,
 ]
-# This is now deprecated, since EntryPoint is python 3.10 or higher.
-# try:
-#     from importlib_metadata import EntryPoint as EntryPointOld  # noqa: E402
-
-#     ENTRY_POINT_CLASSES.append(EntryPointOld)
-# except ImportError:
-#     pass
 
 
 # This model registry follows conventions similar to fsspec,

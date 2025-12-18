@@ -390,10 +390,10 @@ class Module(torch.nn.Module):
         >>> # Instantiate the model using the class method
         >>> model = Module.instantiate(arg_dict)
         >>> # Verify the model was created with the correct parameters
-        >>> model.in_features
-        10
-        >>> model.out_features
-        5
+        >>> x = torch.randn(100, 10)
+        >>> output = model(x)
+        >>> output.shape
+        torch.Size([100, 5])
         """
         _cls = cls._get_class_from_args(arg_dict)
         return _cls(**arg_dict["__args__"])
@@ -1159,12 +1159,6 @@ class Module(torch.nn.Module):
         >>> # Use the model for inference
         >>> x = torch.randn(32, 10)
         >>> output = model(x)  # Shape: (32, 5)
-        >>> # Cannot retrieve the model class from the registry because it is not registered
-        >>> registry = ModelRegistry()
-        >>> ModelClass = registry.factory('SimpleMLP')
-        >>> isinstance(ModelClass, type) and issubclass(ModelClass, Module)
-        ...
-        KeyError: No model is registered under the name SimpleMLP. ...
 
 
         Example 2: Convert a PyTorch model with a custom name:
@@ -1200,13 +1194,7 @@ class Module(torch.nn.Module):
         >>> assert model.inner_model.input_size == 10
         >>> assert model.inner_model.hidden_size == 64
         >>> assert model.inner_model.output_size == 5
-        >>> # Cannot retrieve the model class from the registry because it is not registered
-        >>> registry = ModelRegistry()
-        >>> ModelClass = registry.factory('CustomSimpleMLP')
-        ...
-        KeyError: No model is registered under the name CustomSimpleMLP. ...
 
-        Example 3: Convert a PyTorch model with explicit registration:
 
         >>> import torch
         >>> import torch.nn as nn
