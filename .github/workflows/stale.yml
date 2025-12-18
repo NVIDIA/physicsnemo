@@ -2,7 +2,7 @@ name: 'Close stale issues and PRs'
 
 on:
   schedule:
-    - cron: '30 1 * * *'
+    - cron: '30 1 * * 0'  # Runs weekly on Sunday at 1:30 AM UTC
   workflow_dispatch:  # Allows manual triggering
 
 jobs:
