@@ -3,6 +3,8 @@
 Dimensional: 2D manifold in 3D space (closed, no boundary).
 """
 
+import itertools
+
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
@@ -38,53 +40,35 @@ def load(size: float = 1.0, device: torch.device | str = "cpu") -> Mesh:
     """
     s = size / 2
 
-    # 8 vertices of the cube
-    # Vertex ordering: binary encoding of (x+, y+, z+)
-    #   0: (-, -, -)    4: (-, -, +)
-    #   1: (+, -, -)    5: (+, -, +)
-    #   2: (-, +, -)    6: (-, +, +)
-    #   3: (+, +, -)    7: (+, +, +)
+    # 8 vertices via Cartesian product
     points = torch.tensor(
-        [
-            [-s, -s, -s],  # 0
-            [+s, -s, -s],  # 1
-            [-s, +s, -s],  # 2
-            [+s, +s, -s],  # 3
-            [-s, -s, +s],  # 4
-            [+s, -s, +s],  # 5
-            [-s, +s, +s],  # 6
-            [+s, +s, +s],  # 7
-        ],
+        list(itertools.product([-s, +s], repeat=3)),
         dtype=torch.float32,
         device=device,
     )
 
-    # 12 triangles (2 per face, CCW winding when viewed from outside)
-    # fmt: off
-    cells = torch.tensor(
-        [
-            # -Z face (z = -s): vertices 0, 1, 2, 3; normal points -Z
-            [0, 2, 1],
-            [1, 2, 3],
-            # +Z face (z = +s): vertices 4, 5, 6, 7; normal points +Z
-            [4, 5, 6],
-            [5, 7, 6],
-            # -Y face (y = -s): vertices 0, 1, 4, 5; normal points -Y
-            [0, 1, 4],
-            [1, 5, 4],
-            # +Y face (y = +s): vertices 2, 3, 6, 7; normal points +Y
-            [2, 6, 3],
-            [3, 6, 7],
-            # -X face (x = -s): vertices 0, 2, 4, 6; normal points -X
-            [0, 4, 2],
-            [2, 4, 6],
-            # +X face (x = +s): vertices 1, 3, 5, 7; normal points +X
-            [1, 3, 5],
-            [3, 7, 5],
-        ],
-        dtype=torch.int64,
-        device=device,
+    # 6 face quads with CCW winding for outward normals.
+    # Vertex indices from itertools.product([-s, +s], repeat=3):
+    #   0=(-,-,-), 1=(-,-,+), 2=(-,+,-), 3=(-,+,+)
+    #   4=(+,-,-), 5=(+,-,+), 6=(+,+,-), 7=(+,+,+)
+    _FACE_QUADS = (
+        (0, 1, 3, 2),  # -X face
+        (4, 6, 7, 5),  # +X face
+        (0, 4, 5, 1),  # -Y face
+        (2, 3, 7, 6),  # +Y face
+        (0, 2, 6, 4),  # -Z face
+        (1, 5, 7, 3),  # +Z face
     )
-    # fmt: on
+
+    # Triangulate each quad: (v0, v1, v2, v3) → (v0, v1, v2) and (v0, v2, v3)
+    cells_list = []
+    for q in _FACE_QUADS:
+        cells_list.extend(
+            [
+                [q[0], q[1], q[2]],
+                [q[0], q[2], q[3]],
+            ]
+        )
+    cells = torch.tensor(cells_list, dtype=torch.int64, device=device)
 
     return Mesh(points=points, cells=cells)
