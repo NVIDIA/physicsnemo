@@ -742,7 +742,9 @@ class Mesh:
 
         ### Remap cells and filter out cells with any removed vertices
         remapped_cells = old_to_new[self.cells]  # (n_cells, n_verts_per_cell)
-        valid_cells_mask = (remapped_cells >= 0).all(dim=-1)  # cells with all verts kept
+        valid_cells_mask = (remapped_cells >= 0).all(
+            dim=-1
+        )  # cells with all verts kept
 
         ### Extract valid cells with remapped indices
         new_cells = remapped_cells[valid_cells_mask]
