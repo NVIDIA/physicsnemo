@@ -129,7 +129,7 @@ class CombinedOptimizer(Optimizer):
                 torch.compile(opt.step, **torch_compile_kwargs) for opt in optimizers
             ]
 
-    def zero_grad(self, *args, **kwargs) -> None:
+    def zero_grad(self, set_to_none: bool = True) -> None:
         r"""Clear the gradients of all optimized parameters.
 
         This method delegates to the ``zero_grad()`` method of each underlying
