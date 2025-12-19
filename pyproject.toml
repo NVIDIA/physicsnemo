@@ -140,6 +140,10 @@ utils-extras = [
     "pylibraft-cu13", # Provides rmm
     "cupy-cuda13x",
 ]
+mesh-extras = [
+    "matplotlib>=3.10.7",
+    "pyvista>=0.46.4",
+]
 nn-extras = [
     "cuml-cu13",
     "transformer_engine[pytorch]",
