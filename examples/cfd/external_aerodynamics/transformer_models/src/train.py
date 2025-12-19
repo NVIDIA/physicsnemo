@@ -56,10 +56,6 @@ from physicsnemo.datapipes.cae.transolver_datapipe import (
 
 # Local folder imports for this example
 from metrics import metrics_fn
-from preprocess import (
-    preprocess_surface_data,
-    downsample_surface,
-)
 
 # tensorwise is to handle single-point-cloud or multi-point-cloud running.
 # it's a decorator that will automatically unzip one or more of a list of tensors,
@@ -310,7 +306,10 @@ def forward_pass(
             local_positions = embeddings[:, :, :3]
             # This is the Typhon path
             outputs = model(
-                global_embedding=features, local_embedding=embeddings, geometry=geometry, local_positions=local_positions
+                global_embedding=features,
+                local_embedding=embeddings,
+                geometry=geometry,
+                local_positions=local_positions,
             )
 
             outputs = unpad_output_for_fp8(outputs, output_pad_size)
@@ -356,47 +355,6 @@ def forward_pass(
         else metrics
     )
     all_metrics.update(metrics)
-
-    # if "geometry" in batch.keys():
-    #     print(f"HERE")
-    #     unscaled_outputs = []
-    #     unscaled_targets = []
-    #     for i in range(len(outputs)):
-    #         local_unscaled_outputs = datapipe.unscale_model_targets(
-    #             outputs[i],
-    #             air_density=air_density,
-    #             stream_velocity=stream_velocity,
-    #             factor_type=modes[i],
-    #         )
-    #         local_unscaled_targets = datapipe.unscale_model_targets(
-    #             targets[i],
-    #             air_density=air_density,
-    #             stream_velocity=stream_velocity,
-    #             factor_type=modes[i],
-    #         )
-    #         print(f"local_unscaled_outputs: {local_unscaled_outputs.shape}")
-    #         print(f"local_unscaled_targets: {local_unscaled_targets.shape}")
-    #         metrics = metrics_fn(local_unscaled_outputs, local_unscaled_targets, dist_manager, modes[i])
-    #         print(f"metrics: {metrics}")
-    #         all_metrics.update(metrics)
-    #         unscaled_outputs.append(local_unscaled_outputs)
-    #         unscaled_targets.append(local_unscaled_targets)
-    # else:
-    #     unscaled_outputs = datapipe.unscale_model_targets(
-    #         outputs,
-    #         air_density=air_density,
-    #         stream_velocity=stream_velocity,
-    #         factor_type=modes[0],
-    #     )
-    #     unscaled_targets = datapipe.unscale_model_targets(
-    #         targets,
-    #         air_density=air_density,
-    #         stream_velocity=stream_velocity,
-    #         factor_type=modes[0],
-    #     )
-
-    #     metrics = metrics_fn(unscaled_outputs, unscaled_targets, dist_manager, modes[0])
-    #     all_metrics.update(metrics)
 
     return full_loss, all_metrics, (unscaled_outputs, unscaled_targets)
 
@@ -476,9 +434,7 @@ def train_epoch(
         if i == 0:
             total_metrics = metrics
         else:
-            total_metrics = {
-                k: total_metrics[k] + metrics[k] for k in metrics.keys()
-            }
+            total_metrics = {k: total_metrics[k] + metrics[k] for k in metrics.keys()}
 
         duration = end_time - start_time
         start_time = end_time

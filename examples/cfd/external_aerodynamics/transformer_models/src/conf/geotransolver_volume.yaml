@@ -16,12 +16,12 @@
 
 defaults:
   - training: base
-  - model: typhon
+  - model: geotransolver
   - data: volume
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "typhon/volume/bq"
+run_id: "geotransolver/volume/bq"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8

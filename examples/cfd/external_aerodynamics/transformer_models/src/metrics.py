@@ -16,7 +16,7 @@
 
 import torch
 import torch.distributed as dist
-from physicsnemo.distributed import ShardTensor
+from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.distributed import DistributedManager
 
 from utils import tensorwise
@@ -102,12 +102,12 @@ def metrics_fn_volume(
         NotImplementedError: Always, as this function is not yet implemented.
     """
 
-    # 
+    #
     pressure_pred = pred[:, :, 3]
     pressure_target = target[:, :, 3]
 
-    velocity_pred = torch.sqrt(torch.sum(pred[:, :, 0:3]**2.0, dim=2))
-    velocity_target = torch.sqrt(torch.sum(target[:, :, 0:3]**2.0, dim=2))
+    velocity_pred = torch.sqrt(torch.sum(pred[:, :, 0:3] ** 2.0, dim=2))
+    velocity_target = torch.sqrt(torch.sum(target[:, :, 0:3] ** 2.0, dim=2))
 
     # L1 errors
     l1_num = torch.abs(pred - target)
@@ -131,7 +131,7 @@ def metrics_fn_volume(
     mae_num = torch.abs(pred - target)
     mae_num_vel = torch.abs(velocity_pred - velocity_target)
     mae_pressure = torch.abs(pressure_pred - pressure_target)
-    
+
     # L2 errors
     l2_num = (pred - target) ** 2
     l2_num = torch.sum(l2_num, dim=1)
@@ -203,8 +203,8 @@ def metrics_fn_surface(
     pressure_pred = pred[:, :, 0]
     pressure_target = target[:, :, 0]
 
-    wall_shear_pred = torch.sqrt(torch.sum(pred[:, :, 1:4]**2.0, dim=2))
-    wall_shear_target = torch.sqrt(torch.sum(target[:, :, 1:4]**2.0, dim=2))
+    wall_shear_pred = torch.sqrt(torch.sum(pred[:, :, 1:4] ** 2.0, dim=2))
+    wall_shear_target = torch.sqrt(torch.sum(target[:, :, 1:4] ** 2.0, dim=2))
 
     # MAE
     mae_num = torch.abs(pred - target)
