@@ -20,9 +20,12 @@ Tests validate visualization across different mesh configurations, spatial dimen
 and visualization backends (matplotlib, PyVista).
 """
 
-import matplotlib
-import matplotlib.pyplot as plt
 import pytest
+
+matplotlib = pytest.importorskip("matplotlib")
+pv = pytest.importorskip("pyvista")
+
+import matplotlib.pyplot as plt
 import torch
 
 matplotlib.use("Agg")  # Use non-interactive backend for testing
@@ -107,8 +110,6 @@ def test_auto_backend_3d():
     """Test auto backend selection for 3D surface mesh."""
     mesh = create_3d_surface_mesh()
     # Auto should select PyVista for n_spatial_dims=3
-    import pyvista as pv
-
     plotter = mesh.draw(show=False)
     assert isinstance(plotter, pv.Plotter)
     plotter.close()
@@ -134,8 +135,6 @@ def test_explicit_matplotlib_backend_3d():
 
 def test_explicit_pyvista_backend_3d():
     """Test explicit PyVista backend for 3D mesh."""
-    import pyvista as pv
-
     mesh = create_3d_surface_mesh()
     plotter = mesh.draw(backend="pyvista", show=False)
     assert isinstance(plotter, pv.Plotter)
@@ -144,8 +143,6 @@ def test_explicit_pyvista_backend_3d():
 
 def test_pyvista_backend_1d_in_1d():
     """Test PyVista backend with 1D mesh in 1D space [1,1]."""
-    import pyvista as pv
-
     # Create 1D mesh in 1D space
     points = torch.linspace(0, 10, 20).unsqueeze(1)  # (20, 1)
     cells = torch.stack([torch.arange(19), torch.arange(1, 20)], dim=1)
@@ -162,8 +159,6 @@ def test_pyvista_backend_1d_in_1d():
 
 def test_pyvista_backend_1d_in_2d():
     """Test PyVista backend with 1D mesh in 2D space [1,2]."""
-    import pyvista as pv
-
     # Create 1D mesh in 2D space
     points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
     cells = torch.tensor([[0, 1], [1, 2], [2, 3]])
@@ -180,8 +175,6 @@ def test_pyvista_backend_1d_in_2d():
 
 def test_pyvista_backend_2d_in_2d():
     """Test PyVista backend with 2D mesh in 2D space [2,2]."""
-    import pyvista as pv
-
     # Create 2D mesh in 2D space (triangle in 2D)
     points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]])
     cells = torch.tensor([[0, 1, 2]])
@@ -467,8 +460,6 @@ def test_draw_empty_mesh():
 
 def test_pyvista_with_scalars():
     """Test PyVista backend with scalar coloring."""
-    import pyvista as pv
-
     torch.manual_seed(42)
     mesh = create_3d_surface_mesh()
     mesh.cell_data["pressure"] = torch.rand(mesh.n_cells)
@@ -482,8 +473,6 @@ def test_pyvista_with_scalars():
 
 def test_pyvista_with_point_scalars():
     """Test PyVista backend with point scalar coloring."""
-    import pyvista as pv
-
     torch.manual_seed(42)
     mesh = create_3d_surface_mesh()
     mesh.point_data["temperature"] = torch.rand(mesh.n_points)
@@ -524,8 +513,6 @@ def test_full_workflow_matplotlib():
 
 def test_full_workflow_pyvista():
     """Test complete workflow with PyVista backend."""
-    import pyvista as pv
-
     torch.manual_seed(42)
     mesh = create_3d_surface_mesh()
 
@@ -549,8 +536,6 @@ def test_full_workflow_pyvista():
 
 def test_tetrahedral_mesh_visualization():
     """Test visualization of 3D tetrahedral mesh."""
-    import pyvista as pv
-
     mesh = create_3d_tetrahedral_mesh()
 
     # Should use PyVista for 3D
@@ -618,8 +603,6 @@ class TestVisualizationParametrized:
             assert isinstance(result, matplotlib.axes.Axes)
             plt.close("all")
         elif backend == "pyvista":
-            import pyvista as pv
-
             assert isinstance(result, pv.Plotter)
             result.close()
 
@@ -645,8 +628,6 @@ class TestVisualizationParametrized:
             assert isinstance(result, matplotlib.axes.Axes)
             plt.close("all")
         elif backend == "pyvista":
-            import pyvista as pv
-
             assert isinstance(result, pv.Plotter)
             result.close()
 

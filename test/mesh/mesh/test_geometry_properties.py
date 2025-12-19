@@ -20,6 +20,10 @@ Validates cell_centroids, cell_areas, cell_normals, and point_normals by compari
 against PyVista's compute_cell_sizes and compute_normals methods.
 """
 
+import pytest
+
+pytest.importorskip("pyvista")
+
 import numpy as np
 import torch
 
