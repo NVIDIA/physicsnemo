@@ -133,18 +133,17 @@ class CombinedOptimizer(Optimizer):
         r"""Clear the gradients of all optimized parameters.
 
         This method delegates to the ``zero_grad()`` method of each underlying
-        optimizer, passing through all arguments and keyword arguments.
+        optimizer.
 
         Parameters
         ----------
-        *args
-            Positional arguments to pass to each optimizer's ``zero_grad()``.
-        **kwargs
-            Keyword arguments to pass to each optimizer's ``zero_grad()``.
-            Common kwargs include ``set_to_none`` (bool).
+        set_to_none : bool, optional
+            If True (default), sets gradients to None instead of zero. This
+            reduces memory usage and can improve performance. Matches the
+            upstream PyTorch ``Optimizer.zero_grad()`` interface.
         """
         for opt in self.optimizers:
-            opt.zero_grad(*args, **kwargs)
+            opt.zero_grad(set_to_none=set_to_none)
 
     def step(
         self, closure: Callable[[], torch.Tensor] | None = None
