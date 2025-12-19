@@ -19,3 +19,19 @@
 Includes spheres, cylinders, tori, platonic solids, and various parametric
 surfaces embedded in 3D space.
 """
+
+from physicsnemo.mesh.primitives.surfaces import (
+    cone,
+    cube_surface,
+    cylinder,
+    cylinder_open,
+    disk,
+    hemisphere,
+    icosahedron_surface,
+    mobius_strip,
+    octahedron_surface,
+    plane,
+    sphere_uv,
+    tetrahedron_surface,
+    torus,
+)

@@ -19,3 +19,8 @@
 Includes functions for adding noise, perturbations, and other procedural
 modifications to meshes, plus standalone noise generation functions.
 """
+
+from physicsnemo.mesh.primitives.procedural import (
+    noisy_mesh,
+    perturbed_grid,
+)

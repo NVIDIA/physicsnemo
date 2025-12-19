@@ -19,13 +19,13 @@
 Dimensional: 3D manifold in 3D space.
 """
 
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 
 
+@require_version_spec("pyvista")
 def load(device: torch.device | str = "cpu") -> Mesh:
     """Load tetrahedral beam volume mesh from PyVista examples.
 
@@ -41,11 +41,9 @@ def load(device: torch.device | str = "cpu") -> Mesh:
     Mesh
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
+    import pyvista as pv
+
+    from physicsnemo.mesh.io.io_pyvista import from_pyvista
+
     pv_mesh = pv.examples.load_tetbeam()
-    mesh = from_pyvista(pv_mesh, manifold_dim=3)
-
-    # Move to specified device
-    if device != str(mesh.points.device):
-        mesh = mesh.to(device)
-
-    return mesh
+    return from_pyvista(pv_mesh).to(device=device)

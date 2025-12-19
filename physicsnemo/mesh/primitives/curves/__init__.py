@@ -19,3 +19,19 @@
 Includes line segments, circular arcs, parametric curves, and knots in
 1D, 2D, and 3D embedding spaces.
 """
+
+from physicsnemo.mesh.primitives.curves import (
+    circle_2d,
+    circle_3d,
+    circular_arc_2d,
+    ellipse_2d,
+    helix_3d,
+    line_segment_1d,
+    line_segments_1d,
+    polyline_2d,
+    spiral_2d,
+    spline_3d,
+    straight_line_2d,
+    straight_line_3d,
+    trefoil_knot_3d,
+)

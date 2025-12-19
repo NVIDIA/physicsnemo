@@ -19,3 +19,14 @@
 Includes squares, circles, polygons, and other 2D shapes triangulated
 in the plane.
 """
+
+from physicsnemo.mesh.primitives.planar import (
+    annulus_2d,
+    circle_2d,
+    equilateral_triangle,
+    l_shape,
+    rectangle,
+    regular_polygon,
+    structured_grid,
+    unit_square,
+)

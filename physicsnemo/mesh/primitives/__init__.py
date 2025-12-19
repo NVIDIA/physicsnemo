@@ -41,6 +41,7 @@ from physicsnemo.mesh.primitives import (
     curves,
     planar,
     procedural,
+    pyvista_datasets,
     surfaces,
     volumes,
 )
