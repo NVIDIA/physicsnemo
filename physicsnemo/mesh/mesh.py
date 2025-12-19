@@ -471,22 +471,15 @@ class Mesh:
 
     @property
     def point_normals(self) -> torch.Tensor:
-        """Compute area-weighted normal vectors at mesh vertices.
+        """Compute angle-area-weighted normal vectors at mesh vertices.
 
-        For each point (vertex), computes a normal vector by taking an area-weighted
-        average of the normals of all adjacent cells. This provides a smooth approximation
-        of the surface normal at each vertex.
+        This property returns the canonical/default point normals using combined
+        angle and area weighting (Maya default). For other weighting schemes
+        (unweighted, area, angle), use :meth:`compute_point_normals`.
 
-        The normal at vertex v is computed as:
-            point_normal_v = normalize(sum_over_adjacent_cells(cell_normal * cell_area))
-
-        Area weighting ensures that larger adjacent faces have more influence on the
-        vertex normal, which is standard practice in computer graphics and produces
-        better visual results than simple averaging.
-
-        Normal vectors are only well-defined for codimension-1 manifolds, where each
-        cell has a unique normal direction. For higher codimensions, normals are
-        ambiguous and this property will raise an error.
+        Angle-area weighting ensures that each face's contribution is weighted by
+        both its area and the interior angle at the vertex, balancing both geometric
+        factors for high-quality normals.
 
         The result is cached in point_data["_cache"]["normals"] for efficiency.
 
@@ -502,86 +495,273 @@ class Mesh:
         ValueError
             If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1).
 
+        See Also
+        --------
+        compute_point_normals : Compute point normals with explicit weighting choice.
+        cell_normals : Compute cell (face) normals.
+
         Examples
         --------
             >>> # Triangle mesh in 3D
             >>> mesh = create_triangle_mesh_3d()
-            >>> normals = mesh.point_normals  # (n_points, 3)
+            >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted
             >>> # Normals are unit vectors (or zero for isolated points)
             >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)
         """
         cached = get_cached(self.point_data, "normals")
         if cached is None:
-            ### Validate codimension-1 requirement (same as cell_normals)
-            if self.codimension != 1:
-                raise ValueError(
-                    f"Point normals are only defined for codimension-1 manifolds.\n"
-                    f"Got {self.n_manifold_dims=} and {self.n_spatial_dims=}.\n"
-                    f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
-                    f"Current codimension: {self.codimension}"
-                )
+            cached = self.compute_point_normals(weighting="angle_area")
+            set_cached(self.point_data, "normals", cached)
+        return cached
 
-            ### Get cell normals and areas (triggers computation if not cached)
-            cell_normals = self.cell_normals  # (n_cells, n_spatial_dims)
-            cell_areas = self.cell_areas  # (n_cells,)
+    def compute_point_normals(
+        self,
+        weighting: Literal["area", "unweighted", "angle", "angle_area"] = "angle_area",
+    ) -> torch.Tensor:
+        """Compute normal vectors at mesh vertices with specified weighting.
 
-            ### Initialize accumulated weighted normals for each point
-            # Shape: (n_points, n_spatial_dims)
-            weighted_normals = torch.zeros(
-                (self.n_points, self.n_spatial_dims),
+        For each point (vertex), computes a normal vector by averaging the normals
+        of all adjacent cells. This provides a smooth approximation of the surface
+        normal at each vertex.
+
+        Four weighting schemes are available (following industry conventions from
+        Autodesk Maya and 3ds Max):
+
+        - **"area"** (default): Area-weighted averaging, where larger faces have more
+          influence on the vertex normal. The normal at vertex v is computed as:
+          ``point_normal_v = normalize(sum(cell_normal * cell_area))``.
+          This reduces the influence of small sliver triangles.
+
+        - **"unweighted"**: Simple averaging, where each adjacent face contributes
+          equally regardless of size. The normal at vertex v is:
+          ``point_normal_v = normalize(sum(cell_normal))``.
+          This matches PyVista/VTK's ``compute_normals`` behavior.
+
+        - **"angle"**: Angle-weighted averaging, where faces are weighted by the
+          interior angle at the vertex. Faces with larger angles at the vertex
+          have more influence. This often provides the most geometrically accurate
+          normals for curved surfaces.
+
+        - **"angle_area"**: Combined angle and area weighting, where each face's
+          contribution is weighted by both its area and the angle at the vertex.
+          This is the default in Maya and balances both geometric factors.
+
+        Normal vectors are only well-defined for codimension-1 manifolds, where each
+        cell has a unique normal direction. For higher codimensions, normals are
+        ambiguous and this method will raise an error.
+
+        Parameters
+        ----------
+        weighting : {"area", "unweighted", "angle", "angle_area"}
+            Weighting scheme for averaging adjacent cell normals.
+            - "area": Weight by cell area (larger faces have more influence).
+            - "unweighted": Equal weight for all adjacent cells (matches PyVista/VTK).
+            - "angle": Weight by interior angle at the vertex.
+            - "angle_area": Weight by both angle and area (Maya default).
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor of shape (n_points, n_spatial_dims) containing unit normal vectors
+            at each vertex. For isolated points (with no adjacent cells), the normal
+            is a zero vector.
+
+        Raises
+        ------
+        ValueError
+            If the mesh is not codimension-1 (n_manifold_dims ≠ n_spatial_dims - 1),
+            if an invalid weighting scheme is specified, or if angle-based weighting
+            is requested for 1-simplices (edges) which have no interior angle.
+
+        See Also
+        --------
+        point_normals : Property returning angle-area-weighted normals (canonical default).
+        cell_normals : Compute cell (face) normals.
+
+        Examples
+        --------
+            >>> # Triangle mesh in 3D
+            >>> mesh = create_triangle_mesh_3d()
+            >>> normals = mesh.compute_point_normals()  # area-weighted (default)
+            >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")
+            >>> normals_angle = mesh.compute_point_normals(weighting="angle")
+            >>> # Normals are unit vectors (or zero for isolated points)
+            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)
+        """
+        valid_weightings = ("area", "unweighted", "angle", "angle_area")
+        if weighting not in valid_weightings:
+            raise ValueError(
+                f"Invalid {weighting=}. Must be one of {valid_weightings}."
+            )
+
+        ### Validate codimension-1 requirement (same as cell_normals)
+        if self.codimension != 1:
+            raise ValueError(
+                f"Point normals are only defined for codimension-1 manifolds.\n"
+                f"Got {self.n_manifold_dims=} and {self.n_spatial_dims=}.\n"
+                f"Required: n_manifold_dims = n_spatial_dims - 1 (codimension-1).\n"
+                f"Current codimension: {self.codimension}"
+            )
+
+        ### Validate angle-based weighting requires 2+ manifold dims
+        if weighting in ("angle", "angle_area") and self.n_manifold_dims < 2:
+            raise ValueError(
+                f"Angle-based weighting requires n_manifold_dims >= 2 "
+                f"(cells must have interior angles).\n"
+                f"Got {self.n_manifold_dims=}. Use 'area' or 'unweighted' instead."
+            )
+
+        ### Get cell normals (triggers computation if not cached)
+        cell_normals = self.cell_normals  # (n_cells, n_spatial_dims)
+
+        ### Initialize accumulated normals for each point
+        accumulated_normals = torch.zeros(
+            (self.n_points, self.n_spatial_dims),
+            dtype=self.points.dtype,
+            device=self.points.device,
+        )
+
+        n_vertices_per_cell = self.cells.shape[1]
+        point_indices = self.cells.flatten()
+
+        # Repeat cell normals for each vertex in the cell
+        cell_normals_repeated = cell_normals.unsqueeze(1).expand(
+            -1, n_vertices_per_cell, -1
+        )
+        cell_normals_flat = cell_normals_repeated.reshape(-1, self.n_spatial_dims)
+
+        ### Compute weights based on scheme
+        if weighting == "unweighted":
+            weights = torch.ones(
+                self.n_cells * n_vertices_per_cell,
                 dtype=self.points.dtype,
                 device=self.points.device,
             )
 
-            ### Vectorized accumulation of area-weighted normals
-            # For each cell, add (cell_normal * cell_area) to each of its vertices
+        elif weighting == "area":
+            cell_areas = self.cell_areas
+            weights = cell_areas.unsqueeze(1).expand(-1, n_vertices_per_cell).flatten()
 
-            # Get all vertex indices from all cells
-            # Shape: (n_cells, n_vertices_per_cell)
-            n_vertices_per_cell = self.cells.shape[1]
+        elif weighting in ("angle", "angle_area"):
+            # Compute interior angles at each vertex of each cell
+            # For a simplex, angle at vertex k is between edges to other vertices
+            vertex_angles = (
+                self._compute_vertex_angles()
+            )  # (n_cells, n_vertices_per_cell)
+            weights = vertex_angles.flatten()
 
-            # Flatten point indices: (n_cells * n_vertices_per_cell,)
-            point_indices = self.cells.flatten()
+            if weighting == "angle_area":
+                # Multiply by cell area
+                cell_areas = self.cell_areas
+                area_weights = (
+                    cell_areas.unsqueeze(1).expand(-1, n_vertices_per_cell).flatten()
+                )
+                weights = weights * area_weights
 
-            # Repeat cell normals for each vertex in the cell
-            # Shape: (n_cells, n_vertices_per_cell, n_spatial_dims)
-            cell_normals_repeated = cell_normals.unsqueeze(1).expand(
-                -1, n_vertices_per_cell, -1
-            )
-            # Flatten: (n_cells * n_vertices_per_cell, n_spatial_dims)
-            cell_normals_flat = cell_normals_repeated.reshape(-1, self.n_spatial_dims)
+        ### Apply weights and accumulate
+        normals_to_accumulate = cell_normals_flat * weights.unsqueeze(-1)
 
-            # Repeat cell areas for each vertex in the cell
-            # Shape: (n_cells, n_vertices_per_cell)
-            cell_areas_repeated = cell_areas.unsqueeze(1).expand(
-                -1, n_vertices_per_cell
-            )
-            # Flatten: (n_cells * n_vertices_per_cell,)
-            cell_areas_flat = cell_areas_repeated.flatten()
+        point_indices_expanded = point_indices.unsqueeze(-1).expand(
+            -1, self.n_spatial_dims
+        )
+        accumulated_normals.scatter_add_(
+            dim=0,
+            index=point_indices_expanded,
+            src=normals_to_accumulate,
+        )
 
-            # Weight normals by area
-            # Shape: (n_cells * n_vertices_per_cell, n_spatial_dims)
-            weighted_normals_flat = cell_normals_flat * cell_areas_flat.unsqueeze(-1)
+        ### Normalize to get unit normals
+        return F.normalize(accumulated_normals, dim=-1)
 
-            ### Scatter-add weighted normals to their corresponding points
-            # Expand point_indices to match weighted_normals_flat shape
-            point_indices_expanded = point_indices.unsqueeze(-1).expand(
-                -1, self.n_spatial_dims
-            )
+    def _compute_vertex_angles(self) -> torch.Tensor:
+        """Compute generalized interior angles at each vertex of each cell.
 
-            # Accumulate weighted normals at each point
-            weighted_normals.scatter_add_(
-                dim=0,
-                index=point_indices_expanded,
-                src=weighted_normals_flat,
-            )
+        For an n-simplex, the "angle" at a vertex is computed using the unified
+        formula that generalizes to arbitrary dimensions:
 
-            ### Normalize to get unit normals
-            # For isolated points (zero weighted sum), F.normalize returns zero vector
-            cached = F.normalize(weighted_normals, dim=-1)
-            set_cached(self.point_data, "normals", cached)
+            Ω = 2 × arctan(√det(C) / (1 + Σᵢ<ⱼ Cᵢⱼ))
 
-        return cached
+        where C is the correlation (normalized Gram) matrix of edge vectors:
+            Cᵢⱼ = (eᵢ · eⱼ) / (|eᵢ| |eⱼ|)
+
+        This formula reduces to:
+        - For triangles (n=2): the planar interior angle θ
+        - For tetrahedra (n=3): the solid angle Ω (steradians)
+        - For higher n: the generalized solid angle
+
+        Returns
+        -------
+        torch.Tensor
+            Tensor of shape (n_cells, n_vertices_per_cell) containing the
+            generalized angle at each vertex.
+
+        Notes
+        -----
+        This formula is derived by recognizing that both the planar angle formula
+        and the Van Oosterom & Strackee (1983) solid angle formula follow the
+        same pattern when expressed in terms of the correlation matrix.
+
+        The formula uses atan2 for numerical stability when the denominator
+        approaches zero (nearly degenerate simplices).
+        """
+        n_edges = self.n_manifold_dims  # edges from each vertex
+
+        # Get vertex positions: (n_cells, n_verts, n_spatial_dims)
+        cell_vertices = self.points[self.cells]
+
+        # For each vertex k, compute the edge vectors to the other n_edges vertices
+        # Use roll to get shifted vertex positions:
+        # rolled[:, :, i, :] = cell_vertices[:, (k + i + 1) % n_verts, :]
+
+        # Build edge vectors for all vertices simultaneously
+        # edges[k, i] = v_{(k+i+1) mod n_verts} - v_k
+        # Shape: (n_cells, n_verts, n_edges, n_spatial_dims)
+        edges = torch.stack(
+            [
+                torch.roll(cell_vertices, shifts=-(i + 1), dims=1) - cell_vertices
+                for i in range(n_edges)
+            ],
+            dim=2,
+        )
+
+        # Compute edge lengths: (n_cells, n_verts, n_edges)
+        edge_lengths = edges.norm(dim=-1)
+
+        # Compute normalized edges: (n_cells, n_verts, n_edges, n_spatial_dims)
+        edges_normalized = edges / edge_lengths.unsqueeze(-1).clamp(min=1e-10)
+
+        # Compute correlation matrix C for each vertex of each cell
+        # C[i,j] = normalized_edge_i · normalized_edge_j
+        # Shape: (n_cells, n_verts, n_edges, n_edges)
+        # Using einsum: C_ij = sum_d (edges_normalized[:,:,i,d] * edges_normalized[:,:,j,d])
+        corr_matrix = torch.einsum(
+            "cvid,cvjd->cvij", edges_normalized, edges_normalized
+        )
+
+        # Compute det(C) for each vertex: (n_cells, n_verts)
+        det_C = torch.linalg.det(corr_matrix)
+
+        # Compute sum of off-diagonal elements: Σᵢ<ⱼ Cᵢⱼ
+        # For an n×n matrix, sum of upper triangle (excluding diagonal)
+        # Create upper triangle mask
+        triu_mask = torch.triu(
+            torch.ones(n_edges, n_edges, device=self.points.device, dtype=torch.bool),
+            diagonal=1,
+        )
+        # Sum off-diagonal: (n_cells, n_verts)
+        sum_off_diag = corr_matrix[:, :, triu_mask].sum(dim=-1)
+
+        # Denominator: 1 + Σᵢ<ⱼ Cᵢⱼ
+        denominator = 1.0 + sum_off_diag
+
+        # Numerator: √det(C) (use abs for numerical stability with near-degenerate cells)
+        numerator = det_C.abs().sqrt()
+
+        # Compute angle: Ω = 2 × arctan(numerator / denominator)
+        # Use atan2 for numerical stability
+        angles = 2.0 * torch.atan2(numerator, denominator)
+
+        return angles
 
     @classmethod
     def merge(
