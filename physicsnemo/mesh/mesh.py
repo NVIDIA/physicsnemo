@@ -240,6 +240,49 @@ class Mesh:
                 f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
             )
 
+    if TYPE_CHECKING:
+        # Type stub for the `to` method dynamically added by @tensorclass.
+        # This provides proper type hints without shadowing the runtime implementation.
+        def to(self, *args: Any, **kwargs: Any) -> Self:
+            """Move mesh and all attached data to specified device, dtype, or format.
+
+            Maps this Mesh to another device and/or dtype. All tensors in ``points``,
+            ``cells``, ``point_data``, ``cell_data``, and ``global_data`` are moved
+            together.
+
+            Parameters
+            ----------
+            *args : Any
+                Positional arguments passed to the underlying tensorclass ``to`` method.
+                Common usage: ``mesh.to("cuda")`` or ``mesh.to(torch.float32)``.
+            **kwargs : Any
+                Keyword arguments passed to the underlying tensorclass ``to`` method.
+
+            Keyword Arguments
+            -----------------
+            device : torch.device, optional
+                The desired device of the mesh.
+            dtype : torch.dtype, optional
+                The desired floating point or complex dtype of the mesh tensors.
+            non_blocking : bool, optional
+                Whether the operations should be non-blocking.
+            memory_format : torch.memory_format, optional
+                The desired memory format for 4D parameters and buffers.
+
+            Returns
+            -------
+            Mesh
+                A new Mesh instance on the target device/dtype, or the same mesh if
+                no changes were required.
+
+            Examples
+            --------
+            >>> mesh_gpu = mesh.to("cuda")
+            >>> mesh_cpu = mesh.to(device="cpu")
+            >>> mesh_fp16 = mesh.to(torch.float16)
+            """
+            ...
+
     @property
     def n_points(self) -> int:
         return self.points.shape[0]
