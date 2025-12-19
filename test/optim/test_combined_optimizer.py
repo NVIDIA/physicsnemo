@@ -103,6 +103,15 @@ class TestInitialization:
         ):
             combined_optimizer.add_param_group({"params": []})
 
+    def test_overlapping_params_raises(self, model):
+        """Verify that overlapping parameter groups raise ValueError."""
+        # Both optimizers have the same parameters
+        opt1 = SGD(model.layer1.parameters(), lr=0.01)
+        opt2 = Adam(model.layer1.parameters(), lr=0.001)  # Same params as opt1
+
+        with pytest.raises(ValueError, match="Parameter appears in multiple optimizers"):
+            CombinedOptimizer([opt1, opt2])
+
 
 class TestStep:
     def test_step_calls_all_optimizers(self, model):

@@ -43,7 +43,8 @@ class CombinedOptimizer(Optimizer):
     Raises
     ------
     ValueError
-        If ``optimizers`` is empty.
+        If ``optimizers`` is empty, or if any parameter appears in multiple
+        optimizers (parameter groups must be disjoint).
 
     Notes
     -----
@@ -105,6 +106,23 @@ class CombinedOptimizer(Optimizer):
     ):
         if not optimizers:
             raise ValueError("`optimizers` must contain at least one optimizer.")
+
+        ### Validate that parameter groups are disjoint
+        # Having overlapping parameters would cause silent bugs where the same
+        # parameter is updated multiple times per step.
+        seen_params: set[int] = set()
+        for opt_idx, opt in enumerate(optimizers):
+            for group_idx, group in enumerate(opt.param_groups):
+                for param in group["params"]:
+                    param_id = id(param)
+                    if param_id in seen_params:
+                        raise ValueError(
+                            f"Parameter appears in multiple optimizers. "
+                            f"Found duplicate in optimizer {opt_idx}, group {group_idx}. "
+                            f"Each parameter must belong to exactly one optimizer to avoid "
+                            f"being updated multiple times per step."
+                        )
+                    seen_params.add(param_id)
 
         self.optimizers = optimizers
         self._torch_compile_kwargs = torch_compile_kwargs
