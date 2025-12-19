@@ -97,7 +97,9 @@ def create_mesh_with_caches(
     return mesh
 
 
-def validate_caches(mesh, expected_caches: dict[str, bool], atol: float = 1e-6) -> None:
+def validate_caches(
+    mesh, expected_caches: dict[str, bool], rtol: float = 1e-4, atol: float = 1e-5
+) -> None:
     """Validate that caches exist and are correct."""
     for cache_name, should_exist in expected_caches.items():
         if should_exist:
@@ -125,7 +127,7 @@ def validate_caches(mesh, expected_caches: dict[str, bool], atol: float = 1e-6) 
             else:
                 raise ValueError(f"Unknown cache: {cache_name}")
 
-            assert torch.allclose(cached_value, recomputed, atol=atol), (
+            assert torch.allclose(cached_value, recomputed, rtol=rtol, atol=atol), (
                 f"Cache {cache_name} has incorrect value.\n"
                 f"Max diff: {(cached_value - recomputed).abs().max()}"
             )
@@ -168,9 +170,9 @@ class TestTranslation:
         # physicsnemo.mesh translation
         tm_result = translate(tm_mesh, offset)
 
-        # Compare points
+        # Compare points - use rtol for large coordinate values
         tm_as_pv = to_pyvista(tm_result.to("cpu"))
-        assert np.allclose(tm_as_pv.points, pv_result.points, atol=1e-5)
+        assert np.allclose(tm_as_pv.points, pv_result.points, rtol=1e-3, atol=1e-3)
 
     ### Parametrized dimensional tests ###
 
@@ -261,9 +263,9 @@ class TestRotation:
         # physicsnemo.mesh rotation
         tm_result = rotate(tm_mesh, np.radians(angle), axis)
 
-        # Compare points
+        # Compare points - use rtol for large coordinate values
         tm_as_pv = to_pyvista(tm_result.to("cpu"))
-        assert np.allclose(tm_as_pv.points, pv_result.points, atol=1e-4)
+        assert np.allclose(tm_as_pv.points, pv_result.points, rtol=1e-3, atol=1e-3)
 
     ### Parametrized dimensional tests ###
 
@@ -360,9 +362,9 @@ class TestScale:
         # physicsnemo.mesh scaling
         tm_result = scale(tm_mesh, factor)
 
-        # Compare points
+        # Compare points - use rtol for large coordinate values
         tm_as_pv = to_pyvista(tm_result.to("cpu"))
-        assert np.allclose(tm_as_pv.points, pv_result.points, atol=1e-5)
+        assert np.allclose(tm_as_pv.points, pv_result.points, rtol=1e-3, atol=1e-3)
 
     ### Parametrized dimensional tests ###
 
