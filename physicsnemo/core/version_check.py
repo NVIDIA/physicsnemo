@@ -98,13 +98,13 @@ def check_version_spec(
     return True
 
 
-def require_version_spec(package_name: str, spec: str = ">=0.0.0"):
+def require_version_spec(package_name: str, spec: str = "0.0.0"):
     """
-    Decorator variant that accepts a full version specifier instead of a single minimum version.
+    Decorator that checks a package version requirement before function execution.
 
     Args:
         package_name: Name of the package to check
-        spec: version specifier (e.g., '2.4') (Not PEP 440 to allow dev versions, etc.)
+        spec: Minimum version required (e.g., '2.4')
 
     Returns:
         Decorator function that checks version requirement before execution
