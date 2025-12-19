@@ -179,7 +179,7 @@ class DistributedManager(object):
         """
 
         # Properties don't mesh with decorators.  So in this function, I call the check manually:
-        check_version_spec("torch", ">=2.4", hard_fail=True)
+        check_version_spec("torch", "2.4", hard_fail=True)
 
         if self._global_mesh is None:
             # Fully flat mesh (1D) by default:
@@ -187,14 +187,14 @@ class DistributedManager(object):
 
         return self._global_mesh
 
-    @require_version_spec("torch", ">=2.4")
+    @require_version_spec("torch", "2.4")
     def mesh_names(self):
         """
         Return mesh axis names
         """
         return self._mesh_dims.keys()
 
-    @require_version_spec("torch", ">=2.4")
+    @require_version_spec("torch", "2.4")
     def mesh_sizes(self):
         """
         Return mesh axis sizes
@@ -214,7 +214,7 @@ class DistributedManager(object):
         else:
             raise PhysicsNeMoUndefinedGroupError(name)
 
-    @require_version_spec("torch", ">=2.4")
+    @require_version_spec("torch", "2.4")
     def mesh(self, name=None):
         """
         Return a device_mesh with the given name.
@@ -434,7 +434,7 @@ class DistributedManager(object):
         # Set per rank numpy random seed for data sampling
         np.random.seed(seed=DistributedManager().rank)
 
-    @require_version_spec("torch", ">=2.4")
+    @require_version_spec("torch", "2.4")
     def initialize_mesh(
         self, mesh_shape: Tuple[int, ...], mesh_dim_names: Tuple[str, ...]
     ) -> "torch.distributed.DeviceMesh":
@@ -521,7 +521,7 @@ class DistributedManager(object):
         return self._global_mesh
 
     # Device mesh available in torch 2.4 or higher
-    @require_version_spec("torch", ">=2.4")
+    @require_version_spec("torch", "2.4")
     def get_mesh_group(self, mesh: "dist.DeviceMesh") -> dist.ProcessGroup:
         """
         Get the process group for a given mesh.
