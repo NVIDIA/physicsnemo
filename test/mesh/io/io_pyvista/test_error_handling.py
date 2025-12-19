@@ -21,7 +21,7 @@ import pytest
 
 pv = pytest.importorskip("pyvista")
 
-from physicsnemo.mesh.io.io_pyvista import from_pyvista
+from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
 
 
 class TestErrorHandling:

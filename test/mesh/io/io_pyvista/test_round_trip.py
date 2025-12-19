@@ -22,12 +22,13 @@ across spatial dimensions and compute backends.
 
 import numpy as np
 import pytest
-
-pv = pytest.importorskip("pyvista")
 import torch
 
-from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
 from physicsnemo.mesh.mesh import Mesh
+
+pv = pytest.importorskip("pyvista")
+
+from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
 
 ### Helper Functions ###
 

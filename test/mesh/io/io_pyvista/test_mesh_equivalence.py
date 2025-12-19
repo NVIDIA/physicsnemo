@@ -17,12 +17,13 @@
 """Tests for physicsnemo.mesh.io module - mesh equivalence."""
 
 import pytest
-
-pv = pytest.importorskip("pyvista")
 import torch
 
-from physicsnemo.mesh.io.io_pyvista import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
+
+pv = pytest.importorskip("pyvista")
+
+from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
 
 
 class TestMeshEquivalence:
