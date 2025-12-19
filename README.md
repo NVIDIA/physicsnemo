@@ -347,9 +347,10 @@ The recommended method for installing the latest version of PhysicsNeMo is using
 
 ```Bash
 pip install nvidia-physicsnemo
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-The installation can be verified by running the [Hello World](#hello-world) example.
+The installation can also be verified by running the [Hello World](#hello-world) example.
 
 #### Optional Dependencies
 
@@ -395,6 +396,7 @@ git clone git@github.com:NVIDIA/physicsnemo.git && cd physicsnemo
 
 pip install --upgrade pip
 pip install .
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
 ### Source Container
