@@ -32,7 +32,7 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities import get_cached, set_cached
+from physicsnemo.mesh.utilities._cache import get_cached, set_cached
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
