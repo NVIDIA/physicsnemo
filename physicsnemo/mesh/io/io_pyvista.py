@@ -43,7 +43,7 @@ def from_pyvista(
     Returns
     -------
     Mesh
-        Mesh object with converted geometry and data.
+        Mesh object with converted geometry and data (on CPU).
 
     Raises
     ------
