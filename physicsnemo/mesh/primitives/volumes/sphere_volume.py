@@ -52,7 +52,9 @@ def load(
     from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
     ### Create a sphere surface and fill it with tetrahedra
-    sphere = pv.Sphere(radius=radius, theta_resolution=resolution, phi_resolution=resolution)
+    sphere = pv.Sphere(
+        radius=radius, theta_resolution=resolution, phi_resolution=resolution
+    )
 
     ### Use delaunay_3d to fill the interior with tetrahedra
     volume = sphere.delaunay_3d()

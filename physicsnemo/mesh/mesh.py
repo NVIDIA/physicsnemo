@@ -20,10 +20,15 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict, tensorclass
 
-from physicsnemo.mesh.transformations.geometric import rotate, scale, transform, translate
+from physicsnemo.mesh.transformations.geometric import (
+    rotate,
+    scale,
+    transform,
+    translate,
+)
 from physicsnemo.mesh.utilities._cache import get_cached, set_cached
-from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
+from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 

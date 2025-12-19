@@ -22,4 +22,3 @@ All tests in this directory require pyvista.
 import pytest
 
 pv = pytest.importorskip("pyvista")
-

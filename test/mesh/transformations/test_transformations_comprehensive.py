@@ -24,7 +24,12 @@ import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.transformations.geometric import rotate, scale, transform, translate
+from physicsnemo.mesh.transformations.geometric import (
+    rotate,
+    scale,
+    transform,
+    translate,
+)
 
 
 class TestRotationErrors:
