@@ -25,7 +25,7 @@ import pytest
 import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista, to_pyvista
+from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 ### Helper Functions ###

@@ -20,7 +20,7 @@ import numpy as np
 import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 
 class TestFromPyvista1D:
