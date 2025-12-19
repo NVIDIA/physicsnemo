@@ -274,6 +274,76 @@ class TestStateDict:
         ):
             combined_optimizer.load_state_dict(bad_state)
 
+    def test_state_dict_numeric_correctness(self, model):
+        """Verify save/restore preserves optimizer state numerically.
+
+        This test ensures that loading a saved state_dict correctly restores
+        the internal optimizer state (momentum buffers, Adam moments, etc.)
+        and produces identical parameter updates.
+        """
+        import copy
+
+        torch.manual_seed(42)
+
+        # Create optimizers with momentum/state that accumulates over steps
+        opt1 = SGD(model.layer1.parameters(), lr=0.1, momentum=0.9)
+        opt2 = Adam(model.layer2.parameters(), lr=0.01)
+        combined = CombinedOptimizer([opt1, opt2])
+
+        # Create deterministic test input before any other random ops
+        x_test = torch.randn(4, 10)
+
+        # Run several training steps to build up optimizer state
+        for i in range(5):
+            combined.zero_grad()
+            # Use deterministic input based on step index
+            x = torch.full((4, 10), float(i + 1))
+            loss = model(x).sum()
+            loss.backward()
+            combined.step()
+
+        # Save state and current parameters (deepcopy is essential since
+        # state_dict returns references, not copies)
+        state = copy.deepcopy(combined.state_dict())
+        params_checkpoint = {
+            name: p.clone().detach() for name, p in model.named_parameters()
+        }
+
+        # Take two more steps to advance optimizer state beyond checkpoint
+        for _ in range(2):
+            combined.zero_grad()
+            loss = model(x_test).sum()
+            loss.backward()
+            combined.step()
+
+        # Record current params (after 2 more steps)
+        params_after_extra_steps = {
+            name: p.clone().detach() for name, p in model.named_parameters()
+        }
+
+        # Restore checkpoint: model params + optimizer state
+        with torch.no_grad():
+            for name, p in model.named_parameters():
+                p.copy_(params_checkpoint[name])
+        combined.load_state_dict(state)
+
+        # Take the same two steps again
+        for _ in range(2):
+            combined.zero_grad()
+            loss = model(x_test).sum()
+            loss.backward()
+            combined.step()
+
+        # Verify we get the same final params
+        for name, p in model.named_parameters():
+            expected = params_after_extra_steps[name]
+            actual = p.detach()
+            assert torch.allclose(actual, expected, atol=1e-6), (
+                f"State restore produced different result for {name}: "
+                f"expected param norm {expected.norm().item():.6f}, "
+                f"got {actual.norm().item():.6f}"
+            )
+
 
 class TestIntegration:
     def test_lr_scheduler(self, combined_optimizer):
