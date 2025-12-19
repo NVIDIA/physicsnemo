@@ -109,7 +109,9 @@ class TestInitialization:
         opt1 = SGD(model.layer1.parameters(), lr=0.01)
         opt2 = Adam(model.layer1.parameters(), lr=0.001)  # Same params as opt1
 
-        with pytest.raises(ValueError, match="Parameter appears in multiple optimizers"):
+        with pytest.raises(
+            ValueError, match="Parameter appears in multiple optimizers"
+        ):
             CombinedOptimizer([opt1, opt2])
 
 

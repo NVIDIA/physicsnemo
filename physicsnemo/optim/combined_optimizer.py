@@ -163,9 +163,7 @@ class CombinedOptimizer(Optimizer):
         for opt in self.optimizers:
             opt.zero_grad(set_to_none=set_to_none)
 
-    def step(
-        self, closure: Callable[[], float] | None = None
-    ) -> float | None:
+    def step(self, closure: Callable[[], float] | None = None) -> float | None:
         r"""Perform a single optimization step.
 
         This method calls the ``step()`` method of each underlying optimizer. If a
