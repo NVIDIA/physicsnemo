@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.typhon.gale import (
+from physicsnemo.experimental.models.geotransolver.gale import (
     GALE,
     GALE_block,
 )

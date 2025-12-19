@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Context Projector for Typhon model.
+"""Context Projector for GeoTransolver model.
 
 This module provides the ContextProjector class, which projects context features
 (geometry or global embeddings) onto learned physical state spaces for use in
@@ -25,11 +25,13 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from physicsnemo.utils.version_check import check_min_version
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.transolver.Physics_Attention import gumbel_softmax
+from physicsnemo.nn.ball_query import BQWarp
+from physicsnemo.nn.mlp_layers import Mlp
 
 # Check optional dependency availability
-TE_AVAILABLE = check_min_version("transformer_engine", "0.1.0", hard_fail=False)
+TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
 
@@ -41,7 +43,7 @@ class ContextProjector(nn.Module):
     It projects context values (geometry or global embeddings) onto a learned physical
     state space, but unlike a full attention layer, it never projects back to the
     original space. The projected features are used as context in all GALE blocks
-    of the Typhon model.
+    of the GeoTransolver model.
 
     Parameters
     ----------
@@ -68,7 +70,7 @@ class ContextProjector(nn.Module):
     See Also
     --------
     :class:`GALE` : Full GALE attention layer that uses these projected context features.
-    :class:`Typhon` : Main model that uses ContextProjector for geometry and global embeddings.
+    :class:`GeoTransolver` : Main model that uses ContextProjector for geometry and global embeddings.
     """
 
     def __init__(
@@ -281,7 +283,6 @@ class GeometricFeatureProcessor(nn.Module):
         hidden_dim: int,
     ):
         super().__init__()
-        from physicsnemo.models.layers import BQWarp, Mlp
 
         self.bq_warp = BQWarp(radius=radius, neighbors_in_radius=neighbors_in_radius)
         self.mlp = Mlp(

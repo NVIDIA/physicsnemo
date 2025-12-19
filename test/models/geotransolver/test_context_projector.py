@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.experimental.models.typhon.typhon import (
+from physicsnemo.experimental.models.geotransolver.context_projector import (
     ContextProjector,
 )
 

@@ -14,23 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import random
-import sys
 
 import pytest
 import torch
-from pytest_utils import import_or_fail
 
-from physicsnemo.experimental.models.typhon.typhon import (
-    Typhon,
+from physicsnemo.experimental.models.geotransolver.geotransolver import (
+    GeoTransolver,
 )
-
-# Add parent directory to path for imports
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-from common import (  # noqa E402
+from test.common import (  # noqa E402
     validate_amp,
     validate_checkpoint,
     validate_combo_optims,
@@ -38,18 +30,18 @@ from common import (  # noqa E402
     validate_forward_accuracy,
     validate_jit,
 )
-
+from test.conftest import requires_module
 
 # =============================================================================
-# Typhon End-to-End Model Tests
+# GeoTransolver End-to-End Model Tests
 # =============================================================================
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("use_geometry", [False, True])
 @pytest.mark.parametrize("use_global", [False, True])
-def test_typhon_forward(device, use_geometry, use_global):
-    """Test Typhon model forward pass with optional geometry and global context."""
+def test_geotransolver_forward(device, use_geometry, use_global):
+    """Test GeoTransolver model forward pass with optional geometry and global context."""
     torch.manual_seed(42)
 
     batch_size = 2
@@ -59,7 +51,7 @@ def test_typhon_forward(device, use_geometry, use_global):
     geometry_dim = 3
     global_dim = 16
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=geometry_dim if use_geometry else None,
@@ -97,14 +89,14 @@ def test_typhon_forward(device, use_geometry, use_global):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_typhon_forward_tuple_inputs(device):
-    """Test Typhon model forward pass with tuple inputs/outputs (multi-head)."""
+def test_geotransolver_forward_tuple_inputs(device):
+    """Test GeoTransolver model forward pass with tuple inputs/outputs (multi-head)."""
     torch.manual_seed(42)
 
     functional_dims = (32, 48)
     out_dims = (4, 6)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=functional_dims,
         out_dim=out_dims,
         geometry_dim=3,
@@ -150,13 +142,13 @@ def test_typhon_forward_tuple_inputs(device):
     assert not torch.isnan(outputs[1]).any()
 
 
-@import_or_fail("warp")
+@requires_module("warp")
 @pytest.mark.parametrize("device", ["cuda:0"])
-def test_typhon_forward_with_local_features(device, pytestconfig):
-    """Test Typhon model forward pass with local features (BQ warp)."""
+def test_geotransolver_forward_with_local_features(device, pytestconfig):
+    """Test GeoTransolver model forward pass with local features (BQ warp)."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -206,11 +198,11 @@ def test_typhon_forward_with_local_features(device, pytestconfig):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_typhon_forward_accuracy_basic(device):
-    """Test Typhon basic forward pass accuracy."""
+def test_geotransolver_forward_accuracy_basic(device):
+    """Test GeoTransolver basic forward pass accuracy."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -241,20 +233,20 @@ def test_typhon_forward_accuracy_basic(device):
     assert validate_forward_accuracy(
         model,
         (local_emb, local_positions, global_emb, geometry),
-        file_name="typhon_basic_output.pth",
+        file_name="models/geotransolver/data/geotransolver_basic_output.pth",
         atol=1e-3,
     )
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_typhon_forward_accuracy_tuple(device):
-    """Test Typhon forward pass accuracy with tuple inputs."""
+def test_geotransolver_forward_accuracy_tuple(device):
+    """Test GeoTransolver forward pass accuracy with tuple inputs."""
     torch.manual_seed(42)
 
     functional_dims = (32, 48)
     out_dims = (4, 6)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=functional_dims,
         out_dim=out_dims,
         geometry_dim=3,
@@ -294,7 +286,7 @@ def test_typhon_forward_accuracy_tuple(device):
             global_emb,
             geometry,
         ),
-        file_name="typhon_tuple_output.pth",
+        file_name="models/geotransolver/data/geotransolver_tuple_output.pth",
         atol=1e-3,
     )
 
@@ -305,12 +297,12 @@ def test_typhon_forward_accuracy_tuple(device):
 
 
 @pytest.mark.parametrize("device", ["cuda:0"])
-def test_typhon_optimizations(device):
-    """Test Typhon optimizations (CUDA graphs, JIT, AMP, combo)."""
+def test_geotransolver_optimizations(device):
+    """Test GeoTransolver optimizations (CUDA graphs, JIT, AMP, combo)."""
 
     def setup_model():
-        """Setup fresh Typhon model and inputs for each optimization test."""
-        model = Typhon(
+        """Setup fresh GeoTransolver model and inputs for each optimization test."""
+        model = GeoTransolver(
             functional_dim=32,
             out_dim=4,
             geometry_dim=3,
@@ -373,13 +365,13 @@ def test_typhon_optimizations(device):
 # =============================================================================
 
 
-@import_or_fail("transformer_engine")
+@requires_module("transformer_engine")
 @pytest.mark.parametrize("device", ["cuda:0"])
-def test_typhon_te_basic(device, pytestconfig):
-    """Test Typhon with Transformer Engine backend."""
+def test_geotransolver_te_basic(device, pytestconfig):
+    """Test GeoTransolver with Transformer Engine backend."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -425,11 +417,11 @@ def test_typhon_te_basic(device, pytestconfig):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_typhon_checkpoint(device):
-    """Test Typhon checkpoint save/load."""
+def test_geotransolver_checkpoint(device):
+    """Test GeoTransolver checkpoint save/load."""
     torch.manual_seed(42)
 
-    model_1 = Typhon(
+    model_1 = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -447,7 +439,7 @@ def test_typhon_checkpoint(device):
         include_local_features=False,
     ).to(device)
 
-    model_2 = Typhon(
+    model_2 = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -481,14 +473,14 @@ def test_typhon_checkpoint(device):
 
 
 @pytest.mark.parametrize("device", ["cuda:0", "cpu"])
-def test_typhon_checkpoint_tuple(device):
-    """Test Typhon checkpoint save/load with tuple inputs."""
+def test_geotransolver_checkpoint_tuple(device):
+    """Test GeoTransolver checkpoint save/load with tuple inputs."""
     torch.manual_seed(42)
 
     functional_dims = (32, 48)
     out_dims = (4, 6)
 
-    model_1 = Typhon(
+    model_1 = GeoTransolver(
         functional_dim=functional_dims,
         out_dim=out_dims,
         geometry_dim=3,
@@ -506,7 +498,7 @@ def test_typhon_checkpoint_tuple(device):
         include_local_features=False,
     ).to(device)
 
-    model_2 = Typhon(
+    model_2 = GeoTransolver(
         functional_dim=functional_dims,
         out_dim=out_dims,
         geometry_dim=3,
@@ -546,10 +538,10 @@ def test_typhon_checkpoint_tuple(device):
 # =============================================================================
 
 
-def test_typhon_invalid_hidden_head_dims():
-    """Test that Typhon raises error for incompatible hidden/head dimensions."""
+def test_geotransolver_invalid_hidden_head_dims():
+    """Test that GeoTransolver raises error for incompatible hidden/head dimensions."""
     with pytest.raises(ValueError, match="n_hidden % n_head == 0"):
-        Typhon(
+        GeoTransolver(
             functional_dim=32,
             out_dim=4,
             n_hidden=65,  # Not divisible by n_head=4
@@ -558,12 +550,12 @@ def test_typhon_invalid_hidden_head_dims():
         )
 
 
-def test_typhon_mismatched_functional_out_dims():
-    """Test that Typhon raises error for mismatched functional/out dim lengths."""
+def test_geotransolver_mismatched_functional_out_dims():
+    """Test that GeoTransolver raises error for mismatched functional/out dim lengths."""
     with pytest.raises(
         ValueError, match="functional_dim and out_dim must be the same length"
     ):
-        Typhon(
+        GeoTransolver(
             functional_dim=(32, 48),
             out_dim=(4,),  # Length mismatch
             use_te=False,
@@ -577,11 +569,11 @@ def test_typhon_mismatched_functional_out_dims():
 
 @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["gelu", "relu", "tanh", "silu"])
-def test_typhon_activations(device, activation):
-    """Test Typhon with different activation functions."""
+def test_geotransolver_activations(device, activation):
+    """Test GeoTransolver with different activation functions."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -624,11 +616,11 @@ def test_typhon_activations(device, activation):
 
 @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("n_layers", [1, 2, 4])
-def test_typhon_different_depths(device, n_layers):
-    """Test Typhon with different numbers of layers."""
+def test_geotransolver_different_depths(device, n_layers):
+    """Test GeoTransolver with different numbers of layers."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -666,11 +658,11 @@ def test_typhon_different_depths(device, n_layers):
 
 @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("slice_num", [4, 16, 32])
-def test_typhon_different_slice_nums(device, slice_num):
-    """Test Typhon with different numbers of physical state slices."""
+def test_geotransolver_different_slice_nums(device, slice_num):
+    """Test GeoTransolver with different numbers of physical state slices."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -708,11 +700,11 @@ def test_typhon_different_slice_nums(device, slice_num):
 
 @pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("n_hidden,n_head", [(64, 4), (128, 8), (256, 8)])
-def test_typhon_different_hidden_sizes(device, n_hidden, n_head):
-    """Test Typhon with different hidden dimensions and head counts."""
+def test_geotransolver_different_hidden_sizes(device, n_hidden, n_head):
+    """Test GeoTransolver with different hidden dimensions and head counts."""
     torch.manual_seed(42)
 
-    model = Typhon(
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         geometry_dim=3,
@@ -753,14 +745,14 @@ def test_typhon_different_hidden_sizes(device, n_hidden, n_head):
 # =============================================================================
 
 
-def test_typhon_metadata():
-    """Test Typhon model metadata."""
-    model = Typhon(
+def test_geotransolver_metadata():
+    """Test GeoTransolver model metadata."""
+    model = GeoTransolver(
         functional_dim=32,
         out_dim=4,
         use_te=False,
     )
 
-    assert model.meta.name == "Typhon"
+    assert model.meta.name == "GeoTransolver"
     assert model.meta.amp is True
-    assert model.__name__ == "Typhon"
+    assert model.__name__ == "GeoTransolver"

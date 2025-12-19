@@ -23,19 +23,18 @@ from einops import rearrange
 import torch.nn.functional as F
 
 import physicsnemo  # noqa: F401 for docs
-from physicsnemo.utils.version_check import check_min_version
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.transolver.Physics_Attention import (
     PhysicsAttentionIrregularMesh,
     gumbel_softmax,
 )
 from physicsnemo.models.transolver.transolver import MLP
-from physicsnemo.models.layers import BQWarp, fourier_encode, Mlp
 
-from physicsnemo.models.meta import ModelMetaData
-from physicsnemo.models.module import Module
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 
 # Check optional dependency availability
-TE_AVAILABLE = check_min_version("transformer_engine", "0.1.0", hard_fail=False)
+TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
 

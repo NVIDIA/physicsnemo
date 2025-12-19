@@ -21,29 +21,29 @@ import torch
 import torch.nn as nn
 
 import physicsnemo  # noqa: F401 for docs
-from physicsnemo.utils.version_check import check_min_version
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.transolver.transolver import MLP
 
-from physicsnemo.models.meta import ModelMetaData
-from physicsnemo.models.module import Module
+from physicsnemo.core.meta import ModelMetaData
+from physicsnemo.core.module import Module
 
 from .context_projector import ContextProjector, GlobalContextBuilder
 from .gale import GALE_block
 
 # Check optional dependency availability
-TE_AVAILABLE = check_min_version("transformer_engine", "0.1.0", hard_fail=False)
+TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
 
 
 
 @dataclass
-class TyphonMetaData(ModelMetaData):
+class GeoTransolverMetaData(ModelMetaData):
     """
-    Data class for storing essential meta data needed for the Typhon model.
+    Data class for storing essential meta data needed for the GeoTransolver model.
     """
 
-    name: str = "Typhon"
+    name: str = "GeoTransolver"
     # Optimization
     jit: bool = False
     cuda_graphs: bool = False
@@ -76,10 +76,10 @@ def _normalize_tensor(x):
         return x
     raise TypeError(f"Invalid tensor structure")
 
-class Typhon(Module):
-    r"""Typhon: Geometry-Aware Physics Attention Transformer.
+class GeoTransolver(Module):
+    r"""GeoTransolver: Geometry-Aware Physics Attention Transformer.
 
-    Typhon is an adaptation of the Transolver architecture, replacing standard attention
+    GeoTransolver is an adaptation of the Transolver architecture, replacing standard attention
     with GALE (Geometry-Aware Latent Embeddings) attention. GALE combines physics-aware
     self-attention on learned state slices with cross-attention to geometry and global
     context embeddings.
@@ -151,7 +151,7 @@ class Typhon(Module):
 
     Notes
     -----
-    Typhon currently supports unstructured mesh input only. Enhancements for image-based
+    GeoTransolver currently supports unstructured mesh input only. Enhancements for image-based
     and voxel-based inputs may be available in the future.
 
     For more details on Transolver, see:
@@ -160,7 +160,7 @@ class Typhon(Module):
 
     See Also
     --------
-    :class:`GALE` : The attention mechanism used in Typhon.
+    :class:`GALE` : The attention mechanism used in GeoTransolver.
     :class:`GALE_block` : Transformer block using GALE attention.
     :class:`ContextProjector` : Projects context features onto physical states.
 
@@ -170,7 +170,7 @@ class Typhon(Module):
 
     >>> import torch
     >>> import physicsnemo
-    >>> model = physicsnemo.models.Typhon(
+    >>> model = physicsnemo.models.GeoTransolver(
     ...     functional_dim=64,
     ...     out_dim=3,
     ...     n_hidden=256,
@@ -183,7 +183,7 @@ class Typhon(Module):
 
     Usage with geometry and global context:
 
-    >>> model = physicsnemo.models.Typhon(
+    >>> model = physicsnemo.models.GeoTransolver(
     ...     functional_dim=64,
     ...     out_dim=3,
     ...     geometry_dim=3,
@@ -220,8 +220,8 @@ class Typhon(Module):
         neighbors_in_radius: list[int] = [8, 32],
         n_hidden_local: int = 32,
     ) -> None:
-        super().__init__(meta=TyphonMetaData())
-        self.__name__ = "Typhon"
+        super().__init__(meta=GeoTransolverMetaData())
+        self.__name__ = "GeoTransolver"
 
         self.include_local_features = include_local_features
 
@@ -229,7 +229,7 @@ class Typhon(Module):
         # Check that the hidden dimension and head dimensions are compatible:
         if not n_hidden % n_head == 0:
             raise ValueError(
-                f"Typhon requires n_hidden % n_head == 0, but instead got {n_hidden % n_head}"
+                f"GeoTransolver requires n_hidden % n_head == 0, but instead got {n_hidden % n_head}"
             )
 
         functional_dims = _normalize_dim(functional_dim)
@@ -334,7 +334,7 @@ class Typhon(Module):
         geometry: torch.Tensor | None = None,
         time: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        r"""Forward pass of the Typhon model.
+        r"""Forward pass of the GeoTransolver model.
 
         The model constructs global context embeddings from geometry and global features by
         projecting them onto physical state spaces. These context embeddings are then used
