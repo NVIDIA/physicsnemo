@@ -7,7 +7,7 @@
 [![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Install CI](https://github.com/coreyjadams/physicsnemo/actions/workflows/install-ci.yml/badge.svg)](https://github.com/coreyjadams/physicsnemo/actions/workflows/install-ci.yml)
+[![Install CI](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml/badge.svg?event=schedule)](https://github.com/NVIDIA/physicsnemo/actions/workflows/install-ci.yml)
 
 <!-- markdownlint-enable -->
 [**NVIDIA PhysicsNeMo**](#what-is-physicsnemo)
@@ -347,9 +347,10 @@ The recommended method for installing the latest version of PhysicsNeMo is using
 
 ```Bash
 pip install nvidia-physicsnemo
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
-The installation can be verified by running the [Hello World](#hello-world) example.
+The installation can also be verified by running the [Hello World](#hello-world) example.
 
 #### Optional Dependencies
 
@@ -395,6 +396,7 @@ git clone git@github.com:NVIDIA/physicsnemo.git && cd physicsnemo
 
 pip install --upgrade pip
 pip install .
+python -c "import physicsnemo; print('PhysicsNeMo version:', physicsnemo.__version__)"
 ```
 
 ### Source Container
