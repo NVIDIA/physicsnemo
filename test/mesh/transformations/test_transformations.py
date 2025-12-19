@@ -21,11 +21,8 @@ across spatial dimensions, manifold dimensions, and compute backends, with prope
 invalidation and preservation.
 """
 
-import pytest
-
-pv = pytest.importorskip("pyvista")
-
 import numpy as np
+import pytest
 import torch
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
@@ -37,6 +34,8 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 from physicsnemo.mesh.utilities._cache import get_cached
+
+pv = pytest.importorskip("pyvista")
 
 ### Helper Functions ###
 

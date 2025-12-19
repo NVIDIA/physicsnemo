@@ -21,16 +21,15 @@ and visualization backends (matplotlib, PyVista).
 """
 
 import pytest
+import torch
+
+from physicsnemo.mesh import Mesh
 
 matplotlib = pytest.importorskip("matplotlib")
 pv = pytest.importorskip("pyvista")
 
-import matplotlib.pyplot as plt
-import torch
-
+plt = matplotlib.pyplot
 matplotlib.use("Agg")  # Use non-interactive backend for testing
-
-from physicsnemo.mesh import Mesh
 
 
 def create_0d_point_cloud(n_points: int = 10) -> Mesh:
