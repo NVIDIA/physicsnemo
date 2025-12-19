@@ -150,19 +150,30 @@ class TestStep:
         assert opt1_step_called
         assert opt2_step_called
 
-    def test_zero_grad_calls_all_optimizers(self, combined_optimizer):
-        # Verify gradients are cleared
-        # We'll just check if the method runs without error and clears fake grads
+    def test_zero_grad_sets_grad_to_none(self, combined_optimizer):
+        """Verify zero_grad(set_to_none=True) sets all gradients to None."""
         for group in combined_optimizer.param_groups:
             for p in group["params"]:
                 p.grad = torch.ones_like(p)
 
-        combined_optimizer.zero_grad()
+        combined_optimizer.zero_grad()  # default: set_to_none=True
 
         for group in combined_optimizer.param_groups:
             for p in group["params"]:
-                if p.grad is not None:
-                    assert torch.all(p.grad == 0)
+                assert p.grad is None, f"Expected grad to be None, got {p.grad}"
+
+    def test_zero_grad_sets_grad_to_zero(self, combined_optimizer):
+        """Verify zero_grad(set_to_none=False) sets all gradients to zero."""
+        for group in combined_optimizer.param_groups:
+            for p in group["params"]:
+                p.grad = torch.ones_like(p)
+
+        combined_optimizer.zero_grad(set_to_none=False)
+
+        for group in combined_optimizer.param_groups:
+            for p in group["params"]:
+                assert p.grad is not None, "Expected grad to exist"
+                assert torch.all(p.grad == 0), f"Expected grad to be zero, got {p.grad}"
 
     def test_step_with_closure_called_per_optimizer(self, combined_optimizer, model):
         """Verify closure is called by each optimizer that supports it."""
