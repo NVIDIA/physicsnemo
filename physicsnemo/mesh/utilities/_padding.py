@@ -25,17 +25,16 @@ def _pad_by_tiling_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
     tensor : torch.Tensor
         Tensor to pad.
     size : int
-        Target size for first dimension.
+        Target size for first dimension. Also accepts SymInt for torch.compile.
 
     Returns
     -------
     torch.Tensor
         Padded tensor.
     """
-    return torch.cat(
-        [tensor, torch.tile(tensor[-1:], (size - tensor.shape[0], 1))],
-        dim=0,
-    )
+    pad_count = size - tensor.shape[0]
+    padding = tensor[-1:].expand(pad_count, -1)
+    return torch.cat([tensor, padding], dim=0)
 
 
 def _pad_with_value(tensor: torch.Tensor, size: int, value: float) -> torch.Tensor:
@@ -46,7 +45,7 @@ def _pad_with_value(tensor: torch.Tensor, size: int, value: float) -> torch.Tens
     tensor : torch.Tensor
         Tensor to pad.
     size : int
-        Target size for first dimension.
+        Target size for first dimension. Also accepts SymInt for torch.compile.
     value : float
         Fill value for padding.
 
@@ -55,15 +54,8 @@ def _pad_with_value(tensor: torch.Tensor, size: int, value: float) -> torch.Tens
     torch.Tensor
         Padded tensor.
     """
-    return torch.cat(
-        [
-            tensor,
-            torch.full(
-                (size - tensor.shape[0], *tensor.shape[1:]),
-                fill_value=value,
-                dtype=tensor.dtype,
-                device=tensor.device,
-            ),
-        ],
-        dim=0,
-    )
+    pad_count = size - tensor.shape[0]
+    padding_shape = (pad_count,) + tensor.shape[1:]
+    # Use new_full which inherits dtype/device from tensor
+    padding = tensor.new_full(padding_shape, fill_value=value)
+    return torch.cat([tensor, padding], dim=0)

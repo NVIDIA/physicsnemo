@@ -1156,10 +1156,10 @@ class Mesh:
         ----------
         target_n_points : int or None, optional
             Target number of points. If None, no point padding is applied.
-            Must be >= current n_points if specified.
+            Must be >= current n_points if specified. Also accepts SymInt for torch.compile.
         target_n_cells : int or None, optional
             Target number of cells. If None, no cell padding is applied.
-            Must be >= current n_cells if specified.
+            Must be >= current n_cells if specified. Also accepts SymInt for torch.compile.
         data_padding_value : float
             Value to use for padding data fields. Defaults to NaN.
 
@@ -1257,12 +1257,14 @@ class Mesh:
 
         def next_power_size(current_size: int, base: float) -> int:
             """Calculate the next power of base (integer-floored) that is >= current_size."""
-            if not torch.compiler.is_compiling():
-                if current_size <= 1:
-                    return 1
+            # Clamp to at least 1 to avoid log(0) = -inf
+            # Mathematically correct: for current_size <= 1, result is base^0 = 1
+            # max() works with both int and SymInt during torch.compile
+            safe_size = max(current_size, 1)
+
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
-            n = (torch.tensor(current_size).log() / torch.tensor(base).log()).ceil()
+            n = (torch.tensor(safe_size).log() / torch.tensor(base).log()).ceil()
             return int(torch.tensor(base) ** n)
 
         target_n_points = next_power_size(self.n_points, power)
