@@ -24,7 +24,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.transformations import rotate, scale, transform, translate
+from physicsnemo.mesh.transformations.geometric import rotate, scale, transform, translate
 
 
 class TestRotationErrors:
@@ -715,7 +715,7 @@ class TestRotateDataTransformEdgeCases:
 
     def test_rotate_cell_data_skips_cached(self):
         """Test that rotate skips cached cell_data fields (under "_cache")."""
-        from physicsnemo.mesh.utilities import get_cached, set_cached
+        from physicsnemo.mesh.utilities._cache import get_cached, set_cached
 
         points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
@@ -764,7 +764,7 @@ class TestScaleDataTransformEdgeCases:
 
     def test_scale_data_skips_cached(self):
         """Test scale skips cached fields (under "_cache")."""
-        from physicsnemo.mesh.utilities import get_cached, set_cached
+        from physicsnemo.mesh.utilities._cache import get_cached, set_cached
 
         points = torch.tensor([[1.0, 0.0]])
         cells = torch.tensor([[0]])
