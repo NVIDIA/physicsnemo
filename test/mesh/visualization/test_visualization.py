@@ -213,7 +213,10 @@ def test_unsupported_spatial_dims():
     cells = torch.randint(0, 10, (5, 2))
     mesh = Mesh(points=points, cells=cells)
 
-    with pytest.raises(ValueError, match="Visualization does not support mesh.n_spatial_dims=4.\nMaximum spatial dimensions: 3."):
+    with pytest.raises(
+        ValueError,
+        match="Visualization does not support mesh.n_spatial_dims=4.\nMaximum spatial dimensions: 3.",
+    ):
         mesh.draw()
 
 
