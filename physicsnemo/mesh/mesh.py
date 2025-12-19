@@ -1,4 +1,4 @@
-from typing import Literal, Sequence
+from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import torch
 import torch.nn.functional as F
