@@ -18,23 +18,39 @@
 
 import pytest
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.mesh import primitives
+
+# Volume primitives that don't require pyvista
+PYVISTA_FREE_VOLUMES = ["cube_volume", "tetrahedron_volume"]
+
+# Volume primitives that require pyvista for delaunay_3d
+PYVISTA_VOLUMES = ["sphere_volume", "cylinder_volume"]
+
+requires_pyvista = pytest.mark.skipif(
+    not check_version_spec("pyvista"),
+    reason="pyvista is required for delaunay-based volume meshes",
+)
 
 
 class TestVolumePrimitives:
     """Test all volume example meshes (3D→3D)."""
 
-    @pytest.mark.parametrize(
-        "example_name",
-        [
-            "cube_volume",
-            "sphere_volume",
-            "cylinder_volume",
-            "tetrahedron_volume",
-        ],
-    )
-    def test_volume_mesh(self, example_name):
-        """Test that volume mesh loads with correct dimensions."""
+    @pytest.mark.parametrize("example_name", PYVISTA_FREE_VOLUMES)
+    def test_volume_mesh_pyvista_free(self, example_name):
+        """Test volume meshes that don't require pyvista."""
+        primitives_module = getattr(primitives.volumes, example_name)
+        mesh = primitives_module.load()
+
+        assert mesh.n_manifold_dims == 3
+        assert mesh.n_spatial_dims == 3
+        assert mesh.n_points > 0
+        assert mesh.n_cells > 0
+
+    @requires_pyvista
+    @pytest.mark.parametrize("example_name", PYVISTA_VOLUMES)
+    def test_volume_mesh_pyvista(self, example_name):
+        """Test volume meshes that require pyvista."""
         primitives_module = getattr(primitives.volumes, example_name)
         mesh = primitives_module.load()
 
@@ -58,9 +74,10 @@ class TestVolumePrimitives:
         assert tet.n_points == 4
         assert tet.cells.shape == (1, 4)
 
-    @pytest.mark.parametrize("example_name", ["sphere_volume", "cylinder_volume"])
+    @requires_pyvista
+    @pytest.mark.parametrize("example_name", PYVISTA_VOLUMES)
     def test_delaunay_volumes(self, example_name):
-        """Test Delaunay-based volume meshes."""
+        """Test delaunay-based volume meshes."""
         primitives_module = getattr(primitives.volumes, example_name)
         mesh = primitives_module.load(resolution=15)
 
