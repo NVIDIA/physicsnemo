@@ -19,10 +19,8 @@
 Dimensional: 3D manifold in 3D space.
 """
 
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
 
 
@@ -30,6 +28,9 @@ def load(
     size: float = 1.0, n_subdivisions: int = 5, device: torch.device | str = "cpu"
 ) -> Mesh:
     """Create a tetrahedral volume mesh of a cube.
+
+    The cube is divided into a regular grid of smaller cubes, and each small
+    cube is split into 5 tetrahedra using a consistent diagonal scheme.
 
     Parameters
     ----------
@@ -48,23 +49,44 @@ def load(
     if n_subdivisions < 1:
         raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")
 
-    # Create a structured grid
-    n = n_subdivisions + 1
+    n = n_subdivisions + 1  # Number of points per edge
 
-    # Create PyVista structured grid
-    grid = pv.ImageData(
-        dimensions=(n, n, n),
-        spacing=(size / n_subdivisions, size / n_subdivisions, size / n_subdivisions),
-        origin=(-size / 2, -size / 2, -size / 2),
-    )
+    ### Generate grid points
+    coords_1d = torch.linspace(-size / 2, size / 2, n, device=device)
+    x, y, z = torch.meshgrid(coords_1d, coords_1d, coords_1d, indexing="ij")
+    points = torch.stack([x.flatten(), y.flatten(), z.flatten()], dim=1)
 
-    # Tessellate to tetrahedra
-    tet_grid = grid.tessellate()
+    ### Generate tetrahedra by splitting each cube into 5 tetrahedra
+    # For each cube cell, we split it into 5 tetrahedra using the
+    # "5-tetrahedra" decomposition with consistent diagonal orientation.
+    cells_list = []
 
-    mesh = from_pyvista(tet_grid, manifold_dim=3)
+    for i in range(n_subdivisions):
+        for j in range(n_subdivisions):
+            for k in range(n_subdivisions):
+                # 8 vertices of the cube cell (indexed in the flattened grid)
+                # Vertex ordering: v0=(i,j,k), v1=(i+1,j,k), v2=(i,j+1,k), etc.
+                v0 = i * n * n + j * n + k
+                v1 = (i + 1) * n * n + j * n + k
+                v2 = i * n * n + (j + 1) * n + k
+                v3 = (i + 1) * n * n + (j + 1) * n + k
+                v4 = i * n * n + j * n + (k + 1)
+                v5 = (i + 1) * n * n + j * n + (k + 1)
+                v6 = i * n * n + (j + 1) * n + (k + 1)
+                v7 = (i + 1) * n * n + (j + 1) * n + (k + 1)
 
-    # Move to specified device
-    if device != str(mesh.points.device):
-        mesh = mesh.to(device)
+                # Split cube into 5 tetrahedra using consistent diagonal scheme
+                # This decomposition uses the body diagonal from v0 to v7
+                cells_list.extend(
+                    [
+                        [v0, v1, v3, v7],  # tet 1
+                        [v0, v3, v2, v7],  # tet 2
+                        [v0, v2, v6, v7],  # tet 3
+                        [v0, v6, v4, v7],  # tet 4
+                        [v0, v4, v5, v7],  # tet 5 (closes with v1)
+                    ]
+                )
 
-    return mesh
+    cells = torch.tensor(cells_list, dtype=torch.int64, device=device)
+
+    return Mesh(points=points, cells=cells)

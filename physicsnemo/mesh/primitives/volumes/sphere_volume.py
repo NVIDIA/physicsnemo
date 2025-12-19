@@ -19,24 +19,26 @@
 Dimensional: 3D manifold in 3D space.
 """
 
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 
 
+@require_version_spec("pyvista")
 def load(
     radius: float = 1.0, resolution: int = 20, device: torch.device | str = "cpu"
 ) -> Mesh:
     """Create a tetrahedral volume mesh of a sphere.
+
+    The sphere is filled with tetrahedra using PyVista's delaunay_3d filter.
 
     Parameters
     ----------
     radius : float
         Radius of the sphere.
     resolution : int
-        Resolution of the initial surface mesh.
+        Controls the density of points (higher = more tetrahedra).
     device : str
         Compute device ('cpu' or 'cuda').
 
@@ -45,18 +47,15 @@ def load(
     Mesh
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
-    # Create surface sphere
-    surface = pv.Sphere(
-        radius=radius, theta_resolution=resolution, phi_resolution=resolution
-    )
+    import pyvista as pv
 
-    # Fill with tetrahedra using Delaunay 3D
-    volume = surface.delaunay_3d()
+    from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
-    mesh = from_pyvista(volume, manifold_dim=3)
+    ### Create a sphere surface and fill it with tetrahedra
+    sphere = pv.Sphere(radius=radius, theta_resolution=resolution, phi_resolution=resolution)
 
-    # Move to specified device
-    if device != str(mesh.points.device):
-        mesh = mesh.to(device)
+    ### Use delaunay_3d to fill the interior with tetrahedra
+    volume = sphere.delaunay_3d()
 
-    return mesh
+    ### Convert to physicsnemo Mesh and move to device
+    return from_pyvista(volume).to(device=device)

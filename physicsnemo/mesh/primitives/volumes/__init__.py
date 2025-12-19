@@ -19,3 +19,10 @@
 Includes tetrahedral meshes of cubes, spheres, cylinders, and other
 3D solid shapes.
 """
+
+from physicsnemo.mesh.primitives.volumes import (
+    cube_volume,
+    cylinder_volume,
+    sphere_volume,
+    tetrahedron_volume,
+)

@@ -27,12 +27,13 @@ Categories:
     - surfaces: 2D manifolds in 3D space (surface meshes)
     - volumes: 3D manifolds in 3D space (tetrahedral volumes)
     - procedural: Procedurally generated mesh variations
-    - pyvista_datasets: Wrappers for PyVista example datasets
+    - pyvista_datasets: Wrappers for PyVista example datasets (requires pyvista)
 
 Usage:
-    >>> from physicsnemo.mesh import examples
-    >>> mesh = examples.surfaces.sphere_icosahedral.load(radius=1.0, subdivisions=2)
-    >>> mesh = examples.pyvista_datasets.bunny.load()
+    >>> from physicsnemo.mesh.primitives import surfaces
+    >>> mesh = surfaces.sphere_uv.load(radius=1.0, subdivisions=2)
+    >>> from physicsnemo.mesh.primitives import pyvista_datasets
+    >>> mesh = pyvista_datasets.bunny.load()
 """
 
 from physicsnemo.mesh.primitives import (
@@ -40,17 +41,6 @@ from physicsnemo.mesh.primitives import (
     curves,
     planar,
     procedural,
-    pyvista_datasets,
     surfaces,
     volumes,
 )
-
-__all__ = [
-    "basic",
-    "curves",
-    "planar",
-    "surfaces",
-    "volumes",
-    "procedural",
-    "pyvista_datasets",
-]
