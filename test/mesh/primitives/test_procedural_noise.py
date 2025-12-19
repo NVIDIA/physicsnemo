@@ -19,7 +19,7 @@
 import pytest
 import torch
 
-from physicsnemo.mesh.primitives.procedural import (
+from physicsnemo.mesh.primitives.procedural.noise import (
     perlin_noise_1d,
     perlin_noise_2d,
     perlin_noise_3d,

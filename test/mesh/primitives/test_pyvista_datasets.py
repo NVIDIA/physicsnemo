@@ -18,6 +18,8 @@
 
 import pytest
 
+pytest.importorskip("pyvista")
+
 from physicsnemo.mesh import primitives
 
 
