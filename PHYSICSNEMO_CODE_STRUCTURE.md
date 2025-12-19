@@ -678,15 +678,3 @@ print(f"PhysicsNeMo version: {physicsnemo.__version__}")
 
 ---
 
-## File Statistics
-
-- **Total Python files:** 298 in `physicsnemo/`, 378 in `examples/`, 191 in `test/`
-- **Total example files:** 776 (includes YAML configs, scripts, docs)
-- **Total test files:** 281 (includes checkpoints and test data)
-- **Documentation files:** 196 (RST, Python, images)
-- **Lines of code:** ~100,000+ (estimated)
-
----
-
-**Last Updated:** December 19, 2025
-
