@@ -25,6 +25,8 @@ import numpy as np
 import pytest
 import torch
 
+pv = pytest.importorskip("pyvista")
+
 from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.transformations.geometric import (
@@ -34,8 +36,6 @@ from physicsnemo.mesh.transformations.geometric import (
     translate,
 )
 from physicsnemo.mesh.utilities._cache import get_cached
-
-pv = pytest.importorskip("pyvista")
 
 ### Helper Functions ###
 
