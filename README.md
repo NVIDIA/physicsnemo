@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable -->
 
-📝 NVIDIA Modulus has been renamed to NVIDIA PhysicsNeMo
+📝 NVIDIA PhysicsNeMo is undergoing an update to v2.0 - all the features, with easier installation and integration to external packages.  See the [migration guide](https://github.com/NVIDIA/physicsnemo/blob/main/v2.0-MIGRATION-GUIDE.md) for more details!
 
 [![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![GitHub](https://img.shields.io/github/license/NVIDIA/physicsnemo)](https://github.com/NVIDIA/physicsnemo/blob/master/LICENSE.txt)
