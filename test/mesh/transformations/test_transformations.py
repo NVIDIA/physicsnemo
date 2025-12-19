@@ -21,15 +21,17 @@ across spatial dimensions, manifold dimensions, and compute backends, with prope
 invalidation and preservation.
 """
 
-import numpy as np
 import pytest
-import pyvista as pv
+
+pv = pytest.importorskip("pyvista")
+
+import numpy as np
 import torch
 
-from physicsnemo.mesh.io import from_pyvista, to_pyvista
+from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.transformations import rotate, scale, transform, translate
-from physicsnemo.mesh.utilities import get_cached
+from physicsnemo.mesh.transformations.geometric import rotate, scale, transform, translate
+from physicsnemo.mesh.utilities._cache import get_cached
 
 ### Helper Functions ###
 
