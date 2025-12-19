@@ -24,7 +24,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.utilities import get_cached
+from physicsnemo.mesh.utilities._cache import get_cached, set_cached
 
 ### Helper Functions ###
 
@@ -340,9 +340,6 @@ class TestPointDataToCellData:
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
-
-        ### Manually add a cached property
-        from physicsnemo.mesh.utilities import set_cached
 
         set_cached(mesh.point_data, "test_cached_value", torch.tensor([1.0, 2.0, 3.0]))
 
