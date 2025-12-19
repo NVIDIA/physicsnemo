@@ -146,8 +146,8 @@ class CombinedOptimizer(Optimizer):
             opt.zero_grad(set_to_none=set_to_none)
 
     def step(
-        self, closure: Callable[[], torch.Tensor] | None = None
-    ) -> torch.Tensor | None:
+        self, closure: Callable[[], float] | None = None
+    ) -> float | None:
         r"""Perform a single optimization step.
 
         This method calls the ``step()`` method of each underlying optimizer. If a
@@ -155,15 +155,25 @@ class CombinedOptimizer(Optimizer):
 
         Parameters
         ----------
-        closure : Callable[[], torch.Tensor], optional
+        closure : Callable[[], float], optional
             Optional callable that reevaluates the model and returns the loss.
             If provided, it will be passed to each optimizer's step function.
             Default is None.
 
         Returns
         -------
-        torch.Tensor or None
-            The loss value returned by the last optimizer, or None if no closure was provided.
+        float or None
+            The loss value returned by the last optimizer that returns a non-None
+            value, or None if no closure was provided or no optimizer returned a
+            value. When multiple optimizers return values, the result from the
+            last optimizer in sequence takes precedence.
+
+        Notes
+        -----
+        The return value semantics match PyTorch's ``Optimizer.step()`` interface,
+        which returns ``float | None``. In practice, most closures return a
+        ``torch.Tensor`` loss, and PyTorch optimizers that use the closure will
+        call ``.item()`` on it internally before returning.
         """
         loss = None
         for step_fn in self.step_fns:
