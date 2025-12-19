@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 import numpy as np
 import torch
@@ -22,13 +22,10 @@ import torch
 from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 
-if TYPE_CHECKING:
-    import pyvista as pv
-
 
 @require_version_spec("pyvista")
 def from_pyvista(
-    pyvista_mesh: "pv.PolyData | pv.UnstructuredGrid | pv.PointSet",
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",  # noqa: F821
     manifold_dim: int | Literal["auto"] = "auto",
 ) -> Mesh:
     """Convert a PyVista mesh to a physicsnemo.mesh Mesh.
@@ -56,7 +53,9 @@ def from_pyvista(
     ImportError
         If pyvista is not installed.
     """
-    import pyvista as pv
+    import importlib
+
+    pv = importlib.import_module("pyvista")
 
     ### Determine the manifold dimension
     if manifold_dim == "auto":
@@ -221,7 +220,9 @@ def from_pyvista(
 
 
 @require_version_spec("pyvista")
-def to_pyvista(mesh: Mesh) -> "pv.PolyData | pv.UnstructuredGrid | pv.PointSet":
+def to_pyvista(
+    mesh: Mesh,
+) -> "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet":  # noqa: F821
     """Convert a physicsnemo.mesh Mesh to a PyVista mesh.
 
     Parameters
@@ -241,7 +242,9 @@ def to_pyvista(mesh: Mesh) -> "pv.PolyData | pv.UnstructuredGrid | pv.PointSet":
     ImportError
         If pyvista is not installed.
     """
-    import pyvista as pv
+    import importlib
+
+    pv = importlib.import_module("pyvista")
 
     ### Convert points to numpy and pad to 3D if needed (PyVista requires 3D points)
     points_np = mesh.points.cpu().numpy()

@@ -16,17 +16,24 @@
 
 """Matplotlib backend for mesh visualization."""
 
+import importlib
 from typing import TYPE_CHECKING, Literal
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib.cm import ScalarMappable
-from matplotlib.collections import LineCollection, PolyCollection
-from matplotlib.colors import Normalize
 
 if TYPE_CHECKING:
     from physicsnemo.mesh import Mesh
+
+# Dynamic imports for optional matplotlib dependency (invisible to static analysis)
+plt = importlib.import_module("matplotlib.pyplot")
+_cm = importlib.import_module("matplotlib.cm")
+ScalarMappable = _cm.ScalarMappable
+_collections = importlib.import_module("matplotlib.collections")
+LineCollection = _collections.LineCollection
+PolyCollection = _collections.PolyCollection
+_colors = importlib.import_module("matplotlib.colors")
+Normalize = _colors.Normalize
 
 
 def draw_mesh_matplotlib(
@@ -394,7 +401,9 @@ def _draw_3d(
     show_edges,
 ):
     """Draw mesh in 3D space using mpl_toolkits.mplot3d."""
-    from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
+    _art3d = importlib.import_module("mpl_toolkits.mplot3d.art3d")
+    Line3DCollection = _art3d.Line3DCollection
+    Poly3DCollection = _art3d.Poly3DCollection
 
     ### Draw cells based on manifold dimension
     if cells_np.shape[0] > 0 and alpha_cells > 0:

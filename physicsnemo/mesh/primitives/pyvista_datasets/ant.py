@@ -41,7 +41,9 @@ def load(device: torch.device | str = "cpu") -> Mesh:
     Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=3.
     """
-    import pyvista as pv
+    import importlib
+
+    pv = importlib.import_module("pyvista")
 
     from physicsnemo.mesh.io.io_pyvista import from_pyvista
 

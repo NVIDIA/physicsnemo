@@ -16,13 +16,16 @@
 
 """PyVista backend for mesh visualization."""
 
+import importlib
 from typing import TYPE_CHECKING, Literal
 
-import pyvista as pv
 import torch
 
 if TYPE_CHECKING:
     from physicsnemo.mesh import Mesh
+
+# Dynamic import for optional pyvista dependency (invisible to static analysis)
+pv = importlib.import_module("pyvista")
 
 
 def draw_mesh_pyvista(
