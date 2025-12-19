@@ -208,7 +208,7 @@ def from_pyvista(
                 f"Expected tetrahedral cells after tessellation, but got {list(cells_dict.keys())}"
             )
         tetra_cells = cells_dict[pv.CellType.TETRA]
-        cells = torch.from_numpy(tetra_cells)
+        cells = torch.from_numpy(tetra_cells).long()
 
     ### Return Mesh object
     return Mesh(
