@@ -17,8 +17,10 @@
 """Tests for physicsnemo.mesh.io module - data array shapes."""
 
 import numpy as np
-import pyvista as pv
+import pytest
 import torch
+
+pv = pytest.importorskip("pyvista")
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
 

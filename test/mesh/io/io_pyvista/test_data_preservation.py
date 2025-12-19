@@ -21,7 +21,9 @@ preserved during PyVista → physicsnemo.mesh conversion across backends.
 """
 
 import numpy as np
-import pyvista as pv
+import pytest
+
+pv = pytest.importorskip("pyvista")
 import torch
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista

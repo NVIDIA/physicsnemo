@@ -18,7 +18,7 @@
 
 import numpy as np
 import pytest
-import pyvista as pv
+pv = pytest.importorskip("pyvista")
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
 

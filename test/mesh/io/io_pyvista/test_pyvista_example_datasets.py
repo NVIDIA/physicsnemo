@@ -16,7 +16,9 @@
 
 """Tests for physicsnemo.mesh.io module - PyVista example datasets."""
 
-import pyvista as pv
+import pytest
+
+pv = pytest.importorskip("pyvista")
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
 

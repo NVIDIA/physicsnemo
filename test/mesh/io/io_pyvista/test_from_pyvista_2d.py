@@ -16,7 +16,9 @@
 
 """Tests for physicsnemo.mesh.io module - 2D mesh conversion."""
 
-import pyvista as pv
+import pytest
+
+pv = pytest.importorskip("pyvista")
 import torch
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
