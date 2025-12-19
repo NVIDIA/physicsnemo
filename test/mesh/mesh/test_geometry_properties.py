@@ -27,7 +27,7 @@ pytest.importorskip("pyvista")
 import numpy as np
 import torch
 
-from physicsnemo.mesh.io import to_pyvista
+from physicsnemo.mesh.io.io_pyvista import to_pyvista
 from physicsnemo.mesh.primitives.pyvista_datasets import bunny
 from physicsnemo.mesh.primitives.volumes import sphere_volume
 
