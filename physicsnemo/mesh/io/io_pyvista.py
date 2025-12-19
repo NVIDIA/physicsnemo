@@ -323,13 +323,13 @@ def to_pyvista(mesh: Mesh) -> "pv.PolyData | pv.UnstructuredGrid | pv.PointSet":
         raise ValueError(f"Unsupported {mesh.n_manifold_dims=}. Must be 0, 1, 2, or 3.")
 
     ### Convert data dictionaries
-    for k, v in mesh.point_data.items():
+    for k, v in mesh.point_data.items(include_nested=True, leaves_only=True):
         pv_mesh.point_data[str(k)] = v.cpu().numpy()
 
-    for k, v in mesh.cell_data.items():
+    for k, v in mesh.cell_data.items(include_nested=True, leaves_only=True):
         pv_mesh.cell_data[str(k)] = v.cpu().numpy()
 
-    for k, v in mesh.global_data.items():
+    for k, v in mesh.global_data.items(include_nested=True, leaves_only=True):
         pv_mesh.field_data[str(k)] = v.cpu().numpy()
 
     return pv_mesh
