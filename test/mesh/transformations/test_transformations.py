@@ -34,7 +34,7 @@ from physicsnemo.mesh.transformations.geometric import (
 )
 from physicsnemo.mesh.utilities._cache import get_cached
 
-pv = pytest.importorskip("pyvista")
+pv = pytest.importorskip("pyvista", minversion="0.46.4")
 
 from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
 
