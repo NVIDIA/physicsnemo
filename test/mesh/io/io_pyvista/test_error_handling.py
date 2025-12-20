@@ -28,9 +28,10 @@ import numpy as np
 import pytest
 import torch
 
+from physicsnemo.mesh import Mesh
+
 pv = pytest.importorskip("pyvista")
 
-from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista  # noqa: E402
 
 
