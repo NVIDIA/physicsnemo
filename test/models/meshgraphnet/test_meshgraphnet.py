@@ -174,6 +174,11 @@ def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te)
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
 
+    # Seed for reproducibility
+    torch.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
+
     # Construct MGN model
     model_1 = MeshGraphNet(
         input_dim_nodes=4,
