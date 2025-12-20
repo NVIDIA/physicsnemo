@@ -57,13 +57,14 @@ def perlin_noise_nd(
     Examples
     --------
     >>> # 2D noise for texture generation
+    >>> import torch
     >>> points = torch.rand(100, 2)
     >>> noise = perlin_noise_nd(points, scale=2.0, seed=42)
     >>>
     >>> # 3D noise for volumetric data
-    >>> centroids = mesh.cell_centroids  # (n_cells, 3)
-    >>> noise = perlin_noise_nd(centroids, scale=0.5, seed=123)
-    >>> mesh.cell_data["noise"] = noise
+    >>> centroids = mesh.cell_centroids  # (n_cells, 3)  # doctest: +SKIP
+    >>> noise = perlin_noise_nd(centroids, scale=0.5, seed=123)  # doctest: +SKIP
+    >>> mesh.cell_data["noise"] = noise  # doctest: +SKIP
     >>>
     >>> # Works on GPU
     >>> points_gpu = points.cuda()  # doctest: +SKIP

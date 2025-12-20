@@ -121,21 +121,21 @@ def draw_mesh(
     Examples
     --------
     >>> # Draw mesh with automatic backend selection
-    >>> mesh.draw()
+    >>> mesh.draw()  # doctest: +SKIP
     >>>
     >>> # Color cells by pressure data
-    >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")
+    >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")  # doctest: +SKIP
     >>>
     >>> # Color points by velocity magnitude (computing norm of vector field)
-    >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)
+    >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)  # doctest: +SKIP
     >>>
     >>> # Use nested TensorDict key
-    >>> mesh.draw(cell_scalars=("flow", "temperature"))
+    >>> mesh.draw(cell_scalars=("flow", "temperature"))  # doctest: +SKIP
     >>>
     >>> # Customize and display later
-    >>> ax = mesh.draw(show=False, backend="matplotlib")
-    >>> ax.set_title("My Mesh")
-    >>> plt.show()
+    >>> ax = mesh.draw(show=False, backend="matplotlib")  # doctest: +SKIP
+    >>> ax.set_title("My Mesh")  # doctest: +SKIP
+    >>> plt.show()  # doctest: +SKIP
     """
     ### Validate and process scalar data
     from physicsnemo.mesh.visualization._scalar_utils import (

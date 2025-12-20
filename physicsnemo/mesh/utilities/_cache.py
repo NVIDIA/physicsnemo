@@ -41,10 +41,10 @@ def get_cached(data: TensorDict, key: str) -> torch.Tensor | None:
 
     Examples
     --------
-    >>> cached_areas = get_cached(mesh.cell_data, "areas")
-    >>> if cached_areas is None:
+    >>> cached_areas = get_cached(mesh.cell_data, "areas")  # doctest: +SKIP
+    >>> if cached_areas is None:  # doctest: +SKIP
     ...     # Compute areas
-    ...     pass
+    ...     pass  # doctest: +SKIP
     """
     return data.get(("_cache", key), None)
 
@@ -66,7 +66,7 @@ def set_cached(data: TensorDict, key: str, value: torch.Tensor) -> None:
 
     Examples
     --------
-    >>> set_cached(mesh.cell_data, "areas", computed_areas)
+    >>> set_cached(mesh.cell_data, "areas", computed_areas)  # doctest: +SKIP
     """
     if "_cache" not in data:
         data["_cache"] = TensorDict({}, batch_size=data.batch_size, device=data.device)

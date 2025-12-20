@@ -31,9 +31,15 @@ Categories:
 
 Usage:
     >>> from physicsnemo.mesh.primitives import surfaces
-    >>> mesh = surfaces.sphere_uv.load(radius=1.0, subdivisions=2)
+
+
+
+
+
+
+    >>> mesh = surfaces.sphere_uv.load(radius=1.0, theta_resolution=10, phi_resolution=10)
     >>> from physicsnemo.mesh.primitives import pyvista_datasets
-    >>> mesh = pyvista_datasets.bunny.load()
+    >>> mesh = pyvista_datasets.bunny.load()  # doctest: +SKIP
 """
 
 from physicsnemo.mesh.primitives import (

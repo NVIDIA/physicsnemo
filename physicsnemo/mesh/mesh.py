@@ -527,10 +527,10 @@ class Mesh:
         Examples
         --------
             >>> # Triangle mesh in 3D
-            >>> mesh = create_triangle_mesh_3d()
-            >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted
+            >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
+            >>> normals = mesh.point_normals  # (n_points, 3), angle-area-weighted  # doctest: +SKIP
             >>> # Normals are unit vectors (or zero for isolated points)
-            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)
+            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
         cached = get_cached(self.point_data, "normals")
         if cached is None:
@@ -605,12 +605,12 @@ class Mesh:
         Examples
         --------
             >>> # Triangle mesh in 3D
-            >>> mesh = create_triangle_mesh_3d()
-            >>> normals = mesh.compute_point_normals()  # area-weighted (default)
-            >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")
-            >>> normals_angle = mesh.compute_point_normals(weighting="angle")
+            >>> mesh = create_triangle_mesh_3d()  # doctest: +SKIP
+            >>> normals = mesh.compute_point_normals()  # area-weighted (default)  # doctest: +SKIP
+            >>> normals_unweighted = mesh.compute_point_normals(weighting="unweighted")  # doctest: +SKIP
+            >>> normals_angle = mesh.compute_point_normals(weighting="angle")  # doctest: +SKIP
             >>> # Normals are unit vectors (or zero for isolated points)
-            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)
+            >>> assert torch.allclose(normals.norm(dim=-1), torch.ones(mesh.n_points), atol=1e-6)  # doctest: +SKIP
         """
         valid_weightings = ("area", "unweighted", "angle", "angle_area")
         if weighting not in valid_weightings:
@@ -1023,8 +1023,8 @@ class Mesh:
 
         Examples
         --------
-        >>> mesh = Mesh(points, cells, cell_data={"pressure": cell_pressures})
-        >>> mesh_with_point_data = mesh.cell_data_to_point_data()
+        >>> mesh = Mesh(points, cells, cell_data={"pressure": cell_pressures})  # doctest: +SKIP
+        >>> mesh_with_point_data = mesh.cell_data_to_point_data()  # doctest: +SKIP
         >>> # Now mesh has both cell_data["pressure"] and point_data["pressure"]
         """
         ### Check for key conflicts
@@ -1103,8 +1103,8 @@ class Mesh:
 
         Examples
         --------
-        >>> mesh = Mesh(points, cells, point_data={"temperature": point_temps})
-        >>> mesh_with_cell_data = mesh.point_data_to_cell_data()
+        >>> mesh = Mesh(points, cells, point_data={"temperature": point_temps})  # doctest: +SKIP
+        >>> mesh_with_cell_data = mesh.point_data_to_cell_data()  # doctest: +SKIP
         >>> # Now mesh has both point_data["temperature"] and cell_data["temperature"]
         """
         ### Check for key conflicts
@@ -1176,10 +1176,10 @@ class Mesh:
 
         Examples
         --------
-        >>> mesh = Mesh(points, cells, "no_slip")  # 100 points, 200 cells
-        >>> padded = mesh.pad(target_n_points=128, target_n_cells=256)
-        >>> padded.n_points  # 128
-        >>> padded.n_cells   # 256
+        >>> mesh = Mesh(points, cells)  # 100 points, 200 cells  # doctest: +SKIP
+        >>> padded = mesh.pad(target_n_points=128, target_n_cells=256)  # doctest: +SKIP
+        >>> padded.n_points  # 128  # doctest: +SKIP
+        >>> padded.n_cells   # 256  # doctest: +SKIP
         """
         # Validate inputs
         if not torch.compiler.is_compiling():
@@ -1245,8 +1245,8 @@ class Mesh:
 
         Examples
         --------
-        >>> mesh = Mesh(points, cells, "no_slip")  # 100 points, 200 cells
-        >>> padded = mesh.pad_to_next_power(power=1.5)
+        >>> mesh = Mesh(points, cells)  # 100 points, 200 cells  # doctest: +SKIP
+        >>> padded = mesh.pad_to_next_power(power=1.5)  # doctest: +SKIP
         >>> # Points padded to floor(1.5^n) >= 100, cells to floor(1.5^m) >= 200
         >>> # For power=1.5: 100 points -> 129 points, 200 cells -> 216 cells
         >>> # Padding cells have zero area and don't affect computations
@@ -1359,22 +1359,22 @@ class Mesh:
         Examples
         --------
         >>> # Draw mesh with automatic backend selection
-        >>> mesh.draw()
+        >>> mesh.draw()  # doctest: +SKIP
         >>>
         >>> # Color cells by pressure data
-        >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")
+        >>> mesh.draw(cell_scalars="pressure", cmap="coolwarm")  # doctest: +SKIP
         >>>
         >>> # Color points by velocity magnitude (computing norm of vector field)
-        >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)
+        >>> mesh.draw(point_scalars="velocity")  # velocity is (n_points, 3)  # doctest: +SKIP
         >>>
         >>> # Use nested TensorDict key
-        >>> mesh.draw(cell_scalars=("flow", "temperature"))
+        >>> mesh.draw(cell_scalars=("flow", "temperature"))  # doctest: +SKIP
         >>>
         >>> # Customize and display later
-        >>> ax = mesh.draw(show=False, backend="matplotlib")
-        >>> ax.set_title("My Mesh")
-        >>> import matplotlib.pyplot as plt
-        >>> plt.show()
+        >>> ax = mesh.draw(show=False, backend="matplotlib")  # doctest: +SKIP
+        >>> ax.set_title("My Mesh")  # doctest: +SKIP
+        >>> import matplotlib.pyplot as plt  # doctest: +SKIP
+        >>> plt.show()  # doctest: +SKIP
         """
         return draw_mesh(
             mesh=self,
