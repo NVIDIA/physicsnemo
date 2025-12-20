@@ -214,6 +214,7 @@ class TestToPyvistaErrors:
     def test_unsupported_manifold_dims_raises(self):
         """Test that unsupported manifold dimensions raise ValueError."""
         # Create a mesh with 4 manifold dims (not supported by PyVista)
+        torch.manual_seed(0)
         points = torch.randn(10, 5)  # 5D spatial
         cells = torch.randint(0, 10, (5, 5))  # 4-manifold (5 vertices per cell)
         mesh = Mesh(points=points, cells=cells)

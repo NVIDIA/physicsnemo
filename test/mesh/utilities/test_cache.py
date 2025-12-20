@@ -41,6 +41,7 @@ class TestGetCached:
     def test_get_cached_returns_none_for_missing_key(self):
         """Test that get_cached returns None for missing key in existing cache."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         data["_cache"] = TensorDict({"centroids": torch.randn(10, 3)}, batch_size=[10])
 
         result = get_cached(data, "areas")
@@ -50,6 +51,7 @@ class TestGetCached:
     def test_get_cached_returns_value_when_set(self):
         """Test that get_cached returns the cached value when present."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         cached_value = torch.randn(10, 3)
         data["_cache"] = TensorDict({"centroids": cached_value}, batch_size=[10])
 
@@ -73,6 +75,7 @@ class TestSetCached:
     def test_set_cached_creates_cache_if_missing(self):
         """Test that set_cached creates _cache TensorDict if not present."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         value = torch.randn(10, 3)
 
         set_cached(data, "centroids", value)
@@ -83,6 +86,7 @@ class TestSetCached:
     def test_set_cached_stores_value(self):
         """Test that set_cached stores the value correctly."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         value = torch.randn(10, 3)
 
         set_cached(data, "areas", value)
@@ -93,6 +97,7 @@ class TestSetCached:
     def test_set_cached_overwrites_existing(self):
         """Test that set_cached overwrites existing cached value."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         old_value = torch.randn(10, 3)
         new_value = torch.randn(10, 3)
 
@@ -106,6 +111,7 @@ class TestSetCached:
     def test_set_cached_multiple_keys(self):
         """Test that set_cached can store multiple keys."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         centroids = torch.randn(10, 3)
         areas = torch.randn(10)
         normals = torch.randn(10, 3)
@@ -136,6 +142,7 @@ class TestCacheRoundTrip:
     def test_roundtrip_1d(self):
         """Test round-trip with 1D tensor."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         value = torch.randn(10)
 
         set_cached(data, "areas", value)
@@ -147,6 +154,7 @@ class TestCacheRoundTrip:
     def test_roundtrip_2d(self):
         """Test round-trip with 2D tensor."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         value = torch.randn(10, 3)
 
         set_cached(data, "centroids", value)
@@ -158,6 +166,7 @@ class TestCacheRoundTrip:
     def test_roundtrip_3d(self):
         """Test round-trip with 3D tensor."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         value = torch.randn(10, 3, 3)
 
         set_cached(data, "stress", value)
@@ -172,6 +181,7 @@ class TestCacheWithExistingData:
 
     def test_cache_does_not_affect_existing_data(self):
         """Test that caching doesn't affect existing non-cache data."""
+        torch.manual_seed(0)
         data = TensorDict({"temperature": torch.randn(10)}, batch_size=[10])
         original_temp = data["temperature"].clone()
 
@@ -181,6 +191,7 @@ class TestCacheWithExistingData:
 
     def test_get_cached_ignores_non_cache_keys(self):
         """Test that get_cached only looks in _cache namespace."""
+        torch.manual_seed(0)
         data = TensorDict({"areas": torch.randn(10)}, batch_size=[10])
 
         # Even though "areas" exists at top level, get_cached looks in _cache
@@ -190,6 +201,7 @@ class TestCacheWithExistingData:
 
     def test_cache_coexists_with_data(self):
         """Test that cache and regular data coexist."""
+        torch.manual_seed(0)
         data = TensorDict(
             {
                 "temperature": torch.randn(10),
@@ -212,6 +224,7 @@ class TestCacheDevices:
     def test_cache_cpu(self):
         """Test caching on CPU TensorDict."""
         data = TensorDict({}, batch_size=[10], device="cpu")
+        torch.manual_seed(0)
         value = torch.randn(10, 3, device="cpu")
 
         set_cached(data, "centroids", value)
@@ -224,6 +237,7 @@ class TestCacheDevices:
     def test_cache_cuda(self):
         """Test caching on CUDA TensorDict."""
         data = TensorDict({}, batch_size=[10], device="cuda")
+        torch.manual_seed(0)
         value = torch.randn(10, 3, device="cuda")
 
         set_cached(data, "centroids", value)
@@ -242,6 +256,7 @@ class TestCacheDtypes:
     def test_cache_various_dtypes(self, dtype):
         """Test caching with various dtypes."""
         data = TensorDict({}, batch_size=[10])
+        torch.manual_seed(0)
         if dtype in [torch.float32, torch.float64]:
             value = torch.randn(10, dtype=dtype)
         else:
@@ -267,6 +282,7 @@ class TestCacheIntegrationWithMesh:
         assert cached_areas is None
 
         # Compute and cache
+        torch.manual_seed(0)
         computed_areas = torch.randn(100)
         set_cached(cell_data, "areas", computed_areas)
 
@@ -281,6 +297,7 @@ class TestCacheIntegrationWithMesh:
         point_data = TensorDict({}, batch_size=[500])
 
         # Cache point normals
+        torch.manual_seed(0)
         normals = torch.randn(500, 3)
         set_cached(point_data, "normals", normals)
 
@@ -294,6 +311,7 @@ class TestCacheIntegrationWithMesh:
         cell_data = TensorDict({}, batch_size=[100])
 
         # Cache multiple properties
+        torch.manual_seed(0)
         set_cached(cell_data, "centroids", torch.randn(100, 3))
         set_cached(cell_data, "areas", torch.randn(100))
         set_cached(cell_data, "normals", torch.randn(100, 3))
