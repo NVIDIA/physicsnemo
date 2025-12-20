@@ -242,9 +242,18 @@ class CombinedOptimizer(Optimizer):
 
         Examples
         --------
+        >>> import torch
+        >>> from physicsnemo.optim import CombinedOptimizer
+        >>> param1 = torch.nn.Parameter(torch.randn(3))
+        >>> param2 = torch.nn.Parameter(torch.randn(3))
+        >>> opt1 = torch.optim.SGD([param1], lr=0.01)
+        >>> opt2 = torch.optim.Adam([param2], lr=0.001)
         >>> combined_opt = CombinedOptimizer([opt1, opt2])
         >>> state = combined_opt.state_dict()
-        >>> # state = {"optimizers": [opt1.state_dict(), opt2.state_dict()]}
+        >>> list(state.keys())
+        ['optimizers']
+        >>> len(state["optimizers"])
+        2
         """
         return {"optimizers": [opt.state_dict() for opt in self.optimizers]}
 
