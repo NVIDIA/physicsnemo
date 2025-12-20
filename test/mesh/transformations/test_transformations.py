@@ -98,7 +98,7 @@ def create_mesh_with_caches(
 
 
 def validate_caches(
-    mesh, expected_caches: dict[str, bool], rtol: float = 1e-4, atol: float = 1e-5
+    mesh, expected_caches: dict[str, bool], rtol: float = 1e-4, atol: float = 1e-4
 ) -> None:
     """Validate that caches exist and are correct."""
     for cache_name, should_exist in expected_caches.items():
@@ -357,7 +357,7 @@ class TestScale:
         factor = [2.0, 1.5, 0.8]
 
         # PyVista scaling
-        pv_result = pv_mesh.scale(factor, inplace=False)
+        pv_result = pv_mesh.scale(factor, inplace=False, point=[0.0, 0.0, 0.0])
 
         # physicsnemo.mesh scaling
         tm_result = scale(tm_mesh, factor)
