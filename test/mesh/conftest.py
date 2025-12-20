@@ -252,6 +252,28 @@ def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
 ### Pytest Fixtures ###
 
 
+@pytest.fixture(autouse=True)
+def disable_tf32():
+    """Disable TF32 for deterministic float32 precision across GPU architectures.
+
+    TensorFloat-32 (TF32) is enabled by default on Ampere and newer GPUs (A100, etc.),
+    which reduces float32 matrix multiplication precision from 23-bit to 10-bit mantissa.
+    This can cause tests to pass on older GPUs but fail on newer ones due to ~1e-3 to 1e-4
+    precision differences. Disabling TF32 ensures consistent behavior across all GPUs.
+    """
+    if not torch.cuda.is_available():
+        yield
+        return
+
+    orig_matmul = torch.backends.cuda.matmul.allow_tf32
+    orig_cudnn = torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    yield
+    torch.backends.cuda.matmul.allow_tf32 = orig_matmul
+    torch.backends.cudnn.allow_tf32 = orig_cudnn
+
+
 @pytest.fixture(
     params=[
         "cpu",
