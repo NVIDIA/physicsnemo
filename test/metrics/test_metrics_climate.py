@@ -105,6 +105,7 @@ def test_climate_acc_mse(test_data, device, rtol: float = 1e-3, atol: float = 1e
 
 
 def test_climate_reductions(test_data, device, rtol: float = 1e-3, atol: float = 1e-3):
+    torch.manual_seed(0)
     channels, lon, lat, pred_tensor_np, targ_tensor_np, time_means = test_data
     pred_tensor = torch.from_numpy(pred_tensor_np).expand(channels, -1, -1).to(device)
     lat = torch.from_numpy(lat).to(device)
@@ -247,6 +248,7 @@ def test_climate_reductions(test_data, device, rtol: float = 1e-3, atol: float =
 
 
 def test_climate_efi(test_data, device, rtol: float = 1e-1, atol: float = 1e-1):
+    torch.manual_seed(0)
     one = torch.ones((1, 1), dtype=torch.float32, device=device)
     bin_edges = hist.linspace(-10 * one, 10 * one, 30)
     bin_mids = 0.5 * bin_edges[1:] + 0.5 * bin_edges[:-1]
