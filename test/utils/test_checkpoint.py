@@ -100,6 +100,7 @@ def test_model_checkpointing(
     # Initialize DistributedManager first since save_checkpoint instantiates it
     DistributedManager.initialize()
 
+    torch.manual_seed(0)
     mlp_model_1 = model_generator(8).to(device)
     mlp_model_2 = model_generator(4).to(device)
 
@@ -187,6 +188,7 @@ def test_compiled_model_checkpointing(
 
     from physicsnemo.utils import load_checkpoint, save_checkpoint
 
+    torch.manual_seed(0)
     # Create and compile a simple model
     in_feats = 4
     base_model = FullyConnected(
