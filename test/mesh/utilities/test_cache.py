@@ -236,7 +236,9 @@ class TestCacheDevices:
 class TestCacheDtypes:
     """Tests for dtype handling in cache operations."""
 
-    @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.int64, torch.int32])
+    @pytest.mark.parametrize(
+        "dtype", [torch.float32, torch.float64, torch.int64, torch.int32]
+    )
     def test_cache_various_dtypes(self, dtype):
         """Test caching with various dtypes."""
         data = TensorDict({}, batch_size=[10])
@@ -300,4 +302,3 @@ class TestCacheIntegrationWithMesh:
         assert get_cached(cell_data, "centroids") is not None
         assert get_cached(cell_data, "areas") is not None
         assert get_cached(cell_data, "normals") is not None
-

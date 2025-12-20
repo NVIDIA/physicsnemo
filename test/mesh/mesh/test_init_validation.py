@@ -186,9 +186,13 @@ class TestDimensionValidation:
     def test_manifold_greater_than_spatial_raises(self):
         """Test that manifold_dims > spatial_dims raises ValueError."""
         points = torch.randn(10, 2)  # 2D spatial
-        cells = torch.randint(0, 10, (5, 4))  # 3-manifold (would need at least 3D space)
+        cells = torch.randint(
+            0, 10, (5, 4)
+        )  # 3-manifold (would need at least 3D space)
 
-        with pytest.raises(ValueError, match=r"`n_manifold_dims` must be <= `n_spatial_dims`"):
+        with pytest.raises(
+            ValueError, match=r"`n_manifold_dims` must be <= `n_spatial_dims`"
+        ):
             Mesh(points=points, cells=cells)
 
     def test_0_manifold_in_0_spatial_invalid(self):
@@ -327,7 +331,9 @@ class TestParametrized:
             (1, 1, 3, 0),
         ],
     )
-    def test_valid_combinations(self, n_points, n_cells, n_spatial_dims, n_manifold_dims):
+    def test_valid_combinations(
+        self, n_points, n_cells, n_spatial_dims, n_manifold_dims
+    ):
         """Test various valid dimension combinations."""
         torch.manual_seed(42)
         points = torch.randn(n_points, n_spatial_dims)
@@ -339,4 +345,3 @@ class TestParametrized:
         assert mesh.n_cells == n_cells
         assert mesh.n_spatial_dims == n_spatial_dims
         assert mesh.n_manifold_dims == n_manifold_dims
-

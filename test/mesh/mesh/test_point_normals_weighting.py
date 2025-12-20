@@ -33,7 +33,6 @@ import torch
 
 from physicsnemo.mesh import Mesh
 
-
 ### Helper Functions ###
 
 
@@ -173,7 +172,12 @@ class TestPointNormalsWeightingSchemes:
 
         # For flat surface, all normals should point in +z direction
         expected = torch.tensor([0.0, 0.0, 1.0])
-        for normals in [normals_unweighted, normals_area, normals_angle, normals_angle_area]:
+        for normals in [
+            normals_unweighted,
+            normals_area,
+            normals_angle,
+            normals_angle_area,
+        ]:
             for i in range(mesh.n_points):
                 # Allow for sign flip
                 assert torch.allclose(normals[i].abs(), expected.abs(), atol=1e-5)
@@ -247,14 +251,18 @@ class TestPointNormalsErrors:
 
         assert mesh.n_manifold_dims == 1
 
-        with pytest.raises(ValueError, match="Angle-based weighting requires n_manifold_dims >= 2"):
+        with pytest.raises(
+            ValueError, match="Angle-based weighting requires n_manifold_dims >= 2"
+        ):
             mesh.compute_point_normals(weighting="angle")
 
     def test_angle_area_weighting_for_edges_raises(self):
         """Test that angle_area weighting for edges raises ValueError."""
         mesh = create_edge_mesh_2d()
 
-        with pytest.raises(ValueError, match="Angle-based weighting requires n_manifold_dims >= 2"):
+        with pytest.raises(
+            ValueError, match="Angle-based weighting requires n_manifold_dims >= 2"
+        ):
             mesh.compute_point_normals(weighting="angle_area")
 
     def test_area_weighting_for_edges_works(self):
@@ -295,9 +303,7 @@ class TestEdgeNormals2D:
     def test_corner_edge_normal(self):
         """Test normal at corner where two edges meet at 90 degrees."""
         # L-shaped path
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1], [1, 2]], dtype=torch.long)
         mesh = Mesh(points=points, cells=cells)
 
@@ -405,4 +411,3 @@ class TestCaching:
         # Second access uses cache
         normals2 = mesh.point_normals
         assert torch.equal(normals1, normals2)
-

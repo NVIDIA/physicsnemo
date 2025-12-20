@@ -84,31 +84,31 @@ class TestScatterAggregateMean:
         assert torch.allclose(result, expected)
 
 
-class TestScatterAggregateWeightedMean:
-    """Tests for weighted_mean aggregation mode."""
+class TestScatterAggregateMeanWithWeights:
+    """Tests for mean aggregation with explicit weights."""
 
-    def test_weighted_mean_simple(self):
+    def test_mean_with_weights_simple(self):
         """Test simple weighted mean aggregation."""
         src_data = torch.tensor([1.0, 3.0])
         src_to_dst = torch.tensor([0, 0])
         weights = torch.tensor([1.0, 3.0])
 
         result = scatter_aggregate(
-            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="weighted_mean"
+            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="mean"
         )
 
         # Weighted mean: (1*1 + 3*3) / (1 + 3) = 10/4 = 2.5
         expected = torch.tensor([2.5])
         assert torch.allclose(result, expected)
 
-    def test_weighted_mean_equal_weights_equals_mean(self):
+    def test_mean_with_equal_weights_equals_unweighted(self):
         """Test that equal weights produce same result as unweighted mean."""
         src_data = torch.tensor([1.0, 2.0, 3.0])
         src_to_dst = torch.tensor([0, 0, 0])
         weights = torch.tensor([1.0, 1.0, 1.0])
 
         result_weighted = scatter_aggregate(
-            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="weighted_mean"
+            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="mean"
         )
         result_unweighted = scatter_aggregate(
             src_data, src_to_dst, n_dst=1, aggregation="mean"
@@ -116,34 +116,19 @@ class TestScatterAggregateWeightedMean:
 
         assert torch.allclose(result_weighted, result_unweighted)
 
-    def test_weighted_mean_zero_weight_ignored(self):
+    def test_mean_with_zero_weight_ignored(self):
         """Test that zero-weighted sources are effectively ignored."""
         src_data = torch.tensor([1.0, 2.0, 100.0])  # 100 should be ignored
         src_to_dst = torch.tensor([0, 0, 0])
         weights = torch.tensor([1.0, 1.0, 0.0])  # Zero weight for 100
 
         result = scatter_aggregate(
-            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="weighted_mean"
+            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="mean"
         )
 
         # Weighted mean: (1*1 + 2*1 + 100*0) / (1 + 1 + 0) = 3/2 = 1.5
         expected = torch.tensor([1.5])
         assert torch.allclose(result, expected)
-
-    def test_weighted_mean_mode_alias(self):
-        """Test that 'weighted_mean' and 'mean' behave same with weights."""
-        src_data = torch.tensor([1.0, 3.0])
-        src_to_dst = torch.tensor([0, 0])
-        weights = torch.tensor([1.0, 2.0])
-
-        result_mean = scatter_aggregate(
-            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="mean"
-        )
-        result_weighted = scatter_aggregate(
-            src_data, src_to_dst, n_dst=1, weights=weights, aggregation="weighted_mean"
-        )
-
-        assert torch.allclose(result_mean, result_weighted)
 
 
 class TestScatterAggregateSum:
@@ -206,10 +191,12 @@ class TestScatterAggregateMultiDimensional:
 
     def test_mean_3d_data(self):
         """Test mean aggregation with 3D source data (e.g., tensors)."""
-        src_data = torch.tensor([
-            [[1.0, 2.0], [3.0, 4.0]],
-            [[5.0, 6.0], [7.0, 8.0]],
-        ])
+        src_data = torch.tensor(
+            [
+                [[1.0, 2.0], [3.0, 4.0]],
+                [[5.0, 6.0], [7.0, 8.0]],
+            ]
+        )
         src_to_dst = torch.tensor([0, 0])
 
         result = scatter_aggregate(src_data, src_to_dst, n_dst=1, aggregation="mean")
@@ -307,13 +294,15 @@ class TestScatterAggregateDevices:
 class TestScatterAggregateParametrized:
     """Parametrized tests for scatter_aggregate."""
 
-    @pytest.mark.parametrize("aggregation", ["mean", "weighted_mean", "sum"])
+    @pytest.mark.parametrize("aggregation", ["mean", "sum"])
     def test_all_aggregation_modes(self, aggregation):
         """Test that all aggregation modes work."""
         src_data = torch.tensor([1.0, 2.0, 3.0])
         src_to_dst = torch.tensor([0, 0, 1])
 
-        result = scatter_aggregate(src_data, src_to_dst, n_dst=2, aggregation=aggregation)
+        result = scatter_aggregate(
+            src_data, src_to_dst, n_dst=2, aggregation=aggregation
+        )
 
         assert result.shape == (2,)
 
@@ -323,7 +312,9 @@ class TestScatterAggregateParametrized:
         src_data = torch.randn(20)
         src_to_dst = torch.randint(0, n_dst, (20,))
 
-        result = scatter_aggregate(src_data, src_to_dst, n_dst=n_dst, aggregation="mean")
+        result = scatter_aggregate(
+            src_data, src_to_dst, n_dst=n_dst, aggregation="mean"
+        )
 
         assert result.shape == (n_dst,)
 
@@ -346,4 +337,3 @@ class TestScatterAggregateParametrized:
 
         expected_shape = (3,) + data_shape[1:]
         assert result.shape == expected_shape
-

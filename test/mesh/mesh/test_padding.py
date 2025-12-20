@@ -32,7 +32,6 @@ import torch
 
 from physicsnemo.mesh import Mesh
 
-
 ### Helper Functions ###
 
 
@@ -205,7 +204,9 @@ class TestPadWithData:
 
         padded = mesh.pad(target_n_cells=15, data_padding_value=-999.0)
 
-        assert torch.allclose(padded.cell_data["pressure"][5:], torch.full((10,), -999.0))
+        assert torch.allclose(
+            padded.cell_data["pressure"][5:], torch.full((10,), -999.0)
+        )
 
     def test_pad_preserves_original_data(self):
         """Test that original data values are preserved."""
@@ -284,7 +285,9 @@ class TestPadToNextPowerBasic:
 
     def test_pad_to_next_power_with_data(self):
         """Test pad_to_next_power with data fields."""
-        mesh = create_simple_mesh(n_points=100, n_cells=50, add_point_data=True, add_cell_data=True)
+        mesh = create_simple_mesh(
+            n_points=100, n_cells=50, add_point_data=True, add_cell_data=True
+        )
 
         padded = mesh.pad_to_next_power(power=2.0)
 
@@ -298,7 +301,10 @@ class TestPadToNextPowerBasic:
         padded = mesh.pad_to_next_power(power=2.0, data_padding_value=-1.0)
 
         # Padded values should be -1.0
-        assert torch.allclose(padded.point_data["temperature"][100:], torch.full((padded.n_points - 100,), -1.0))
+        assert torch.allclose(
+            padded.point_data["temperature"][100:],
+            torch.full((padded.n_points - 100,), -1.0),
+        )
 
 
 class TestPadToNextPowerErrors:
@@ -368,7 +374,11 @@ class TestPadParametrized:
     def test_pad_various_dimensions(self, n_spatial_dims, n_manifold_dims, device):
         """Test padding across various dimension combinations."""
         mesh = create_simple_mesh(
-            n_points=10, n_cells=5, n_spatial_dims=n_spatial_dims, n_manifold_dims=n_manifold_dims, device=device
+            n_points=10,
+            n_cells=5,
+            n_spatial_dims=n_spatial_dims,
+            n_manifold_dims=n_manifold_dims,
+            device=device,
         )
 
         padded = mesh.pad(target_n_points=20, target_n_cells=15)
@@ -399,7 +409,7 @@ class TestPadParametrized:
             # Find n such that floor(base^n) = result
             log_val = math.log(n) / math.log(base)
             n_ceil = math.ceil(log_val)
-            expected = int(base ** n_ceil)
+            expected = int(base**n_ceil)
             # Allow small tolerance for floating point computation
             return n == expected
 
@@ -443,4 +453,3 @@ class TestPadEdgeCases:
         padded = mesh.pad(target_n_points=10)
 
         assert torch.allclose(padded.global_data["time"], torch.tensor(1.5))
-

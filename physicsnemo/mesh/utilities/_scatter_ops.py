@@ -59,9 +59,8 @@ def scatter_aggregate(
         If None, uses uniform weights of 1.0.
     aggregation : str
         Aggregation mode:
-        - "mean": Weighted mean
+        - "mean": Weighted mean (uses weights if provided, uniform otherwise)
         - "sum": Weighted sum (no normalization)
-        - "weighted_mean": Same as "mean" (for clarity)
 
     Returns
     -------
@@ -116,7 +115,7 @@ def scatter_aggregate(
     )
 
     ### Handle aggregation mode
-    if aggregation in ("mean", "weighted_mean"):
+    if aggregation == "mean":
         ### Compute sum of weights at each destination
         weight_sums = torch.zeros(n_dst, dtype=dtype, device=device)
         weight_sums.scatter_add_(
@@ -136,8 +135,6 @@ def scatter_aggregate(
         pass
 
     else:
-        raise ValueError(
-            f"Invalid {aggregation=}. Must be 'mean', 'weighted_mean', or 'sum'."
-        )
+        raise ValueError(f"Invalid {aggregation=}. Must be 'mean' or 'sum'.")
 
     return aggregated_data
