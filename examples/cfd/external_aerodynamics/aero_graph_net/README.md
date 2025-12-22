@@ -131,7 +131,9 @@ of the samples from the test dataset.](../../../../docs/img/drivaernet_results.p
 > [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo)
 > you may have to pass a few additional flags to your `docker run` command.
 > Specifically, include `--ulimit nofile=65535:65535` and `--shm-size=4g` as
-> additional flags while launching the container.
+> additional flags while launching the container. These flags are required
+> because a process pool is used to parallelize dataset creation prior to
+> starting training, which requires additional resources inside the container.
 
 The example uses [Hydra](https://hydra.cc/docs/intro/) for experiment configuration.
 Hydra provides a convenient way to change almost any experiment parameter,
