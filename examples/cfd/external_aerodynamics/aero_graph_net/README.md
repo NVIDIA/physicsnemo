@@ -140,8 +140,6 @@ BSMS MGN model requires additional dependency:
 pip install sparse_dot_mkl
 ```
 
-You can also run `pip install -r requirements.txt` to get all the python dependencies.
-
 Additionally, if you are using the [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo),
 install a few system-level packages with
 
