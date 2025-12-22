@@ -42,6 +42,7 @@ dependencies = [
     "termcolor>=3.2.0",
     "zarr>=2.18.3",
     "hydra-core>=1.3.2",
+    "tensordict>=0.10.0",
     "omegaconf>=2.3.0",
 ]
 
@@ -138,6 +139,10 @@ utils-extras = [
     "stl",
     "pylibraft-cu13", # Provides rmm
     "cupy-cuda13x",
+]
+mesh-extras = [
+    "matplotlib>=3.10.7",
+    "pyvista>=0.46.4",
 ]
 nn-extras = [
     "cuml-cu13",
