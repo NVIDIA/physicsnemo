@@ -1,6 +1,5 @@
 # PhysicsNeMo Code Structure
 
-**Version:** 1.4.0a0 (v2.0-refactor branch)  
 **Repository:** https://github.com/NVIDIA/physicsnemo
 
 ---
@@ -609,29 +608,20 @@ Comprehensive documentation (196 files):
 ## Dependencies
 
 ### Core Dependencies (from `pyproject.toml`)
-- **PyTorch** ≥ 2.4.0 - Deep learning framework
+- **PyTorch** - Deep learning framework
 - **Warp-lang** - NVIDIA's high-performance Python framework
-- **Hydra-core** ≥ 1.3.2 - Configuration management
-- **OmegaConf** ≥ 2.3.0 - Configuration system
-- **xarray** ≥ 2025.6.1 - N-D labeled arrays
-- **zarr** ≥ 2.18.3 - Chunked array storage
-- **h5py** ≥ 3.15.1 - HDF5 file I/O
-- **einops** ≥ 0.8.1 - Tensor operations
-- **timm** ≥ 1.0.22 - Vision models
-- **onnx** ≥ 1.14.0 - Model export
+- **Hydra-core** - Configuration management
+- **OmegaConf** - Configuration system
+- **xarray**  - N-D labeled arrays
+- **zarr**  - Chunked array storage
+- **h5py**  - HDF5 file I/O
+- **einops**  - Tensor operations
+- **timm**  - Vision models
+- **onnx**  - Model export
 - **pandas** - Data analysis
-- **s3fs** ≥ 2023.5.0 - S3 filesystem
-- **tqdm** ≥ 4.60.0 - Progress bars
+- **s3fs**  - S3 filesystem
+- **tqdm** - Progress bars
 - **requests** ≥ 2.32.2 - HTTP library
-
----
-
-## Version Information
-
-- **Current Version:** 1.4.0a0 (alpha)
-- **Branch:** v2.0-refactor
-- **Python:** 3.11+
-- **License:** Apache 2.0 (see LICENSE.txt)
 
 ---
 
@@ -640,7 +630,7 @@ Comprehensive documentation (196 files):
 ### Installation
 ```bash
 # Clone the repository
-git clone -b v2.0-refactor https://github.com/NVIDIA/physicsnemo.git
+git clone https://github.com/NVIDIA/physicsnemo.git
 cd physicsnemo
 
 # Install in development mode
