@@ -126,6 +126,13 @@ of the samples from the test dataset.](../../../../docs/img/drivaernet_results.p
 
 ## Model training
 
+> [!NOTE]
+> If you are running this example using the
+> [PhysicsNeMo Docker Container](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/physicsnemo/containers/physicsnemo)
+> you may have to pass a few additional flags to your `docker run` command.
+> Specifically, include `--ulimit nofile=65535:65535` and `--shm-size=4g` as
+> additional flags while launching the container.
+
 The example uses [Hydra](https://hydra.cc/docs/intro/) for experiment configuration.
 Hydra provides a convenient way to change almost any experiment parameter,
 such as dataset configuration, model and optimizer settings and so on.
