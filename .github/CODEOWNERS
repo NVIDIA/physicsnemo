@@ -50,6 +50,8 @@ physicsnemo/active_learning @laserkelvin @dallasfoster
 physicsnemo/launch
 physicsnemo/deploy
 
+# Mesh
+physicsnemo/mesh @peterdsharpe
 
 # DATAPIPES
 physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
@@ -145,3 +147,6 @@ test/metrics/diffusion @CharlelieLrt
 test/utils/generative @CharlelieLrt
 test/utils/corrdiff @CharlelieLrt
 test/active_learning @laserkelvin @dallasfoster
+
+# Mesh
+test/mesh @peterdsharpe
