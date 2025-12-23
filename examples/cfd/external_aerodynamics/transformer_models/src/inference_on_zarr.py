@@ -324,16 +324,22 @@ def inference(cfg: DictConfig) -> None:
         start = time.time()
 
         air_density = batch["air_density"] if "air_density" in batch.keys() else None
-        stream_velocity = batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
+        stream_velocity = (
+            batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
+        )
 
         if cfg.data.mode == "surface":
             coeff = 1.0
 
             if stream_velocity is not None:
-                global_predictions = global_predictions * stream_velocity**2.0 * air_density
+                global_predictions = (
+                    global_predictions * stream_velocity**2.0 * air_density
+                )
                 global_targets = global_targets * stream_velocity**2.0 * air_density
 
-            metrics = metrics_fn_surface(global_predictions, global_targets, dist_manager)
+            metrics = metrics_fn_surface(
+                global_predictions, global_targets, dist_manager
+            )
             # Compute the drag and loss coefficients:
             # (Index on [0] is to remove the 1 batch index)
             pred_pressure, pred_shear = torch.split(
@@ -359,7 +365,6 @@ def inference(cfg: DictConfig) -> None:
                 torch.tensor([[0, 0, 1]], device=dist_manager.device),
             )
 
-            
             # true_fields = val_dataset.unscale_model_targets(batch["fields"], air_density=air_density, stream_velocity=stream_velocity)
             true_pressure, true_shear = torch.split(global_targets[0], (1, 3), dim=-1)
 
@@ -437,14 +442,26 @@ def inference(cfg: DictConfig) -> None:
 
         elif cfg.data.mode == "volume":
             if stream_velocity is not None:
-                global_predictions[:, :, 3] = global_predictions[:, :, 3] * stream_velocity**2.0 * air_density
-                global_targets[:, :, 3] = global_targets[:, :, 3] * stream_velocity**2.0 * air_density
-                global_predictions[:, :, 0:3] = global_predictions[:, :, 0:3] * stream_velocity
+                global_predictions[:, :, 3] = (
+                    global_predictions[:, :, 3] * stream_velocity**2.0 * air_density
+                )
+                global_targets[:, :, 3] = (
+                    global_targets[:, :, 3] * stream_velocity**2.0 * air_density
+                )
+                global_predictions[:, :, 0:3] = (
+                    global_predictions[:, :, 0:3] * stream_velocity
+                )
                 global_targets[:, :, 0:3] = global_targets[:, :, 0:3] * stream_velocity
-                global_predictions[:, :, 4] = global_predictions[:, :, 4] * stream_velocity**2.0 * air_density
-                global_targets[:, :, 4] = global_targets[:, :, 4] * stream_velocity**2.0 * air_density
-            
-            metrics = metrics_fn_volume(global_predictions, global_targets, dist_manager)
+                global_predictions[:, :, 4] = (
+                    global_predictions[:, :, 4] * stream_velocity**2.0 * air_density
+                )
+                global_targets[:, :, 4] = (
+                    global_targets[:, :, 4] * stream_velocity**2.0 * air_density
+                )
+
+            metrics = metrics_fn_volume(
+                global_predictions, global_targets, dist_manager
+            )
             # Extract metric values and convert tensors to floats
             l2_pressure = (
                 metrics["l2_pressure_vol"].item()
@@ -476,7 +493,7 @@ def inference(cfg: DictConfig) -> None:
                 if hasattr(metrics["mae_velocity"], "item")
                 else metrics["mae_velocity"]
             )
-            
+
             l2_nut = (
                 metrics["l2_nut"].item()
                 if hasattr(metrics["l2_nut"], "item")
@@ -541,7 +558,7 @@ def inference(cfg: DictConfig) -> None:
         logger.info(f"R2 score for lift: {r2_lift:.4f}")
         logger.info(f"R2 score for drag: {r2_drag:.4f}")
         csv_filename = f"{cfg.output_dir}/{cfg.run_id}/surface_inference_results_{datetime.now()}.csv"
-        with open(csv_filename, 'w', newline='') as f:
+        with open(csv_filename, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(results)
@@ -566,7 +583,7 @@ def inference(cfg: DictConfig) -> None:
             f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
         )
         csv_filename = f"{cfg.output_dir}/{cfg.run_id}/volume_inference_results_{datetime.now()}.csv"
-        with open(csv_filename, 'w', newline='') as f:
+        with open(csv_filename, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(results)
