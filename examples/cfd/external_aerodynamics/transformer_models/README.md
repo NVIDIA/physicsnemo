@@ -1,7 +1,7 @@
 <!-- markdownlint-disable -->
 # Transformer Models for External Aerodynamics on Irregular Meshes
 
-This directory contains training and inference recipes for transformer-based surrogate models for CFD applications. This is a collection of transformer models including `Transolver` and `Typhon`, both of which can be run on surface or volume data.
+This directory contains training and inference recipes for transformer-based surrogate models for CFD applications. This is a collection of transformer models including `Transolver` and `GeoTransolver`, both of which can be run on surface or volume data.
 
 ## Models Overview
 
@@ -11,11 +11,11 @@ This directory contains training and inference recipes for transformer-based sur
 
 By stacking multiple PhysicsAttention layers, the `Transolver` model learns to map from the functional input space to the output space with high fidelity. The PhysicsNeMo implementation closely follows the original Transolver architecture ([https://github.com/thuml/Transolver](https://github.com/thuml/Transolver)), but introduces modifications for improved numerical stability and compatibility with NVIDIA TransformerEngine.
 
-### Typhon
+### GeoTranSolver
 
-Typhon adapts the Transolver backbone by replacing standard attention with GALE (Geometry-Aware Latent Embeddings) attention, which unifies physics-aware self-attention on learned state slices with cross-attention to geometry and global context embeddings. Inspired by Domino's multi-scale ball query formulations, Typhon learns global geometry encodings and local latent encodings that capture neighborhoods at multiple radii, preserving fine-grained near-boundary behavior and far-field interactions. Crucially, geometry and global features are projected into physical state spaces and injected as context in every transformer block, ensuring persistent conditioning and alignment between evolving latent states and the underlying domain.
+GeoTransolver adapts the Transolver backbone by replacing standard attention with GALE (Geometry-Aware Latent Embeddings) attention, which unifies physics-aware self-attention on learned state slices with cross-attention to geometry and global context embeddings. Inspired by Domino's multi-scale ball query formulations, GeoTransolver learns global geometry encodings and local latent encodings that capture neighborhoods at multiple radii, preserving fine-grained near-boundary behavior and far-field interactions. Crucially, geometry and global features are projected into physical state spaces and injected as context in every transformer block, ensuring persistent conditioning and alignment between evolving latent states and the underlying domain.
 
-GALE directly targets core challenges in AI physics modeling. By structuring self-attention around physics-aware slices, Typhon encourages interactions that reflect operator couplings (e.g., pressure–velocity or field–material). Multi-scale ball queries enforce locality where needed while maintaining access to global signals, balancing efficiency with nonlocal reasoning. Continuous geometry-context projection at depth mitigates representation drift and improves stability, while providing a natural interface for constraint-aware training and regularization. Together, these design choices enhance accuracy, robustness to geometric and regime shifts, and scalability on large, irregular discretizations.
+GALE directly targets core challenges in AI physics modeling. By structuring self-attention around physics-aware slices, GeoTransolver encourages interactions that reflect operator couplings (e.g., pressure–velocity or field–material). Multi-scale ball queries enforce locality where needed while maintaining access to global signals, balancing efficiency with nonlocal reasoning. Continuous geometry-context projection at depth mitigates representation drift and improves stability, while providing a natural interface for constraint-aware training and regularization. Together, these design choices enhance accuracy, robustness to geometric and regime shifts, and scalability on large, irregular discretizations.
 
 ## External Aerodynamics CFD Example: Overview
 
@@ -31,7 +31,7 @@ These transformer models can use TransformerEngine from NVIDIA, as well as tenso
 
 1. Prepare the Dataset. These models use the same Zarr outputs as other models with DrivaerML. `PhysicsNeMo` has a related project to help with data processing, called [PhysicsNeMo-Curator](https://github.com/NVIDIA/physicsnemo-curator). Using `PhysicsNeMo-Curator`, the data needed to train can be setup easily. Please refer to [these instructions on getting started](https://github.com/NVIDIA/physicsnemo-curator?tab=readme-ov-file#what-is-physicsnemo-curator) with `PhysicsNeMo-Curator`. For specifics of preparing the dataset for this example, see the [download](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md#download-drivaerml-dataset) and [preprocessing](https://github.com/NVIDIA/physicsnemo-curator/blob/main/examples/external_aerodynamics/README.md) instructions from `physicsnemo-curator`. Users should apply the preprocessing steps locally to produce `zarr` output files.
 
-2. Train your model. The model and training configuration is configured with `hydra`, and configurations are available for both surface and volume modes (e.g., `transolver_surface`, `transolver_volume`, `typhon_surface`, `typhon_volume`). Find configurations in `src/conf`, where you can control both network properties and training properties. See below for an overview and explanation of key parameters that may be of special interest.
+2. Train your model. The model and training configuration is configured with `hydra`, and configurations are available for both surface and volume modes (e.g., `transolver_surface`, `transolver_volume`, `geotransolver_surface`, `geotransolver_volume`). Find configurations in `src/conf`, where you can control both network properties and training properties. See below for an overview and explanation of key parameters that may be of special interest.
 
 3. Use the trained model to perform inference. This example contains inference examples for the validation set, already in Zarr format. The `.vtp` inference pipeline is being updated to accommodate these models.
 
@@ -43,7 +43,7 @@ To train the model, first we compute normalization factors on the dataset to mak
 
 > By default, the normalization sets the mean to 0.0 and std to 1.0 of all labels in the dataset, computing the mean across the train dataset. You could adapt this to a different normalization, however take care to update both the preprocessing as well as inference scripts. Min/Max is another popular strategy.
 
-To configure your training run, use `hydra`. The config contains sections for the model, data, optimizer, and training settings. For details on the model parameters, see the API for `physicsnemo.models.transolver` and `physicsnemo.experimental.models.typhon`.
+To configure your training run, use `hydra`. The config contains sections for the model, data, optimizer, and training settings. For details on the model parameters, see the API for `physicsnemo.models.transolver` and `physicsnemo.experimental.models.geotransolver`.
 
 To fit the training into memory, you can apply on-the-fly downsampling to the data with `data.resolution=N`, where `N` is how many points per GPU to use. This dataloader will yield the full data examples in shapes of `[1, K, f]` where `K` is the resolution of the mesh, and `f` is the feature space (3 for points, normals, etc. 4 for surface fields). Downsampling happens in the preprocessing pipeline.
 

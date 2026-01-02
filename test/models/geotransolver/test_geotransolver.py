@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random
 
 import pytest
 import torch
@@ -37,7 +36,6 @@ from test.conftest import requires_module
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 @pytest.mark.parametrize("use_geometry", [False, True])
 @pytest.mark.parametrize("use_global", [False, True])
 def test_geotransolver_forward(device, use_geometry, use_global):
@@ -88,7 +86,6 @@ def test_geotransolver_forward(device, use_geometry, use_global):
     assert not torch.isnan(outputs).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_geotransolver_forward_tuple_inputs(device):
     """Test GeoTransolver model forward pass with tuple inputs/outputs (multi-head)."""
     torch.manual_seed(42)
@@ -189,7 +186,7 @@ def test_geotransolver_forward_with_local_features(device, pytestconfig):
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
-    assert not torch.isnan(outputs[0]).any()
+    assert not torch.isnan(outputs).any()
 
 
 # =============================================================================
@@ -197,7 +194,6 @@ def test_geotransolver_forward_with_local_features(device, pytestconfig):
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_geotransolver_forward_accuracy_basic(device):
     """Test GeoTransolver basic forward pass accuracy."""
     torch.manual_seed(42)
@@ -238,7 +234,6 @@ def test_geotransolver_forward_accuracy_basic(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_geotransolver_forward_accuracy_tuple(device):
     """Test GeoTransolver forward pass accuracy with tuple inputs."""
     torch.manual_seed(42)
@@ -299,6 +294,7 @@ def test_geotransolver_forward_accuracy_tuple(device):
 @pytest.mark.parametrize("device", ["cuda:0"])
 def test_geotransolver_optimizations(device):
     """Test GeoTransolver optimizations (CUDA graphs, JIT, AMP, combo)."""
+    torch.manual_seed(42)
 
     def setup_model():
         """Setup fresh GeoTransolver model and inputs for each optimization test."""
@@ -408,7 +404,7 @@ def test_geotransolver_te_basic(device, pytestconfig):
 
     assert isinstance(outputs, torch.Tensor)
     assert outputs.shape == (batch_size, n_tokens, 4)
-    assert not torch.isnan(outputs[0]).any()
+    assert not torch.isnan(outputs).any()
 
 
 # =============================================================================
@@ -416,7 +412,6 @@ def test_geotransolver_te_basic(device, pytestconfig):
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_geotransolver_checkpoint(device):
     """Test GeoTransolver checkpoint save/load."""
     torch.manual_seed(42)
@@ -457,7 +452,7 @@ def test_geotransolver_checkpoint(device):
         include_local_features=False,
     ).to(device)
 
-    batch_size = random.randint(1, 2)
+    batch_size = 2
     n_tokens = 100
     n_global = 5
 
@@ -472,7 +467,6 @@ def test_geotransolver_checkpoint(device):
     )
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_geotransolver_checkpoint_tuple(device):
     """Test GeoTransolver checkpoint save/load with tuple inputs."""
     torch.manual_seed(42)
@@ -516,7 +510,7 @@ def test_geotransolver_checkpoint_tuple(device):
         include_local_features=False,
     ).to(device)
 
-    batch_size = random.randint(1, 2)
+    batch_size = 2
     n_tokens_1 = 100
     n_tokens_2 = 150
     n_global = 5

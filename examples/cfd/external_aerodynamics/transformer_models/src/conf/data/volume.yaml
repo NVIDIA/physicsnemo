@@ -20,10 +20,11 @@ defaults:
 # Overrides for volume data:
 mode: volume
 
-# volume-speficic needs:
+# volume-specific needs:
 data_keys:
   - "volume_fields"
   - "volume_mesh_centers"
   - "stl_faces"
   - "stl_centers"
   - "stl_coordinates"
+  

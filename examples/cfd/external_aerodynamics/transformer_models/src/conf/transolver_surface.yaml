@@ -21,7 +21,7 @@ defaults:
 
 output_dir: "runs"
 checkpoint_dir: null  # Optional: set custom checkpoint path, defaults to output_dir
-run_id: "surface/bfloat16"
+run_id: "surface/float32"
 
 # Performance considerations:
 precision: float32 # float32, float16, bfloat16, or float8
@@ -35,3 +35,4 @@ data:
 logging:
   level: INFO
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  

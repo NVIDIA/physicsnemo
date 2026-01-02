@@ -27,7 +27,6 @@ from physicsnemo.experimental.models.geotransolver.gale import (
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gale_forward_basic(device):
     """Test GALE attention layer forward pass without context."""
     torch.manual_seed(42)
@@ -60,7 +59,6 @@ def test_gale_forward_basic(device):
     assert not torch.isnan(outputs[0]).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gale_forward_with_context(device):
     """Test GALE attention layer forward pass with cross-attention context."""
     torch.manual_seed(42)
@@ -95,7 +93,6 @@ def test_gale_forward_with_context(device):
     assert not torch.isnan(outputs[0]).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gale_forward_multiple_inputs(device):
     """Test GALE attention layer with multiple input tensors."""
     torch.manual_seed(42)
@@ -169,7 +166,6 @@ def test_gale_plus_mode(device):
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gale_block_forward(device):
     """Test GALE_block transformer block forward pass."""
     torch.manual_seed(42)
@@ -205,7 +201,6 @@ def test_gale_block_forward(device):
     assert not torch.isnan(outputs[0]).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0", "cpu"])
 def test_gale_block_multiple_inputs(device):
     """Test GALE_block with multiple input tensors."""
     torch.manual_seed(42)
