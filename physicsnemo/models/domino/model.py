@@ -28,8 +28,8 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float
 
-from physicsnemo import Module
-from physicsnemo.models.meta import ModelMetaData
+from physicsnemo.core import Module
+from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.unet import UNet
 from physicsnemo.nn import FourierMLP, get_activation
 
