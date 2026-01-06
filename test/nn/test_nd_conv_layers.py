@@ -228,8 +228,6 @@ class SpectralConv4d(nn.Module):
 def test_conv_nd(device, dimension):
     """compare output of ConvNdKernel1Layer with that of layer for specfic n_dim"""
 
-    torch.manual_seed(0)
-    random.seed(0)
     bsize = 2
     in_channels = 4
     out_channels = 2

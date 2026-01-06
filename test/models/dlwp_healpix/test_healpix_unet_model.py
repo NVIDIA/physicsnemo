@@ -90,7 +90,6 @@ def test_data():
     def generate_test_data(
         batch_size=8, time_dim=1, channels=7, img_size=16, device="cpu"
     ):
-        torch.manual_seed(42)
         test_data = torch.randn(batch_size, 12, time_dim, channels, img_size, img_size)
 
         return test_data.to(device)
@@ -102,7 +101,6 @@ def test_data():
 def constant_data():
     # create dummy data
     def generate_constant_data(channels=2, img_size=16, device="cpu"):
-        torch.manual_seed(42)
         constants = torch.randn(12, channels, img_size, img_size)
 
         return constants.to(device)
@@ -114,7 +112,6 @@ def constant_data():
 def insolation_data():
     # create dummy data
     def generate_insolation_data(batch_size=8, time_dim=1, img_size=16, device="cpu"):
-        torch.manual_seed(42)
         insolation = torch.randn(batch_size, 12, time_dim, 1, img_size, img_size)
 
         return insolation.to(device)
@@ -235,7 +232,6 @@ def test_HEALPixUNet_initialize(
 def test_HEALPixUNet_integration_steps(
     device, unet_encoder_dict, unet_decoder_dict, pytestconfig
 ):
-    fix_random_seeds(seed=42)
     in_channels = 2
     out_channels = 2
     n_constants = 1

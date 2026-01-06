@@ -309,7 +309,6 @@ class TestScatterAggregateParametrized:
     @pytest.mark.parametrize("n_dst", [1, 2, 5, 10])
     def test_various_n_dst(self, n_dst):
         """Test with various destination counts."""
-        torch.manual_seed(0)
         src_data = torch.randn(20)
         src_to_dst = torch.randint(0, n_dst, (20,))
 

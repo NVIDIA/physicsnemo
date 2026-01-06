@@ -33,7 +33,6 @@ def test_dgm_layer_forward_pass(device):
 
 
 def test_dgm_layer_parameters_update(device):
-    torch.manual_seed(0)
     input_tensor_1 = torch.Tensor([[1, 1]]).to(device)
     input_tensor_2 = torch.Tensor([[2, 2]]).to(device)
     layer = DGMLayer(2, 2, 2).to(device)

@@ -31,8 +31,6 @@ from test import common
 
 def test_activation_identity(device):
     """Test identity function in physicsnemo.nn"""
-    torch.manual_seed(0)
-    random.seed(0)
     func = Identity().to(device)
     # Random tensor of random size
     tensor_dim = random.randint(1, 5)
@@ -45,8 +43,6 @@ def test_activation_identity(device):
 
 def test_activation_stan(device):
     """Test Stan function in physicsnemo.nn"""
-    torch.manual_seed(0)
-    random.seed(0)
     func = Stan(out_features=2).to(device)
     # Doc string example handles accuracy
     bsize = random.randint(1, 8)
@@ -68,8 +64,6 @@ def test_activation_stan(device):
 
 def test_activation_squareplus(device):
     """Test square plus function in physicsnemo.nn"""
-    torch.manual_seed(0)
-    random.seed(0)
     func = SquarePlus().to(device)
     func.b = 0
     # Ones tensor of random size
@@ -83,8 +77,6 @@ def test_activation_squareplus(device):
 
 def test_activation_capped_leaky_relu(device):
     """Test capped_gelu function in physicsnemo.nn"""
-    torch.manual_seed(0)
-    random.seed(0)
     func = CappedLeakyReLU(cap_value=1.0).to(device)
     leaky_relu_func = torch.nn.LeakyReLU()
 
@@ -109,8 +101,6 @@ def test_activation_capped_leaky_relu(device):
 
 def test_activation_capped_gelu(device):
     """Test capped_gelu function in physicsnemo.nn"""
-    torch.manual_seed(0)
-    random.seed(0)
     func = CappedGELU(cap_value=1.0).to(device)
     gelu_func = torch.nn.GELU()
 

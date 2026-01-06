@@ -95,7 +95,6 @@ def test_shard_tensor_reduction(
 ):
     dm = DistributedManager()
 
-    torch.manual_seed(0)
     # Create a random-valued tensor of at least rank 3:
     full_input = torch.randn(2, 128, 2, requires_grad=backward).to(dm.device)
 

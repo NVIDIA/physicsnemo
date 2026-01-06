@@ -17,8 +17,10 @@
 import importlib
 import os
 import pathlib
+import random
 from collections import defaultdict
 
+import numpy as np
 import pytest
 import torch
 
@@ -171,3 +173,26 @@ def requires_module(names):
 def device(request):
     """Device fixture that automatically skips CUDA tests when not available."""
     return request.param
+
+
+@pytest.fixture(autouse=True, scope="function")
+def seed_random_state():
+    """Reset all random number generators to a fixed seed before each test.
+
+    This ensures test reproducibility and isolation - each test starts with
+    identical RNG state regardless of test execution order or subset.
+
+    Tests that need a specific seed can still call torch.manual_seed() etc.
+    explicitly, which will override this fixture's seeding.
+    """
+    SEED = 95051
+
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+
+    # CUDA seeding (no-op if CUDA unavailable)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
+
+    yield

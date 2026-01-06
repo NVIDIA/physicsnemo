@@ -34,7 +34,6 @@ class TestPerlinNoiseND:
     def test_dimension_agnostic(self, n_dims):
         """Test that Perlin noise works for any number of dimensions."""
         n_points = 50
-        torch.manual_seed(0)
         points = torch.randn(n_points, n_dims)
 
         noise = perlin_noise_nd(points, scale=1.0, seed=42)
@@ -51,7 +50,6 @@ class TestPerlinNoiseND:
     @pytest.mark.parametrize("seed", [0, 42, 123, 999])
     def test_reproducibility(self, seed):
         """Test that same seed produces same output."""
-        torch.manual_seed(0)
         points = torch.randn(100, 3)
 
         noise1 = perlin_noise_nd(points, scale=1.0, seed=seed)
@@ -61,7 +59,6 @@ class TestPerlinNoiseND:
 
     def test_different_seeds_produce_different_output(self):
         """Test that different seeds produce different noise patterns."""
-        torch.manual_seed(0)
         points = torch.randn(100, 3)
 
         noise1 = perlin_noise_nd(points, scale=1.0, seed=42)
@@ -76,7 +73,6 @@ class TestPerlinNoiseND:
     @pytest.mark.parametrize("scale", [0.1, 0.5, 1.0, 2.0, 5.0])
     def test_scale_parameter(self, scale):
         """Test that scale parameter affects noise frequency."""
-        torch.manual_seed(0)
         points = torch.randn(100, 3)
 
         noise = perlin_noise_nd(points, scale=scale, seed=42)

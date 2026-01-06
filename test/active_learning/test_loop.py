@@ -189,7 +189,6 @@ class TestDefaultTrainingLoop:
 
     def test_basic_training_loop_execution(self, mock_module):
         """Test basic execution of training loop with mocked components."""
-        torch.manual_seed(0)
         # Create a mock train step that returns a loss with backward method
         mock_loss = MagicMock()
         mock_loss.detach.return_value.item.return_value = 0.5
@@ -230,7 +229,6 @@ class TestDefaultTrainingLoop:
 
     def test_training_with_validation(self, mock_module):
         """Test training loop with validation step."""
-        torch.manual_seed(0)
         # Create mock train step
         mock_loss = MagicMock()
         mock_loss.detach.return_value.item.return_value = 0.5
@@ -281,7 +279,6 @@ class TestDefaultTrainingLoop:
 
     def test_training_with_lr_scheduler(self, mock_module):
         """Test training loop with learning rate scheduler."""
-        torch.manual_seed(0)
         mock_loss = MagicMock()
         mock_loss.detach.return_value.item.return_value = 0.5
         mock_loss.backward = MagicMock()

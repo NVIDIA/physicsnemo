@@ -72,10 +72,6 @@ def test_mesh_utils(tmp_path, pytestconfig):
             tuple: A tuple containing the random VTP mesh (vtk.vtkPolyData).
         """
 
-        import random
-
-        random.seed(0)
-
         # make directory if it does not exist
         os.makedirs(dir, exist_ok=True)
 

@@ -161,9 +161,6 @@ def shard_tensor_initialization_from_local_chunks_worker(mesh):
 
     dm = DistributedManager()
 
-    random.seed(0)
-    torch.manual_seed(0)
-
     # Create a mesh right from the inputs:
     global_shape, placements = init_global_shape_and_placements(
         mesh,

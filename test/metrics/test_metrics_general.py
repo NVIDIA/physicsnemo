@@ -66,8 +66,6 @@ def get_disagreements(inputs, bins, counts, test):
 
 @pytest.mark.parametrize("input_shape", [(1, 72, 144)])
 def test_histogram(device, input_shape, rtol: float = 1e-3, atol: float = 1e-3):
-    torch.manual_seed(0)
-    np.random.seed(0)
     x = torch.randn([10, *input_shape], device=device)
     y = torch.randn([5, *input_shape], device=device)
 
@@ -226,7 +224,6 @@ def fair_crps(pred, obs, dim=-1):
 
 
 def test_fair_crps_greater_than_zero(device):
-    torch.manual_seed(0)
     pred = torch.randn(5, 10, device=device)
     obs = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0], device=device)
     assert torch.all(fair_crps(pred, obs, dim=-1) > 0)
@@ -236,7 +233,6 @@ def test_fair_crps_is_fair(device):
     # fair means that a random prediction should outperform a non-random one on average
     # This is not always true of ``crps``...try replacing fair_crps function
     # below with ``crps``
-    torch.manual_seed(0)
     n = 256
     random_pred = torch.randn(n, 2, device=device)
     cheating_pred = torch.zeros((n, 2), device=device)
@@ -345,7 +341,6 @@ def test_crps_finite(device, num, biased):
 def test_crps(device, rtol: float = 1e-3, atol: float = 1e-3):
     # Uses eq (5) from Gneiting et al. https://doi.org/10.1175/MWR2904.1
     # crps(N(0, 1), 0.0) = 2 / sqrt(2*pi) - 1/sqrt(pi) ~= 0.23...
-    torch.manual_seed(0)
     x = torch.randn((1_000_000, 1), device=device, dtype=torch.float32)
     y = torch.zeros((1,), device=device, dtype=torch.float32)
 
@@ -531,7 +526,6 @@ def test_crps(device, rtol: float = 1e-3, atol: float = 1e-3):
 @pytest.mark.parametrize("mean", [3.0])
 @pytest.mark.parametrize("variance", [0.1])
 def test_wasserstein(device, mean, variance, rtol: float = 1e-3, atol: float = 1e-3):
-    torch.manual_seed(0)
     mean = torch.as_tensor([mean], device=device, dtype=torch.float32)
     variance = torch.as_tensor([variance], device=device, dtype=torch.float32)
 
@@ -602,7 +596,6 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
     if not torch.cuda.is_available():
         pytest.skip("CUDA required for this test.")
 
-    torch.manual_seed(0)
     DistributedManager._shared_state = {}
     if (device == "cuda:0") and (not DistributedManager.is_initialized()):
         os.environ["MASTER_ADDR"] = "localhost"
@@ -704,8 +697,6 @@ def test_means_var(device, rtol: float = 1e-3, atol: float = 1e-3):
 
 
 def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
-    torch.manual_seed(0)
-    np.random.seed(0)
     x = torch.randn((10_000, 30, 30), device=device, dtype=torch.float32)
     y = torch.randn((30, 30), device=device, dtype=torch.float32)
 
@@ -775,7 +766,6 @@ def test_calibration(device, rtol: float = 1e-2, atol: float = 1e-2):
 
 
 def test_entropy(device, rtol: float = 1e-2, atol: float = 1e-2):
-    torch.manual_seed(0)
     one = torch.ones([1], device=device, dtype=torch.float32)
 
     x = torch.randn((50_000, 10, 10), device=device, dtype=torch.float32)

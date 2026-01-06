@@ -242,7 +242,6 @@ class TestCacheDtypes:
     def test_cache_various_dtypes(self, dtype):
         """Test caching with various dtypes."""
         data = TensorDict({}, batch_size=[10])
-        torch.manual_seed(0)
         if dtype in [torch.float32, torch.float64]:
             value = torch.randn(10, dtype=dtype)
         else:
@@ -268,7 +267,6 @@ class TestCacheIntegrationWithMesh:
         assert cached_areas is None
 
         # Compute and cache
-        torch.manual_seed(0)
         computed_areas = torch.randn(100)
         set_cached(cell_data, "areas", computed_areas)
 
@@ -283,7 +281,6 @@ class TestCacheIntegrationWithMesh:
         point_data = TensorDict({}, batch_size=[500])
 
         # Cache point normals
-        torch.manual_seed(0)
         normals = torch.randn(500, 3)
         set_cached(point_data, "normals", normals)
 
@@ -297,7 +294,6 @@ class TestCacheIntegrationWithMesh:
         cell_data = TensorDict({}, batch_size=[100])
 
         # Cache multiple properties
-        torch.manual_seed(0)
         set_cached(cell_data, "centroids", torch.randn(100, 3))
         set_cached(cell_data, "areas", torch.randn(100))
         set_cached(cell_data, "normals", torch.randn(100, 3))

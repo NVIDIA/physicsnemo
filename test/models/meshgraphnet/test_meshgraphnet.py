@@ -37,9 +37,6 @@ def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
 
     torch.manual_seed(0)
     np.random.seed(0)
-    import random
-
-    random.seed(0)
     # Construct MGN model
     model = MeshGraphNet(
         input_dim_nodes=4,
@@ -75,9 +72,6 @@ def test_meshgraphnet_forward(device, pytestconfig, set_physicsnemo_force_te):
 def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te):
     """Test mehsgraphnet constructor options"""
     import torch_geometric as pyg
-
-    random.seed(0)
-    torch.manual_seed(0)
 
     # Define dictionary of constructor args
     arg_list = [
@@ -142,8 +136,6 @@ def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
 
     def setup_model():
         """Set up fresh model and inputs for each optim test"""
-        torch.manual_seed(0)
-        random.seed(0)
         # Construct MGN model
         model = MeshGraphNet(
             input_dim_nodes=2,
@@ -181,11 +173,6 @@ def test_meshgraphnet_checkpoint(device, pytestconfig, set_physicsnemo_force_te)
     import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
-
-    # Seed for reproducibility
-    torch.manual_seed(0)
-    np.random.seed(0)
-    random.seed(0)
 
     # Construct MGN model
     model_1 = MeshGraphNet(
@@ -226,9 +213,6 @@ def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     import torch_geometric as pyg
 
     from physicsnemo.models.meshgraphnet import MeshGraphNet
-
-    torch.manual_seed(0)
-    random.seed(0)
 
     # Construct MGN model
     model = MeshGraphNet(
