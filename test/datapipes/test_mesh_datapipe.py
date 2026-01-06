@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import os
-import random
 
 import pytest
 
@@ -50,6 +49,10 @@ def test_mesh_datapipe(device, tmp_path, pytestconfig):
         Returns:
             tuple: A tuple containing the random VTP mesh (vtk.vtkPolyData) and the random VTU mesh (vtk.vtkUnstructuredGrid).
         """
+
+        import random
+
+        random.seed(0)
 
         # make directory if it does not exist
         os.makedirs(dir, exist_ok=True)
