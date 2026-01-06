@@ -157,6 +157,7 @@ def test_serialization(device, order, monkeypatch, pytestconfig):
         ln = FakeModel().cuda()
         print(ln.state_dict().keys())
 
+        torch.manual_seed(0)
         x = torch.randn(2, 8).cuda()
         y = ln(x)
         print(f"Y shape: {y.shape}")

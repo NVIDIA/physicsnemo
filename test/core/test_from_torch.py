@@ -87,6 +87,8 @@ def test_from_torch_optims(device):
     def setup_model():
         """Set up fresh model and inputs for each optim test"""
         # Construct CustomPhysicsNeMoModel
+        torch.manual_seed(0)
+        random.seed(0)
         CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
         model = CustomPhysicsNeMoModel(in_features=32, out_features=8).to(device)
 
@@ -121,6 +123,8 @@ def test_from_torch_optims(device):
 
 def test_from_torch_checkpoint(device):
     """Test checkpoint save/load from PyTorch"""
+    torch.manual_seed(0)
+    random.seed(0)
     # Construct CustomPhysicsNeMoModel
     CustomPhysicsNeMoModel = Module.from_torch(
         CustomModel, CustomMetaData(), register=True
@@ -139,6 +143,8 @@ def test_from_torch_checkpoint(device):
 @common.check_ort_version()
 def test_from_torch_deploy(device):
     """Test deployment support from PyTorch"""
+    torch.manual_seed(0)
+    random.seed(0)
     # Construct CustomPhysicsNeMoModel
     CustomPhysicsNeMoModel = Module.from_torch(CustomModel, CustomMetaData())
     model = CustomPhysicsNeMoModel(in_features=4, out_features=4).to(device)

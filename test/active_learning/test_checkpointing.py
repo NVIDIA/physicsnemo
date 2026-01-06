@@ -235,6 +235,7 @@ def test_queue_serialization_with_to_list(
     )
 
     # Add items to queues
+    torch.manual_seed(0)
     test_data = MockDataStructure(inputs=torch.randn(16, 64))
     driver.query_queue.put(test_data)
     driver.label_queue.put(test_data)
@@ -278,6 +279,7 @@ def test_queue_serialization_fallback(
     )
 
     # Add item to queue
+    torch.manual_seed(0)
     test_data = MockDataStructure(inputs=torch.randn(16, 64))
     driver.query_queue.put(test_data)
 
@@ -617,6 +619,7 @@ def test_checkpoint_preserves_model_weights(
     driver_config, mock_module, strategies_config, temp_checkpoint_dir
 ):
     """Test that model weights are correctly saved and loaded."""
+    torch.manual_seed(0)
     driver = Driver(
         config=driver_config,
         learner=mock_module,
@@ -754,6 +757,7 @@ def test_resume_from_query_phase_skips_earlier_phases(
     # Create checkpoint at query phase
     driver.active_learning_step_idx = 1
     driver.current_phase = p.ActiveLearningPhase.QUERY
+    torch.manual_seed(0)
     driver.query_queue.put(MockDataStructure(inputs=torch.randn(16, 64)))
 
     checkpoint_path = temp_checkpoint_dir / "resume_query_test"

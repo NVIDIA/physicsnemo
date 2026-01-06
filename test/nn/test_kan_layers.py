@@ -33,6 +33,7 @@ def test_kan_initialization(device):
 
 @pytest.mark.parametrize("bias_flag", [True, False])
 def test_kan_forward_pass(device, bias_flag):
+    torch.manual_seed(0)
     batch, in_dim, out_dim = 8, 5, 2
     kan = KolmogorovArnoldNetwork(
         in_dim, out_dim, num_harmonics=4, add_bias=bias_flag

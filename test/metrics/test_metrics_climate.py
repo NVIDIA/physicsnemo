@@ -105,7 +105,6 @@ def test_climate_acc_mse(test_data, device, rtol: float = 1e-3, atol: float = 1e
 
 
 def test_climate_reductions(test_data, device, rtol: float = 1e-3, atol: float = 1e-3):
-    torch.manual_seed(0)
     channels, lon, lat, pred_tensor_np, targ_tensor_np, time_means = test_data
     pred_tensor = torch.from_numpy(pred_tensor_np).expand(channels, -1, -1).to(device)
     lat = torch.from_numpy(lat).to(device)

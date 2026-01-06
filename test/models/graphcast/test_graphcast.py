@@ -364,6 +364,8 @@ def test_graphcast_checkpoint(
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
+    fix_random_seeds()
+
     model_kwds = {
         "mesh_level": 1,
         "input_res": (res_h, res_w),
@@ -404,6 +406,8 @@ def test_graphcast_checkpoint_te(
     """Test GraphCast checkpoint save/load with graph transformer processor"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
+
+    fix_random_seeds()
 
     device = "cuda:0"
 
@@ -455,6 +459,8 @@ def test_GraphCast_deploy(
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
 
+    fix_random_seeds()
+
     model_kwds = {
         "mesh_level": 1,
         "input_res": (res_h, res_w),
@@ -492,6 +498,8 @@ def test_GraphCast_deploy_te(
     """Test GraphCast deployment support with graph transformer processor"""
 
     from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
+
+    fix_random_seeds()
 
     device = "cuda:0"
 

@@ -73,6 +73,7 @@ def test_mesh_utils(tmp_path, pytestconfig):
         """
 
         import random
+
         random.seed(0)
 
         # make directory if it does not exist

@@ -96,6 +96,10 @@ def synthetic_domino_data(
 ):
     """Generate synthetic domino data and save to temporary directory structure using zarr."""
 
+    import numpy as np
+
+    np.random.seed(0)
+
     # Create temporary directory
     temp_dir = Path(tempfile.mkdtemp())
 
