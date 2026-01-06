@@ -19,6 +19,7 @@ name: Pre-commit
 on:
   pull_request:
     branches: [main, v2.0-refactor]
+  merge_group:
 
 jobs:
   pre-commit:
