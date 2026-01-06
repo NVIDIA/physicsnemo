@@ -100,10 +100,10 @@ class LocalGeometryEncoding(nn.Module):
 
     def forward(
         self,
-        encoding_g: Float[torch.Tensor, "batch channels nx ny nz"],
-        volume_mesh_centers: Float[torch.Tensor, "batch num_points 3"],
-        p_grid: Float[torch.Tensor, "batch nx ny nz 3"],
-    ) -> Float[torch.Tensor, "batch num_points out_features"]:
+        encoding_g: Float[torch.Tensor, " batch channels nx ny nz"],
+        volume_mesh_centers: Float[torch.Tensor, " batch num_points 3"],
+        p_grid: Float[torch.Tensor, " batch nx ny nz 3"],
+    ) -> Float[torch.Tensor, " batch num_points out_features"]:
         r"""
         Compute local geometry encoding.
 

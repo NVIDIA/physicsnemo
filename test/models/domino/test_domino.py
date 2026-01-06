@@ -164,28 +164,8 @@ class model_params:
     geometry_local = geometry_local
 
 
-@requires_module("warp")
-# @pytest.mark.parametrize("device", ["cuda:0"])
-@pytest.mark.parametrize("processor_type", ["unet", "conv"])
-def test_domino_forward(device, processor_type, pytestconfig):
-    """Test domino forward pass"""
-
-    from physicsnemo.models.domino.model import DoMINO
-
-    torch.manual_seed(0)
-
-    params = model_params()
-
-    params.geometry_rep.geo_processor.processor_type = processor_type
-
-    model = DoMINO(
-        input_features=3,
-        output_features_vol=4,
-        output_features_surf=5,
-        global_features=2,
-        model_parameters=params,
-    ).to(device)
-
+def create_test_input_dict(device, params):
+    """Create a test input dictionary for DoMINO model."""
     bsize = 1
     nx, ny, nz = params.interp_res
     num_neigh = params.num_neighbors_surface
