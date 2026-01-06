@@ -13,6 +13,7 @@ API Reference
    api/physicsnemo.deploy.rst
    api/physicsnemo.distributed.rst
    api/physicsnemo.distributed.shardtensor.rst
+   api/physicsnemo.optim.rst
    api/physicsnemo.utils.rst
    api/physicsnemo.launch.logging.rst
    api/physicsnemo.launch.utils.rst 
