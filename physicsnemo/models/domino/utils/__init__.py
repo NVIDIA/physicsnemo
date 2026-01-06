@@ -14,6 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""
+DoMINO Utility Functions.
+
+This module provides utility functions for the DoMINO model, including
+data preprocessing, normalization, grid creation, and sampling utilities.
+"""
+
 from .utils import (
     area_weighted_shuffle_array,
     calculate_center_of_mass,
