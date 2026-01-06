@@ -8,6 +8,7 @@ on:
   schedule:
     - cron: '0 6 * * *'  # 6 AM UTC daily
   workflow_dispatch:  # Allows manual triggering from GitHub UI
+  merge_group:
 
 jobs:
   test-pip:
@@ -44,9 +45,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # For push/PR: only ubuntu. For schedule/manual: full matrix
-        os: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
-        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
+        # For push/PR/merge_group: only ubuntu. For schedule/manual: full matrix
+        os: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
+        python-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
 
     steps:
     - uses: actions/checkout@v4
