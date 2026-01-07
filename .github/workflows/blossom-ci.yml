@@ -20,22 +20,33 @@ on:
   # CI job triggers here
   issue_comment:
     types: [created]
-  
+
+  merge_group:
+
   workflow_dispatch:
       inputs:
           platform:
-            description: 'runs-on argument'     
+            description: 'runs-on argument'
             required: false
           args:
-            description: 'argument'     
+            description: 'argument'
             required: false
 jobs:
+  # Auto-pass job for merge queue - runs only on merge_group event
+  Merge-Queue-Auto-Pass:
+    name: Merge Queue Auto Pass
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto pass for merge queue
+        run: echo "Auto-passing for merge queue. Blossom CI already ran on the PR."
+
   Authorization:
     name: Authorization
-    runs-on: blossom 
+    runs-on: blossom
     outputs:
       args: ${{ env.args }}
-      
+
     # This job only runs for pull request comments
     # Comment must be `/blossom-ci`
     if: >
@@ -66,7 +77,7 @@ jobs:
            github.actor == 'abokov-nv' ||
            github.actor == 'saikrishnanc-nv' ||
            github.actor == 'laserkelvin'
-         )  
+         )
     steps:
       - name: Check if comment is issued by authorized person
         run: blossom-ci
@@ -74,7 +85,7 @@ jobs:
           OPERATION: 'AUTH'
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_KEY_DATA: ${{ secrets.BLOSSOM_KEY }}
-        
+
   Vulnerability-scan:
     name: Vulnerability scan
     needs: [Authorization]
@@ -87,20 +98,20 @@ jobs:
           repository: ${{ fromJson(needs.Authorization.outputs.args).repo }}
           ref: ${{ fromJson(needs.Authorization.outputs.args).ref }}
           lfs: 'true'
-      
-      # repo specific steps 
+
+      # repo specific steps
       #- name: Setup java
       #  uses: actions/setup-java@v1
       #  with:
       #    java-version: 1.8
-      
+
       # add blackduck properties https://synopsys.atlassian.net/wiki/spaces/INTDOCS/pages/631308372/Methods+for+Configuring+Analysis#Using-a-configuration-file
       #- name: Setup blackduck properties
       #  run: |
       #       PROJECTS=$(mvn -am dependency:tree | grep maven-dependency-plugin | awk '{ out="com.nvidia:"$(NF-1);print out }' | grep rapids | xargs | sed -e 's/ /,/g')
       #       echo detect.maven.build.command="-pl=$PROJECTS -am" >> application.properties
       #       echo detect.maven.included.scopes=compile >> application.properties
-          
+
       - name: Run blossom action
         uses: NVIDIA/blossom-action@main
         env:
@@ -110,7 +121,7 @@ jobs:
           args1: ${{ fromJson(needs.Authorization.outputs.args).args1 }}
           args2: ${{ fromJson(needs.Authorization.outputs.args).args2 }}
           args3: ${{ fromJson(needs.Authorization.outputs.args).args3 }}
-          
+
   Job-trigger:
     name: Start ci job
     needs: [Vulnerability-scan]
@@ -123,7 +134,7 @@ jobs:
           OPERATION: 'START-CI-JOB'
           CI_SERVER: ${{ secrets.CI_SERVER }}
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              
+
   Upload-Log:
     name: Upload log
     runs-on: blossom
