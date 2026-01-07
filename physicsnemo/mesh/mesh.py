@@ -551,7 +551,7 @@ class Mesh:
         Four weighting schemes are available (following industry conventions from
         Autodesk Maya and 3ds Max):
 
-        - **"area"** (default): Area-weighted averaging, where larger faces have more
+        - **"area"**: Area-weighted averaging, where larger faces have more
           influence on the vertex normal. The normal at vertex v is computed as:
           ``point_normal_v = normalize(sum(cell_normal * cell_area))``.
           This reduces the influence of small sliver triangles.
@@ -566,7 +566,7 @@ class Mesh:
           have more influence. This often provides the most geometrically accurate
           normals for curved surfaces.
 
-        - **"angle_area"**: Combined angle and area weighting, where each face's
+        - **"angle_area"** (default): Combined angle and area weighting, where each face's
           contribution is weighted by both its area and the angle at the vertex.
           This is the default in Maya and balances both geometric factors.
 
