@@ -28,8 +28,6 @@ def test_fourier_mlp(device, fourier_features, num_modes):
     """Test FourierMLP with various configurations"""
     from physicsnemo.nn import FourierMLP
 
-    torch.manual_seed(0)
-
     model = FourierMLP(
         input_features=3,
         base_layer=64,
@@ -48,8 +46,6 @@ def test_fourier_encode_vectorized(device):
     """Test fourier encoding function"""
     from physicsnemo.nn import fourier_encode
 
-    torch.manual_seed(0)
-
     coords = torch.randn(4, 20, 3).to(device)
     freqs = torch.exp(torch.linspace(0, math.pi, 5)).to(device)
 
@@ -65,8 +61,6 @@ def test_local_geometry_encoding(device):
     from physicsnemo.nn import get_activation
 
     BATCH_SIZE = 1
-
-    torch.manual_seed(0)
 
     N_ENCODING_CHANNELS = 3
     N_NEIGHBORS = 32
@@ -98,8 +92,6 @@ def test_multi_geometry_encoding(device, geo_encoding_type):
     """Test MultiGeometryEncoding with different encoding types"""
     from physicsnemo.models.domino.encodings import MultiGeometryEncoding
     from physicsnemo.models.domino.model import get_activation
-
-    torch.manual_seed(0)
 
     BATCH_SIZE = 1
     N_MESH_POINTS = 50

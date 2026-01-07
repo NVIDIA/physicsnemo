@@ -30,7 +30,6 @@ class TestFromPyvista0D:
 
     def test_pointset_auto_detection(self):
         """Test automatic detection of 0D manifold from PointSet."""
-        np.random.seed(0)
         points = np.random.rand(100, 3).astype(np.float32)
         pv_mesh = pv.PointSet(points)
 
@@ -50,7 +49,6 @@ class TestFromPyvista0D:
 
     def test_pointset_explicit_dim(self):
         """Test explicit manifold_dim specification for point cloud."""
-        np.random.seed(0)
         points = np.random.rand(50, 3).astype(np.float32)
         pv_mesh = pv.PointSet(points)
 
@@ -65,7 +63,6 @@ class TestFromPyvista0D:
 
         PolyData can represent point clouds using vertex cells.
         """
-        np.random.seed(0)
         points = np.random.rand(25, 3).astype(np.float32)
         pv_mesh = pv.PolyData(points)
 

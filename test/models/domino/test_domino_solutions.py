@@ -32,8 +32,6 @@ def test_solution_calculator_volume(
     from physicsnemo.models.domino.solutions import SolutionCalculatorVolume
     from physicsnemo.nn import FourierMLP, get_activation
 
-    torch.manual_seed(0)
-
     activation = get_activation("relu")
 
     # Create parameter model if needed
@@ -116,8 +114,6 @@ def test_solution_calculator_surface(
     from physicsnemo.models.domino.solutions import SolutionCalculatorSurface
     from physicsnemo.nn import FourierMLP, get_activation
 
-    torch.manual_seed(0)
-
     activation = get_activation("relu")
 
     # Determine input features based on surface configuration
@@ -199,8 +195,6 @@ def test_sample_sphere(device, r, num_points):
     """Test sphere sampling function"""
     from physicsnemo.models.domino.solutions import sample_sphere
 
-    torch.manual_seed(0)
-
     center = torch.randn(2, 30, 3).to(device)
     output = sample_sphere(center, r, num_points)
 
@@ -214,8 +208,6 @@ def test_sample_sphere(device, r, num_points):
 def test_sample_sphere_shell(device):
     """Test spherical shell sampling function"""
     from physicsnemo.models.domino.solutions import sample_sphere_shell
-
-    torch.manual_seed(0)
 
     center = torch.randn(2, 30, 3).to(device)
     r_inner, r_outer = 0.5, 1.5
