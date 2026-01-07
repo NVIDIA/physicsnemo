@@ -21,8 +21,6 @@ on:
   issue_comment:
     types: [created]
 
-  merge_group:
-
   workflow_dispatch:
       inputs:
           platform:
@@ -34,50 +32,42 @@ on:
 jobs:
   Authorization:
     name: Authorization
-    runs-on: ${{ github.event_name == 'merge_group' && 'ubuntu-latest' || 'blossom' }}
+    runs-on: blossom
     outputs:
       args: ${{ env.args }}
 
-    # This job runs for pull request comments or merge queue
+    # This job only runs for pull request comments
     # Comment must be `/blossom-ci`
     if: >
-         github.event_name == 'merge_group' ||
+         (github.event.comment.body == '/blossom-ci' || github.event.comment.body == '/multi-gpu-ci') &&
          (
-           (github.event.comment.body == '/blossom-ci' || github.event.comment.body == '/multi-gpu-ci') &&
-           (
-             github.actor == 'nickgeneva' ||
-             github.actor == 'ktangsali' ||
-             github.actor == 'dallasfoster' ||
-             github.actor == 'akshaysubr' ||
-             github.actor == 'loliverhennigh' ||
-             github.actor == 'mnabian' ||
-             github.actor == 'stadlmax' ||
-             github.actor == 'daviddpruitt' ||
-             github.actor == 'Alexey-Kamenev' ||
-             github.actor == 'jleinonen' ||
-             github.actor == 'MortezaMardani' ||
-             github.actor == 'tge25' ||
-             github.actor == 'nbren12' ||
-             github.actor == 'yairchn' ||
-             github.actor == 'pzharrington' ||
-             github.actor == 'hasethinvd' ||
-             github.actor == 'RishikeshRanade' ||
-             github.actor == 'hakhondzadeh' ||
-             github.actor == 'peterdsharpe' ||
-             github.actor == 'coreyjadams' ||
-             github.actor == 'CharlelieLrt' ||
-             github.actor == 'abokov-nv' ||
-             github.actor == 'saikrishnanc-nv' ||
-             github.actor == 'laserkelvin'
-           )
+           github.actor == 'nickgeneva' ||
+           github.actor == 'ktangsali' ||
+           github.actor == 'dallasfoster' ||
+           github.actor == 'akshaysubr' ||
+           github.actor == 'loliverhennigh' ||
+           github.actor == 'mnabian' ||
+           github.actor == 'stadlmax' ||
+           github.actor == 'daviddpruitt' ||
+           github.actor == 'Alexey-Kamenev' ||
+           github.actor == 'jleinonen' ||
+           github.actor == 'MortezaMardani' ||
+           github.actor == 'tge25' ||
+           github.actor == 'nbren12' ||
+           github.actor == 'yairchn' ||
+           github.actor == 'pzharrington' ||
+           github.actor == 'hasethinvd' ||
+           github.actor == 'RishikeshRanade' ||
+           github.actor == 'hakhondzadeh' ||
+           github.actor == 'peterdsharpe' ||
+           github.actor == 'coreyjadams' ||
+           github.actor == 'CharlelieLrt' ||
+           github.actor == 'abokov-nv' ||
+           github.actor == 'saikrishnanc-nv' ||
+           github.actor == 'laserkelvin'
          )
     steps:
-      - name: Auto pass for merge queue
-        if: github.event_name == 'merge_group'
-        run: echo "Auto-passing for merge queue. Blossom CI already ran on the PR."
-
       - name: Check if comment is issued by authorized person
-        if: github.event_name != 'merge_group'
         run: blossom-ci
         env:
           OPERATION: 'AUTH'
@@ -87,14 +77,9 @@ jobs:
   Vulnerability-scan:
     name: Vulnerability scan
     needs: [Authorization]
-    runs-on: ${{ github.event_name == 'merge_group' && 'ubuntu-latest' || 'vulnerability-scan' }}
+    runs-on: vulnerability-scan
     steps:
-      - name: Auto pass for merge queue
-        if: github.event_name == 'merge_group'
-        run: echo "Auto-passing for merge queue. Blossom CI already ran on the PR."
-
       - name: Checkout code
-        if: github.event_name != 'merge_group'
         uses: actions/checkout@v2
         with:
           repository: ${{ fromJson(needs.Authorization.outputs.args).repo }}
@@ -115,7 +100,6 @@ jobs:
       #       echo detect.maven.included.scopes=compile >> application.properties
 
       - name: Run blossom action
-        if: github.event_name != 'merge_group'
         uses: NVIDIA/blossom-action@main
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,14 +112,9 @@ jobs:
   Job-trigger:
     name: Start ci job
     needs: [Vulnerability-scan]
-    runs-on: ${{ github.event_name == 'merge_group' && 'ubuntu-latest' || 'blossom' }}
+    runs-on: blossom
     steps:
-      - name: Auto pass for merge queue
-        if: github.event_name == 'merge_group'
-        run: echo "Auto-passing for merge queue. Blossom CI already ran on the PR."
-
       - name: Start ci job
-        if: github.event_name != 'merge_group'
         run: blossom-ci
         env:
           OPERATION: 'START-CI-JOB'
@@ -144,15 +123,10 @@ jobs:
 
   Upload-Log:
     name: Upload log
-    runs-on: ${{ github.event_name == 'merge_group' && 'ubuntu-latest' || 'blossom' }}
-    if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
+    runs-on: blossom
+    if : github.event_name == 'workflow_dispatch'
     steps:
-      - name: Auto pass for merge queue
-        if: github.event_name == 'merge_group'
-        run: echo "Auto-passing for merge queue. Blossom CI already ran on the PR."
-
       - name: Jenkins log for pull request ${{ fromJson(github.event.inputs.args).pr }} (click here)
-        if: github.event_name != 'merge_group'
         run: blossom-ci
         env:
           OPERATION: 'POST-PROCESSING'
