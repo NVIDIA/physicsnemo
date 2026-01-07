@@ -39,6 +39,7 @@ jobs:
     # This job only runs for pull request comments
     # Comment must be `/blossom-ci`
     if: >
+         github.event_name != 'merge_group' &&
          (github.event.comment.body == '/blossom-ci' || github.event.comment.body == '/multi-gpu-ci') &&
          (
            github.actor == 'nickgeneva' ||
@@ -78,6 +79,7 @@ jobs:
     name: Vulnerability scan
     needs: [Authorization]
     runs-on: vulnerability-scan
+    if: github.event_name != 'merge_group'
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -113,6 +115,7 @@ jobs:
     name: Start ci job
     needs: [Vulnerability-scan]
     runs-on: blossom
+    if: github.event_name != 'merge_group'
     steps:
       - name: Start ci job
         run: blossom-ci
@@ -124,7 +127,7 @@ jobs:
   Upload-Log:
     name: Upload log
     runs-on: blossom
-    if : github.event_name == 'workflow_dispatch'
+    if : github.event_name != 'merge_group' && github.event_name == 'workflow_dispatch'
     steps:
       - name: Jenkins log for pull request ${{ fromJson(github.event.inputs.args).pr }} (click here)
         run: blossom-ci
