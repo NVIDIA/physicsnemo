@@ -33,18 +33,13 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 
 |Use case|Model|Transient|
 | --- | --- |  --- |
-|[Vortex Shedding](./cfd/vortex_shedding_mgn/)|MeshGraphNet|YES|
 |[Drag prediction - External Aero](./cfd/external_aerodynamics/)|MeshGraphNet, UNet, DoMINO, FigConvNet, Transolver|NO|
 |[Drag prediction - External Aero - Mixture of Experts](./cfd/external_aerodynamics/)|MoE Model|NO|
 |[Navier-Stokes Flow](./cfd/navier_stokes_rnn/)|RNN|YES|
 |[Gray-Scott System](./cfd/gray_scott_rnn/)|RNN|YES|
 |[Lagrangian Fluid Flow](./cfd/lagrangian_mgn/)|MeshGraphNet|YES|
-|[Darcy Flow using Nested-FNOs](./cfd/darcy_nested_fnos/)|Nested-FNO|NO|
-|[Darcy Flow using Transolver*](./cfd/darcy_transolver/)|Transolver (Transformer-based)|NO|
 |[Darcy Flow (Data + Physics Driven) using DeepONet approach](./cfd/darcy_physics_informed/)|FNO (branch) and MLP (trunk)|NO|
 |[Darcy Flow (Data + Physics Driven) using PINO approach (Numerical gradients)](./cfd/darcy_physics_informed/)|FNO|NO|
-|[Stokes Flow (Physics Informed Fine-Tuning)](./cfd/stokes_mgn/)|MeshGraphNet and MLP|NO|
-|[Lid Driven Cavity Flow](./cfd/ldc_pinns/)|MLP|NO
 |[Magnetohydrodynamics using PINO (Data + Physics Driven)*](./cfd/mhd_pino/)|FNO|YES|
 |[Shallow Water Equations using PINO (Data + Physics Driven)*](./cfd/swe_nonlinear_pino/)|FNO|YES|
 |[Shallow Water Equations using Distributed GNNs](./cfd/swe_distributed_gnn/)|GraphCast|YES|
@@ -52,6 +47,9 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |[Data Center Airflow](./cfd/datacenter/)|3D UNet|NO|
 |[Fluid Super-resolution*](./cfd/flow_reconstruction_diffusion/)|Denoising Diffusion Probablistic Model|YES|
 |[Pre-trained DPOT for Navier-Stokes*](./cfd/navier_stokes_dpot/)|Denoising Operator Transformer|YES|
+|[Fine-tuning of DoMINO NIM](./cfd/external_aerodynamics/domino_nim_finetuning/)|DoMINO|NO|
+|[Transolver for External Aerodynamics on Irregular Meshes](./cfd/external_aerodynamics/transolver/)|Transolver|NO|
+
 
 ### Weather
 
@@ -59,10 +57,8 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 | --- | --- |
 |[Medium-range global weather forecast using FCN-SFNO](https://github.com/NVIDIA/modulus-makani)|FCN-SFNO|
 |[Medium-range global weather forecast using GraphCast](./weather/graphcast/)|GraphCast|
-|[Medium-range global weather forecast using FCN-AFNO](./weather/fcn_afno/)|FCN-AFNO|
 |[Medium-range and S2S global weather forecast using DLWP](./weather/dlwp/)|DLWP|
 |[Coupled Ocean-Atmosphere Medium-range and S2S global weather forecast using DLWP-HEALPix](./weather/dlwp_healpix/)|DLWP-HEALPix|
-|[Medium-range and S2S global weather forecast using Pangu](./weather/pangu_weather/)|Pangu|
 |[Diagonistic (Precipitation) model using AFNO](./weather/diagnostic/)|AFNO|
 |[Unified Recipe for training several Global Weather Forecasting models](./weather/unified_recipe/)|AFNO, FCN-SFNO, GraphCast|
 |[Generative Correction Diffusion Model for Km-scale Atmospheric Downscaling](./weather/corrdiff/)|CorrDiff|
@@ -77,6 +73,7 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |Use case|Model|
 | --- | --- |
 |[Deforming Plate](./structural_mechanics/deforming_plate/)|MeshGraphNet|
+|[Machine Learning Surrogates for Automotive Crash Dynamics](./structural_mechanics/crash)|Transolver, MeshGraphNet|
 
 ### Healthcare
 
@@ -102,12 +99,17 @@ The several examples inside PhysicsNeMo can be classified based on their domains
 |Use case|Model|
 | --- | --- |
 |[Diffusion model for full-waveform inversion](./geophysics/diffusion_fwi/)|UNet, Global Filter Net|
+|[Reservoir Simulation using X-MeshGraphNet](./reservoir_simulation/)|MeshGraphNet|
 
 ### Generative
 
 |Use case|Model|
 | --- | --- |
 |[TopoDiff*](./generative/topodiff)|Conditional diffusion-model|
+
+### Active Learning
+
+1. [Classify the famous two-moons data distribution using Active learning](./active_learning/moons/)
 
 ## Additional examples
 

@@ -18,6 +18,9 @@
 ./CHANGELOG.md 
 ./*.md @ram-cherukuri @megnvidia
 
+.github/workflows @ktangsali @coreyjadams @nickgeneva
+.github/workflows/merge-queue-blossom-passthrough.yml @coreyjadams
+
 # All changes to documentation, except images:
 docs/ @megnvidia @ktangsali
 docs/img/

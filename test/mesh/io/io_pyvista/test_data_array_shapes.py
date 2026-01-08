@@ -30,7 +30,6 @@ class TestDataArrayShapes:
 
     def test_scalar_data(self):
         """Test scalar data (1D array per point/cell)."""
-        np.random.seed(0)
         pv_mesh = pv.Sphere(radius=1.0, theta_resolution=10, phi_resolution=10)
 
         # Add scalar data
@@ -53,7 +52,6 @@ class TestDataArrayShapes:
 
     def test_vector_data(self):
         """Test vector data (Nx3 arrays)."""
-        np.random.seed(0)
         pv_mesh = pv.Sphere(radius=1.0, theta_resolution=10, phi_resolution=10)
 
         # Add vector data
@@ -81,7 +79,6 @@ class TestDataArrayShapes:
         For higher-dimensional data like 3x3 stress tensors, you must
         flatten them to (n, 9) before adding to PyVista.
         """
-        np.random.seed(0)
         pv_mesh = pv.Sphere(radius=1.0, theta_resolution=10, phi_resolution=10)
 
         # For tensor data, must be pre-flattened to 2D
@@ -113,7 +110,6 @@ class TestDataArrayShapes:
         NOTE: PyVista only accepts arrays with dimensionality ≤ 2.
         Higher-order tensors must be pre-flattened before adding to PyVista.
         """
-        np.random.seed(0)
         pv_mesh = pv.Sphere(radius=1.0, theta_resolution=10, phi_resolution=10)
 
         # For higher-dimensional data, flatten to 2D before adding to PyVista
@@ -137,7 +133,6 @@ class TestDataArrayShapes:
 
     def test_mixed_data_types(self):
         """Test mesh with multiple data arrays of different shapes and types."""
-        np.random.seed(0)
         pv_mesh = pv.Sphere(radius=1.0, theta_resolution=10, phi_resolution=10)
 
         # Clear default data to have a clean slate

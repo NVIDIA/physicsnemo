@@ -26,8 +26,6 @@ def test_aggregation_model(device, activation):
     from physicsnemo.models.domino.mlps import AggregationModel
     from physicsnemo.models.domino.model import get_activation
 
-    torch.manual_seed(0)
-
     model = AggregationModel(
         input_features=100,
         output_features=1,
@@ -46,8 +44,6 @@ def test_local_point_conv(device, activation):
     """Test LocalPointConv"""
     from physicsnemo.models.domino.mlps import LocalPointConv
     from physicsnemo.models.domino.model import get_activation
-
-    torch.manual_seed(0)
 
     model = LocalPointConv(
         input_features=50,
