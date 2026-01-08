@@ -102,7 +102,6 @@ class TestToPyvista:
 
     def test_0d_mesh_to_pointset(self):
         """Test converting 0D mesh to PointSet."""
-        np.random.seed(0)
         points = torch.from_numpy(np.random.rand(50, 3).astype(np.float32))
         cells = torch.empty((0, 1), dtype=torch.long)
 
@@ -116,9 +115,6 @@ class TestToPyvista:
 
     def test_data_preservation_to_pyvista(self):
         """Test that point_data, cell_data, and global_data are preserved."""
-        np.random.seed(0)
-        torch.manual_seed(42)
-
         # Create a mesh with data
         points = torch.rand(10, 3)
         cells = torch.tensor([[0, 1, 2], [2, 3, 4]], dtype=torch.long)

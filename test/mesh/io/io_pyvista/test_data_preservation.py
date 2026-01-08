@@ -49,7 +49,6 @@ class TestDataPreservation:
 
     def test_point_data_preserved(self):
         """Test that point_data is preserved during conversion."""
-        np.random.seed(0)
         pv_mesh = pv.Sphere()
 
         # Explicitly create point data
@@ -78,7 +77,6 @@ class TestDataPreservation:
 
     def test_cell_data_preserved(self):
         """Test that cell_data is preserved as cell_data."""
-        np.random.seed(0)
         pv_mesh = pv.Sphere()
 
         # Explicitly create cell data
@@ -161,7 +159,6 @@ class TestDataPreservationParametrized:
 
     def test_data_preservation_with_device_transfer(self, device):
         """Test that data is preserved when transferring to different device."""
-        np.random.seed(42)
         pv_mesh = pv.Sphere(theta_resolution=5, phi_resolution=5)
         pv_mesh.point_data["temp"] = np.random.rand(pv_mesh.n_points).astype(np.float32)
         pv_mesh.cell_data["pressure"] = np.random.rand(pv_mesh.n_cells).astype(

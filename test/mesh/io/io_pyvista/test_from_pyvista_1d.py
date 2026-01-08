@@ -105,7 +105,6 @@ class TestFromPyvista1D:
 
         Create a spline through specific points and verify it converts correctly.
         """
-        np.random.seed(0)
         # Create control points for the spline
         control_points = np.array(
             [

@@ -29,8 +29,6 @@ def test_geo_conv_out(device, act, fourier_features):
     """Test GeoConvOut layer"""
     from physicsnemo.models.domino.geometry_rep import GeoConvOut
 
-    torch.manual_seed(0)
-
     @dataclass
     class TestParams:
         base_neurons: int = 32
@@ -71,8 +69,6 @@ def test_geo_processor(device, act):
     """Test GeoProcessor CNN"""
     from physicsnemo.models.domino.geometry_rep import GeoProcessor
 
-    torch.manual_seed(0)
-
     @dataclass
     class TestParams:
         base_filters: int = 8
@@ -97,8 +93,6 @@ def test_geometry_rep(
 ):
     """Test GeometryRep module with different configurations"""
     from physicsnemo.models.domino.geometry_rep import GeometryRep
-
-    torch.manual_seed(0)
 
     # Modify params for this test
     params = base_model_params()
