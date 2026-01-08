@@ -306,8 +306,8 @@ def _get_letter_points(points, edges, text_path, polygon_ranges):
 def _triangulate(points, edges, text_path):
     """Triangulate text letter-by-letter with hole support."""
     import numpy as np
-    from matplotlib.tri import Triangulation
     from matplotlib.path import Path as MplPath
+    from matplotlib.tri import Triangulation
 
     letter_groups = _group_letters(text_path)
 
