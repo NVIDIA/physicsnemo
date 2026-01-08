@@ -33,6 +33,7 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.unet import UNet
 from physicsnemo.nn import FourierMLP, get_activation
 
+from .config import DEFAULT_MODEL_PARAMS, Config
 from .encodings import (
     MultiGeometryEncoding,
 )
@@ -193,6 +194,12 @@ class DoMINO(Module):
         model_parameters: Any = None,
     ):
         super().__init__(meta=ModelMetaData(name="DoMINO"))
+
+        # Convert model_parameters to Config, using defaults if None
+        if model_parameters is None:
+            model_parameters = DEFAULT_MODEL_PARAMS
+        elif not isinstance(model_parameters, Config):
+            model_parameters = Config.from_hydra(model_parameters)
 
         self.output_features_vol = output_features_vol
         self.output_features_surf = output_features_surf

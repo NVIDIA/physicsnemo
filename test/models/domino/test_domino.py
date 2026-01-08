@@ -23,13 +23,12 @@ This module contains tests for:
 - MOD-008c: Checkpoint loading tests
 """
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import pytest
 import torch
 
+from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS as model_params
 from test.common.fwdaccuracy import save_output
 from test.common.utils import compare_output
 from test.conftest import requires_module
@@ -68,100 +67,6 @@ def validate_domino(
         tensor_dict = torch.load(str(file_name))
         output_target = tuple([value.to(device) for value in tensor_dict.values()])
         return compare_output(output, output_target, rtol, atol)
-
-
-@dataclass
-class model_params:
-    """Model parameters configuration for testing."""
-
-    @dataclass
-    class geometry_rep:
-        @dataclass
-        class geo_conv:
-            base_neurons: int = 32
-            base_neurons_in: int = 1
-            base_neurons_out: int = 1
-            surface_hops: int = 1
-            volume_hops: int = 1
-            volume_radii: Sequence = (0.1, 0.5, 1.0, 2.5)
-            volume_neighbors_in_radius: Sequence = (32, 64, 128, 256)
-            surface_radii: Sequence = (0.01, 0.05, 1.0)
-            surface_neighbors_in_radius: Sequence = (8, 16, 128)
-            activation: str = "gelu"
-            fourier_features: bool = False
-            num_modes: int = 5
-
-        @dataclass
-        class geo_processor:
-            base_filters: int = 8
-            activation: str = "gelu"
-            processor_type: str = "unet"
-            self_attention: bool = False
-            cross_attention: bool = False
-            volume_sdf_scaling_factor: Sequence = (0.04,)
-            surface_sdf_scaling_factor: Sequence = (0.01, 0.02, 0.04)
-
-        base_filters: int = 8
-        geo_conv = geo_conv
-        geo_processor = geo_processor
-
-    @dataclass
-    class geometry_local:
-        base_layer: int = 512
-        volume_neighbors_in_radius: Sequence = (64, 128)
-        surface_neighbors_in_radius: Sequence = (32, 128)
-        volume_radii: Sequence = (0.1, 0.25)
-        surface_radii: Sequence = (0.05, 0.25)
-
-    @dataclass
-    class nn_basis_functions:
-        base_layer: int = 512
-        fourier_features: bool = True
-        num_modes: int = 5
-        activation: str = "gelu"
-
-    @dataclass
-    class local_point_conv:
-        activation: str = "gelu"
-
-    @dataclass
-    class aggregation_model:
-        base_layer: int = 512
-        activation: str = "gelu"
-
-    @dataclass
-    class position_encoder:
-        base_neurons: int = 512
-        activation: str = "gelu"
-        fourier_features: bool = True
-        num_modes: int = 5
-
-    @dataclass
-    class parameter_model:
-        base_layer: int = 512
-        fourier_features: bool = False
-        num_modes: int = 5
-        activation: str = "gelu"
-
-    model_type: str = "combined"
-    activation: str = "gelu"
-    interp_res: Sequence = (128, 64, 64)
-    use_sdf_in_basis_func: bool = True
-    positional_encoding: bool = False
-    surface_neighbors: bool = True
-    num_neighbors_surface: int = 7
-    num_neighbors_volume: int = 10
-    use_surface_normals: bool = True
-    use_surface_area: bool = True
-    encode_parameters: bool = False
-    combine_volume_surface: bool = False
-    geometry_encoding_type: str = "both"
-    solution_calculation_mode: str = "two-loop"
-    geometry_rep = geometry_rep
-    nn_basis_functions = nn_basis_functions
-    aggregation_model = aggregation_model
-    position_encoder = position_encoder
-    geometry_local = geometry_local
 
 
 def create_test_input_dict(device, params):
@@ -238,7 +143,7 @@ def test_domino_constructor(device, config, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
 
     if config == "default":
         # Test with minimal required arguments (uses defaults for optional params)
@@ -299,7 +204,7 @@ def test_domino_constructor_volume_only(device, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
 
     model = DoMINO(
         input_features=3,
@@ -321,7 +226,7 @@ def test_domino_constructor_surface_only(device, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
 
     model = DoMINO(
         input_features=3,
@@ -341,7 +246,7 @@ def test_domino_constructor_invalid(device, pytestconfig):
     """Test DoMINO model raises error when both outputs are None."""
     from physicsnemo.models.domino.model import DoMINO
 
-    params = model_params()
+    params = model_params
 
     with pytest.raises(ValueError, match="At least one of"):
         DoMINO(
@@ -365,7 +270,7 @@ def test_domino_forward(device, processor_type, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
     params.geometry_rep.geo_processor.processor_type = processor_type
 
     model = DoMINO(
@@ -393,7 +298,7 @@ def test_domino_forward_output_shapes(device, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
     output_vol = 4
     output_surf = 5
     num_points = 100
@@ -430,7 +335,7 @@ def test_domino_forward_input_validation(device, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
 
     model = DoMINO(
         input_features=3,
@@ -465,7 +370,7 @@ def test_domino_checkpoint_save_load(device, tmp_path, pytestconfig):
 
     torch.manual_seed(0)
 
-    params = model_params()
+    params = model_params
 
     # Create and configure original model
     model_original = DoMINO(
