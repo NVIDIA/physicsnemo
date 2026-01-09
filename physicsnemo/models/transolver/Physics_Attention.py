@@ -1,9 +1,14 @@
 # ignore_header_test
 # ruff: noqa: E402
-""""""
 
 r"""
-Transolver model. This code was modified from, https://github.com/thuml/Transolver
+Physics attention modules for the Transolver model.
+
+This module provides physics-informed attention mechanisms that project inputs
+onto learned physics slices before applying attention. These attention variants
+support irregular meshes, 2D structured grids, and 3D volumetric data.
+
+This code was modified from https://github.com/thuml/Transolver
 
 The following license is provided from their source,
 
@@ -52,8 +57,9 @@ else:
 
 
 def gumbel_softmax(
-    logits: torch.Tensor, tau: torch.Tensor | float = 1.0
-) -> torch.Tensor:
+    logits: Float[torch.Tensor, "... num_categories"],
+    tau: torch.Tensor | float = 1.0,
+) -> Float[torch.Tensor, "... num_categories"]:
     r"""
     Implementation of Gumbel Softmax from Transolver++.
 

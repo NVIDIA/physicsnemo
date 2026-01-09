@@ -1,9 +1,14 @@
 # ignore_header_test
 # ruff: noqa: E402
-""""""
 
 r"""
-Transolver model. This code was modified from, https://github.com/thuml/Transolver
+Transolver model and building blocks for physics-informed neural operator learning.
+
+This module provides the main Transolver model class along with its internal
+building blocks (MLP, Transolver_block) for solving PDEs on structured and
+unstructured meshes.
+
+This code was modified from https://github.com/thuml/Transolver
 
 The following license is provided from their source,
 
@@ -501,7 +506,7 @@ class Transolver(Module):
         slice_num: int = 32,
         unified_pos: bool = False,
         ref: int = 8,
-        structured_shape: None | tuple[int] = None,
+        structured_shape: None | tuple[int, ...] = None,
         use_te: bool = True,
         time_input: bool = False,
         plus: bool = False,
@@ -686,8 +691,8 @@ class Transolver(Module):
     def forward(
         self,
         fx: Float[torch.Tensor, "batch *spatial functional_dim"],
-        embedding: Float[torch.Tensor, "batch *spatial embedding_dim"] | None,
-        time: Float[torch.Tensor, " batch"] | None,
+        embedding: Float[torch.Tensor, "batch *spatial embedding_dim"] | None = None,
+        time: Float[torch.Tensor, " batch"] | None = None,
     ) -> Float[torch.Tensor, "batch *spatial out_dim"]:
         r"""
         Forward pass of the Transolver model.

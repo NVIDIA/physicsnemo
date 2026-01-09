@@ -1,11 +1,14 @@
 # ignore_header_test
 # ruff: noqa: E402
-""""""
 
 r"""
 Transolver model embedding utilities.
 
-This code was modified from, https://github.com/thuml/Transolver
+This module provides positional encoding and embedding utilities for the
+Transolver model, including rotary position embeddings (RoPE), sinusoidal
+positional encodings, and timestep embeddings for diffusion-style models.
+
+This code was modified from https://github.com/thuml/Transolver
 
 The following license is provided from their source,
 
