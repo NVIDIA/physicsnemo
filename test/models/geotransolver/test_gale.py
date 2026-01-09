@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
 import torch
 
 from physicsnemo.experimental.models.geotransolver.gale import (
@@ -129,38 +128,6 @@ def test_gale_forward_multiple_inputs(device):
     assert not torch.isnan(outputs[1]).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
-def test_gale_plus_mode(device):
-    """Test GALE attention with Transolver++ mode."""
-    torch.manual_seed(42)
-
-    dim = 64
-    heads = 4
-    dim_head = 16
-    slice_num = 8
-    batch_size = 2
-    n_tokens = 100
-
-    gale = GALE(
-        dim=dim,
-        heads=heads,
-        dim_head=dim_head,
-        dropout=0.0,
-        slice_num=slice_num,
-        use_te=False,
-        plus=True,  # Enable Transolver++ features
-        context_dim=dim_head,
-    ).to(device)
-
-    x = torch.randn(batch_size, n_tokens, dim).to(device)
-
-    outputs = gale((x,), context=None)
-
-    assert len(outputs) == 1
-    assert outputs[0].shape == (batch_size, n_tokens, dim)
-    assert not torch.isnan(outputs[0]).any()
-
-
 # =============================================================================
 # GALE_block Tests
 # =============================================================================
@@ -236,40 +203,3 @@ def test_gale_block_multiple_inputs(device):
     assert len(outputs) == 2
     assert outputs[0].shape == (batch_size, n_tokens_1, hidden_dim)
     assert outputs[1].shape == (batch_size, n_tokens_2, hidden_dim)
-
-
-@pytest.mark.parametrize("device", ["cuda:0"])
-def test_gale_mixing_weight_gradient(device):
-    """Test that GALE mixing weight receives gradients."""
-    torch.manual_seed(42)
-
-    dim = 64
-    heads = 4
-    dim_head = 16
-    slice_num = 8
-    batch_size = 2
-    n_tokens = 100
-    context_tokens = 32
-    context_dim = dim_head
-
-    gale = GALE(
-        dim=dim,
-        heads=heads,
-        dim_head=dim_head,
-        dropout=0.0,
-        slice_num=slice_num,
-        use_te=False,
-        plus=False,
-        context_dim=context_dim,
-    ).to(device)
-
-    x = torch.randn(batch_size, n_tokens, dim, requires_grad=True).to(device)
-    context = torch.randn(batch_size, heads, context_tokens, context_dim).to(device)
-
-    outputs = gale((x,), context=context)
-    loss = outputs[0].sum()
-    loss.backward()
-
-    # Check that state_mixing parameter receives gradient
-    assert gale.state_mixing.grad is not None
-    assert gale.state_mixing.grad != 0

@@ -140,7 +140,6 @@ def test_geotransolver_forward_tuple_inputs(device):
 
 
 @requires_module("warp")
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_geotransolver_forward_with_local_features(device, pytestconfig):
     """Test GeoTransolver model forward pass with local features (BQ warp)."""
     torch.manual_seed(42)
@@ -291,7 +290,6 @@ def test_geotransolver_forward_accuracy_tuple(device):
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_geotransolver_optimizations(device):
     """Test GeoTransolver optimizations (CUDA graphs, JIT, AMP, combo)."""
     torch.manual_seed(42)
