@@ -14,29 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
-from collections.abc import Sequence
+"""GALE (Geometry-Aware Latent Embeddings) attention layer and transformer block.
+
+This module provides the GALE attention mechanism and GALE_block transformer block,
+which extend the Transolver physics attention with cross-attention capabilities for
+geometry and global context embeddings.
+"""
+
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
 from einops import rearrange
-import torch.nn.functional as F
+from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.transolver.Physics_Attention import (
     PhysicsAttentionIrregularMesh,
-    gumbel_softmax,
 )
 from physicsnemo.models.transolver.transolver import MLP
-
-from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.module import Module
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
 if TE_AVAILABLE:
     import transformer_engine.pytorch as te
+
 
 class GALE(PhysicsAttentionIrregularMesh):
     r"""Geometry-Aware Latent Embeddings (GALE) attention layer.
@@ -65,21 +68,49 @@ class GALE(PhysicsAttentionIrregularMesh):
     context_dim : int, optional
         Dimension of the context vector for cross-attention. Default is 0.
 
+    Forward
+    -------
+    x : tuple[torch.Tensor, ...]
+        Tuple of input tensors, each of shape :math:`(B, N, C)` where :math:`B` is
+        batch size, :math:`N` is number of tokens, and :math:`C` is number of channels.
+    context : tuple[torch.Tensor, ...] | None, optional
+        Context tensor for cross-attention of shape :math:`(B, H, S_c, D_c)` where
+        :math:`H` is number of heads, :math:`S_c` is number of context slices, and
+        :math:`D_c` is context dimension. If ``None``, only self-attention is applied.
+        Default is ``None``.
+
+    Outputs
+    -------
+    list[torch.Tensor]
+        List of output tensors, each of shape :math:`(B, N, C)`, same shape as inputs.
+
     Notes
     -----
     The mixing between self-attention and cross-attention is controlled by a learnable
     parameter ``state_mixing`` which is passed through a sigmoid function to ensure
-    the mixing weight stays in \([0, 1]\).
+    the mixing weight stays in :math:`[0, 1]`.
 
     See Also
     --------
     :class:`physicsnemo.models.transolver.Physics_Attention.PhysicsAttentionIrregularMesh` : Base physics attention class.
     :class:`GALE_block` : Transformer block using GALE attention.
+
+    Examples
+    --------
+    >>> import torch
+    >>> gale = GALE(dim=256, heads=8, dim_head=32, context_dim=32)
+    >>> x = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
+    >>> context = torch.randn(2, 8, 64, 32)  # Context for cross-attention
+    >>> outputs = gale(x, context)
+    >>> len(outputs)
+    1
+    >>> outputs[0].shape
+    torch.Size([2, 100, 256])
     """
 
     def __init__(
         self,
-        dim,
+        dim: int,
         heads: int = 8,
         dim_head: int = 64,
         dropout: float = 0.0,
@@ -87,49 +118,55 @@ class GALE(PhysicsAttentionIrregularMesh):
         use_te: bool = True,
         plus: bool = False,
         context_dim: int = 0,
-    ):
+    ) -> None:
         super().__init__(dim, heads, dim_head, dropout, slice_num, use_te, plus)
 
         linear_layer = te.Linear if self.use_te else nn.Linear
 
-        # We have additional parameters, here:
+        # Cross-attention projection layers for context integration
         self.cross_q = linear_layer(dim_head, dim_head)
         self.cross_k = linear_layer(context_dim, dim_head)
         self.cross_v = linear_layer(context_dim, dim_head)
 
-        # This is the learnable mixing weight between self and cross attention.
-        # We start near 0.0 since it is passed through a sigmoid to keep the
-        # mixing weight between 0 and 1.
+        # Learnable mixing weight between self and cross attention
+        # Initialize near 0.0 since sigmoid(0) = 0.5, giving balanced initial mixing
         self.state_mixing = nn.Parameter(torch.tensor(0.0))
 
     def compute_slice_attention_cross(
-        self, slice_tokens: torch.Tensor, context: torch.Tensor
-    ) -> torch.Tensor:
+        self,
+        slice_tokens: list[Float[torch.Tensor, "batch heads slices dim"]],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"],
+    ) -> list[Float[torch.Tensor, "batch heads slices dim"]]:
         r"""Compute cross-attention between slice tokens and context.
 
         Parameters
         ----------
-        slice_tokens : torch.Tensor
-            Slice tokens of shape \((B, H, N, D)\) where \(B\) is batch size, \(H\) is number of heads, \(N\) is number of slices, and \(D\) is head dimension.
+        slice_tokens : list[torch.Tensor]
+            List of slice token tensors, each of shape :math:`(B, H, N, D)` where
+            :math:`B` is batch size, :math:`H` is number of heads, :math:`N` is
+            number of slices, and :math:`D` is head dimension.
         context : torch.Tensor
-            Context tensor of shape \((B, H, N_c, D_c)\) where \(N_c\) is number of context slices and \(D_c\) is context dimension.
+            Context tensor of shape :math:`(B, H, N_c, D_c)` where :math:`N_c` is
+            number of context slices and :math:`D_c` is context dimension.
 
         Returns
         -------
-        torch.Tensor
-            Cross-attention output of shape \((B, H, N, D)\).
+        list[torch.Tensor]
+            List of cross-attention outputs, each of shape :math:`(B, H, N, D)`.
         """
+        # Concatenate all slice tokens for batched projection
+        q_input = torch.cat(slice_tokens, dim=-2)  # (B, H, total_slices, D)
 
-        # Project the slice and context tokens:
+        # Project queries from slice tokens
+        q = self.cross_q(q_input)  # (B, H, total_slices, D)
 
-        q_input = torch.cat(slice_tokens, dim=-2)
-        q = self.cross_q(q_input)
-        
-        k = self.cross_k(context)
-        v = self.cross_v(context)
+        # Project keys and values from context
+        k = self.cross_k(context)  # (B, H, N_c, D)
+        v = self.cross_v(context)  # (B, H, N_c, D)
 
-        # Compute the attention:
+        # Compute cross-attention using appropriate backend
         if self.use_te:
+            # Transformer Engine expects (B, S, H, D) format
             q = rearrange(q, "b h s d -> b s h d")
             k = rearrange(k, "b h s d -> b s h d")
             v = rearrange(v, "b h s d -> b s h d")
@@ -138,81 +175,113 @@ class GALE(PhysicsAttentionIrregularMesh):
                 cross_attention, "b s (h d) -> b h s d", h=self.heads, d=self.dim_head
             )
         else:
+            # Use PyTorch's scaled dot-product attention
             cross_attention = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, is_causal=False
             )
-        cross_attention = torch.split(cross_attention, slice_tokens[0].shape[-2], dim=-2)
 
+        # Split back into individual slice token outputs
+        cross_attention = torch.split(
+            cross_attention, slice_tokens[0].shape[-2], dim=-2
+        )
 
-        return cross_attention
+        return list(cross_attention)
 
     def forward(
-        self, x: tuple[torch.Tensor, ...], context: tuple[torch.Tensor, ...] | None = None
-    ) -> torch.Tensor:
+        self,
+        x: tuple[Float[torch.Tensor, "batch tokens channels"], ...],
+        context: Float[torch.Tensor, "batch heads context_slices context_dim"]
+        | None = None,
+    ) -> list[Float[torch.Tensor, "batch tokens channels"]]:
         r"""Forward pass of the GALE module.
+
+        Applies physics-aware self-attention combined with optional cross-attention
+        to geometry and global context.
 
         Parameters
         ----------
-        x : torch.Tensor
-            Input tensor of shape \((B, N, C)\) where \(B\) is batch size, \(N\) is number of tokens, and \(C\) is number of channels.
-        context : torch.Tensor, optional
-            Context tensor for cross-attention of shape \((B, H, S_c, D_c)\) where \(H\) is number of heads, \(S_c\) is number of context slices, and \(D_c\) is context dimension. If None, only self-attention is applied. Default is None.
+        x : tuple[torch.Tensor, ...]
+            Tuple of input tensors, each of shape :math:`(B, N, C)` where :math:`B`
+            is batch size, :math:`N` is number of tokens, and :math:`C` is number
+            of channels.
+        context : torch.Tensor | None, optional
+            Context tensor for cross-attention of shape :math:`(B, H, S_c, D_c)`
+            where :math:`H` is number of heads, :math:`S_c` is number of context
+            slices, and :math:`D_c` is context dimension. If ``None``, only
+            self-attention is applied. Default is ``None``.
 
         Returns
         -------
-        torch.Tensor
-            Output tensor of shape \((B, N, C)\), same shape as input.
+        list[torch.Tensor]
+            List of output tensors, each of shape :math:`(B, N, C)``, same shape
+            as inputs.
         """
-        # Project the inputs onto learned spaces:
+        ### Input validation
+        if not torch.compiler.is_compiling():
+            if len(x) == 0:
+                raise ValueError("Expected non-empty tuple of input tensors")
+            for i, tensor in enumerate(x):
+                if tensor.ndim != 3:
+                    raise ValueError(
+                        f"Expected 3D input tensor (B, N, C) at index {i}, "
+                        f"got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
+                    )
+
+        # Project inputs onto learned latent spaces
         if self.plus:
-            x_mid = [ self.project_input_onto_slices(_x) for _x in x ]
-            # In transolver ++, fx_mid is gone.
-            # x_mid is used to compute the projections instead:
-            fx_mid = [ _x_mid for _x_mid in x_mid ]
+            x_mid = [self.project_input_onto_slices(_x) for _x in x]
+            # In Transolver++, x_mid is reused for both projections
+            fx_mid = [_x_mid for _x_mid in x_mid]
         else:
-            x_mid, fx_mid = zip(*[ self.project_input_onto_slices(_x) for _x in x ])
+            x_mid, fx_mid = zip(
+                *[self.project_input_onto_slices(_x) for _x in x]
+            )
 
-        # Perform the linear projection of learned latent space onto slices:
-        slice_projections = [ self.in_project_slice(_x_mid) for _x_mid in x_mid ]
+        # Project latent representations onto physical state slices
+        slice_projections = [self.in_project_slice(_x_mid) for _x_mid in x_mid]
 
-        # Slice projections has shape [B, N_head, N_tokens, Head_dim], but head_dim may have changed!
-        # Use the slice projections and learned spaces to compute the slices, and their weights:
-        slice_weights, slice_tokens = zip(*[self.compute_slices_from_projections(proj, _fx_mid) for proj, _fx_mid in zip(slice_projections, fx_mid)])
-        # slice_weights has shape [Batch, N_heads, N_tokens, Slice_num]
-        # slice_tokens has shape  [Batch, N_heads, N_tokens, head_dim]
-        # Apply attention to the slice tokens
-        if self.use_te:
-            self_slice_token = [ self.compute_slice_attention_te(_slice_token) for _slice_token in slice_tokens ]
-        else:
-            self_slice_token = [ self.compute_slice_attention_sdpa(_slice_token) for _slice_token in slice_tokens ]
-        
-        # HERE, we are differing: apply cross-attention with physical states:
-        if context is not None:
-            # cross_slice_token = self.compute_slice_attention_cross(
-            #     slice_tokens, context
-            # )
-            cross_slice_token = [ self.compute_slice_attention_cross([_slice_token], context)[0] 
-                for _slice_token in slice_tokens 
+        # Compute slice weights and aggregated slice tokens
+        slice_weights, slice_tokens = zip(
+            *[
+                self.compute_slices_from_projections(proj, _fx_mid)
+                for proj, _fx_mid in zip(slice_projections, fx_mid)
             ]
-            
-            # Apply learnable mixing:
+        )
+
+        # Apply self-attention to slice tokens
+        if self.use_te:
+            self_slice_token = [
+                self.compute_slice_attention_te(_slice_token)
+                for _slice_token in slice_tokens
+            ]
+        else:
+            self_slice_token = [
+                self.compute_slice_attention_sdpa(_slice_token)
+                for _slice_token in slice_tokens
+            ]
+
+        # Apply cross-attention with context if provided
+        if context is not None:
+            cross_slice_token = [
+                self.compute_slice_attention_cross([_slice_token], context)[0]
+                for _slice_token in slice_tokens
+            ]
+
+            # Blend self-attention and cross-attention with learnable mixing weight
             mixing_weight = torch.sigmoid(self.state_mixing)
-            out_slice_token = [ mixing_weight * sst + (1 - mixing_weight) * cst
+            out_slice_token = [
+                mixing_weight * sst + (1 - mixing_weight) * cst
                 for sst, cst in zip(self_slice_token, cross_slice_token)
             ]
-
         else:
-            # Just keep self attention:
+            # Use only self-attention when no context is provided
             out_slice_token = self_slice_token
 
-        # Shape unchanged
-
-        # Deslice:
+        # Project attention outputs back to original space using slice weights
         outputs = [
-            self.project_attention_outputs(ost, sw) for ost, sw in zip(out_slice_token, slice_weights)
+            self.project_attention_outputs(ost, sw)
+            for ost, sw in zip(out_slice_token, slice_weights)
         ]
-
-        # Outputs now has the same shape as the original input x
 
         return outputs
 
@@ -233,26 +302,58 @@ class GALE_block(nn.Module):
     dropout : float
         Dropout rate.
     act : str, optional
-        Activation function name. Default is "gelu".
+        Activation function name. Default is ``"gelu"``.
     mlp_ratio : int, optional
         Ratio of MLP hidden dimension to ``hidden_dim``. Default is 4.
     last_layer : bool, optional
-        Whether this is the last layer in the model. Default is False.
+        Whether this is the last layer in the model. Default is ``False``.
     out_dim : int, optional
         Output dimension (only used if ``last_layer=True``). Default is 1.
     slice_num : int, optional
         Number of learned physical state slices. Default is 32.
     use_te : bool, optional
-        Whether to use Transformer Engine backend. Default is True.
+        Whether to use Transformer Engine backend. Default is ``True``.
     plus : bool, optional
-        Whether to use Transolver++ features. Default is False.
+        Whether to use Transolver++ features. Default is ``False``.
     context_dim : int, optional
         Dimension of the context vector for cross-attention. Default is 0.
+
+    Forward
+    -------
+    fx : tuple[torch.Tensor, ...]
+        Tuple of input tensors, each of shape :math:`(B, N, C)` where :math:`B` is
+        batch size, :math:`N` is number of tokens, and :math:`C` is hidden dimension.
+    global_context : tuple[torch.Tensor, ...]
+        Global context tensor for cross-attention of shape :math:`(B, H, S_c, D_c)`
+        where :math:`H` is number of heads, :math:`S_c` is number of context slices,
+        and :math:`D_c` is context dimension.
+
+    Outputs
+    -------
+    list[torch.Tensor]
+        List of output tensors, each of shape :math:`(B, N, C)`, same shape as inputs.
 
     Notes
     -----
     The block applies layer normalization before the attention operation and uses
     residual connections after both the attention and MLP layers.
+
+    See Also
+    --------
+    :class:`GALE` : The attention mechanism used in this block.
+    :class:`physicsnemo.experimental.models.geotransolver.GeoTransolver` : Main model using GALE_block.
+
+    Examples
+    --------
+    >>> import torch
+    >>> block = GALE_block(num_heads=8, hidden_dim=256, dropout=0.1, context_dim=32)
+    >>> fx = (torch.randn(2, 100, 256),)  # Single input tensor in tuple
+    >>> context = torch.randn(2, 8, 64, 32)  # Global context
+    >>> outputs = block(fx, context)
+    >>> len(outputs)
+    1
+    >>> outputs[0].shape
+    torch.Size([2, 100, 256])
     """
 
     def __init__(
@@ -260,28 +361,32 @@ class GALE_block(nn.Module):
         num_heads: int,
         hidden_dim: int,
         dropout: float,
-        act="gelu",
-        mlp_ratio=4,
-        last_layer=False,
-        out_dim=1,
-        slice_num=32,
-        use_te=True,
+        act: str = "gelu",
+        mlp_ratio: int = 4,
+        last_layer: bool = False,
+        out_dim: int = 1,
+        slice_num: int = 32,
+        use_te: bool = True,
         plus: bool = False,
         context_dim: int = 0,
-    ):
+    ) -> None:
         super().__init__()
 
         if use_te and not TE_AVAILABLE:
             raise ImportError(
-                "Transformer Engine is not installed. Please install it with: pip install transformer-engine>=0.1.0"
+                "Transformer Engine is not installed. "
+                "Please install it with: pip install transformer-engine>=0.1.0"
             )
 
         self.last_layer = last_layer
+
+        # Layer normalization before attention
         if use_te:
             self.ln_1 = te.LayerNorm(hidden_dim)
         else:
             self.ln_1 = nn.LayerNorm(hidden_dim)
 
+        # GALE attention layer
         self.Attn = GALE(
             hidden_dim,
             heads=num_heads,
@@ -293,6 +398,7 @@ class GALE_block(nn.Module):
             context_dim=context_dim,
         )
 
+        # Feed-forward network with layer normalization
         if use_te:
             self.ln_mlp1 = te.LayerNormMLP(
                 hidden_size=hidden_dim,
@@ -312,28 +418,50 @@ class GALE_block(nn.Module):
                 ),
             )
 
-    def forward(self, fx: tuple[torch.Tensor, ...], global_context: tuple[torch.Tensor, ...]) -> torch.Tensor:
+    def forward(
+        self,
+        fx: tuple[Float[torch.Tensor, "batch tokens hidden_dim"], ...],
+        global_context: Float[torch.Tensor, "batch heads context_slices context_dim"],
+    ) -> list[Float[torch.Tensor, "batch tokens hidden_dim"]]:
         r"""Forward pass of the GALE block.
 
         Parameters
         ----------
-        fx : torch.Tensor
-            Input tensor of shape \((B, N, C)\) where \(B\) is batch size, \(N\) is number of tokens, and \(C\) is hidden dimension.
+        fx : tuple[torch.Tensor, ...]
+            Tuple of input tensors, each of shape :math:`(B, N, C)` where :math:`B`
+            is batch size, :math:`N` is number of tokens, and :math:`C` is hidden
+            dimension.
         global_context : torch.Tensor
-            Global context tensor for cross-attention of shape \((B, H, S_c, D_c)\) where \(H\) is number of heads, \(S_c\) is number of context slices, and \(D_c\) is context dimension.
+            Global context tensor for cross-attention of shape :math:`(B, H, S_c, D_c)`
+            where :math:`H` is number of heads, :math:`S_c` is number of context slices,
+            and :math:`D_c` is context dimension.
 
         Returns
         -------
-        torch.Tensor
-            Output tensor of shape \((B, N, C)\), same shape as input.
+        list[torch.Tensor]
+            List of output tensors, each of shape :math:`(B, N, C)`, same shape as inputs.
         """
-        
-        normed_inputs = [ self.ln_1(_fx) for _fx in fx ]
-        attn = self.Attn(normed_inputs, global_context)
-        
-        fx = [ attn[i] + normed_inputs[i] for i in range(len(normed_inputs)) ]
-        
-        fx = [ self.ln_mlp1(_fx) + _fx for _fx in fx ]
+        ### Input validation
+        if not torch.compiler.is_compiling():
+            if len(fx) == 0:
+                raise ValueError("Expected non-empty tuple of input tensors")
+            for i, tensor in enumerate(fx):
+                if tensor.ndim != 3:
+                    raise ValueError(
+                        f"Expected 3D input tensor (B, N, C) at index {i}, "
+                        f"got {tensor.ndim}D tensor with shape {tuple(tensor.shape)}"
+                    )
 
-        return fx
+        # Apply pre-normalization to all inputs
+        normed_inputs = [self.ln_1(_fx) for _fx in fx]
 
+        # Apply GALE attention with cross-attention to global context
+        attn = self.Attn(tuple(normed_inputs), global_context)
+
+        # Residual connection after attention
+        fx_out = [attn[i] + normed_inputs[i] for i in range(len(normed_inputs))]
+
+        # Feed-forward network with residual connection
+        fx_out = [self.ln_mlp1(_fx) + _fx for _fx in fx_out]
+
+        return fx_out

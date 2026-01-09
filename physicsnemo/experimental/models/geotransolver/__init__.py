@@ -14,6 +14,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .geotransolver import GeoTransolver
+r"""GeoTransolver: Geometry-Aware Physics Attention Transformer.
 
-__all__ = ["GeoTransolver"]
+This module provides the GeoTransolver model and its components for learning
+physics-based representations with geometry and global context awareness.
+
+Classes
+-------
+GeoTransolver
+    Main model class combining GALE attention with geometry and global context.
+GALE
+    Geometry-Aware Latent Embeddings attention layer.
+GALE_block
+    Transformer block using GALE attention.
+ContextProjector
+    Projects context features onto physical state slices.
+GlobalContextBuilder
+    Orchestrates context construction for the model.
+
+Examples
+--------
+Basic usage:
+
+>>> import torch
+>>> from physicsnemo.experimental.models.geotransolver import GeoTransolver
+>>> model = GeoTransolver(
+...     functional_dim=64,
+...     out_dim=3,
+...     n_hidden=256,
+...     n_layers=4,
+...     use_te=False,
+... )
+>>> x = torch.randn(2, 1000, 64)
+>>> output = model(x)
+>>> output.shape
+torch.Size([2, 1000, 3])
+"""
+
+from .context_projector import ContextProjector, GlobalContextBuilder
+from .gale import GALE, GALE_block
+from .geotransolver import GeoTransolver, GeoTransolverMetaData
+
+__all__ = [
+    "GeoTransolver",
+    "GeoTransolverMetaData",
+    "GALE",
+    "GALE_block",
+    "ContextProjector",
+    "GlobalContextBuilder",
+]
