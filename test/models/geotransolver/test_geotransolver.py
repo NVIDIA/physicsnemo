@@ -360,10 +360,12 @@ def test_geotransolver_optimizations(device):
 
 
 @requires_module("transformer_engine")
-@pytest.mark.parametrize("device", ["cuda:0"])
 def test_geotransolver_te_basic(device, pytestconfig):
     """Test GeoTransolver with Transformer Engine backend."""
     torch.manual_seed(42)
+
+    if device == "cpu":
+        pytest.skip("TE Tests require cuda.")
 
     model = GeoTransolver(
         functional_dim=32,
@@ -559,7 +561,6 @@ def test_geotransolver_mismatched_functional_out_dims():
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("activation", ["gelu", "relu", "tanh", "silu"])
 def test_geotransolver_activations(device, activation):
     """Test GeoTransolver with different activation functions."""
@@ -606,7 +607,6 @@ def test_geotransolver_activations(device, activation):
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("n_layers", [1, 2, 4])
 def test_geotransolver_different_depths(device, n_layers):
     """Test GeoTransolver with different numbers of layers."""
@@ -648,7 +648,6 @@ def test_geotransolver_different_depths(device, n_layers):
     assert not torch.isnan(outputs).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("slice_num", [4, 16, 32])
 def test_geotransolver_different_slice_nums(device, slice_num):
     """Test GeoTransolver with different numbers of physical state slices."""
@@ -690,7 +689,6 @@ def test_geotransolver_different_slice_nums(device, slice_num):
     assert not torch.isnan(outputs).any()
 
 
-@pytest.mark.parametrize("device", ["cuda:0"])
 @pytest.mark.parametrize("n_hidden,n_head", [(64, 4), (128, 8), (256, 8)])
 def test_geotransolver_different_hidden_sizes(device, n_hidden, n_head):
     """Test GeoTransolver with different hidden dimensions and head counts."""
