@@ -180,3 +180,33 @@ def crop3d(x: torch.Tensor, resolution):
         padding_top : Lat - padding_bottom,
         padding_left : Lon - padding_right,
     ]
+
+
+def _validate_amp(amp_mode: bool) -> None:
+    """Raise if `amp_mode` is False but PyTorch autocast (CPU or CUDA) is active.
+
+    Parameters
+    ----------
+    amp_mode : bool
+        Your intended AMP flag. Set False when you require full precision.
+    """
+
+    try:
+        cuda_amp = bool(torch.is_autocast_enabled())
+    except AttributeError:  # very old PyTorch
+        cuda_amp = False
+    try:
+        cpu_amp = bool(torch.is_autocast_enabled("cpu"))
+    except AttributeError:
+        cpu_amp = False
+
+    if not amp_mode and (cuda_amp or cpu_amp):
+        active = []
+        if cuda_amp:
+            active.append("cuda")
+        if cpu_amp:
+            active.append("cpu")
+        raise RuntimeError(
+            f"amp_mode=False but torch autocast is enabled on: {', '.join(active)}. "
+            "Disable autocast for this region or set amp_mode=True if mixed precision is intended."
+        )

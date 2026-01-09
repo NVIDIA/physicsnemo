@@ -25,9 +25,16 @@ from .activations import (
     Stan,
     get_activation,
 )
+from .attention_layers import (
+    AttentionOp,
+    EarthAttention2D,
+    EarthAttention3D,
+    UNetAttention,
+)
 from .ball_query import BQWarp
-from .conv_layers import ConvBlock, CubeEmbedding
+from .conv_layers import Conv2d, ConvBlock, CubeEmbedding
 from .dgm_layers import DGMLayer
+from .embedding_layers import FourierEmbedding, PositionalEmbedding
 from .fourier_layers import (
     FourierFilter,
     FourierLayer,
@@ -42,7 +49,9 @@ from .fully_connected_layers import (
     ConvNdFCLayer,
     ConvNdKernel1Layer,
     FCLayer,
+    Linear,
 )
+from .group_norm import GroupNorm, get_group_norm
 from .kan_layers import KolmogorovArnoldNetwork
 from .mlp_layers import Mlp
 from .resample_layers import (
@@ -64,5 +73,6 @@ from .transformer_layers import (
     FuserLayer,
     SwinTransformer,
 )
+from .unet_layers import UNetBlock
 from .weight_fact import WeightFactLinear
 from .weight_norm import WeightNormLinear

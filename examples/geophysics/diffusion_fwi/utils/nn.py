@@ -25,7 +25,7 @@ from einops import rearrange
 
 from timm.layers import Mlp
 
-from physicsnemo.models.diffusion.song_unet import SongUNetPosEmbd
+from physicsnemo.models.diffusion_unets import SongUNetPosEmbd
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 
@@ -365,7 +365,7 @@ class DiffusionFWINet(Module):
 
     Notes
     -----
-    This model uses :class:`physicsnemo.models.diffusion.song_unet.SongUNetPosEmbd` as its
+    This model uses :class:`~physicsnemo.models.diffusion_unets.SongUNetPosEmbd` as its
     diffusion UNet. For more details on the diffusion model parameters, refer
     to its documentation.
     """

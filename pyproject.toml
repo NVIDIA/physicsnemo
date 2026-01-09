@@ -212,24 +212,14 @@ DistributedAFNO = "physicsnemo.models.afno:DistributedAFNO"
 ModAFNO = "physicsnemo.models.afno:ModAFNO"
 
 # Diffusion UNets
-SongUNet = "physicsnemo.models.diffusion:SongUNet"
-SongUNetPosEmbd = "physicsnemo.models.diffusion:SongUNetPosEmbd"
-SongUNetPosLtEmbd = "physicsnemo.models.diffusion:SongUNetPosLtEmbd"
-DhariwalUNet = "physicsnemo.models.diffusion:DhariwalUNet"
+SongUNet = "physicsnemo.models.diffusion_unets:SongUNet"
+SongUNetPosEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosEmbd"
+SongUNetPosLtEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosLtEmbd"
+DhariwalUNet = "physicsnemo.models.diffusion_unets:DhariwalUNet"
 
 # Diffusion wrappers
-CorrDiffRegressionUNet = "physicsnemo.models.diffusion:CorrDiffRegressionUNet"
-StormCastUNet = "physicsnemo.models.diffusion:StormCastUNet"
-
-# Diffusion Preconditioners
-EDMPrecond = "physicsnemo.models.diffusion:EDMPrecond"
-EDMPrecondSuperResolution = "physicsnemo.models.diffusion:EDMPrecondSuperResolution"
-EDMPrecondSR = "physicsnemo.models.diffusion:EDMPrecondSR"
-VEPrecond = "physicsnemo.models.diffusion:VEPrecond"
-VPPrecond = "physicsnemo.models.diffusion:VPPrecond"
-iDDPMPrecond = "physicsnemo.models.diffusion:iDDPMPrecond"
-VEPrecond_dfsr_cond = "physicsnemo.models.diffusion:VEPrecond_dfsr_cond"
-VEPrecond_dfsr = "physicsnemo.models.diffusion:VEPrecond_dfsr"
+CorrDiffRegressionUNet = "physicsnemo.models.diffusion_unets:CorrDiffRegressionUNet"
+StormCastUNet = "physicsnemo.models.diffusion_unets:StormCastUNet"
 
 # DLWP
 DLWP = "physicsnemo.models.dlwp:DLWP"

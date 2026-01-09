@@ -19,6 +19,8 @@ import warnings
 import torch
 import numpy as np
 from omegaconf import ListConfig
+import cftime
+import datetime
 
 
 def set_patch_shape(img_shape, patch_shape):
@@ -116,3 +118,10 @@ def is_time_for_periodic_task(
         return True
     else:
         return cur_nimg % freq < batch_size
+
+
+def _convert_datetime_to_cftime(
+    time: datetime.datetime, cls=cftime.DatetimeGregorian
+) -> cftime.DatetimeGregorian:
+    """Convert a Python datetime object to a cftime DatetimeGregorian object."""
+    return cls(time.year, time.month, time.day, time.hour, time.minute, time.second)

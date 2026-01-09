@@ -6,7 +6,7 @@ PhysicsNeMo Utils
 
 The PhysicsNeMo Utils module provides a comprehensive set of utilities that support various aspects of scientific computing,
 machine learning, and physics simulations. These utilities range from optimization helpers and distributed computing tools
-to specialized functions for weather/climate modeling and geometry processing. The module is designed to simplify common
+to specialized functions for weather and climate modeling, and geometry processing. The module is designed to simplify common
 tasks while maintaining high performance and scalability.
 
 .. autosummary::
@@ -74,15 +74,15 @@ Diffusion utils
 Tools for working with diffusion models and other generative approaches,
 including deterministic and stochastic sampling utilities.
 
-.. automodule:: physicsnemo.utils.diffusion.deterministic_sampler
+.. automodule:: physicsnemo.diffusion.samplers.deterministic_sampler
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.diffusion.stochastic_sampler
+.. automodule:: physicsnemo.diffusion.samplers.stochastic_sampler
     :members:
     :show-inheritance:
 
-.. automodule:: physicsnemo.utils.diffusion.utils
+.. automodule:: physicsnemo.diffusion.utils
     :members:
     :show-inheritance:
 
@@ -121,12 +121,12 @@ Patching utilities are particularly useful for *patch-based* diffusion, also cal
 *multi-diffusion*. This approach is used to scale diffusion to very large images.
 The following patching utilities extract patches from 2D images, and typically gather
 them in the batch dimension. A batch of patches is therefore composed of multiple
-smaller patches extracted from each sample in the original batch of larger
+smaller patches that are extracted from each sample in the original batch of larger
 images. Diffusion models can then process these patches independently. These
 utilities also support fusing operations to reconstruct the entire predicted
 image from the individual predicted patches.
 
-.. automodule:: physicsnemo.utils.patching
+.. automodule:: physicsnemo.diffusion.multi_diffusion
     :members:
     :show-inheritance:
 
@@ -145,7 +145,7 @@ CorrDiff utils
 
 Utilities for working with the CorrDiff model, particularly for the diffusion and regression steps.
 
-.. automodule:: physicsnemo.utils.corrdiff.utils
+.. automodule:: physicsnemo.diffusion.samplers
     :members:
     :show-inheritance:
 

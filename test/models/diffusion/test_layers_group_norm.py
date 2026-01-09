@@ -20,9 +20,7 @@ import pytest
 import torch
 
 import physicsnemo
-from physicsnemo.models.diffusion.layers import get_group_norm
-
-# from physicsnemo.models.diffusion.layers import GroupNorm
+from physicsnemo.nn import get_group_norm
 from test import common  # noqa: E402
 
 

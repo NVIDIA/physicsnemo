@@ -23,9 +23,8 @@ import numpy as np
 from numba import jit, prange
 import xarray as xr
 
-from physicsnemo.models.diffusion.training_utils import convert_datetime_to_cftime
-
 from datasets.base import ChannelMetadata, DownscalingDataset
+from helpers.train_helpers import _convert_datetime_to_cftime
 
 
 class HRRRMiniDataset(DownscalingDataset):
@@ -112,7 +111,7 @@ class HRRRMiniDataset(DownscalingDataset):
         datetimes = (
             datetime.datetime.utcfromtimestamp(t.tolist() / 1e9) for t in self.times
         )
-        return [convert_datetime_to_cftime(t) for t in datetimes]
+        return [_convert_datetime_to_cftime(t) for t in datetimes]
 
     def image_shape(self) -> Tuple[int, int]:
         """Get the (height, width) of the data (same for input and output)."""
