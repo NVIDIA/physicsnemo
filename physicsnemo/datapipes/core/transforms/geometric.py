@@ -28,12 +28,12 @@ from typing import Optional, Union
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.registry import register_transform
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 from physicsnemo.nn.sdf import signed_distance_field
 
 
-@register_transform()
+@register()
 class ComputeSDF(Transform):
     r"""
     Compute signed distance field from a mesh.
@@ -135,7 +135,7 @@ class ComputeSDF(Transform):
         return f"ComputeSDF(input_keys={self.input_keys}, output_key={self.output_key})"
 
 
-@register_transform()
+@register()
 class ComputeNormals(Transform):
     r"""
     Compute normal vectors from closest points.
@@ -214,6 +214,7 @@ class ComputeNormals(Transform):
         )
 
 
+@register()
 class Translate(Transform):
     r"""
     Apply a translation by subtracting a center point.
@@ -294,6 +295,7 @@ class Translate(Transform):
         )
 
 
+@register()
 class ReScale(Transform):
     r"""
     Apply a scale factor by dividing by a reference scale.

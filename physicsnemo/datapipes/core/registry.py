@@ -34,11 +34,32 @@ Example usage:
     >>>
     >>> # List all registered components
     >>> print(TRANSFORM_REGISTRY.list())
+
+OmegaConf Resolver for Hydra configs:
+    After calling ``register_resolvers()``, you can use short names in YAML configs:
+
+    >>> from physicsnemo.datapipes.core.registry import register_resolvers
+    >>> register_resolvers()
+
+    Then in your YAML config:
+
+    .. code-block:: yaml
+
+        # Instead of:
+        _target_: physicsnemo.datapipes.core.transforms.CenterOfMass
+
+        # You can write:
+        _target_: ${dp:CenterOfMass}
+
+        # Or for readers:
+        _target_: ${dp:ZarrReader}
 """
 
 from __future__ import annotations
 
 from typing import Callable, Type, TypeVar
+
+from omegaconf import OmegaConf
 
 T = TypeVar("T")
 
@@ -154,44 +175,89 @@ class ComponentRegistry:
         return f"ComponentRegistry({self.name!r}, count={len(self)})"
 
 
-# Global registries for transforms and readers
-TRANSFORM_REGISTRY = ComponentRegistry("transforms")
-READER_REGISTRY = ComponentRegistry("readers")
+# Global component registry for all datapipe components (transforms, readers, etc.)
+COMPONENT_REGISTRY = ComponentRegistry("components")
 
 
-def register_transform(name: str | None = None) -> Callable[[Type[T]], Type[T]]:
+def register(name: str | None = None) -> Callable[[Type[T]], Type[T]]:
     """
-    Decorator to register a transform class.
+    Decorator to register a datapipe component class.
 
-    This is a convenience wrapper around TRANSFORM_REGISTRY.register().
+    Registered components can be referenced by short name in Hydra configs
+    using the ``${dp:ComponentName}`` syntax after calling ``register_resolvers()``.
 
     Args:
         name: Optional name to register under. If None, uses the class name.
 
     Example:
-        >>> from physicsnemo.datapipes.core.registry import register_transform
+        >>> from physicsnemo.datapipes.core.registry import register
         >>>
-        >>> @register_transform()
+        >>> @register()
         ... class MyTransform(Transform):
         ...     pass
-    """
-    return TRANSFORM_REGISTRY.register(name)
-
-
-def register_reader(name: str | None = None) -> Callable[[Type[T]], Type[T]]:
-    """
-    Decorator to register a reader class.
-
-    This is a convenience wrapper around READER_REGISTRY.register().
-
-    Args:
-        name: Optional name to register under. If None, uses the class name.
-
-    Example:
-        >>> from physicsnemo.datapipes.core.registry import register_reader
         >>>
-        >>> @register_reader()
-        ... class MyReader(Reader):
+        >>> @register("custom_name")
+        ... class AnotherTransform(Transform):
         ...     pass
     """
-    return READER_REGISTRY.register(name)
+    return COMPONENT_REGISTRY.register(name)
+
+
+def _resolve_component(name: str) -> str:
+    """
+    Resolve a short component name to its full module path.
+
+    Args:
+        name: Short name of the component (e.g., "CenterOfMass", "ZarrReader").
+
+    Returns:
+        Full module path for use in Hydra's ``_target_`` field.
+
+    Raises:
+        KeyError: If the name is not found in the registry.
+    """
+    if name in COMPONENT_REGISTRY:
+        cls = COMPONENT_REGISTRY.get(name)
+        return f"{cls.__module__}.{cls.__name__}"
+
+    # Not found - build helpful error message
+    available = COMPONENT_REGISTRY.list()
+    raise KeyError(f"Component '{name}' not found in registry. Available: {available}.")
+
+
+def register_resolvers() -> None:
+    """
+    Register OmegaConf resolvers for datapipe components.
+
+    This enables short names in Hydra YAML configs using the ``${dp:...}`` syntax.
+    Call this function before using Hydra's ``instantiate()`` or loading configs.
+
+    The resolver looks up components in COMPONENT_REGISTRY dynamically at resolve
+    time, so custom components registered after this function is called will still
+    be available.
+
+    Example:
+        >>> from physicsnemo.datapipes.core.registry import register_resolvers
+        >>> register_resolvers()
+
+        Then in YAML:
+
+        .. code-block:: yaml
+
+            # Use short names with ${dp:...}
+            - _target_: ${dp:CenterOfMass}
+              coords_key: stl_centers
+              areas_key: stl_areas
+              output_key: center_of_mass
+
+            - _target_: ${dp:SubsamplePoints}
+              input_keys:
+                - surface_mesh_centers
+              n_points: 50000
+
+    Note:
+        This function can be called multiple times safely. The resolver dynamically
+        looks up components from COMPONENT_REGISTRY, so custom transforms registered
+        after this call will still be resolvable.
+    """
+    OmegaConf.register_new_resolver("dp", _resolve_component, replace=True)

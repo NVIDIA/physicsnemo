@@ -25,11 +25,11 @@ from __future__ import annotations
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.registry import register_transform
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 
 
-@register_transform()
+@register()
 class BroadcastGlobalFeatures(Transform):
     r"""
     Broadcast global scalar/vector features to all spatial points.

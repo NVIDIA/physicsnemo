@@ -23,7 +23,7 @@ Supports reading from single HDF5 files or directories of HDF5 files.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import torch
 
@@ -35,10 +35,10 @@ except ImportError:
     HAS_H5PY = False
 
 from physicsnemo.datapipes.core.readers.base import Reader
-from physicsnemo.datapipes.core.registry import register_reader
+from physicsnemo.datapipes.core.registry import register
 
 
-@register_reader()
+@register()
 class HDF5Reader(Reader):
     """
     Read samples from HDF5 files.

@@ -28,11 +28,11 @@ import numpy as np
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.registry import register_transform
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 
 
-@register_transform()
+@register()
 class Normalize(Transform):
     """
     Normalize specified fields using mean-std or min-max scaling.

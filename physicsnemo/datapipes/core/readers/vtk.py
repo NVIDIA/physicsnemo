@@ -31,7 +31,7 @@ import torch
 
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.core.readers.base import Reader
-from physicsnemo.datapipes.core.registry import register_reader
+from physicsnemo.datapipes.core.registry import register
 
 # Check if pyvista is available
 PYVISTA_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
@@ -40,7 +40,7 @@ if PYVISTA_AVAILABLE:
     pv = importlib.import_module("pyvista")
 
 
-@register_reader()
+@register()
 class VTKReader(Reader):
     r"""
     Read samples from VTK format files (.stl, .vtp, .vtu).

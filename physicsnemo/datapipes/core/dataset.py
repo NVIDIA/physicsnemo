@@ -33,8 +33,10 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.datapipes.core.readers.base import Reader
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 from physicsnemo.datapipes.core.transforms.compose import Compose
+from physicsnemo.distributed import DistributedManager
 
 
 @dataclass
@@ -48,6 +50,7 @@ class _PrefetchResult:
     event: Optional[torch.cuda.Event] = None  # For stream sync
 
 
+@register()
 class Dataset:
     """
     A dataset combining a Reader with a transform pipeline.
@@ -104,6 +107,8 @@ class Dataset:
             device: Target device for automatic transfer (e.g., "cuda", "cuda:0").
                    If None, no automatic transfer is performed (data stays on CPU).
                    When specified, data is transferred to this device before transforms.
+                   If device is "auto", will select the device with distributed manager.
+                   Auto device falls back to CPU.
             num_workers: Number of worker threads for prefetching (default: 2).
 
         Raises:
@@ -116,7 +121,23 @@ class Dataset:
 
         self.reader = reader
         self.num_workers = num_workers
-        self.target_device = torch.device(device) if device is not None else None
+        if device == "auto":
+            if torch.cuda.is_available():
+                if DistributedManager._is_initialized:
+                    device = DistributedManager().device
+                else:
+                    device = "cuda:0"
+            else:
+                device = "cpu"
+
+        # Now, instantiate the device if not already done:
+        match device:
+            case torch.device():
+                self.target_device = device
+            case str():
+                self.target_device = torch.device(device)
+            case None:
+                self.target_device = None
 
         # Handle transforms
         if transforms is None:

@@ -25,11 +25,11 @@ from typing import Any, Iterator, Sequence
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.registry import register_transform
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 
 
-@register_transform()
+@register()
 class Compose(Transform):
     """
     Compose multiple transforms into a sequential pipeline.

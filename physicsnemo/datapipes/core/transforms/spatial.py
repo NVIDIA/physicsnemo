@@ -28,12 +28,12 @@ from typing import Optional, Union
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.registry import register_transform
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 from physicsnemo.nn.neighbors import knn
 
 
-@register_transform()
+@register()
 class BoundingBoxFilter(Transform):
     r"""
     Filter points outside a spatial bounding box.
@@ -127,7 +127,7 @@ class BoundingBoxFilter(Transform):
         )
 
 
-@register_transform()
+@register()
 class CreateGrid(Transform):
     r"""
     Create a regular 3D spatial grid.
@@ -205,7 +205,7 @@ class CreateGrid(Transform):
         return f"CreateGrid(output_key={self.output_key}, resolution={self.resolution})"
 
 
-@register_transform()
+@register()
 class KNNNeighbors(Transform):
     r"""
     Compute k-nearest neighbors in a point cloud.
@@ -301,7 +301,7 @@ class KNNNeighbors(Transform):
         )
 
 
-@register_transform()
+@register()
 class CenterOfMass(Transform):
     r"""
     Compute weighted center of mass for a point cloud.

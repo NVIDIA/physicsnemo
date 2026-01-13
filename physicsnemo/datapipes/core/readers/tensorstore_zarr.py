@@ -33,7 +33,7 @@ import torch
 
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.core.readers.base import Reader
-from physicsnemo.datapipes.core.registry import register_reader
+from physicsnemo.datapipes.core.registry import register
 
 # Check if tensorstore is available
 TENSORSTORE_AVAILABLE = check_version_spec("tensorstore", hard_fail=False)
@@ -42,7 +42,7 @@ if TENSORSTORE_AVAILABLE:
     ts = importlib.import_module("tensorstore")
 
 
-@register_reader()
+@register()
 class TensorStoreZarrReader(Reader):
     r"""
     High-performance async reader for Zarr files using TensorStore.

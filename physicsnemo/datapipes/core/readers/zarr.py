@@ -36,16 +36,17 @@ except ImportError:
     HAS_ZARR = False
 
 from physicsnemo.datapipes.core.readers.base import Reader
-from physicsnemo.datapipes.core.registry import register_reader
+from physicsnemo.datapipes.core.registry import register
 
 
-@register_reader()
+@register()
 class ZarrReader(Reader):
     """
     Read samples from Zarr groups.
 
     Zarr is a chunked, compressed array format ideal for large scientific datasets.
-    Each Zarr group in the directory represents one sample.
+    Each Zarr group in the directory represents one sample. Supports loading both
+    arrays and attributes from Zarr groups.
 
     Example:
         >>> # Directory with sample_0.zarr, sample_1.zarr, ...
@@ -56,6 +57,12 @@ class ZarrReader(Reader):
         >>> # Load only specific fields:
         >>> reader = ZarrReader("data_dir/", fields=["positions", "velocity"])
         >>> sample = reader[0]
+
+        >>> # Load attributes from Zarr groups:
+        >>> # If the Zarr group has attributes like "timestep" or "scale_factor",
+        >>> # you can request them as fields:
+        >>> reader = ZarrReader("data_dir/", fields=["positions", "timestep", "scale_factor"])
+        >>> sample = reader[0]  # sample["timestep"] contains the attribute value
 
         >>> # With coordinated subsampling for large arrays:
         >>> reader = ZarrReader(
@@ -85,8 +92,10 @@ class ZarrReader(Reader):
 
         Args:
             path: Path to directory containing Zarr groups.
-            fields: List of array names to load. If None, loads all available
-                arrays from each group.
+            fields: List of array or attribute names to load. If None, loads all
+                available arrays from each group. When a field name matches an
+                attribute key (and not an array), the attribute value will be
+                converted to a tensor. Note: string attributes are not supported.
             default_values: Dictionary mapping field names to default tensors.
                 If a field in ``fields`` is not found in the file but has an
                 entry here, the default tensor is used instead of raising an
@@ -258,14 +267,19 @@ class ZarrReader(Reader):
         data = {}
         fields_to_load = self.fields
 
-        # Check for missing required fields
-        available = set(root.array_keys())
+        # Discover available arrays and attributes for this sample at runtime
+        available_arrays = set(root.array_keys())
+        available_attrs = set(root.attrs.keys()) if hasattr(root, "attrs") else set()
+        available = available_arrays | available_attrs
+
+        # Check for missing required fields (check both arrays and attributes)
         required_fields = set(fields_to_load) - set(self.default_values.keys())
         missing_fields = required_fields - available
         if missing_fields:
             raise KeyError(
                 f"Required fields {missing_fields} not found in {group_path}. "
-                f"Available: {list(available)}"
+                f"Available arrays: {list(available_arrays)}, "
+                f"Available attributes: {list(available_attrs)}"
             )
 
         # Determine subsample slice if coordinated subsampling is enabled
@@ -307,10 +321,50 @@ class ZarrReader(Reader):
                     else:
                         data[field] = torch.from_numpy(root[field][:])
 
+            elif field in available_attrs:
+                # Load from attributes (discovered at runtime for this sample)
+                attr_value = root.attrs[field]
+                data[field] = self._convert_attr_to_tensor(attr_value, field)
+
             elif field in self.default_values:
                 data[field] = self.default_values[field].clone()
 
         return data
+
+    def _convert_attr_to_tensor(self, value: Any, field_name: str) -> torch.Tensor:
+        """
+        Convert an attribute value to a torch.Tensor.
+
+        Args:
+            value: The attribute value to convert.
+            field_name: Name of the field (for error messages).
+
+        Returns:
+            A torch.Tensor containing the attribute value.
+
+        Raises:
+            TypeError: If the attribute value cannot be converted to a tensor.
+        """
+        try:
+            if isinstance(value, np.ndarray):
+                return torch.from_numpy(value)
+            elif isinstance(value, (list, tuple)):
+                return torch.tensor(value)
+            elif isinstance(value, (int, float, bool)):
+                return torch.tensor(value)
+            elif isinstance(value, str):
+                raise TypeError(
+                    f"Cannot convert string attribute '{field_name}' to tensor. "
+                    f"String attributes are not supported."
+                )
+            else:
+                # Try to convert via numpy
+                return torch.from_numpy(np.asarray(value))
+        except (TypeError, ValueError) as e:
+            raise TypeError(
+                f"Cannot convert attribute '{field_name}' of type {type(value).__name__} "
+                f"to tensor: {e}"
+            ) from e
 
     def __len__(self) -> int:
         """Return number of samples."""

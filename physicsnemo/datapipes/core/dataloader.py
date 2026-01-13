@@ -33,8 +33,10 @@ from torch.utils.data import RandomSampler, Sampler, SequentialSampler
 
 from physicsnemo.datapipes.core.collate import Collator, get_collator
 from physicsnemo.datapipes.core.dataset import Dataset
+from physicsnemo.datapipes.core.registry import register
 
 
+@register()
 class DataLoader:
     """
     Batched iteration over a Dataset with stream-based prefetching.

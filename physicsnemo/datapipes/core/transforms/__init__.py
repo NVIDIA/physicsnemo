@@ -27,6 +27,10 @@ from physicsnemo.datapipes.core.transforms.compose import Compose
 # NOTE: Downsample and ToDevice transforms are not yet implemented
 # from physicsnemo.datapipes.core.transforms.downsample import Downsample
 # from physicsnemo.datapipes.core.transforms.to_device import ToDevice, cpu, cuda
+from physicsnemo.datapipes.core.transforms.concat_fields import (
+    ConcatFields,
+    NormalizeVectors,
+)
 from physicsnemo.datapipes.core.transforms.field_processing import (
     BroadcastGlobalFeatures,
 )
@@ -49,6 +53,11 @@ from physicsnemo.datapipes.core.transforms.subsample import (
     poisson_sample_indices_fixed,
     shuffle_array,
 )
+from physicsnemo.datapipes.core.transforms.utility import (
+    ConstantField,
+    Purge,
+    Rename,
+)
 
 __all__ = [
     # Base
@@ -56,10 +65,6 @@ __all__ = [
     "Compose",
     # Existing transforms
     "Normalize",
-    # "Downsample",  # Not yet implemented
-    # "ToDevice",  # Not yet implemented
-    # "cuda",  # Not yet implemented
-    # "cpu",  # Not yet implemented
     # Subsampling
     "SubsamplePoints",
     "poisson_sample_indices_fixed",
@@ -72,9 +77,16 @@ __all__ = [
     # Field processing
     "FieldSlice",
     "BroadcastGlobalFeatures",
+    # Concat / feature building
+    "ConcatFields",
+    "NormalizeVectors",
     # Spatial
     "BoundingBoxFilter",
     "CreateGrid",
     "KNNNeighbors",
     "CenterOfMass",
+    # Utility
+    "Rename",
+    "Purge",
+    "ConstantField",
 ]

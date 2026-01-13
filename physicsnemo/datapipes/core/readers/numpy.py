@@ -29,10 +29,10 @@ import numpy as np
 import torch
 
 from physicsnemo.datapipes.core.readers.base import Reader
-from physicsnemo.datapipes.core.registry import register_reader
+from physicsnemo.datapipes.core.registry import register
 
 
-@register_reader()
+@register()
 class NumpyReader(Reader):
     """
     Read samples from NumPy .npz files.

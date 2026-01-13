@@ -28,7 +28,7 @@ from typing import Literal, Optional
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.registry import register_transform
+from physicsnemo.datapipes.core.registry import register
 from physicsnemo.datapipes.core.transforms.base import Transform
 
 
@@ -120,7 +120,7 @@ def shuffle_array(
     return sampled_points, indices
 
 
-@register_transform()
+@register()
 class SubsamplePoints(Transform):
     r"""
     Subsample points from large point clouds or meshes.

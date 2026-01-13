@@ -64,39 +64,81 @@ from physicsnemo.datapipes.core.readers import (
     HDF5Reader,
     NumpyReader,
     Reader,
+    TensorStoreZarrReader,
+    VTKReader,
     ZarrReader,
 )
 from physicsnemo.datapipes.core.registry import (
-    READER_REGISTRY,
-    TRANSFORM_REGISTRY,
+    COMPONENT_REGISTRY,
     ComponentRegistry,
-    register_reader,
-    register_transform,
+    register,
+    register_resolvers,
 )
 from physicsnemo.datapipes.core.transforms import (
+    BoundingBoxFilter,
+    BroadcastGlobalFeatures,
+    CenterOfMass,
     Compose,
+    ComputeNormals,
+    ComputeSDF,
+    ConcatFields,
+    ConstantField,
+    CreateGrid,
+    FieldSlice,
+    KNNNeighbors,
     Normalize,
+    NormalizeVectors,
+    Purge,
+    Rename,
+    ReScale,
     SubsamplePoints,
     Transform,
+    Translate,
 )
 
-__version__ = "0.1.0"
+# Auto-register OmegaConf resolvers so ${dp:ComponentName} works in Hydra configs
+register_resolvers()
 
 __all__ = [
     # Core
     "TensorDict",  # Re-export from tensordict
     "Dataset",
     "DataLoader",
-    # Transforms
+    # Transforms - Base
     "Transform",
     "Compose",
+    # Transforms - Normalization
     "Normalize",
+    # Transforms - Subsampling
     "SubsamplePoints",
+    # Transforms - Geometric
+    "ComputeSDF",
+    "ComputeNormals",
+    "Translate",
+    "ReScale",
+    # Transforms - Field processing
+    "FieldSlice",
+    "BroadcastGlobalFeatures",
+    # Transforms - Concat / feature building
+    "ConcatFields",
+    "NormalizeVectors",
+    # Transforms - Spatial
+    "BoundingBoxFilter",
+    "CreateGrid",
+    "KNNNeighbors",
+    "CenterOfMass",
+    # Transforms - Utility
+    "Rename",
+    "Purge",
+    "ConstantField",
+    "ZeroLike",
     # Readers
     "Reader",
     "HDF5Reader",
     "ZarrReader",
     "NumpyReader",
+    "VTKReader",
+    "TensorStoreZarrReader",
     # Collation
     "Collator",
     "DefaultCollator",
@@ -107,8 +149,7 @@ __all__ = [
     "get_collator",
     # Registry
     "ComponentRegistry",
-    "TRANSFORM_REGISTRY",
-    "READER_REGISTRY",
-    "register_transform",
-    "register_reader",
+    "COMPONENT_REGISTRY",
+    "register",
+    "register_resolvers",
 ]
