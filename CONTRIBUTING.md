@@ -25,6 +25,13 @@ we will get back to you.
 
 ## Contribute to PhysicsNeMo-Core
 
+### Coding Style
+
+Beyond using standard tools for formatting and linting, we document and enforce
+guidelines for how the PhysicsNeMo codebase is organized. Please consult the
+`CODING_STANDARDS` directory for details on how and where to contribute code,
+including a "ruleset" for developing models.
+
 ### Pull Requests
 
 Developer workflow for code contributions is as follows:
