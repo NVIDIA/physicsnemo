@@ -32,7 +32,15 @@ from .attention_layers import (
     UNetAttention,
 )
 from .ball_query import BQWarp
-from .conv_layers import Conv2d, ConvBlock, CubeEmbedding
+from .conv_layers import (
+    Conv2d,
+    ConvBlock,
+    ConvGRULayer,
+    ConvLayer,
+    ConvResidualBlock,
+    CubeEmbedding,
+    TransposeConvLayer,
+)
 from .dgm_layers import DGMLayer
 from .embedding_layers import FourierEmbedding, PositionalEmbedding
 from .fourier_layers import (
