@@ -69,7 +69,7 @@ class TransolverDataConfig:
     """
 
     data_path: Path | None
-    model_type: Literal["surface", "volume"] = "surface"
+    model_type: Literal["surface", "volume", "combined"] = "surface"
     resolution: int = 200_000
 
     # Control what features are added to the inputs to the model:
@@ -82,7 +82,8 @@ class TransolverDataConfig:
 
     # For controlling the normalization of target values:
     scaling_type: Optional[Literal["min_max_scaling", "mean_std_scaling"]] = None
-    normalization_factors: Optional[torch.Tensor] = None
+    surface_factors: Optional[torch.Tensor] = None
+    volume_factors: Optional[torch.Tensor] = None
 
     ############################################################
     # Translation invariance configuration:
@@ -199,11 +200,6 @@ class TransolverDataPipe(Dataset):
         # Build the embeddings:
         embeddings_inputs = [positions]
 
-        # Surface SDF is always 0:
-        if self.config.include_sdf:
-            sdf = torch.zeros_like(positions[:, 0:1])
-            embeddings_inputs.append(sdf)
-
         if self.config.include_normals:
             normals = data_dict["surface_normals"]
             if idx is not None:
@@ -213,30 +209,37 @@ class TransolverDataPipe(Dataset):
 
         embeddings = torch.cat(embeddings_inputs, dim=-1)
 
-        # Build fx:
-        fx_inputs = [
-            data_dict["air_density"],
-            data_dict["stream_velocity"],
-        ]
-        fx = torch.stack(fx_inputs, dim=-1)
-
-        if self.config.broadcast_global_features:
-            fx = fx.broadcast_to(embeddings.shape[0], -1)
-        else:
-            fx = fx.unsqueeze(0)
-
         fields = data_dict["surface_fields"]
         if idx is not None:
             fields = fields[idx]
 
         if self.config.scaling_type is not None:
-            fields = self.scale_model_targets(fields, self.config.normalization_factors)
+            fields = self.scale_model_targets(fields, self.config.surface_factors)
 
-        return {
-            "embeddings": embeddings,
-            "fx": fx,
-            "fields": fields,
-        }
+        if "air_density" in data_dict and "stream_velocity" in data_dict:
+            # Build fx:
+            fx_inputs = [
+                data_dict["air_density"],
+                data_dict["stream_velocity"],
+            ]
+            fx = torch.stack(fx_inputs, dim=-1)
+
+            if self.config.broadcast_global_features:
+                fx = fx.broadcast_to(embeddings.shape[0], -1)
+            else:
+                fx = fx.unsqueeze(0)
+
+            return {
+                "embeddings": embeddings,
+                "fx": fx,
+                "fields": fields,
+            }
+
+        else:
+            return {
+                "embeddings": embeddings,
+                "fields": fields,
+            }
 
     def preprocess_volume_data(
         self,
@@ -316,30 +319,36 @@ class TransolverDataPipe(Dataset):
 
         embeddings = torch.cat(embeddings_inputs, dim=-1)
 
-        # Build fx:
-        fx_inputs = [
-            data_dict["air_density"],
-            data_dict["stream_velocity"],
-        ]
-        fx = torch.stack(fx_inputs, dim=-1)
-
-        if self.config.broadcast_global_features:
-            fx = fx.broadcast_to(embeddings.shape[0], -1)
-        else:
-            fx = fx.unsqueeze(0)
-
         fields = data_dict["volume_fields"]
         if idx is not None:
             fields = fields[idx]
 
         if self.config.scaling_type is not None:
-            fields = self.scale_model_targets(fields, self.config.normalization_factors)
+            fields = self.scale_model_targets(fields, self.config.volume_factors)
 
-        return {
-            "embeddings": embeddings,
-            "fx": fx,
-            "fields": fields,
-        }
+        if "air_density" in data_dict and "stream_velocity" in data_dict:
+            # Build fx:
+            fx_inputs = [
+                data_dict["air_density"],
+                data_dict["stream_velocity"],
+            ]
+            fx = torch.stack(fx_inputs, dim=-1)
+
+            if self.config.broadcast_global_features:
+                fx = fx.broadcast_to(embeddings.shape[0], -1)
+            else:
+                fx = fx.unsqueeze(0)
+
+            return {
+                "embeddings": embeddings,
+                "fx": fx,
+                "fields": fields,
+            }
+        else:
+            return {
+                "embeddings": embeddings,
+                "fields": fields,
+            }
 
     def process_geometry(
         self,
@@ -422,7 +431,7 @@ class TransolverDataPipe(Dataset):
             "stl_centers",
         ]
 
-        if self.config.model_type == "volume":
+        if self.config.model_type == "volume" or self.config.model_type == "combined":
             # We need these for the SDF calculation:
             required_keys.extend(
                 [
@@ -430,7 +439,9 @@ class TransolverDataPipe(Dataset):
                     "stl_faces",
                 ]
             )
-        elif self.config.model_type == "surface":
+        elif (
+            self.config.model_type == "surface" or self.config.model_type == "combined"
+        ):
             required_keys.extend(
                 [
                     "surface_normals",
@@ -446,15 +457,20 @@ class TransolverDataPipe(Dataset):
         else:
             center_of_mass = None
 
-        field_key = f"{self.config.model_type}_fields"
-        coords_key = f"{self.config.model_type}_mesh_centers"
-
-        required_keys.extend(
-            [
-                field_key,
-                coords_key,
-            ]
-        )
+        if self.config.model_type == "surface" or self.config.model_type == "combined":
+            required_keys.extend(
+                [
+                    "surface_fields",
+                    "surface_mesh_centers",
+                ]
+            )
+        elif self.config.model_type == "volume" or self.config.model_type == "combined":
+            required_keys.extend(
+                [
+                    "volume_fields",
+                    "volume_mesh_centers",
+                ]
+            )
 
         missing_keys = [key for key in required_keys if key not in data_dict]
         if missing_keys:
@@ -475,6 +491,23 @@ class TransolverDataPipe(Dataset):
             outputs = self.preprocess_volume_data(
                 data_dict, center_of_mass, scale_factor
             )
+        elif self.config.model_type == "combined":
+            outputs_surf = self.preprocess_surface_data(
+                data_dict, center_of_mass, scale_factor
+            )
+
+            outputs_vol = self.preprocess_volume_data(
+                data_dict, center_of_mass, scale_factor
+            )
+
+            outputs = {}
+            outputs["embeddings"] = [
+                outputs_surf["embeddings"],
+                outputs_vol["embeddings"],
+            ]
+            # This should be the same in either:
+            outputs["fx"] = outputs_surf["fx"]
+            outputs["fields"] = [outputs_surf["fields"], outputs_vol["fields"]]
 
         if self.config.include_geometry:
             outputs["geometry"] = self.process_geometry(
@@ -512,6 +545,7 @@ class TransolverDataPipe(Dataset):
         fields: torch.Tensor | None = None,
         air_density: torch.Tensor | None = None,
         stream_velocity: torch.Tensor | None = None,
+        factor_type: Literal["surface", "volume", "auto"] = "auto",
     ):
         """
         Unscale the model outputs based on the configured scaling factors.
@@ -521,7 +555,18 @@ class TransolverDataPipe(Dataset):
 
         """
 
-        factors = self.config.normalization_factors
+        match factor_type:
+            case "surface":
+                factors = self.config.surface_factors
+            case "volume":
+                factors = self.config.volume_factors
+            case "auto":
+                if self.config.model_type == "surface":
+                    factors = self.config.surface_factors
+                elif self.config.model_type == "volume":
+                    factors = self.config.volume_factors
+                else:
+                    raise ValueError(f"Invalid model type {self.config.model_type}")
 
         if self.config.scaling_type == "mean_std_scaling":
             field_mean = factors["mean"]
@@ -532,8 +577,8 @@ class TransolverDataPipe(Dataset):
             field_max = factors["max"]
             fields = unnormalize(fields, field_max, field_min)
 
-        if air_density is not None and stream_velocity is not None:
-            fields = fields * air_density * stream_velocity**2
+        # if air_density is not None and stream_velocity is not None:
+        #     fields = fields * air_density * stream_velocity**2
 
         return fields
 
@@ -591,9 +636,11 @@ class TransolverDataPipe(Dataset):
 
         """
         outputs = self.process_data(data_dict)
-
         for key in outputs.keys():
-            outputs[key] = outputs[key].unsqueeze(0)
+            if isinstance(outputs[key], list):
+                outputs[key] = [item.unsqueeze(0) for item in outputs[key]]
+            else:
+                outputs[key] = outputs[key].unsqueeze(0)
 
         return outputs
 
@@ -610,10 +657,8 @@ class TransolverDataPipe(Dataset):
 def create_transolver_dataset(
     cfg: DictConfig,
     phase: Literal["train", "val", "test"],
-    # keys_to_read: list[str],
-    # keys_to_read_if_available: dict[str, torch.Tensor],
-    scaling_factors: list[float],
-    # normalize_coordinates: bool = True,
+    surface_factors: dict[str, torch.Tensor] | None = None,
+    volume_factors: dict[str, torch.Tensor] | None = None,
     device_mesh: torch.distributed.DeviceMesh | None = None,
     placements: dict[str, torch.distributed.tensor.Placement] | None = None,
 ):
@@ -694,7 +739,8 @@ def create_transolver_dataset(
     datapipe = TransolverDataPipe(
         input_path,
         resolution=cfg.resolution,
-        normalization_factors=scaling_factors,
+        surface_factors=surface_factors,
+        volume_factors=volume_factors,
         model_type=model_type,
         scaling_type="mean_std_scaling",
         **overrides,
