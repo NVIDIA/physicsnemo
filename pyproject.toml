@@ -70,6 +70,7 @@ earth2grid = ["setuptools", "torch"]
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
+explicit = true  # Only use for packages that explicitly specify this index
 
 
 [tool.uv.sources]
@@ -190,7 +191,8 @@ lint.fixable = ["I"]
 
 # Never enforce `E501` (line length violations),
 # and `S311` (random number generators)
-lint.ignore = ["E501", "S311"]
+# and `F722` which breaks jaxtyping annotations
+lint.ignore = ["E501", "S311", "F722"]
 
 # Exclude the docs and experimental folders (this applies to both lint and format)
 exclude = ["docs", "physicsnemo/experimental"]
