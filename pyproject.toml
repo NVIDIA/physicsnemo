@@ -16,7 +16,7 @@ license = "Apache-2.0"
 
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
+    "Operating System :: POSIX :: Linux",
 ]
 dynamic = ["version", "optional_dependencies"]
 
@@ -60,6 +60,10 @@ Changelog = "https://github.com/NVIDIA/physicsnemo/blob/main/CHANGELOG.md"
 
 [tool.uv]
 managed = true
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
 
 [tool.uv.extra-build-dependencies]
 torch-sparse = ["torch"]
