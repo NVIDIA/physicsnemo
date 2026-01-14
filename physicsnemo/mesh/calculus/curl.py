@@ -1,0 +1,75 @@
+"""Curl operator for vector fields (3D only).
+
+Implements curl using both DEC and LSQ methods.
+
+DEC formula: curl = ⋆d♭
+    1. Apply flat ♭ to convert vector field to 1-form
+    2. Apply exterior derivative d to get 2-form
+    3. Apply Hodge star ⋆ to get dual 1-form
+    4. Convert back to vector field
+
+For 3D: curl maps vectors to vectors.
+"""
+
+from typing import TYPE_CHECKING
+
+import torch
+
+if TYPE_CHECKING:
+    from physicsnemo.mesh.mesh import Mesh
+
+
+def compute_curl_points_lsq(
+    mesh: "Mesh",
+    vector_field: torch.Tensor,
+) -> torch.Tensor:
+    """Compute curl at vertices using LSQ gradient method.
+
+    For 3D vector field v = [vₓ, vᵧ, vᵧ]:
+        curl(v) = [∂vᵧ/∂y - ∂vᵧ/∂z, ∂vₓ/∂z - ∂vᵧ/∂x, ∂vᵧ/∂x - ∂vₓ/∂y]
+
+    Computes Jacobian of vector field, then takes antisymmetric part.
+
+    Args:
+        mesh: Simplicial mesh
+        vector_field: Vectors at vertices, shape (n_points, 3)
+
+    Returns:
+        Curl at vertices, shape (n_points, 3)
+
+    Raises:
+        ValueError: If n_spatial_dims != 3
+    """
+    if mesh.n_spatial_dims != 3:
+        raise ValueError(
+            f"Curl is only defined for 3D vector fields, got {mesh.n_spatial_dims=}"
+        )
+
+    from physicsnemo.mesh.calculus._lsq_reconstruction import compute_point_gradient_lsq
+
+    n_points = mesh.n_points
+
+    ### Compute Jacobian: gradient of each component
+    # Shape: (n_points, 3, 3) where jacobian[i,j,k] = ∂v_j/∂x_k
+    jacobian = torch.zeros(
+        (n_points, 3, 3),
+        dtype=vector_field.dtype,
+        device=mesh.points.device,
+    )
+
+    for component_idx in range(3):
+        component = vector_field[:, component_idx]  # (n_points,)
+        grad_component = compute_point_gradient_lsq(mesh, component)  # (n_points, 3)
+        jacobian[:, component_idx, :] = grad_component
+
+    ### Compute curl from Jacobian
+    # curl = [∂vz/∂y - ∂vy/∂z, ∂vx/∂z - ∂vz/∂x, ∂vy/∂x - ∂vx/∂y]
+    curl = torch.zeros(
+        (n_points, 3), dtype=vector_field.dtype, device=mesh.points.device
+    )
+
+    curl[:, 0] = jacobian[:, 2, 1] - jacobian[:, 1, 2]  # ∂vz/∂y - ∂vy/∂z
+    curl[:, 1] = jacobian[:, 0, 2] - jacobian[:, 2, 0]  # ∂vx/∂z - ∂vz/∂x
+    curl[:, 2] = jacobian[:, 1, 0] - jacobian[:, 0, 1]  # ∂vy/∂x - ∂vx/∂y
+
+    return curl
