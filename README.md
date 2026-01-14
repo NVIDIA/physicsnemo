@@ -419,8 +419,10 @@ docker build -t physicsnemo:ci \
 
 Alternatively, you can run `make container-ci`.
 
-Currently, only `linux/amd64` and `linux/arm64` platforms are supported. If using
-`linux/arm64`, some dependencies like `warp-lang` might not install correctly.
+Docker containers are available for `linux/amd64` and `linux/arm64` platforms only.
+If using `linux/arm64`, some dependencies like `warp-lang` might not install correctly.
+
+For pip installation, Linux, macOS (ARM), and Windows are supported.
 
 ## PhysicsNeMo Migration Guide
 
