@@ -112,8 +112,8 @@ class MeshGraphNet(Module):
     torch.Tensor
         Output node features of shape :math:`(N_{nodes}, D_{out})`.
 
-    Example
-    -------
+    Examples
+    --------
     >>> # ``norm_type`` in MeshGraphNet is deprecated,
     >>> # TE will be automatically used if possible unless told otherwise.
     >>> # (You don't have to set this variable, it's faster to use TE!)
@@ -325,33 +325,6 @@ class MeshGraphNetProcessor(Module):
         num_processor_checkpoint_segments: int = 0,
         checkpoint_offloading: bool = False,
     ):
-        r"""Initialize the MeshGraphNet processor.
-
-        Parameters
-        ----------
-        processor_size : int, optional, default=15
-            Number of alternating edge/node update layers in the processor.
-        input_dim_node : int, optional, default=128
-            Dimensionality of per-node hidden features provided to the processor.
-        input_dim_edge : int, optional, default=128
-            Dimensionality of per-edge hidden features provided to the processor.
-        num_layers_node : int, optional, default=2
-            Number of MLP layers within each node update block.
-        num_layers_edge : int, optional, default=2
-            Number of MLP layers within each edge update block.
-        aggregation : str, optional, default="sum"
-            Message aggregation method used in node update blocks.
-        norm_type : str, optional, default="LayerNorm"
-            Normalization type within processor blocks.
-        activation_fn : torch.nn.Module, optional, default=nn.ReLU()
-            Activation function module used inside the MLPs.
-        do_concat_trick : bool, optional, default=False
-            Whether to replace concat+MLP with MLP+idx+sum.
-        num_processor_checkpoint_segments : int, optional, default=0
-            Number of checkpoint segments across processor layers (0 disables checkpointing).
-        checkpoint_offloading : bool, optional, default=False
-            Whether to offload checkpoint activations to CPU.
-        """
         super().__init__()
         self.processor_size = processor_size
         self.num_processor_checkpoint_segments = num_processor_checkpoint_segments
