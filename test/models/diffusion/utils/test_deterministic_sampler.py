@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.diffusion.preconditioning import EDMPrecondSuperResolution
+from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
 from test.conftest import requires_module
 
 
@@ -44,7 +44,7 @@ def mock_net():
 # Basic functionality test
 @requires_module("cftime")
 def test_deterministic_sampler_output_type_and_shape(mock_net, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -57,7 +57,7 @@ def test_deterministic_sampler_output_type_and_shape(mock_net, pytestconfig):
 @requires_module("cftime")
 @pytest.mark.parametrize("solver", ["invalid_solver", "euler", "heun"])
 def test_deterministic_sampler_solver_validation(mock_net, solver, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     if solver == "invalid_solver":
         with pytest.raises(ValueError):
@@ -80,7 +80,7 @@ def test_deterministic_sampler_solver_validation(mock_net, solver, pytestconfig)
 # Test for edge cases
 @requires_module("cftime")
 def test_deterministic_sampler_edge_cases(mock_net, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -95,7 +95,7 @@ def test_deterministic_sampler_edge_cases(mock_net, pytestconfig):
 @requires_module("cftime")
 @pytest.mark.parametrize("discretization", ["vp", "ve", "iddpm", "edm"])
 def test_deterministic_sampler_discretization(mock_net, discretization, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -109,7 +109,7 @@ def test_deterministic_sampler_discretization(mock_net, discretization, pytestco
 @requires_module("cftime")
 @pytest.mark.parametrize("schedule", ["vp", "ve", "linear"])
 def test_deterministic_sampler_schedule(mock_net, schedule, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -123,7 +123,7 @@ def test_deterministic_sampler_schedule(mock_net, schedule, pytestconfig):
 @requires_module("cftime")
 @pytest.mark.parametrize("num_steps", [1, 5, 18])
 def test_deterministic_sampler_num_steps(mock_net, num_steps, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -139,7 +139,7 @@ def test_deterministic_sampler_num_steps(mock_net, num_steps, pytestconfig):
 def test_deterministic_sampler_sigma_boundaries(
     mock_net, sigma_min, sigma_max, pytestconfig
 ):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -157,7 +157,7 @@ def test_deterministic_sampler_sigma_boundaries(
 @requires_module("cftime")
 @pytest.mark.parametrize("scaling", ["invalid_scaling", "vp", "none"])
 def test_deterministic_sampler_scaling_validation(mock_net, scaling, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 64, 64)
     img_lr = torch.randn(1, 3, 64, 64)
@@ -176,7 +176,7 @@ def test_deterministic_sampler_scaling_validation(mock_net, scaling, pytestconfi
 # Test correctness with known ODE solution
 @requires_module("cftime")
 def test_deterministic_sampler_correctness(pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     # Create a simple network that implements our ODE: dx/dt = -x ==> x(t) = exp(-t)
     class SimpleODENet(torch.nn.Module):
@@ -260,7 +260,7 @@ def setup_model_learnable_embd(img_resolution, C_x, C_cond, global_lr=False, see
 # The test function for patch-based deterministic_sampler
 @requires_module("cftime")
 def test_deterministic_sampler_full_domain_lead_time(device, pytestconfig):
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     latents = torch.randn(1, 3, 16, 16, device=device)  # Mock latents
     img_lr = torch.randn(1, 3, 16, 16, device=device)  # Mock low-res image
@@ -287,8 +287,8 @@ def test_deterministic_sampler_full_domain_lead_time(device, pytestconfig):
 # The test function for edm_sampler with rectangular domain and patching
 @requires_module("cftime")
 def test_deterministic_sampler_rectangle_patching_lead_time(device, pytestconfig):
-    from physicsnemo.models.diffusion.patching import GridPatching2D
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     torch._dynamo.reset()
     img_shape_y, img_shape_x = 32, 32
@@ -336,8 +336,8 @@ def test_deterministic_sampler_patching_differentiable(device, pytestconfig):
     if device == "cpu":
         pytest.skip("Skip deterministic sampler patching differentiable on cpu")
 
-    from physicsnemo.models.diffusion.patching import GridPatching2D
-    from physicsnemo.models.diffusion.sampling import deterministic_sampler
+    from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+    from physicsnemo.diffusion.samplers import deterministic_sampler
 
     torch._dynamo.reset()
 

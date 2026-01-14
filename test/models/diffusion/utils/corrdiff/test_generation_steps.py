@@ -46,8 +46,8 @@ class MockNet:
 
 @requires_module("cftime")
 def test_regression_step(device, pytestconfig):
-    from physicsnemo.models.diffusion import CorrDiffRegressionUNet
-    from physicsnemo.models.diffusion.corrdiff_utils import regression_step
+    from physicsnemo.diffusion.generate import regression_step
+    from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
 
     # define the net
     mock_unet = CorrDiffRegressionUNet(
@@ -71,9 +71,9 @@ def test_regression_step(device, pytestconfig):
 
 @requires_module("cftime")
 def test_diffusion_step(device, pytestconfig):
-    from physicsnemo.models.diffusion import EDMPrecondSuperResolution
-    from physicsnemo.models.diffusion.corrdiff_utils import diffusion_step
-    from physicsnemo.models.diffusion.sampling import (
+    from physicsnemo.diffusion.generate import diffusion_step
+    from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
+    from physicsnemo.diffusion.samplers import (
         deterministic_sampler,
         stochastic_sampler,
     )
@@ -133,9 +133,9 @@ def test_diffusion_step(device, pytestconfig):
 
 @requires_module("cftime")
 def test_diffusion_step_rectangle(device, pytestconfig):
-    from physicsnemo.models.diffusion.corrdiff_utils import diffusion_step
-    from physicsnemo.models.diffusion.patching import GridPatching2D
-    from physicsnemo.models.diffusion.sampling import stochastic_sampler
+    from physicsnemo.diffusion.generate import diffusion_step
+    from physicsnemo.diffusion.multi_diffusion import GridPatching2D
+    from physicsnemo.diffusion.samplers import stochastic_sampler
 
     torch._dynamo.reset()
 

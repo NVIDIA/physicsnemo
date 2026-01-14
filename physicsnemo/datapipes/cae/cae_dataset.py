@@ -652,19 +652,26 @@ if TENSORSTORE_AVAILABLE:
 
             keys = store.list().result()
 
+            def to_tensor_dict(attributes_dict):
+                attributes = {}
+                for k, v in attributes_dict.items():
+                    try:
+                        attributes[k] = torch.tensor(v)
+                    except (TypeError, ValueError, RuntimeError):  # noqa PERF203
+                        pass
+                return attributes
+
             # Zarr 3 check:
             if b"/zarr.json" in keys:
                 zarr_json = store.read(b"/zarr.json").result()
                 # load into json's parser:
                 attributes_dict = json.loads(zarr_json.value)["attributes"]
-                attributes = {k: torch.tensor(v) for k, v in attributes_dict.items()}
-                return attributes
+                return to_tensor_dict(attributes_dict)
             elif b"/.zattrs" in keys:
                 # Zarr 2:
                 zarr_attrs = store.read(b"/.zattrs").result()
                 attributes_dict = json.loads(zarr_attrs.value)
-                attributes = {k: torch.tensor(v) for k, v in attributes_dict.items()}
-                return attributes
+                return to_tensor_dict(attributes_dict)
             else:
                 return {}
 

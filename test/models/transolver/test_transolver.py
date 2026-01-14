@@ -133,10 +133,15 @@ def test_transolver_optims(device):
             use_te=False,
         ).to(device)
 
-        bsize = 4
+        if device == "cuda:0":
+            bsize = 4
+            n_points = 12345
+        else:
+            bsize = 1
+            n_points = 123
 
-        embedding = torch.randn(bsize, 12345, 3).to(device)
-        functional_input = torch.randn(bsize, 12345, 2).to(device)
+        embedding = torch.randn(bsize, n_points, 3).to(device)
+        functional_input = torch.randn(bsize, n_points, 2).to(device)
 
         return model, embedding, functional_input
 

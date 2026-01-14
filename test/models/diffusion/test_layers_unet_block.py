@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import physicsnemo
-from physicsnemo.models.diffusion.layers import UNetBlock
+from physicsnemo.nn import UNetBlock
 
 # import common  # noqa: E402
 
