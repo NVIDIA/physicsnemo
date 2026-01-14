@@ -15,11 +15,11 @@
 # limitations under the License.
 
 r"""
-Default configuration parameters for domino.
+Default configuration parameters for DoMINO.
 
 Built as dictionary objects (for JSON serialization) but with
-attribute access (for domino's code). Built-in conversion
-from hydra objects as well.
+attribute access (for DoMINO's code). Built-in conversion
+from Hydra objects as well.
 """
 
 from dataclasses import fields, is_dataclass
@@ -27,7 +27,7 @@ from typing import Any
 
 
 class Config(dict):
-    """
+    r"""
     A dict subclass that provides attribute-style access to keys.
 
     Nested dicts are automatically wrapped in Config instances,
@@ -60,7 +60,7 @@ class Config(dict):
     """
 
     def __init__(self, *args, **kwargs):
-        """Initialize from dict, positional args, or keyword args."""
+        r"""Initialize from dict, positional args, or keyword args."""
         super().__init__(*args, **kwargs)
         # Convert any nested dicts to Config instances
         for key, value in self.items():
@@ -68,20 +68,20 @@ class Config(dict):
                 self[key] = Config(value)
 
     def __getattr__(self, key: str) -> Any:
-        """Allow attribute-style access to dict keys."""
+        r"""Allow attribute-style access to dict keys."""
         try:
             return self[key]
         except KeyError:
             raise AttributeError(f"'{type(self).__name__}' has no attribute '{key}'")
 
     def __setattr__(self, key: str, value: Any):
-        """Allow attribute-style setting of dict keys, wrapping dicts as Config."""
+        r"""Allow attribute-style setting of dict keys, wrapping dicts as Config."""
         if isinstance(value, dict) and not isinstance(value, Config):
             value = Config(value)
         self[key] = value
 
     def __delattr__(self, key: str):
-        """Allow attribute-style deletion of dict keys."""
+        r"""Allow attribute-style deletion of dict keys."""
         try:
             del self[key]
         except KeyError:
@@ -89,14 +89,18 @@ class Config(dict):
 
     @classmethod
     def from_hydra(cls, hydra_cfg: Any) -> "Config":
-        """
+        r"""
         Convert a Hydra/OmegaConf config object to a Config instance.
 
-        Args:
-            hydra_cfg: A Hydra DictConfig, dataclass, or dict-like object
+        Parameters
+        ----------
+        hydra_cfg : Any
+            A Hydra DictConfig, dataclass, or dict-like object.
 
-        Returns:
-            A Config instance with values from hydra_cfg
+        Returns
+        -------
+        Config
+            A Config instance with values from ``hydra_cfg``.
         """
         if hydra_cfg is None:
             return cls()
@@ -123,8 +127,7 @@ class Config(dict):
 
 
 def _dataclass_to_dict(obj: Any) -> dict:
-    """Recursively convert a dataclass to a dict."""
-
+    r"""Recursively convert a dataclass to a dict."""
     result = {}
     for field in fields(obj):
         value = getattr(obj, field.name)

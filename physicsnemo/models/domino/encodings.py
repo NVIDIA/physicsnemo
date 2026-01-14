@@ -26,12 +26,13 @@ import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
 
+from physicsnemo.core import Module
 from physicsnemo.nn import BQWarp
 
 from .mlps import LocalPointConv
 
 
-class LocalGeometryEncoding(nn.Module):
+class LocalGeometryEncoding(Module):
     r"""
     A local geometry encoding module.
 
@@ -85,7 +86,7 @@ class LocalGeometryEncoding(nn.Module):
         activation: nn.Module,
         grid_resolution: tuple[int, int, int],
     ):
-        super().__init__()
+        super().__init__(meta=None)
         self.bq_warp = BQWarp(
             radius=radius,
             neighbors_in_radius=neighbors_in_radius,
@@ -173,7 +174,7 @@ class LocalGeometryEncoding(nn.Module):
         return encoding_g_inner
 
 
-class MultiGeometryEncoding(nn.Module):
+class MultiGeometryEncoding(Module):
     r"""
     Module to apply multiple local geometry encodings at different scales.
 
@@ -228,7 +229,7 @@ class MultiGeometryEncoding(nn.Module):
         activation: nn.Module,
         grid_resolution: tuple[int, int, int],
     ):
-        super().__init__()
+        super().__init__(meta=None)
 
         self.local_geo_encodings = nn.ModuleList(
             [

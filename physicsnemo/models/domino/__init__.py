@@ -17,7 +17,7 @@
 r"""
 DoMINO Model Package.
 
-This package contains the DoMINO (Decomposable Multi-scale Iterative Nueral Operator)
+This package contains the DoMINO (Decomposable Multi-scale Iterative Neural Operator)
 model architecture for predicting both surface and
 volume physical quantities in aerodynamic simulations.
 

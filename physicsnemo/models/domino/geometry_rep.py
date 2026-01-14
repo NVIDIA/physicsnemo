@@ -30,6 +30,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 
+from physicsnemo.core import Module
 from physicsnemo.models.unet import UNet
 from physicsnemo.nn import BQWarp, Mlp, fourier_encode, get_activation
 
@@ -66,7 +67,7 @@ def scale_sdf(
     return sdf / (scaling_factor + torch.abs(sdf))
 
 
-class GeoConvOut(nn.Module):
+class GeoConvOut(Module):
     r"""
     Geometry layer to project STL geometry data onto regular grids.
 
@@ -117,7 +118,7 @@ class GeoConvOut(nn.Module):
         model_parameters: Any,
         grid_resolution: list[int] | None = None,
     ):
-        super().__init__()
+        super().__init__(meta=None)
         if grid_resolution is None:
             grid_resolution = [256, 96, 64]
         base_neurons = model_parameters.base_neurons
@@ -216,7 +217,7 @@ class GeoConvOut(nn.Module):
         return x
 
 
-class GeoProcessor(nn.Module):
+class GeoProcessor(Module):
     r"""
     Geometry processing layer using 3D CNNs.
 
@@ -257,7 +258,7 @@ class GeoProcessor(nn.Module):
         output_filters: int,
         model_parameters: Any,
     ):
-        super().__init__()
+        super().__init__(meta=None)
         base_filters = model_parameters.base_filters
 
         # Encoder layers
@@ -371,7 +372,7 @@ class GeoProcessor(nn.Module):
         return x
 
 
-class GeometryRep(nn.Module):
+class GeometryRep(Module):
     r"""
     Geometry representation module that processes STL geometry data.
 
@@ -439,7 +440,7 @@ class GeometryRep(nn.Module):
         sdf_scaling_factor: Sequence[float] = [0.04],
         model_parameters: Any = None,
     ):
-        super().__init__()
+        super().__init__(meta=None)
         geometry_rep = model_parameters.geometry_rep
         self.geo_encoding_type = model_parameters.geometry_encoding_type
         self.cross_attention = geometry_rep.geo_processor.cross_attention

@@ -27,6 +27,8 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float
 
+from physicsnemo.core import Module
+
 
 def apply_parameter_encoding(
     mesh_centers: Float[torch.Tensor, "batch num_points 3"],
@@ -155,7 +157,7 @@ def sample_sphere_shell(
     return output
 
 
-class SolutionCalculatorVolume(nn.Module):
+class SolutionCalculatorVolume(Module):
     r"""
     Module to calculate the output solution of the DoMINO Model for volume data.
 
@@ -220,7 +222,7 @@ class SolutionCalculatorVolume(nn.Module):
         aggregation_model: nn.ModuleList,
         nn_basis: nn.ModuleList,
     ):
-        super().__init__()
+        super().__init__(meta=None)
 
         self.num_variables = num_variables
         self.num_sample_points = num_sample_points
@@ -406,7 +408,7 @@ class SolutionCalculatorVolume(nn.Module):
             return output_all
 
 
-class SolutionCalculatorSurface(nn.Module):
+class SolutionCalculatorSurface(Module):
     r"""
     Module to calculate the output solution of the DoMINO Model for surface data.
 
@@ -478,7 +480,7 @@ class SolutionCalculatorSurface(nn.Module):
         aggregation_model: nn.ModuleList,
         nn_basis: nn.ModuleList,
     ):
-        super().__init__()
+        super().__init__(meta=None)
         self.num_variables = num_variables
         self.num_sample_points = num_sample_points
         self.encode_parameters = encode_parameters
