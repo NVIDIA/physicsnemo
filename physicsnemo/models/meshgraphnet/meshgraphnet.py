@@ -22,8 +22,8 @@ from warnings import warn
 
 import torch
 import torch.nn as nn
-from torch import Tensor
 from jaxtyping import Float
+from torch import Tensor
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -252,11 +252,17 @@ class MeshGraphNet(Module):
             Output node features of shape :math:`(N_{nodes}, D_{out})`.
         """
         if not torch.compiler.is_compiling():
-            if node_features.ndim != 2 or node_features.shape[1] != self.input_dim_nodes:
+            if (
+                node_features.ndim != 2
+                or node_features.shape[1] != self.input_dim_nodes
+            ):
                 raise ValueError(
                     f"Expected tensor of shape (N_nodes, {self.input_dim_nodes}) but got tensor of shape {tuple(node_features.shape)}"
                 )
-            if edge_features.ndim != 2 or edge_features.shape[1] != self.input_dim_edges:
+            if (
+                edge_features.ndim != 2
+                or edge_features.shape[1] != self.input_dim_edges
+            ):
                 raise ValueError(
                     f"Expected tensor of shape (N_edges, {self.input_dim_edges}) but got tensor of shape {tuple(edge_features.shape)}"
                 )
