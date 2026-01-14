@@ -235,3 +235,38 @@ def test_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_te):
     )
     assert common.validate_onnx_export(model, invar)
     assert common.validate_onnx_runtime(model, invar)
+
+
+@requires_module("torch_geometric")
+def test_meshgraphnet_shape_validation(device, pytestconfig, set_physicsnemo_force_te):
+    """Test shape validation errors for MeshGraphNet.forward"""
+    import torch_geometric as pyg
+
+    from physicsnemo.models.meshgraphnet import MeshGraphNet
+
+    model = MeshGraphNet(
+        input_dim_nodes=4,
+        input_dim_edges=3,
+        output_dim=2,
+    ).to(device)
+
+    # Single graph
+    num_nodes, num_edges = 12, 16
+    graph = pyg.data.Batch.from_data_list([rand_graph(num_nodes, num_edges, device)])
+
+    # Wrong node feature dimension (second dim)
+    bad_node = torch.randn(graph.num_nodes, 5).to(device)
+    good_edge = torch.randn(graph.num_edges, 3).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node, good_edge, graph)
+
+    # Wrong edge feature dimension (second dim)
+    good_node = torch.randn(graph.num_nodes, 4).to(device)
+    bad_edge = torch.randn(graph.num_edges, 2).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_edges, 3\)"):
+        _ = model(good_node, bad_edge, graph)
+
+    # Wrong node feature rank (ndim)
+    bad_node_rank = torch.randn(2, graph.num_nodes, 4).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node_rank, good_edge, graph)
