@@ -334,12 +334,15 @@ way is to start with a reference sample and then update it for your own use case
 ## Installation
 
 The following instructions help you install the base PhysicsNeMo modules to get
-started. In addition to this, optional dependencies can be installed to provide additional functionality. A complete list of optional dependencies is available in the [`pyproject.toml`](./pyproject.toml) file.
+started. In addition to this, optional dependencies can be installed to provide
+additional functionality. A complete list of optional dependencies is available
+in the [`pyproject.toml`](./pyproject.toml) file.
 
-The [training recipes](./examples) are not packaged into the pip wheels or the container to keep the
-footprint low. We recommend users clone the appropriate training recipes and use them
-as a starting point. These training recipes may require additional example-specific dependencies,
-as indicated through an associated `requirements.txt` file in such cases.
+The [training recipes](./examples) are not packaged into the pip wheels or the
+container to keep the footprint low. We recommend users clone the appropriate
+training recipes and use them as a starting point. These training recipes may
+require additional example-specific dependencies, as indicated through an
+associated `requirements.txt` file in such cases.
 
 ### PyPI
 
