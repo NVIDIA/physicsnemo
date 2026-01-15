@@ -23,10 +23,6 @@
 
 name: Pull Request Github CI
 on:
-  pull_request:
-    branches:
-      - main
-      - "release/*"
   push:
     branches:
       - "pull-request/[0-9]+"
