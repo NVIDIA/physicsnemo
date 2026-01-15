@@ -138,7 +138,7 @@ jobs:
   coverage:
     name: Coverage
     needs: build-environment
-    runs-on: nv-gpu-amd64-h100-1gpu
+    runs-on: linux-amd64-gpu-h100-latest-1
     container:
       image: nvcr.io/nvidia/pytorch:25.12-py3
 
