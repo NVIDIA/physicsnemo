@@ -17,8 +17,9 @@
 # This CI runs on pull requests and uses testmon to skip tests
 # that don't have changed dependencies based on the nightly cache.
 # The tests run here will only use UV.
-#
-# Currently this uses ubuntu cpu tests, it's going to switch to github nvidia runners.
+
+# TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
+# THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
 
 name: Pull Request Github CI
 on:
@@ -32,24 +33,18 @@ on:
   workflow_dispatch:
     # Allow manual triggering for debugging the CI.
 
-
+# Container image used across all jobs - update this single value to change everywhere
+# Note: env context not available in container.image, so we hardcode the value
 jobs:
   # Stage 1: Build and cache the environment
   build-environment:
-    name: Build Environment (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest"]
-        python-version: ["3.12"]
+    name: Build Environment
+    runs-on: ubuntu-latest
+    container:
+      image: nvcr.io/nvidia/pytorch:25.01-py3
 
     steps:
     - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: nick-fields/retry@v3
@@ -65,7 +60,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-pr-latest
 
     - name: Install package with uv
       if: steps.cache-uv-restore.outputs.cache-hit != 'true'
@@ -82,7 +77,7 @@ jobs:
     - name: Delete old environment cache
       if: steps.cache-uv-restore.outputs.cache-hit != 'true'
       run: |
-        gh cache delete "uv-env-py${{ matrix.python-version }}-latest" || true
+        gh cache delete "uv-env-pr-latest" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -91,25 +86,18 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-pr-latest
 
   # Stage 2: Run testmon tests
   testmon:
-    name: Testmon (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
+    name: Testmon
     needs: build-environment
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest"]
-        python-version: ["3.12"]
+    runs-on: ubuntu-latest
+    container:
+      image: nvcr.io/nvidia/pytorch:25.01-py3
 
     steps:
     - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: nick-fields/retry@v3
@@ -124,7 +112,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-pr-latest
         fail-on-cache-miss: true
 
     - name: Restore testmon database from cache
@@ -134,9 +122,7 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-${{ matrix.os }}-py${{ matrix.python-version }}-latest
-        restore-keys: |
-          testmon-${{ matrix.os }}-py${{ matrix.python-version }}-
+        key: testmon-nightly-latest
 
     - name: Run core tests (with testmon)
       run: |
@@ -144,21 +130,14 @@ jobs:
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
-    name: Coverage (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
+    name: Coverage
     needs: build-environment
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest"]
-        python-version: ["3.12"]
+    runs-on: ubuntu-latest
+    container:
+      image: nvcr.io/nvidia/pytorch:25.01-py3
 
     steps:
     - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: nick-fields/retry@v3
@@ -173,7 +152,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-pr-latest
         fail-on-cache-miss: true
 
     - name: Restore testmon database from cache
@@ -183,16 +162,14 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-${{ matrix.os }}-py${{ matrix.python-version }}-latest
-        restore-keys: |
-          testmon-${{ matrix.os }}-py${{ matrix.python-version }}-
+        key: testmon-nightly-latest
 
     - name: Restore nightly coverage baseline from cache
       id: cache-coverage-restore
       uses: actions/cache/restore@v4
       with:
         path: .coverage*
-        key: coverage-${{ matrix.os }}-py${{ matrix.python-version }}-latest
+        key: coverage-nightly-latest
 
     - name: Run core tests for coverage report (testmon-selected)
       run: |
@@ -219,6 +196,6 @@ jobs:
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-report-${{ matrix.os }}-py${{ matrix.python-version }}
+        name: coverage-report-pr
         path: htmlcov/
         retention-days: 7

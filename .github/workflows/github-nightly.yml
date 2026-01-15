@@ -19,9 +19,10 @@
 # The tests run here will only use UV.  This is meant to be nightly functionality
 # testing AND a baseline dependency graph for PRs.
 
-# Currently this uses ubuntu cpu tests, it's going to switch to github nvidia runners.
+
 # TO DO: THE COVERAGE LIMIT IS VERY LOW, BECAUSE THIS IS NOT USING GPU TESTS OR
 # THE DATA-DRIVEN TESTS.  RAISE THIS UP AGAIN EVENTUALLY.
+
 
 name: Nightly Github Workflow
 on:
@@ -31,24 +32,18 @@ on:
   workflow_dispatch:
     # Allow manual triggering
 
-
+# Container image used across all jobs - update this single value to change everywhere
+# Note: env context not available in container.image, so we hardcode the value
 jobs:
   # Stage 1: Build and cache the environment
   build-environment:
-    name: Build Environment (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest"]
-        python-version: ["3.11", "3.12", "3.13"]
+    name: Build Environment
+    runs-on: ubuntu-latest
+    container:
+      image: nvcr.io/nvidia/pytorch:25.01-py3
 
     steps:
     - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: nick-fields/retry@v3
@@ -64,7 +59,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-nightly-latest
 
     - name: Install package with uv
       if: steps.cache-uv-restore.outputs.cache-hit != 'true'
@@ -81,7 +76,7 @@ jobs:
     - name: Delete old environment cache
       if: steps.cache-uv-restore.outputs.cache-hit != 'true'
       run: |
-        gh cache delete "uv-env-py${{ matrix.python-version }}-latest" || true
+        gh cache delete "uv-env-nightly-latest" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -90,25 +85,18 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-nightly-latest
 
   # Stage 2: Run testmon tests and cache the database
   testmon:
-    name: Testmon (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
+    name: Testmon
     needs: build-environment
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest"]
-        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: nv-gpu-amd64-h100-1gpu
+    container:
+      image: nvcr.io/nvidia/pytorch:25.01-py3
 
     steps:
     - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: nick-fields/retry@v3
@@ -123,7 +111,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-nightly-latest
         fail-on-cache-miss: true
 
     - name: Run core tests (collect all for testmon)
@@ -133,7 +121,7 @@ jobs:
 
     - name: Delete old testmon cache
       run: |
-        gh cache delete "testmon-${{ matrix.os }}-py${{ matrix.python-version }}-latest" || true
+        gh cache delete "testmon-nightly-latest" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -144,25 +132,18 @@ jobs:
           .testmondata
           .testmondata-shm
           .testmondata-wal
-        key: testmon-${{ matrix.os }}-py${{ matrix.python-version }}-latest
+        key: testmon-nightly-latest
 
   # Stage 3: Run coverage tests and upload artifacts
   coverage:
-    name: Coverage (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
+    name: Coverage
     needs: build-environment
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest"]
-        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: nv-gpu-amd64-h100-1gpu
+    container:
+      image: nvcr.io/nvidia/pytorch:25.01-py3
 
     steps:
     - uses: actions/checkout@v4
-
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
 
     - name: Install uv
       uses: nick-fields/retry@v3
@@ -177,7 +158,7 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .venv
-        key: uv-env-py${{ matrix.python-version }}-latest
+        key: uv-env-nightly-latest
         fail-on-cache-miss: true
 
     - name: Run core tests for coverage report
@@ -190,7 +171,7 @@ jobs:
 
     - name: Delete old coverage cache
       run: |
-        gh cache delete "coverage-${{ matrix.os }}-py${{ matrix.python-version }}-latest" || true
+        gh cache delete "coverage-nightly-latest" || true
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -198,7 +179,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .coverage*
-        key: coverage-${{ matrix.os }}-py${{ matrix.python-version }}-latest
+        key: coverage-nightly-latest
 
     - name: Merge coverage reports
       run: |
@@ -211,14 +192,14 @@ jobs:
     - name: Upload coverage HTML report
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-report-${{ matrix.os }}-py${{ matrix.python-version }}
+        name: coverage-report-nightly
         path: htmlcov/
         retention-days: 7
 
     - name: Upload combined coverage data
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-data-${{ matrix.os }}-py${{ matrix.python-version }}
+        name: coverage-data-nightly
         path: |
           .coverage
           coverage.xml
