@@ -71,6 +71,10 @@ def safe_acos(x: float) -> float:
 #
 # Matrix indices go from m=l (row 0) to m=-l (row 2l), same for m' in columns.
 # Output is stored in row-major order as a 1D array of floats.
+#
+# Note on usage:
+# `wp.func` are not intended to be called directly, and instead will need
+# to be wrapped in `wp.kernels` and launched appropriately.
 
 
 def wigner_d_matrix_size(l: int) -> int:
@@ -1061,3 +1065,23 @@ def wigner_d_l5(
     D[10, 8] = d_n5_n3 * wp.cos(-5.0 * alpha - 3.0 * gamma)
     D[10, 9] = d_n5_n4 * wp.cos(-5.0 * alpha - 4.0 * gamma)
     D[10, 10] = d_n5_n5 * wp.cos(-5.0 * alpha - 5.0 * gamma)
+
+
+@wp.kernel
+def _compute_wigner_d(l: int, angles: wp.array(dtype=wp.vec3f)):
+    idx = wp.tid()
+    output = wp.zeros((2 * l + 1, 2 * l + 1), dtype=angles.dtype)
+    alpha, beta, gamma = angles[idx, 0], angles[idx, 1], angles[idx, 2]
+    if l == 0:
+        wigner_d_l0(alpha, beta, gamma, output)
+    elif l == 1:
+        wigner_d_l1(alpha, beta, gamma, output)
+    elif l == 2:
+        wigner_d_l2(alpha, beta, gamma, output)
+    elif l == 3:
+        wigner_d_l3(alpha, beta, gamma, output)
+    elif l == 4:
+        wigner_d_l4(alpha, beta, gamma, output)
+    else:
+        wigner_d_l5(alpha, beta, gamma, output)
+    return output
