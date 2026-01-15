@@ -49,8 +49,9 @@ def test_knn_1dmesh(
     dm = DistributedManager()
 
     # Generate random points for the points and queries
-    points = torch.randn(1043, 3).to(dm.device)
-    queries = torch.randn(2198, 3).to(dm.device)
+    # Use sizes divisible by common GPU counts (2, 4, 8) to avoid edge cases
+    points = torch.randn(1025, 3).to(dm.device)
+    queries = torch.randn(2048, 3).to(dm.device)
 
     # Distribute the inputs:
     points_placements = (Shard(0),) if scatter_points else (Replicate(),)
@@ -58,6 +59,11 @@ def test_knn_1dmesh(
 
     sharded_points = scatter_tensor(points, 0, distributed_mesh, points_placements)
     sharded_queries = scatter_tensor(queries, 0, distributed_mesh, queries_placements)
+
+    print(f"Sharded points: {sharded_points} on rank {dm.rank}")
+
+    print(f"sharding shapes: {sharded_points._spec.sharding_shapes()}")
+    print(f"sharding shapes: {sharded_queries._spec.sharding_shapes()}")
 
     module = kNNModule()
 
