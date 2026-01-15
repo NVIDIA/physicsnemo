@@ -125,6 +125,17 @@ def test_mehsgraphnet_constructor(device, pytestconfig, set_physicsnemo_force_te
         outvar = model(node_features, edge_features, graph)
         assert outvar.shape == (bsize * num_nodes, kw_args["output_dim"])
 
+        # Check public attributes reflect constructor args
+        assert model.input_dim_nodes == kw_args["input_dim_nodes"]
+        assert model.input_dim_edges == kw_args["input_dim_edges"]
+        assert model.output_dim == kw_args["output_dim"]
+
+        # Check key submodules exist
+        assert hasattr(model, "edge_encoder")
+        assert hasattr(model, "node_encoder")
+        assert hasattr(model, "processor")
+        assert hasattr(model, "node_decoder")
+
 
 @requires_module("torch_geometric")
 def test_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):

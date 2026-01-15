@@ -17,7 +17,7 @@
 from contextlib import nullcontext
 from dataclasses import dataclass
 from itertools import chain
-from typing import Callable, List, Tuple, Union
+from typing import Callable, Literal, Tuple, Union
 from warnings import warn
 
 import torch
@@ -64,7 +64,7 @@ class MeshGraphNet(Module):
         Number of outputs.
     processor_size : int, optional, default=15
         Number of message passing blocks.
-    mlp_activation_fn : Union[str, List[str]], optional, default="relu"
+    mlp_activation_fn : str, optional, default="relu"
         Activation function to use.
     num_layers_node_processor : int, optional, default=2
         Number of MLP layers for processing nodes in each message passing block.
@@ -87,16 +87,16 @@ class MeshGraphNet(Module):
     num_layers_node_decoder : Union[int, None], optional, default=2
         Number of MLP layers for the node feature decoder. If ``None`` is provided,
         the MLP collapses to an identity function, i.e. no decoder.
-    aggregation : str, optional, default="sum"
-        Message aggregation type.
+    aggregation : Literal["sum", "mean"], optional, default="sum"
+        Message aggregation type. Allowed values are ``"sum"`` and ``"mean"``.
     do_concat_trick : bool, optional, default=False
         Whether to replace concat+MLP with MLP+idx+sum.
     num_processor_checkpoint_segments : int, optional, default=0
         Number of processor segments for gradient checkpointing (0 disables checkpointing).
     checkpoint_offloading : bool, optional, default=False
         Whether to offload the checkpointing to the CPU.
-    norm_type : str, optional, default="LayerNorm"
-        Normalization type [``"LayerNorm"``, ``"TELayerNorm"``].
+    norm_type : Literal["LayerNorm", "TELayerNorm"], optional, default="LayerNorm"
+        Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``.
 
     Forward
     -------
@@ -105,7 +105,15 @@ class MeshGraphNet(Module):
     edge_features : torch.Tensor
         Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
     graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
-        Graph container compatible with the mesh graph blocks.
+        Graph connectivity/topology container (PyG).
+        Connectivity/topology only. Do not duplicate node or edge features on the graph;
+        pass them via ``node_features`` and ``edge_features``. If present on
+        the graph, they will be ignored by the model.
+        ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
+        ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
+        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
+        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------
@@ -137,8 +145,7 @@ class MeshGraphNet(Module):
 
     Note
     ----
-    Reference: Pfaff, Tobias, et al. "Learning mesh-based simulation with graph networks."
-    arXiv preprint arXiv:2010.03409 (2020).
+    Reference: `Learning Mesh-Based Simulation with Graph Networks <https://arxiv.org/pdf/2010.03409>`.
 
     See also :class:`~physicsnemo.nn.gnn_layers.mesh_graph_mlp.MeshGraphMLP`,
     :class:`~physicsnemo.nn.gnn_layers.mesh_edge_block.MeshEdgeBlock`,
@@ -151,7 +158,7 @@ class MeshGraphNet(Module):
         input_dim_edges: int,
         output_dim: int,
         processor_size: int = 15,
-        mlp_activation_fn: Union[str, List[str]] = "relu",
+        mlp_activation_fn: str = "relu",
         num_layers_node_processor: int = 2,
         num_layers_edge_processor: int = 2,
         hidden_dim_processor: int = 128,
@@ -161,12 +168,12 @@ class MeshGraphNet(Module):
         num_layers_edge_encoder: Union[int, None] = 2,
         hidden_dim_node_decoder: int = 128,
         num_layers_node_decoder: Union[int, None] = 2,
-        aggregation: str = "sum",
+        aggregation: Literal["sum", "mean"] = "sum",
         do_concat_trick: bool = False,
         num_processor_checkpoint_segments: int = 0,
         checkpoint_offloading: bool = False,
         recompute_activation: bool = False,
-        norm_type="LayerNorm",
+        norm_type: Literal["LayerNorm", "TELayerNorm"] = "LayerNorm",
     ):
         super().__init__(meta=MetaData())
 
@@ -289,10 +296,10 @@ class MeshGraphNetProcessor(Module):
         Number of MLP layers within each node update block.
     num_layers_edge : int, optional, default=2
         Number of MLP layers within each edge update block.
-    aggregation : str, optional, default="sum"
-        Message aggregation method used in node update blocks.
-    norm_type : str, optional, default="LayerNorm"
-        Normalization type within processor blocks [``"LayerNorm"``, ``"TELayerNorm"``].
+    aggregation : Literal["sum", "mean"], optional, default="sum"
+        Message aggregation type. Allowed values are ``"sum"`` and ``"mean"``.
+    norm_type : Literal["LayerNorm", "TELayerNorm"], optional, default="LayerNorm"
+        Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``
     activation_fn : torch.nn.Module, optional, default=nn.ReLU()
         Activation function module used inside the MLPs.
     do_concat_trick : bool, optional, default=False
@@ -309,7 +316,15 @@ class MeshGraphNetProcessor(Module):
     edge_features : torch.Tensor
         Edge features of shape :math:`(N_{edges}, D_{edge})`.
     graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
-        Graph container.
+        Graph connectivity/topology container (PyG).
+        Connectivity/topology only. Do not duplicate node or edge features on the graph;
+        pass them via ``node_features`` and ``edge_features``. If present on
+        the graph, they will be ignored by the model.
+        ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
+        ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
+        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
+        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------
@@ -324,8 +339,8 @@ class MeshGraphNetProcessor(Module):
         input_dim_edge: int = 128,
         num_layers_node: int = 2,
         num_layers_edge: int = 2,
-        aggregation: str = "sum",
-        norm_type: str = "LayerNorm",
+        aggregation: Literal["sum", "mean"] = "sum",
+        norm_type: Literal["LayerNorm", "TELayerNorm"] = "LayerNorm",
         activation_fn: nn.Module = nn.ReLU(),
         do_concat_trick: bool = False,
         num_processor_checkpoint_segments: int = 0,
@@ -373,10 +388,10 @@ class MeshGraphNetProcessor(Module):
 
         self.processor_layers = nn.ModuleList(layers)
         self.num_processor_layers = len(self.processor_layers)
-        self.set_checkpoint_segments(self.num_processor_checkpoint_segments)
-        self.set_checkpoint_offload_ctx(self.checkpoint_offloading)
+        self._set_checkpoint_segments(self.num_processor_checkpoint_segments)
+        self._set_checkpoint_offload_ctx(self.checkpoint_offloading)
 
-    def set_checkpoint_offload_ctx(self, enabled: bool):
+    def _set_checkpoint_offload_ctx(self, enabled: bool) -> None:
         r"""Set the context for CPU offloading of checkpoints.
 
         Parameters
@@ -396,7 +411,7 @@ class MeshGraphNetProcessor(Module):
         else:
             self.checkpoint_offload_ctx = nullcontext()
 
-    def set_checkpoint_segments(self, checkpoint_segments: int):
+    def _set_checkpoint_segments(self, checkpoint_segments: int) -> None:
         r"""Set the number of checkpoint segments.
 
         Parameters
@@ -430,7 +445,7 @@ class MeshGraphNetProcessor(Module):
             self.checkpoint_segments = [(0, self.num_processor_layers)]
 
     @profile
-    def run_function(
+    def _run_function(
         self, segment_start: int, segment_end: int
     ) -> Callable[[Tensor, Tensor, GraphType], Tuple[Tensor, Tensor]]:
         r"""Create a segment function for gradient checkpointing.
@@ -487,7 +502,7 @@ class MeshGraphNetProcessor(Module):
     ) -> Tensor:
         r"""Forward pass of the processor.
 
-        Parameters
+        Parameterss
         ----------
         node_features : torch.Tensor
             Node features of shape :math:`(N_{nodes}, D_{node})`.
@@ -513,7 +528,7 @@ class MeshGraphNetProcessor(Module):
         with self.checkpoint_offload_ctx:
             for segment_start, segment_end in self.checkpoint_segments:
                 edge_features, node_features = self.checkpoint_fn(
-                    self.run_function(segment_start, segment_end),
+                    self._run_function(segment_start, segment_end),
                     node_features,
                     edge_features,
                     graph,
