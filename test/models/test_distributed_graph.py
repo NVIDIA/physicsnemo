@@ -20,7 +20,6 @@ import pytest
 import torch
 
 from physicsnemo.distributed import DistributedManager
-from test.conftest import requires_module
 
 
 def get_random_graph(device):
@@ -127,23 +126,28 @@ def run_test_distributed_graph(
     partition_scheme: str,
     use_torchrun: bool = False,
 ):
-    from physicsnemo.models.gnn_layers import (
-        DistributedGraph,
-        partition_graph_by_coordinate_bbox,
-    )
     from physicsnemo.models.graphcast.graph_cast_net import (
         get_lat_lon_partition_separators,
     )
+    from physicsnemo.nn.gnn_layers import (
+        DistributedGraph,
+        partition_graph_by_coordinate_bbox,
+    )
 
-    if not use_torchrun:
-        os.environ["RANK"] = f"{rank}"
-        os.environ["WORLD_SIZE"] = f"{world_size}"
-        os.environ["MASTER_ADDR"] = "localhost"
-        os.environ["MASTER_PORT"] = str(12355)
-        DistributedManager.initialize()
+    print(f"Rank {rank} checking in")
+
+    os.environ["RANK"] = f"{rank}"
+    os.environ["WORLD_SIZE"] = f"{world_size}"
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = str(12355)
+    os.environ["LOCAL_RANK"] = f"{rank % torch.cuda.device_count()}"
+
+    DistributedManager.initialize()
 
     manager = DistributedManager()
     assert manager.is_initialized() and manager._distributed
+
+    print(f"Rank {rank} device: {manager.device}")
 
     # actual test
     num_channels = 64
@@ -334,15 +338,7 @@ def run_test_distributed_graph(
                     )
                     assert torch.allclose(grad_local, torch.ones_like(local_edge_feat))
 
-    if not use_torchrun:
-        DistributedManager.cleanup()
-        del os.environ["RANK"]
-        del os.environ["WORLD_SIZE"]
-        del os.environ["MASTER_ADDR"]
-        del os.environ["MASTER_PORT"]
 
-
-@requires_module("dgl")
 @pytest.mark.multigpu_dynamic
 @pytest.mark.parametrize("partition_scheme", ["lat_lon_bbox", "default"])
 def test_distributed_graph(partition_scheme, pytestconfig):

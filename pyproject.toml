@@ -65,7 +65,7 @@ managed = true
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
-earth2grid = ["setuptools", "torch"] 
+earth2grid = ["setuptools", "torch"]
 
 [[tool.uv.index]]
 name = "nvidia"
@@ -120,6 +120,7 @@ dev = [
     "pytest-dependency>=0.6.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.8",
+    "pytest-testmon>=2.2.0",
 ]
 
 #####################################################################
