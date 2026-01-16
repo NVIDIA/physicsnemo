@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from typing import Iterable, Literal, Optional
 
 import torch
-from jaxtyping import Float
 from torch import Tensor
 
 from physicsnemo.core.meta import ModelMetaData

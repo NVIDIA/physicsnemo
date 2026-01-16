@@ -18,15 +18,11 @@ from dataclasses import dataclass
 from typing import Literal, Union
 
 import torch
-import torch.nn as nn
 from jaxtyping import Float
-from torch import Tensor
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.nn import get_activation
 from physicsnemo.nn.gnn_layers.graph_types import GraphType
-from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
 
 # Import the Kolmogorov–Arnold Network layer.
 from physicsnemo.nn.kan_layers import KolmogorovArnoldNetwork
