@@ -65,11 +65,12 @@ managed = true
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
-earth2grid = ["setuptools", "torch"] 
+earth2grid = ["setuptools", "torch"]
 
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
+explicit = true  # Only use for packages that explicitly specify this index
 
 
 [tool.uv.sources]
@@ -119,6 +120,7 @@ dev = [
     "pytest-dependency>=0.6.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.8",
+    "pytest-testmon>=2.2.0",
 ]
 
 #####################################################################
@@ -190,7 +192,8 @@ lint.fixable = ["I"]
 
 # Never enforce `E501` (line length violations),
 # and `S311` (random number generators)
-lint.ignore = ["E501", "S311"]
+# and `F722` which breaks jaxtyping annotations
+lint.ignore = ["E501", "S311", "F722"]
 
 # Exclude the docs and experimental folders (this applies to both lint and format)
 exclude = ["docs", "physicsnemo/experimental"]

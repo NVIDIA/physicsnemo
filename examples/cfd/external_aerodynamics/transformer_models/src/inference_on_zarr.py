@@ -19,9 +19,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import torchinfo
-import typing
+import typing, csv
 import collections
 from typing import Literal
+from datetime import datetime
 
 import hydra
 import omegaconf
@@ -31,6 +32,7 @@ from physicsnemo.utils import load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 
 from sklearn.metrics import r2_score
+from metrics import metrics_fn_surface, metrics_fn_volume
 
 from physicsnemo.distributed import DistributedManager
 
@@ -199,8 +201,8 @@ def batched_inference_loop(
     metrics = {k: v / global_weight for k, v in metrics.items()}
     loss = loss / global_weight
 
-    global_predictions = torch.cat([l[0] for l in global_preds_targets], dim=1)
-    global_targets = torch.cat([l[1] for l in global_preds_targets], dim=1)
+    global_predictions = torch.cat([l[0][0] for l in global_preds_targets], dim=1)
+    global_targets = torch.cat([l[1][0] for l in global_preds_targets], dim=1)
 
     # Now, we have to *unshuffle* the prediction to the original index
     inverse_indices = torch.empty_like(indices)
@@ -254,16 +256,25 @@ def inference(cfg: DictConfig) -> None:
 
     # Load the normalization file from configured directory (defaults to current dir)
     norm_dir = getattr(cfg.data, "normalization_dir", ".")
-    if cfg.data.mode == "surface":
+    if cfg.data.mode == "surface" or cfg.data.mode == "combined":
         norm_file = str(Path(norm_dir) / "surface_fields_normalization.npz")
-    elif cfg.data.mode == "volume":
-        norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
+        norm_data = np.load(norm_file)
+        surface_factors = {
+            "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+            "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+        }
+    else:
+        surface_factors = None
 
-    norm_data = np.load(norm_file)
-    norm_factors = {
-        "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
-        "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
-    }
+    if cfg.data.mode == "volume" or cfg.data.mode == "combined":
+        norm_file = str(Path(norm_dir) / "volume_fields_normalization.npz")
+        norm_data = np.load(norm_file)
+        volume_factors = {
+            "mean": torch.from_numpy(norm_data["mean"]).to(dist_manager.device),
+            "std": torch.from_numpy(norm_data["std"]).to(dist_manager.device),
+        }
+    else:
+        volume_factors = None
 
     if cfg.compile:
         model = torch.compile(model, dynamic=True)
@@ -287,7 +298,8 @@ def inference(cfg: DictConfig) -> None:
     val_dataset = create_transolver_dataset(
         cfg.data,
         phase="val",
-        scaling_factors=norm_factors,
+        surface_factors=surface_factors,
+        volume_factors=volume_factors,
     )
 
     results = []
@@ -311,9 +323,23 @@ def inference(cfg: DictConfig) -> None:
         logger.info(f"Finished batch {batch_idx} in {elapsed:.4f} seconds")
         start = time.time()
 
+        air_density = batch["air_density"] if "air_density" in batch.keys() else None
+        stream_velocity = (
+            batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
+        )
+
         if cfg.data.mode == "surface":
             coeff = 1.0
 
+            if stream_velocity is not None:
+                global_predictions = (
+                    global_predictions * stream_velocity**2.0 * air_density
+                )
+                global_targets = global_targets * stream_velocity**2.0 * air_density
+
+            metrics = metrics_fn_surface(
+                global_predictions, global_targets, dist_manager
+            )
             # Compute the drag and loss coefficients:
             # (Index on [0] is to remove the 1 batch index)
             pred_pressure, pred_shear = torch.split(
@@ -339,8 +365,6 @@ def inference(cfg: DictConfig) -> None:
                 torch.tensor([[0, 0, 1]], device=dist_manager.device),
             )
 
-            # air_density = batch["air_density"] if "air_density" in batch.keys() else None
-            # stream_velocity = batch["stream_velocity"] if "stream_velocity" in batch.keys() else None
             # true_fields = val_dataset.unscale_model_targets(batch["fields"], air_density=air_density, stream_velocity=stream_velocity)
             true_pressure, true_shear = torch.split(global_targets[0], (1, 3), dim=-1)
 
@@ -372,20 +396,30 @@ def inference(cfg: DictConfig) -> None:
                 if hasattr(metrics["l2_pressure_surf"], "item")
                 else metrics["l2_pressure_surf"]
             )
-            l2_shear_x = (
-                metrics["l2_shear_x"].item()
-                if hasattr(metrics["l2_shear_x"], "item")
-                else metrics["l2_shear_x"]
+            l1_pressure = (
+                metrics["l1_pressure_surf"].item()
+                if hasattr(metrics["l1_pressure_surf"], "item")
+                else metrics["l1_pressure_surf"]
             )
-            l2_shear_y = (
-                metrics["l2_shear_y"].item()
-                if hasattr(metrics["l2_shear_y"], "item")
-                else metrics["l2_shear_y"]
+            mae_pressure = (
+                metrics["mae_pressure_surf"].item()
+                if hasattr(metrics["mae_pressure_surf"], "item")
+                else metrics["mae_pressure_surf"]
             )
-            l2_shear_z = (
-                metrics["l2_shear_z"].item()
-                if hasattr(metrics["l2_shear_z"], "item")
-                else metrics["l2_shear_z"]
+            l2_wall_shear_stress = (
+                metrics["l2_wall_shear_stress"].item()
+                if hasattr(metrics["l2_wall_shear_stress"], "item")
+                else metrics["l2_wall_shear_stress"]
+            )
+            l1_wall_shear_stress = (
+                metrics["l1_wall_shear_stress"].item()
+                if hasattr(metrics["l1_wall_shear_stress"], "item")
+                else metrics["l1_wall_shear_stress"]
+            )
+            mae_wall_shear_stress = (
+                metrics["mae_wall_shear_stress"].item()
+                if hasattr(metrics["mae_wall_shear_stress"], "item")
+                else metrics["mae_wall_shear_stress"]
             )
 
             results.append(
@@ -393,9 +427,11 @@ def inference(cfg: DictConfig) -> None:
                     batch_idx,
                     f"{loss:.4f}",
                     f"{l2_pressure:.4f}",
-                    f"{l2_shear_x:.4f}",
-                    f"{l2_shear_y:.4f}",
-                    f"{l2_shear_z:.4f}",
+                    f"{l1_pressure:.4f}",
+                    f"{mae_pressure:.4f}",
+                    f"{l2_wall_shear_stress:.4f}",
+                    f"{l1_wall_shear_stress:.4f}",
+                    f"{mae_wall_shear_stress:.4f}",
                     f"{pred_drag_coeff:.4f}",
                     f"{pred_lift_coeff:.4f}",
                     f"{true_drag_coeff:.4f}",
@@ -405,31 +441,73 @@ def inference(cfg: DictConfig) -> None:
             )
 
         elif cfg.data.mode == "volume":
+            if stream_velocity is not None:
+                global_predictions[:, :, 3] = (
+                    global_predictions[:, :, 3] * stream_velocity**2.0 * air_density
+                )
+                global_targets[:, :, 3] = (
+                    global_targets[:, :, 3] * stream_velocity**2.0 * air_density
+                )
+                global_predictions[:, :, 0:3] = (
+                    global_predictions[:, :, 0:3] * stream_velocity
+                )
+                global_targets[:, :, 0:3] = global_targets[:, :, 0:3] * stream_velocity
+                global_predictions[:, :, 4] = (
+                    global_predictions[:, :, 4] * stream_velocity**2.0 * air_density
+                )
+                global_targets[:, :, 4] = (
+                    global_targets[:, :, 4] * stream_velocity**2.0 * air_density
+                )
+
+            metrics = metrics_fn_volume(
+                global_predictions, global_targets, dist_manager
+            )
             # Extract metric values and convert tensors to floats
             l2_pressure = (
                 metrics["l2_pressure_vol"].item()
                 if hasattr(metrics["l2_pressure_vol"], "item")
                 else metrics["l2_pressure_vol"]
             )
-            l2_velocity_x = (
-                metrics["l2_velocity_x"].item()
-                if hasattr(metrics["l2_velocity_x"], "item")
-                else metrics["l2_velocity_x"]
+            l1_pressure = (
+                metrics["l1_pressure_vol"].item()
+                if hasattr(metrics["l1_pressure_vol"], "item")
+                else metrics["l1_pressure_vol"]
             )
-            l2_velocity_y = (
-                metrics["l2_velocity_y"].item()
-                if hasattr(metrics["l2_velocity_y"], "item")
-                else metrics["l2_velocity_y"]
+            mae_pressure = (
+                metrics["mae_pressure_vol"].item()
+                if hasattr(metrics["mae_pressure_vol"], "item")
+                else metrics["mae_pressure_vol"]
             )
-            l2_velocity_z = (
-                metrics["l2_velocity_z"].item()
-                if hasattr(metrics["l2_velocity_z"], "item")
-                else metrics["l2_velocity_z"]
+            l2_velocity = (
+                metrics["l2_velocity"].item()
+                if hasattr(metrics["l2_velocity"], "item")
+                else metrics["l2_velocity"]
             )
+            l1_velocity = (
+                metrics["l1_velocity"].item()
+                if hasattr(metrics["l1_velocity"], "item")
+                else metrics["l1_velocity"]
+            )
+            mae_velocity = (
+                metrics["mae_velocity"].item()
+                if hasattr(metrics["mae_velocity"], "item")
+                else metrics["mae_velocity"]
+            )
+
             l2_nut = (
                 metrics["l2_nut"].item()
                 if hasattr(metrics["l2_nut"], "item")
                 else metrics["l2_nut"]
+            )
+            l1_nut = (
+                metrics["l1_nut"].item()
+                if hasattr(metrics["l1_nut"], "item")
+                else metrics["l1_nut"]
+            )
+            mae_nut = (
+                metrics["mae_nut"].item()
+                if hasattr(metrics["mae_nut"], "item")
+                else metrics["mae_nut"]
             )
 
             results.append(
@@ -437,19 +515,23 @@ def inference(cfg: DictConfig) -> None:
                     batch_idx,
                     f"{loss:.4f}",
                     f"{l2_pressure:.4f}",
-                    f"{l2_velocity_x:.4f}",
-                    f"{l2_velocity_y:.4f}",
-                    f"{l2_velocity_z:.4f}",
+                    f"{l1_pressure:.4f}",
+                    f"{mae_pressure:.4f}",
+                    f"{l2_velocity:.4f}",
+                    f"{l1_velocity:.4f}",
+                    f"{mae_velocity:.4f}",
                     f"{l2_nut:.4f}",
+                    f"{l1_nut:.4f}",
+                    f"{mae_nut:.4f}",
                     f"{elapsed:.4f}",
                 ]
             )
 
     if cfg.data.mode == "surface":
-        pred_drag_coeffs = [r[6] for r in results]
-        pred_lift_coeffs = [r[7] for r in results]
-        true_drag_coeffs = [r[8] for r in results]
-        true_lift_coeffs = [r[9] for r in results]
+        pred_drag_coeffs = [r[8] for r in results]
+        pred_lift_coeffs = [r[9] for r in results]
+        true_drag_coeffs = [r[10] for r in results]
+        true_lift_coeffs = [r[11] for r in results]
 
         # Compute the R2 scores for lift and drag:
         r2_lift = r2_score(true_lift_coeffs, pred_lift_coeffs)
@@ -459,9 +541,11 @@ def inference(cfg: DictConfig) -> None:
             "Batch",
             "Loss",
             "L2 Pressure",
-            "L2 Shear X",
-            "L2 Shear Y",
-            "L2 Shear Z",
+            "L1 Pressure",
+            "MAE Pressure",
+            "L2 Wall Shear Stress",
+            "L1 Wall Shear Stress",
+            "MAE Wall Shear Stress",
             "Predicted Drag Coefficient",
             "Pred Lift Coefficient",
             "True Drag Coefficient",
@@ -473,21 +557,37 @@ def inference(cfg: DictConfig) -> None:
         )
         logger.info(f"R2 score for lift: {r2_lift:.4f}")
         logger.info(f"R2 score for drag: {r2_drag:.4f}")
+        csv_filename = f"{cfg.output_dir}/{cfg.run_id}/surface_inference_results_{datetime.now()}.csv"
+        with open(csv_filename, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(results)
+        logger.info(f"Results saved to {csv_filename}")
 
     elif cfg.data.mode == "volume":
         headers = [
             "Batch",
             "Loss",
             "L2 Pressure",
-            "L2 Velocity X",
-            "L2 Velocity Y",
-            "L2 Velocity Z",
+            "L1 Pressure",
+            "MAE Pressure",
+            "L2 Velocity",
+            "L1 Velocity",
+            "MAE Velocity",
             "L2 Nut",
+            "L1 Nut",
+            "MAE Nut",
             "Elapsed (s)",
         ]
         logger.info(
             f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
         )
+        csv_filename = f"{cfg.output_dir}/{cfg.run_id}/volume_inference_results_{datetime.now()}.csv"
+        with open(csv_filename, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerows(results)
+        logger.info(f"Results saved to {csv_filename}")
 
     # Calculate means for each metric (skip batch index)
     if results:

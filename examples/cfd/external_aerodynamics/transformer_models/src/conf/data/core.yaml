@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# You may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Paths to your data:
+train:
+  data_path:  /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/drivaer_aws/domino/train/
+val:
+  data_path: /lustre/fsw/portfolios/coreai/projects/coreai_modulus_cae/datasets/drivaer_aws/domino/val/
+
+# You can set a normalization factor directory:
+normalization_dir: "src/"
+
+# How many events in advance should we be preloading?
+preload_depth: 1
+
+# Pin memory for GPU transfers?
+pin_memory: true
+
+# Sampling resolution of the point clouds:
+resolution: 200_000
+
+# Surface / Volume / (combined, if supported)
+mode: ???
+
+# For building embeddings: include normal directions for each point?
+include_normals: true
+# Include SDF?  (It's 0 for surface data...)
+include_sdf: true
+# Apply translation invariance via center-of-mass subtraction?
+translational_invariance: true
+# Rescale x/y/z inputs to the model for scale invariance?
+scale_invariance: true
+reference_scale: [12.0, 4.5, 3.25]
+
+# Which parts of the data files to read?  No need to read everything, all the time.
+data_keys: ???
+
+# Load and return the STL geometry info in the dataloader?
+include_geometry: false
+
+# Broadcast global features to the same resolution as points?
+broadcast_global_features: true
+
+# Return the mesh areas and normals?  You don't usually want this for training.
+# We switch it on automatically for inference.
+return_mesh_features: false
+

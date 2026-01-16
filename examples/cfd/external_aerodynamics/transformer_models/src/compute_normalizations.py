@@ -89,7 +89,6 @@ def compute_mean_std_min_max(
 
         # Update running mean and M2 (Welford's algorithm)
         delta = batch_mean - mean
-        N += batch_n
         mean = mean + delta * (batch_n / N)
         M2 = M2 + batch_M2 + delta**2 * (batch_n * N) / N
         time_end = time.time()

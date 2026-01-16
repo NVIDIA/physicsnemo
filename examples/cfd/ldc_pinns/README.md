@@ -48,9 +48,9 @@ The results would get saved in the `./outputs/` directory.
 ## Additional Reading
 
 This example demonstrates computing physics losses on point clouds. For more examples
-on physics informing different type of models and model outputs, refer:
+on physics informing different type of models and model outputs, refer to:
 
-* Point clouds: [Darcy Flow (DeepONet)](../darcy_physics_informed/darcy_physics_informed_deeponet.py),
-[Stokes Flow (MLP)](../stokes_mgn/pi_fine_tuning.py)
-* Regular grid: [Darcy Flow (FNO)](../darcy_physics_informed/darcy_physics_informed_fno.py)
-* Unstructured meshes: [Stokes Flow (MeshGraphNet)](../stokes_mgn/pi_fine_tuning_gnn.py)
+* Point clouds: [Darcy Flow (DeepONet)](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/examples/cfd/darcy_physics_informed/README.html),
+[Stokes Flow (MLP)](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/examples/cfd/stokes_mgn/README.html)
+* Regular grid: [Darcy Flow (FNO)](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/examples/cfd/darcy_physics_informed/README.html)
+* Unstructured meshes: [Stokes Flow (MeshGraphNet)](https://docs.nvidia.com/physicsnemo/latest/physicsnemo/examples/cfd/stokes_mgn/README.html)
