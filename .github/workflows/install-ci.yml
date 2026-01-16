@@ -66,9 +66,9 @@ jobs:
         command: ${{ runner.os == 'Windows' && 'irm https://astral.sh/uv/install.ps1 | iex; echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append' || 'curl -LsSf https://astral.sh/uv/install.sh | sh && echo "$HOME/.cargo/bin" >> $GITHUB_PATH' }}
 
     - name: Install package with uv
-      run: |
-        # Install core dependencies and development group
-        UV_PREVIEW=1 uv sync --group dev --preview-features extra-build-dependencies
+      env:
+        UV_PREVIEW: "1"
+      run: uv sync --group dev --preview-features extra-build-dependencies
 
     - name: Run tests
       run: uv run pytest test/
