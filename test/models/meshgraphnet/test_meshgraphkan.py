@@ -111,6 +111,17 @@ def test_meshgraphkan_constructor(device, pytestconfig, set_physicsnemo_force_te
         out = model(node_f, edge_f, graph)
         assert out.shape == (graph.num_nodes, kw["output_dim"])
 
+        # Check public attributes reflect constructor args
+        assert model.input_dim_nodes == kw["input_dim_nodes"]
+        assert model.input_dim_edges == kw["input_dim_edges"]
+        assert model.output_dim == kw["output_dim"]
+
+        # Check key submodules exist
+        assert hasattr(model, "edge_encoder")
+        assert hasattr(model, "node_encoder")
+        assert hasattr(model, "processor")
+        assert hasattr(model, "node_decoder")
+
 
 @requires_module("torch_geometric")
 def test_meshgraphkan_optims(device, pytestconfig, set_physicsnemo_force_te):
