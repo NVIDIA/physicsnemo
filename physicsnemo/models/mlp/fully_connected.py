@@ -148,8 +148,8 @@ class FullyConnected(Module):
         )
 
     def forward(
-        self, x: Float[Tensor, "batch in_features"]  # noqa: F722
-    ) -> Float[Tensor, "batch out_features"]:  # noqa: F722
+        self, x: Float[Tensor, "batch in_features"]
+    ) -> Float[Tensor, "batch out_features"]:
         """Forward pass through the MLP."""
         # Validate input shape
         if not torch.compiler.is_compiling():
