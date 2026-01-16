@@ -142,8 +142,7 @@ With `log_to_wandb=True`, you'll want to specify your `wandb` entity and project
 
 ### Inference
 
-For an example of inferencing on both subsampled HRRR and ISD data, run the
-[example_inference.py](example_inference.py) script. It requires the ISD and HRRR data, as
+For an example of running inference on both subsampled HRRR and ISD data, review how to run the ``example_inference.py`` in its  `README<.physicsnemo/latest/physicsnemo/examples/cfd/stokes_mgn/README.html>`__ script. It requires the ISD and HRRR data, as
 well as the state file of the trained model.
 
 For running a full inference of the model across an entire year, use the `full_inference.py`
