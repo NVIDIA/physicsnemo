@@ -10,7 +10,7 @@ set of tools to enable your application.
 > etc) that can't be done in advance, and prepares the loaded data to be ingested
 > into the model and training or inference loop.
 
-There are plenty of tools in the `Python` eco system for loading, preprocessing, and
+There are plenty of tools in the `Python` ecosystem for loading, preprocessing, and
 preparing your data for training or inference.  To compare / contrast some of these
 tools with the ecosystem available, and see if the `PhysicsNeMo` datapipe interface
 might be valuable to your workload, consider the following design principles
@@ -19,12 +19,14 @@ we followed when building the `PhysicsNeMo` datapipes:
 1. **GPU-first** - Many scientific datasets are *large* for even a single example:
 the data is high resolution and the preprocessing needs benefit from GPU acceleration.
 Compare this to other methods where the data preprocessing is predominantly CPU-based,
-such as the `PyTorch` Dataloader: whereas CPU-based preprocessing may introduce GPU
+such as the `PyTorch` DataLoader: whereas CPU-based preprocessing may introduce GPU
 pipeline stalls on high resolution data, GPU-based preprocessing will maximize
 throughput.
 
-2. **Threading over Multiprocessing** - In `Python`, true concurrency is typically only
-available via multiprocessing or when offloading to compiled libraries or GPU kernels.
+2. **Threading over Multiprocessing** - In `Python`, true concurrency is difficult
+due to the global interpreter lock (GIL), and is typically only achieved by
+spawning subprocesses (via multiprocessing) or when offloading
+to compiled libraries or GPU kernels.
 For this reason, many data loaders leverage multiprocessing for data concurrency:
 load images in separate processes, and collate a batch on the main thread.
 For simplicity, with a GPU-first paradigm, the `PhysicsNeMo` datapipe focuses on GPU
@@ -37,12 +39,12 @@ frustrating component in reproducibility of AI results - the preprocessing, samp
 batching and other parameters can be hard to infer from training scripts.  Here,
 we make a deliberate design choice to enable datapipe configuration serialization
 as a first-class citizen.  `PhysicsNeMo` Datapipes can be built directly in `Python`,
-but also instantiated from hydra yaml files for version control and distribution.
+but also instantiated from `hydra` YAML files for version control and distribution.
 
 4. **Familiar Interfaces** - We built our tools from scratch, but they are meant
 to look familiar and inter-operate with the tools you already know.  Use
-`PhysicsNeMo` DataLoaders as a replacement for `PyTorch`'s Dataloader; tools like
-DistributedSampler will still work. Users of `torchvision` will be familiar
+`PhysicsNeMo` DataLoaders as a replacement for `PyTorch`'s DataLoader; tools like
+`DistributedSampler` will still work. Users of `torchvision` will be familiar
 with the concept of chaining transformations together.
 
 5. **Extensibility out of the box** - We want to provide a data pipeline that gives
@@ -78,10 +80,10 @@ though this can require extra care in reading and using the dataset.
 
 The `PhysicsNeMo` datapipe consists of the following components:
 
-- `reader` objects contain the logic to understand a **dataset** on disk, and
+- `reader`s contain the logic to understand a **dataset** on disk, and
   load examples into CPU memory.  
 
-- The `dataset` object, which contains a `reader`, orchestrates threads that preload
+- The `dataset`, which contains a `reader`, orchestrates threads that preload
   data **examples** from disk and move it to GPU.  On the GPU, a `dataset` can apply a
   series of transformations to each **example**.  Each example is stored in `tensordict`
   format.  The dataset will also track metadata, for understanding where each **example**
@@ -142,7 +144,7 @@ Build preprocessing pipelines with transforms:
 - Apply a single transform (Normalize)
 - Compose multiple transforms together
 - Subsample point clouds with SubsamplePoints
-- Use geometric transforms (Translate, ReScale)
+- Use geometric transforms (Translate, Scale)
 - Save/load normalization statistics from files
 - Denormalize data with the `inverse()` method
 

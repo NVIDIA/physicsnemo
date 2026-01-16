@@ -309,7 +309,7 @@ class Normalize(Transform):
                 # Normalize: (x - mean) / std
                 updates[key] = (tensor - mean) / (std + self.eps)
 
-            else:  # min_max
+            elif self.method == "min_max":
                 min_val = self._mins[key]
                 max_val = self._maxs[key]
 
@@ -317,6 +317,8 @@ class Normalize(Transform):
                 center = (max_val + min_val) / 2.0
                 half_range = (max_val - min_val) / 2.0
                 updates[key] = (tensor - center) / (half_range + self.eps)
+            else:
+                raise ValueError(f"Unknown normalization method: {self.method}")
 
         # Update TensorDict with normalized values
         return data.update(updates)

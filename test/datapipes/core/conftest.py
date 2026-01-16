@@ -174,12 +174,6 @@ def zarr_single_group(temp_dir):
 
 
 @pytest.fixture
-def device():
-    """Return available device (cuda if available, else cpu)."""
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-@pytest.fixture
 def cuda_available():
     """Skip test if CUDA is not available."""
     if not torch.cuda.is_available():

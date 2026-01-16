@@ -383,20 +383,21 @@ class ZarrReader(Reader):
             If the attribute value cannot be converted to a tensor.
         """
         try:
-            if isinstance(value, np.ndarray):
-                return torch.from_numpy(value)
-            elif isinstance(value, (list, tuple)):
-                return torch.tensor(value)
-            elif isinstance(value, (int, float, bool)):
-                return torch.tensor(value)
-            elif isinstance(value, str):
-                raise TypeError(
-                    f"Cannot convert string attribute '{field_name}' to tensor. "
-                    f"String attributes are not supported."
-                )
-            else:
-                # Try to convert via numpy
-                return torch.from_numpy(np.asarray(value))
+            match value:
+                case np.ndarray():
+                    return torch.from_numpy(value)
+                case list() | tuple():
+                    return torch.tensor(value)
+                case int() | float() | bool():
+                    return torch.tensor(value)
+                case str():
+                    raise TypeError(
+                        f"Cannot convert string attribute '{field_name}' to tensor. "
+                        f"String attributes are not supported."
+                    )
+                case _:
+                    # Try to convert via numpy
+                    return torch.from_numpy(np.asarray(value))
         except (TypeError, ValueError) as e:
             raise TypeError(
                 f"Cannot convert attribute '{field_name}' of type {type(value).__name__} "

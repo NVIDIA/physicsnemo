@@ -24,11 +24,14 @@ Device transfers and threading are handled elsewhere (Dataset and DataLoader).
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Iterator
 
 import torch
 from tensordict import TensorDict
+
+logger = logging.getLogger(__name__)
 
 
 class Reader(ABC):
@@ -260,9 +263,20 @@ class Reader(ABC):
         ------
         tuple[TensorDict, dict[str, Any]]
             Tuple of (TensorDict with CPU tensors, metadata dict) for each sample.
+
+        Raises
+        ------
+        RuntimeError
+            If a sample fails to load, wrapping the original exception with
+            context about which sample failed.
         """
         for i in range(len(self)):
-            yield self[i]
+            try:
+                yield self[i]
+            except Exception as e:
+                error_msg = f"Sample {i} failed with exception: {type(e).__name__}: {e}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg) from e
 
     def close(self) -> None:
         """
