@@ -877,8 +877,8 @@ class UNet(Module):
         return layer(x)
 
     def forward(
-        self, x: Float[torch.Tensor, "batch channels depth height width"]  # noqa: F722
-    ) -> Float[torch.Tensor, "batch channels depth height width"]:  # noqa: F722
+        self, x: Float[torch.Tensor, "batch in_channels depth height width"]
+    ) -> Float[torch.Tensor, "batch out_channels depth height width"]:
         """Forward pass through the U-Net."""
         # Validate input shape
         if not torch.compiler.is_compiling():
