@@ -72,5 +72,4 @@ jobs:
         UV_PREVIEW=1 uv sync --group dev --preview-features extra-build-dependencies
 
     - name: Run tests
-      run: |
-        uv run pytest test/
+      run: uv run pytest test/
