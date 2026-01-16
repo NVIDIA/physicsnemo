@@ -24,7 +24,7 @@ from .histogram import cdf as cdf_function
 Tensor = torch.Tensor
 
 
-@torch.jit.script
+@torch.compile
 def _kernel_crps_implementation(pred: Tensor, obs: Tensor, biased: bool) -> Tensor:
     """An O(m log m) implementation of the kernel CRPS formulas"""
     skill = torch.abs(pred - obs[..., None]).mean(-1)

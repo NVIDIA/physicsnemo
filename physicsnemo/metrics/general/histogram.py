@@ -27,7 +27,7 @@ from .ensemble_metrics import EnsembleMetrics
 Tensor = torch.Tensor
 
 
-@torch.jit.script
+@torch.compile
 def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cover
     """Element-wise multi-dimensional linspace
 
@@ -64,7 +64,7 @@ def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cov
     return out
 
 
-@torch.jit.script
+@torch.compile
 def _low_memory_bin_reduction_counts(
     inputs: Tensor, bin_edges: Tensor, counts: Tensor, number_of_bins: int
 ):  # pragma: no cover
@@ -108,7 +108,7 @@ def _low_memory_bin_reduction_counts(
     return counts
 
 
-@torch.jit.script
+@torch.compile
 def _high_memory_bin_reduction_counts(
     inputs: Tensor, bin_edges: Tensor, counts: Tensor, number_of_bins: int
 ) -> Tensor:  # pragma: no cover
@@ -146,7 +146,7 @@ def _high_memory_bin_reduction_counts(
     return counts
 
 
-@torch.jit.script
+@torch.compile
 def _low_memory_bin_reduction_cdf(
     inputs: Tensor, bin_edges: Tensor, counts: Tensor, number_of_bins: int
 ) -> Tensor:  # pragma: no cover
@@ -180,7 +180,7 @@ def _low_memory_bin_reduction_cdf(
     return counts
 
 
-@torch.jit.script
+@torch.compile
 def _high_memory_bin_reduction_cdf(
     inputs: torch.Tensor,
     bin_edges: torch.Tensor,

@@ -67,7 +67,7 @@ def validate_jit(
         return True
 
     output = model.forward(*in_args)
-    jit_model = torch.jit.script(model)
+    jit_model = torch.compile(model)
     output_jit = jit_model(*in_args)
 
     return compare_output(output, output_jit, rtol, atol)
@@ -315,7 +315,7 @@ def validate_combo_optims(
 
     # Torch script, need to save it as seperate model since TS model doesnt have meta
     if model.meta.jit:
-        fwd_model = torch.jit.script(model)
+        fwd_model = torch.compile(model)
     else:
         fwd_model = model
 
