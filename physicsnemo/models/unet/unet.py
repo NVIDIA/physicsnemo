@@ -855,9 +855,7 @@ class UNet(Module):
                 ]
             )
 
-    def checkpointed_forward(
-        self, layer: nn.Module, x: torch.Tensor
-    ) -> torch.Tensor:
+    def checkpointed_forward(self, layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
         """Apply gradient checkpointing to a layer if enabled.
 
         Parameters

@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import random
-
 import pytest
 import torch
 
@@ -172,7 +170,9 @@ def test_unet_checkpoint_attributes(device, pytestconfig):
 
         # Verify attributes are preserved
         assert loaded_model.use_attn_gate == original_model.use_attn_gate
-        assert loaded_model.gradient_checkpointing == original_model.gradient_checkpointing
+        assert (
+            loaded_model.gradient_checkpointing == original_model.gradient_checkpointing
+        )
 
         # Verify outputs match
         torch.manual_seed(42)
