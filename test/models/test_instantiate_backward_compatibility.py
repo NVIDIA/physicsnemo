@@ -44,7 +44,7 @@ import physicsnemo.core
         },
         {
             "__name__": "StormCastUNet",
-            "__module__": "modulus.models.diffusion.unet",
+            "__module__": "modulus.models.diffusion_unets.unet",
             "__args__": {
                 "img_resolution": [512, 640],
                 "img_in_channels": 127,

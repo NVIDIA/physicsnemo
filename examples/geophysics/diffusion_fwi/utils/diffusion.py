@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 import torch
 import nvtx
 
-from physicsnemo.models.diffusion.training_utils import StackedRandomGenerator
+from physicsnemo.diffusion.utils import StackedRandomGenerator
 
 
 class _RemovableHandle:

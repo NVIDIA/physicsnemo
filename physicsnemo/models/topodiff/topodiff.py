@@ -28,8 +28,7 @@ from torch.nn.functional import silu
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-
-from ..diffusion import (
+from physicsnemo.nn import (
     Conv2d,
     GroupNorm,
     Linear,

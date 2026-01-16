@@ -771,10 +771,10 @@ def main(cfg: DictConfig) -> None:
     loss_kwargs = EasyDict()
     if cfg.precond == "dfsr":
         network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond_dfsr"
-        loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss_dfsr"
+        loss_kwargs.class_name = "physicsnemo.diffusion.metrics.VELoss_dfsr"
     elif cfg.precond == "dfsr_cond":
         network_kwargs.class_name = "physicsnemo.models.diffusion.VEPrecond_dfsr_cond"
-        loss_kwargs.class_name = "physicsnemo.metrics.diffusion.VELoss_dfsr_cond"
+        loss_kwargs.class_name = "physicsnemo.diffusion.metrics.VELoss_dfsr_cond"
     loss_fn = construct_class_by_name(**loss_kwargs)  # training.loss.(VP|VE|EDM)Loss
 
     # Network options.

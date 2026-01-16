@@ -16,7 +16,8 @@
 
 import datetime
 
-from physicsnemo.models.diffusion.training_utils import convert_datetime_to_cftime
+import cftime
+from .train_helpers import _convert_datetime_to_cftime
 
 from datasets.dataset import init_dataset_from_config
 from datasets.base import DownscalingDataset
@@ -31,7 +32,7 @@ def get_dataset_and_sampler(dataset_cfg, times, has_lead_time=False):
         plot_times = times
     else:
         plot_times = [
-            convert_datetime_to_cftime(
+            _convert_datetime_to_cftime(
                 datetime.datetime.strptime(time, "%Y-%m-%dT%H:%M:%S")
             )
             for time in times
@@ -113,3 +114,126 @@ def save_images(
         writer.write_input(channel_name, time_index, image_lr2[0, channel_idx])
         if channel_idx == image_lr2.shape[1] - 1:
             break
+
+
+class NetCDFWriter:
+    """NetCDF Writer"""
+
+    def __init__(
+        self, f, lat, lon, input_channels, output_channels, has_lead_time=False
+    ):
+        self._f = f
+        self.has_lead_time = has_lead_time
+        # create unlimited dimensions
+        f.createDimension("time")
+        f.createDimension("ensemble")
+
+        if lat.shape != lon.shape:
+            raise ValueError("lat and lon must have the same shape")
+        ny, nx = lat.shape
+
+        # create lat/lon grid
+        f.createDimension("x", nx)
+        f.createDimension("y", ny)
+
+        v = f.createVariable("lat", "f", dimensions=("y", "x"))
+        # NOTE rethink this for datasets whose samples don't have constant lat-lon.
+        v[:] = lat
+        v.standard_name = "latitude"
+        v.units = "degrees_north"
+
+        v = f.createVariable("lon", "f", dimensions=("y", "x"))
+        v[:] = lon
+        v.standard_name = "longitude"
+        v.units = "degrees_east"
+
+        # create time dimension
+        if has_lead_time:
+            v = f.createVariable("time", "str", ("time"))
+        else:
+            v = f.createVariable("time", "i8", ("time"))
+            v.calendar = "standard"
+            v.units = "hours since 1990-01-01 00:00:00"
+
+        self.truth_group = f.createGroup("truth")
+        self.prediction_group = f.createGroup("prediction")
+        self.input_group = f.createGroup("input")
+
+        for variable in output_channels:
+            name = variable.name + variable.level
+            self.truth_group.createVariable(name, "f", dimensions=("time", "y", "x"))
+            self.prediction_group.createVariable(
+                name, "f", dimensions=("ensemble", "time", "y", "x")
+            )
+
+        # setup input data in netCDF
+
+        for variable in input_channels:
+            name = variable.name + variable.level
+            self.input_group.createVariable(name, "f", dimensions=("time", "y", "x"))
+
+    def write_input(self, channel_name, time_index, val):
+        """Write input data to NetCDF file."""
+        self.input_group[channel_name][time_index] = val
+
+    def write_truth(self, channel_name, time_index, val):
+        """Write ground truth data to NetCDF file."""
+        self.truth_group[channel_name][time_index] = val
+
+    def write_prediction(self, channel_name, time_index, ensemble_index, val):
+        """Write prediction data to NetCDF file."""
+        self.prediction_group[channel_name][ensemble_index, time_index] = val
+
+    def write_time(self, time_index, time):
+        """Write time information to NetCDF file."""
+        if self.has_lead_time:
+            self._f["time"][time_index] = time
+        else:
+            time_v = self._f["time"]
+            self._f["time"][time_index] = cftime.date2num(
+                time, time_v.units, time_v.calendar
+            )
+
+
+############################################################################
+#                     CorrDiff Time Range Utilities                        #
+############################################################################
+
+
+def _time_range(
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    step: datetime.timedelta,
+    inclusive: bool = False,
+):
+    """Like the Python `range` iterator, but with datetimes."""
+    t = start_time
+    while (t <= end_time) if inclusive else (t < end_time):
+        yield t
+        t += step
+
+
+def get_time_from_range(times_range, time_format="%Y-%m-%dT%H:%M:%S"):
+    """Generates a list of times within a given range.
+
+    Args:
+        times_range: A list containing start time, end time, and optional interval (hours).
+        time_format: The format of the input times (default: "%Y-%m-%dT%H:%M:%S").
+
+    Returns:
+        A list of times within the specified range.
+    """
+
+    start_time = datetime.datetime.strptime(times_range[0], time_format)
+    end_time = datetime.datetime.strptime(times_range[1], time_format)
+    interval = (
+        datetime.timedelta(hours=times_range[2])
+        if len(times_range) > 2
+        else datetime.timedelta(hours=1)
+    )
+
+    times = [
+        t.strftime(time_format)
+        for t in _time_range(start_time, end_time, interval, inclusive=True)
+    ]
+    return times

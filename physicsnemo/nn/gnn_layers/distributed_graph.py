@@ -712,7 +712,7 @@ def partition_graph_by_coordinate_bbox(
     >>> partition_rank = 0
     >>> coordinate_separators_min = [[0, 0], [None, 0], [None, None], [0, None]]
     >>> coordinate_separators_max = [[None, None], [0, None], [0, 0], [None, 0]]
-    >>> device = "cuda:0"
+    >>> device = "cuda:0" if torch.cuda.is_available() else "cpu"
     >>> # dummy coordinates
     >>> src_coordinates = torch.FloatTensor(
     ...     [
@@ -746,10 +746,10 @@ def partition_graph_by_coordinate_bbox(
     ...     partition_rank,
     ...     device,
     ... )
-    >>> pg.local_offsets
-    tensor([0, 2], device='cuda:0')
-    >>> pg.local_indices
-    tensor([0, 1], device='cuda:0')
+    >>> pg.local_offsets  # doctest: +ELLIPSIS
+    tensor([0, 2]...)
+    >>> pg.local_indices  # doctest: +ELLIPSIS
+    tensor([0, 1]...)
     >>> pg.sizes
     [[0, 1, 1, 0], [0, 1, 1, 0], [1, 0, 0, 1], [1, 0, 0, 1]]
     >>>
@@ -777,7 +777,7 @@ def partition_graph_by_coordinate_bbox(
     >>> # call partitioning routine
     >>> partition_size = 4
     >>> partition_rank = 0
-    >>> device = "cuda:0"
+    >>> device = "cuda:0" if torch.cuda.is_available() else "cpu"
     >>> pg = partition_graph_by_coordinate_bbox(
     ...     offsets,
     ...     indices,
@@ -789,10 +789,10 @@ def partition_graph_by_coordinate_bbox(
     ...     partition_rank,
     ...     device,
     ... )
-    >>> pg.local_offsets
-    tensor([0, 2], device='cuda:0')
-    >>> pg.local_indices
-    tensor([0, 1], device='cuda:0')
+    >>> pg.local_offsets  # doctest: +ELLIPSIS
+    tensor([0, 2]...)
+    >>> pg.local_indices  # doctest: +ELLIPSIS
+    tensor([0, 1]...)
     >>> pg.sizes
     [[2, 0, 0, 0], [0, 2, 0, 0], [0, 0, 2, 0], [0, 0, 0, 2]]
 

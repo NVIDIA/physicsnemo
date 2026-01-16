@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from physicsnemo.models.diffusion import CorrDiffRegressionUNet, StormCastUNet
+from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet, StormCastUNet
 from test import common
 
 
