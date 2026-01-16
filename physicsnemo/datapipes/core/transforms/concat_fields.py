@@ -41,19 +41,32 @@ class ConcatFields(Transform):
 
     All input tensors must have the same shape except for the concatenation dimension.
 
-    Example:
-        >>> transform = ConcatFields(
-        ...     input_keys=["positions", "sdf", "normals"],
-        ...     output_key="embeddings"
-        ... )
-        >>> data = TensorDict({
-        ...     "positions": torch.randn(10000, 3),
-        ...     "sdf": torch.randn(10000, 1),
-        ...     "normals": torch.randn(10000, 3)
-        ... })
-        >>> result = transform(data)
-        >>> print(result["embeddings"].shape)
-        torch.Size([10000, 7])
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of tensor keys to concatenate, in order.
+    output_key : str
+        Key to store the concatenated result.
+    dim : int, default=-1
+        Dimension along which to concatenate.
+    skip_missing : bool, default=False
+        If True, skip keys that are not present in the data instead of
+        raising an error. Useful for optional fields.
+
+    Examples
+    --------
+    >>> transform = ConcatFields(
+    ...     input_keys=["positions", "sdf", "normals"],
+    ...     output_key="embeddings"
+    ... )
+    >>> data = TensorDict({
+    ...     "positions": torch.randn(10000, 3),
+    ...     "sdf": torch.randn(10000, 1),
+    ...     "normals": torch.randn(10000, 3)
+    ... })
+    >>> result = transform(data)
+    >>> print(result["embeddings"].shape)
+    torch.Size([10000, 7])
     """
 
     def __init__(
@@ -67,12 +80,17 @@ class ConcatFields(Transform):
         """
         Initialize the concatenation transform.
 
-        Args:
-            input_keys: List of tensor keys to concatenate, in order.
-            output_key: Key to store the concatenated result.
-            dim: Dimension along which to concatenate (default: -1, last dim).
-            skip_missing: If True, skip keys that are not present in the data
-                         instead of raising an error. Useful for optional fields.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of tensor keys to concatenate, in order.
+        output_key : str
+            Key to store the concatenated result.
+        dim : int, default=-1
+            Dimension along which to concatenate.
+        skip_missing : bool, default=False
+            If True, skip keys that are not present in the data
+            instead of raising an error. Useful for optional fields.
         """
         super().__init__()
         self.input_keys = input_keys
@@ -84,15 +102,24 @@ class ConcatFields(Transform):
         """
         Concatenate the specified fields.
 
-        Args:
-            data: Input TensorDict containing fields to concatenate.
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing fields to concatenate.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             TensorDict with concatenated result added.
 
-        Raises:
-            KeyError: If a required key is not found (unless skip_missing=True).
-            RuntimeError: If tensors have incompatible shapes for concatenation.
+        Raises
+        ------
+        KeyError
+            If a required key is not found (unless skip_missing=True).
+        RuntimeError
+            If tensors have incompatible shapes for concatenation.
+        ValueError
+            If no tensors are found to concatenate.
         """
         tensors = []
 
@@ -118,6 +145,14 @@ class ConcatFields(Transform):
         return data.update({self.output_key: result})
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
         return f"input_keys={self.input_keys}, output_key={self.output_key}, dim={self.dim}"
 
 
@@ -129,14 +164,24 @@ class NormalizeVectors(Transform):
     Divides vectors by their L2 norm along the specified dimension.
     Handles zero-length vectors by adding a small epsilon to prevent division by zero.
 
-    Example:
-        >>> transform = NormalizeVectors(input_keys=["normals"])
-        >>> data = TensorDict({"normals": torch.randn(10000, 3)})
-        >>> result = transform(data)
-        >>> # Normals are now unit length
-        >>> norms = torch.norm(result["normals"], dim=-1)
-        >>> print(torch.allclose(norms, torch.ones_like(norms), atol=1e-5))
-        True
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of tensor keys to normalize.
+    dim : int, default=-1
+        Dimension along which to compute norm.
+    eps : float, default=1e-6
+        Small value to prevent division by zero.
+
+    Examples
+    --------
+    >>> transform = NormalizeVectors(input_keys=["normals"])
+    >>> data = TensorDict({"normals": torch.randn(10000, 3)})
+    >>> result = transform(data)
+    >>> # Normals are now unit length
+    >>> norms = torch.norm(result["normals"], dim=-1)
+    >>> print(torch.allclose(norms, torch.ones_like(norms), atol=1e-5))
+    True
     """
 
     def __init__(
@@ -149,10 +194,14 @@ class NormalizeVectors(Transform):
         """
         Initialize the vector normalization transform.
 
-        Args:
-            input_keys: List of tensor keys to normalize.
-            dim: Dimension along which to compute norm (default: -1).
-            eps: Small value to prevent division by zero.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of tensor keys to normalize.
+        dim : int, default=-1
+            Dimension along which to compute norm.
+        eps : float, default=1e-6
+            Small value to prevent division by zero.
         """
         super().__init__()
         self.input_keys = input_keys
@@ -160,7 +209,24 @@ class NormalizeVectors(Transform):
         self.eps = eps
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Normalize vectors to unit length."""
+        """
+        Normalize vectors to unit length.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing vectors to normalize.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with normalized vectors.
+
+        Raises
+        ------
+        KeyError
+            If a required key is not found in the data.
+        """
         updates = {}
 
         for key in self.input_keys:
@@ -175,4 +241,12 @@ class NormalizeVectors(Transform):
         return data.update(updates)
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
         return f"input_keys={self.input_keys}, dim={self.dim}, eps={self.eps}"

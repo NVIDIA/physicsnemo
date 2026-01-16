@@ -23,7 +23,7 @@ and applying spatial invariances (translation, scaling).
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional
 
 import torch
 from tensordict import TensorDict
@@ -42,22 +42,39 @@ class ComputeSDF(Transform):
     a triangular mesh surface. Optionally returns the closest points on the
     mesh surface for each query point.
 
-    Example:
-        >>> transform = ComputeSDF(
-        ...     input_keys=["volume_mesh_centers"],
-        ...     output_key="sdf_nodes",
-        ...     mesh_coords_key="stl_coordinates",
-        ...     mesh_faces_key="stl_faces",
-        ...     closest_points_key="closest_points"
-        ... )
-        >>> sample = Tensordict({
-        ...     "volume_mesh_centers": torch.randn(10000, 3),
-        ...     "stl_coordinates": torch.randn(5000, 3),
-        ...     "stl_faces": torch.randint(0, 5000, (10000,))
-        ... })
-        >>> result = transform(sample)
-        >>> print(result["sdf_nodes"].shape)
-        torch.Size([10000, 1])
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of keys containing query points to compute SDF for.
+        Each tensor should have shape :math:`(N, 3)`.
+    output_key : str
+        Key to store the computed SDF values.
+    mesh_coords_key : str
+        Key for mesh vertex coordinates, shape :math:`(M, 3)`.
+    mesh_faces_key : str
+        Key for mesh face indices (flattened), shape :math:`(F*3,)`.
+    use_winding_number : bool, default=True
+        If True, use winding number for sign determination.
+    closest_points_key : str, optional
+        Optional key to store closest points on mesh.
+
+    Examples
+    --------
+    >>> transform = ComputeSDF(
+    ...     input_keys=["volume_mesh_centers"],
+    ...     output_key="sdf_nodes",
+    ...     mesh_coords_key="stl_coordinates",
+    ...     mesh_faces_key="stl_faces",
+    ...     closest_points_key="closest_points"
+    ... )
+    >>> sample = TensorDict({
+    ...     "volume_mesh_centers": torch.randn(10000, 3),
+    ...     "stl_coordinates": torch.randn(5000, 3),
+    ...     "stl_faces": torch.randint(0, 5000, (10000,))
+    ... })
+    >>> result = transform(sample)
+    >>> print(result["sdf_nodes"].shape)
+    torch.Size([10000, 1])
     """
 
     def __init__(
@@ -73,14 +90,21 @@ class ComputeSDF(Transform):
         """
         Initialize the SDF computation transform.
 
-        Args:
-            input_keys: List of keys containing query points to compute SDF for.
-                       Each tensor should have shape :math:`(N, 3)`.
-            output_key: Key to store the computed SDF values.
-            mesh_coords_key: Key for mesh vertex coordinates, shape :math:`(M, 3)`.
-            mesh_faces_key: Key for mesh face indices (flattened), shape :math:`(F*3,)`.
-            use_winding_number: If True, use winding number for sign determination.
-            closest_points_key: Optional key to store closest points on mesh.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of keys containing query points to compute SDF for.
+            Each tensor should have shape :math:`(N, 3)`.
+        output_key : str
+            Key to store the computed SDF values.
+        mesh_coords_key : str
+            Key for mesh vertex coordinates, shape :math:`(M, 3)`.
+        mesh_faces_key : str
+            Key for mesh face indices (flattened), shape :math:`(F*3,)`.
+        use_winding_number : bool, default=True
+            If True, use winding number for sign determination.
+        closest_points_key : str, optional
+            Optional key to store closest points on mesh.
         """
         super().__init__()
         self.input_keys = input_keys
@@ -91,7 +115,24 @@ class ComputeSDF(Transform):
         self.closest_points_key = closest_points_key
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Compute SDF for the sample."""
+        """
+        Compute SDF for the sample.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing mesh and query point data.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with computed SDF values added.
+
+        Raises
+        ------
+        KeyError
+            If mesh or query point keys are not found in the data.
+        """
         # Get mesh data
         if self.mesh_coords_key not in data:
             raise KeyError(f"Mesh coordinates key '{self.mesh_coords_key}' not found")
@@ -132,6 +173,14 @@ class ComputeSDF(Transform):
         return data.update(updates)
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return f"ComputeSDF(input_keys={self.input_keys}, output_key={self.output_key})"
 
 
@@ -144,13 +193,27 @@ class ComputeNormals(Transform):
     points on a surface. Handles zero-distance edge cases by falling back to
     center of mass direction.
 
-    Example:
-        >>> transform = ComputeNormals(
-        ...     positions_key="volume_mesh_centers",
-        ...     closest_points_key="closest_points",
-        ...     center_of_mass_key="center_of_mass",
-        ...     output_key="volume_normals"
-        ... )
+    Parameters
+    ----------
+    positions_key : str
+        Key for position tensor, shape :math:`(N, 3)`.
+    closest_points_key : str
+        Key for closest points tensor, shape :math:`(N, 3)`.
+    center_of_mass_key : str
+        Key for center of mass, shape :math:`(1, 3)` or :math:`(3,)`.
+    output_key : str
+        Key to store computed normals.
+    handle_zero_distance : bool, default=True
+        If True, use center_of_mass fallback for zero distances.
+
+    Examples
+    --------
+    >>> transform = ComputeNormals(
+    ...     positions_key="volume_mesh_centers",
+    ...     closest_points_key="closest_points",
+    ...     center_of_mass_key="center_of_mass",
+    ...     output_key="volume_normals"
+    ... )
     """
 
     def __init__(
@@ -165,12 +228,18 @@ class ComputeNormals(Transform):
         """
         Initialize the normal computation transform.
 
-        Args:
-            positions_key: Key for position tensor, shape :math:`(N, 3)`.
-            closest_points_key: Key for closest points tensor, shape :math:`(N, 3)`.
-            center_of_mass_key: Key for center of mass, shape :math:`(1, 3)` or :math:`(3,)`.
-            output_key: Key to store computed normals.
-            handle_zero_distance: If True, use center_of_mass fallback for zero distances.
+        Parameters
+        ----------
+        positions_key : str
+            Key for position tensor, shape :math:`(N, 3)`.
+        closest_points_key : str
+            Key for closest points tensor, shape :math:`(N, 3)`.
+        center_of_mass_key : str
+            Key for center of mass, shape :math:`(1, 3)` or :math:`(3,)`.
+        output_key : str
+            Key to store computed normals.
+        handle_zero_distance : bool, default=True
+            If True, use center_of_mass fallback for zero distances.
         """
         super().__init__()
         self.positions_key = positions_key
@@ -180,7 +249,19 @@ class ComputeNormals(Transform):
         self.handle_zero_distance = handle_zero_distance
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Compute normals for the sample."""
+        """
+        Compute normals for the sample.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing position and closest point data.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with computed normals added.
+        """
         positions = data[self.positions_key]
         closest_points = data[self.closest_points_key]
         center_of_mass = data[self.center_of_mass_key]
@@ -208,6 +289,14 @@ class ComputeNormals(Transform):
         return data.update({self.output_key: normals})
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return (
             f"ComputeNormals(positions_key={self.positions_key}, "
             f"output_key={self.output_key})"
@@ -217,38 +306,96 @@ class ComputeNormals(Transform):
 @register()
 class Translate(Transform):
     r"""
-    Apply a translation by subtracting a center point.
+    Apply a translation by adding or subtracting a center point.
 
-    Subtracts a reference point (typically center of mass) from position-like
-    tensors to make the representation translation invariant.
+    By default, this will ADD the translation. But you can also
+    use the subtract mode: this is particularly useful when composed
+    with CenterOfMass: you can compute the CoM and apply a translation
+    as a CoM subtraction to center the data at the origin.
 
-    Example:
-        >>> transform = TranslationInvariance(
-        ...     input_keys=["volume_mesh_centers", "surface_mesh_centers"],
-        ...     center_key_or_value="center_of_mass"
-        ... )
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of position tensor keys to translate.
+    center_key_or_value : str or torch.Tensor
+        Either a key name (str) for a tensor in the sample,
+        or a fixed tensor value to add/subtract.
+    subtract : bool, default=False
+        If False (default), ADD the translation (data + center).
+        If True, SUBTRACT the translation (data - center).
+        Use subtract=True when centering data around a reference point
+        like center of mass.
+
+    Examples
+    --------
+    Add mode (default) - shift points by a fixed offset:
+
+    >>> transform = Translate(
+    ...     input_keys=["positions"],
+    ...     center_key_or_value=torch.tensor([1.0, 2.0, 3.0])
+    ... )
+    >>> # result["positions"] = original + [1, 2, 3]
+
+    Subtract mode - center points by subtracting center of mass:
+
+    >>> transform = Translate(
+    ...     input_keys=["volume_mesh_centers", "surface_mesh_centers"],
+    ...     center_key_or_value="center_of_mass",
+    ...     subtract=True
+    ... )
+    >>> # result["positions"] = original - center_of_mass
     """
 
     def __init__(
         self,
         input_keys: list[str],
-        center_key_or_value: Union[str, torch.Tensor],
+        center_key_or_value: str | torch.Tensor,
+        *,
+        subtract: bool = False,
     ) -> None:
         """
-        Initialize the translation invariance transform.
+        Initialize the translation transform.
 
-        Args:
-            input_keys: List of position tensor keys to translate.
-            center_key_or_value: Either a key name (str) for a tensor in the sample,
-                                or a fixed tensor value to subtract.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of position tensor keys to translate.
+        center_key_or_value : str or torch.Tensor
+            Either a key name (str) for a tensor in the sample,
+            or a fixed tensor value to add/subtract.
+        subtract : bool, default=False
+            If False (default), ADD the translation (data + center).
+            If True, SUBTRACT the translation (data - center).
+            Use subtract=True when centering data around a reference point
+            like center of mass.
         """
         super().__init__()
         self.input_keys = input_keys
         self.center_key_or_value = center_key_or_value
         self.is_key = isinstance(center_key_or_value, str)
+        self.subtract = subtract
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Apply translation to the sample."""
+        """
+        Apply translation to the sample.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing position data.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with translated positions.
+
+        Raises
+        ------
+        KeyError
+            If the center key is not found in the data.
+        TypeError
+            If center_key_or_value is not a string or torch.Tensor.
+        """
         # Get center value
         if isinstance(self.center_key_or_value, str):
             if self.center_key_or_value not in data:
@@ -272,63 +419,111 @@ class Translate(Transform):
         updates = {}
         for key in self.input_keys:
             if key in data:
-                updates[key] = data[key] - center
+                if self.subtract:
+                    updates[key] = data[key] - center
+                else:
+                    updates[key] = data[key] + center
 
         return data.update(updates)
 
-    def to(self, device: Union[torch.device, str]) -> "Translate":
-        """Move center tensor to the specified device (if not a key reference)."""
-        super().to(device)
-        if not self.is_key:
-            if not isinstance(self.center_key_or_value, torch.Tensor):
-                raise TypeError(
-                    f"center_key_or_value should be torch.Tensor but got {type(self.center_key_or_value)}"
-                )
-            device = torch.device(device) if isinstance(device, str) else device
-            self.center_key_or_value = self.center_key_or_value.to(device)
-        return self
-
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
+        mode = "subtract" if self.subtract else "add"
         return (
-            f"TranslationInvariance(input_keys={self.input_keys}, "
-            f"center={self.center_key_or_value})"
+            f"Translate(input_keys={self.input_keys}, "
+            f"center={self.center_key_or_value}, mode={mode})"
         )
 
 
 @register()
-class ReScale(Transform):
+class Scale(Transform):
     r"""
-    Apply a scale factor by dividing by a reference scale.
+    Apply a scale factor by multiplying or dividing by a reference scale.
 
-    Divides position tensors by a reference scale to make the representation
-    scale invariant.
+    By default, this will MULTIPLY by the scale factor. But you can also
+    use the divide mode: this is particularly useful for normalizing data
+    to make the representation scale invariant (e.g., dividing by a
+    characteristic length scale).
 
-    Example:
-        >>> transform = ReScale(
-        ...     input_keys=["volume_mesh_centers", "geometry_coordinates"],
-        ...     reference_scale=torch.tensor([[1.0, 1.0, 1.0]])
-        ... )
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of position tensor keys to scale.
+    scale : torch.Tensor
+        Scale factor tensor, shape :math:`(1, D)` or :math:`(D,)`.
+    divide : bool, default=False
+        If False (default), MULTIPLY by the scale (data * scale).
+        If True, DIVIDE by the scale (data / scale).
+        Use divide=True when normalizing data by a reference scale.
+
+    Examples
+    --------
+    Multiply mode (default) - scale up positions by 2x:
+
+    >>> transform = Scale(
+    ...     input_keys=["positions"],
+    ...     scale=torch.tensor([2.0, 2.0, 2.0])
+    ... )
+    >>> # result["positions"] = original * [2, 2, 2]
+
+    Divide mode - normalize by a reference scale:
+
+    >>> transform = Scale(
+    ...     input_keys=["volume_mesh_centers", "geometry_coordinates"],
+    ...     scale=torch.tensor([1.0, 1.0, 1.0]),
+    ...     divide=True
+    ... )
+    >>> # result["positions"] = original / scale
     """
 
     def __init__(
         self,
         input_keys: list[str],
-        reference_scale: torch.Tensor,
+        scale: torch.Tensor,
+        *,
+        divide: bool = False,
     ) -> None:
         """
-        Initialize the scale invariance transform.
+        Initialize the scale transform.
 
-        Args:
-            input_keys: List of position tensor keys to scale.
-            reference_scale: Tensor to divide by, shape :math:`(1, D)` or :math:`(D,)`.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of position tensor keys to scale.
+        scale : torch.Tensor
+            Scale factor tensor, shape :math:`(1, D)` or :math:`(D,)`.
+        divide : bool, default=False
+            If False (default), MULTIPLY by the scale (data * scale).
+            If True, DIVIDE by the scale (data / scale).
+            Use divide=True when normalizing data by a reference scale.
         """
         super().__init__()
         self.input_keys = input_keys
-        self.reference_scale = reference_scale
+        self.scale = scale
+        self.divide = divide
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Apply scaling to the data."""
-        scale = self.reference_scale
+        """
+        Apply scaling to the data.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing position data.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with scaled positions.
+        """
+        scale = self.scale
 
         # Ensure scale has batch dimension
         if scale.ndim == 1:
@@ -342,19 +537,28 @@ class ReScale(Transform):
         updates = {}
         for key in self.input_keys:
             if key in data:
-                updates[key] = data[key] / scale
+                if self.divide:
+                    updates[key] = data[key] / scale
+                else:
+                    updates[key] = data[key] * scale
 
         return data.update(updates)
 
-    def to(self, device: Union[torch.device, str]) -> "ReScale":
-        """Move reference scale tensor to the specified device."""
-        super().to(device)
-        device = torch.device(device) if isinstance(device, str) else device
-        self.reference_scale = self.reference_scale.to(device)
-        return self
-
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
+        mode = "divide" if self.divide else "multiply"
         return (
-            f"ScaleInvariance(input_keys={self.input_keys}, "
-            f"scale_shape={self.reference_scale.shape})"
+            f"Scale(input_keys={self.input_keys}, "
+            f"scale_shape={self.scale.shape}, mode={mode})"
         )
+
+
+# Backwards compatibility alias
+ReScale = Scale

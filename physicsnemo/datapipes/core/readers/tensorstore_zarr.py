@@ -26,7 +26,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -54,24 +54,29 @@ class TensorStoreZarrReader(Reader):
     This is a drop-in replacement for ZarrReader with identical interface.
     Each Zarr group in the directory represents one sample.
 
-    Example:
-        >>> # Directory with sample_0.zarr, sample_1.zarr, ...
-        >>> reader = TensorStoreZarrReader("data_dir/", group_pattern="sample_*.zarr")
-        >>> sample = reader[0]
+    Examples
+    --------
+    Basic usage:
 
-        >>> # Load only specific fields:
-        >>> reader = TensorStoreZarrReader("data_dir/", fields=["positions", "velocity"])
-        >>> sample = reader[0]
+    >>> # Directory with sample_0.zarr, sample_1.zarr, ...
+    >>> reader = TensorStoreZarrReader("data_dir/", group_pattern="sample_*.zarr")
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
 
-        >>> # With coordinated subsampling for large arrays:
-        >>> reader = TensorStoreZarrReader(
-        ...     "data_dir/",
-        ...     coordinated_subsampling={
-        ...         "n_points": 50000,
-        ...         "target_keys": ["volume_coords", "volume_fields"],
-        ...     }
-        ... )
-        >>> sample = reader[0]
+    Load only specific fields:
+
+    >>> reader = TensorStoreZarrReader("data_dir/", fields=["positions", "velocity"])
+    >>> data, metadata = reader[0]
+
+    With coordinated subsampling for large arrays:
+
+    >>> reader = TensorStoreZarrReader(
+    ...     "data_dir/",
+    ...     coordinated_subsampling={
+    ...         "n_points": 50000,
+    ...         "target_keys": ["volume_coords", "volume_fields"],
+    ...     }
+    ... )
+    >>> data, metadata = reader[0]
 
     Performance Tips:
         - Increase ``cache_bytes_limit`` for better performance on repeated access
@@ -82,7 +87,7 @@ class TensorStoreZarrReader(Reader):
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
         fields: Optional[list[str]] = None,
         default_values: Optional[dict[str, torch.Tensor]] = None,
@@ -97,28 +102,42 @@ class TensorStoreZarrReader(Reader):
         """
         Initialize the TensorStore Zarr reader.
 
-        Args:
-            path: Path to directory containing Zarr groups.
-            fields: List of array names to load. If None, loads all available
-                arrays from each group.
-            default_values: Dictionary mapping field names to default tensors.
-                If a field in ``fields`` is not found in the file but has an
-                entry here, the default tensor is used instead of raising an
-                error. Useful for optional fields.
-            group_pattern: Glob pattern for finding Zarr groups.
-            cache_bytes_limit: Total cache size in bytes (default: 10 MB).
-            data_copy_concurrency: Limit for concurrent data copy operations.
-            file_io_concurrency: Limit for concurrent file I/O operations.
-            pin_memory: If True, place tensors in pinned memory.
-            include_index_in_metadata: If True, include sample index in metadata.
-            coordinated_subsampling: Optional dict to configure coordinated
-                subsampling. If provided, must contain ``n_points`` (int) and
-                ``target_keys`` (list of str).
+        Parameters
+        ----------
+        path : str or Path
+            Path to directory containing Zarr groups.
+        fields : list[str], optional
+            List of array names to load. If None, loads all available
+            arrays from each group.
+        default_values : dict[str, torch.Tensor], optional
+            Dictionary mapping field names to default tensors.
+            If a field in ``fields`` is not found in the file but has an
+            entry here, the default tensor is used instead of raising an
+            error. Useful for optional fields.
+        group_pattern : str, default="*.zarr"
+            Glob pattern for finding Zarr groups.
+        cache_bytes_limit : int, default=10_000_000
+            Total cache size in bytes (default: 10 MB).
+        data_copy_concurrency : int, default=72
+            Limit for concurrent data copy operations.
+        file_io_concurrency : int, default=72
+            Limit for concurrent file I/O operations.
+        pin_memory : bool, default=False
+            If True, place tensors in pinned memory.
+        include_index_in_metadata : bool, default=True
+            If True, include sample index in metadata.
+        coordinated_subsampling : dict[str, Any], optional
+            Optional dict to configure coordinated subsampling. If provided,
+            must contain ``n_points`` (int) and ``target_keys`` (list of str).
 
-        Raises:
-            ImportError: If TensorStore is not installed.
-            FileNotFoundError: If path doesn't exist.
-            ValueError: If no Zarr groups found.
+        Raises
+        ------
+        ImportError
+            If TensorStore is not installed.
+        FileNotFoundError
+            If path doesn't exist.
+        ValueError
+            If no Zarr groups found.
         """
         if not TENSORSTORE_AVAILABLE:
             raise ImportError(
@@ -245,7 +264,28 @@ class TensorStoreZarrReader(Reader):
         slice_stop: int,
         n_points: int,
     ) -> slice:
-        """Select a random contiguous slice from a range."""
+        """
+        Select a random contiguous slice from a range.
+
+        Parameters
+        ----------
+        slice_start : int
+            Start index of the available range.
+        slice_stop : int
+            Stop index of the available range (exclusive).
+        n_points : int
+            Number of points to sample.
+
+        Returns
+        -------
+        slice
+            A slice object representing the random contiguous section.
+
+        Raises
+        ------
+        ValueError
+            If the range is smaller than n_points.
+        """
         total_points = slice_stop - slice_start
 
         if total_points < n_points:

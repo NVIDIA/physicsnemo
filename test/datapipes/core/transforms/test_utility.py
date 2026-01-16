@@ -132,6 +132,161 @@ class TestRename:
         assert "mapping" in repr_str
         assert "strict" in repr_str
 
+    def test_nested_rename_single_key(self):
+        """Test renaming a key in a nested TensorDict."""
+        data = TensorDict(
+            {
+                "a": torch.randn(10, 3),
+                "nested": TensorDict(
+                    {
+                        "old_name": torch.randn(10, 2),
+                        "other": torch.randn(10, 1),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Rename(mapping={"nested.old_name": "nested.new_name"})
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "nested" in result.keys()
+        assert "new_name" in result["nested"].keys()
+        assert "old_name" not in result["nested"].keys()
+        assert "other" in result["nested"].keys()
+
+    def test_nested_rename_multiple_keys(self):
+        """Test renaming multiple keys in nested TensorDicts."""
+        data = TensorDict(
+            {
+                "a": torch.randn(10, 3),
+                "level1": TensorDict(
+                    {
+                        "x": torch.randn(10, 2),
+                        "level2": TensorDict(
+                            {
+                                "y": torch.randn(10, 1),
+                            },
+                            batch_size=[],
+                        ),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Rename(
+            mapping={
+                "level1.x": "level1.positions",
+                "level1.level2.y": "level1.level2.values",
+            }
+        )
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "positions" in result["level1"].keys()
+        assert "x" not in result["level1"].keys()
+        assert "values" in result["level1"]["level2"].keys()
+        assert "y" not in result["level1"]["level2"].keys()
+
+    def test_nested_rename_preserves_data(self):
+        """Test that nested renaming preserves tensor data."""
+        original_tensor = torch.randn(20, 4)
+        data = TensorDict(
+            {
+                "nested": TensorDict(
+                    {
+                        "original": original_tensor.clone(),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Rename(mapping={"nested.original": "nested.renamed"})
+        result = transform(data)
+
+        assert torch.equal(result["nested"]["renamed"], original_tensor)
+
+    def test_nested_rename_strict_mode_missing_key(self):
+        """Test strict mode raises error for missing nested keys."""
+        data = TensorDict(
+            {
+                "nested": TensorDict(
+                    {
+                        "existing": torch.randn(10, 2),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Rename(mapping={"nested.missing": "nested.new_name"}, strict=True)
+
+        with pytest.raises(KeyError, match="missing"):
+            transform(data)
+
+    def test_nested_rename_non_strict_skips_missing(self):
+        """Test non-strict mode skips missing nested keys."""
+        data = TensorDict(
+            {
+                "nested": TensorDict(
+                    {
+                        "existing": torch.randn(10, 2),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Rename(
+            mapping={
+                "nested.missing": "nested.new_name",
+                "nested.existing": "nested.renamed",
+            },
+            strict=False,
+        )
+        result = transform(data)
+
+        assert "renamed" in result["nested"].keys()
+        assert "existing" not in result["nested"].keys()
+        assert "new_name" not in result["nested"].keys()
+
+    def test_deeply_nested_rename(self):
+        """Test renaming keys in deeply nested TensorDicts."""
+        data = TensorDict(
+            {
+                "a": torch.randn(5, 3),
+                "b": TensorDict(
+                    {
+                        "c": torch.randn(5, 2),
+                        "d": TensorDict(
+                            {
+                                "e": torch.randn(5, 1),
+                            },
+                            batch_size=[],
+                        ),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Rename(mapping={"b.d.e": "b.d.renamed_e"})
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "c" in result["b"].keys()
+        assert "renamed_e" in result["b"]["d"].keys()
+        assert "e" not in result["b"]["d"].keys()
+
 
 class TestPurge:
     """Tests for the Purge transform."""
@@ -353,6 +508,209 @@ class TestPurge:
         result = transform(data)
 
         assert len(list(result.keys())) == 0
+
+    def test_nested_drop_single_key(self):
+        """Test dropping a single key from a nested TensorDict."""
+        data = TensorDict(
+            {
+                "a": torch.randn(10, 3),
+                "nested": TensorDict(
+                    {
+                        "keep": torch.randn(10, 2),
+                        "drop_me": torch.randn(10, 1),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(drop_only=["nested.drop_me"])
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "nested" in result.keys()
+        assert "keep" in result["nested"].keys()
+        assert "drop_me" not in result["nested"].keys()
+
+    def test_nested_drop_multiple_keys(self):
+        """Test dropping multiple keys from nested TensorDicts."""
+        data = TensorDict(
+            {
+                "a": torch.randn(10, 3),
+                "level1": TensorDict(
+                    {
+                        "x": torch.randn(10, 2),
+                        "y": torch.randn(10, 1),
+                        "level2": TensorDict(
+                            {
+                                "z": torch.randn(10, 1),
+                                "w": torch.randn(10, 1),
+                            },
+                            batch_size=[],
+                        ),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(drop_only=["level1.y", "level1.level2.w"])
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "x" in result["level1"].keys()
+        assert "y" not in result["level1"].keys()
+        assert "z" in result["level1"]["level2"].keys()
+        assert "w" not in result["level1"]["level2"].keys()
+
+    def test_nested_keep_only_single_key(self):
+        """Test keeping only a single nested key."""
+        data = TensorDict(
+            {
+                "a": torch.randn(10, 3),
+                "nested": TensorDict(
+                    {
+                        "keep": torch.randn(10, 2),
+                        "remove": torch.randn(10, 1),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(keep_only=["nested.keep"])
+        result = transform(data)
+
+        assert "a" not in result.keys()
+        assert "nested" in result.keys()
+        assert "keep" in result["nested"].keys()
+        assert "remove" not in result["nested"].keys()
+
+    def test_nested_keep_only_multiple_keys(self):
+        """Test keeping multiple nested keys."""
+        data = TensorDict(
+            {
+                "a": torch.randn(10, 3),
+                "level1": TensorDict(
+                    {
+                        "x": torch.randn(10, 2),
+                        "y": torch.randn(10, 1),
+                        "level2": TensorDict(
+                            {
+                                "z": torch.randn(10, 1),
+                                "w": torch.randn(10, 1),
+                            },
+                            batch_size=[],
+                        ),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(keep_only=["a", "level1.x", "level1.level2.z"])
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "x" in result["level1"].keys()
+        assert "y" not in result["level1"].keys()
+        assert "z" in result["level1"]["level2"].keys()
+        assert "w" not in result["level1"]["level2"].keys()
+
+    def test_nested_strict_mode_missing_key_raises(self):
+        """Test strict mode raises error for missing nested keys."""
+        data = TensorDict(
+            {
+                "nested": TensorDict(
+                    {
+                        "existing": torch.randn(10, 2),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(drop_only=["nested.missing"], strict=True)
+
+        with pytest.raises(KeyError, match="missing"):
+            transform(data)
+
+    def test_nested_non_strict_skips_missing(self):
+        """Test non-strict mode skips missing nested keys."""
+        data = TensorDict(
+            {
+                "nested": TensorDict(
+                    {
+                        "existing": torch.randn(10, 2),
+                        "drop": torch.randn(10, 1),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(drop_only=["nested.missing", "nested.drop"], strict=False)
+        result = transform(data)
+
+        assert "existing" in result["nested"].keys()
+        assert "drop" not in result["nested"].keys()
+
+    def test_nested_preserves_data(self):
+        """Test that nested purge preserves tensor data."""
+        original_tensor = torch.randn(20, 4)
+        data = TensorDict(
+            {
+                "nested": TensorDict(
+                    {
+                        "keep": original_tensor.clone(),
+                        "drop": torch.randn(20, 2),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(drop_only=["nested.drop"])
+        result = transform(data)
+
+        assert torch.equal(result["nested"]["keep"], original_tensor)
+
+    def test_deeply_nested_drop(self):
+        """Test dropping keys in deeply nested TensorDicts."""
+        data = TensorDict(
+            {
+                "a": torch.randn(5, 3),
+                "b": TensorDict(
+                    {
+                        "c": torch.randn(5, 2),
+                        "d": TensorDict(
+                            {
+                                "e": torch.randn(5, 1),
+                                "f": torch.randn(5, 1),
+                            },
+                            batch_size=[],
+                        ),
+                    },
+                    batch_size=[],
+                ),
+            },
+            batch_size=[],
+        )
+
+        transform = Purge(drop_only=["b.d.f"])
+        result = transform(data)
+
+        assert "a" in result.keys()
+        assert "c" in result["b"].keys()
+        assert "e" in result["b"]["d"].keys()
+        assert "f" not in result["b"]["d"].keys()
 
 
 class TestConstantField:

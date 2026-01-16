@@ -23,7 +23,7 @@ Supports reading from single .npz files or directories of .npz files.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -44,19 +44,19 @@ class NumpyReader(Reader):
     Example (single .npz):
         >>> # data.npz with arrays "positions" (N, 100, 3), "features" (N, 100)
         >>> reader = NumpyReader("data.npz", fields=["positions", "features"])
-        >>> sample = reader[0]
+        >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
         >>> # Or load all arrays:
         >>> reader = NumpyReader("data.npz")  # fields=None loads all
 
     Example (directory):
         >>> # Directory with sample_0.npz, sample_1.npz, ...
         >>> reader = NumpyReader("data_dir/", file_pattern="sample_*.npz")
-        >>> sample = reader[0]
+        >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
     """
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
         fields: Optional[list[str]] = None,
         default_values: Optional[dict[str, torch.Tensor]] = None,
@@ -69,25 +69,37 @@ class NumpyReader(Reader):
         """
         Initialize the NumPy reader.
 
-        Args:
-            path: Path to .npz file or directory of .npz files.
-            fields: List of array names to load. If None, loads all available
-                arrays from the file.
-            default_values: Dictionary mapping field names to default tensors.
-                If a field in ``fields`` is not found in the file but has an
-                entry here, the default tensor is used instead of raising an
-                error. Useful for optional fields.
-            file_pattern: Glob pattern for finding files (directory mode).
-            index_key: If provided, use this array to determine sample count.
-            pin_memory: If True, place tensors in pinned memory for faster GPU transfer.
-            include_index_in_metadata: If True, include sample index in metadata.
-            coordinated_subsampling: Optional dict to configure coordinated
-                subsampling (directory mode only). If provided, must contain
-                ``n_points`` (int) and ``target_keys`` (list of str).
+        Parameters
+        ----------
+        path : str or Path
+            Path to .npz file or directory of .npz files.
+        fields : list[str], optional
+            List of array names to load. If None, loads all available
+            arrays from the file.
+        default_values : dict[str, torch.Tensor], optional
+            Dictionary mapping field names to default tensors.
+            If a field in ``fields`` is not found in the file but has an
+            entry here, the default tensor is used instead of raising an
+            error. Useful for optional fields.
+        file_pattern : str, default="*.npz"
+            Glob pattern for finding files (directory mode).
+        index_key : str, optional
+            If provided, use this array to determine sample count.
+        pin_memory : bool, default=False
+            If True, place tensors in pinned memory for faster GPU transfer.
+        include_index_in_metadata : bool, default=True
+            If True, include sample index in metadata.
+        coordinated_subsampling : dict[str, Any], optional
+            Optional dict to configure coordinated subsampling (directory mode
+            only). If provided, must contain ``n_points`` (int) and
+            ``target_keys`` (list of str).
 
-        Raises:
-            FileNotFoundError: If path doesn't exist.
-            ValueError: If no files found in directory or unsupported file type.
+        Raises
+        ------
+        FileNotFoundError
+            If path doesn't exist.
+        ValueError
+            If no files found in directory or unsupported file type.
         """
         super().__init__(
             pin_memory=pin_memory,
@@ -164,16 +176,24 @@ class NumpyReader(Reader):
         """
         Select a random contiguous slice from a range.
 
-        Args:
-            slice_start: Start index of the available range.
-            slice_stop: Stop index of the available range (exclusive).
-            n_points: Number of points to sample.
+        Parameters
+        ----------
+        slice_start : int
+            Start index of the available range.
+        slice_stop : int
+            Stop index of the available range (exclusive).
+        n_points : int
+            Number of points to sample.
 
-        Returns:
+        Returns
+        -------
+        slice
             A slice object representing the random contiguous section.
 
-        Raises:
-            ValueError: If the range is smaller than n_points.
+        Raises
+        ------
+        ValueError
+            If the range is smaller than n_points.
         """
         total_points = slice_stop - slice_start
 
@@ -195,13 +215,19 @@ class NumpyReader(Reader):
         """
         Load data from an npz file.
 
-        Args:
-            npz: The loaded npz file object.
-            index: Sample index to load (for single file mode with indexed arrays).
-                None for directory mode (load entire arrays).
-            file_path: Path to the file (for error messages).
+        Parameters
+        ----------
+        npz : np.lib.npyio.NpzFile
+            The loaded npz file object.
+        index : int, optional
+            Sample index to load (for single file mode with indexed arrays).
+            None for directory mode (load entire arrays).
+        file_path : Path, optional
+            Path to the file (for error messages).
 
-        Returns:
+        Returns
+        -------
+        dict[str, torch.Tensor]
             Dictionary mapping field names to tensors.
         """
         data = {}

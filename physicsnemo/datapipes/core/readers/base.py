@@ -36,37 +36,44 @@ class Reader(ABC):
     Abstract base class for data readers.
 
     Readers are intentionally simple and transactional:
+
     - Load data from a source (file, database, etc.)
     - Return (TensorDict, metadata_dict) tuples with CPU tensors
     - No threading, no prefetching, no device transfers
 
     This design makes custom readers easy to implement. Users only need to:
-    1. Implement `_load_sample(index)` to load raw data
-    2. Implement `__len__()` to return dataset size
+
+    1. Implement ``_load_sample(index)`` to load raw data
+    2. Implement ``__len__()`` to return dataset size
 
     Device transfers are handled automatically by Dataset (if device parameter set).
     Threading/prefetching is handled by the DataLoader.
 
-    Example custom reader:
-        >>> class MyReader(Reader):
-        ...     def __init__(self, path: str, **kwargs):
-        ...         super().__init__(**kwargs)
-        ...         self.data = load_my_data(path)
-        ...
-        ...     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
-        ...         return {"x": torch.from_numpy(self.data[index])}
-        ...
-        ...     def __len__(self) -> int:
-        ...         return len(self.data)
+    Examples
+    --------
+    Custom reader implementation:
+
+    >>> class MyReader(Reader):
+    ...     def __init__(self, path: str, **kwargs):
+    ...         super().__init__(**kwargs)
+    ...         self.data = load_my_data(path)
+    ...
+    ...     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
+    ...         return {"x": torch.from_numpy(self.data[index])}
+    ...
+    ...     def __len__(self) -> int:
+    ...         return len(self.data)
 
     Subclasses must implement:
-        - _load_sample(index: int) -> dict[str, torch.Tensor]
-        - __len__() -> int
+
+    - ``_load_sample(index: int) -> dict[str, torch.Tensor]``
+    - ``__len__() -> int``
 
     Optionally override:
-        - _get_field_names() -> list[str]
-        - _get_sample_metadata(index: int) -> dict[str, Any]
-        - close()
+
+    - ``_get_field_names() -> list[str]``
+    - ``_get_sample_metadata(index: int) -> dict[str, Any]``
+    - ``close()``
     """
 
     def __init__(
@@ -79,18 +86,23 @@ class Reader(ABC):
         """
         Initialize the reader.
 
-        Args:
-            pin_memory: If True, place tensors in pinned (page-locked) memory.
-                       This enables faster async CPU→GPU transfers later.
-                       Only use if you plan to move data to GPU (default: False).
-            include_index_in_metadata: If True, include sample index in metadata
-                                       (default: True).
-            coordinated_subsampling: Optional dict to configure coordinated
-                subsampling at construction time. If provided, must contain:
-                - ``n_points``: Number of points to read from each target tensor
-                - ``target_keys``: List of tensor keys to apply subsampling to
-                This allows configuration via Hydra. Readers that don't support
-                coordinated subsampling will ignore this parameter.
+        Parameters
+        ----------
+        pin_memory : bool, default=False
+            If True, place tensors in pinned (page-locked) memory.
+            This enables faster async CPU→GPU transfers later.
+            Only use if you plan to move data to GPU.
+        include_index_in_metadata : bool, default=True
+            If True, include sample index in metadata.
+        coordinated_subsampling : dict[str, Any], optional
+            Optional dict to configure coordinated subsampling at construction
+            time. If provided, must contain:
+
+            - ``n_points``: Number of points to read from each target tensor
+            - ``target_keys``: List of tensor keys to apply subsampling to
+
+            This allows configuration via Hydra. Readers that don't support
+            coordinated subsampling will ignore this parameter.
         """
         self.pin_memory = pin_memory
         self.include_index_in_metadata = include_index_in_metadata
@@ -104,20 +116,33 @@ class Reader(ABC):
         This is the main method to implement. Load data from your source
         and return it as a dictionary of CPU tensors.
 
-        Args:
-            index: Sample index (0 to len-1).
+        Parameters
+        ----------
+        index : int
+            Sample index (0 to len-1).
 
-        Returns:
+        Returns
+        -------
+        dict[str, torch.Tensor]
             Dictionary mapping field names to CPU tensors.
 
-        Raises:
-            IndexError: If index is out of range.
+        Raises
+        ------
+        IndexError
+            If index is out of range.
         """
         raise NotImplementedError
 
     @abstractmethod
     def __len__(self) -> int:
-        """Return the number of samples in the dataset."""
+        """
+        Return the number of samples in the dataset.
+
+        Returns
+        -------
+        int
+            Number of samples.
+        """
         raise NotImplementedError
 
     def _get_field_names(self) -> list[str]:
@@ -126,6 +151,11 @@ class Reader(ABC):
 
         Override this to provide field names without loading a sample.
         Default implementation loads sample 0 and extracts keys.
+
+        Returns
+        -------
+        list[str]
+            List of field names available in samples.
         """
         if len(self) == 0:
             return []
@@ -139,10 +169,14 @@ class Reader(ABC):
         Override this to provide source-specific metadata (filenames, etc.).
         Default implementation returns empty dict (index added separately).
 
-        Args:
-            index: Sample index.
+        Parameters
+        ----------
+        index : int
+            Sample index.
 
-        Returns:
+        Returns
+        -------
+        dict[str, Any]
             Dictionary of metadata (not tensors).
         """
         return {}
@@ -152,27 +186,46 @@ class Reader(ABC):
         """
         Return True if this reader supports coordinated subsampling.
 
-        Override this property in subclasses that implement coordinated subsampling.
+        Override this property in subclasses that implement coordinated
+        subsampling.
+
+        Returns
+        -------
+        bool
+            True if coordinated subsampling is supported.
         """
         return False
 
     @property
     def field_names(self) -> list[str]:
-        """List of field names available in samples."""
+        """
+        List of field names available in samples.
+
+        Returns
+        -------
+        list[str]
+            Field names.
+        """
         return self._get_field_names()
 
     def __getitem__(self, index: int) -> tuple[TensorDict, dict[str, Any]]:
         """
         Load and return a single sample.
 
-        Args:
-            index: Sample index. Supports negative indexing.
+        Parameters
+        ----------
+        index : int
+            Sample index. Supports negative indexing.
 
-        Returns:
+        Returns
+        -------
+        tuple[TensorDict, dict[str, Any]]
             Tuple of (TensorDict with CPU tensors, metadata dict).
 
-        Raises:
-            IndexError: If index is out of range.
+        Raises
+        ------
+        IndexError
+            If index is out of range.
         """
         # Handle negative indexing
         if index < 0:
@@ -200,7 +253,14 @@ class Reader(ABC):
         return data, metadata
 
     def __iter__(self) -> Iterator[tuple[TensorDict, dict[str, Any]]]:
-        """Iterate over all samples."""
+        """
+        Iterate over all samples.
+
+        Yields
+        ------
+        tuple[TensorDict, dict[str, Any]]
+            Tuple of (TensorDict with CPU tensors, metadata dict) for each sample.
+        """
         for i in range(len(self)):
             yield self[i]
 
@@ -221,6 +281,14 @@ class Reader(ABC):
         self.close()
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the reader.
+        """
         return (
             f"{self.__class__.__name__}(len={len(self)}, pin_memory={self.pin_memory})"
         )

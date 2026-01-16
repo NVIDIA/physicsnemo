@@ -86,23 +86,34 @@ class Normalize(Transform):
         """
         Initialize the normalizer.
 
-        Args:
-            input_keys: List of field names to normalize.
-            means: Mean values for mean_std method. Either a dict mapping field names
-                   to values, or a single value applied to all fields. Deprecated if
-                   ``method`` is not specified.
-            stds: Standard deviation values for mean_std method. Same format as means.
-            method: Normalization method - either ``"mean_std"`` or ``"min_max"``.
-            mins: Minimum values for min_max method. Same format as means.
-            maxs: Maximum values for min_max method. Same format as means.
-            stats_file: Path to ``.npz`` file containing normalization statistics.
-                        File should contain per-field dicts with keys like 'mean',
-                        'std', 'min', 'max'.
-            eps: Small value added to prevent division by zero.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of field names to normalize.
+        means : dict[str, float | torch.Tensor] or float or torch.Tensor, optional
+            Mean values for mean_std method. Either a dict mapping field names
+            to values, or a single value applied to all fields. Deprecated if
+            ``method`` is not specified.
+        stds : dict[str, float | torch.Tensor] or float or torch.Tensor, optional
+            Standard deviation values for mean_std method. Same format as means.
+        method : {"mean_std", "min_max"}, optional
+            Normalization method - either ``"mean_std"`` or ``"min_max"``.
+        mins : dict[str, float | torch.Tensor] or float or torch.Tensor, optional
+            Minimum values for min_max method. Same format as means.
+        maxs : dict[str, float | torch.Tensor] or float or torch.Tensor, optional
+            Maximum values for min_max method. Same format as means.
+        stats_file : str or Path, optional
+            Path to ``.npz`` file containing normalization statistics.
+            File should contain per-field dicts with keys like 'mean',
+            'std', 'min', 'max'.
+        eps : float, default=1e-8
+            Small value added to prevent division by zero.
 
-        Raises:
-            ValueError: If input_keys is empty, method is invalid, or required
-                        parameters are missing.
+        Raises
+        ------
+        ValueError
+            If input_keys is empty, method is invalid, or required
+            parameters are missing.
         """
         super().__init__()
 
@@ -201,16 +212,23 @@ class Normalize(Transform):
         Expected file structure: Dictionary mapping field names to dicts with
         keys 'mean', 'std', 'min', 'max' (numpy arrays).
 
-        Args:
-            stats_file: Path to .npz file.
+        Parameters
+        ----------
+        stats_file : str or Path
+            Path to .npz file.
 
-        Returns:
+        Returns
+        -------
+        dict[str, dict]
             Dictionary with keys 'means', 'stds', 'mins', 'maxs', each mapping
             field names to torch tensors.
 
-        Raises:
-            FileNotFoundError: If file doesn't exist.
-            ValueError: If required statistics are missing.
+        Raises
+        ------
+        FileNotFoundError
+            If file doesn't exist.
+        ValueError
+            If required statistics are missing.
         """
         file_path = Path(stats_file)
         if not file_path.exists():
@@ -259,14 +277,20 @@ class Normalize(Transform):
         """
         Normalize the specified fields in the TensorDict.
 
-        Args:
-            data: Input TensorDict.
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             TensorDict with normalized fields.
 
-        Raises:
-            KeyError: If a specified field is not in the TensorDict.
+        Raises
+        ------
+        KeyError
+            If a specified field is not in the TensorDict.
         """
         updates = {}
 
@@ -320,10 +344,14 @@ class Normalize(Transform):
         For mean_std method: x * std + mean
         For min_max method: x * half_range + center
 
-        Args:
-            data: Normalized TensorDict.
+        Parameters
+        ----------
+        data : TensorDict
+            Normalized TensorDict.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             Denormalized TensorDict.
         """
         updates = {}

@@ -36,22 +36,25 @@ class Transform(ABC):
     Metadata is not passed to transforms (handled separately by Dataset/DataLoader).
 
     Subclasses must implement:
-        - __call__(data: TensorDict) -> TensorDict
+
+    - ``__call__(data: TensorDict) -> TensorDict``
 
     Optionally override:
-        - extra_repr() -> str: For custom repr output
-        - state_dict() -> dict: For serialization
-        - load_state_dict(state_dict: dict): For deserialization
 
-    Example:
-        >>> class MyTransform(Transform):
-        ...     def __init__(self, scale: float):
-        ...         super().__init__()
-        ...         self.scale = scale
-        ...
-        ...     def __call__(self, data: TensorDict) -> TensorDict:
-        ...         # Apply transformation to all tensors
-        ...         return data.apply(lambda x: x * self.scale)
+    - ``extra_repr() -> str``: For custom repr output
+    - ``state_dict() -> dict``: For serialization
+    - ``load_state_dict(state_dict: dict)``: For deserialization
+
+    Examples
+    --------
+    >>> class MyTransform(Transform):
+    ...     def __init__(self, scale: float):
+    ...         super().__init__()
+    ...         self.scale = scale
+    ...
+    ...     def __call__(self, data: TensorDict) -> TensorDict:
+    ...         # Apply transformation to all tensors
+    ...         return data.apply(lambda x: x * self.scale)
     """
 
     def __init__(self) -> None:
@@ -63,10 +66,14 @@ class Transform(ABC):
         """
         Apply the transform to a TensorDict.
 
-        Args:
-            data: Input TensorDict to transform.
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict to transform.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             Transformed TensorDict.
         """
         raise NotImplementedError
@@ -75,20 +82,36 @@ class Transform(ABC):
         """
         Move any internal tensors to the specified device.
 
-        Override this method if your transform has internal tensor state.
+        This default implementation automatically moves any tensor attributes
+        found in self.__dict__ to the specified device. Override this method
+        if your transform requires custom device handling.
 
-        Args:
-            device: Target device.
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
 
-        Returns:
+        Returns
+        -------
+        Transform
             Self for chaining.
         """
         self._device = torch.device(device) if isinstance(device, str) else device
+        for name, value in self.__dict__.items():
+            if isinstance(value, torch.Tensor):
+                setattr(self, name, value.to(self._device))
         return self
 
     @property
     def device(self) -> torch.device | None:
-        """The device this transform operates on."""
+        """
+        The device this transform operates on.
+
+        Returns
+        -------
+        torch.device or None
+            The device, or None if not set.
+        """
         return self._device
 
     def extra_repr(self) -> str:
@@ -96,6 +119,11 @@ class Transform(ABC):
         Return extra information for repr.
 
         Override this to add transform-specific info to the repr.
+
+        Returns
+        -------
+        str
+            Extra representation string.
         """
         return ""
 
@@ -104,6 +132,11 @@ class Transform(ABC):
         Return a dictionary containing the transform's state.
 
         Override this for transforms with learnable or configurable state.
+
+        Returns
+        -------
+        dict[str, Any]
+            State dictionary.
         """
         return {}
 
@@ -112,11 +145,21 @@ class Transform(ABC):
         Load state from a state dictionary.
 
         Override this to restore transform state.
+
+        Parameters
+        ----------
+        state_dict : dict[str, Any]
+            State dictionary to load from.
         """
         pass
 
     def __repr__(self) -> str:
-        extra = self.extra_repr()
-        if extra:
-            return f"{self.__class__.__name__}({extra})"
-        return f"{self.__class__.__name__}()"
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
+        return f"{self.__class__.__name__}({self.extra_repr()})"

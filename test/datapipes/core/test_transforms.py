@@ -17,7 +17,6 @@
 """Tests for transforms."""
 
 import tempfile
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -418,33 +417,15 @@ def test_normalize_file_override_with_direct_params():
 
 
 # ============================================================================
-# Backward Compatibility Tests
+# State Dict Tests
 # ============================================================================
 
 
-def test_normalize_backward_compat_deprecated_warning():
-    """Test that using means/stds without method raises deprecation warning."""
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        norm = dp.Normalize(
-            input_keys=["x"],
-            means={"x": 0.0},
-            stds={"x": 1.0},
-        )
-        assert len(w) == 1
-        assert issubclass(w[-1].category, DeprecationWarning)
-        assert "deprecated" in str(w[-1].message).lower()
-
-    # Should still work correctly
-    sample = TensorDict({"x": torch.tensor([10.0])})
-    result = norm(sample)
-    torch.testing.assert_close(result["x"], torch.tensor([10.0]), atol=1e-6, rtol=1e-6)
-
-
-def test_normalize_backward_compat_state_dict():
-    """Test loading old state_dict without method field."""
-    old_state = {
+def test_normalize_load_state_dict_mean_std():
+    """Test loading state_dict for mean_std method."""
+    state = {
         "input_keys": ["x"],
+        "method": "mean_std",
         "means": {"x": torch.tensor(5.0)},
         "stds": {"x": torch.tensor(2.0)},
         "eps": 1e-8,
@@ -453,9 +434,8 @@ def test_normalize_backward_compat_state_dict():
     norm = dp.Normalize(
         input_keys=["x"], method="mean_std", means={"x": 0.0}, stds={"x": 1.0}
     )
-    norm.load_state_dict(old_state)
+    norm.load_state_dict(state)
 
-    # Should default to mean_std method
     assert norm.method == "mean_std"
 
     sample = TensorDict({"x": torch.tensor([7.0])})

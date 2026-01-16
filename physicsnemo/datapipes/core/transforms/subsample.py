@@ -44,18 +44,25 @@ def poisson_sample_indices_fixed(N: int, k: int, device=None) -> torch.Tensor:
     The sampling uses exponentially distributed gaps to achieve near-uniform
     coverage without replacement.
 
-    Args:
-        N: Total number of available indices.
-        k: Number of indices to sample.
-        device: Device for the output tensor.
+    Parameters
+    ----------
+    N : int
+        Total number of available indices.
+    k : int
+        Number of indices to sample.
+    device : torch.device, optional
+        Device for the output tensor.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape :math:`(k,)` containing sampled indices.
 
-    Example:
-        >>> indices = poisson_sample_indices_fixed(1000000, 10000)
-        >>> print(indices.shape)
-        torch.Size([10000])
+    Examples
+    --------
+    >>> indices = poisson_sample_indices_fixed(1000000, 10000)
+    >>> print(indices.shape)
+    torch.Size([10000])
     """
     # Draw exponential gaps off of random initializations
     gaps = torch.rand(k, device=device).exponential_()
@@ -85,16 +92,22 @@ def shuffle_array(
     """
     Sample points with or without weights.
 
-    Args:
-        points: Input tensor to sample from, shape :math:`(N, ...)`
-        n_points: Number of points to sample.
-        weights: Optional weights for sampling, shape :math:`(N,)`.
-                If None, uses uniform sampling.
+    Parameters
+    ----------
+    points : torch.Tensor
+        Input tensor to sample from, shape :math:`(N, ...)`.
+    n_points : int
+        Number of points to sample.
+    weights : torch.Tensor, optional
+        Optional weights for sampling, shape :math:`(N,)`.
+        If None, uses uniform sampling.
 
-    Returns:
-        Tuple of (sampled_points, indices) where:
-            - sampled_points: Sampled tensor, shape :math:`(n\\_points, ...)`
-            - indices: Selected indices, shape :math:`(n\\_points,)`
+    Returns
+    -------
+    sampled_points : torch.Tensor
+        Sampled tensor, shape :math:`(n\\_points, ...)`.
+    indices : torch.Tensor
+        Selected indices, shape :math:`(n\\_points,)`.
     """
     N = points.shape[0]
     device = points.device
@@ -131,48 +144,66 @@ class SubsamplePoints(Transform):
     maintaining correspondence between coordinates and field values.
 
     Supports two sampling algorithms:
-        - ``"poisson_fixed"``: Near-uniform sampling for very large datasets (> 2^24 points)
-        - ``"uniform"``: Standard uniform sampling
+
+    - ``"poisson_fixed"``: Near-uniform sampling for very large datasets (> 2^24 points)
+    - ``"uniform"``: Standard uniform sampling
 
     Optionally supports weighted sampling (e.g., area-weighted for surface meshes)
     by providing a ``weights_key``.
 
-    Example (uniform sampling):
-        >>> # Subsample volume data
-        >>> transform = SubsamplePoints(
-        ...     input_keys=["volume_mesh_centers", "volume_fields"],
-        ...     n_points=10000,
-        ...     algorithm="poisson_fixed"
-        ... )
-        >>> sample = TensorDict({
-        ...     "volume_mesh_centers": torch.randn(100000, 3),
-        ...     "volume_fields": torch.randn(100000, 5)
-        ... })
-        >>> result = transform(sample)
-        >>> print(result["volume_mesh_centers"].shape)
-        torch.Size([10000, 3])
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of tensor keys to subsample. All must have the same
+        first dimension size.
+    n_points : int
+        Number of points to sample.
+    algorithm : {"poisson_fixed", "uniform"}, default="poisson_fixed"
+        Sampling algorithm to use.
+    weights_key : str, optional
+        Optional key for sampling weights (e.g., ``"surface_areas"``
+        for area-weighted surface sampling). When provided, samples
+        are drawn according to the weights distribution.
 
-    Example (weighted sampling):
-        >>> # Area-weighted surface sampling
-        >>> transform = SubsamplePoints(
-        ...     input_keys=["surface_mesh_centers", "surface_fields", "surface_normals"],
-        ...     n_points=5000,
-        ...     algorithm="uniform",
-        ...     weights_key="surface_areas"
-        ... )
-        >>> sample = Sample({
-        ...     "surface_mesh_centers": torch.randn(20000, 3),
-        ...     "surface_fields": torch.randn(20000, 2),
-        ...     "surface_normals": torch.randn(20000, 3),
-        ...     "surface_areas": torch.rand(20000)
-        ... })
-        >>> result = transform(sample)
-        >>> print(result["surface_mesh_centers"].shape)
-        torch.Size([5000, 3])
+    Examples
+    --------
+    Uniform sampling:
 
-    Note:
-        All specified keys must have the same size in their first dimension.
-        The same indices are applied to all keys to maintain correspondence.
+    >>> transform = SubsamplePoints(
+    ...     input_keys=["volume_mesh_centers", "volume_fields"],
+    ...     n_points=10000,
+    ...     algorithm="poisson_fixed"
+    ... )
+    >>> sample = TensorDict({
+    ...     "volume_mesh_centers": torch.randn(100000, 3),
+    ...     "volume_fields": torch.randn(100000, 5)
+    ... })
+    >>> result = transform(sample)
+    >>> print(result["volume_mesh_centers"].shape)
+    torch.Size([10000, 3])
+
+    Weighted sampling:
+
+    >>> transform = SubsamplePoints(
+    ...     input_keys=["surface_mesh_centers", "surface_fields", "surface_normals"],
+    ...     n_points=5000,
+    ...     algorithm="uniform",
+    ...     weights_key="surface_areas"
+    ... )
+    >>> sample = TensorDict({
+    ...     "surface_mesh_centers": torch.randn(20000, 3),
+    ...     "surface_fields": torch.randn(20000, 2),
+    ...     "surface_normals": torch.randn(20000, 3),
+    ...     "surface_areas": torch.rand(20000)
+    ... })
+    >>> result = transform(sample)
+    >>> print(result["surface_mesh_centers"].shape)
+    torch.Size([5000, 3])
+
+    Notes
+    -----
+    All specified keys must have the same size in their first dimension.
+    The same indices are applied to all keys to maintain correspondence.
     """
 
     def __init__(
@@ -186,16 +217,19 @@ class SubsamplePoints(Transform):
         """
         Initialize the subsample transform.
 
-        Args:
-            input_keys: List of tensor keys to subsample. All must have the same
-                       first dimension size.
-            n_points: Number of points to sample.
-            algorithm: Sampling algorithm to use. Options:
-                      - ``"poisson_fixed"``: Near-uniform sampling (default)
-                      - ``"uniform"``: Standard uniform sampling
-            weights_key: Optional key for sampling weights (e.g., ``"surface_areas"``
-                        for area-weighted surface sampling). When provided, samples
-                        are drawn according to the weights distribution.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of tensor keys to subsample. All must have the same
+            first dimension size.
+        n_points : int
+            Number of points to sample.
+        algorithm : {"poisson_fixed", "uniform"}, default="poisson_fixed"
+            Sampling algorithm to use.
+        weights_key : str, optional
+            Optional key for sampling weights (e.g., ``"surface_areas"``
+            for area-weighted surface sampling). When provided, samples
+            are drawn according to the weights distribution.
         """
         super().__init__()
         self.input_keys = input_keys
@@ -204,7 +238,26 @@ class SubsamplePoints(Transform):
         self.weights_key = weights_key
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Apply subsampling to the TensorDict."""
+        """
+        Apply subsampling to the TensorDict.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing fields to subsample.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with subsampled fields.
+
+        Raises
+        ------
+        KeyError
+            If a required key is not found in the data.
+        ValueError
+            If keys have inconsistent first dimension sizes.
+        """
         if not self.input_keys:
             return data
 
@@ -262,6 +315,14 @@ class SubsamplePoints(Transform):
         return data.update(updates)
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         weights_str = f", weights_key={self.weights_key}" if self.weights_key else ""
         return (
             f"SubsamplePoints(input_keys={self.input_keys}, n_points={self.n_points}, "

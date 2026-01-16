@@ -42,7 +42,8 @@ class BroadcastGlobalFeatures(Transform):
     input_keys : list[str]
         List of global feature keys to broadcast.
     n_points_key : str
-        Key of a tensor whose first dimension gives the number of points to broadcast to.
+        Key of a tensor whose first dimension gives the number of points
+        to broadcast to.
     output_key : str
         Key to store the broadcasted features.
 
@@ -69,7 +70,19 @@ class BroadcastGlobalFeatures(Transform):
         n_points_key: str,
         output_key: str,
     ) -> None:
-        """Initialize the broadcast transform."""
+        """
+        Initialize the broadcast transform.
+
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of global feature keys to broadcast.
+        n_points_key : str
+            Key of a tensor whose first dimension gives the number of points
+            to broadcast to.
+        output_key : str
+            Key to store the broadcasted features.
+        """
         super().__init__()
         self.input_keys = input_keys
         self.n_points_key = n_points_key
@@ -122,6 +135,14 @@ class BroadcastGlobalFeatures(Transform):
         return data.update({self.output_key: fx})
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return (
             f"BroadcastGlobalFeatures(input_keys={self.input_keys}, "
             f"output_key={self.output_key})"

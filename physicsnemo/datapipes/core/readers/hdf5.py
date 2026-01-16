@@ -44,18 +44,24 @@ class HDF5Reader(Reader):
     Read samples from HDF5 files.
 
     Supports two modes:
+
     1. Single file with samples indexed along first dimension of datasets
     2. Directory of HDF5 files, one sample per file
 
-    Example (single file):
-        >>> # File structure: data.h5 with datasets "pressure" (N, 100), "velocity" (N, 100, 3)
-        >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])
-        >>> sample = reader[0]  # Returns Sample with pressure[100] and velocity[100, 3]
+    Examples
+    --------
+    Single file mode:
 
-    Example (directory):
-        >>> # Directory with sample_0.h5, sample_1.h5, ...
-        >>> reader = HDF5Reader("data_dir/", file_pattern="sample_*.h5")
-        >>> sample = reader[0]  # Loads all datasets from sample_0.h5
+    >>> # File structure: data.h5 with datasets "pressure" (N, 100), "velocity" (N, 100, 3)
+    >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
+    >>> data["pressure"].shape  # torch.Size([100])
+
+    Directory mode:
+
+    >>> # Directory with sample_0.h5, sample_1.h5, ...
+    >>> reader = HDF5Reader("data_dir/", file_pattern="sample_*.h5")
+    >>> data, metadata = reader[0]  # Loads all datasets from sample_0.h5
     """
 
     def __init__(
@@ -71,19 +77,30 @@ class HDF5Reader(Reader):
         """
         Initialize the HDF5 reader.
 
-        Args:
-            path: Path to HDF5 file or directory containing HDF5 files.
-            fields: List of dataset names to load. If None, loads all datasets.
-            file_pattern: Glob pattern for finding files (directory mode only).
-            index_key: If provided, use this dataset to determine sample count
-                      instead of inferring from first dimension.
-            pin_memory: If True, place tensors in pinned memory for faster GPU transfer.
-            include_index_in_metadata: If True, include sample index in metadata.
+        Parameters
+        ----------
+        path : Path or str
+            Path to HDF5 file or directory containing HDF5 files.
+        fields : list[str], optional
+            List of dataset names to load. If None, loads all datasets.
+        file_pattern : str, default="*.h5"
+            Glob pattern for finding files (directory mode only).
+        index_key : str, optional
+            If provided, use this dataset to determine sample count
+            instead of inferring from first dimension.
+        pin_memory : bool, default=False
+            If True, place tensors in pinned memory for faster GPU transfer.
+        include_index_in_metadata : bool, default=True
+            If True, include sample index in metadata.
 
-        Raises:
-            ImportError: If h5py is not installed.
-            FileNotFoundError: If path doesn't exist.
-            ValueError: If no HDF5 files found in directory.
+        Raises
+        ------
+        ImportError
+            If h5py is not installed.
+        FileNotFoundError
+            If path doesn't exist.
+        ValueError
+            If no HDF5 files found in directory.
         """
         if not HAS_H5PY:
             raise ImportError(
@@ -144,7 +161,24 @@ class HDF5Reader(Reader):
                 self._length = 0
 
     def _load_sample(self, index: int) -> dict[str, torch.Tensor]:
-        """Load a single sample from HDF5."""
+        """
+        Load a single sample from HDF5.
+
+        Parameters
+        ----------
+        index : int
+            Sample index.
+
+        Returns
+        -------
+        dict[str, torch.Tensor]
+            Dictionary mapping field names to tensors.
+
+        Raises
+        ------
+        KeyError
+            If a requested field is not found in the file.
+        """
         data = {}
 
         if self._is_directory:
@@ -173,15 +207,41 @@ class HDF5Reader(Reader):
         return data
 
     def __len__(self) -> int:
-        """Return number of samples."""
+        """
+        Return number of samples.
+
+        Returns
+        -------
+        int
+            Number of samples in the dataset.
+        """
         return self._length
 
     def _get_field_names(self) -> list[str]:
-        """Return field names."""
+        """
+        Return field names.
+
+        Returns
+        -------
+        list[str]
+            List of field names available in samples.
+        """
         return self.fields if self.fields else []
 
     def _get_sample_metadata(self, index: int) -> dict[str, Any]:
-        """Return metadata for a sample including source file info."""
+        """
+        Return metadata for a sample including source file info.
+
+        Parameters
+        ----------
+        index : int
+            Sample index.
+
+        Returns
+        -------
+        dict[str, Any]
+            Metadata dictionary with source file information.
+        """
         if self._is_directory:
             return {
                 "source_file": str(self._files[index]),
@@ -201,6 +261,14 @@ class HDF5Reader(Reader):
             self._h5_file = None
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the reader.
+        """
         mode = "directory" if self._is_directory else "file"
         return (
             f"HDF5Reader("

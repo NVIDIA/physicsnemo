@@ -23,7 +23,7 @@ Supports reading from a directory of Zarr groups, one sample per group.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -48,36 +48,42 @@ class ZarrReader(Reader):
     Each Zarr group in the directory represents one sample. Supports loading both
     arrays and attributes from Zarr groups.
 
-    Example:
-        >>> # Directory with sample_0.zarr, sample_1.zarr, ...
-        >>> # Each contains arrays like "positions", "features", etc.
-        >>> reader = ZarrReader("data_dir/", group_pattern="sample_*.zarr")
-        >>> sample = reader[0]
+    Examples
+    --------
+    Basic usage:
 
-        >>> # Load only specific fields:
-        >>> reader = ZarrReader("data_dir/", fields=["positions", "velocity"])
-        >>> sample = reader[0]
+    >>> # Directory with sample_0.zarr, sample_1.zarr, ...
+    >>> # Each contains arrays like "positions", "features", etc.
+    >>> reader = ZarrReader("data_dir/", group_pattern="sample_*.zarr")
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
 
-        >>> # Load attributes from Zarr groups:
-        >>> # If the Zarr group has attributes like "timestep" or "scale_factor",
-        >>> # you can request them as fields:
-        >>> reader = ZarrReader("data_dir/", fields=["positions", "timestep", "scale_factor"])
-        >>> sample = reader[0]  # sample["timestep"] contains the attribute value
+    Load only specific fields:
 
-        >>> # With coordinated subsampling for large arrays:
-        >>> reader = ZarrReader(
-        ...     "data_dir/",
-        ...     coordinated_subsampling={
-        ...         "n_points": 50000,
-        ...         "target_keys": ["volume_coords", "volume_fields"],
-        ...     }
-        ... )
-        >>> sample = reader[0]
+    >>> reader = ZarrReader("data_dir/", fields=["positions", "velocity"])
+    >>> data, metadata = reader[0]
+
+    Load attributes from Zarr groups:
+
+    >>> # If the Zarr group has attributes like "timestep" or "scale_factor",
+    >>> # you can request them as fields:
+    >>> reader = ZarrReader("data_dir/", fields=["positions", "timestep", "scale_factor"])
+    >>> data, metadata = reader[0]  # data["timestep"] contains the attribute value
+
+    With coordinated subsampling for large arrays:
+
+    >>> reader = ZarrReader(
+    ...     "data_dir/",
+    ...     coordinated_subsampling={
+    ...         "n_points": 50000,
+    ...         "target_keys": ["volume_coords", "volume_fields"],
+    ...     }
+    ... )
+    >>> data, metadata = reader[0]
     """
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
         fields: Optional[list[str]] = None,
         default_values: Optional[dict[str, torch.Tensor]] = None,
@@ -90,30 +96,42 @@ class ZarrReader(Reader):
         """
         Initialize the Zarr reader.
 
-        Args:
-            path: Path to directory containing Zarr groups.
-            fields: List of array or attribute names to load. If None, loads all
-                available arrays from each group. When a field name matches an
-                attribute key (and not an array), the attribute value will be
-                converted to a tensor. Note: string attributes are not supported.
-            default_values: Dictionary mapping field names to default tensors.
-                If a field in ``fields`` is not found in the file but has an
-                entry here, the default tensor is used instead of raising an
-                error. Useful for optional fields.
-            group_pattern: Glob pattern for finding Zarr groups.
-            pin_memory: If True, place tensors in pinned memory for faster GPU transfer.
-            include_index_in_metadata: If True, include sample index in metadata.
-            coordinated_subsampling: Optional dict to configure coordinated
-                subsampling. If provided, must contain ``n_points`` (int) and
-                ``target_keys`` (list of str).
-            cache_stores: If True (default), cache opened zarr stores to avoid
-                repeated opening and prevent executor shutdown errors. Set to
-                False if memory is a concern with many groups.
+        Parameters
+        ----------
+        path : str or Path
+            Path to directory containing Zarr groups.
+        fields : list[str], optional
+            List of array or attribute names to load. If None, loads all
+            available arrays from each group. When a field name matches an
+            attribute key (and not an array), the attribute value will be
+            converted to a tensor. Note: string attributes are not supported.
+        default_values : dict[str, torch.Tensor], optional
+            Dictionary mapping field names to default tensors.
+            If a field in ``fields`` is not found in the file but has an
+            entry here, the default tensor is used instead of raising an
+            error. Useful for optional fields.
+        group_pattern : str, default="*.zarr"
+            Glob pattern for finding Zarr groups.
+        pin_memory : bool, default=False
+            If True, place tensors in pinned memory for faster GPU transfer.
+        include_index_in_metadata : bool, default=True
+            If True, include sample index in metadata.
+        coordinated_subsampling : dict[str, Any], optional
+            Optional dict to configure coordinated subsampling. If provided,
+            must contain ``n_points`` (int) and ``target_keys`` (list of str).
+        cache_stores : bool, default=True
+            If True, cache opened zarr stores to avoid repeated opening and
+            prevent executor shutdown errors. Set to False if memory is a
+            concern with many groups.
 
-        Raises:
-            ImportError: If zarr is not installed.
-            FileNotFoundError: If path doesn't exist.
-            ValueError: If no Zarr groups found in directory.
+        Raises
+        ------
+        ImportError
+            If zarr is not installed.
+        FileNotFoundError
+            If path doesn't exist.
+        ValueError
+            If no Zarr groups found in directory.
         """
         if not HAS_ZARR:
             raise ImportError(
@@ -200,10 +218,14 @@ class ZarrReader(Reader):
         This prevents the "cannot schedule new futures after shutdown" error
         by reusing opened stores instead of repeatedly calling zarr.open().
 
-        Args:
-            path: Path to the zarr group.
+        Parameters
+        ----------
+        path : Path
+            Path to the zarr group.
 
-        Returns:
+        Returns
+        -------
+        Any
             Opened zarr group.
         """
         if self._cache_stores:
@@ -231,16 +253,24 @@ class ZarrReader(Reader):
         """
         Select a random contiguous slice from a range.
 
-        Args:
-            slice_start: Start index of the available range.
-            slice_stop: Stop index of the available range (exclusive).
-            n_points: Number of points to sample.
+        Parameters
+        ----------
+        slice_start : int
+            Start index of the available range.
+        slice_stop : int
+            Stop index of the available range (exclusive).
+        n_points : int
+            Number of points to sample.
 
-        Returns:
+        Returns
+        -------
+        slice
             A slice object representing the random contiguous section.
 
-        Raises:
-            ValueError: If the range is smaller than n_points.
+        Raises
+        ------
+        ValueError
+            If the range is smaller than n_points.
         """
         total_points = slice_stop - slice_start
 
@@ -335,15 +365,22 @@ class ZarrReader(Reader):
         """
         Convert an attribute value to a torch.Tensor.
 
-        Args:
-            value: The attribute value to convert.
-            field_name: Name of the field (for error messages).
+        Parameters
+        ----------
+        value : Any
+            The attribute value to convert.
+        field_name : str
+            Name of the field (for error messages).
 
-        Returns:
-            A torch.Tensor containing the attribute value.
+        Returns
+        -------
+        torch.Tensor
+            A tensor containing the attribute value.
 
-        Raises:
-            TypeError: If the attribute value cannot be converted to a tensor.
+        Raises
+        ------
+        TypeError
+            If the attribute value cannot be converted to a tensor.
         """
         try:
             if isinstance(value, np.ndarray):

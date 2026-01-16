@@ -85,7 +85,7 @@ from physicsnemo.datapipes.core.transforms import (
     ConstantField,
     CreateGrid,
     FieldSlice,
-    KNNNeighbors,
+    KNearestNeighbors,
     Normalize,
     NormalizeVectors,
     Purge,
@@ -125,13 +125,12 @@ __all__ = [
     # Transforms - Spatial
     "BoundingBoxFilter",
     "CreateGrid",
-    "KNNNeighbors",
+    "KNearestNeighbors",
     "CenterOfMass",
     # Transforms - Utility
     "Rename",
     "Purge",
     "ConstantField",
-    "ZeroLike",
     # Readers
     "Reader",
     "HDF5Reader",

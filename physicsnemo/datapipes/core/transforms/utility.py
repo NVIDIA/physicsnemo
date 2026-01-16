@@ -40,16 +40,30 @@ class Rename(Transform):
     Replaces existing key names with new names according to a mapping.
     The tensor data is preserved, only the keys are changed.
 
-    Example:
-        >>> transform = Rename(mapping={"old_name": "new_name", "x": "positions"})
-        >>> data = TensorDict({
-        ...     "old_name": torch.randn(100, 3),
-        ...     "x": torch.randn(100, 3),
-        ...     "other": torch.randn(100, 1)
-        ... })
-        >>> result = transform(data)
-        >>> print(list(result.keys()))
-        ['new_name', 'positions', 'other']
+    Nested tensordicts can use this too. The keys are flattened with a '.'
+    separator: a["b"]["d"] will map to a["b.d"] for renaming. If you want to
+    replace d, you'd provide {"a.d" : "a.c"} in the mapping file.
+
+    Parameters
+    ----------
+    mapping : dict[str, str]
+        Dictionary mapping old key names to new key names.
+        Keys are the original names, values are the new names.
+    strict : bool, default=True
+        If True, raise an error if a key in the mapping is not found
+        in the data. If False, silently skip missing keys.
+
+    Examples
+    --------
+    >>> transform = Rename(mapping={"old_name": "new_name", "x": "positions"})
+    >>> data = TensorDict({
+    ...     "old_name": torch.randn(100, 3),
+    ...     "x": torch.randn(100, 3),
+    ...     "other": torch.randn(100, 1)
+    ... })
+    >>> result = transform(data)
+    >>> print(list(result.keys()))
+    ['new_name', 'positions', 'other']
     """
 
     def __init__(
@@ -61,11 +75,14 @@ class Rename(Transform):
         """
         Initialize the rename transform.
 
-        Args:
-            mapping: Dictionary mapping old key names to new key names.
-                    Keys are the original names, values are the new names.
-            strict: If True, raise an error if a key in the mapping is not found
-                   in the data. If False, silently skip missing keys.
+        Parameters
+        ----------
+        mapping : dict[str, str]
+            Dictionary mapping old key names to new key names.
+            Keys are the original names, values are the new names.
+        strict : bool, default=True
+            If True, raise an error if a key in the mapping is not found
+            in the data. If False, silently skip missing keys.
         """
         super().__init__()
         self.mapping = mapping
@@ -75,47 +92,61 @@ class Rename(Transform):
         """
         Rename keys according to the mapping.
 
-        Args:
-            data: Input TensorDict with keys to rename.
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict with keys to rename.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             TensorDict with renamed keys.
 
-        Raises:
-            KeyError: If strict=True and a key in the mapping is not found.
-            ValueError: If a new key name already exists in the data.
+        Raises
+        ------
+        KeyError
+            If strict=True and a key in the mapping is not found.
+        ValueError
+            If a new key name already exists in the data.
         """
+        # Flatten keys to handle nested TensorDicts
+        data_f = data.flatten_keys(separator=".")
+        data_keys = set(str(k) for k in data_f.keys())
+
         # Check for missing keys if strict mode
-        data_keys = set(str(k) for k in data.keys())
         if self.strict:
             missing_keys = set(self.mapping.keys()) - data_keys
             if missing_keys:
                 raise KeyError(
                     f"Keys not found in data: {missing_keys}. "
-                    f"Available keys: {list(data.keys())}"
+                    f"Available keys: {list(data_f.keys())}"
                 )
 
         # Check for conflicts with new names
-        existing_keys = data_keys
-        keys_to_rename = set(self.mapping.keys()) & existing_keys
+        keys_to_rename = set(self.mapping.keys()) & data_keys
         new_names = {self.mapping[k] for k in keys_to_rename}
-        keys_not_renamed = existing_keys - keys_to_rename
+        keys_not_renamed = data_keys - keys_to_rename
 
         conflicts = new_names & keys_not_renamed
         if conflicts:
             raise ValueError(f"New key names conflict with existing keys: {conflicts}")
 
-        # Build new data dict with renamed keys
-        new_data = {}
-        for key in data.keys():
-            if key in self.mapping:
-                new_data[self.mapping[key]] = data[key]
-            else:
-                new_data[key] = data[key]
+        # Rename keys in-place on flattened data
+        for old_key, new_key in self.mapping.items():
+            if old_key in data_f.keys():
+                data_f.rename_key_(old_key, new_key)
 
-        return TensorDict(new_data, batch_size=data.batch_size)
+        return data_f.unflatten_keys(separator=".")
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
         return f"mapping={self.mapping}, strict={self.strict}"
 
 
@@ -125,33 +156,56 @@ class Purge(Transform):
     Remove keys and their associated tensors from a TensorDict.
 
     Supports two mutually exclusive modes:
+
     - drop_only: Specify keys to remove (keep everything else)
     - keep_only: Specify keys to keep (remove everything else)
 
     Only one mode can be active at a time. By default, drop_only=None means
     no keys are dropped (identity transform).
 
-    Example (drop mode):
-        >>> transform = Purge(drop_only=["temp", "debug_info"])
-        >>> data = TensorDict({
-        ...     "positions": torch.randn(100, 3),
-        ...     "temp": torch.randn(100, 1),
-        ...     "debug_info": torch.randn(100, 10)
-        ... })
-        >>> result = transform(data)
-        >>> print(list(result.keys()))
-        ['positions']
+    Parameters
+    ----------
+    keep_only : list[str], optional
+        List of keys to keep. All other keys will be removed.
+        Cannot be used together with drop_only.
+    drop_only : list[str], optional
+        List of keys to remove. All other keys will be kept.
+        Cannot be used together with keep_only. Default is None
+        (drop nothing).
+    strict : bool, default=True
+        If True, raise an error if a specified key is not found
+        in the data. If False, silently skip missing keys.
 
-    Example (keep mode):
-        >>> transform = Purge(keep_only=["positions", "velocities"])
-        >>> data = TensorDict({
-        ...     "positions": torch.randn(100, 3),
-        ...     "velocities": torch.randn(100, 3),
-        ...     "temp": torch.randn(100, 1)
-        ... })
-        >>> result = transform(data)
-        >>> print(list(result.keys()))
-        ['positions', 'velocities']
+    Examples
+    --------
+    Drop mode - remove specific keys:
+
+    >>> transform = Purge(drop_only=["temp", "debug_info"])
+    >>> data = TensorDict({
+    ...     "positions": torch.randn(100, 3),
+    ...     "temp": torch.randn(100, 1),
+    ...     "debug_info": torch.randn(100, 10)
+    ... })
+    >>> result = transform(data)
+    >>> print(list(result.keys()))
+    ['positions']
+
+    Keep mode - keep only specific keys:
+
+    >>> transform = Purge(keep_only=["positions", "velocities"])
+    >>> data = TensorDict({
+    ...     "positions": torch.randn(100, 3),
+    ...     "velocities": torch.randn(100, 3),
+    ...     "temp": torch.randn(100, 1)
+    ... })
+    >>> result = transform(data)
+    >>> print(list(result.keys()))
+    ['positions', 'velocities']
+
+    Raises
+    ------
+    ValueError
+        If both keep_only and drop_only are specified.
     """
 
     def __init__(
@@ -164,17 +218,23 @@ class Purge(Transform):
         """
         Initialize the purge transform.
 
-        Args:
-            keep_only: List of keys to keep. All other keys will be removed.
-                      Cannot be used together with drop_only.
-            drop_only: List of keys to remove. All other keys will be kept.
-                      Cannot be used together with keep_only. Default is None
-                      (drop nothing).
-            strict: If True, raise an error if a specified key is not found
-                   in the data. If False, silently skip missing keys.
+        Parameters
+        ----------
+        keep_only : list[str], optional
+            List of keys to keep. All other keys will be removed.
+            Cannot be used together with drop_only.
+        drop_only : list[str], optional
+            List of keys to remove. All other keys will be kept.
+            Cannot be used together with keep_only. Default is None
+            (drop nothing).
+        strict : bool, default=True
+            If True, raise an error if a specified key is not found
+            in the data. If False, silently skip missing keys.
 
-        Raises:
-            ValueError: If both keep_only and drop_only are specified.
+        Raises
+        ------
+        ValueError
+            If both keep_only and drop_only are specified.
         """
         super().__init__()
 
@@ -188,61 +248,93 @@ class Purge(Transform):
         self.drop_only = drop_only
         self.strict = strict
 
+    @staticmethod
+    def _to_nested_key(key: str) -> str | tuple[str, ...]:
+        """
+        Convert a dot-separated key string to a tuple for nested access.
+
+        Parameters
+        ----------
+        key : str
+            Key string, possibly with dots for nested access.
+
+        Returns
+        -------
+        str or tuple[str, ...]
+            Original string if no dots, otherwise tuple of parts.
+        """
+        if "." in key:
+            return tuple(key.split("."))
+        return key
+
     def __call__(self, data: TensorDict) -> TensorDict:
         """
         Remove or keep specified keys from the TensorDict.
 
-        Args:
-            data: Input TensorDict.
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             TensorDict with keys removed according to the configuration.
 
-        Raises:
-            KeyError: If strict=True and a specified key is not found.
+        Raises
+        ------
+        KeyError
+            If strict=True and a specified key is not found.
         """
-        available_keys = set(str(k) for k in data.keys())
+        # Get all keys including nested ones (as tuples for nested, strings for flat)
+        available_keys = set(data.keys(include_nested=True, leaves_only=True))
 
         if self.keep_only is not None:
-            # Keep only mode: keep specified keys, remove everything else
-            keys_to_keep = set(self.keep_only)
+            # Keep only mode: use TensorDict.select
+            # Convert dot-separated strings to tuples for nested key access
+            keys_to_keep = [self._to_nested_key(k) for k in self.keep_only]
 
             if self.strict:
-                missing_keys = keys_to_keep - available_keys
+                missing_keys = set(keys_to_keep) - available_keys
                 if missing_keys:
                     raise KeyError(
                         f"Keys specified in 'keep_only' not found in data: {missing_keys}. "
-                        f"Available keys: {list(data.keys())}"
+                        f"Available keys: {list(available_keys)}"
                     )
 
-            # Only keep keys that exist and are in keep_only
-            final_keys = keys_to_keep & available_keys
+            # Use select which handles nested keys properly
+            # strict=False to allow missing keys in non-strict mode
+            return data.select(*keys_to_keep, strict=self.strict)
 
         elif self.drop_only is not None:
-            # Drop only mode: remove specified keys, keep everything else
-            keys_to_drop = set(self.drop_only)
+            # Drop only mode: use TensorDict.exclude
+            # Convert dot-separated strings to tuples for nested key access
+            keys_to_drop = [self._to_nested_key(k) for k in self.drop_only]
 
             if self.strict:
-                missing_keys = keys_to_drop - available_keys
+                missing_keys = set(keys_to_drop) - available_keys
                 if missing_keys:
                     raise KeyError(
                         f"Keys specified in 'drop_only' not found in data: {missing_keys}. "
-                        f"Available keys: {list(data.keys())}"
+                        f"Available keys: {list(available_keys)}"
                     )
 
-            # Keep all keys except those to drop
-            final_keys = available_keys - keys_to_drop
+            # Use exclude which handles nested keys properly
+            return data.exclude(*keys_to_drop)
 
         else:
             # Default: drop nothing, keep everything
-            final_keys = available_keys
-
-        # Build new TensorDict with only the final keys
-        new_data = {key: data[key] for key in final_keys}
-
-        return TensorDict(new_data, batch_size=data.batch_size)
+            return data.clone()
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
         if self.keep_only is not None:
             return f"keep_only={self.keep_only}, strict={self.strict}"
         elif self.drop_only is not None:
@@ -261,37 +353,54 @@ class ConstantField(Transform):
     specified constant value. Useful for creating placeholder tensors like
     zero SDF values for surface points, or indicator fields.
 
-    Example:
-        >>> # Create zeros (default)
-        >>> transform = ConstantField(
-        ...     reference_key="positions",
-        ...     output_key="sdf",
-        ...     output_dim=1
-        ... )
-        >>> data = TensorDict({"positions": torch.randn(10000, 3)})
-        >>> result = transform(data)
-        >>> print(result["sdf"].shape)
-        torch.Size([10000, 1])
-        >>> print(result["sdf"][0, 0].item())
-        0.0
+    Parameters
+    ----------
+    reference_key : str
+        Key for the tensor to use as shape reference.
+        The first dimension of this tensor determines
+        the number of rows in the output.
+    output_key : str
+        Key to store the constant tensor.
+    fill_value : float, default=0.0
+        The constant value to fill the tensor with.
+    output_dim : int, default=1
+        Feature dimension for output tensor. Creates tensor with
+        shape (N, output_dim) where N is the first dimension of
+        the reference tensor.
 
-    Example:
-        >>> # Create ones
-        >>> transform = ConstantField(
-        ...     reference_key="positions",
-        ...     output_key="mask",
-        ...     fill_value=1.0,
-        ...     output_dim=1
-        ... )
+    Examples
+    --------
+    Create zeros (default):
 
-    Example:
-        >>> # Create custom constant
-        >>> transform = ConstantField(
-        ...     reference_key="positions",
-        ...     output_key="temperature",
-        ...     fill_value=293.15,  # Room temperature in Kelvin
-        ...     output_dim=1
-        ... )
+    >>> transform = ConstantField(
+    ...     reference_key="positions",
+    ...     output_key="sdf",
+    ...     output_dim=1
+    ... )
+    >>> data = TensorDict({"positions": torch.randn(10000, 3)})
+    >>> result = transform(data)
+    >>> print(result["sdf"].shape)
+    torch.Size([10000, 1])
+    >>> print(result["sdf"][0, 0].item())
+    0.0
+
+    Create ones:
+
+    >>> transform = ConstantField(
+    ...     reference_key="positions",
+    ...     output_key="mask",
+    ...     fill_value=1.0,
+    ...     output_dim=1
+    ... )
+
+    Create custom constant:
+
+    >>> transform = ConstantField(
+    ...     reference_key="positions",
+    ...     output_key="temperature",
+    ...     fill_value=293.15,  # Room temperature in Kelvin
+    ...     output_dim=1
+    ... )
     """
 
     def __init__(
@@ -305,16 +414,20 @@ class ConstantField(Transform):
         """
         Initialize the constant field creation transform.
 
-        Args:
-            reference_key: Key for the tensor to use as shape reference.
-                          The first dimension of this tensor determines
-                          the number of rows in the output.
-            output_key: Key to store the constant tensor.
-            fill_value: The constant value to fill the tensor with.
-                       Defaults to 0.0.
-            output_dim: Feature dimension for output tensor. Creates tensor with
-                       shape (N, output_dim) where N is the first dimension of
-                       the reference tensor. Defaults to 1.
+        Parameters
+        ----------
+        reference_key : str
+            Key for the tensor to use as shape reference.
+            The first dimension of this tensor determines
+            the number of rows in the output.
+        output_key : str
+            Key to store the constant tensor.
+        fill_value : float, default=0.0
+            The constant value to fill the tensor with.
+        output_dim : int, default=1
+            Feature dimension for output tensor. Creates tensor with
+            shape (N, output_dim) where N is the first dimension of
+            the reference tensor.
         """
         super().__init__()
         self.reference_key = reference_key
@@ -323,7 +436,24 @@ class ConstantField(Transform):
         self.output_dim = output_dim
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Create constant-filled tensor matching reference shape."""
+        """
+        Create constant-filled tensor matching reference shape.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing the reference tensor.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with the constant tensor added.
+
+        Raises
+        ------
+        KeyError
+            If the reference key is not found in the data.
+        """
         if self.reference_key not in data.keys():
             raise KeyError(
                 f"Reference key '{self.reference_key}' not found in data. "
@@ -343,6 +473,14 @@ class ConstantField(Transform):
         return data.update({self.output_key: constant_tensor})
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
         return (
             f"reference_key={self.reference_key}, "
             f"output_key={self.output_key}, "

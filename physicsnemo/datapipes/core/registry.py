@@ -18,41 +18,44 @@
 Registry for datapipe components.
 
 Provides registries for transforms and readers, enabling:
+
 - Short aliases in Hydra configuration
 - Component discovery and introspection
 - Consistent instantiation patterns
 
-Example usage:
-    >>> from physicsnemo.datapipes.core.registry import TRANSFORM_REGISTRY
-    >>>
-    >>> @TRANSFORM_REGISTRY.register()
-    ... class MyTransform(Transform):
-    ...     pass
-    >>>
-    >>> # Get registered component by name
-    >>> cls = TRANSFORM_REGISTRY.get("MyTransform")
-    >>>
-    >>> # List all registered components
-    >>> print(TRANSFORM_REGISTRY.list())
+Examples
+--------
+>>> from physicsnemo.datapipes.core.registry import COMPONENT_REGISTRY
+>>>
+>>> @COMPONENT_REGISTRY.register()
+... class MyTransform(Transform):
+...     pass
+>>>
+>>> # Get registered component by name
+>>> cls = COMPONENT_REGISTRY.get("MyTransform")
+>>>
+>>> # List all registered components
+>>> print(COMPONENT_REGISTRY.list())
 
-OmegaConf Resolver for Hydra configs:
-    After calling ``register_resolvers()``, you can use short names in YAML configs:
+OmegaConf Resolver for Hydra configs
+------------------------------------
+After calling ``register_resolvers()``, you can use short names in YAML configs:
 
-    >>> from physicsnemo.datapipes.core.registry import register_resolvers
-    >>> register_resolvers()
+>>> from physicsnemo.datapipes.core.registry import register_resolvers
+>>> register_resolvers()
 
-    Then in your YAML config:
+Then in your YAML config:
 
-    .. code-block:: yaml
+.. code-block:: yaml
 
-        # Instead of:
-        _target_: physicsnemo.datapipes.core.transforms.CenterOfMass
+    # Instead of:
+    _target_: physicsnemo.datapipes.core.transforms.CenterOfMass
 
-        # You can write:
-        _target_: ${dp:CenterOfMass}
+    # You can write:
+    _target_: ${dp:CenterOfMass}
 
-        # Or for readers:
-        _target_: ${dp:ZarrReader}
+    # Or for readers:
+    _target_: ${dp:ZarrReader}
 """
 
 from __future__ import annotations
@@ -75,28 +78,36 @@ class ComponentRegistry:
     - Runtime discovery of available components
     - Validation that a component exists
 
-    Example:
-        >>> registry = ComponentRegistry("transforms")
-        >>>
-        >>> @registry.register()
-        ... class Normalize(Transform):
-        ...     pass
-        >>>
-        >>> @registry.register("norm")  # Custom alias
-        ... class Normalize(Transform):
-        ...     pass
-        >>>
-        >>> # Retrieve by name
-        >>> Normalize = registry.get("Normalize")
-        >>> Normalize = registry.get("norm")
+    Parameters
+    ----------
+    name : str
+        Human-readable name for this registry (e.g., "transforms").
+
+    Examples
+    --------
+    >>> registry = ComponentRegistry("transforms")
+    >>>
+    >>> @registry.register()
+    ... class Normalize(Transform):
+    ...     pass
+    >>>
+    >>> @registry.register("norm")  # Custom alias
+    ... class Normalize(Transform):
+    ...     pass
+    >>>
+    >>> # Retrieve by name
+    >>> Normalize = registry.get("Normalize")
+    >>> Normalize = registry.get("norm")
     """
 
     def __init__(self, name: str) -> None:
         """
         Initialize the registry.
 
-        Args:
-            name: Human-readable name for this registry (e.g., "transforms").
+        Parameters
+        ----------
+        name : str
+            Human-readable name for this registry (e.g., "transforms").
         """
         self.name = name
         self._registry: dict[str, Type] = {}
@@ -105,20 +116,30 @@ class ComponentRegistry:
         """
         Decorator to register a component class.
 
-        Args:
-            name: Optional name to register under. If None, uses the class name.
+        Parameters
+        ----------
+        name : str, optional
+            Name to register under. If None, uses the class name.
 
-        Returns:
+        Returns
+        -------
+        Callable[[Type[T]], Type[T]]
             Decorator function that registers the class.
 
-        Example:
-            >>> @registry.register()
-            ... class MyTransform(Transform):
-            ...     pass
-            >>>
-            >>> @registry.register("custom_name")
-            ... class AnotherTransform(Transform):
-            ...     pass
+        Raises
+        ------
+        ValueError
+            If the name is already registered.
+
+        Examples
+        --------
+        >>> @registry.register()
+        ... class MyTransform(Transform):
+        ...     pass
+        >>>
+        >>> @registry.register("custom_name")
+        ... class AnotherTransform(Transform):
+        ...     pass
         """
 
         def decorator(cls: Type[T]) -> Type[T]:
@@ -137,14 +158,20 @@ class ComponentRegistry:
         """
         Get a registered component by name.
 
-        Args:
-            name: The registered name of the component.
+        Parameters
+        ----------
+        name : str
+            The registered name of the component.
 
-        Returns:
+        Returns
+        -------
+        Type
             The registered class.
 
-        Raises:
-            KeyError: If the name is not registered.
+        Raises
+        ------
+        KeyError
+            If the name is not registered.
         """
         if name not in self._registry:
             available = ", ".join(sorted(self._registry.keys()))
@@ -158,20 +185,49 @@ class ComponentRegistry:
         """
         List all registered component names.
 
-        Returns:
+        Returns
+        -------
+        list[str]
             Sorted list of registered names.
         """
         return sorted(self._registry.keys())
 
     def __contains__(self, name: str) -> bool:
-        """Check if a name is registered."""
+        """
+        Check if a name is registered.
+
+        Parameters
+        ----------
+        name : str
+            Name to check.
+
+        Returns
+        -------
+        bool
+            True if registered, False otherwise.
+        """
         return name in self._registry
 
     def __len__(self) -> int:
-        """Return the number of registered components."""
+        """
+        Return the number of registered components.
+
+        Returns
+        -------
+        int
+            Number of registered components.
+        """
         return len(self._registry)
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the registry.
+        """
         return f"ComponentRegistry({self.name!r}, count={len(self)})"
 
 
@@ -186,19 +242,27 @@ def register(name: str | None = None) -> Callable[[Type[T]], Type[T]]:
     Registered components can be referenced by short name in Hydra configs
     using the ``${dp:ComponentName}`` syntax after calling ``register_resolvers()``.
 
-    Args:
-        name: Optional name to register under. If None, uses the class name.
+    Parameters
+    ----------
+    name : str, optional
+        Name to register under. If None, uses the class name.
 
-    Example:
-        >>> from physicsnemo.datapipes.core.registry import register
-        >>>
-        >>> @register()
-        ... class MyTransform(Transform):
-        ...     pass
-        >>>
-        >>> @register("custom_name")
-        ... class AnotherTransform(Transform):
-        ...     pass
+    Returns
+    -------
+    Callable[[Type[T]], Type[T]]
+        Decorator function that registers the class.
+
+    Examples
+    --------
+    >>> from physicsnemo.datapipes.core.registry import register
+    >>>
+    >>> @register()
+    ... class MyTransform(Transform):
+    ...     pass
+    >>>
+    >>> @register("custom_name")
+    ... class AnotherTransform(Transform):
+    ...     pass
     """
     return COMPONENT_REGISTRY.register(name)
 
@@ -207,14 +271,20 @@ def _resolve_component(name: str) -> str:
     """
     Resolve a short component name to its full module path.
 
-    Args:
-        name: Short name of the component (e.g., "CenterOfMass", "ZarrReader").
+    Parameters
+    ----------
+    name : str
+        Short name of the component (e.g., "CenterOfMass", "ZarrReader").
 
-    Returns:
+    Returns
+    -------
+    str
         Full module path for use in Hydra's ``_target_`` field.
 
-    Raises:
-        KeyError: If the name is not found in the registry.
+    Raises
+    ------
+    KeyError
+        If the name is not found in the registry.
     """
     if name in COMPONENT_REGISTRY:
         cls = COMPONENT_REGISTRY.get(name)
@@ -236,28 +306,30 @@ def register_resolvers() -> None:
     time, so custom components registered after this function is called will still
     be available.
 
-    Example:
-        >>> from physicsnemo.datapipes.core.registry import register_resolvers
-        >>> register_resolvers()
+    Examples
+    --------
+    >>> from physicsnemo.datapipes.core.registry import register_resolvers
+    >>> register_resolvers()
 
-        Then in YAML:
+    Then in YAML:
 
-        .. code-block:: yaml
+    .. code-block:: yaml
 
-            # Use short names with ${dp:...}
-            - _target_: ${dp:CenterOfMass}
-              coords_key: stl_centers
-              areas_key: stl_areas
-              output_key: center_of_mass
+        # Use short names with ${dp:...}
+        - _target_: ${dp:CenterOfMass}
+          coords_key: stl_centers
+          areas_key: stl_areas
+          output_key: center_of_mass
 
-            - _target_: ${dp:SubsamplePoints}
-              input_keys:
-                - surface_mesh_centers
-              n_points: 50000
+        - _target_: ${dp:SubsamplePoints}
+          input_keys:
+            - surface_mesh_centers
+          n_points: 50000
 
-    Note:
-        This function can be called multiple times safely. The resolver dynamically
-        looks up components from COMPONENT_REGISTRY, so custom transforms registered
-        after this call will still be resolvable.
+    Notes
+    -----
+    This function can be called multiple times safely. The resolver dynamically
+    looks up components from COMPONENT_REGISTRY, so custom transforms registered
+    after this call will still be resolvable.
     """
     OmegaConf.register_new_resolver("dp", _resolve_component, replace=True)

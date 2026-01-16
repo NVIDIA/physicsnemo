@@ -39,6 +39,7 @@ from physicsnemo.datapipes.core.transforms.geometric import (
     ComputeNormals,
     ComputeSDF,
     ReScale,
+    Scale,
     Translate,
 )
 from physicsnemo.datapipes.core.transforms.normalize import Normalize
@@ -46,7 +47,7 @@ from physicsnemo.datapipes.core.transforms.spatial import (
     BoundingBoxFilter,
     CenterOfMass,
     CreateGrid,
-    KNNNeighbors,
+    KNearestNeighbors,
 )
 from physicsnemo.datapipes.core.transforms.subsample import (
     SubsamplePoints,
@@ -73,7 +74,8 @@ __all__ = [
     "ComputeSDF",
     "ComputeNormals",
     "Translate",
-    "ReScale",
+    "Scale",
+    "ReScale",  # Backwards compatibility alias for Scale
     # Field processing
     "FieldSlice",
     "BroadcastGlobalFeatures",
@@ -83,7 +85,7 @@ __all__ = [
     # Spatial
     "BoundingBoxFilter",
     "CreateGrid",
-    "KNNNeighbors",
+    "KNearestNeighbors",
     "CenterOfMass",
     # Utility
     "Rename",

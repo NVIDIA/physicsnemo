@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional, Sequence, Union
+from typing import Any, Iterator, Optional, Sequence
 
 import torch
 from tensordict import TensorDict
@@ -56,6 +56,7 @@ class Dataset:
     A dataset combining a Reader with a transform pipeline.
 
     The Dataset provides a torch-like interface for accessing data:
+
     - Indexing: dataset[i] returns transformed sample i
     - Iteration: for sample in dataset
     - Length: len(dataset)
@@ -63,56 +64,67 @@ class Dataset:
 
     The pipeline is: Reader → Transforms → Sample
 
-    Prefetching Model:
-        The dataset supports prefetching samples using a thread pool.
-        When a CUDA stream is provided, GPU operations (device transfer,
-        GPU transforms) happen on that stream, allowing overlap with
-        other computation.
+    Prefetching Model
+    -----------------
+    The dataset supports prefetching samples using a thread pool.
+    When a CUDA stream is provided, GPU operations (device transfer,
+    GPU transforms) happen on that stream, allowing overlap with
+    other computation.
 
-        >>> # Start prefetching
-        >>> dataset.prefetch(0, stream=stream0)
-        >>> dataset.prefetch(1, stream=stream1)
-        >>>
-        >>> # Retrieve results (waits if not ready)
-        >>> sample_0 = dataset[0]  # Uses prefetched result
+    >>> # Start prefetching
+    >>> dataset.prefetch(0, stream=stream0)
+    >>> dataset.prefetch(1, stream=stream1)
+    >>>
+    >>> # Retrieve results (waits if not ready)
+    >>> sample_0 = dataset[0]  # Uses prefetched result
 
-    Example:
-        >>> from physicsnemo.datapipes import Dataset, HDF5Reader, Normalize, ToDevice, Compose
-        >>>
-        >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])
-        >>> transforms = Compose([
-        ...     ToDevice("cuda"),
-        ...     Normalize(["pressure"], means={"pressure": 0.0}, stds={"pressure": 1.0}),
-        ... ])
-        >>>
-        >>> dataset = Dataset(reader, transforms=transforms)
-        >>> sample = dataset[0]
+    Examples
+    --------
+    >>> from physicsnemo.datapipes import Dataset, HDF5Reader, Normalize
+    >>>
+    >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])
+    >>> transforms = Normalize(
+    ...     ["pressure"],
+    ...     method="mean_std",
+    ...     means={"pressure": 0.0},
+    ...     stds={"pressure": 1.0},
+    ... )
+    >>>
+    >>> dataset = Dataset(reader, transforms=transforms, device="cuda")
+    >>> sample, metadata = dataset[0]
     """
 
     def __init__(
         self,
         reader: Reader,
         *,
-        transforms: Optional[Union[Transform, Sequence[Transform]]] = None,
-        device: Optional[Union[str, torch.device]] = None,
+        transforms: Optional[Transform | Sequence[Transform]] = None,
+        device: Optional[str | torch.device] = None,
         num_workers: int = 2,
     ) -> None:
         """
         Initialize the dataset.
 
-        Args:
-            reader: Data reader providing raw samples.
-            transforms: Transform or sequence of transforms to apply.
-                       If a sequence, they are composed in order.
-            device: Target device for automatic transfer (e.g., "cuda", "cuda:0").
-                   If None, no automatic transfer is performed (data stays on CPU).
-                   When specified, data is transferred to this device before transforms.
-                   If device is "auto", will select the device with distributed manager.
-                   Auto device falls back to CPU.
-            num_workers: Number of worker threads for prefetching (default: 2).
+        Parameters
+        ----------
+        reader : Reader
+            Data reader providing raw samples.
+        transforms : Transform or Sequence[Transform], optional
+            Transform or sequence of transforms to apply.
+            If a sequence, they are composed in order.
+        device : str or torch.device, optional
+            Target device for automatic transfer (e.g., "cuda", "cuda:0").
+            If None, no automatic transfer is performed (data stays on CPU).
+            When specified, data is transferred to this device before transforms.
+            If device is "auto", will select the device with distributed manager.
+            Auto device falls back to CPU.
+        num_workers : int, default=2
+            Number of worker threads for prefetching.
 
-        Raises:
-            TypeError: If reader is not a Reader instance.
+        Raises
+        ------
+        TypeError
+            If reader is not a Reader instance.
         """
         if not isinstance(reader, Reader):
             raise TypeError(
@@ -167,7 +179,14 @@ class Dataset:
         self._executor: Optional[ThreadPoolExecutor] = None
 
     def _ensure_executor(self) -> ThreadPoolExecutor:
-        """Lazily create the thread pool executor."""
+        """
+        Lazily create the thread pool executor.
+
+        Returns
+        -------
+        ThreadPoolExecutor
+            The thread pool executor for prefetching.
+        """
         if self._executor is None:
             self._executor = ThreadPoolExecutor(
                 max_workers=self.num_workers,
@@ -183,11 +202,16 @@ class Dataset:
         """
         Load a sample and apply transforms. Called by worker threads.
 
-        Args:
-            index: Sample index.
-            stream: Optional CUDA stream for GPU operations.
+        Parameters
+        ----------
+        index : int
+            Sample index.
+        stream : torch.cuda.Stream, optional
+            Optional CUDA stream for GPU operations.
 
-        Returns:
+        Returns
+        -------
+        _PrefetchResult
             PrefetchResult with data, metadata, or error.
         """
         result = _PrefetchResult(index=index)
@@ -236,9 +260,12 @@ class Dataset:
 
         Call __getitem__ to retrieve the result (it will wait if needed).
 
-        Args:
-            index: Sample index to prefetch.
-            stream: Optional CUDA stream for GPU operations.
+        Parameters
+        ----------
+        index : int
+            Sample index to prefetch.
+        stream : torch.cuda.Stream, optional
+            Optional CUDA stream for GPU operations.
         """
         # Don't prefetch if already in flight
         if index in self._prefetch_futures:
@@ -256,10 +283,13 @@ class Dataset:
         """
         Start prefetching multiple samples.
 
-        Args:
-            indices: Sample indices to prefetch.
-            streams: Optional CUDA streams, one per index. If shorter than
-                    indices, streams are cycled. If None, no streams used.
+        Parameters
+        ----------
+        indices : Sequence[int]
+            Sample indices to prefetch.
+        streams : Sequence[torch.cuda.Stream], optional
+            Optional CUDA streams, one per index. If shorter than
+            indices, streams are cycled. If None, no streams used.
         """
         for i, idx in enumerate(indices):
             stream = None
@@ -274,15 +304,22 @@ class Dataset:
         If the index was prefetched, returns the prefetched result
         (waiting for completion if necessary). Otherwise loads synchronously.
 
-        Args:
-            index: Sample index.
+        Parameters
+        ----------
+        index : int
+            Sample index.
 
-        Returns:
+        Returns
+        -------
+        tuple[TensorDict, dict[str, Any]]
             Tuple of (TensorDict with transformed data, metadata dict).
 
-        Raises:
-            IndexError: If index is out of range.
-            Exception: If prefetch failed, re-raises the error.
+        Raises
+        ------
+        IndexError
+            If index is out of range.
+        Exception
+            If prefetch failed, re-raises the error.
         """
         # Check if prefetched
         future = self._prefetch_futures.pop(index, None)
@@ -319,8 +356,10 @@ class Dataset:
 
         Note: Already-running tasks will complete, but results are discarded.
 
-        Args:
-            index: Specific index to cancel. If None, cancels all.
+        Parameters
+        ----------
+        index : int, optional
+            Specific index to cancel. If None, cancels all.
         """
         if index is None:
             # Cancel all - just clear the dict, let futures complete
@@ -329,7 +368,14 @@ class Dataset:
             self._prefetch_futures.pop(index, None)
 
     def __len__(self) -> int:
-        """Return the number of samples in the dataset."""
+        """
+        Return the number of samples in the dataset.
+
+        Returns
+        -------
+        int
+            Number of samples.
+        """
         return len(self.reader)
 
     def __iter__(self) -> Iterator[tuple[TensorDict, dict[str, Any]]]:
@@ -338,22 +384,47 @@ class Dataset:
 
         Note: This does NOT automatically prefetch. For prefetched iteration,
         use the DataLoader which manages prefetching strategy.
+
+        Yields
+        ------
+        tuple[TensorDict, dict[str, Any]]
+            Tuple of (transformed data, metadata) for each sample.
         """
         for i in range(len(self)):
             yield self[i]
 
     @property
     def field_names(self) -> list[str]:
-        """List of field names in samples (from reader)."""
+        """
+        List of field names in samples (from reader).
+
+        Returns
+        -------
+        list[str]
+            Field names available in samples.
+        """
         return self.reader.field_names
 
     @property
     def prefetch_count(self) -> int:
-        """Number of items currently being prefetched."""
+        """
+        Number of items currently being prefetched.
+
+        Returns
+        -------
+        int
+            Count of in-flight prefetch operations.
+        """
         return len(self._prefetch_futures)
 
     def close(self) -> None:
-        """Close the dataset and stop prefetching."""
+        """
+        Close the dataset and stop prefetching.
+
+        Waits for any in-flight prefetch tasks to complete before shutdown.
+        This prevents "cannot schedule new futures after shutdown" errors
+        from libraries like zarr that use async I/O internally.
+        """
         # Wait for any in-flight prefetch tasks to complete before shutdown.
         # This prevents "cannot schedule new futures after shutdown" errors
         # from libraries like zarr that use async I/O internally.
@@ -380,5 +451,13 @@ class Dataset:
         self.close()
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the Dataset.
+        """
         transform_str = repr(self.transforms) if self.transforms else "None"
         return f"Dataset(\n  reader={self.reader},\n  transforms={transform_str}\n)"

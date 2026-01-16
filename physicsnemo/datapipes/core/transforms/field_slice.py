@@ -20,8 +20,6 @@ FieldSlice - Select specific indices or slices from tensor dimensions.
 
 from __future__ import annotations
 
-from typing import Union
-
 import torch
 from tensordict import TensorDict
 
@@ -30,7 +28,7 @@ from physicsnemo.datapipes.core.transforms.base import Transform
 
 # Type for a single dimension's slice specification
 # Can be: list of indices [0, 2, 5], or dict for slice {"start": 0, "stop": 5, "step": 2}
-SliceSpec = Union[list[int], dict[str, int]]
+SliceSpec = list[int] | dict[str, int]
 
 
 @register()
@@ -44,39 +42,63 @@ class FieldSlice(Transform):
     1. **Index selection**: Provide a list of indices to select
     2. **Slice selection**: Provide start/stop/step as a dict
 
-    Example with index selection:
-        >>> # Select features 0, 2, 5 from last dimension of "features" field
-        >>> transform = FieldSlice({
-        ...     "features": {-1: [0, 2, 5]},
-        ... })
-        >>> # Input shape: (N, 10) -> Output shape: (N, 3)
+    Parameters
+    ----------
+    slicing : dict[str, dict[int | str, SliceSpec]]
+        Dictionary mapping field names to dimension slicing specs.
+        Format::
 
-    Example with slice selection:
-        >>> # Select first 5 features using slice notation
-        >>> transform = FieldSlice({
-        ...     "features": {-1: {"start": 0, "stop": 5}},
-        ... })
-        >>> # Input shape: (N, 10) -> Output shape: (N, 5)
+            {
+                "field_name": {
+                    dim: indices_or_slice,
+                    ...
+                },
+                ...
+            }
 
-    Example with multiple dimensions:
-        >>> # Slice both dimensions
-        >>> transform = FieldSlice({
-        ...     "grid": {
-        ...         0: [0, 1, 2],      # First 3 indices of dim 0
-        ...         -1: {"stop": 4},   # First 4 of last dim (slice)
-        ...     },
-        ... })
+        Where:
+
+        - ``dim`` is the dimension index (int, or str for Hydra like "-1")
+        - ``indices_or_slice`` is either:
+            - A list of indices: ``[0, 2, 5]``
+            - A slice dict: ``{"start": 0, "stop": 5, "step": 1}``
+
+    Examples
+    --------
+    Index selection - select features 0, 2, 5 from last dimension:
+
+    >>> transform = FieldSlice({
+    ...     "features": {-1: [0, 2, 5]},
+    ... })
+    >>> # Input shape: (N, 10) -> Output shape: (N, 3)
+
+    Slice selection - select first 5 features:
+
+    >>> transform = FieldSlice({
+    ...     "features": {-1: {"start": 0, "stop": 5}},
+    ... })
+    >>> # Input shape: (N, 10) -> Output shape: (N, 5)
+
+    Multiple dimensions:
+
+    >>> transform = FieldSlice({
+    ...     "grid": {
+    ...         0: [0, 1, 2],      # First 3 indices of dim 0
+    ...         -1: {"stop": 4},   # First 4 of last dim (slice)
+    ...     },
+    ... })
 
     Hydra configuration example:
-        .. code-block:: yaml
 
-            _target_: physicsnemo.datapipes.core.transforms.FieldSlice
-            slicing:
-              features:
-                "-1": [0, 2, 5]
-              velocity:
-                "-1":
-                  stop: 2
+    .. code-block:: yaml
+
+        _target_: physicsnemo.datapipes.core.transforms.FieldSlice
+        slicing:
+          features:
+            "-1": [0, 2, 5]
+          velocity:
+            "-1":
+              stop: 2
     """
 
     def __init__(
@@ -86,23 +108,11 @@ class FieldSlice(Transform):
         """
         Initialize the FieldSlice transform.
 
-        Args:
-            slicing: Dictionary mapping field names to dimension slicing specs.
-                Format::
-
-                    {
-                        "field_name": {
-                            dim: indices_or_slice,
-                            ...
-                        },
-                        ...
-                    }
-
-                Where:
-                - ``dim`` is the dimension index (int, or str for Hydra like "-1")
-                - ``indices_or_slice`` is either:
-                    - A list of indices: ``[0, 2, 5]``
-                    - A slice dict: ``{"start": 0, "stop": 5, "step": 1}``
+        Parameters
+        ----------
+        slicing : dict[str, dict[int | str, SliceSpec]]
+            Dictionary mapping field names to dimension slicing specs.
+            See class docstring for detailed format description.
         """
         super().__init__()
         self.slicing = slicing
@@ -111,14 +121,20 @@ class FieldSlice(Transform):
         """
         Apply slicing to the specified fields.
 
-        Args:
-            data: Input TensorDict.
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict.
 
-        Returns:
+        Returns
+        -------
+        TensorDict
             TensorDict with sliced fields.
 
-        Raises:
-            KeyError: If a specified field is not in the TensorDict.
+        Raises
+        ------
+        KeyError
+            If a specified field is not in the TensorDict.
         """
         updates = {}
 
@@ -153,13 +169,24 @@ class FieldSlice(Transform):
         """
         Apply a single slice specification to a tensor.
 
-        Args:
-            tensor: Input tensor.
-            dim: Dimension to slice (normalized to positive).
-            spec: Slice specification (list of indices or slice dict).
+        Parameters
+        ----------
+        tensor : torch.Tensor
+            Input tensor.
+        dim : int
+            Dimension to slice (normalized to positive).
+        spec : SliceSpec
+            Slice specification (list of indices or slice dict).
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Sliced tensor.
+
+        Raises
+        ------
+        TypeError
+            If spec is not a list or dict.
         """
         if isinstance(spec, list):
             # Index selection: [0, 2, 5]
@@ -186,4 +213,12 @@ class FieldSlice(Transform):
             )
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            String with transform parameters.
+        """
         return f"slicing={self.slicing}"

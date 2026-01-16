@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -53,23 +53,24 @@ class VTKReader(Reader):
     to instantiate this reader will raise an ImportError with installation
     instructions.
 
-    Example:
-        >>> # Directory structure:
-        >>> # data/
-        >>> #   sample_0/
-        >>> #     geometry.stl
-        >>> #     surface.vtp
-        >>> #   sample_1/
-        >>> #     geometry.stl
-        >>> #     surface.vtp
-        >>> #   ...
-        >>>
-        >>> reader = VTKReader(
-        ...     "data/",
-        ...     keys_to_read=["stl_coordinates", "stl_faces", "surface_normals"],
-        ... )
-        >>> sample = reader[0]
-        >>> print(sample["stl_coordinates"].shape)  # (N, 3)
+    Examples
+    --------
+    >>> # Directory structure:
+    >>> # data/
+    >>> #   sample_0/
+    >>> #     geometry.stl
+    >>> #     surface.vtp
+    >>> #   sample_1/
+    >>> #     geometry.stl
+    >>> #     surface.vtp
+    >>> #   ...
+    >>>
+    >>> reader = VTKReader(
+    ...     "data/",
+    ...     keys_to_read=["stl_coordinates", "stl_faces", "surface_normals"],
+    ... )
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
+    >>> print(data["stl_coordinates"].shape)  # (N, 3)
 
     Available Keys:
         From .stl files:
@@ -91,7 +92,7 @@ class VTKReader(Reader):
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: str | Path,
         *,
         keys_to_read: Optional[list[str]] = None,
         exclude_patterns: Optional[list[str]] = None,
@@ -101,18 +102,28 @@ class VTKReader(Reader):
         """
         Initialize the VTK reader.
 
-        Args:
-            path: Path to directory containing subdirectories with VTK files.
-            keys_to_read: List of keys to extract from VTK files.
-                         If None, extracts all available data.
-            exclude_patterns: List of filename patterns to exclude (e.g., ["single_solid"]).
-            pin_memory: If True, place tensors in pinned memory for faster GPU transfer.
-            include_index_in_metadata: If True, include sample index in metadata.
+        Parameters
+        ----------
+        path : str or Path
+            Path to directory containing subdirectories with VTK files.
+        keys_to_read : list[str], optional
+            List of keys to extract from VTK files.
+            If None, extracts all available data.
+        exclude_patterns : list[str], optional
+            List of filename patterns to exclude (e.g., ["single_solid"]).
+        pin_memory : bool, default=False
+            If True, place tensors in pinned memory for faster GPU transfer.
+        include_index_in_metadata : bool, default=True
+            If True, include sample index in metadata.
 
-        Raises:
-            ImportError: If PyVista is not installed.
-            FileNotFoundError: If path doesn't exist.
-            ValueError: If no valid VTK directories found.
+        Raises
+        ------
+        ImportError
+            If PyVista is not installed.
+        FileNotFoundError
+            If path doesn't exist.
+        ValueError
+            If no valid VTK directories found.
         """
         if not PYVISTA_AVAILABLE:
             raise ImportError(

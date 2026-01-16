@@ -36,24 +36,35 @@ class Compose(Transform):
 
     Applies transforms in order, passing the output of each as input to the next.
 
-    Example:
-        >>> pipeline = Compose([
-        ...     Normalize(["pressure"], means={"pressure": 0.0}, stds={"pressure": 1.0}),
-        ...     Downsample(["pressure"], n=1000),
-        ... ])
-        >>> transformed = pipeline(sample)
+    Parameters
+    ----------
+    transforms : Sequence[Transform]
+        Sequence of transforms to apply in order.
+
+    Examples
+    --------
+    >>> pipeline = Compose([
+    ...     Normalize(["pressure"], method="mean_std", means={"pressure": 0.0}, stds={"pressure": 1.0}),
+    ...     SubsamplePoints(["pressure"], n_points=1000),
+    ... ])
+    >>> transformed = pipeline(sample)
     """
 
     def __init__(self, transforms: Sequence[Transform]) -> None:
         """
         Initialize the composition.
 
-        Args:
-            transforms: Sequence of transforms to apply in order.
+        Parameters
+        ----------
+        transforms : Sequence[Transform]
+            Sequence of transforms to apply in order.
 
-        Raises:
-            TypeError: If any element is not a Transform.
-            ValueError: If transforms is empty.
+        Raises
+        ------
+        TypeError
+            If any element is not a Transform.
+        ValueError
+            If transforms is empty.
         """
         super().__init__()
 
@@ -70,44 +81,121 @@ class Compose(Transform):
         self.transforms: list[Transform] = list(transforms)
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Apply all transforms in sequence."""
+        """
+        Apply all transforms in sequence.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict to transform.
+
+        Returns
+        -------
+        TensorDict
+            Transformed TensorDict after applying all transforms.
+        """
         for transform in self.transforms:
             data = transform(data)
         return data
 
     def to(self, device: torch.device | str) -> Compose:
-        """Move all transforms to the specified device."""
+        """
+        Move all transforms to the specified device.
+
+        Parameters
+        ----------
+        device : torch.device or str
+            Target device.
+
+        Returns
+        -------
+        Compose
+            Self for chaining.
+        """
         super().to(device)
         for transform in self.transforms:
             transform.to(device)
         return self
 
     def __getitem__(self, index: int) -> Transform:
-        """Get a transform by index."""
+        """
+        Get a transform by index.
+
+        Parameters
+        ----------
+        index : int
+            Index of the transform to retrieve.
+
+        Returns
+        -------
+        Transform
+            The transform at the specified index.
+        """
         return self.transforms[index]
 
     def __len__(self) -> int:
-        """Return number of transforms."""
+        """
+        Return number of transforms.
+
+        Returns
+        -------
+        int
+            Number of transforms in the composition.
+        """
         return len(self.transforms)
 
     def __iter__(self) -> Iterator[Transform]:
-        """Iterate over transforms."""
+        """
+        Iterate over transforms.
+
+        Yields
+        ------
+        Transform
+            Each transform in the composition.
+        """
         return iter(self.transforms)
 
     def append(self, transform: Transform) -> None:
-        """Append a transform to the pipeline."""
+        """
+        Append a transform to the pipeline.
+
+        Parameters
+        ----------
+        transform : Transform
+            Transform to append.
+
+        Raises
+        ------
+        TypeError
+            If transform is not a Transform instance.
+        """
         if not isinstance(transform, Transform):
             raise TypeError(f"Expected Transform, got {type(transform).__name__}")
         self.transforms.append(transform)
 
     def state_dict(self) -> dict[str, Any]:
-        """Return state of all transforms."""
+        """
+        Return state of all transforms.
+
+        Returns
+        -------
+        dict[str, Any]
+            Dictionary containing transform states and types.
+        """
         return {
             "transforms": [t.state_dict() for t in self.transforms],
             "transform_types": [type(t).__name__ for t in self.transforms],
         }
 
     def extra_repr(self) -> str:
+        """
+        Return extra information for repr.
+
+        Returns
+        -------
+        str
+            Formatted string showing all transforms.
+        """
         lines = []
         for i, t in enumerate(self.transforms):
             lines.append(f"  ({i}): {t}")

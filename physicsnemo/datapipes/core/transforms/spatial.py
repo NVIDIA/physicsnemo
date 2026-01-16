@@ -23,7 +23,7 @@ filtering, grid creation, k-NN neighbor computation, and center of mass calculat
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional
 
 import torch
 from tensordict import TensorDict
@@ -43,19 +43,32 @@ class BoundingBoxFilter(Transform):
     This is useful for focusing on specific regions of interest or removing
     outliers from simulation data.
 
-    Example:
-        >>> transform = BoundingBoxFilter(
-        ...     input_keys=["volume_mesh_centers"],
-        ...     bbox_min=torch.tensor([-1.0, -1.0, -1.0]),
-        ...     bbox_max=torch.tensor([1.0, 1.0, 1.0]),
-        ...     dependent_keys=["volume_fields", "sdf_nodes"]
-        ... )
-        >>> sample = TensorDict({
-        ...     "volume_mesh_centers": torch.randn(10000, 3) * 2,  # Some outside bbox
-        ...     "volume_fields": torch.randn(10000, 4)
-        ... })
-        >>> result = transform(sample)
-        >>> # Only points within bbox remain
+    Parameters
+    ----------
+    input_keys : list[str]
+        List of coordinate tensor keys to filter.
+    bbox_min : torch.Tensor
+        Minimum corner of bounding box, shape :math:`(3,)`.
+    bbox_max : torch.Tensor
+        Maximum corner of bounding box, shape :math:`(3,)`.
+    dependent_keys : list[str], optional
+        Optional list of keys to filter using the same mask.
+        These maintain correspondence with the filtered coordinates.
+
+    Examples
+    --------
+    >>> transform = BoundingBoxFilter(
+    ...     input_keys=["volume_mesh_centers"],
+    ...     bbox_min=torch.tensor([-1.0, -1.0, -1.0]),
+    ...     bbox_max=torch.tensor([1.0, 1.0, 1.0]),
+    ...     dependent_keys=["volume_fields", "sdf_nodes"]
+    ... )
+    >>> sample = TensorDict({
+    ...     "volume_mesh_centers": torch.randn(10000, 3) * 2,  # Some outside bbox
+    ...     "volume_fields": torch.randn(10000, 4)
+    ... })
+    >>> result = transform(sample)
+    >>> # Only points within bbox remain
     """
 
     def __init__(
@@ -69,12 +82,17 @@ class BoundingBoxFilter(Transform):
         """
         Initialize the bounding box filter transform.
 
-        Args:
-            input_keys: List of coordinate tensor keys to filter.
-            bbox_min: Minimum corner of bounding box, shape :math:`(3,)`.
-            bbox_max: Maximum corner of bounding box, shape :math:`(3,)`.
-            dependent_keys: Optional list of keys to filter using the same mask.
-                           These maintain correspondence with the filtered coordinates.
+        Parameters
+        ----------
+        input_keys : list[str]
+            List of coordinate tensor keys to filter.
+        bbox_min : torch.Tensor
+            Minimum corner of bounding box, shape :math:`(3,)`.
+        bbox_max : torch.Tensor
+            Maximum corner of bounding box, shape :math:`(3,)`.
+        dependent_keys : list[str], optional
+            Optional list of keys to filter using the same mask.
+            These maintain correspondence with the filtered coordinates.
         """
         super().__init__()
         self.input_keys = input_keys
@@ -83,7 +101,19 @@ class BoundingBoxFilter(Transform):
         self.dependent_keys = dependent_keys or []
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Apply bounding box filtering to the sample."""
+        """
+        Apply bounding box filtering to the sample.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing coordinate and dependent data.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with filtered points.
+        """
         updates = {}
 
         for coord_key in self.input_keys:
@@ -112,15 +142,15 @@ class BoundingBoxFilter(Transform):
 
         return data.update(updates)
 
-    def to(self, device: Union[torch.device, str]) -> "BoundingBoxFilter":
-        """Move bounding box tensors to the specified device."""
-        super().to(device)
-        device = torch.device(device) if isinstance(device, str) else device
-        self.bbox_min = self.bbox_min.to(device)
-        self.bbox_max = self.bbox_max.to(device)
-        return self
-
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return (
             f"BoundingBoxFilter(input_keys={self.input_keys}, "
             f"dependent_keys={self.dependent_keys})"
@@ -135,17 +165,29 @@ class CreateGrid(Transform):
     Generates a uniform grid spanning a bounding box, used for latent space
     representations, interpolation grids, or structured spatial queries.
 
-    Example:
-        >>> transform = CreateGrid(
-        ...     output_key="grid",
-        ...     resolution=(64, 64, 64),
-        ...     bbox_min=torch.tensor([-1.0, -1.0, -1.0]),
-        ...     bbox_max=torch.tensor([1.0, 1.0, 1.0])
-        ... )
-        >>> sample = TensorDict({})
-        >>> result = transform(sample)
-        >>> print(result["grid"].shape)
-        torch.Size([262144, 3])  # 64*64*64 = 262144
+    Parameters
+    ----------
+    output_key : str
+        Key to store the generated grid.
+    resolution : tuple[int, int, int]
+        Grid resolution as (nx, ny, nz).
+    bbox_min : torch.Tensor
+        Minimum corner of bounding box, shape :math:`(3,)`.
+    bbox_max : torch.Tensor
+        Maximum corner of bounding box, shape :math:`(3,)`.
+
+    Examples
+    --------
+    >>> transform = CreateGrid(
+    ...     output_key="grid",
+    ...     resolution=(64, 64, 64),
+    ...     bbox_min=torch.tensor([-1.0, -1.0, -1.0]),
+    ...     bbox_max=torch.tensor([1.0, 1.0, 1.0])
+    ... )
+    >>> sample = TensorDict({})
+    >>> result = transform(sample)
+    >>> print(result["grid"].shape)
+    torch.Size([262144, 3])  # 64*64*64 = 262144
     """
 
     def __init__(
@@ -158,11 +200,16 @@ class CreateGrid(Transform):
         """
         Initialize the grid creation transform.
 
-        Args:
-            output_key: Key to store the generated grid.
-            resolution: Grid resolution as (nx, ny, nz).
-            bbox_min: Minimum corner of bounding box, shape :math:`(3,)`.
-            bbox_max: Maximum corner of bounding box, shape :math:`(3,)`.
+        Parameters
+        ----------
+        output_key : str
+            Key to store the generated grid.
+        resolution : tuple[int, int, int]
+            Grid resolution as (nx, ny, nz).
+        bbox_min : torch.Tensor
+            Minimum corner of bounding box, shape :math:`(3,)`.
+        bbox_max : torch.Tensor
+            Maximum corner of bounding box, shape :math:`(3,)`.
         """
         super().__init__()
         self.output_key = output_key
@@ -171,7 +218,19 @@ class CreateGrid(Transform):
         self.bbox_max = bbox_max
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Create grid and add to sample."""
+        """
+        Create grid and add to sample.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with generated grid added.
+        """
         device = data.device if data.device is not None else torch.device("cpu")
 
         # Move bbox to device
@@ -193,20 +252,20 @@ class CreateGrid(Transform):
 
         return data.update({self.output_key: grid})
 
-    def to(self, device: Union[torch.device, str]) -> "CreateGrid":
-        """Move bounding box tensors to the specified device."""
-        super().to(device)
-        device = torch.device(device) if isinstance(device, str) else device
-        self.bbox_min = self.bbox_min.to(device)
-        self.bbox_max = self.bbox_max.to(device)
-        return self
-
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return f"CreateGrid(output_key={self.output_key}, resolution={self.resolution})"
 
 
 @register()
-class KNNNeighbors(Transform):
+class KNearestNeighbors(Transform):
     r"""
     Compute k-nearest neighbors in a point cloud.
 
@@ -214,22 +273,37 @@ class KNNNeighbors(Transform):
     corresponding coordinates and other attributes. Useful for local
     feature aggregation in mesh networks and spatial interpolation.
 
-    Example:
-        >>> transform = KNNNeighbors(
-        ...     points_key="surface_mesh_centers",
-        ...     queries_key="surface_mesh_centers_subsampled",
-        ...     k=11,
-        ...     output_prefix="surface_neighbors",
-        ...     extract_keys=["surface_normals", "surface_areas"]
-        ... )
-        >>> sample = TensorDict({
-        ...     "surface_mesh_centers": torch.randn(10000, 3),
-        ...     "surface_mesh_centers_subsampled": torch.randn(1000, 3),
-        ...     "surface_normals": torch.randn(10000, 3),
-        ...     "surface_areas": torch.rand(10000)
-        ... })
-        >>> result = transform(sample)
-        >>> # Creates: surface_neighbors_coords, surface_neighbors_normals, etc.
+    Parameters
+    ----------
+    points_key : str
+        Key for reference points to search, shape :math:`(N, 3)`.
+    queries_key : str
+        Key for query points, shape :math:`(M, 3)`.
+    k : int
+        Number of nearest neighbors to find.
+    output_prefix : str, default="neighbors"
+        Prefix for output keys.
+    extract_keys : list[str], optional
+        Optional list of keys to extract for neighbors
+        (e.g., ``["normals", "areas"]``). If None, only extracts coordinates.
+
+    Examples
+    --------
+    >>> transform = KNearestNeighbors(
+    ...     points_key="surface_mesh_centers",
+    ...     queries_key="surface_mesh_centers_subsampled",
+    ...     k=11,
+    ...     output_prefix="surface_neighbors",
+    ...     extract_keys=["surface_normals", "surface_areas"]
+    ... )
+    >>> sample = TensorDict({
+    ...     "surface_mesh_centers": torch.randn(10000, 3),
+    ...     "surface_mesh_centers_subsampled": torch.randn(1000, 3),
+    ...     "surface_normals": torch.randn(10000, 3),
+    ...     "surface_areas": torch.rand(10000)
+    ... })
+    >>> result = transform(sample)
+    >>> # Creates: surface_neighbors_coords, surface_neighbors_normals, etc.
     """
 
     def __init__(
@@ -244,13 +318,19 @@ class KNNNeighbors(Transform):
         """
         Initialize the k-NN transform.
 
-        Args:
-            points_key: Key for reference points to search, shape :math:`(N, 3)`.
-            queries_key: Key for query points, shape :math:`(M, 3)`.
-            k: Number of nearest neighbors to find.
-            output_prefix: Prefix for output keys.
-            extract_keys: Optional list of keys to extract for neighbors
-                         (e.g., ``["normals", "areas"]``). If None, only extracts coordinates.
+        Parameters
+        ----------
+        points_key : str
+            Key for reference points to search, shape :math:`(N, 3)`.
+        queries_key : str
+            Key for query points, shape :math:`(M, 3)`.
+        k : int
+            Number of nearest neighbors to find.
+        output_prefix : str, default="neighbors"
+            Prefix for output keys.
+        extract_keys : list[str], optional
+            Optional list of keys to extract for neighbors
+            (e.g., ``["normals", "areas"]``). If None, only extracts coordinates.
         """
         super().__init__()
         self.points_key = points_key
@@ -260,7 +340,24 @@ class KNNNeighbors(Transform):
         self.extract_keys = extract_keys or []
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Compute k-NN and extract neighbor features."""
+        """
+        Compute k-NN and extract neighbor features.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing points and queries.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with neighbor indices, distances, and features added.
+
+        Raises
+        ------
+        KeyError
+            If points or queries keys are not found in the data.
+        """
         if self.points_key not in data:
             raise KeyError(f"Points key '{self.points_key}' not found")
         if self.queries_key not in data:
@@ -295,8 +392,16 @@ class KNNNeighbors(Transform):
         return data.update(updates)
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return (
-            f"KNNNeighbors(points_key={self.points_key}, "
+            f"KNearestNeighbors(points_key={self.points_key}, "
             f"queries_key={self.queries_key}, k={self.k})"
         )
 
@@ -309,19 +414,29 @@ class CenterOfMass(Transform):
     Calculates the center of mass using area or mass weights, typically
     applied to mesh data where each point represents a cell with a specific area.
 
-    Example:
-        >>> transform = CenterOfMass(
-        ...     coords_key="stl_centers",
-        ...     areas_key="stl_areas",
-        ...     output_key="center_of_mass"
-        ... )
-        >>> sample = Sample({
-        ...     "stl_centers": torch.randn(5000, 3),
-        ...     "stl_areas": torch.rand(5000)
-        ... })
-        >>> result = transform(sample)
-        >>> print(result["center_of_mass"].shape)
-        torch.Size([1, 3])
+    Parameters
+    ----------
+    coords_key : str
+        Key for coordinates, shape :math:`(N, 3)`.
+    areas_key : str
+        Key for area weights, shape :math:`(N,)`.
+    output_key : str
+        Key to store the computed center of mass, shape :math:`(1, 3)`.
+
+    Examples
+    --------
+    >>> transform = CenterOfMass(
+    ...     coords_key="stl_centers",
+    ...     areas_key="stl_areas",
+    ...     output_key="center_of_mass"
+    ... )
+    >>> sample = TensorDict({
+    ...     "stl_centers": torch.randn(5000, 3),
+    ...     "stl_areas": torch.rand(5000)
+    ... })
+    >>> result = transform(sample)
+    >>> print(result["center_of_mass"].shape)
+    torch.Size([1, 3])
     """
 
     def __init__(
@@ -333,10 +448,14 @@ class CenterOfMass(Transform):
         """
         Initialize the center of mass transform.
 
-        Args:
-            coords_key: Key for coordinates, shape :math:`(N, 3)`.
-            areas_key: Key for area weights, shape :math:`(N,)`.
-            output_key: Key to store the computed center of mass, shape :math:`(1, 3)`.
+        Parameters
+        ----------
+        coords_key : str
+            Key for coordinates, shape :math:`(N, 3)`.
+        areas_key : str
+            Key for area weights, shape :math:`(N,)`.
+        output_key : str
+            Key to store the computed center of mass, shape :math:`(1, 3)`.
         """
         super().__init__()
         self.coords_key = coords_key
@@ -344,7 +463,24 @@ class CenterOfMass(Transform):
         self.output_key = output_key
 
     def __call__(self, data: TensorDict) -> TensorDict:
-        """Compute center of mass for the sample."""
+        """
+        Compute center of mass for the sample.
+
+        Parameters
+        ----------
+        data : TensorDict
+            Input TensorDict containing coordinates and area weights.
+
+        Returns
+        -------
+        TensorDict
+            TensorDict with computed center of mass added.
+
+        Raises
+        ------
+        KeyError
+            If coordinates or areas keys are not found in the data.
+        """
         if self.coords_key not in data:
             raise KeyError(f"Coordinates key '{self.coords_key}' not found")
         if self.areas_key not in data:
@@ -364,6 +500,14 @@ class CenterOfMass(Transform):
         return data.update({self.output_key: center_of_mass})
 
     def __repr__(self) -> str:
+        """
+        Return string representation.
+
+        Returns
+        -------
+        str
+            String representation of the transform.
+        """
         return (
             f"CenterOfMass(coords_key={self.coords_key}, output_key={self.output_key})"
         )
