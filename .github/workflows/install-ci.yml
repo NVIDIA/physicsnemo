@@ -29,6 +29,9 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    # Set up MSVC compiler on Windows (does nothing on Linux/macOS)
+    - uses: ilammy/msvc-dev-cmd@v1
+
     - name: Install package with pip
       run: |
         python -m pip install --upgrade pip
@@ -55,6 +58,9 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+
+    # Set up MSVC compiler on Windows (does nothing on Linux/macOS)
+    - uses: ilammy/msvc-dev-cmd@v1
 
     - name: Install uv
       uses: nick-fields/retry@v3
