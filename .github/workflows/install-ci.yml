@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
 
     steps:
@@ -46,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         # For push/PR/merge_group: only ubuntu. For schedule/manual: full matrix
-        os: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
+        os: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest","windows-latest"]') }}
         python-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
 
     steps:
@@ -62,9 +62,8 @@ jobs:
       with:
         timeout_minutes: 5
         max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        command: ${{ runner.os == 'Windows' && 'irm https://astral.sh/uv/install.ps1 | iex; echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append' || 'curl -LsSf https://astral.sh/uv/install.sh | sh && echo "$HOME/.cargo/bin" >> $GITHUB_PATH' }}
 
     - name: Install package with uv
       run: |
