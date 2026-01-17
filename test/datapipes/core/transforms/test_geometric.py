@@ -14,13 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for geometric transforms."""
+"""Tests for geometric transforms (Translate, Scale, ComputeSDF, ComputeNormals)."""
 
 import pytest
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.datapipes.core.transforms.geometric import ReScale, Scale, Translate
+from physicsnemo.datapipes.core.transforms.geometric import (
+    ComputeNormals,
+    ComputeSDF,
+    ReScale,
+    Scale,
+    Translate,
+)
 
 
 class TestTranslate:
@@ -534,3 +540,419 @@ class TestReScaleBackwardsCompatibility:
         from physicsnemo.datapipes.core.transforms import ReScale as ImportedReScale
 
         assert ImportedReScale is Scale
+
+
+# ============================================================================
+# ComputeSDF Tests
+# ============================================================================
+
+
+class TestComputeSDF:
+    """Tests for ComputeSDF transform."""
+
+    @pytest.fixture
+    def simple_cube_mesh(self):
+        """Create a simple cube mesh centered at origin."""
+        # Cube vertices from -1 to 1
+        vertices = torch.tensor(
+            [
+                [-1, -1, -1],
+                [1, -1, -1],
+                [1, 1, -1],
+                [-1, 1, -1],
+                [-1, -1, 1],
+                [1, -1, 1],
+                [1, 1, 1],
+                [-1, 1, 1],
+            ],
+            dtype=torch.float32,
+        )
+
+        # Faces (triangulated cube - 12 triangles, 2 per face)
+        faces = torch.tensor(
+            [
+                # Front
+                0,
+                1,
+                2,
+                0,
+                2,
+                3,
+                # Back
+                4,
+                6,
+                5,
+                4,
+                7,
+                6,
+                # Top
+                3,
+                2,
+                6,
+                3,
+                6,
+                7,
+                # Bottom
+                0,
+                5,
+                1,
+                0,
+                4,
+                5,
+                # Right
+                1,
+                5,
+                6,
+                1,
+                6,
+                2,
+                # Left
+                0,
+                3,
+                7,
+                0,
+                7,
+                4,
+            ],
+            dtype=torch.int32,
+        )
+
+        return vertices, faces
+
+    def test_sdf_basic(self, simple_cube_mesh):
+        """Test basic SDF computation."""
+        vertices, faces = simple_cube_mesh
+
+        transform = ComputeSDF(
+            input_keys=["query_points"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+        )
+
+        # Query points at various locations
+        query_points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],  # At center
+                [2.0, 0.0, 0.0],  # Further from surface
+                [0.5, 0.5, 0.5],  # Near surface
+            ]
+        )
+
+        data = TensorDict(
+            {
+                "query_points": query_points,
+                "mesh_coords": vertices,
+                "mesh_faces": faces,
+            }
+        )
+
+        result = transform(data)
+
+        assert "sdf" in result
+        assert result["sdf"].shape == (3, 1)
+
+        # SDF should be finite (not NaN or Inf)
+        assert torch.isfinite(result["sdf"]).all()
+
+        # Point further from surface should have larger absolute SDF
+        assert abs(result["sdf"][1, 0]) > abs(result["sdf"][2, 0])
+
+    def test_sdf_with_closest_points(self, simple_cube_mesh):
+        """Test SDF computation with closest points output."""
+        vertices, faces = simple_cube_mesh
+
+        transform = ComputeSDF(
+            input_keys=["query_points"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+            closest_points_key="closest_pts",
+        )
+
+        query_points = torch.tensor([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+
+        data = TensorDict(
+            {
+                "query_points": query_points,
+                "mesh_coords": vertices,
+                "mesh_faces": faces,
+            }
+        )
+
+        result = transform(data)
+
+        assert "closest_pts" in result
+        assert result["closest_pts"].shape == (2, 3)
+
+    def test_sdf_missing_mesh_coords_raises(self):
+        """Test that missing mesh coordinates raises KeyError."""
+        transform = ComputeSDF(
+            input_keys=["query_points"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+        )
+
+        data = TensorDict(
+            {
+                "query_points": torch.randn(10, 3),
+                "mesh_faces": torch.randint(0, 100, (100,)),
+            }
+        )
+
+        with pytest.raises(KeyError, match="Mesh coordinates key"):
+            transform(data)
+
+    def test_sdf_missing_mesh_faces_raises(self):
+        """Test that missing mesh faces raises KeyError."""
+        transform = ComputeSDF(
+            input_keys=["query_points"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+        )
+
+        data = TensorDict(
+            {
+                "query_points": torch.randn(10, 3),
+                "mesh_coords": torch.randn(100, 3),
+            }
+        )
+
+        with pytest.raises(KeyError, match="Mesh faces key"):
+            transform(data)
+
+    def test_sdf_missing_input_key_raises(self, simple_cube_mesh):
+        """Test that missing input key raises KeyError."""
+        vertices, faces = simple_cube_mesh
+
+        transform = ComputeSDF(
+            input_keys=["query_points"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+        )
+
+        data = TensorDict(
+            {
+                "mesh_coords": vertices,
+                "mesh_faces": faces,
+            }
+        )
+
+        with pytest.raises(KeyError, match="Input key"):
+            transform(data)
+
+    def test_sdf_multiple_input_keys(self, simple_cube_mesh):
+        """Test SDF computation with multiple input keys."""
+        vertices, faces = simple_cube_mesh
+
+        transform = ComputeSDF(
+            input_keys=["query_a", "query_b"],
+            output_key="sdf",
+            mesh_coords_key="mesh_coords",
+            mesh_faces_key="mesh_faces",
+        )
+
+        data = TensorDict(
+            {
+                "query_a": torch.tensor([[0.0, 0.0, 0.0]]),
+                "query_b": torch.tensor([[2.0, 0.0, 0.0]]),
+                "mesh_coords": vertices,
+                "mesh_faces": faces,
+            }
+        )
+
+        result = transform(data)
+
+        # Multiple inputs should have suffixed output keys
+        assert "sdf_query_a" in result
+        assert "sdf_query_b" in result
+
+    def test_sdf_repr(self):
+        """Test string representation."""
+        transform = ComputeSDF(
+            input_keys=["points"],
+            output_key="sdf_values",
+            mesh_coords_key="coords",
+            mesh_faces_key="faces",
+        )
+
+        repr_str = repr(transform)
+        assert "ComputeSDF" in repr_str
+        assert "points" in repr_str
+        assert "sdf_values" in repr_str
+
+
+# ============================================================================
+# ComputeNormals Tests
+# ============================================================================
+
+
+class TestComputeNormals:
+    """Tests for ComputeNormals transform."""
+
+    def test_compute_normals_basic(self):
+        """Test basic normal computation from closest points."""
+        transform = ComputeNormals(
+            positions_key="positions",
+            closest_points_key="closest_points",
+            center_of_mass_key="center_of_mass",
+            output_key="normals",
+        )
+
+        # Points on a sphere surface
+        positions = torch.tensor(
+            [
+                [2.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 2.0],
+            ]
+        )
+        # Closest points on unit sphere (same direction, different magnitude)
+        closest_points = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        center_of_mass = torch.tensor([0.0, 0.0, 0.0])
+
+        data = TensorDict(
+            {
+                "positions": positions,
+                "closest_points": closest_points,
+                "center_of_mass": center_of_mass,
+            }
+        )
+
+        result = transform(data)
+
+        assert "normals" in result
+        assert result["normals"].shape == (3, 3)
+
+        # Normals should be unit length
+        norms = torch.norm(result["normals"], dim=-1)
+        torch.testing.assert_close(norms, torch.ones(3), atol=1e-5, rtol=1e-5)
+
+        # Normals should point outward (same direction as position - closest)
+        expected_normals = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        torch.testing.assert_close(
+            result["normals"], expected_normals, atol=1e-5, rtol=1e-5
+        )
+
+    def test_compute_normals_zero_distance_fallback(self):
+        """Test that zero-distance points use center of mass fallback."""
+        transform = ComputeNormals(
+            positions_key="positions",
+            closest_points_key="closest_points",
+            center_of_mass_key="center_of_mass",
+            output_key="normals",
+            handle_zero_distance=True,
+        )
+
+        # Point exactly on the surface (position == closest_point)
+        positions = torch.tensor([[1.0, 0.0, 0.0]])
+        closest_points = torch.tensor([[1.0, 0.0, 0.0]])  # Same as position
+        center_of_mass = torch.tensor([0.0, 0.0, 0.0])
+
+        data = TensorDict(
+            {
+                "positions": positions,
+                "closest_points": closest_points,
+                "center_of_mass": center_of_mass,
+            }
+        )
+
+        result = transform(data)
+
+        # Should use direction from center of mass to position
+        expected_normal = torch.tensor([[1.0, 0.0, 0.0]])
+        torch.testing.assert_close(
+            result["normals"], expected_normal, atol=1e-5, rtol=1e-5
+        )
+
+    def test_compute_normals_2d_center_of_mass(self):
+        """Test with 2D center of mass (shape (1, 3))."""
+        transform = ComputeNormals(
+            positions_key="positions",
+            closest_points_key="closest_points",
+            center_of_mass_key="center_of_mass",
+            output_key="normals",
+        )
+
+        positions = torch.tensor([[2.0, 0.0, 0.0]])
+        closest_points = torch.tensor([[1.0, 0.0, 0.0]])
+        center_of_mass = torch.tensor([[0.0, 0.0, 0.0]])  # Shape (1, 3)
+
+        data = TensorDict(
+            {
+                "positions": positions,
+                "closest_points": closest_points,
+                "center_of_mass": center_of_mass,
+            }
+        )
+
+        result = transform(data)
+
+        assert result["normals"].shape == (1, 3)
+
+    def test_compute_normals_disable_zero_distance_handling(self):
+        """Test with handle_zero_distance=False."""
+        transform = ComputeNormals(
+            positions_key="positions",
+            closest_points_key="closest_points",
+            center_of_mass_key="center_of_mass",
+            output_key="normals",
+            handle_zero_distance=False,
+        )
+
+        # Mixed points
+        positions = torch.tensor(
+            [
+                [2.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],  # Zero distance
+            ]
+        )
+        closest_points = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],  # Same as position
+            ]
+        )
+        center_of_mass = torch.tensor([0.0, 0.0, 0.0])
+
+        data = TensorDict(
+            {
+                "positions": positions,
+                "closest_points": closest_points,
+                "center_of_mass": center_of_mass,
+            }
+        )
+
+        result = transform(data)
+
+        # First normal should still be correct
+        assert result["normals"].shape == (2, 3)
+
+    def test_compute_normals_repr(self):
+        """Test string representation."""
+        transform = ComputeNormals(
+            positions_key="pos",
+            closest_points_key="closest",
+            center_of_mass_key="com",
+            output_key="normals",
+        )
+
+        repr_str = repr(transform)
+        assert "ComputeNormals" in repr_str
+        assert "pos" in repr_str
+        assert "normals" in repr_str
