@@ -524,7 +524,7 @@ class Encoder3DBlock(Module):
         for depth in range(model_depth):
             for i in range(num_conv_blocks):
                 self.layers.append(
-                    ConvBlock(
+                    Conv3DBlock(
                         in_channels=current_channels,
                         out_channels=feature_map_channels[depth * num_conv_blocks + i],
                         kernel_size=kernel_size,
@@ -552,7 +552,7 @@ class Encoder3DBlock(Module):
         return x
 
 
-class DecoderBlock(Module):
+class Decoder3DBlock(Module):
     r"""U-Net decoder block with upsampling and skip connection support.
 
     Sequentially applies transposed convolutions for upsampling and regular
@@ -628,7 +628,7 @@ class DecoderBlock(Module):
             for i in range(num_conv_blocks):
                 if i == 0:
                     self.layers.append(
-                        ConvTranspose(
+                        ConvTranspose3D(
                             in_channels=current_channels,
                             out_channels=current_channels,
                             activation=conv_transpose_activation,
@@ -639,7 +639,7 @@ class DecoderBlock(Module):
                     ]
 
                 self.layers.append(
-                    ConvBlock(
+                    Conv3DBlock(
                         in_channels=current_channels,
                         out_channels=feature_map_channels[depth * num_conv_blocks + i],
                         kernel_size=kernel_size,
@@ -655,7 +655,7 @@ class DecoderBlock(Module):
 
         # Final convolution
         self.layers.append(
-            ConvBlock(
+            Conv3DBlock(
                 in_channels=current_channels,
                 out_channels=out_channels,
                 kernel_size=kernel_size,
@@ -814,7 +814,7 @@ class UNet(Module):
         self.gradient_checkpointing = gradient_checkpointing
 
         # Construct the encoder
-        self.encoder = EncoderBlock(
+        self.encoder = Encoder3DBlock(
             in_channels=in_channels,
             feature_map_channels=feature_map_channels,
             kernel_size=kernel_size,
@@ -837,7 +837,7 @@ class UNet(Module):
             ]  # Reverse and discard the first channel
         else:
             decoder_feature_maps = feature_map_channels[::-1]
-        self.decoder = DecoderBlock(
+        self.decoder = Decoder3DBlock(
             out_channels=out_channels,
             feature_map_channels=decoder_feature_maps,
             kernel_size=kernel_size,
