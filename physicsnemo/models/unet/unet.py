@@ -145,7 +145,8 @@ class Conv3DBlock(Module):
         bias: bool = True,
         padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
         activation: str | None = "relu",
-        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
         normalization_args: dict | None = None,
     ):
         super().__init__()
@@ -518,7 +519,8 @@ class Encoder3DBlock(Module):
         padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
         pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "AvgPool3d",
         pool_size: int = 2,
-        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
         normalization_args: dict | None = None,
     ):
         super().__init__()
@@ -622,7 +624,8 @@ class Decoder3DBlock(Module):
         conv_transpose_activation: str | None = None,
         padding: int = 1,
         padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
-        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
         normalization_args: dict | None = None,
     ):
         super().__init__()
@@ -813,7 +816,8 @@ class UNet(Module):
         padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
         pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "MaxPool3d",
         pool_size: int = 2,
-        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
         normalization_args: dict | None = None,
         use_attn_gate: bool = False,
         attn_decoder_feature_maps: Sequence[int] | None = None,
