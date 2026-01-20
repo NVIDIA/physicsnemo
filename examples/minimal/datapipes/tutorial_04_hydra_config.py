@@ -117,7 +117,7 @@ def main(cfg: DictConfig):
                 print(f"Epoch {epoch}, Batch {batch_idx}:")
                 for key in batch_data.keys():
                     shape = tuple(batch_data[key].shape)
-                    print(f"    {key}: {shape}")
+                    print(f"    {key}: {shape} on device {batch_data[key].device}")
 
         print(f"Epoch {epoch} complete: {len(dataloader)} batches")
 

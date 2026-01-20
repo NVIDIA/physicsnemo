@@ -77,7 +77,7 @@ dataloader:
     # -------------------------------------------------------------------------
     dataset:
         _target_: physicsnemo.datapipes.core.Dataset
-        device: cuda
+        device: auto
         num_workers: 2
 
         # Reader: Reference the config loaded from defaults
