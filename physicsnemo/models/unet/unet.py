@@ -50,7 +50,7 @@ class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
 
     Parameters
     ----------
-    normalized_shape : int or tuple of ints
+    normalized_shape : int | Sequence[int]
         Input shape over which to normalize. If a single integer, treated as a
         singleton list.
     eps : float, optional, default=1e-5
@@ -71,8 +71,11 @@ class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
     """
 
     def __init__(
-        self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True
-    ):
+        self,
+        normalized_shape: int | Sequence[int],
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+    ) -> None:
         super().__init__(normalized_shape, eps, elementwise_affine)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
