@@ -191,7 +191,9 @@ class Conv3DBlock(Module):
         else:
             self.norm = nn.Identity()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
         """Forward pass through the convolutional block."""
         x = self.conv3d(x)
         x = self.norm(x)
@@ -305,7 +307,9 @@ class ConvTranspose3D(Module):
         else:
             self.norm = nn.Identity()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
         """Forward pass through the transposed convolutional block."""
         x = self.conv3d_transpose(x)
         x = self.norm(x)
@@ -382,7 +386,9 @@ class Pool3D(Module):
                 ceil_mode=ceil_mode,
             )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels depth height width"]
+    ) -> Float[torch.Tensor, "batch channels depth_out height_out width_out"]:
         """Forward pass through the pooling layer."""
         return self.pooling(x)
 
@@ -438,7 +444,11 @@ class Attention3DBlock(Module):
 
         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        g: Float[torch.Tensor, "batch c_g depth height width"],
+        x: Float[torch.Tensor, "batch c_l depth height width"],
+    ) -> Float[torch.Tensor, "batch c_l depth height width"]:
         """Forward pass computing attention-weighted skip features."""
         # Compute attention
         g1 = self.W_g(g)  # (B, F_int, D, H, W)
@@ -545,7 +555,9 @@ class Encoder3DBlock(Module):
                     Pool3D(pooling_type=pooling_type, kernel_size=pool_size)
                 )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
         """Forward pass through the encoder block."""
         for layer in self.layers:
             x = layer(x)
@@ -667,7 +679,9 @@ class Decoder3DBlock(Module):
             )
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
         """Forward pass through the decoder block."""
         for layer in self.layers:
             x = layer(x)
