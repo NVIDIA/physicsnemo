@@ -865,7 +865,7 @@ class UNet(Module):
                 ]
             )
 
-    def checkpointed_forward(self, layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    def _checkpointed_forward(self, layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
         """Apply gradient checkpointing to a layer if enabled.
 
         Parameters
@@ -907,7 +907,7 @@ class UNet(Module):
             if isinstance(layer, Pool3D):
                 skip_features.append(x)
             # Apply checkpointing if enabled
-            x = self.checkpointed_forward(layer, x)
+            x = self._checkpointed_forward(layer, x)
 
         # Decoding path
         skip_features = skip_features[::-1]  # Reverse the skip features
@@ -924,6 +924,6 @@ class UNet(Module):
                 concats += 1
             else:
                 # Apply checkpointing for other layers
-                x = self.checkpointed_forward(layer, x)
+                x = self._checkpointed_forward(layer, x)
 
         return x
