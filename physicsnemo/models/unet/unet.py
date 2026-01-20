@@ -16,7 +16,7 @@
 
 import importlib
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
@@ -101,25 +101,25 @@ class Conv3DBlock(Module):
         Number of input channels :math:`C_{in}`.
     out_channels : int
         Number of output channels :math:`C_{out}`.
-    kernel_size : int or tuple, optional, default=3
+    kernel_size : int | tuple[int, ...], optional, default=3
         Size of the convolving kernel.
-    stride : int or tuple, optional, default=1
+    stride : int | tuple[int, ...], optional, default=1
         Stride of the convolution.
-    padding : int or tuple, optional, default=1
+    padding : int | tuple[int, ...], optional, default=1
         Padding added to all sides of the input.
-    dilation : int or tuple, optional, default=1
+    dilation : int | tuple[int, ...], optional, default=1
         Spacing between kernel elements.
     groups : int, optional, default=1
         Number of blocked connections from input to output channels.
     bias : bool, optional, default=True
         If ``True``, adds a learnable bias to the output.
-    padding_mode : str, optional, default="zeros"
-        Padding mode: ``"zeros"``, ``"reflect"``, ``"replicate"``, or ``"circular"``.
-    activation : Optional[str], optional, default="relu"
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    activation : str | None, optional, default="relu"
         Activation function name from :mod:`torch.nn.functional`.
-    normalization : Optional[str], optional, default="groupnorm"
-        Normalization type: ``"groupnorm"``, ``"batchnorm"``, or ``"layernorm"``.
-    normalization_args : Optional[dict], optional, default=None
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
         Additional arguments for the normalization layer.
 
     Forward
@@ -137,16 +137,16 @@ class Conv3DBlock(Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
-        padding: Union[int, tuple] = 1,
-        dilation: Union[int, tuple] = 1,
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
+        padding: int | tuple[int, ...] = 1,
+        dilation: int | tuple[int, ...] = 1,
         groups: int = 1,
         bias: bool = True,
-        padding_mode: str = "zeros",
-        activation: Optional[str] = "relu",
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        activation: str | None = "relu",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization_args: dict | None = None,
     ):
         super().__init__()
         # Initialize convolution layer
@@ -211,27 +211,27 @@ class ConvTranspose3D(Module):
         Number of input channels :math:`C_{in}`.
     out_channels : int
         Number of output channels :math:`C_{out}`.
-    kernel_size : int or tuple, optional, default=3
+    kernel_size : int | tuple[int, ...], optional, default=3
         Size of the convolving kernel.
-    stride : int or tuple, optional, default=2
+    stride : int | tuple[int, ...], optional, default=2
         Stride of the convolution.
-    padding : int or tuple, optional, default=1
+    padding : int | tuple[int, ...], optional, default=1
         Padding added to all sides of the input.
-    output_padding : int or tuple, optional, default=1
+    output_padding : int | tuple[int, ...], optional, default=1
         Additional size added to one side of the output shape.
     groups : int, optional, default=1
         Number of blocked connections from input to output channels.
     bias : bool, optional, default=True
         If ``True``, adds a learnable bias to the output.
-    dilation : int or tuple, optional, default=1
+    dilation : int | tuple[int, ...], optional, default=1
         Spacing between kernel elements.
-    padding_mode : str, optional, default="zeros"
-        Padding mode to use.
-    activation : Optional[str], optional, default=None
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    activation : str | None, optional, default=None
         Activation function name from :mod:`torch.nn.functional`.
-    normalization : Optional[str], optional, default=None
-        Normalization type: ``"groupnorm"``, ``"batchnorm"``, or ``"layernorm"``.
-    normalization_args : Optional[dict], optional, default=None
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default=None
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
         Additional arguments for the normalization layer.
 
     Forward
@@ -249,17 +249,17 @@ class ConvTranspose3D(Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 2,
-        padding: Union[int, tuple] = 1,
-        output_padding: Union[int, tuple] = 1,
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 2,
+        padding: int | tuple[int, ...] = 1,
+        output_padding: int | tuple[int, ...] = 1,
         groups: int = 1,
         bias: bool = True,
-        dilation: Union[int, tuple] = 1,
-        padding_mode: str = "zeros",
-        activation: Optional[str] = None,
-        normalization: Optional[str] = None,
-        normalization_args: Optional[dict] = None,
+        dilation: int | tuple[int, ...] = 1,
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        activation: str | None = None,
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = None,
+        normalization_args: dict | None = None,
     ):
         super().__init__()
         # Initialize transposed convolution layer
@@ -320,15 +320,15 @@ class Pool3D(Module):
 
     Parameters
     ----------
-    pooling_type : str, optional, default="AvgPool3d"
+    pooling_type : Literal["AvgPool3d", "MaxPool3d"], optional, default="AvgPool3d"
         Type of pooling: ``"AvgPool3d"`` or ``"MaxPool3d"``.
-    kernel_size : int or tuple, optional, default=2
+    kernel_size : int | tuple[int, ...], optional, default=2
         Size of the pooling window.
-    stride : int, tuple, or None, optional, default=None
+    stride : int | tuple[int, ...] | None, optional, default=None
         Stride of the pooling. If ``None``, uses ``kernel_size``.
-    padding : int or tuple, optional, default=0
+    padding : int | tuple[int, ...], optional, default=0
         Implicit zero padding on both sides of the input.
-    dilation : int or tuple, optional, default=1
+    dilation : int | tuple[int, ...], optional, default=1
         Spacing between kernel points (only for ``MaxPool3d``).
     ceil_mode : bool, optional, default=False
         If ``True``, use ceil instead of floor to compute output shape.
@@ -348,11 +348,11 @@ class Pool3D(Module):
 
     def __init__(
         self,
-        pooling_type: str = "AvgPool3d",
-        kernel_size: Union[int, tuple] = 2,
-        stride: Optional[Union[int, tuple]] = None,
-        padding: Union[int, tuple] = 0,
-        dilation: Union[int, tuple] = 1,
+        pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "AvgPool3d",
+        kernel_size: int | tuple[int, ...] = 2,
+        stride: int | tuple[int, ...] | None = None,
+        padding: int | tuple[int, ...] = 0,
+        dilation: int | tuple[int, ...] = 1,
         ceil_mode: bool = False,
         count_include_pad: bool = True,
     ):
@@ -458,30 +458,30 @@ class Encoder3DBlock(Module):
     ----------
     in_channels : int
         Number of input channels :math:`C_{in}`.
-    feature_map_channels : List[int]
+    feature_map_channels : Sequence[int]
         Channel sizes for each conv block. Length must equal
         ``model_depth * num_conv_blocks``.
-    kernel_size : int or tuple, optional, default=3
+    kernel_size : int | tuple[int, ...], optional, default=3
         Size of the convolving kernel.
-    stride : int or tuple, optional, default=1
+    stride : int | tuple[int, ...], optional, default=1
         Stride of the convolution.
     model_depth : int, optional, default=4
         Number of depth levels (conv-pool repetitions).
     num_conv_blocks : int, optional, default=2
         Number of convolutional blocks per depth level.
-    activation : Optional[str], optional, default="relu"
+    activation : str | None, optional, default="relu"
         Activation function name.
     padding : int, optional, default=1
         Padding for convolutions.
-    padding_mode : str, optional, default="zeros"
-        Padding mode.
-    pooling_type : str, optional, default="AvgPool3d"
-        Type of pooling: ``"AvgPool3d"`` or ``"MaxPool3d"``.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    pooling_type : Literal["AvgPool3d", "MaxPool3d"], optional, default="AvgPool3d"
+        Type of pooling.
     pool_size : int, optional, default=2
         Pooling window size.
-    normalization : Optional[str], optional, default="groupnorm"
-        Normalization type.
-    normalization_args : Optional[dict], optional, default=None
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
         Additional normalization arguments.
 
     Forward
@@ -498,18 +498,18 @@ class Encoder3DBlock(Module):
     def __init__(
         self,
         in_channels: int,
-        feature_map_channels: List[int],
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
+        feature_map_channels: Sequence[int],
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
         model_depth: int = 4,
         num_conv_blocks: int = 2,
-        activation: Optional[str] = "relu",
+        activation: str | None = "relu",
         padding: int = 1,
-        padding_mode: str = "zeros",
-        pooling_type: str = "AvgPool3d",
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "AvgPool3d",
         pool_size: int = 2,
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization_args: dict | None = None,
     ):
         super().__init__()
 
@@ -563,28 +563,28 @@ class Decoder3DBlock(Module):
     ----------
     out_channels : int
         Number of output channels :math:`C_{out}`.
-    feature_map_channels : List[int]
+    feature_map_channels : Sequence[int]
         Channel sizes for each layer. Length must equal
         ``model_depth * num_conv_blocks + 1``.
-    kernel_size : int or tuple, optional, default=3
+    kernel_size : int | tuple[int, ...], optional, default=3
         Size of the convolving kernel.
-    stride : int or tuple, optional, default=1
+    stride : int | tuple[int, ...], optional, default=1
         Stride of the convolution.
     model_depth : int, optional, default=3
         Number of depth levels.
     num_conv_blocks : int, optional, default=2
         Number of convolutional blocks per depth level.
-    conv_activation : Optional[str], optional, default="relu"
+    conv_activation : str | None, optional, default="relu"
         Activation for convolutional layers.
-    conv_transpose_activation : Optional[str], optional, default=None
+    conv_transpose_activation : str | None, optional, default=None
         Activation for transposed convolutional layers.
     padding : int, optional, default=1
         Padding for convolutions.
-    padding_mode : str, optional, default="zeros"
-        Padding mode.
-    normalization : Optional[str], optional, default="groupnorm"
-        Normalization type.
-    normalization_args : Optional[dict], optional, default=None
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
         Additional normalization arguments.
 
     Forward
@@ -601,17 +601,17 @@ class Decoder3DBlock(Module):
     def __init__(
         self,
         out_channels: int,
-        feature_map_channels: List[int],
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
+        feature_map_channels: Sequence[int],
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
         model_depth: int = 3,
         num_conv_blocks: int = 2,
-        conv_activation: Optional[str] = "relu",
-        conv_transpose_activation: Optional[str] = None,
+        conv_activation: str | None = "relu",
+        conv_transpose_activation: str | None = None,
         padding: int = 1,
-        padding_mode: str = "zeros",
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization_args: dict | None = None,
     ):
         super().__init__()
 
@@ -708,40 +708,40 @@ class UNet(Module):
         Number of input channels :math:`C_{in}`.
     out_channels : int
         Number of output channels :math:`C_{out}`.
-    kernel_size : int or tuple, optional, default=3
+    kernel_size : int | tuple[int, ...], optional, default=3
         Size of the convolving kernel.
-    stride : int or tuple, optional, default=1
+    stride : int | tuple[int, ...], optional, default=1
         Stride of the convolution.
     model_depth : int, optional, default=5
         Number of levels in the U-Net (including bottleneck).
-    feature_map_channels : List[int], optional
+    feature_map_channels : Sequence[int], optional
         Channel sizes for each conv block. Length must equal
         ``model_depth * num_conv_blocks``.
     num_conv_blocks : int, optional, default=2
         Number of convolutional blocks per level.
-    conv_activation : Optional[str], optional, default="relu"
+    conv_activation : str | None, optional, default="relu"
         Activation function for convolutional layers.
-    conv_transpose_activation : Optional[str], optional, default=None
+    conv_transpose_activation : str | None, optional, default=None
         Activation function for transposed convolutional layers.
     padding : int, optional, default=1
         Padding for convolutions.
-    padding_mode : str, optional, default="zeros"
-        Padding mode.
-    pooling_type : str, optional, default="MaxPool3d"
-        Pooling type: ``"AvgPool3d"`` or ``"MaxPool3d"``.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    pooling_type : Literal["AvgPool3d", "MaxPool3d"], optional, default="MaxPool3d"
+        Pooling type.
     pool_size : int, optional, default=2
         Pooling window size.
-    normalization : Optional[str], optional, default="groupnorm"
-        Normalization type.
-    normalization_args : Optional[dict], optional, default=None
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
         Additional normalization arguments.
     use_attn_gate : bool, optional, default=False
         Whether to use attention gates on skip connections.
-    attn_decoder_feature_maps : List[int], optional, default=None
+    attn_decoder_feature_maps : Sequence[int] | None, optional, default=None
         Decoder channel sizes for attention (required if ``use_attn_gate=True``).
-    attn_feature_map_channels : List[int], optional, default=None
+    attn_feature_map_channels : Sequence[int] | None, optional, default=None
         Encoder channel sizes for attention (required if ``use_attn_gate=True``).
-    attn_intermediate_channels : int, optional, default=None
+    attn_intermediate_channels : int | None, optional, default=None
         Intermediate channels for attention computation.
     gradient_checkpointing : bool, optional, default=True
         Whether to use gradient checkpointing to reduce memory.
@@ -777,10 +777,10 @@ class UNet(Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
         model_depth: int = 5,
-        feature_map_channels: List[int] = [
+        feature_map_channels: Sequence[int] = (
             64,
             64,
             128,
@@ -791,20 +791,20 @@ class UNet(Module):
             512,
             1024,
             1024,
-        ],
+        ),
         num_conv_blocks: int = 2,
-        conv_activation: Optional[str] = "relu",
-        conv_transpose_activation: Optional[str] = None,
+        conv_activation: str | None = "relu",
+        conv_transpose_activation: str | None = None,
         padding: int = 1,
-        padding_mode: str = "zeros",
-        pooling_type: str = "MaxPool3d",
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "MaxPool3d",
         pool_size: int = 2,
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = "groupnorm",
+        normalization_args: dict | None = None,
         use_attn_gate: bool = False,
-        attn_decoder_feature_maps=None,
-        attn_feature_map_channels=None,
-        attn_intermediate_channels=None,
+        attn_decoder_feature_maps: Sequence[int] | None = None,
+        attn_feature_map_channels: Sequence[int] | None = None,
+        attn_intermediate_channels: int | None = None,
         gradient_checkpointing: bool = True,
     ):
         super().__init__(meta=MetaData())
