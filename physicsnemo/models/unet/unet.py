@@ -904,7 +904,7 @@ class UNet(Module):
         skip_features = []
         # Encoding path
         for layer in self.encoder.layers:
-            if isinstance(layer, Pool3d):
+            if isinstance(layer, Pool3D):
                 skip_features.append(x)
             # Apply checkpointing if enabled
             x = self.checkpointed_forward(layer, x)
