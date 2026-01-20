@@ -854,6 +854,18 @@ class UNet(Module):
 
         # Initialize attention blocks for each skip connection
         if self.use_attn_gate:
+            if attn_decoder_feature_maps is None:
+                raise ValueError(
+                    "attn_decoder_feature_maps is required when use_attn_gate=True"
+                )
+            if attn_feature_map_channels is None:
+                raise ValueError(
+                    "attn_feature_map_channels is required when use_attn_gate=True"
+                )
+            if attn_intermediate_channels is None:
+                raise ValueError(
+                    "attn_intermediate_channels is required when use_attn_gate=True"
+                )
             self.attention_blocks = nn.ModuleList(
                 [
                     Attention3DBlock(
