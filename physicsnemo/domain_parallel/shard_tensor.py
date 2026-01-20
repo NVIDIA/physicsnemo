@@ -424,7 +424,46 @@ class ShardTensor(DTensor):
                         if not arg._local_tensor.is_contiguous():
                             arg._local_tensor = arg._local_tensor.contiguous()
 
-            dispatch_res = DTensor._op_dispatcher.dispatch(func, args, kwargs or {})
+            # In the latest pytorch, we have to make sure shard tensors
+            # go to the _python_dispatch.py utilities in dtensor as dtensors.
+
+            def _shard_tensor_to_dtensor(st: "ShardTensor") -> DTensor:
+                """Convert a ShardTensor to a plain DTensor for dispatch.
+
+                This creates a DTensor with the same internal state as the ShardTensor,
+                which allows DTensor's dispatch to handle it correctly.
+                """
+                dtensor = torch.Tensor._make_wrapper_subclass(
+                    DTensor,
+                    st._spec.tensor_meta.shape,
+                    strides=st._spec.tensor_meta.stride,
+                    dtype=st.dtype,
+                    device=st.device,
+                    layout=st.layout,
+                    requires_grad=st.requires_grad,
+                )
+                dtensor._local_tensor = st._local_tensor
+                dtensor._spec = st._spec
+                return dtensor
+
+            def _convert_args_to_dtensor(arg):
+                """Recursively convert ShardTensors in args to DTensors."""
+                if isinstance(arg, ShardTensor):
+                    return _shard_tensor_to_dtensor(arg)
+                elif isinstance(arg, (list, tuple)):
+                    converted = [_convert_args_to_dtensor(a) for a in arg]
+                    return type(arg)(converted)
+                return arg
+
+            # Convert ShardTensors to DTensors for the dispatch call
+            converted_args = tuple(_convert_args_to_dtensor(arg) for arg in args)
+            converted_kwargs = {
+                k: _convert_args_to_dtensor(v) for k, v in (kwargs or {}).items()
+            }
+
+            dispatch_res = DTensor._op_dispatcher.dispatch(
+                func, converted_args, converted_kwargs
+            )
 
             # Return a shard tensor instead of a dtensor.
             def _convert_dtensor_with_input_check(dtensor, input_args):

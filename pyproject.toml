@@ -70,6 +70,7 @@ earth2grid = ["setuptools", "torch"]
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
+explicit = true  # Only use for packages that explicitly specify this index
 
 
 [tool.uv.sources]
@@ -100,6 +101,7 @@ exclude = [
     "/examples",
     "/test",
     "/CODING_STANDARDS",
+    "/benchmarks",
 ]
 
 
@@ -109,6 +111,7 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "asv>=0.6.0",
     "coverage>=7.13.0",
     "import-linter>=2.7",
     "interrogate>=1.7.0",
@@ -119,6 +122,7 @@ dev = [
     "pytest-dependency>=0.6.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.8",
+    "pytest-testmon>=2.2.0",
 ]
 
 #####################################################################
