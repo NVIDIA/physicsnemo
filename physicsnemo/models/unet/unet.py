@@ -43,6 +43,11 @@ class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
     then restores the original shape. This enables layer normalization over the
     channel dimension while preserving the spatial structure.
 
+    .. note::
+        When ``transformer_engine`` is installed, this class inherits from
+        :class:`transformer_engine.pytorch.LayerNorm`. Otherwise, it inherits
+        from :class:`torch.nn.LayerNorm`.
+
     Parameters
     ----------
     normalized_shape : int or tuple of ints
