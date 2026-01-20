@@ -542,7 +542,7 @@ class Encoder3DBlock(Module):
                 depth < model_depth - 1
             ):  # Add pooling between levels but not at the last level
                 self.layers.append(
-                    Pool3d(pooling_type=pooling_type, kernel_size=pool_size)
+                    Pool3D(pooling_type=pooling_type, kernel_size=pool_size)
                 )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -856,7 +856,7 @@ class UNet(Module):
         if self.use_attn_gate:
             self.attention_blocks = nn.ModuleList(
                 [
-                    AttentionBlock(
+                    Attention3DBlock(
                         F_g=attn_decoder_feature_maps[i],
                         F_l=attn_feature_map_channels[i],
                         F_int=attn_intermediate_channels,
