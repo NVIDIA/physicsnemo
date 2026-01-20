@@ -558,7 +558,3 @@ class Scale(Transform):
             f"Scale(input_keys={self.input_keys}, "
             f"scale_shape={self.scale.shape}, mode={mode})"
         )
-
-
-# Backwards compatibility alias
-ReScale = Scale

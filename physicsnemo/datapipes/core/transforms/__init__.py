@@ -38,7 +38,6 @@ from physicsnemo.datapipes.core.transforms.field_slice import FieldSlice
 from physicsnemo.datapipes.core.transforms.geometric import (
     ComputeNormals,
     ComputeSDF,
-    ReScale,
     Scale,
     Translate,
 )
@@ -75,7 +74,6 @@ __all__ = [
     "ComputeNormals",
     "Translate",
     "Scale",
-    "ReScale",  # Backwards compatibility alias for Scale
     # Field processing
     "FieldSlice",
     "BroadcastGlobalFeatures",

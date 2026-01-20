@@ -314,6 +314,7 @@ class KNearestNeighbors(Transform):
         *,
         output_prefix: str = "neighbors",
         extract_keys: Optional[list[str]] = None,
+        drop_first_neighbor: bool = False,
     ) -> None:
         """
         Initialize the k-NN transform.
@@ -338,6 +339,7 @@ class KNearestNeighbors(Transform):
         self.k = k
         self.output_prefix = output_prefix
         self.extract_keys = extract_keys or []
+        self.drop_first_neighbor = drop_first_neighbor
 
     def __call__(self, data: TensorDict) -> TensorDict:
         """
@@ -380,13 +382,19 @@ class KNearestNeighbors(Transform):
         updates[f"{self.output_prefix}_distances"] = neighbor_distances
 
         # Extract neighbor coordinates (skip first, which is self)
-        neighbor_coords = points[neighbor_indices][:, 1:]
+        if self.drop_first_neighbor:
+            neighbor_coords = points[neighbor_indices][:, 1:]
+        else:
+            neighbor_coords = points[neighbor_indices]
         updates[f"{self.output_prefix}_coords"] = neighbor_coords
 
         # Extract additional features for neighbors
         for key in self.extract_keys:
             if key in data:
-                neighbor_features = data[key][neighbor_indices][:, 1:]
+                if self.drop_first_neighbor:
+                    neighbor_features = data[key][neighbor_indices][:, 1:]
+                else:
+                    neighbor_features = data[key][neighbor_indices]
                 updates[f"{self.output_prefix}_{key}"] = neighbor_features
 
         return data.update(updates)
@@ -442,8 +450,9 @@ class CenterOfMass(Transform):
     def __init__(
         self,
         coords_key: str,
-        areas_key: str,
         output_key: str,
+        *,
+        areas_key: str | None = None,
     ) -> None:
         """
         Initialize the center of mass transform.
@@ -483,19 +492,22 @@ class CenterOfMass(Transform):
         """
         if self.coords_key not in data:
             raise KeyError(f"Coordinates key '{self.coords_key}' not found")
-        if self.areas_key not in data:
-            raise KeyError(f"Areas key '{self.areas_key}' not found")
 
         coords = data[self.coords_key]
-        areas = data[self.areas_key]
+        if self.areas_key is not None:
+            if self.areas_key not in data:
+                raise KeyError(f"Areas key '{self.areas_key}' not found")
 
-        # Compute weighted center of mass
-        total_area = areas.sum()
-        weighted_coords = coords * areas.unsqueeze(-1)
-        center_of_mass = weighted_coords.sum(dim=0) / total_area
+            areas = data[self.areas_key]
+            # Compute weighted center of mass
+            total_area = areas.sum()
 
-        # Ensure shape is (1, 3)
-        center_of_mass = center_of_mass.unsqueeze(0)
+            #  Apply the weighting:
+            coords = coords * areas.unsqueeze(-1)
+
+            center_of_mass = coords.sum(dim=0) / total_area
+        else:
+            center_of_mass = coords.mean(dim=0)
 
         return data.update({self.output_key: center_of_mass})
 

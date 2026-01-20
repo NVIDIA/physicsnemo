@@ -90,7 +90,7 @@ from physicsnemo.datapipes.core.transforms import (
     NormalizeVectors,
     Purge,
     Rename,
-    ReScale,
+    Scale,
     SubsamplePoints,
     Transform,
     Translate,
@@ -115,7 +115,7 @@ __all__ = [
     "ComputeSDF",
     "ComputeNormals",
     "Translate",
-    "ReScale",
+    "Scale",
     # Transforms - Field processing
     "FieldSlice",
     "BroadcastGlobalFeatures",
