@@ -913,8 +913,8 @@ class UNet(Module):
         skip_features = skip_features[::-1]  # Reverse the skip features
         concats = 0  # Track number of concats
         for layer in self.decoder.layers:
-            if isinstance(layer, ConvTranspose):
-                x = self.checkpointed_forward(layer, x)
+            if isinstance(layer, ConvTranspose3D):
+                x = self._checkpointed_forward(layer, x)
                 if self.use_attn_gate:
                     # Apply attention to the skip connection
                     skip_att = self.attention_blocks[concats](x, skip_features[concats])
