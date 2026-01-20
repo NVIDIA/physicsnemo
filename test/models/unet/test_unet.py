@@ -48,7 +48,7 @@ def test_unet_forward(device, pytestconfig):
     ["default", "custom"],
     ids=["with_defaults", "with_custom_args"],
 )
-def test_unet_constructor(device, config, pytestconfig):
+def test_unet_constructor_and_forward(device, config, pytestconfig):
     """Test UNet constructor and verify public attributes."""
     from physicsnemo.models.unet import UNet
 
@@ -62,6 +62,8 @@ def test_unet_constructor(device, config, pytestconfig):
         ).to(device)
 
         # Verify default attributes
+        assert model.in_channels == 1
+        assert model.out_channels == 1
         assert model.use_attn_gate is False
         assert model.gradient_checkpointing is True
 
@@ -78,6 +80,8 @@ def test_unet_constructor(device, config, pytestconfig):
         ).to(device)
 
         # Verify custom attributes
+        assert model.in_channels == 2
+        assert model.out_channels == 2
         assert model.use_attn_gate is False
         assert model.gradient_checkpointing is False
 
