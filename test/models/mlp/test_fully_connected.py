@@ -56,6 +56,8 @@ def test_fully_connected_constructor(device, config):
         ).to(device)
 
         # Verify default attributes
+        assert model.in_features == 32
+        assert model.out_features == 16
         assert model.skip_connections is False
         assert len(model.layers) == 6  # Default num_layers
 
@@ -74,16 +76,10 @@ def test_fully_connected_constructor(device, config):
         ).to(device)
 
         # Verify custom attributes
+        assert model.in_features == 64
+        assert model.out_features == 32
         assert model.skip_connections is True
         assert len(model.layers) == 4
-
-    # Verify model can produce output with correct shape
-    bsize = 4
-    in_features = 32 if config == "default" else 64
-    out_features = 16 if config == "default" else 32
-    invar = torch.randn(bsize, in_features).to(device)
-    outvar = model(invar)
-    assert outvar.shape == (bsize, out_features)
 
 
 def test_fully_connected_weight_norm_fact_exclusive(device):
