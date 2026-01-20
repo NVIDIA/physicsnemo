@@ -78,7 +78,9 @@ class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
     ) -> None:
         super().__init__(normalized_shape, eps, elementwise_affine)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels *spatial"]
+    ) -> Float[torch.Tensor, "batch channels *spatial"]:
         """Forward pass applying reshaped layer normalization."""
         shape = x.shape
         x = x.view(shape[0], shape[1], -1).transpose(1, 2).contiguous()
