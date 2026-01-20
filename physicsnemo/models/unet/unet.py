@@ -89,7 +89,7 @@ class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
         return x
 
 
-class ConvBlock(Module):
+class Conv3DBlock(Module):
     r"""3D convolutional block with optional normalization and activation.
 
     Applies a 3D convolution followed by optional normalization and activation
@@ -199,7 +199,7 @@ class ConvBlock(Module):
         return x
 
 
-class ConvTranspose(Module):
+class ConvTranspose3D(Module):
     r"""3D transposed convolutional block with optional normalization and activation.
 
     Applies a transposed 3D convolution for upsampling, followed by optional
@@ -313,7 +313,7 @@ class ConvTranspose(Module):
         return x
 
 
-class Pool3d(Module):
+class Pool3D(Module):
     r"""3D pooling block.
 
     Applies a specified 3D pooling operation (average or max) for downsampling.
@@ -387,8 +387,8 @@ class Pool3d(Module):
         return self.pooling(x)
 
 
-class AttentionBlock(Module):
-    r"""Attention gate for skip connections.
+class Attention3DBlock(Module):
+    r"""Attention gate for skip connections in 3D U-Net architectures.
 
     Applies an attention mechanism to modulate skip connection features based
     on the decoder's gating signal. Uses LayerNorm for normalization.
@@ -448,7 +448,7 @@ class AttentionBlock(Module):
         return x * psi  # Element-wise multiplication with attention mask
 
 
-class EncoderBlock(Module):
+class Encoder3DBlock(Module):
     r"""U-Net encoder block with multi-scale feature extraction.
 
     Sequentially applies convolutional blocks with pooling operations to
