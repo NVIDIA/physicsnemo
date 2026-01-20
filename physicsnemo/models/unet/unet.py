@@ -927,18 +927,3 @@ class UNet(Module):
                 x = self.checkpointed_forward(layer, x)
 
         return x
-
-
-if __name__ == "__main__":
-    inputs = torch.randn(1, 1, 96, 96, 96).cuda()
-    print("The shape of inputs: ", inputs.shape)
-    model = UNet(
-        in_channels=1,
-        out_channels=1,
-        model_depth=5,
-        feature_map_channels=[64, 64, 128, 128, 256, 256, 512, 512, 1024, 1024],
-        num_conv_blocks=2,
-    ).cuda()
-    x = model(inputs)
-    print("model: ", model)
-    print("The shape of output: ", x.shape)
