@@ -20,6 +20,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from jaxtyping import Complex, Float
 from torch import Tensor
 
 
@@ -53,9 +54,9 @@ class SpectralConv1d(nn.Module):
 
     def compl_mul1d(
         self,
-        input: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
+        input: Complex[Tensor, "batch in_channels modes"],
+        weights: Float[Tensor, "in_channels out_channels modes 2"],
+    ) -> Complex[Tensor, "batch out_channels modes"]:
         """Complex multiplication
 
         Parameters
@@ -70,14 +71,15 @@ class SpectralConv1d(nn.Module):
         Tensor
             Product of complex multiplication
         """
-        # (batch, in_channel, x ), (in_channel, out_channel, x) -> (batch, out_channel, x)
+        # (batch, in_channels, modes), (in_channels, out_channels, modes) -> (batch, out_channels, modes)
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bix,iox->box", input, cweights)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch in_channels x"]
+    ) -> Float[Tensor, "batch out_channels x"]:
         bsize = x.shape[0]
-        # Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.fft.rfft(x)
+        x_ft = torch.fft.rfft(x)  # (batch, in_channels, x//2+1) complex
 
         # Multiply relevant Fourier modes
         out_ft = torch.zeros(
@@ -86,14 +88,14 @@ class SpectralConv1d(nn.Module):
             x.size(-1) // 2 + 1,
             device=x.device,
             dtype=torch.cfloat,
-        )
+        )  # (batch, out_channels, x//2+1) complex
         out_ft[:, :, : self.modes1] = self.compl_mul1d(
             x_ft[:, :, : self.modes1],
             self.weights1,
         )
 
         # Return to physical space
-        x = torch.fft.irfft(out_ft, n=x.size(-1))
+        x = torch.fft.irfft(out_ft, n=x.size(-1))  # (batch, out_channels, x) real
         return x
 
     def reset_parameters(self):
@@ -135,7 +137,11 @@ class SpectralConv2d(nn.Module):
         )
         self.reset_parameters()
 
-    def compl_mul2d(self, input: Tensor, weights: Tensor) -> Tensor:
+    def compl_mul2d(
+        self,
+        input: Complex[Tensor, "batch in_channels modes1 modes2"],
+        weights: Float[Tensor, "in_channels out_channels modes1 modes2 2"],
+    ) -> Complex[Tensor, "batch out_channels modes1 modes2"]:
         """Complex multiplication
 
         Parameters
@@ -150,7 +156,8 @@ class SpectralConv2d(nn.Module):
         Tensor
             Product of complex multiplication
         """
-        # (batch, in_channel, x, y), (in_channel, out_channel, x, y) -> (batch, out_channel, x, y)
+        # (batch, in_channels, modes1, modes2), (in_channels, out_channels, modes1, modes2)
+        #   -> (batch, out_channels, modes1, modes2)
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixy,ioxy->boxy", input, cweights)
 
@@ -178,8 +185,7 @@ class SpectralConv2d(nn.Module):
         )
 
         # Return to physical space
-        x = torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)))
-        return x
+        return torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)))  # (batch, out_channels, h, w) real
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
@@ -242,9 +248,9 @@ class SpectralConv3d(nn.Module):
 
     def compl_mul3d(
         self,
-        input: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
+        input: Complex[Tensor, "batch in_channels modes1 modes2 modes3"],
+        weights: Float[Tensor, "in_channels out_channels modes1 modes2 modes3 2"],
+    ) -> Complex[Tensor, "batch out_channels modes1 modes2 modes3"]:
         """Complex multiplication
 
         Parameters
@@ -259,7 +265,9 @@ class SpectralConv3d(nn.Module):
         Tensor
             Product of complex multiplication
         """
-        # (batch, in_channel, x, y, z), (in_channel, out_channel, x, y, z) -> (batch, out_channel, x, y, z)
+        # (batch, in_channels, modes1, modes2, modes3),
+        #   (in_channels, out_channels, modes1, modes2, modes3)
+        #   -> (batch, out_channels, modes1, modes2, modes3)
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixyz,ioxyz->boxyz", input, cweights)
 
@@ -292,8 +300,9 @@ class SpectralConv3d(nn.Module):
         )
 
         # Return to physical space
-        x = torch.fft.irfftn(out_ft, s=(x.size(-3), x.size(-2), x.size(-1)))
-        return x
+        return torch.fft.irfftn(
+            out_ft, s=(x.size(-3), x.size(-2), x.size(-1))
+        )  # (batch, out_channels, d1, d2, d3) real
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
@@ -433,9 +442,9 @@ class SpectralConv4d(nn.Module):
 
     def compl_mul4d(
         self,
-        input: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
+        input: Complex[Tensor, "batch in_channels modes1 modes2 modes3 modes4"],
+        weights: Float[Tensor, "in_channels out_channels modes1 modes2 modes3 modes4 2"],
+    ) -> Complex[Tensor, "batch out_channels modes1 modes2 modes3 modes4"]:
         """Complex multiplication
 
         Parameters
@@ -450,7 +459,9 @@ class SpectralConv4d(nn.Module):
         Tensor
             Product of complex multiplication
         """
-        # (batch, in_channel, x, y, z), (in_channel, out_channel, x, y, z) -> (batch, out_channel, x, y, z)
+        # (batch, in_channels, modes1, modes2, modes3, modes4),
+        #   (in_channels, out_channels, modes1, modes2, modes3, modes4)
+        #   -> (batch, out_channels, modes1, modes2, modes3, modes4)
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixyzt,ioxyzt->boxyzt", input, cweights)
 
@@ -532,8 +543,9 @@ class SpectralConv4d(nn.Module):
         )
 
         # Return to physical space
-        x = torch.fft.irfftn(out_ft, s=(x.size(-4), x.size(-3), x.size(-2), x.size(-1)))
-        return x
+        return torch.fft.irfftn(
+            out_ft, s=(x.size(-4), x.size(-3), x.size(-2), x.size(-1))
+        )  # (batch, out_channels, d1, d2, d3, d4) real
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
