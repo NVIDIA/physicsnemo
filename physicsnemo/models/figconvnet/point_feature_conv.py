@@ -14,6 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Point feature convolution operations for FIGConvNet.
+
+This module provides point-based convolution operations that aggregate
+features from neighboring points using various reduction operations.
+
+The main classes are:
+
+- :class:`PointFeatureTransform`: Apply transforms to point features
+- :class:`PointFeatureCat`: Concatenate point features
+- :class:`PointFeatureMLP`: MLP for point feature transformation
+- :class:`PointFeatureConv`: Point-based graph convolution
+- :class:`PointFeatureConvBlock`: Residual block with point convolutions
+"""
+
 # ruff: noqa: S101,F722
 from typing import List, Literal, Optional
 
@@ -36,7 +50,32 @@ from physicsnemo.models.figconvnet.neighbor_ops import (
 
 
 class PointFeatureTransform(nn.Module):
-    """PointFeatureTransform."""
+    r"""Apply a transform to point feature tensors.
+
+    Wraps an arbitrary transform (e.g., MLP, normalization) to operate on
+    the feature tensors within PointFeatures objects while preserving vertices.
+
+    Parameters
+    ----------
+    feature_transform : nn.Module
+        Transform module to apply to the feature tensor.
+
+    Forward
+    -------
+    point_features : PointFeatures
+        Input point features.
+
+    Outputs
+    -------
+    PointFeatures
+        Transformed point features with same vertices.
+
+    Examples
+    --------
+    >>> import torch
+    >>> import torch.nn as nn
+    >>> transform = PointFeatureTransform(nn.Linear(64, 128))
+    """
 
     def __init__(
         self,
@@ -45,28 +84,106 @@ class PointFeatureTransform(nn.Module):
         super().__init__()
         self.feature_transform = feature_transform
 
-    def forward(self, point_features: PointFeatures["N C1"]) -> PointFeatures["N C2"]:
+    def forward(self, point_features: PointFeatures) -> PointFeatures:
+        r"""Apply transform to point features.
+
+        Parameters
+        ----------
+        point_features : PointFeatures
+            Input point features.
+
+        Returns
+        -------
+        PointFeatures
+            Transformed point features.
+        """
         return PointFeatures(
             point_features.vertices, self.feature_transform(point_features.features)
         )
 
 
 class PointFeatureCat(nn.Module):
-    """PointFeatureCat."""
+    r"""Concatenate two PointFeatures along the channel dimension.
+
+    Parameters
+    ----------
+    None
+
+    Forward
+    -------
+    point_features : PointFeatures
+        First point features with shape :math:`(B, N, C_1)`.
+    point_features2 : PointFeatures
+        Second point features with shape :math:`(B, N, C_2)`.
+
+    Outputs
+    -------
+    PointFeatures
+        Concatenated point features with shape :math:`(B, N, C_1 + C_2)`.
+
+    Note
+    ----
+    Both inputs must have the same vertices (same point locations).
+    """
 
     def forward(
         self,
-        point_features: PointFeatures["N C1"],
-        point_features2: PointFeatures["N C2"],
-    ) -> PointFeatures["N C3"]:
+        point_features: PointFeatures,
+        point_features2: PointFeatures,
+    ) -> PointFeatures:
+        r"""Concatenate point features.
+
+        Parameters
+        ----------
+        point_features : PointFeatures
+            First point features.
+        point_features2 : PointFeatures
+            Second point features.
+
+        Returns
+        -------
+        PointFeatures
+            Concatenated point features.
+        """
         return PointFeatures(
             point_features.vertices,
-            torch.cat([point_features.features, point_features2.features], dim=1),
+            torch.cat([point_features.features, point_features2.features], dim=-1),
         )
 
 
 class PointFeatureMLP(PointFeatureTransform):
-    """PointFeatureMLP."""
+    r"""MLP for point feature transformation.
+
+    A simple two-layer MLP applied to point features.
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
+    hidden_channels : int, optional, default=None
+        Number of hidden channels. Defaults to ``multiplier * out_channels``.
+    multiplier : int, optional, default=2
+        Multiplier for computing default hidden channels.
+    nonlinearity : nn.Module, optional, default=nn.GELU
+        Activation function class.
+
+    Forward
+    -------
+    point_features : PointFeatures
+        Input point features with shape :math:`(B, N, C_{in})`.
+
+    Outputs
+    -------
+    PointFeatures
+        Transformed point features with shape :math:`(B, N, C_{out})`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> mlp = PointFeatureMLP(64, 128)
+    """
 
     def __init__(
         self,
@@ -89,7 +206,86 @@ class PointFeatureMLP(PointFeatureTransform):
 
 
 class PointFeatureConv(nn.Module):
-    """PointFeatureConv."""
+    r"""Point-based graph convolution.
+
+    This module performs convolution on point clouds by aggregating features
+    from neighboring points. It supports both radius-based and KNN neighbor
+    search, with configurable edge features and reduction operations.
+
+    The convolution operates as follows:
+
+    1. Find neighbors for each output point (via radius or KNN search)
+    2. Compute edge features from input and output point features
+    3. Optionally add relative position information
+    4. Transform edge features through an MLP
+    5. Aggregate using specified reduction operations
+    6. Transform aggregated features through output MLP
+
+    Parameters
+    ----------
+    radius : float
+        Search radius for neighbor finding (used when ``neighbor_search_type="radius"``).
+    edge_transform_mlp : nn.Module, optional, default=None
+        MLP for transforming edge features. Auto-created if None.
+    out_transform_mlp : nn.Module, optional, default=None
+        MLP for transforming aggregated features. Auto-created if None.
+    in_channels : int, optional, default=8
+        Number of input feature channels.
+    out_channels : int, optional, default=32
+        Number of output feature channels.
+    hidden_dim : int, optional, default=None
+        Hidden dimension for MLPs. Defaults to ``channel_multiplier * out_channels``.
+    channel_multiplier : int, optional, default=2
+        Multiplier for computing default hidden dimension.
+    use_rel_pos : bool, optional, default=True
+        Whether to include relative position in edge features.
+    use_rel_pos_encode : bool, optional, default=False
+        Whether to use sinusoidal encoding for relative positions.
+    pos_encode_dim : int, optional, default=32
+        Dimension of positional encoding.
+    pos_encode_range : float, optional, default=4
+        Range for positional encoding.
+    reductions : List[REDUCTION_TYPES], optional, default=["mean"]
+        Reduction operations for aggregating neighbor features.
+    downsample_voxel_size : float, optional, default=None
+        Voxel size for downsampling output points.
+    out_point_feature_type : Literal["provided", "downsample", "same"], optional, default="same"
+        How to determine output point locations.
+    provided_in_channels : int, optional, default=None
+        Input channels for provided output points.
+    neighbor_search_vertices_scaler : torch.Tensor, optional, default=None
+        Scaling factors for anisotropic neighbor search.
+    neighbor_search_type : Literal["radius", "knn"], optional, default="radius"
+        Type of neighbor search.
+    radius_search_method : Literal["open3d", "warp"], optional, default="warp"
+        Backend for radius search.
+    knn_k : int, optional, default=None
+        Number of neighbors for KNN search.
+
+    Forward
+    -------
+    in_point_features : PointFeatures
+        Input point features of shape :math:`(B, N, C_{in})`.
+    out_point_features : PointFeatures, optional
+        Output point features defining query locations (for "provided" type).
+    neighbor_search_vertices_scaler : torch.Tensor, optional
+        Per-call override for vertex scaling.
+
+    Outputs
+    -------
+    PointFeatures
+        Output point features of shape :math:`(B, M, C_{out})`.
+
+    Note
+    ----
+    This is the core convolution operation for point-based neural networks,
+    implementing a message-passing scheme on point clouds.
+
+    See Also
+    --------
+    :class:`PointFeatureConvBlock`
+    :func:`~physicsnemo.models.figconvnet.neighbor_ops.batched_neighbor_radius_search`
+    """
 
     def __init__(
         self,
@@ -128,30 +324,31 @@ class PointFeatureConv(nn.Module):
         ellipsoidal neighborhood.
         """
         super().__init__()
-        assert isinstance(reductions, (tuple, list)) and len(reductions) > 0, (
-            f"reductions must be a list or tuple of length > 0, got {reductions}"
-        )
+        if not isinstance(reductions, (tuple, list)) or len(reductions) == 0:
+            raise ValueError(
+                f"reductions must be a list or tuple of length > 0, got {reductions}"
+            )
         if out_point_feature_type == "provided":
-            assert downsample_voxel_size is None, (
-                "downsample_voxel_size is only used for downsample"
-            )
-            assert provided_in_channels is not None, (
-                "provided_in_channels must be provided for provided type"
-            )
+            if downsample_voxel_size is not None:
+                raise ValueError("downsample_voxel_size is only used for downsample")
+            if provided_in_channels is None:
+                raise ValueError(
+                    "provided_in_channels must be provided for provided type"
+                )
         elif out_point_feature_type == "downsample":
-            assert downsample_voxel_size is not None, (
-                "downsample_voxel_size must be provided for downsample"
-            )
-            assert provided_in_channels is None, (
-                "provided_in_channels must be None for downsample type"
-            )
+            if downsample_voxel_size is None:
+                raise ValueError(
+                    "downsample_voxel_size must be provided for downsample"
+                )
+            if provided_in_channels is not None:
+                raise ValueError(
+                    "provided_in_channels must be None for downsample type"
+                )
         elif out_point_feature_type == "same":
-            assert downsample_voxel_size is None, (
-                "downsample_voxel_size is only used for downsample"
-            )
-            assert provided_in_channels is None, (
-                "provided_in_channels must be None for same type"
-            )
+            if downsample_voxel_size is not None:
+                raise ValueError("downsample_voxel_size is only used for downsample")
+            if provided_in_channels is not None:
+                raise ValueError("provided_in_channels must be None for same type")
         if downsample_voxel_size is not None and downsample_voxel_size > radius:
             raise ValueError(
                 f"downsample_voxel_size {downsample_voxel_size} must be <= radius {radius}"
@@ -169,7 +366,8 @@ class PointFeatureConv(nn.Module):
         if neighbor_search_type == "radius":
             self.radius_or_k = radius
         elif neighbor_search_type == "knn":
-            assert knn_k is not None
+            if knn_k is None:
+                raise ValueError("knn_k must be provided for knn neighbor search type")
             self.radius_or_k = knn_k
         else:
             raise ValueError(
@@ -214,37 +412,55 @@ class PointFeatureConv(nn.Module):
 
     def forward(
         self,
-        in_point_features: PointFeatures["B N C1"],
-        out_point_features: Optional[PointFeatures["B M C1"]] = None,
-        # in_weight: Optional[Float[Tensor, "B N"]] = None,  # noqa: F821
+        in_point_features: PointFeatures,
+        out_point_features: Optional[PointFeatures] = None,
         neighbor_search_vertices_scaler: Optional[Float[Tensor, "3"]] = None,
-    ) -> PointFeatures["B M C2"]:
-        """When out_point_features is None, the output will be generated on the
-        in_point_features.vertices."""
+    ) -> PointFeatures:
+        r"""Apply point convolution.
+
+        Parameters
+        ----------
+        in_point_features : PointFeatures
+            Input point features of shape :math:`(B, N, C_{in})`.
+        out_point_features : PointFeatures, optional
+            Output point locations. Required for "provided" type, ignored otherwise.
+        neighbor_search_vertices_scaler : torch.Tensor, optional
+            Scaling factors for anisotropic neighbor search.
+
+        Returns
+        -------
+        PointFeatures
+            Output point features of shape :math:`(B, M, C_{out})`.
+        """
         if self.out_point_feature_type == "provided":
-            assert out_point_features is not None, (
-                "out_point_features must be provided for the provided type"
-            )
+            if out_point_features is None:
+                raise ValueError(
+                    "out_point_features must be provided for the provided type"
+                )
         elif self.out_point_feature_type == "downsample":
-            assert out_point_features is None
+            if out_point_features is not None:
+                raise ValueError("out_point_features must be None for downsample type")
             out_point_features = in_point_features.voxel_down_sample(
                 self.downsample_voxel_size
             )
         elif self.out_point_feature_type == "same":
-            assert out_point_features is None
+            if out_point_features is not None:
+                raise ValueError("out_point_features must be None for same type")
             out_point_features = in_point_features
 
         in_num_channels = in_point_features.num_channels
         out_num_channels = out_point_features.num_channels
-        assert (
+        expected_edge_channels = (
             in_num_channels
             + out_num_channels
             + self.use_rel_pos_encode * self.positional_encoding.num_channels * 3
             + (not self.use_rel_pos_encode) * self.use_rel_pos * 3
-            == self.edge_transform_mlp.in_channels
-        ), (
-            f"input features shape {in_point_features.features.shape} and {out_point_features.features.shape} does not match the edge_transform_mlp input features {self.edge_transform_mlp.in_channels}"
         )
+        if expected_edge_channels != self.edge_transform_mlp.in_channels:
+            raise ValueError(
+                f"input features shape {in_point_features.features.shape} and {out_point_features.features.shape} "
+                f"does not match the edge_transform_mlp input features {self.edge_transform_mlp.in_channels}"
+            )
         # Get the neighbors
         in_vertices = in_point_features.vertices
         out_vertices = out_point_features.vertices
@@ -334,7 +550,67 @@ class PointFeatureConv(nn.Module):
 
 
 class PointFeatureConvBlock(nn.Module):
-    """ConvBlock has two convolutions with a residual connection."""
+    r"""Residual block with two point convolutions.
+
+    A standard residual block architecture for point features consisting of:
+
+    1. First point convolution (with optional downsampling)
+    2. Normalization and activation
+    3. Second point convolution (same resolution)
+    4. Normalization
+    5. Skip connection
+    6. Final activation
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
+    radius : float
+        Search radius for neighbor finding.
+    use_rel_pos : bool, optional, default=True
+        Whether to use relative positions.
+    use_rel_pos_encode : bool, optional, default=False
+        Whether to use sinusoidal positional encoding.
+    pos_encode_dim : int, optional, default=32
+        Dimension of positional encoding.
+    reductions : List[REDUCTION_TYPES], optional, default=["mean"]
+        Reduction operations for aggregation.
+    downsample_voxel_size : float, optional, default=None
+        Voxel size for downsampling.
+    pos_encode_range : float, optional, default=4
+        Range for positional encoding.
+    out_point_feature_type : Literal["provided", "downsample", "same"], optional, default="same"
+        How to determine output point locations.
+    provided_in_channels : int, optional, default=None
+        Input channels for provided output points.
+    neighbor_search_type : Literal["radius", "knn"], optional, default="radius"
+        Type of neighbor search.
+    knn_k : int, optional, default=None
+        Number of neighbors for KNN search.
+
+    Forward
+    -------
+    in_point_features : PointFeatures
+        Input point features of shape :math:`(B, N, C_{in})`.
+    out_point_features : PointFeatures, optional
+        Output point features (for "provided" type).
+
+    Outputs
+    -------
+    PointFeatures
+        Output point features of shape :math:`(B, M, C_{out})`.
+
+    Note
+    ----
+    The skip connection is automatically adjusted based on the output type
+    and channel dimensions.
+
+    See Also
+    --------
+    :class:`PointFeatureConv`
+    """
 
     def __init__(
         self,
@@ -396,22 +672,39 @@ class PointFeatureConvBlock(nn.Module):
 
     def forward(
         self,
-        in_point_features: PointFeatures["B N C1"],
-        out_point_features: Optional[PointFeatures["B M C2"]] = None,
-    ) -> PointFeatures["B N C2"]:
+        in_point_features: PointFeatures,
+        out_point_features: Optional[PointFeatures] = None,
+    ) -> PointFeatures:
+        r"""Apply residual block to point features.
+
+        Parameters
+        ----------
+        in_point_features : PointFeatures
+            Input point features.
+        out_point_features : PointFeatures, optional
+            Output point locations for "provided" type.
+
+        Returns
+        -------
+        PointFeatures
+            Processed point features.
+        """
         if self.out_point_feature_type == "provided":
-            assert out_point_features is not None, (
-                "out_point_features must be provided for the provided type"
-            )
+            if out_point_features is None:
+                raise ValueError(
+                    "out_point_features must be provided for the provided type"
+                )
             out = self.conv1(in_point_features, out_point_features)
         elif self.out_point_feature_type == "downsample":
-            assert out_point_features is None
+            if out_point_features is not None:
+                raise ValueError("out_point_features must be None for downsample type")
             out_point_features = in_point_features.voxel_down_sample(
                 self.downsample_voxel_size
             )
             out = self.conv1(in_point_features)
         elif self.out_point_feature_type == "same":
-            assert out_point_features is None
+            if out_point_features is not None:
+                raise ValueError("out_point_features must be None for same type")
             out_point_features = in_point_features
             out = self.conv1(in_point_features)
         out = self.nonlinear(self.norm1(out))
