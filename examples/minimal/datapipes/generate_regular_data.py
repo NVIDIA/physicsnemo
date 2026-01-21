@@ -89,8 +89,8 @@ def generate_synthetic_data(
 
     for key, shape in shapes.items():
         full_shape = (num_samples,) + shape
-        # Generate random data in range [-1, 1]
-        data[key] = rng.uniform(-1.0, 1.0, size=full_shape).astype(np.float32)
+        # Generate random data in range [-7, 13]
+        data[key] = rng.uniform(-7.0, 13.0, size=full_shape).astype(np.float32)
         print(f"Generated '{key}' with shape {full_shape}")
 
     return data

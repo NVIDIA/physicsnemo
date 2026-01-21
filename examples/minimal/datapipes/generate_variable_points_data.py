@@ -121,8 +121,8 @@ def generate_variable_sample(
 
     for key, feature_dims in shapes.items():
         full_shape = (num_points,) + feature_dims
-        # Generate random data in range [-1, 1]
-        sample_data[key] = rng.uniform(-1.0, 1.0, size=full_shape).astype(np.float32)
+        # Generate random data in from a normal distribution, mean 17 and std 3
+        sample_data[key] = rng.normal(17.0, 3.0, size=full_shape).astype(np.float32)
 
     return sample_data
 
