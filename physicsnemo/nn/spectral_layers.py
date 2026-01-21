@@ -161,27 +161,32 @@ class SpectralConv2d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixy,ioxy->boxy", input, cweights)
 
-    def forward(self, x: Tensor) -> Tensor:
-        batchsize = x.shape[0]
-        # Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.fft.rfft2(x)
+    def forward(
+        self, x: Float[Tensor, "batch in_channels h w"]
+    ) -> Float[Tensor, "batch out_channels h w"]:
+        x_ft = torch.fft.rfft2(x)  # (batch, in_channels, h, w//2+1) complex
+        h, w = x_ft.size(-2), x_ft.size(-1)  # h=h, w=w//2+1
 
-        # Multiply relevant Fourier modes
+        # Initialize output in frequency space
         out_ft = torch.zeros(
-            batchsize,
-            self.out_channels,
-            x.size(-2),
-            x.size(-1) // 2 + 1,
-            dtype=torch.cfloat,
-            device=x.device,
+            x.size(0), self.out_channels, h, w, dtype=torch.cfloat, device=x.device
+        )  # (batch, out_channels, h, w) complex
+
+        # Accumulate Fourier modes. Use .contiguous() on sliced complex tensors and
+        # padding (not slice assignment) for torch.compile compatibility.
+        # Slice assignment causes gradient stride issues in the Inductor backward pass.
+        # Pad format: (left, right, top, bottom) for last 2 dims
+        out_ft = out_ft + F.pad(
+            self.compl_mul2d(
+                x_ft[:, :, : self.modes1, : self.modes2].contiguous(), self.weights1
+            ),
+            (0, w - self.modes2, 0, h - self.modes1),
         )
-        out_ft[:, :, : self.modes1, : self.modes2] = self.compl_mul2d(
-            x_ft[:, :, : self.modes1, : self.modes2],
-            self.weights1,
-        )
-        out_ft[:, :, -self.modes1 :, : self.modes2] = self.compl_mul2d(
-            x_ft[:, :, -self.modes1 :, : self.modes2],
-            self.weights2,
+        out_ft = out_ft + F.pad(
+            self.compl_mul2d(
+                x_ft[:, :, -self.modes1 :, : self.modes2].contiguous(), self.weights2
+            ),
+            (0, w - self.modes2, h - self.modes1, 0),
         )
 
         # Return to physical space
@@ -271,32 +276,51 @@ class SpectralConv3d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixyz,ioxyz->boxyz", input, cweights)
 
-    def forward(self, x: Tensor) -> Tensor:
-        batchsize = x.shape[0]
-        # Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.fft.rfftn(x, dim=[-3, -2, -1])
+    def forward(
+        self, x: Float[Tensor, "batch in_channels d1 d2 d3"]
+    ) -> Float[Tensor, "batch out_channels d1 d2 d3"]:
+        x_ft = torch.fft.rfftn(x, dim=[-3, -2, -1])  # (batch, in_channels, d1, d2, d3//2+1) complex
+        d1, d2, d3 = x_ft.size(-3), x_ft.size(-2), x_ft.size(-1)  # d3 = d3//2+1
 
-        # Multiply relevant Fourier modes
+        # Initialize output in frequency space
         out_ft = torch.zeros(
-            batchsize,
-            self.out_channels,
-            x.size(-3),
-            x.size(-2),
-            x.size(-1) // 2 + 1,
-            dtype=torch.cfloat,
-            device=x.device,
+            x.size(0), self.out_channels, d1, d2, d3, dtype=torch.cfloat, device=x.device
+        )  # (batch, out_channels, d1, d2, d3) complex
+
+        # Accumulate Fourier modes. Use .contiguous() on sliced complex tensors and
+        # padding (not slice assignment) for torch.compile compatibility.
+        # Slice assignment causes gradient stride issues in the Inductor backward pass.
+        # Pad format for 3D: (d3_left, d3_right, d2_top, d2_bottom, d1_front, d1_back)
+        pad_d3 = d3 - self.modes3
+        pad_d2 = d2 - self.modes2
+        pad_d1 = d1 - self.modes1
+        out_ft = out_ft + F.pad(
+            self.compl_mul3d(
+                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3].contiguous(),
+                self.weights1,
+            ),
+            (0, pad_d3, 0, pad_d2, 0, pad_d1),
         )
-        out_ft[:, :, : self.modes1, : self.modes2, : self.modes3] = self.compl_mul3d(
-            x_ft[:, :, : self.modes1, : self.modes2, : self.modes3], self.weights1
+        out_ft = out_ft + F.pad(
+            self.compl_mul3d(
+                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3].contiguous(),
+                self.weights2,
+            ),
+            (0, pad_d3, 0, pad_d2, pad_d1, 0),
         )
-        out_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3] = self.compl_mul3d(
-            x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3], self.weights2
+        out_ft = out_ft + F.pad(
+            self.compl_mul3d(
+                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3].contiguous(),
+                self.weights3,
+            ),
+            (0, pad_d3, pad_d2, 0, 0, pad_d1),
         )
-        out_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3] = self.compl_mul3d(
-            x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3], self.weights3
-        )
-        out_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3] = self.compl_mul3d(
-            x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3], self.weights4
+        out_ft = out_ft + F.pad(
+            self.compl_mul3d(
+                x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3].contiguous(),
+                self.weights4,
+            ),
+            (0, pad_d3, pad_d2, 0, pad_d1, 0),
         )
 
         # Return to physical space
@@ -465,81 +489,88 @@ class SpectralConv4d(nn.Module):
         cweights = torch.view_as_complex(weights)
         return torch.einsum("bixyzt,ioxyzt->boxyzt", input, cweights)
 
-    def forward(self, x: Tensor) -> Tensor:
-        batchsize = x.shape[0]
-        # Compute Fourier coeffcients up to factor of e^(- something constant)
-        x_ft = torch.fft.rfftn(x, dim=[-4, -3, -2, -1])
+    def forward(
+        self, x: Float[Tensor, "batch in_channels d1 d2 d3 d4"]
+    ) -> Float[Tensor, "batch out_channels d1 d2 d3 d4"]:
+        x_ft = torch.fft.rfftn(x, dim=[-4, -3, -2, -1])  # (batch, in_channels, d1, d2, d3, d4//2+1) complex
+        d1, d2, d3, d4 = x_ft.size(-4), x_ft.size(-3), x_ft.size(-2), x_ft.size(-1)  # d4 = d4//2+1
 
-        # Multiply relevant Fourier modes
+        # Initialize output in frequency space
         out_ft = torch.zeros(
-            batchsize,
-            self.out_channels,
-            x.size(-4),
-            x.size(-3),
-            x.size(-2),
-            x.size(-1) // 2 + 1,
-            dtype=torch.cfloat,
-            device=x.device,
-        )
+            x.size(0), self.out_channels, d1, d2, d3, d4, dtype=torch.cfloat, device=x.device
+        )  # (batch, out_channels, d1, d2, d3, d4) complex
 
-        # print(f'mod: size x: {x_ft.size()}, out: {out_ft.size()}')
-        # print(f'mod: x_ft[weight4]: {x_ft[:, :, self.modes1 :, self.modes2 :, : -self.modes3, :self.modes4].size()} weight4: {self.weights4.size()}')
-
-        out_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4] = (
+        # Accumulate Fourier modes. Use .contiguous() on sliced complex tensors and
+        # padding (not slice assignment) for torch.compile compatibility.
+        # Slice assignment causes gradient stride issues in the Inductor backward pass.
+        # Pad format for 4D: (d4_left, d4_right, d3_front, d3_back, d2_top, d2_bottom, d1_near, d1_far)
+        pad_d4 = d4 - self.modes4
+        pad_d3 = d3 - self.modes3
+        pad_d2 = d2 - self.modes2
+        pad_d1 = d1 - self.modes1
+        # [:modes1, :modes2, :modes3, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4],
+                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4].contiguous(),
                 self.weights1,
-            )
+            ),
+            (0, pad_d4, 0, pad_d3, 0, pad_d2, 0, pad_d1),
         )
-        out_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4] = (
+        # [-modes1:, :modes2, :modes3, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4],
+                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4].contiguous(),
                 self.weights2,
-            )
+            ),
+            (0, pad_d4, 0, pad_d3, 0, pad_d2, pad_d1, 0),
         )
-        out_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4] = (
+        # [:modes1, -modes2:, :modes3, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4],
+                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4].contiguous(),
                 self.weights3,
-            )
+            ),
+            (0, pad_d4, 0, pad_d3, pad_d2, 0, 0, pad_d1),
         )
-        out_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4] = (
+        # [:modes1, :modes2, -modes3:, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4],
+                x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4].contiguous(),
                 self.weights4,
-            )
+            ),
+            (0, pad_d4, pad_d3, 0, 0, pad_d2, 0, pad_d1),
         )
-        out_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4] = (
+        # [-modes1:, -modes2:, :modes3, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[
-                    :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
-                ],
+                x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4].contiguous(),
                 self.weights5,
-            )
+            ),
+            (0, pad_d4, 0, pad_d3, pad_d2, 0, pad_d1, 0),
         )
-        out_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4] = (
+        # [-modes1:, :modes2, -modes3:, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[
-                    :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
-                ],
+                x_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4].contiguous(),
                 self.weights6,
-            )
+            ),
+            (0, pad_d4, pad_d3, 0, 0, pad_d2, pad_d1, 0),
         )
-        out_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+        # [:modes1, -modes2:, -modes3:, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[
-                    :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
-                ],
+                x_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4].contiguous(),
                 self.weights7,
-            )
+            ),
+            (0, pad_d4, pad_d3, 0, pad_d2, 0, 0, pad_d1),
         )
-        out_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4] = (
+        # [-modes1:, -modes2:, -modes3:, :modes4]
+        out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[
-                    :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
-                ],
+                x_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4].contiguous(),
                 self.weights8,
-            )
+            ),
+            (0, pad_d4, pad_d3, 0, pad_d2, 0, pad_d1, 0),
         )
 
         # Return to physical space
