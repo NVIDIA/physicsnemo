@@ -318,7 +318,9 @@ def _days_from_2000(model_time):
             f"model_time has an invalid date type. It must be "
             f"datetime.datetime. Got {date_type}."
         )
-    return _total_days(model_time - date_type(2000, 1, 1, 12, 0, 0, tzinfo=datetime.UTC))
+    return _total_days(
+        model_time - date_type(2000, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+    )
 
 
 def _total_days(time_diff):

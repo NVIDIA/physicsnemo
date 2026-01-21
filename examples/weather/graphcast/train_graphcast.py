@@ -141,7 +141,9 @@ class GraphCastTrainer(BaseTrainer):
 
         # Compile the model, and specify the device and dtype
         if cfg.jit:
-            self.model = torch.compile(self.model).to(dtype=self.dtype).to(device=dist.device)
+            self.model = (
+                torch.compile(self.model).to(dtype=self.dtype).to(device=dist.device)
+            )
             rank_zero_logger.success("Compiled the model")
         else:
             self.model = self.model.to(dtype=self.dtype).to(device=dist.device)
