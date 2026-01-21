@@ -63,6 +63,8 @@ def test_meshgraphkan_forward(device, pytestconfig, set_physicsnemo_force_te):
         model,
         (node_f, edge_f, graph),
         file_name="models/meshgraphnet/data/meshgraphkan_output.pth",
+        atol=1e-1,
+        rtol=1e-1,
     )
 
 

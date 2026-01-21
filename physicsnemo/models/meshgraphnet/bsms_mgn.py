@@ -44,6 +44,10 @@ class MetaData(ModelMetaData):
 class BiStrideMeshGraphNet(MeshGraphNet):
     r"""Bi-stride MeshGraphNet network architecture.
 
+    Bi-stride MGN augments vanilla MGN with a U-Net-like multi-scale message
+    passing that alternates between coarsening and refining the mesh. This
+    improves modeling of long-range interactions.
+
     Parameters
     ----------
     input_dim_nodes : int
@@ -54,7 +58,7 @@ class BiStrideMeshGraphNet(MeshGraphNet):
         Number of outputs.
     processor_size : int, optional, default=15
         Number of message passing blocks.
-    mlp_activation_fn : Union[str, List[str]], optional, default="relu"
+    mlp_activation_fn : str, optional, default="relu"
         Activation function to use.
     num_layers_node_processor : int, optional, default=2
         Number of MLP layers for processing nodes in each message passing block.
@@ -223,34 +227,6 @@ class BiStrideMeshGraphNet(MeshGraphNet):
         ms_ids: Iterable[Tensor] = (),
         **kwargs,
     ) -> Tensor:
-        r"""Forward pass with bi-stride message passing.
-
-        Parameters
-        ----------
-        node_features : torch.Tensor
-            Input node features of shape :math:`(N_{nodes}, D_{in}^{node})`.
-        edge_features : torch.Tensor
-            Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
-        graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
-            Graph connectivity/topology container (PyG).
-            Connectivity/topology only. Do not duplicate node or edge features on the graph;
-            pass them via ``node_features`` and ``edge_features``. If present on
-            the graph, they will be ignored by the model.
-            ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
-            ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-            The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
-            PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-            :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
-        ms_edges : Iterable[torch.Tensor], optional
-            Multi-scale edge lists; each item corresponds to one level.
-        ms_ids : Iterable[torch.Tensor], optional
-            Multi-scale node id lists; each item corresponds to one level.
-
-        Returns
-        -------
-        torch.Tensor
-            Output node features of shape :math:`(N_{nodes}, D_{out})`.
-        """
         if not torch.compiler.is_compiling():
             if (
                 node_features.ndim != 2

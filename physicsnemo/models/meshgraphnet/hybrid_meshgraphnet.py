@@ -101,6 +101,8 @@ class HybridMeshGraphNet(MeshGraphNet):
         Whether to recompute activations.
     norm_type : Literal["LayerNorm", "TELayerNorm"], optional, default="LayerNorm"
         Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``.
+        ``"TELayerNorm"`` refers to the Transformer Engine implementation of LayerNorm and
+        requires NVIDIA Transformer Engine to be installed (optional dependency).
 
     Forward
     -------
@@ -338,7 +340,9 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
     aggregation : Literal["sum", "mean"], optional, default="sum"
         Message aggregation method used in node update blocks. Allowed values are ``"sum"`` and ``"mean"``.
     norm_type : Literal["LayerNorm", "TELayerNorm"], optional, default="LayerNorm"
-        Normalization type within processor blocks.
+        Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``.
+        ``"TELayerNorm"`` uses the Transformer Engine LayerNorm and requires NVIDIA
+        Transformer Engine to be installed.
     activation_fn : torch.nn.Module, optional, default=nn.ReLU()
         Activation function module used inside the MLPs.
     do_concat_trick : bool, optional, default=False
@@ -455,7 +459,7 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
         """
         segment = self.processor_layers[segment_start:segment_end]
 
-        def custom_forward(
+        def _custom_forward(
             node_features: Tensor,
             mesh_edge_features: Tensor,
             world_edge_features: Tensor,
@@ -485,7 +489,7 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
                 )
             return mesh_edge_features, world_edge_features, node_features
 
-        return custom_forward
+        return _custom_forward
 
     @profile
     def forward(
@@ -495,24 +499,6 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
         world_edge_features: Tensor,
         graph: GraphType,
     ) -> Tensor:
-        r"""Forward pass overridden for hybrid functionality.
-
-        Parameters
-        ----------
-        node_features : torch.Tensor
-            Node features of shape :math:`(N_{nodes}, D_{node})`.
-        mesh_edge_features : torch.Tensor
-            Mesh edge features of shape :math:`(N_{mesh\_edges}, D_{edge})`.
-        world_edge_features : torch.Tensor
-            World edge features of shape :math:`(N_{world\_edges}, D_{edge})`.
-        graph : GraphType
-            Graph container.
-
-        Returns
-        -------
-        torch.Tensor
-            Updated node features of shape :math:`(N_{nodes}, D_{node})`.
-        """
         if not torch.compiler.is_compiling():
             if node_features.ndim != 2 or node_features.shape[1] != self.input_dim_node:
                 raise ValueError(
