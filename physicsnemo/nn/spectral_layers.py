@@ -190,7 +190,9 @@ class SpectralConv2d(nn.Module):
         )
 
         # Return to physical space
-        return torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)))  # (batch, out_channels, h, w) real
+        return torch.fft.irfft2(
+            out_ft, s=(x.size(-2), x.size(-1))
+        )  # (batch, out_channels, h, w) real
 
     def reset_parameters(self):
         """Reset spectral weights with distribution scale*U(0,1)"""
@@ -279,12 +281,20 @@ class SpectralConv3d(nn.Module):
     def forward(
         self, x: Float[Tensor, "batch in_channels d1 d2 d3"]
     ) -> Float[Tensor, "batch out_channels d1 d2 d3"]:
-        x_ft = torch.fft.rfftn(x, dim=[-3, -2, -1])  # (batch, in_channels, d1, d2, d3//2+1) complex
+        x_ft = torch.fft.rfftn(
+            x, dim=[-3, -2, -1]
+        )  # (batch, in_channels, d1, d2, d3//2+1) complex
         d1, d2, d3 = x_ft.size(-3), x_ft.size(-2), x_ft.size(-1)  # d3 = d3//2+1
 
         # Initialize output in frequency space
         out_ft = torch.zeros(
-            x.size(0), self.out_channels, d1, d2, d3, dtype=torch.cfloat, device=x.device
+            x.size(0),
+            self.out_channels,
+            d1,
+            d2,
+            d3,
+            dtype=torch.cfloat,
+            device=x.device,
         )  # (batch, out_channels, d1, d2, d3) complex
 
         # Accumulate Fourier modes. Use .contiguous() on sliced complex tensors and
@@ -467,7 +477,9 @@ class SpectralConv4d(nn.Module):
     def compl_mul4d(
         self,
         input: Complex[Tensor, "batch in_channels modes1 modes2 modes3 modes4"],
-        weights: Float[Tensor, "in_channels out_channels modes1 modes2 modes3 modes4 2"],
+        weights: Float[
+            Tensor, "in_channels out_channels modes1 modes2 modes3 modes4 2"
+        ],
     ) -> Complex[Tensor, "batch out_channels modes1 modes2 modes3 modes4"]:
         """Complex multiplication
 
@@ -492,12 +504,26 @@ class SpectralConv4d(nn.Module):
     def forward(
         self, x: Float[Tensor, "batch in_channels d1 d2 d3 d4"]
     ) -> Float[Tensor, "batch out_channels d1 d2 d3 d4"]:
-        x_ft = torch.fft.rfftn(x, dim=[-4, -3, -2, -1])  # (batch, in_channels, d1, d2, d3, d4//2+1) complex
-        d1, d2, d3, d4 = x_ft.size(-4), x_ft.size(-3), x_ft.size(-2), x_ft.size(-1)  # d4 = d4//2+1
+        x_ft = torch.fft.rfftn(
+            x, dim=[-4, -3, -2, -1]
+        )  # (batch, in_channels, d1, d2, d3, d4//2+1) complex
+        d1, d2, d3, d4 = (
+            x_ft.size(-4),
+            x_ft.size(-3),
+            x_ft.size(-2),
+            x_ft.size(-1),
+        )  # d4 = d4//2+1
 
         # Initialize output in frequency space
         out_ft = torch.zeros(
-            x.size(0), self.out_channels, d1, d2, d3, d4, dtype=torch.cfloat, device=x.device
+            x.size(0),
+            self.out_channels,
+            d1,
+            d2,
+            d3,
+            d4,
+            dtype=torch.cfloat,
+            device=x.device,
         )  # (batch, out_channels, d1, d2, d3, d4) complex
 
         # Accumulate Fourier modes. Use .contiguous() on sliced complex tensors and
@@ -511,7 +537,9 @@ class SpectralConv4d(nn.Module):
         # [:modes1, :modes2, :modes3, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, : self.modes1, : self.modes2, : self.modes3, : self.modes4
+                ].contiguous(),
                 self.weights1,
             ),
             (0, pad_d4, 0, pad_d3, 0, pad_d2, 0, pad_d1),
@@ -519,7 +547,9 @@ class SpectralConv4d(nn.Module):
         # [-modes1:, :modes2, :modes3, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, -self.modes1 :, : self.modes2, : self.modes3, : self.modes4
+                ].contiguous(),
                 self.weights2,
             ),
             (0, pad_d4, 0, pad_d3, 0, pad_d2, pad_d1, 0),
@@ -527,7 +557,9 @@ class SpectralConv4d(nn.Module):
         # [:modes1, -modes2:, :modes3, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, : self.modes1, -self.modes2 :, : self.modes3, : self.modes4
+                ].contiguous(),
                 self.weights3,
             ),
             (0, pad_d4, 0, pad_d3, pad_d2, 0, 0, pad_d1),
@@ -535,7 +567,9 @@ class SpectralConv4d(nn.Module):
         # [:modes1, :modes2, -modes3:, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, : self.modes1, : self.modes2, -self.modes3 :, : self.modes4
+                ].contiguous(),
                 self.weights4,
             ),
             (0, pad_d4, pad_d3, 0, 0, pad_d2, 0, pad_d1),
@@ -543,7 +577,9 @@ class SpectralConv4d(nn.Module):
         # [-modes1:, -modes2:, :modes3, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, : self.modes3, : self.modes4
+                ].contiguous(),
                 self.weights5,
             ),
             (0, pad_d4, 0, pad_d3, pad_d2, 0, pad_d1, 0),
@@ -551,7 +587,9 @@ class SpectralConv4d(nn.Module):
         # [-modes1:, :modes2, -modes3:, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, -self.modes1 :, : self.modes2, -self.modes3 :, : self.modes4
+                ].contiguous(),
                 self.weights6,
             ),
             (0, pad_d4, pad_d3, 0, 0, pad_d2, pad_d1, 0),
@@ -559,7 +597,9 @@ class SpectralConv4d(nn.Module):
         # [:modes1, -modes2:, -modes3:, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, : self.modes1, -self.modes2 :, -self.modes3 :, : self.modes4
+                ].contiguous(),
                 self.weights7,
             ),
             (0, pad_d4, pad_d3, 0, pad_d2, 0, 0, pad_d1),
@@ -567,7 +607,9 @@ class SpectralConv4d(nn.Module):
         # [-modes1:, -modes2:, -modes3:, :modes4]
         out_ft = out_ft + F.pad(
             self.compl_mul4d(
-                x_ft[:, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4].contiguous(),
+                x_ft[
+                    :, :, -self.modes1 :, -self.modes2 :, -self.modes3 :, : self.modes4
+                ].contiguous(),
                 self.weights8,
             ),
             (0, pad_d4, pad_d3, 0, pad_d2, 0, pad_d1, 0),
