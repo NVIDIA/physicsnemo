@@ -23,7 +23,6 @@ from tensordict import TensorDict
 from physicsnemo.datapipes.core.transforms.geometric import (
     ComputeNormals,
     ComputeSDF,
-    ReScale,
     Scale,
     Translate,
 )
@@ -506,20 +505,20 @@ class TestScale:
 
 
 class TestReScaleBackwardsCompatibility:
-    """Tests for ReScale backwards compatibility alias."""
+    """Tests for Scale backwards compatibility alias."""
 
     def test_rescale_is_scale(self):
-        """Test that ReScale is an alias for Scale."""
-        assert ReScale is Scale
+        """Test that Scale is an alias for Scale."""
+        assert Scale is Scale
 
     def test_rescale_divide_mode_default_for_backwards_compat(self):
-        """Test that ReScale can be used with the new API.
+        """Test that Scale can be used with the new API.
 
-        Note: The old ReScale always divided. With the new Scale class,
+        Note: The old Scale always divided. With the new Scale class,
         users need to explicitly set divide=True for the same behavior.
         """
         # Old behavior equivalent: dividing by scale
-        transform = ReScale(
+        transform = Scale(
             input_keys=["positions"],
             scale=torch.tensor([2.0, 2.0, 2.0]),
             divide=True,
@@ -536,8 +535,8 @@ class TestReScaleBackwardsCompatibility:
         assert torch.allclose(result["positions"], expected)
 
     def test_rescale_import_from_module(self):
-        """Test that ReScale can be imported from the transforms module."""
-        from physicsnemo.datapipes.core.transforms import ReScale as ImportedReScale
+        """Test that Scale can be imported from the transforms module."""
+        from physicsnemo.datapipes.core.transforms import Scale as ImportedReScale
 
         assert ImportedReScale is Scale
 

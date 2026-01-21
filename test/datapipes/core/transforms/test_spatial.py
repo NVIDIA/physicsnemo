@@ -340,6 +340,7 @@ class TestKNearestNeighbors:
             queries_key="queries",
             k=3,
             output_prefix="neighbors",
+            drop_first_neighbor=False,
         )
 
         # Create structured points for predictable results
@@ -367,7 +368,7 @@ class TestKNearestNeighbors:
         assert result["neighbors_indices"].shape == (2, 3)
         assert result["neighbors_distances"].shape == (2, 3)
         # coords excludes self, so k-1 neighbors
-        assert result["neighbors_coords"].shape == (2, 2, 3)
+        assert result["neighbors_coords"].shape == (2, 3, 3)
 
     def test_knn_with_extract_keys(self):
         """Test k-NN with additional feature extraction."""
@@ -396,8 +397,8 @@ class TestKNearestNeighbors:
         assert "nn_values" in result
 
         # Shape should be (n_queries, k-1, feature_dim) since self is excluded
-        assert result["nn_normals"].shape == (5, 3, 3)
-        assert result["nn_values"].shape == (5, 3, 1)
+        assert result["nn_normals"].shape == (5, 4, 3)
+        assert result["nn_values"].shape == (5, 4, 1)
 
     def test_knn_missing_points_raises(self):
         """Test that missing points key raises KeyError."""
@@ -491,9 +492,13 @@ class TestCenterOfMass:
         result = transform(data)
 
         assert "com" in result
-        assert result["com"].shape == (1, 3)
+        assert result["com"].shape == torch.Size(
+            [
+                3,
+            ]
+        )
         torch.testing.assert_close(
-            result["com"], torch.tensor([[0.0, 0.0, 0.0]]), atol=1e-6, rtol=1e-6
+            result["com"], torch.tensor([0.0, 0.0, 0.0]), atol=1e-6, rtol=1e-6
         )
 
     def test_weighted_center_of_mass(self):
@@ -520,7 +525,7 @@ class TestCenterOfMass:
         # Center should be closer to first point
         expected_x = (0.0 * 9.0 + 10.0 * 1.0) / 10.0  # = 1.0
         torch.testing.assert_close(
-            result["com"], torch.tensor([[expected_x, 0.0, 0.0]]), atol=1e-6, rtol=1e-6
+            result["com"], torch.tensor([expected_x, 0.0, 0.0]), atol=1e-6, rtol=1e-6
         )
 
     def test_single_point(self):
@@ -538,7 +543,7 @@ class TestCenterOfMass:
 
         result = transform(data)
 
-        torch.testing.assert_close(result["com"], torch.tensor([[5.0, 3.0, 2.0]]))
+        torch.testing.assert_close(result["com"], torch.tensor([5.0, 3.0, 2.0]))
 
     def test_missing_coords_raises(self):
         """Test that missing coords key raises KeyError."""
