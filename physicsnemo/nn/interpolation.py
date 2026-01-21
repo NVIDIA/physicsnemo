@@ -246,8 +246,6 @@ def gaussian_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     dim = dx.size(-1)
     sharpen = 2.0
     sigma = dx / sharpen
-    print(sigma)
-    print(sigma.prod())
     factor = 1.0 / ((2.0 * math.pi) ** (dim / 2.0) * sigma.prod())
     gaussian = torch.exp(-0.5 * torch.square((dist_vec / sigma)))
     gaussian = factor * gaussian.prod(dim=-1)

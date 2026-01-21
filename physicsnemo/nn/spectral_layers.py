@@ -697,7 +697,7 @@ def fourier_derivatives(x: Tensor, ell: List[float]) -> Tuple[Tensor, Tensor]:
     return (wx, wxx)
 
 
-@torch.jit.ignore
+@torch.compiler.disable
 def calc_latent_derivatives(
     x: Tensor, domain_length: List[int] = 2
 ) -> Tuple[List[Tensor], List[Tensor]]:

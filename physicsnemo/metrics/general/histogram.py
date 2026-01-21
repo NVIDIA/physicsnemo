@@ -51,10 +51,7 @@ def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cov
     # create a tensor of 'num' steps from 0 to 1
     steps = torch.arange(num + 1, dtype=torch.float32, device=start.device) / (num)
 
-    # reshape the 'steps' tensor to [-1, *([1]*start.ndim)] to allow for broadcastings
-    # - using 'steps.reshape([-1, *([1]*start.ndim)])' would be nice here but
-    #  torchscript "cannot statically infer the expected size of a list in this contex",
-    #  hence the code below
+    # reshape the 'steps' tensor to [-1, *([1]*start.ndim)] to allow for broadcasting
     for i in range(start.ndim):
         steps = steps.unsqueeze(-1)
 
