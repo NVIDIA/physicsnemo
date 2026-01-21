@@ -83,6 +83,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
 earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/refs/tags/v2025.11.1.tar.gz" }
 cuml-cu13 = { index = "nvidia" }
 pylibraft-cu13 = { index = "nvidia" }
