@@ -309,26 +309,30 @@ class PointFeatures:
         return f"PointFeatures(vertices={self.vertices.shape}, features={self.features.shape})"
 
 
-class GridFeaturesMemoryFormat(enum.Enum):
+class GridFeaturesMemoryFormat(str, enum.Enum):
     r"""Memory format for GridFeatures storage.
 
     This enum defines different memory layouts for storing 3D grid features.
     The factorized formats compress one spatial dimension into the channel
     dimension, enabling efficient 2D convolution operations.
 
+    This class inherits from both ``str`` and ``enum.Enum`` to enable JSON
+    serialization. Enum values can be directly serialized with ``json.dumps()``
+    and deserialized using ``GridFeaturesMemoryFormat(value)``.
+
     Attributes
     ----------
-    b_x_y_z_c : int
+    b_x_y_z_c : str
         Standard 3D format: Batch, X, Y, Z, Channels. Shape: :math:`(B, X, Y, Z, C)`
-    b_c_x_y_z : int
+    b_c_x_y_z : str
         PyTorch 3D conv format: Batch, Channels, X, Y, Z. Shape: :math:`(B, C, X, Y, Z)`
-    b_zc_x_y : int
+    b_zc_x_y : str
         Factorized format with Z compressed: Batch, Z*Channels, X, Y.
         Shape: :math:`(B, Z \cdot C, X, Y)`
-    b_xc_y_z : int
+    b_xc_y_z : str
         Factorized format with X compressed: Batch, X*Channels, Y, Z.
         Shape: :math:`(B, X \cdot C, Y, Z)`
-    b_yc_x_z : int
+    b_yc_x_z : str
         Factorized format with Y compressed: Batch, Y*Channels, X, Z.
         Shape: :math:`(B, Y \cdot C, X, Z)`
 
@@ -340,13 +344,13 @@ class GridFeaturesMemoryFormat(enum.Enum):
     globally along the compressed dimension.
     """
 
-    b_x_y_z_c = enum.auto()
-    b_c_x_y_z = enum.auto()
+    b_x_y_z_c = "b_x_y_z_c"
+    b_c_x_y_z = "b_c_x_y_z"
 
     # Factorized (compressed) 3D to 2D memory formats
-    b_zc_x_y = enum.auto()
-    b_xc_y_z = enum.auto()
-    b_yc_x_z = enum.auto()
+    b_zc_x_y = "b_zc_x_y"
+    b_xc_y_z = "b_xc_y_z"
+    b_yc_x_z = "b_yc_x_z"
 
 
 # Mapping from memory format to string representation

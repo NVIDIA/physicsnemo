@@ -91,7 +91,7 @@ def _radius_search_warp(
     if isinstance(grid_dim, int):
         grid_dim = (grid_dim, grid_dim, grid_dim)
 
-    result_count = wp.zeros(shape=len(queries), dtype=wp.int32)
+    result_count = wp.zeros(shape=len(queries), dtype=wp.int32, device=device)
     grid = wp.HashGrid(
         dim_x=grid_dim[0],
         dim_y=grid_dim[1],
@@ -115,8 +115,8 @@ def _radius_search_warp(
     if total_count >= 2**31 - 1:
         raise ValueError(f"Total result count is too large: {total_count} > 2**31 - 1")
 
-    result_point_idx = wp.zeros(shape=(total_count,), dtype=wp.int32)
-    result_point_dist = wp.zeros(shape=(total_count,), dtype=wp.float32)
+    result_point_idx = wp.zeros(shape=(total_count,), dtype=wp.int32, device=device)
+    result_point_dist = wp.zeros(shape=(total_count,), dtype=wp.float32, device=device)
 
     wp.launch(
         kernel=_radius_search_query,
