@@ -13,3 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+_target_: physicsnemo.datapipes.core.readers.NumpyReader
+path: ???
+fields: null
+default_values: null
+pin_memory: false
+include_index_in_metadata: true

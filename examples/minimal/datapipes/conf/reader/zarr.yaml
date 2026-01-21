@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# _target_: physicsnemo.datapipes.core.readers.TensorStoreZarrReader
 _target_: physicsnemo.datapipes.core.readers.ZarrReader
 path: ???
 fields: null
@@ -22,9 +21,3 @@ default_values: null
 group_pattern: "*.zarr"
 pin_memory: false
 include_index_in_metadata: true
-coordinated_subsampling:
-  n_points: 10000
-  target_keys:
-    - volume_fields
-    - volume_mesh_centers
-

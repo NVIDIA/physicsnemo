@@ -26,14 +26,3 @@ data_copy_concurrency: 72
 file_io_concurrency: 72
 pin_memory: false
 include_index_in_metadata: true
-
-# Coordinated subsampling configuration (optional)
-# Reads contiguous chunks from large tensors to reduce IO bandwidth.
-# Set to null to disable, or configure n_points and target_keys.
-coordinated_subsampling: null
-# Example:
-# coordinated_subsampling:
-#   n_points: 10000
-#   target_keys:
-#     - volume_coords
-#     - volume_fields
