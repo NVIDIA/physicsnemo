@@ -97,6 +97,8 @@ class MeshGraphNet(Module):
         Whether to offload the checkpointing to the CPU.
     norm_type : Literal["LayerNorm", "TELayerNorm"], optional, default="LayerNorm"
         Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``.
+        ``"TELayerNorm"`` refers to the Transformer Engine implementation of LayerNorm and
+        requires NVIDIA Transformer Engine to be installed (optional dependency).
 
     Forward
     -------
@@ -242,22 +244,6 @@ class MeshGraphNet(Module):
         graph: GraphType,
         **kwargs,
     ) -> Float[torch.Tensor, "num_nodes output_dim"]:
-        r"""Forward pass.
-
-        Parameters
-        ----------
-        node_features : torch.Tensor
-            Input node features of shape :math:`(N_{nodes}, D_{in}^{node})`.
-        edge_features : torch.Tensor
-            Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
-        graph : GraphType
-            Graph container.
-
-        Returns
-        -------
-        torch.Tensor
-            Output node features of shape :math:`(N_{nodes}, D_{out})`.
-        """
         if not torch.compiler.is_compiling():
             if (
                 node_features.ndim != 2
@@ -299,7 +285,9 @@ class MeshGraphNetProcessor(Module):
     aggregation : Literal["sum", "mean"], optional, default="sum"
         Message aggregation type. Allowed values are ``"sum"`` and ``"mean"``.
     norm_type : Literal["LayerNorm", "TELayerNorm"], optional, default="LayerNorm"
-        Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``
+        Normalization type. Allowed values are ``"LayerNorm"`` and ``"TELayerNorm"``.
+        ``"TELayerNorm"`` uses the Transformer Engine LayerNorm and requires NVIDIA
+        Transformer Engine to be installed.
     activation_fn : torch.nn.Module, optional, default=nn.ReLU()
         Activation function module used inside the MLPs.
     do_concat_trick : bool, optional, default=False
@@ -500,22 +488,6 @@ class MeshGraphNetProcessor(Module):
         edge_features: Tensor,
         graph: GraphType,
     ) -> Tensor:
-        r"""Forward pass of the processor.
-
-        Parameterss
-        ----------
-        node_features : torch.Tensor
-            Node features of shape :math:`(N_{nodes}, D_{node})`.
-        edge_features : torch.Tensor
-            Edge features of shape :math:`(N_{edges}, D_{edge})`.
-        graph : GraphType
-            Graph container.
-
-        Returns
-        -------
-        torch.Tensor
-            Updated node features of shape :math:`(N_{nodes}, D_{node})`.
-        """
         if not torch.compiler.is_compiling():
             if node_features.ndim != 2 or node_features.shape[1] != self.input_dim_node:
                 raise ValueError(
