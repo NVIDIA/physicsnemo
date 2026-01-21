@@ -141,7 +141,6 @@ def radius_search_warp(
     queries: Float[Tensor, "M 3"],
     radius: float,
     grid_dim: Union[int, Tuple[int, int, int]] = (128, 128, 128),
-    device: str = "cuda",
 ) -> Tuple[Float[Tensor, "Q"], Float[Tensor, "Q"], Float[Tensor, "M + 1"]]:  # noqa: F821
     """
     Args:
@@ -149,7 +148,6 @@ def radius_search_warp(
         queries: [M, 3]
         radius: float
         grid_dim: Union[int, Tuple[int, int, int]]
-        device: str
 
     Returns:
         neighbor_index: [Q]
@@ -161,6 +159,10 @@ def radius_search_warp(
         raise ValueError("points must be contiguous")
     if not queries.is_contiguous():
         raise ValueError("queries must be contiguous")
+
+    # Derive device from input tensors
+    device = str(points.device)
+
     points_wp = wp.from_torch(points, dtype=wp.vec3)
     queries_wp = wp.from_torch(queries, dtype=wp.vec3)
 
@@ -185,7 +187,6 @@ def batched_radius_search_warp(
     queries: Float[Tensor, "B M 3"],
     radius: float,
     grid_dim: Union[int, Tuple[int, int, int]] = (128, 128, 128),
-    device: str = "cuda",
 ) -> Tuple[Float[Tensor, "Q"], Float[Tensor, "Q"], Float[Tensor, "B*M + 1"]]:  # noqa: F821
     """
     Args:
@@ -193,7 +194,6 @@ def batched_radius_search_warp(
         queries: [B, M, 3]
         radius: float
         grid_dim: Union[int, Tuple[int, int, int]]
-        device: str
 
     Returns:
         neighbor_index: [Q]
@@ -212,7 +212,6 @@ def batched_radius_search_warp(
             queries=queries[b],
             radius=radius,
             grid_dim=grid_dim,
-            device=device,
         )
         neighbor_index_list.append(neighbor_index + index_offset)
         neighbor_distance_list.append(neighbor_distance)
