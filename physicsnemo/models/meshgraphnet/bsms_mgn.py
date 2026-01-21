@@ -64,6 +64,14 @@ class BiStrideMeshGraphNet(MeshGraphNet):
         Number of MLP layers for processing nodes in each message passing block.
     num_layers_edge_processor : int, optional, default=2
         Number of MLP layers for processing edge features in each message passing block.
+    num_mesh_levels : int, optional, default=2
+        Number of mesh levels used by the bi-stride U-Net (multi-scale) processor.
+    bistride_pos_dim : int, optional, default=3
+        Dimensionality of node positions stored in ``graph.pos`` (required by bi-stride).
+    num_layers_bistride : int, optional, default=2
+        Number of layers within each bi-stride message passing block.
+    bistride_unet_levels : int, optional, default=1
+        Number of times to apply the bi-stride U-Net (depth of repeat).
     hidden_dim_processor : int, optional, default=128
         Hidden layer size for the message passing blocks.
     hidden_dim_node_encoder : int, optional, default=128
@@ -91,6 +99,8 @@ class BiStrideMeshGraphNet(MeshGraphNet):
         For example, if ``processor_size`` is 15, then ``num_processor_checkpoint_segments`` can be 10
         since it's a factor of :math:`15 \times 2 = 30`. Start with fewer segments if memory is tight,
         as each segment affects training speed.
+    recompute_activation : bool, optional, default=False
+        Whether to recompute activations during backward to reduce memory usage.
 
     Forward
     -------
@@ -108,6 +118,7 @@ class BiStrideMeshGraphNet(MeshGraphNet):
         The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
         :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        Requires ``graph.pos`` with shape :math:`(N_{nodes}, \text{bistride\_pos\_dim})` for bi-stride.
     ms_edges : Iterable[torch.Tensor], optional
         Multi-scale edge lists; each is typically an integer tensor of shape :math:`(2, E_l)`.
     ms_ids : Iterable[torch.Tensor], optional
@@ -124,21 +135,24 @@ class BiStrideMeshGraphNet(MeshGraphNet):
     >>> from torch_geometric.data import Data
     >>> from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
     >>>
+    >>> # Choose a device and create the model on it
+    >>> device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    >>>
     >>> # Create a simple graph
     >>> num_nodes = 8
-    >>> src = torch.arange(num_nodes - 1)
-    >>> dst = torch.arange(num_nodes - 1) + 1
+    >>> src = torch.arange(num_nodes, device=device)
+    >>> dst = (src + 1) % num_nodes
     >>> edge_index = torch.stack([src, dst], dim=0)  # (2, E)
-    >>> graph = Data(edge_index=edge_index, num_nodes=num_nodes)
-    >>> graph.pos = torch.randn(num_nodes, 3)  # position needed by bi-stride
+    >>> graph = Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
+    >>> graph.pos = torch.randn(num_nodes, 3, device=device)  # position needed by bi-stride
     >>>
     >>> # Features
-    >>> node_features = torch.randn(num_nodes, 10)
-    >>> edge_features = torch.randn(edge_index.shape[1], 4)
+    >>> node_features = torch.randn(num_nodes, 10, device=device)
+    >>> edge_features = torch.randn(edge_index.shape[1], 4, device=device)
     >>>
     >>> # Multi-scale inputs (one level for simplicity)
-    >>> ms_edges = [edge_index]                  # list of (2, E_l) tensors
-    >>> ms_ids = [torch.arange(num_nodes)]       # list of (N_l,) tensors
+    >>> ms_edges = [edge_index, edge_index]  # list of (2, E_l) tensors
+    >>> ms_ids = [torch.arange(num_nodes, device=device), torch.arange(num_nodes, device=device)]  # list of (N_l,) tensors
     >>>
     >>> # Model
     >>> model = BiStrideMeshGraphNet(
@@ -150,7 +164,8 @@ class BiStrideMeshGraphNet(MeshGraphNet):
     ...     hidden_dim_node_encoder=16,
     ...     hidden_dim_edge_encoder=16,
     ...     num_layers_bistride=1,
-    ... )
+    ...     num_mesh_levels=1,
+    ... ).to(device)
     >>>
     >>> out = model(node_features, edge_features, graph, ms_edges, ms_ids)
     >>> out.size()

@@ -135,8 +135,9 @@ class HybridMeshGraphNet(MeshGraphNet):
     >>> from torch_geometric.data import Data
     >>> from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
     >>>
-    >>> # Create model
-    >>> model = HybridMeshGraphNet(input_dim_nodes=4, input_dim_edges=3, output_dim=2)
+    >>> # Create model on a consistent device
+    >>> device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    >>> model = HybridMeshGraphNet(input_dim_nodes=4, input_dim_edges=3, output_dim=2).to(device)
     >>>
     >>> # Create connectivity: mesh edges and world edges, then combine
     >>> num_nodes, num_mesh_edges, num_world_edges = 10, 5, 5
@@ -147,12 +148,12 @@ class HybridMeshGraphNet(MeshGraphNet):
     >>> world_dst = torch.randint(0, num_nodes, (num_world_edges,))
     >>> world_edge_index = torch.stack([world_src, world_dst], dim=0)  # (2, E_world)
     >>> edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)  # (2, E)
-    >>> graph = Data(edge_index=edge_index, num_nodes=num_nodes)
+    >>> graph = Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
     >>>
     >>> # Features: pass separately for mesh and world edges, and for nodes
-    >>> node_features = torch.randn(num_nodes, 4)
-    >>> mesh_edge_features = torch.randn(num_mesh_edges, 3)
-    >>> world_edge_features = torch.randn(num_world_edges, 3)
+    >>> node_features = torch.randn(num_nodes, 4, device=device)
+    >>> mesh_edge_features = torch.randn(num_mesh_edges, 3, device=device)
+    >>> world_edge_features = torch.randn(num_world_edges, 3, device=device)
     >>>
     >>> # Forward
     >>> out = model(node_features, mesh_edge_features, world_edge_features, graph)
