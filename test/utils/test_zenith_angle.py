@@ -25,9 +25,7 @@
 # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 
-from datetime import datetime
-
-from datetime import UTC
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
