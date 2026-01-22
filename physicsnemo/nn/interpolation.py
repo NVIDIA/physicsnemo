@@ -110,7 +110,6 @@ def smooth_step_2(x: Tensor) -> Tensor:
     return torch.clip(x**3 * (6 * x**2 - 15 * x + 10), 0, 1)
 
 
-@torch.compile
 def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the nearest neighbor weighting for the given distance vector.
@@ -140,7 +139,6 @@ def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return torch.ones(dist_vec.shape[:-2] + [1] + [1], device=dist_vec.device)
 
 
-@torch.compile
 def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
     dim = lower_point.shape[-1]
     weights = []
@@ -155,7 +153,6 @@ def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
     return torch.unsqueeze(weights, dim=-1)
 
 
-@torch.compile
 def linear_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the linear weighting based on the distance vector and spacing.
@@ -178,7 +175,6 @@ def linear_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
-@torch.compile
 def smooth_step_1_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the weighting using the `smooth_step_1` function on the normalized
@@ -202,7 +198,6 @@ def smooth_step_1_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
-@torch.compile
 def smooth_step_2_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the weighting using the `smooth_step_2` function on the normalized
@@ -332,7 +327,6 @@ def index_values_low_mem(points: Tensor, idx: Tensor) -> Tensor:
     return vertices4d
 
 
-@torch.compile
 def _grid_knn_idx(
     query_points: Tensor,
     grid: List[Tuple[float, float, int]],
