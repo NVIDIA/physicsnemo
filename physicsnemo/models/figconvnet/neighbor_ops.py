@@ -407,7 +407,7 @@ def neighbor_knn_search(
 
     Raises
     ------
-    AssertionError
+    ValueError
         If k is out of valid range.
     ValueError
         If an unsupported search method is specified.
