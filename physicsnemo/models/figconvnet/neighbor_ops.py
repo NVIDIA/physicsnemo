@@ -150,8 +150,8 @@ class NeighborSearchReturn:
         NeighborSearchReturn
             Self, with tensors on target device.
         """
-        self._neighbors_index.to(device)
-        self._neighbors_row_splits.to(device)
+        self._neighbors_index = self._neighbors_index.to(device)
+        self._neighbors_row_splits = self._neighbors_row_splits.to(device)
         return self
 
 
