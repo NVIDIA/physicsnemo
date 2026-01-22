@@ -407,12 +407,16 @@ class FIGConvUNet(BaseModel):
                     GridFeatureConv2DBlocksAndIntraCommunication(
                         in_channels=hidden_channels[level + 1],
                         out_channels=hidden_channels[level + 1],
+                down_block.extend([
+                    GridFeatureConv2DBlocksAndIntraCommunication(
+                        in_channels=hidden_channels[level + 1],
+                        out_channels=hidden_channels[level + 1],
                         kernel_size=kernel_size,
                         stride=1,
                         compressed_spatial_dims=compressed_spatial_dims,
                         communication_types=communication_types,
                     )
-                )
+                ])
             down_block = nn.Sequential(*down_block)
             self.down_blocks.append(down_block)
 
