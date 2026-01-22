@@ -115,7 +115,6 @@ class TestDPOTNet:
             assert block.norm1.num_groups == 4
             assert block.norm2.num_groups == 4
 
-
     def test_input_validation(self):
         """Test input shape validation."""
         model = DPOTNet(
