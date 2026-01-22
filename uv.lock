@@ -1195,49 +1195,6 @@ wheels = [
 ]
 
 [[package]]
-name = "earth2grid"
-version = "2025.11.1+torch210"
-source = { url = "https://github.com/NVlabs/earth2grid/archive/refs/tags/v2025.11.1.tar.gz" }
-dependencies = [
-    { name = "einops" },
-    { name = "numpy" },
-    { name = "scipy" },
-    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
-    { name = "torch", version = "2.10.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform != 'darwin'" },
-]
-sdist = { hash = "sha256:f6e3aa22066d0b9b2c87473171548e32c0480b68b5ba9b4a165d5963fb1fc94b" }
-
-[package.metadata]
-requires-dist = [
-    { name = "black", marker = "extra == 'test'", specifier = ">=21.5b2" },
-    { name = "bump2version", marker = "extra == 'dev'", specifier = ">=1.0.1" },
-    { name = "coverage", marker = "extra == 'test'", specifier = ">=7.0.0" },
-    { name = "einops", specifier = ">=0.7.0" },
-    { name = "flake8", marker = "extra == 'test'", specifier = ">=3.9.2" },
-    { name = "flake8-docstrings", marker = "extra == 'test'", specifier = ">=1.6.0" },
-    { name = "isort", marker = "extra == 'test'", specifier = ">=5.8.0" },
-    { name = "matplotlib", marker = "extra == 'test'" },
-    { name = "matplotlib", marker = "extra == 'viz'" },
-    { name = "mypy", marker = "extra == 'test'", specifier = ">=0.900" },
-    { name = "netcdf4", marker = "extra == 'all'", specifier = ">=1.6.5" },
-    { name = "numpy", specifier = ">=1.23.3" },
-    { name = "pip", marker = "extra == 'dev'", specifier = ">=20.3.1" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=2.12.0" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=6.2.4" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=2.12.0" },
-    { name = "pytest-regtest", marker = "extra == 'test'", specifier = ">=1.5.1,<2" },
-    { name = "pyvista", marker = "extra == 'viz'", specifier = ">=0.43.2" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.5" },
-    { name = "scipy" },
-    { name = "toml", marker = "extra == 'dev'", specifier = ">=0.10.2" },
-    { name = "torch", specifier = ">=2.10,<2.11" },
-    { name = "tox", marker = "extra == 'dev'", specifier = ">=3.20.1" },
-    { name = "twine", marker = "extra == 'dev'", specifier = ">=3.3.0" },
-    { name = "virtualenv", marker = "extra == 'dev'", specifier = ">=20.2.2" },
-]
-provides-extras = ["all", "viz", "test", "dev"]
-
-[[package]]
 name = "einops"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3325,9 +3282,6 @@ gnns = [
     { name = "vtk" },
     { name = "wandb" },
 ]
-healpix = [
-    { name = "earth2grid" },
-]
 mesh-extras = [
     { name = "matplotlib" },
     { name = "pyvista" },
@@ -3399,7 +3353,6 @@ requires-dist = [
     { name = "cupy-cuda13x", marker = "extra == 'nn-extras'" },
     { name = "cupy-cuda13x", marker = "extra == 'utils-extras'" },
     { name = "dask", marker = "extra == 'datapipes-extras'" },
-    { name = "earth2grid", marker = "extra == 'healpix'", url = "https://github.com/NVlabs/earth2grid/archive/refs/tags/v2025.11.1.tar.gz" },
     { name = "einops", specifier = ">=0.8.1" },
     { name = "gitpython", specifier = ">=3.1.40" },
     { name = "h5py", specifier = ">=3.15.1" },
@@ -3481,7 +3434,7 @@ requires-dist = [
     { name = "xarray", specifier = ">=2025.6.1" },
     { name = "zarr", specifier = ">=2.18.3" },
 ]
-provides-extras = ["datapipes-extras", "gnns", "healpix", "mesh-extras", "model-extras", "nn-extras", "utils-extras"]
+provides-extras = ["datapipes-extras", "gnns", "mesh-extras", "model-extras", "nn-extras", "utils-extras"]
 
 [package.metadata.requires-dev]
 dev = [
