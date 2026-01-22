@@ -482,7 +482,7 @@ def batched_neighbor_knn_search(
 
     Raises
     ------
-    AssertionError
+    ValueError
         If batch sizes don't match.
 
     Examples
