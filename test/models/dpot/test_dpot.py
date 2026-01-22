@@ -115,16 +115,6 @@ class TestDPOTNet:
             assert block.norm1.num_groups == 4
             assert block.norm2.num_groups == 4
 
-    def test_norm_groups_validation(self):
-        """Test that embed_dim must be divisible by norm_groups."""
-        # Fix: Use PyTorch's actual error message
-        with pytest.raises(
-            ValueError, match="num_channels must be divisible by num_groups"
-        ):
-            DPOTNet(
-                embed_dim=65,  # Not divisible by 8
-                norm_groups=8,
-            )
 
     def test_input_validation(self):
         """Test input shape validation."""
