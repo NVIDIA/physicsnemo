@@ -163,7 +163,7 @@ class PointFeatures:
 
         Raises
         ------
-        AssertionError
+        ValueError
             If tensor shapes are invalid or inconsistent.
         """
         if self.vertices.ndim != 3:
