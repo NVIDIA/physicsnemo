@@ -25,11 +25,10 @@
 # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
 # OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
-from pytz import utc
 
 from physicsnemo.utils.zenith_angle import (
     _datetime_to_julian_century,
@@ -52,7 +51,7 @@ from physicsnemo.utils.zenith_angle import (
     ),
 )
 def test_zenith_angle(time, lon, lat, expected):
-    time = time.replace(tzinfo=utc)
+    time = time.replace(tzinfo=UTC)
     assert cos_zenith_angle(time, lon, lat) == pytest.approx(expected, abs=1e-10)
     timestamp = time.timestamp()
     assert cos_zenith_angle_from_timestamp(timestamp, lon, lat) == pytest.approx(
@@ -74,17 +73,17 @@ def test_zenith_angle_array():
         datetime(2020, 7, 6, 9, 0, 0),
         datetime(2000, 1, 1, 12, 0, 0),
         datetime(2000, 7, 1, 12, 0, 0),
-        datetime(2000, 7, 1, 12, 0, 0, tzinfo=utc),
+        datetime(2000, 7, 1, 12, 0, 0, tzinfo=UTC),
     ],
 )
 def test_timestamp_to_julian_centuries(t):
     a = _datetime_to_julian_century(t)
-    b = _timestamp_to_julian_century(t.replace(tzinfo=utc).timestamp())
+    b = _timestamp_to_julian_century(t.replace(tzinfo=UTC).timestamp())
     assert a == b
 
 
 def test_toa():
-    t = datetime(2000, 7, 1, 12, 0, 0, tzinfo=utc).timestamp()
+    t = datetime(2000, 7, 1, 12, 0, 0, tzinfo=UTC).timestamp()
     lat, lon = 0.0, 0.0
     ans = toa_incident_solar_radiation_accumulated(t, lat, lon)
     assert ans >= 0
