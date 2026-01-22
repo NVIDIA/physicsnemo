@@ -117,7 +117,7 @@ def test_figconvunet_forward(pytestconfig, device):
     torch.manual_seed(0)
 
     if device == "cpu":
-        pytest.skip("FigConvUNet is not reproducable between CPU vs. GPU.")
+        pytest.skip("FigConvUNet is not reproducible between CPU vs. GPU.")
 
     model = _create_model().to(device)
     model.eval()
