@@ -73,18 +73,23 @@ name = "nvidia"
 url = "https://pypi.nvidia.com"
 explicit = true  # Only use for packages that explicitly specify this index
 
-# PyTorch CUDA 13 index - needed for torch builds compatible with cuml-cu13.
-# torch 2.10+ on PyPI (CUDA 12.8) pins cuda-bindings==12.9.4, which conflicts
-# with cuml-cu13's requirement for cuda-bindings>=13.0.1 via cuda-python.
+# PyTorch CUDA 13 index - used on Linux and Windows for torch builds compatible with cuml-cu13.
+# torch 2.10+ on PyPI (CUDA 12.8) pins cuda-bindings==12.9.4, which conflicts with
+# cuml-cu13's requirement for cuda-bindings>=13.0.1 via cuda-python.
 # The CUDA 13 build of torch pins cuda-bindings==13.0.3, which is compatible.
+# On Mac, we fall back to PyPI (CUDA is not available on macOS).
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu130" }
-torchvision = { index = "pytorch-cu130" }
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+]
 earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/refs/tags/v2025.11.1.tar.gz" }
 cuml-cu13 = { index = "nvidia" }
 pylibraft-cu13 = { index = "nvidia" }
