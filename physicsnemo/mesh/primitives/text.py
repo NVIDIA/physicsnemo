@@ -5,13 +5,13 @@ dimensional configurations: 1D curves, 2D surfaces, 3D volumes, and boundaries.
 
 Uses matplotlib's font rendering, Delaunay triangulation, and intelligent
 hole detection (for letters like 'o', 'e', 'a') using the shoelace formula.
+
+This module requires matplotlib to be installed.
 """
 
 import torch
-from matplotlib.font_manager import FontProperties
-from matplotlib.path import Path
-from matplotlib.textpath import TextPath
 
+from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.projections import embed_in_spatial_dims, extrude
 
@@ -62,8 +62,16 @@ def _sample_curve_segment(p0, control_points, pn, num_samples: int):
 
 def _text_to_path(
     text: str, font_size: float = 12.0, samples_per_unit: float = 10
-) -> tuple[torch.Tensor, torch.Tensor, Path]:
-    """Convert text to sampled path with edges."""
+):
+    """Convert text to sampled path with edges.
+
+    Returns:
+        Tuple of (points, edges, matplotlib Path object)
+    """
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.path import Path
+    from matplotlib.textpath import TextPath
+
     fp = FontProperties(family="sans-serif", weight="bold")
     text_path = TextPath((0, 0), text, size=font_size, prop=fp)
 
@@ -192,13 +200,13 @@ def _refine_edges(points: torch.Tensor, edges: torch.Tensor, max_length: float):
     return torch.cat(refined_points, dim=0), torch.stack(refined_edges, dim=0)
 
 
-def _group_letters(text_path: Path):
+def _group_letters(text_path):
     """Group polygons into letters using signed area and containment."""
     import numpy as np
     from matplotlib.path import Path as MplPath
 
     path_codes = np.array(text_path.codes)
-    closepoly_indices = np.where(path_codes == Path.CLOSEPOLY)[0]
+    closepoly_indices = np.where(path_codes == MplPath.CLOSEPOLY)[0]
 
     outers, holes = [], []
     start_idx = 0
@@ -237,12 +245,13 @@ def _group_letters(text_path: Path):
     return letter_groups
 
 
-def _winding_number(points: torch.Tensor, path: Path) -> torch.Tensor:
+def _winding_number(points: torch.Tensor, path) -> torch.Tensor:
     """Compute winding number for path containment test."""
     import numpy as np
+    from matplotlib.path import Path as MplPath
 
     path_codes = np.array(path.codes)
-    moveto_indices = np.where(path_codes == Path.MOVETO)[0]
+    moveto_indices = np.where(path_codes == MplPath.MOVETO)[0]
     total_winding = torch.zeros(len(points), dtype=torch.float32, device=points.device)
 
     for i, start_idx in enumerate(moveto_indices):
@@ -368,6 +377,7 @@ def _triangulate(points, edges, text_path):
     return all_points, triangles
 
 
+@require_version_spec("matplotlib")
 def text_1d_2d(
     text: str = "physicsnemo.mesh",
     font_size: float = 12.0,
@@ -406,6 +416,7 @@ def text_1d_2d(
     )
 
 
+@require_version_spec("matplotlib")
 def text_2d_2d(
     text: str = "physicsnemo.mesh",
     font_size: float = 12.0,
@@ -447,6 +458,7 @@ def text_2d_2d(
     )
 
 
+@require_version_spec("matplotlib")
 def text_3d_3d(
     text: str = "physicsnemo.mesh",
     font_size: float = 12.0,
@@ -506,6 +518,7 @@ def text_3d_3d(
     return volume
 
 
+@require_version_spec("matplotlib")
 def text_2d_3d(
     text: str = "physicsnemo.mesh",
     font_size: float = 12.0,

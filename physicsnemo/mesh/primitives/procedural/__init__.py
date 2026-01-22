@@ -21,6 +21,7 @@ modifications to meshes, plus standalone noise generation functions.
 """
 
 from physicsnemo.mesh.primitives.procedural import (
+    lumpy_sphere,
     noisy_mesh,
     perturbed_grid,
 )

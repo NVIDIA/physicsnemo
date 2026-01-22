@@ -6,11 +6,14 @@ manifold dimensions, and compute backends.
 """
 
 import pytest
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
+
+# PyVista is optional; tests that cross-validate against it are skipped if unavailable
+pv = pytest.importorskip("pyvista")
+
+from physicsnemo.mesh.io.io_pyvista import from_pyvista  # noqa: E402
 
 ### Helper Functions (shared across tests) ###
 

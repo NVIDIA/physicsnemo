@@ -3,7 +3,10 @@
 import pytest
 import torch
 
-from physicsnemo.mesh.primitives.text import (
+# Skip this module if matplotlib is not available (text primitives require it)
+pytest.importorskip("matplotlib")
+
+from physicsnemo.mesh.primitives.text import (  # noqa: E402
     text_1d_2d,
     text_2d_2d,
     text_2d_3d,
