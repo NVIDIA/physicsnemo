@@ -66,7 +66,6 @@ managed = true
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
-earth2grid = ["setuptools", "torch"]
 
 [[tool.uv.index]]
 name = "nvidia"
@@ -90,7 +89,6 @@ torch = [
 torchvision = [
     { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
 ]
-earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/refs/tags/v2025.11.1.tar.gz" }
 cuml-cu13 = { index = "nvidia" }
 pylibraft-cu13 = { index = "nvidia" }
 cuml-cu12 = { index = "nvidia" } # TODO setup optional install groups for CUDA 12 installations
@@ -193,10 +191,6 @@ gnns = [
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]
-healpix = [
-    "earth2grid",
-]
-
 
 #####################################################################
 # Linting configuration
