@@ -24,11 +24,7 @@ from pathlib import Path
 from threading import local
 from typing import Any
 
-try:
-    from termcolor import colored
-except ImportError:
-    colored = None
-
+from termcolor import colored
 
 # Thread-local storage for context information
 _context_storage = local()
