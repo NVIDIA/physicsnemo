@@ -4,11 +4,10 @@ Tests all code paths including DEC operators, error cases, and edge conditions.
 """
 
 import pytest
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.primitives import procedural
 
 
 @pytest.fixture
@@ -297,7 +296,7 @@ class TestGradientTypes:
 
     def test_extrinsic_gradient(self):
         """Test gradient_type='extrinsic'."""
-        mesh = from_pyvista(pv.examples.load_airplane())
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=2)
         mesh.point_data["test"] = torch.ones(mesh.n_points)
 
         mesh_grad = mesh.compute_point_derivatives(
@@ -309,7 +308,7 @@ class TestGradientTypes:
 
     def test_intrinsic_gradient(self):
         """Test gradient_type='intrinsic'."""
-        mesh = from_pyvista(pv.examples.load_airplane())
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=2)
         mesh.point_data["test"] = torch.ones(mesh.n_points)
 
         mesh_grad = mesh.compute_point_derivatives(
@@ -321,7 +320,7 @@ class TestGradientTypes:
 
     def test_both_gradients(self):
         """Test gradient_type='both'."""
-        mesh = from_pyvista(pv.examples.load_airplane())
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=2)
         mesh.point_data["test"] = torch.ones(mesh.n_points)
 
         mesh_grad = mesh.compute_point_derivatives(keys="test", gradient_type="both")
@@ -658,7 +657,7 @@ class TestTangentSpaceProjection:
 
         torch.manual_seed(42)
         # Surface mesh
-        mesh = from_pyvista(pv.examples.load_airplane())
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=2)
 
         # Tensor gradient (n_points, n_spatial_dims, 2)
         tensor_grads = torch.randn(mesh.n_points, 3, 2)
@@ -715,7 +714,7 @@ class TestDerivativesMethodCombinations:
 
     def test_dec_method_extrinsic_gradient(self):
         """Test method='dec' with gradient_type='extrinsic'."""
-        mesh = from_pyvista(pv.examples.load_airplane())
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=2)
         mesh.point_data["test"] = torch.ones(mesh.n_points)
 
         mesh_grad = mesh.compute_point_derivatives(
@@ -726,7 +725,7 @@ class TestDerivativesMethodCombinations:
 
     def test_dec_method_both_gradients(self):
         """Test method='dec' with gradient_type='both'."""
-        mesh = from_pyvista(pv.examples.load_airplane())
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=2)
         mesh.point_data["test"] = torch.ones(mesh.n_points)
 
         mesh_grad = mesh.compute_point_derivatives(

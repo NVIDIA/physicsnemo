@@ -5,10 +5,9 @@ fields with known derivatives. Verifies fundamental calculus identities.
 """
 
 import pytest
-import pyvista as pv
 import torch
 
-from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.mesh.primitives import procedural, volumes
 
 
 ### Analytical field generators
@@ -152,20 +151,6 @@ def make_harmonic_field_xy():
 
 ### Mesh fixtures
 @pytest.fixture
-def tetbeam_mesh():
-    """3D tetrahedral mesh (uniform, good quality)."""
-    pv_mesh = pv.examples.load_tetbeam()
-    return from_pyvista(pv_mesh)
-
-
-@pytest.fixture
-def airplane_mesh():
-    """2D surface mesh in 3D space."""
-    pv_mesh = pv.examples.load_airplane()
-    return from_pyvista(pv_mesh)
-
-
-@pytest.fixture
 def simple_triangle_mesh_2d():
     """Simple 2D triangle mesh for basic tests."""
     points = torch.tensor(
@@ -196,9 +181,9 @@ def simple_triangle_mesh_2d():
 class TestGradient:
     """Test gradient computation."""
 
-    def test_gradient_of_constant_is_zero(self, tetbeam_mesh):
+    def test_gradient_of_constant_is_zero(self):
         """∇(const) = 0."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Create constant field
         const_value = 5.0
@@ -214,9 +199,9 @@ class TestGradient:
         # Should be zero everywhere
         assert torch.allclose(gradient, torch.zeros_like(gradient), atol=1e-6)
 
-    def test_gradient_of_linear_is_exact(self, tetbeam_mesh):
+    def test_gradient_of_linear_is_exact(self):
         """∇(a·r) = a exactly for linear fields."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Linear field: φ = 2x + 3y - z
         coeffs = torch.tensor([2.0, 3.0, -1.0])
@@ -235,14 +220,14 @@ class TestGradient:
         assert torch.allclose(gradient, expected, atol=1e-4)
 
     @pytest.mark.parametrize("method", ["lsq"])
-    def test_quadratic_hessian_uniformity(self, tetbeam_mesh, method):
+    def test_quadratic_hessian_uniformity(self, method):
         """φ = ||r||² has uniform Laplacian (Hessian trace is constant).
 
         This tests the KEY property: Laplacian of ||r||² should be spatially uniform.
         The absolute value may have systematic bias in first-order methods, but
         the spatial variation (std dev) should be small relative to mean.
         """
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Quadratic field
         phi = (mesh.points**2).sum(dim=-1)
@@ -274,9 +259,9 @@ class TestGradient:
 class TestDivergence:
     """Test divergence computation with analytical fields."""
 
-    def test_uniform_divergence_3d(self, tetbeam_mesh):
+    def test_uniform_divergence_3d(self):
         """v = [x,y,z], div(v) = 3 (constant everywhere)."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Vector field v = r
         v = mesh.points.clone()
@@ -291,9 +276,9 @@ class TestDivergence:
             divergence, torch.full_like(divergence, expected), atol=1e-4
         ), f"Divergence mean={divergence.mean():.6f}, expected={expected}"
 
-    def test_scaled_divergence_field(self, tetbeam_mesh):
+    def test_scaled_divergence_field(self):
         """v = [2x, 3y, 4z], div(v) = 2+3+4 = 9."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         v = mesh.points.clone()
         v[:, 0] *= 2.0
@@ -307,9 +292,9 @@ class TestDivergence:
         # Should be exactly 9
         assert torch.allclose(divergence, torch.full_like(divergence, 9.0), atol=1e-4)
 
-    def test_zero_divergence_rotation(self, tetbeam_mesh):
+    def test_zero_divergence_rotation(self):
         """v = [-y,x,0], div(v) = 0 (solenoidal field)."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Rotation field
         v = torch.zeros_like(mesh.points)
@@ -324,9 +309,9 @@ class TestDivergence:
         # Should be exactly zero (linear field components)
         assert torch.allclose(divergence, torch.zeros_like(divergence), atol=1e-6)
 
-    def test_zero_divergence_field_xyz(self, tetbeam_mesh):
+    def test_zero_divergence_field_xyz(self):
         """v = [yz, xz, xy], div(v) = 0."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         x, y, z = mesh.points[:, 0], mesh.points[:, 1], mesh.points[:, 2]
         v = torch.stack([y * z, x * z, x * y], dim=-1)
@@ -343,9 +328,9 @@ class TestDivergence:
 class TestCurl:
     """Test curl computation with analytical fields."""
 
-    def test_uniform_curl_3d(self, tetbeam_mesh):
+    def test_uniform_curl_3d(self):
         """v = [-y,x,0], curl(v) = [0,0,2] (uniform curl)."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Rotation field
         v = torch.zeros_like(mesh.points)
@@ -363,9 +348,9 @@ class TestCurl:
 
         assert torch.allclose(curl_v, expected, atol=1e-4)
 
-    def test_zero_curl_conservative_field(self, tetbeam_mesh):
+    def test_zero_curl_conservative_field(self):
         """v = r = ∇(½||r||²), curl(v) = 0 (irrotational)."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Conservative field (gradient of potential)
         v = mesh.points.clone()
@@ -377,9 +362,9 @@ class TestCurl:
         # Should be exactly zero (curl of gradient of linear function)
         assert torch.allclose(curl_v, torch.zeros_like(curl_v), atol=1e-6)
 
-    def test_helical_field(self, tetbeam_mesh):
+    def test_helical_field(self):
         """v = [-y, x, z], curl(v) = [0, 0, 2]."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         v = torch.zeros_like(mesh.points)
         v[:, 0] = -mesh.points[:, 1]
@@ -395,9 +380,9 @@ class TestCurl:
 
         assert torch.allclose(curl_v, expected, atol=1e-4)
 
-    def test_curl_multiple_axes(self, tetbeam_mesh):
+    def test_curl_multiple_axes(self):
         """Test curl with rotation about different axes (all linear fields)."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Test 1: Rotation about z-axis: v = [-y, x, 0], curl = [0, 0, 2]
         v_z = torch.zeros_like(mesh.points)
@@ -498,14 +483,10 @@ class TestLaplacian:
         well-centered meshes where circumcenters lie inside triangles. Axis-aligned
         grids create poorly-conditioned duals.
         """
-        import pyvista as pv
-
-        from physicsnemo.mesh.io import from_pyvista
+        from physicsnemo.mesh.primitives.surfaces import sphere_uv
 
         # Use a sphere mesh which is naturally well-centered (close to Delaunay)
-        # Subdivide for refinement
-        sphere_pv = pv.Sphere(radius=1.0, theta_resolution=20, phi_resolution=20)
-        mesh = from_pyvista(sphere_pv)
+        mesh = sphere_uv.load(radius=1.0, theta_resolution=20, phi_resolution=20)
 
         # Test function: φ = z²
         # On a sphere, this is NOT constant, so we get a non-trivial Laplacian
@@ -526,9 +507,9 @@ class TestLaplacian:
 class TestManifolds:
     """Test calculus on manifolds (surfaces in higher dimensions)."""
 
-    def test_intrinsic_gradient_orthogonal_to_normal(self, airplane_mesh):
+    def test_intrinsic_gradient_orthogonal_to_normal(self):
         """Intrinsic gradient should be perpendicular to surface normal."""
-        mesh = airplane_mesh
+        mesh = procedural.lumpy_sphere.load(radius=1.0, subdivisions=3)
 
         # Any scalar field
         phi = (mesh.points**2).sum(dim=-1)
@@ -560,9 +541,9 @@ class TestManifolds:
 class TestCalculusIdentities:
     """Test fundamental calculus identities."""
 
-    def test_curl_of_gradient_is_zero(self, tetbeam_mesh):
+    def test_curl_of_gradient_is_zero(self):
         """curl(∇φ) = 0 for any scalar field."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Should be zero (curl of conservative field)
         # For LINEAR potential, curl of gradient should be near-exact zero
@@ -581,9 +562,9 @@ class TestCalculusIdentities:
             curl_of_grad_linear, torch.zeros_like(curl_of_grad_linear), atol=1e-6
         )
 
-    def test_divergence_of_curl_is_zero(self, tetbeam_mesh):
+    def test_divergence_of_curl_is_zero(self):
         """div(curl(v)) = 0 for any vector field."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         # Use rotation field
         v = torch.zeros_like(mesh.points)
@@ -610,9 +591,9 @@ class TestParametrized:
 
     @pytest.mark.parametrize("field_type", ["constant", "linear"])
     @pytest.mark.parametrize("method", ["lsq"])
-    def test_gradient_exact_recovery(self, tetbeam_mesh, field_type, method):
+    def test_gradient_exact_recovery(self, field_type, method):
         """Gradient of constant/linear fields should be exact."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
 
         if field_type == "constant":
             phi = torch.full((mesh.n_points,), 5.0)
@@ -631,9 +612,9 @@ class TestParametrized:
         assert torch.allclose(grad, expected_grad, atol=tol)
 
     @pytest.mark.parametrize("divergence_value", [1.0, 3.0, 9.0])
-    def test_uniform_divergence_recovery(self, tetbeam_mesh, divergence_value):
+    def test_uniform_divergence_recovery(self, divergence_value):
         """Divergence of scaled identity field should be exact."""
-        mesh = tetbeam_mesh
+        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
         scale = divergence_value / mesh.n_spatial_dims
         v = mesh.points * scale
 
