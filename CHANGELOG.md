@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+<<<<<<< LEFT
 - Refactored diffusion preconditioners in
   `physicsnemo.diffusion.preconditioners` relying on a new abstract base class
   `BaseAffinePreconditioner` for preconditioning schemes using affine
