@@ -110,6 +110,7 @@ def smooth_step_2(x: Tensor) -> Tensor:
     return torch.clip(x**3 * (6 * x**2 - 15 * x + 10), 0, 1)
 
 
+@torch.compile
 def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the nearest neighbor weighting for the given distance vector.
@@ -136,7 +137,7 @@ def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
         but with the last two dimensions reduced to single dimensions.
 
     """
-    return torch.ones(dist_vec.shape[:-2] + [1] + [1], device=dist_vec.device)
+    return torch.ones(dist_vec.shape[:-2] + (1, 1), device=dist_vec.device)
 
 
 def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
@@ -153,6 +154,7 @@ def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
     return torch.unsqueeze(weights, dim=-1)
 
 
+@torch.compile
 def linear_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the linear weighting based on the distance vector and spacing.
@@ -175,6 +177,7 @@ def linear_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
+@torch.compile
 def smooth_step_1_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the weighting using the `smooth_step_1` function on the normalized
@@ -198,6 +201,7 @@ def smooth_step_1_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
+@torch.compile
 def smooth_step_2_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the weighting using the `smooth_step_2` function on the normalized
@@ -327,6 +331,7 @@ def index_values_low_mem(points: Tensor, idx: Tensor) -> Tensor:
     return vertices4d
 
 
+@torch.compile
 def _grid_knn_idx(
     query_points: Tensor,
     grid: List[Tuple[float, float, int]],
@@ -362,7 +367,7 @@ def _grid_knn_idx(
     # TODO make for more general diminsions
     if len(grid) == 1:
         idx_row_0 = center_idx[..., 0:1] + idx_add
-        idx = idx_row_0.view(idx_row_0.shape[0:2] + torch.Size([int(stride)]))
+        idx = idx_row_0.view(*idx_row_0.shape[:2], stride)
     elif len(grid) == 2:
         dim_size_1 = grid[1][2]
         if padding:
@@ -371,9 +376,7 @@ def _grid_knn_idx(
         idx_row_0 = idx_row_0.unsqueeze(-1)
         idx_row_1 = center_idx[..., 1:2] + idx_add
         idx_row_1 = idx_row_1.unsqueeze(2)
-        idx = (idx_row_0 + idx_row_1).view(
-            idx_row_0.shape[0:2] + torch.Size([int(stride**2)])
-        )
+        idx = (idx_row_0 + idx_row_1).view(*idx_row_0.shape[:2], stride**2)
     elif len(grid) == 3:
         dim_size_1 = grid[1][2]
         dim_size_2 = grid[2][2]
@@ -386,9 +389,7 @@ def _grid_knn_idx(
         idx_row_1 = idx_row_1.unsqueeze(2).unsqueeze(-1)
         idx_row_2 = center_idx[..., 2:3] + idx_add
         idx_row_2 = idx_row_2.unsqueeze(2).unsqueeze(3)
-        idx = (idx_row_0 + idx_row_1 + idx_row_2).view(
-            idx_row_0.shape[0:2] + torch.Size([int(stride**3)])
-        )
+        idx = (idx_row_0 + idx_row_1 + idx_row_2).view(*idx_row_0.shape[:2], stride**3)
     else:
         raise RuntimeError
 
