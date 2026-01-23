@@ -69,6 +69,52 @@ __all__ = [
 ]
 
 
+def _build_radial_mlp(channels_list: list[int]) -> nn.Sequential:
+    """Build an MLP with LayerNorm and SiLU activation between layers.
+
+    This matches the RadialMLP architecture from the reference eSCN implementation.
+    The structure is: Linear -> LayerNorm -> SiLU -> Linear -> LayerNorm -> SiLU -> ... -> Linear
+
+    Parameters
+    ----------
+    channels_list : list[int]
+        List of channel sizes. First element is input size, last is output size.
+        Intermediate elements define hidden layer sizes. Must have at least 2 elements.
+
+    Returns
+    -------
+    nn.Sequential
+        The MLP as a sequential module.
+
+    Examples
+    --------
+    >>> mlp = _build_radial_mlp([64, 128, 256])
+    >>> # Creates: Linear(64->128) -> LayerNorm(128) -> SiLU -> Linear(128->256)
+    >>> x = torch.randn(100, 64)
+    >>> out = mlp(x)
+    >>> out.shape
+    torch.Size([100, 256])
+    """
+    if len(channels_list) < 2:
+        raise ValueError(
+            f"channels_list must have at least 2 elements, got {len(channels_list)}"
+        )
+
+    modules: list[nn.Module] = []
+    for i in range(len(channels_list) - 1):
+        in_ch = channels_list[i]
+        out_ch = channels_list[i + 1]
+
+        modules.append(nn.Linear(in_ch, out_ch, bias=True))
+
+        # Add LayerNorm + SiLU for all but the last layer
+        if i < len(channels_list) - 2:
+            modules.append(nn.LayerNorm(out_ch))
+            modules.append(nn.SiLU())
+
+    return nn.Sequential(*modules)
+
+
 class SO2Convolution(nn.Module):
     """SO(2) equivariant convolution using regular, padded tensor layout.
 
@@ -81,6 +127,10 @@ class SO2Convolution(nn.Module):
     a single vectorized einsum operation, eliminating Python loops and
     intermediate tensors in the forward pass.
 
+    The ``edge_channels`` mechanism also facilitates, as the name suggests,
+    the mixing edge information such as distances to help break degeneracies
+    in the output by modulating what information passes through l, m filters.
+
     Parameters
     ----------
     in_channels : int
@@ -92,8 +142,11 @@ class SO2Convolution(nn.Module):
     mmax : int
         Maximum spherical harmonic order. Must be <= lmax.
     edge_channels : int, optional
-        Edge feature channels for weight modulation. If None, uses internal
-        (shared) weights without edge-dependent modulation. Default: None.
+        Number of edge feature channels for input modulation. When provided,
+        a RadialMLP is used to compute per-coefficient scaling factors from
+        edge features. The input is scaled element-wise before the linear
+        transform, matching the reference eSCN implementation. Default: None
+        (use internal/shared weights without edge modulation).
     extra_m0_output_channels : int, optional
         Additional output channels for m=0 only (used for gating scalars).
         Default: None (no extra channels).
@@ -200,18 +253,16 @@ class SO2Convolution(nn.Module):
         m0_imag_mask[:, :, 0, 1, :] = 0.0  # Zero out m=0 imaginary
         self.register_buffer("m0_imag_mask", m0_imag_mask, persistent=False)
 
-        # Optional radial function for edge-dependent weight modulation
+        # Optional radial function for edge-dependent input modulation
         self.rad_func: nn.Module | None = None
         if not self.internal_weights:
             assert edge_channels is not None
-            # Number of weight parameters to modulate per edge
-            # We modulate W_r and W_i separately, each of shape [mmax+1, in_ch, out_ch]
-            # For simplicity, we output a scale factor per m-order
-            num_modulation_params = (mmax + 1) * 2  # scale for W_r and W_i per m
-            self.rad_func = nn.Sequential(
-                nn.Linear(edge_channels, edge_channels),
-                nn.SiLU(),
-                nn.Linear(edge_channels, num_modulation_params),
+            # Output one modulation scalar per input coefficient
+            # Shape: (lmax+1) * (mmax+1) * 2 * in_channels
+            rad_output_size = (self.lmax + 1) * (self.mmax + 1) * 2 * self.in_channels
+            # MLP: Linear -> LayerNorm -> SiLU -> Linear
+            self.rad_func = _build_radial_mlp(
+                [edge_channels, edge_channels, rad_output_size]
             )
 
         # Optional extra output channels for m=0 (gating)
@@ -293,7 +344,7 @@ class SO2Convolution(nn.Module):
             The dimension of size 2 contains real (index 0) and imaginary
             (index 1) components.
         x_edge : Float[torch.Tensor, "batch edge_channels"], optional
-            Edge features for weight modulation. Required if ``edge_channels``
+            Edge features for input modulation. Required if ``edge_channels``
             was specified during initialization. Default: None.
 
         Returns
@@ -315,21 +366,13 @@ class SO2Convolution(nn.Module):
                 "x_edge is required when edge_channels was specified at init"
             )
 
-        # Get combined complex weight tensor (possibly modulated by edge features)
-        # W shape: [mmax+1, 2, 2, in_channels, out_channels]
-        # where indices are [m, out_ri, in_ri, in_ch, out_ch]
-        W = self._get_complex_weights(x_edge)
+        # Apply edge modulation to INPUT (matching reference implementation)
+        x = self._apply_edge_modulation(x, x_edge)
 
-        # The einsum contracts over:
-        # - r (in_ri): the real/imag input index
-        # - c (in_channels): the input channel dimension
-        # This implements the complex multiplication:
-        # out_r = x_r*W_r - x_i*W_i  (via W[:, 0, 0]=W_r, W[:, 0, 1]=-W_i)
-        # out_i = x_r*W_i + x_i*W_r  (via W[:, 1, 0]=W_i, W[:, 1, 1]=W_r)
-        out = torch.einsum("blmrc,mRrco->blmRo", x, W)
+        # Apply convolution with standard (unmodulated) weights
+        out = torch.einsum("blmrc,mRrco->blmRo", x, self.W_complex)
 
         # Apply mask for invalid (l, m) positions where m > l
-        # mask shape: [lmax+1, mmax+1] -> broadcast to [1, lmax+1, mmax+1, 1, 1]
         mask: torch.Tensor = self.mask  # type: ignore[assignment]
         out = out * mask[None, :, :, None, None]
 
@@ -344,68 +387,44 @@ class SO2Convolution(nn.Module):
         else:
             return out
 
-    def _get_complex_weights(
+    def _apply_edge_modulation(
         self,
+        x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"],
         x_edge: Float[torch.Tensor, "batch edge_channels"] | None,
-    ) -> Float[torch.Tensor, "mmax_plus_1 2 2 in_channels out_channels"]:
-        """Get combined complex weight tensor, optionally modulated by edge features.
+    ) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]:
+        """Apply per-edge, per-coefficient scaling to input features.
+
+        Apply a scalar modulation factor for each input coefficient
+        and rescale the inputs before applying the main linear transform.
 
         Parameters
         ----------
-        x_edge : Float[torch.Tensor, "batch edge_channels"], optional
-            Edge features for weight modulation.
+        x : torch.Tensor
+            Input tensor of shape [batch, lmax+1, mmax+1, 2, in_channels].
+        x_edge : torch.Tensor or None
+            Edge features of shape [batch, edge_channels]. If None or if
+            internal_weights=True, returns x unchanged.
 
         Returns
         -------
         torch.Tensor
-            Combined weight tensor of shape ``[mmax+1, 2, 2, in_channels, out_channels]``
-            encoding the complex multiplication structure.
+            Modulated input tensor of same shape as x.
         """
         if self.internal_weights or x_edge is None:
-            return self.W_complex
+            return x
 
-        # Apply radial function to get modulation factors
-        # mod shape: [batch, (mmax+1)*2]
         assert self.rad_func is not None
+
+        # Get modulation factors from RadialMLP
+        # Shape: [batch, (lmax+1) * (mmax+1) * 2 * in_channels]
         mod = self.rad_func(x_edge)
 
-        # Split into real and imaginary modulation factors
-        # Each of shape [batch, mmax+1]
-        mod_r, mod_i = mod.chunk(2, dim=-1)
+        # Reshape to match input layout
+        # Shape: [batch, lmax+1, mmax+1, 2, in_channels]
+        mod = mod.view(x.shape[0], self.lmax + 1, self.mmax + 1, 2, self.in_channels)
 
-        # For edge-dependent weights, we scale the base weights
-        # This creates per-edge weights: W_r_edge[b, m, c, o] = W_r[m, c, o] * mod_r[b, m]
-        # Note: For simplicity, we apply scalar modulation per m-order
-        # More sophisticated approaches could learn full weight matrices per edge
-
-        # Average modulation across batch for use with the combined einsum
-        # FUSION_TARGET: edge_modulated_weights - this pattern needs custom kernel
-        mod_r_avg = mod_r.mean(dim=0)  # [mmax+1]
-        mod_i_avg = mod_i.mean(dim=0)  # [mmax+1]
-
-        # Create modulated W_r and W_i
-        # Reshape modulation for broadcasting: [mmax+1, 1, 1]
-        mod_r_avg = mod_r_avg[:, None, None]
-        mod_i_avg = mod_i_avg[:, None, None]
-
-        W_r_mod = self.W_r * mod_r_avg
-        W_i_mod = self.W_i * mod_i_avg
-
-        # Build combined weight tensor with modulated weights
-        W = torch.zeros(
-            self.mmax + 1,
-            2,
-            2,
-            self.in_channels,
-            self.out_channels,
-            dtype=self.W_r.dtype,
-            device=self.W_r.device,
-        )
-        W[:, 0, 0] = W_r_mod  # real_out <- real_in
-        W[:, 0, 1] = -W_i_mod  # real_out <- imag_in (negative)
-        W[:, 1, 0] = W_i_mod  # imag_out <- real_in
-        W[:, 1, 1] = W_r_mod  # imag_out <- imag_in
-        return W
+        # Element-wise multiplication (per-edge, per-coefficient scaling)
+        return x * mod
 
     def _compute_extra_m0(
         self,

@@ -28,14 +28,10 @@ Functions
 ---------
 make_grid_mask
     Create a boolean mask for valid (l, m) pairs in the grid layout.
-complex_multiply
-    Pure function for complex multiplication (reference for fusion).
 """
 
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
-from physicsnemo.experimental.nn.symmetry.so2_conv import (
-    SO2Convolution,
-)
+from physicsnemo.experimental.nn.symmetry.so2_conv import SO2Convolution
 
 __all__ = [
     "SO2Convolution",
