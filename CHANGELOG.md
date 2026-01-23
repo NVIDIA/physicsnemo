@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `SO2Convolution` layer in `physicsnemo.experimental.nn.symmetry` using
   grid-based layout for efficient GPU parallelization. The new implementation
   uses a single vectorized einsum operation instead of per-m-order loops.
+- New `SO2Convolution` layer in `physicsnemo.experimental.nn.symmetry` using
+  grid-based layout for efficient GPU parallelization. The new implementation
+  uses a single vectorized einsum operation instead of per-m-order loops.
 
 ### Changed
 
