@@ -1,4 +1,3 @@
-
 # SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
@@ -15,3 +14,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Symmetry-equivariant neural network layers.
+
+This module provides layers for building SO(2) equivariant neural networks
+for processing spherical harmonic representations.
+
+Classes
+-------
+SO2Convolution
+    SO(2) equivariant convolution layer using grid layout for efficient processing.
+
+Functions
+---------
+make_grid_mask
+    Create a boolean mask for valid (l, m) pairs in the grid layout.
+complex_multiply
+    Pure function for complex multiplication (reference for fusion).
+"""
+
+from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
+from physicsnemo.experimental.nn.symmetry.so2_conv import (
+    SO2Convolution,
+)
+
+__all__ = [
+    "SO2Convolution",
+    "make_grid_mask",
+]
