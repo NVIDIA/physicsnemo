@@ -62,7 +62,7 @@ layers =
    fourier_layers | transformer_layers | unet_layers
    dgm_layers | mlp_layers | fully_connected_layers | gnn_layers | attention_layers
    activations | ball_query | conv_layers  | drop | fft  | fused_silu | interpolation | kan_layers  | resample_layers | sdf | siren_layers | spectral_layers | transformer_decoder  | weight_fact | weight_norm | embedding_layers | group_norm
-   neighbors 
+   neighbors | healpix
    utils
 
 [importlinter:contract:physicsnemo-nn-gnn-layers]
@@ -88,7 +88,7 @@ containers=
 layers = 
    mesh_reduced
    afno | dlwp | dlwp_healpix | domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn | diffusion_unets
-   unet | dlwp_healpix_layers 
+   unet
 
 [importlinter:contract:physicsnemo-diffusion]
 name = Control Internal Dependencies in PhysicsNeMo diffusion
