@@ -21,36 +21,36 @@ compatible with TimeMergedDataset and includes quality control filtering,
 normalization, and innovation filtering.
 """
 
+import functools
 import io
 import os
 from datetime import datetime
 from typing import List, Literal
 
-import functools
 import fsspec
-import healda.profiling
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from utils import storage
 
-import healda.storage
-from healda.datasets.da.sensors import (
-    SENSOR_CONFIGS,
-)
-from healda.datasets.da.v2.etl.combined_schema import (
-    get_combined_observation_schema,
+from datasets.etl.combined_schema import (
     GLOBAL_CHANNEL_ID,
     SENSOR_ID,
+    get_combined_observation_schema,
 )
-from healda.datasets.da.v2.filtering_utils import filter_observations
+from datasets.obs_filtering_utils import filter_observations
+from datasets.sensors import (
+    SENSOR_CONFIGS,
+)
+from physicsnemo.models.healda import profiling
 
 LOCAL_CHANNEL_ID = pa.field("local_channel_id", pa.uint16())
 
 
 def get_channel_table():
-    import healda.config.environment as config
+    import config.environment as config
 
     return UFSUnifiedLoader(
         config.UFS_OBS_PATH,
@@ -135,7 +135,7 @@ class UFSUnifiedLoader:
         # Setup filesystem
         if self.filesystem_type == "s3":
             self.fs = fsspec.filesystem(
-                "s3", **healda.storage.get_storage_options(remote_name)
+                "s3", **storage.get_storage_options(remote_name)
             )
         elif self.filesystem_type == "local":
             self.fs = None

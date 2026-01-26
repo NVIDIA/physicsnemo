@@ -14,8 +14,7 @@
 # limitations under the License.
 import torch
 
-from physicsnemo.models.healda import DiT
-from config.models import ModelConfigV1
+from physicsnemo.models.healda import DiT, ModelConfigV1
 
 
 def get_model(config: ModelConfigV1) -> torch.nn.Module:

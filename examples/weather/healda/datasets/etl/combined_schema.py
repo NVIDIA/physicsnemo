@@ -28,7 +28,6 @@ multi-component observations.
 
 import pyarrow as pa
 
-
 GLOBAL_CHANNEL_ID = pa.field("Global_Channel_ID", pa.uint16(), nullable=False)
 SENSOR_ID = pa.field("sensor_id", pa.uint16())
 

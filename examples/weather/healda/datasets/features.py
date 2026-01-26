@@ -12,13 +12,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Literal
-import torch
 import math
-import healda.profiling
+from typing import Literal
+
+import torch
+
+from physicsnemo.models.healda import profiling
 
 
-@healda.profiling.nvtx
+@profiling.nvtx
 def compute_unified_metadata(
     target_time_sec: torch.Tensor,  # int64 seconds
     lat: torch.Tensor,

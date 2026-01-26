@@ -14,36 +14,36 @@
 # limitations under the License.
 import abc
 import dataclasses
-import json
 import gc
-import os
-import time
-import itertools
-import shutil
-import warnings
 import glob
-from functools import partial
-
-from typing import Iterable, Union
-import torchmetrics
+import itertools
+import json
+import logging
+import os
 import re
+import shutil
+import signal
+import time
+import warnings
+from functools import partial
+from typing import Iterable, Union
 
-from healda.config.training import loop
-import healda.config.models
-import healda.models
-import healda.checkpointing
-import healda.profiling
+import models
 import numpy as np
 import psutil
 import torch
 import torch.utils.tensorboard
-from healda import distributed as dist
-import signal
-from healda.signals import finish_before_quitting, QuitEarly, handler
-from healda import training_stats
-from healda.training import utils as misc
-from healda.datasets.base import SpatioTemporalDataset, BatchInfo
-import logging
+import torchmetrics
+from config.training import loop
+from datasets.base import BatchInfo, SpatioTemporalDataset
+from utils import checkpointing
+from utils import distributed as dist
+from utils.signals import QuitEarly, finish_before_quitting, handler
+
+from physicsnemo.models.healda import ModelConfigV1, profiling
+from training import utils as misc
+
+from . import training_stats
 
 try:
     import wandb
@@ -152,7 +152,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
         pass
 
     def get_network(self) -> torch.nn.Module:
-        return healda.models.get_model(self.model_config)
+        return models.get_model(self.model_config)
 
     @abc.abstractmethod
     def get_optimizer(self, parameters):
@@ -163,7 +163,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
         pass
 
     @property
-    def model_config(self) -> healda.config.models.ModelConfigV1 | None:
+    def model_config(self) -> ModelConfigV1 | None:
         """Model configuration used for the network. This is used for checkpointing.
 
         If you are overriding get_network, then be sure to make this consistent.
@@ -188,7 +188,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
                 broadcast_buffers=False,
             )
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def log_tick(
         self,
         maintenance_time,
@@ -275,7 +275,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     ):
         dist.print0(f'Loading training state from "{resume_state_dump}"...')
 
-        with healda.checkpointing.Checkpoint(resume_state_dump, "r") as checkpoint:
+        with checkpointing.Checkpoint(resume_state_dump, "r") as checkpoint:
             self._load_net_state(checkpoint, require_all)
             gc.collect()
             if optimizer and self.optimizer is not None:
@@ -341,7 +341,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     def _stage_dict_batch(self, batch):
         return _to_batch(batch, self.device)
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def backward_batch(self, dataset_iterator):
         self.ddp.train()
         self.optimizer.zero_grad(set_to_none=True)
@@ -351,7 +351,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
             with misc.ddp_sync(
                 self.ddp, (round_idx == self.num_accumulation_rounds - 1)
             ):
-                with healda.profiling.nvtx_range("load data"):
+                with profiling.nvtx_range("load data"):
                     batch = next(dataset_iterator)
 
                     if isinstance(batch, dict):
@@ -381,7 +381,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
                     else:
                         raise NotImplementedError(self.loss_reduction)
 
-                with healda.profiling.nvtx_range("training_loop:backward"):
+                with profiling.nvtx_range("training_loop:backward"):
                     loss_mean.backward()
 
                 total_loss += loss_mean.detach().cpu()
@@ -411,7 +411,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
         self.log_metric("grad_norm", grad_norm, frequency="tick", print=True)
         self.log_metric("grad_norm", grad_norm, frequency="step")
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     @finish_before_quitting
     def step_optimizer(self, cur_nimg):
         torch.cuda.nvtx.range_push("training_loop:step")
@@ -487,7 +487,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     def on_tick(self):
         pass
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def validate(self, net):
         loss_key = "Loss/test_loss"
 
@@ -547,13 +547,13 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     def batch_info(self) -> None | BatchInfo:
         return None
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     @finish_before_quitting
     def _save_checkpoint(self, path, optimizer: bool):
         # ensure that file updates are atomic to avoid faulty
         # restart files
         tmppath = path + ".tmp" + str(os.getpid())
-        with healda.checkpointing.Checkpoint(tmppath, "w") as checkpoint:
+        with checkpointing.Checkpoint(tmppath, "w") as checkpoint:
             checkpoint.write_model(self.net)
             if self.batch_info is not None:
                 checkpoint.write_batch_info(self.batch_info)
@@ -577,7 +577,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
                 checkpoint.write_model_config(self.model_config)
         shutil.move(tmppath, path)
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def save_training_state(self, cur_nimg):
         if dist.get_rank() != 0:
             return
@@ -587,7 +587,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
         self._save_checkpoint(state_filename, optimizer=True)
         dist.print0(f"Checkpoint saved to {state_filename}")
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def save_network_snapshot(self, cur_nimg):
         if dist.get_rank() != 0:
             return

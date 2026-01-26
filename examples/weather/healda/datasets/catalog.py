@@ -12,13 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import healda.storage
-import zarr
-from dataclasses import dataclass
-import xarray
-from healda.config import environment
-import zarr.storage
 import urllib.parse
+from dataclasses import dataclass
+
+import xarray
+import zarr
+import zarr.storage
+from config import environment
+from utils import storage
 
 
 @dataclass
@@ -28,7 +29,7 @@ class _Zarr:
 
     @property
     def storage_options(self):
-        return healda.storage.get_storage_options(self.profile)
+        return storage.get_storage_options(self.profile)
 
     def to_store(self, obstore=True) -> zarr.storage.StoreLike:
         if self.profile == "":
@@ -37,9 +38,7 @@ class _Zarr:
         url = urllib.parse.urlparse(self.path)
         if obstore:
             bucket = url.netloc
-            store = healda.storage.get_obstore(
-                self.profile, bucket=bucket, prefix=url.path
-            )
+            store = storage.get_obstore(self.profile, bucket=bucket, prefix=url.path)
             zarr_store = zarr.storage.ObjectStore(store)
         else:
             import fsspec
@@ -63,7 +62,7 @@ class _Zarr:
 
     def consolidate_metadata(self):
         store = zarr.storage.FsspecStore.from_url(
-            self.path, storage_options=healda.storage.get_storage_options(self.profile)
+            self.path, storage_options=storage.get_storage_options(self.profile)
         )
         zarr.consolidate_metadata(store)
 
@@ -75,11 +74,11 @@ class _Parquet:
 
     @property
     def storage_options(self):
-        return healda.storage.get_storage_options(self.profile)
+        return storage.get_storage_options(self.profile)
 
     @property
     def polars_storage_options(self):
-        return healda.storage.get_polars_storage_options(self.profile)
+        return storage.get_polars_storage_options(self.profile)
 
     def files(self):
         import fsspec
@@ -98,7 +97,7 @@ class _Parquet:
 
         return polars.scan_parquet(
             self.path + "/*.parquet",
-            storage_options=healda.storage.get_polars_storage_options(self.profile),
+            storage_options=storage.get_polars_storage_options(self.profile),
         )
 
 

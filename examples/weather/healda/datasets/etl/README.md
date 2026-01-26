@@ -30,13 +30,13 @@ python3 etl_unified.py --output-dir /path/to/output --sensor amsua,conv,atms,ams
 
 ## Normalization Stats
 
-Normalization stats (mean/std per channel) are loaded from CSV files in `preprocessing/normalizations/`.
+Normalization stats (mean/std per channel) are loaded from CSV files in `normalizations/`.
 
 **If CSVs are missing:** ETL defaults to mean=0, std=1 (with a warning). The observation parquet files are still valid — only the `channel_table.parquet` needs regeneration after computing proper stats.
 
 **To recompute stats for new sensors:**
-1. Run ETL to produce parquet (stats will default to 0/1)
-2. Run `preprocessing/compute_normalizations.py --data-root /path/to/output`
+1. Run ETL to produce parquet (stats will default to mean 0 and std 1)
+2. Run `compute_normalizations.py --data-root /path/to/output`
 3. Regenerate channel table: `python3 etl_unified.py --output-dir /path/to/output --channel-table-only`
 
 ## Output Structure

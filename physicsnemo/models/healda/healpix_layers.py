@@ -12,13 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import dataclasses
+
 import earth2grid
 import earth2grid.healpix
 import einops
 import torch
-import dataclasses
 
-from healda.models.embedding import CalendarEmbedding
+from .embedding import CalendarEmbedding
 
 
 @dataclasses.dataclass
@@ -128,8 +129,7 @@ class HPXPatchEmbed(torch.nn.Module):
         )
         self.side_fine = 2**level_fine
         npix = 12 * 4**level_coarse
-        # TODO adding time_length is backwards breaing
-        # need to add ability to fine tune
+
         self.pos_embed = torch.nn.Parameter(
             torch.randn(
                 npix,
@@ -203,7 +203,6 @@ class HPXPatchEmbed(torch.nn.Module):
             second_of_day=second_of_day, day_of_year=day_of_year
         )  # b c t x
 
-        # TODO push subdomain logic into the calendar embedding to avoid unecessary compute
         if subdomain is not None:
             coarse_subdomain = subdomain.coarsen(self.level_fine - self.level_coarse)
             calendar_emb = coarse_subdomain.select_from_global(calendar_emb)

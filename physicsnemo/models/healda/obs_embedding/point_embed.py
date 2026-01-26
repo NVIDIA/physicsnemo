@@ -12,18 +12,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import earth2grid
-import math
-import torch
 import logging
+import math
 
-import healda.profiling
-from healda.datasets.da.types import (
+import earth2grid
+import torch
+
+from .. import profiling
+from ..config import ModelSensorConfig, SensorEmbedderConfig
+from ..types import (
     UnifiedObservation,
     split_by_sensor,
 )
-from healda.config.models import SensorEmbedderConfig, ModelSensorConfig
-from healda.models.obs_embedding.scatter_infill_aggregators import ScatterAggregator
+from .scatter_infill_aggregators import ScatterAggregator
 
 
 def _prod(shape):
@@ -308,7 +309,7 @@ class SensorEmbedder(torch.nn.Module):
 
         return output
 
-    @healda.profiling.nvtx(enabled=False)
+    @profiling.nvtx(enabled=False)
     def forward(self, obs: UnifiedObservation) -> torch.Tensor:
         """
         Embed observations from a single sensor onto a spatial grid.
@@ -401,7 +402,7 @@ class MultiSensorObsEmbedding(torch.nn.Module):
         ).transpose(-1, -2)
         return x
 
-    @healda.profiling.nvtx(enabled=False)
+    @profiling.nvtx(enabled=False)
     def forward(self, obs: UnifiedObservation) -> torch.Tensor:
         """
         Args:

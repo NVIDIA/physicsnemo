@@ -12,10 +12,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from healda.datasets.base import DatasetMetadata
+from datasets.base import DatasetMetadata
 
 
 def _get_coarsest_freq(freq1: str, freq2: str) -> str:

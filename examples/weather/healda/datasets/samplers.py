@@ -17,8 +17,7 @@ import random
 
 import torch
 import torch.utils.data
-
-import healda.distributed as dist
+from utils import distributed as dist
 
 
 def subsample(dataset, min_samples):

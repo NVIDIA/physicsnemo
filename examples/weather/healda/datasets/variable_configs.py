@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from healda.datasets.base import VariableConfig
+from datasets.base import VariableConfig
 
 VARIABLE_CONFIGS = {}
 VARIABLE_CONFIGS["default"] = VariableConfig(

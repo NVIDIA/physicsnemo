@@ -12,16 +12,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import zarr
-from zarr.core.sync import sync
-import zarr.storage
-import xarray as xr
-import pandas as pd
-import cftime
 import asyncio
-import numpy as np
 import urllib.parse
 
+import cftime
+import numpy as np
+import pandas as pd
+import xarray as xr
+import zarr
+import zarr.storage
+from zarr.core.sync import sync
 
 NO_LEVEL = -1
 

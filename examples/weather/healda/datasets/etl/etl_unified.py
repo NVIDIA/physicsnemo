@@ -13,13 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import argparse
-import random
 import os
+import random
 import re
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
-from typing import Literal, Optional, Dict, List, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import h5py
 import joblib
@@ -30,17 +30,17 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from healda.datasets.da.sensors import (
-    PLATFORM_NAME_TO_ID,
+from datasets.etl.combined_schema import (
+    get_channel_table_schema,
+    get_combined_observation_schema,
+)
+from datasets.sensors import (
     CONV_CHANNEL_MAP,
     CONV_CHANNELS,
     CONV_PLATFORMS,
-    get_global_channel_id,
+    PLATFORM_NAME_TO_ID,
     SENSOR_CONFIGS,
-)
-from healda.datasets.da.v2.etl.combined_schema import (
-    get_combined_observation_schema,
-    get_channel_table_schema,
+    get_global_channel_id,
 )
 
 memory = joblib.Memory(".cache")

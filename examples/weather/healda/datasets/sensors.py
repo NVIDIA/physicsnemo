@@ -12,11 +12,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import pandas as pd
-import numpy as np
-from dataclasses import dataclass, field
 import pathlib
 import warnings
+from dataclasses import dataclass, field
+
+import numpy as np
+import pandas as pd
 
 
 @dataclass
@@ -35,7 +36,7 @@ class SensorConfig:
     )  # lookup-table: raw_id →  local channel
 
     def __post_init__(self):
-        base = pathlib.Path(__file__).parent / "preprocessing/normalizations"
+        base = pathlib.Path(__file__).parent / "etl/normalizations"
         norm_file = base / f"{self.name}_normalizations.csv"
 
         if norm_file.exists():

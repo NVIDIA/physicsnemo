@@ -16,12 +16,13 @@
 Async data loader that processes batches in a background thread with a separate CUDA stream.
 """
 
+import dataclasses
 import queue
 import threading
+from typing import Any, Callable, Iterable, Optional
+
 import torch
-from typing import Callable, Iterable, Any, Optional
 from torch.utils.data import DataLoader
-import dataclasses
 
 
 class _Done:

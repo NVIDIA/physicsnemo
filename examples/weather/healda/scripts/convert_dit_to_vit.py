@@ -9,13 +9,13 @@ bias terms, allowing the model to run with emb_channels=0.
 import dataclasses
 from collections import OrderedDict
 
+import models
 import torch
 import torch.nn as nn
+from utils.checkpointing import Checkpoint
 
-from healda.checkpointing import Checkpoint
-from healda.models.dit import DiT
-from healda.models.embedding import EmbedNoiseLabels
-import healda.models
+from physicsnemo.models.healda.dit import DiT
+from physicsnemo.models.healda.embedding import EmbedNoiseLabels
 
 
 def compute_constant_emb(
@@ -166,7 +166,7 @@ def convert_checkpoint_file(
             batch_info = None
 
     # Create DiT model to get module references
-    dit = healda.models.get_model(model_config)
+    dit = models.get_model(model_config)
     dit.load_state_dict(state_dict)
     dit.to(device)
     dit.eval()
@@ -178,7 +178,7 @@ def convert_checkpoint_file(
     new_config = dataclasses.replace(model_config, as_vit=True, legacy_label_bias=False)
 
     # Create new model with as_vit=True and load converted weights
-    new_dit = healda.models.get_model(new_config)
+    new_dit = models.get_model(new_config)
     new_dit.load_state_dict(new_state_dict, strict=False)
 
     # Write output checkpoint
@@ -194,7 +194,7 @@ def convert_checkpoint_file(
     removed = old_params - new_params
     print(f"Saved to {output_path}")
     print(
-        f"Parameters: {old_params/1e6:.2f}M -> {new_params/1e6:.2f}M ({removed/1e6:.2f}M removed)"
+        f"Parameters: {old_params / 1e6:.2f}M -> {new_params / 1e6:.2f}M ({removed / 1e6:.2f}M removed)"
     )
 
 

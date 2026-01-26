@@ -25,10 +25,12 @@ step 2. mlp w/ metadata + embed_id -> scalar
 
 """
 
-import torch
-import earth2grid.healpix
 import math
-from healda.models.healpix_layers import Subdomain
+
+import earth2grid.healpix
+import torch
+
+from ..healpix_layers import Subdomain
 
 
 class HieararchicalGraphConvDown(torch.nn.Module):

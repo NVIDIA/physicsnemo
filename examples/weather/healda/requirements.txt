@@ -1,5 +1,5 @@
 # HealDA Example Dependencies
-# Note: nvidia-physicsnemo should be installed first
+# install earth2grid separately first (see README.md)
 
 cartopy>=0.25.0
 cftime>=1.6.5
@@ -14,6 +14,7 @@ obstore>=0.8.2
 pandas>=2.3.3
 psutil>=7.1.3
 pyarrow>=21.0.0
+pytest-asyncio>=0.23.0
 python-dotenv>=1.2.1
 tensorboard>=2.20.0
 torch>=2.6.1

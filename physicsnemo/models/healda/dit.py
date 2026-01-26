@@ -29,22 +29,22 @@ from typing import Any, Dict, Optional, Tuple
 import earth2grid.healpix
 import einops
 import torch
-from torch import nn
 import torch.distributed.fsdp
 import torch.utils.checkpoint
 from diffusers.models.attention import Attention, FeedForward
+from torch import nn
 
-import healda.profiling
-from healda.config.models import ModelSensorConfig, ObsConfig, SensorEmbedderConfig
-from healda.datasets.da.types import UnifiedObservation
-from healda.domain import HealPixDomain
-from healda.models.distributed import shard_t, shard_x
-from healda.models.embedding import EmbedNoiseLabels
-from healda.models.healpix_layers import HPXPatchDecode, HPXPatchEmbed, Subdomain
-from healda.models.obs_embedding.decoder import ObsDecoder
-from healda.models.obs_embedding.point_embed_v2 import (
+from . import profiling
+from .config import ModelSensorConfig, ObsConfig, SensorEmbedderConfig
+from .domain import HealPixDomain
+from .embedding import EmbedNoiseLabels
+from .healpix_layers import HPXPatchDecode, HPXPatchEmbed, Subdomain
+from .obs_embedding.decoder import ObsDecoder
+from .obs_embedding.point_embed import (
     MultiSensorObsEmbedding,
 )
+from .sharding import shard_t, shard_x
+from .types import UnifiedObservation
 
 
 @dataclasses.dataclass
@@ -527,7 +527,7 @@ class TransformerBlock(nn.Module):
         )
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
 
-        with healda.profiling.nvtx_range("attn1", enabled=False):
+        with profiling.nvtx_range("attn1", enabled=False):
             attn_output = self.attn1(
                 norm_hidden_states,
                 encoder_hidden_states=(
@@ -563,7 +563,7 @@ class TransformerBlock(nn.Module):
 
         # temporal attention
         if self.temporal_attn is not None:
-            with healda.profiling.nvtx_range("temporal_attn", enabled=False):
+            with profiling.nvtx_range("temporal_attn", enabled=False):
                 if self._parallel_group is not None:
                     hidden_states = shard_x(hidden_states, self._parallel_group)
                     input_t_sharded = False
@@ -576,10 +576,10 @@ class TransformerBlock(nn.Module):
 
         # 4. Feed-forward
         # i2vgen doesn't have this norm ?????
-        with healda.profiling.nvtx_range("norm3", enabled=False):
+        with profiling.nvtx_range("norm3", enabled=False):
             norm_hidden_states = self.norm3(hidden_states) * (1 + scale_mlp) + shift_mlp
 
-        with healda.profiling.nvtx_range("ff", enabled=False):
+        with profiling.nvtx_range("ff", enabled=False):
             if checkpoint_ff:
                 ff_output = torch.utils.checkpoint.checkpoint(
                     self.ff, norm_hidden_states, use_reentrant=False
@@ -846,7 +846,7 @@ class DiT(torch.nn.Module):
 
         self.load_state_dict(state_dict)
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -996,7 +996,7 @@ class DiT(torch.nn.Module):
             obs=self._decode_obs(hidden_states, unified_obs, subdomain_coarse),
         )
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def _decode_dense(
         self,
         hidden_states: torch.Tensor,

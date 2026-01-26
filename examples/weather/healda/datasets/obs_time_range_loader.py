@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 import os
 
 import numpy as np
@@ -19,12 +20,10 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-import logging
+from config.environment import UFS_OBS_PATH, UFS_OBS_PROFILE
+from utils import storage
 
-import healda.storage
-from healda.config.environment import UFS_OBS_PATH, UFS_OBS_PROFILE
-from healda.datasets.da.v2.etl.combined_schema import get_combined_observation_schema
-
+from datasets.etl.combined_schema import get_combined_observation_schema
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +160,7 @@ class Loader:
         join_channel_table: bool = True,
     ):
         self.sensors = sensors
-        self._filesystem = healda.storage.get_pyarrow_filesystem(
+        self._filesystem = storage.get_pyarrow_filesystem(
             UFS_OBS_PROFILE, connect_timeout=1_000, request_timeout=1_000
         )
         self.channel_table = _open_channel_table(UFS_OBS_PATH, self._filesystem)

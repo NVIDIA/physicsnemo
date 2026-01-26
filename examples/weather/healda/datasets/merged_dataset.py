@@ -12,16 +12,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from zarr.core.sync import sync
-import torch
-import math
-import pandas as pd
-import numpy as np
 import asyncio
-from typing import Callable
-import healda.datetime
-import healda.profiling
+import datetime
 import logging
+import math
+from typing import Callable
+
+import numpy as np
+import pandas as pd
+import torch
+from zarr.core.sync import sync
+
+from physicsnemo.models.healda import profiling
+
+from . import datetime_utils
 
 logger = logging.getLogger(__name__)
 
@@ -244,9 +248,7 @@ class TimeMergedDataset(torch.utils.data.IterableDataset):
         return pd.DatetimeIndex(self._times)
 
     def set_times(self, times):
-        self._times = _split(
-            healda.datetime.as_numpy(times), self.rank, self.world_size
-        )
+        self._times = _split(datetime_utils.as_numpy(times), self.rank, self.world_size)
 
     def _load_chunk(self, chunk: int):
         return sync(self._loader.sel_time(self._times_for_chunk(chunk)))
@@ -319,7 +321,7 @@ class TimeMergedDataset(torch.utils.data.IterableDataset):
                     time = times_for_chunk[idx]
                     arr_i = {k: v[idx] for k, v in arr.items()}
                     timestamp = pd.Timestamp(time)
-                    cftimestamp = healda.datetime.as_cftime(timestamp)
+                    cftimestamp = datetime_utils.as_cftime(timestamp)
                     frames.append(arr_i)
                     timestamps.append(cftimestamp)
 
@@ -426,7 +428,7 @@ class TimeMergedMapStyle(torch.utils.data.Dataset):
                 output.append(self.transform(sample_times, sample_frames))
             return output
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def _get_times_and_frames(self, idx):
         if min(idx) < 0 or max(idx) >= self.valid_length:
             raise IndexError(
@@ -444,7 +446,7 @@ class TimeMergedMapStyle(torch.utils.data.Dataset):
         timestamps = []
         for i, time in enumerate(window_times):
             timestamp = pd.Timestamp(time)
-            cftimestamp = healda.datetime.as_cftime(timestamp)
+            cftimestamp = datetime_utils.as_cftime(timestamp)
             timestamps.append(cftimestamp)
 
         def reshape(list):
@@ -456,7 +458,7 @@ class TimeMergedMapStyle(torch.utils.data.Dataset):
 
         return timestamps, frames
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def __getitems__(self, idx):
         timestamps, frames = self._get_times_and_frames(idx)
         return self._batch_transform(timestamps, frames)

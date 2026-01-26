@@ -15,25 +15,24 @@
 import dataclasses
 import datetime
 import functools
-import healda.profiling
+import warnings
+
 import cftime
 import earth2grid
-
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import torch
 
-from healda.datasets.base import (
-    VariableConfig,
-)
-from healda.datasets.da import features, types
-from healda.datasets.da.analysis_loaders import (
+from datasets import features, static_data
+from datasets.analysis_loaders import (
     get_batch_info,
 )
-from healda.datasets.da.variable_configs import VARIABLE_CONFIGS
-from healda.datasets import static_data
-import warnings
+from datasets.base import (
+    VariableConfig,
+)
+from datasets.variable_configs import VARIABLE_CONFIGS
+from physicsnemo.models.healda import profiling, types
 
 warnings.filterwarnings(
     "ignore",
@@ -243,7 +242,7 @@ class TransformV2:
 
         return offsets_3d, sensor_id_to_local
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def _process_obs(self, target_times: list[list[cftime.datetime]], frames):
         # Add batch and time indices to each table before concatenation
         all_obs_with_indices = []
@@ -323,7 +322,7 @@ class TransformV2:
         condition = condition.unsqueeze(0)
         return _reorder_nest_to_hpxpad(condition)
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def transform(self, times, frames):
         """
         frames: [[{state: (c, x), obs_v2: Obs}]]
@@ -344,7 +343,7 @@ class TransformV2:
         out["labels"] = torch.empty([len(frames), 0])
         return out
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def device_transform(self, batch, device):
         """Transforms to the output of .transform that can occur on gpu
 
@@ -363,7 +362,7 @@ class TransformV2:
                 out[key] = batch[key].to(device, non_blocking=True)
         return out
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     def _device_transform_unified_obs(
         self, obs_tensors, offsets, sensor_id_to_local, device
     ):

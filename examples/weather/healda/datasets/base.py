@@ -12,14 +12,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Protocol, Any
-from enum import Enum
-import numpy as np
-from healda.domain import Domain
-import torch
 import dataclasses
 import json
 from datetime import timedelta
+from enum import Enum
+from typing import Any, Protocol
+
+import numpy as np
+import torch
+
+from physicsnemo.models.healda.domain import Domain
 
 
 class TimeUnit(Enum):

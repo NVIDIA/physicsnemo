@@ -29,42 +29,47 @@ import logging
 import os
 import warnings
 
-import healda.config.environment as config
-import healda.config.models
-import healda.models
-import healda.profiling
-import healda.training.loop
+import config.environment as config
 import matplotlib.pyplot as plt
+import models
 import torch
 import torch.distributed
 import torch.utils
 import torch.utils.data
-from healda import distributed as dist
-from healda.config.models import ModelSensorConfig, ObsConfig, SensorEmbedderConfig
-from healda.signals import finish_before_quitting
-from healda.dataclass_parser import parse_args, parse_dict
-from healda.datasets.base import BatchInfo, TimeUnit, VariableConfig
-from healda.datasets.da.dataset_ufs_da import (
+import training.loop
+from datasets.base import BatchInfo, TimeUnit, VariableConfig
+from datasets.dataset import (
     VARIABLE_CONFIGS,
     collate,
     get_batch_info,
     get_dataset,
     get_sensors_for_config,
 )
-from healda.datasets.da.sensors import (
+from datasets.prefetch_map import prefetch_map
+from datasets.round_robin import RoundRobinLoader
+from datasets.samplers import (
+    ChunkedDistributedSampler,
+)
+from datasets.sensors import (
     PLATFORM_NAME_TO_ID,
     SENSOR_CONFIGS,
     SENSOR_NAME_TO_ID,
 )
-from healda.datasets.da.v2.transform import TransformV2
-from healda.datasets.da.v2.transform import collate as collate_v2
-from healda.datasets.prefetch_map import prefetch_map
-from healda.datasets.round_robin import RoundRobinLoader
-from healda.datasets.samplers import (
-    ChunkedDistributedSampler,
+from datasets.transform import TransformV2
+from datasets.transform import collate as collate_v2
+from training import loop
+from utils import distributed as dist
+from utils.dataclass_parser import parse_args, parse_dict
+from utils.signals import finish_before_quitting
+from utils.visualizations import visualize
+
+from physicsnemo.models.healda import (
+    ModelConfigV1,
+    ModelSensorConfig,
+    ObsConfig,
+    SensorEmbedderConfig,
+    profiling,
 )
-from healda.training import loop
-from healda.visualizations import visualize
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +142,7 @@ class TrainingLoop(loop.TrainingLoopBase):
     weight_decay_biases: bool = True
     drop_path: float = 0.0
     p_dropout: float = 0.0
-    architecture: str = "dit-l_reg_hpx6"
+    architecture: str = "dit-l_reg_hpx6_per_sensor"
     as_vit: bool = False
     gradient_checkpointing: bool = False
     pos_emb_gains: bool = False
@@ -218,7 +223,7 @@ class TrainingLoop(loop.TrainingLoopBase):
         super().setup()
         self.net.gradient_checkpointing = self.gradient_checkpointing
 
-    @healda.profiling.nvtx
+    @profiling.nvtx
     @finish_before_quitting
     def step_optimizer(self, cur_nimg):
         """Optionally apply a scheduled gradient clipping value, then
@@ -471,7 +476,7 @@ class TrainingLoop(loop.TrainingLoopBase):
         self.net.load_from_checkpoint(checkpoint)
 
     @property
-    def model_config(self) -> healda.config.models.ModelConfigV1:
+    def model_config(self) -> ModelConfigV1:
         out_channels = self.out_channels
         label_dim = 0  # labels not used
 
@@ -484,14 +489,13 @@ class TrainingLoop(loop.TrainingLoopBase):
             sensors_dict = build_sensor_config(sensor_names)
             sensor_embedder_config = self.sensor_embedder_config
 
-        return healda.models.ModelConfigV1(
+        return models.ModelConfigV1(
             architecture=self.architecture,
             condition_channels=condition_channels,
             out_channels=out_channels,
             label_dim=label_dim,
             label_dropout=self.label_dropout,
             legacy_label_bias=self.legacy_label_bias,
-            model_channels=self.model_channels,
             obs_config=self.obs_config,
             p_dropout=self.p_dropout,
             drop_path=self.drop_path,
@@ -704,7 +708,7 @@ def main():
 
     if dist.get_rank() == 0:
         logging.basicConfig(level=logging.INFO)
-        healda.training.loop.logger.setLevel(level=logging.DEBUG)
+        training.loop.logger.setLevel(level=logging.DEBUG)
 
     try:
         dist.print0(f"Using {cli.name=} preset.")

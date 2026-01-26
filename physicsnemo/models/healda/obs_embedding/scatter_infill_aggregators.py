@@ -15,7 +15,8 @@
 """Scatter aggregation for observation embedding. Use scatter-reduce to aggregate observations onto spatial grids."""
 
 import torch
-from healda.scatter_mean import scatter_mean
+
+from ..scatter_mean import scatter_mean
 
 
 class ScatterAggregator(torch.nn.Module):

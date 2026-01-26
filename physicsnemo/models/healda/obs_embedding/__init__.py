@@ -14,6 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .point_embed import MultiSensorObsEmbedding, ObsTokenizer
 from .decoder import ObsDecoder
+from .point_embed import MultiSensorObsEmbedding, ObsTokenizer, SensorEmbedder
 from .scatter_infill_aggregators import ScatterAggregator
