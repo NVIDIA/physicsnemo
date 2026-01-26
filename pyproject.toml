@@ -22,15 +22,16 @@ dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
     "onnx>=1.14.0",
-    "warp-lang",
-    "pandas",
-    "nvtx",
+    "warp-lang>=1.5.0",
+    "pandas>=2.2.0",
+    "nvtx>=0.2.10",
     "treelib>=1.2.5",
     "numpy>=1.22.4",
     "torch>=2.4.0",
+    "torchvision>=0.19.0",
     "tqdm>=4.60.0",
     "requests>=2.32.2",
-    "GitPython",
+    "GitPython>=3.1.40",
     "s3fs>=2023.5.0",
     "packaging>=24.2",
     "timm>=1.0.22",
@@ -65,16 +66,29 @@ managed = true
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
-earth2grid = ["setuptools", "torch"]
 
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
 explicit = true  # Only use for packages that explicitly specify this index
 
+# PyTorch CUDA 13 index - used on Linux and Windows for torch builds compatible with cuml-cu13.
+# torch 2.10+ on PyPI (CUDA 12.8) pins cuda-bindings==12.9.4, which conflicts with
+# cuml-cu13's requirement for cuda-bindings>=13.0.1 via cuda-python.
+# The CUDA 13 build of torch pins cuda-bindings==13.0.3, which is compatible.
+# On Mac, we fall back to PyPI (CUDA is not available on macOS).
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.uv.sources]
-earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/main.tar.gz" }
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+]
 cuml-cu13 = { index = "nvidia" }
 pylibraft-cu13 = { index = "nvidia" }
 cuml-cu12 = { index = "nvidia" } # TODO setup optional install groups for CUDA 12 installations
@@ -123,6 +137,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.8",
     "pytest-testmon>=2.2.0",
+    "ipykernel>=7.1.0",
 ]
 
 #####################################################################
@@ -177,10 +192,6 @@ gnns = [
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]
-healpix = [
-    "earth2grid",
-]
-
 
 #####################################################################
 # Linting configuration

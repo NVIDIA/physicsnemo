@@ -121,36 +121,18 @@ class PositionalEmbedding(torch.nn.Module):
                 torch.nn.Linear(mlp_hidden_dim, num_channels, bias=True),
             )
 
-        if self.embed_fn == "np_sin_cos":
-            half_embed_dim = freq_embed_dim // 2
-            pow = np.arange(half_embed_dim, dtype=np.float32) / half_embed_dim
-            w = np.exp(-np.log(self.max_positions) * pow)
-            self.register_buffer("freqs", torch.from_numpy(w).float())
-
-    def _cos_sin_embedding(self, x):
-        freqs = torch.arange(
-            start=0, end=self.freq_embed_dim // 2, dtype=torch.float32, device=x.device
-        )
+        freqs = torch.arange(start=0, end=self.freq_embed_dim // 2, dtype=torch.float32)
         freqs = freqs / (self.freq_embed_dim // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
-        _validate_amp(self.amp_mode)
-        if not self.amp_mode:
-            if freqs.dtype != x.dtype:
-                freqs = freqs.to(x.dtype)
-        x = x.ger(freqs)
-        x = torch.cat([x.cos(), x.sin()], dim=1)
-        return x
-
-    def _sin_cos_embedding_np(self, x):
-        x = torch.outer(x, self.freqs)
-        x = torch.cat([x.sin(), x.cos()], dim=1)
-        return x
+        self.register_buffer("freqs", freqs, persistent=False)
 
     def forward(self, x):
+        x = torch.outer(x, self.freqs)
+
         if self.embed_fn == "cos_sin":
-            x = self._cos_sin_embedding(x)
+            x = torch.cat([x.cos(), x.sin()], dim=1)
         elif self.embed_fn == "np_sin_cos":
-            x = self._sin_cos_embedding_np(x)
+            x = torch.cat([x.sin(), x.cos()], dim=1)
 
         if self.learnable:
             x = self.mlp(x)

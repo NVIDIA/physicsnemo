@@ -32,16 +32,13 @@ from typing import TypeVar, Union
 
 import numpy as np
 
-# can replace this import with zoneinfo from the standard library in python3.9+.
-import pytz
-
 # helper type
 dtype = np.float32
 
 
 T = TypeVar("T", np.ndarray, float)
 
-TIMESTAMP_2000 = datetime.datetime(2000, 1, 1, 12, 0, tzinfo=pytz.utc).timestamp()
+TIMESTAMP_2000 = datetime.datetime(2000, 1, 1, 12, 0, tzinfo=datetime.UTC).timestamp()
 
 
 def cos_zenith_angle(
@@ -68,7 +65,7 @@ def cos_zenith_angle(
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> angle = cos_zenith_angle(model_time, lat=360, lon=120)
     >>> bool(abs(angle - -0.447817277) < 1e-6)
     True
@@ -98,7 +95,7 @@ def cos_zenith_angle_from_timestamp(
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> angle = cos_zenith_angle_from_timestamp(model_time.timestamp(), lat=360, lon=120)
     >>> bool(abs(angle - -0.447817277) < 1e-6)
     True
@@ -160,7 +157,7 @@ def irradiance(
     seconds_per_solar_day = 86400
     mean_tropical_year = mean_tropical_year * seconds_per_solar_day
 
-    year_2000_equinox = datetime.datetime(2000, 3, 20, 7, 35, tzinfo=pytz.utc)
+    year_2000_equinox = datetime.datetime(2000, 3, 20, 7, 35, tzinfo=datetime.UTC)
 
     # from appendix of Berger 1978
     M = (t - year_2000_equinox.timestamp()) % mean_tropical_year
@@ -308,12 +305,12 @@ def _days_from_2000(model_time):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> float(_days_from_2000(model_time))
     731.0
     """
     if isinstance(model_time, datetime.datetime):
-        model_time = model_time.replace(tzinfo=pytz.utc)
+        model_time = model_time.replace(tzinfo=datetime.UTC)
 
     date_type = type(np.asarray(model_time).ravel()[0])
     if date_type not in [datetime.datetime]:
@@ -321,7 +318,9 @@ def _days_from_2000(model_time):
             f"model_time has an invalid date type. It must be "
             f"datetime.datetime. Got {date_type}."
         )
-    return _total_days(model_time - date_type(2000, 1, 1, 12, 0, 0, tzinfo=pytz.utc))
+    return _total_days(
+        model_time - date_type(2000, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+    )
 
 
 def _total_days(time_diff):
@@ -346,7 +345,7 @@ def _greenwich_mean_sidereal_time(jul_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> g_time = _greenwich_mean_sidereal_time(c)
     >>> bool(abs(g_time - 4.903831411) < 1e-8)
@@ -372,7 +371,7 @@ def _local_mean_sidereal_time(julian_centuries, longitude):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> l_time = _local_mean_sidereal_time(c, np.deg2rad(90))
     >>> bool(abs(l_time - 6.474627737) < 1e-8)
@@ -389,7 +388,7 @@ def _sun_ecliptic_longitude(julian_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> lon = _sun_ecliptic_longitude(c)
     >>> bool(abs(lon - 17.469114444) < 1e-8)
@@ -428,7 +427,7 @@ def _obliquity_star(julian_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> julian_centuries = _days_from_2000(model_time) / 36525.0
     >>> obl = _obliquity_star(julian_centuries)
     >>> bool(abs(obl - 0.409088056) < 1e-8)
@@ -457,7 +456,7 @@ def _right_ascension_declination(julian_centuries):
 
     Example:
     --------
-    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=pytz.utc)
+    >>> model_time = datetime.datetime(2002, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
     >>> c = _timestamp_to_julian_century(model_time.timestamp())
     >>> out1, out2 = _right_ascension_declination(c)
     >>> bool(abs(out1 - -1.363787213) < 1e-8)
