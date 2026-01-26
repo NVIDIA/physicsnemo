@@ -20,8 +20,8 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-import physicsnemo.datapipes.core as dp
-from physicsnemo.datapipes.core.registry import (
+import physicsnemo.datapipes as dp
+from physicsnemo.datapipes.registry import (
     COMPONENT_REGISTRY,
     ComponentRegistry,
     _resolve_component,
@@ -194,13 +194,13 @@ def test_registry_count():
 def test_resolve_transform():
     """Test resolving a transform name to full path."""
     result = _resolve_component("Normalize")
-    assert result == "physicsnemo.datapipes.core.transforms.normalize.Normalize"
+    assert result == "physicsnemo.datapipes.transforms.normalize.Normalize"
 
 
 def test_resolve_reader():
     """Test resolving a reader name to full path."""
     result = _resolve_component("HDF5Reader")
-    assert result == "physicsnemo.datapipes.core.readers.hdf5.HDF5Reader"
+    assert result == "physicsnemo.datapipes.readers.hdf5.HDF5Reader"
 
 
 def test_resolve_unknown_raises():
@@ -219,8 +219,7 @@ def test_omegaconf_resolver_registered():
     # Resolve should work
     resolved = OmegaConf.to_container(cfg, resolve=True)
     assert (
-        resolved["_target_"]
-        == "physicsnemo.datapipes.core.transforms.normalize.Normalize"
+        resolved["_target_"] == "physicsnemo.datapipes.transforms.normalize.Normalize"
     )
 
 
@@ -230,7 +229,7 @@ def test_omegaconf_resolver_with_reader():
 
     cfg = OmegaConf.create({"_target_": "${dp:ZarrReader}"})
     resolved = OmegaConf.to_container(cfg, resolve=True)
-    assert resolved["_target_"] == "physicsnemo.datapipes.core.readers.zarr.ZarrReader"
+    assert resolved["_target_"] == "physicsnemo.datapipes.readers.zarr.ZarrReader"
 
 
 # ============================================================================

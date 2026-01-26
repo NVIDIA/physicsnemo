@@ -24,7 +24,7 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-import physicsnemo.datapipes.core as dp
+import physicsnemo.datapipes as dp
 
 # ============================================================================
 # Normalize transform

@@ -30,7 +30,7 @@ from torch.utils.data import (
     WeightedRandomSampler,
 )
 
-import physicsnemo.datapipes.core as dp
+import physicsnemo.datapipes as dp
 
 # ============================================================================
 # Basic DataLoader functionality
