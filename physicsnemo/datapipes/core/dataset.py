@@ -135,7 +135,7 @@ class Dataset:
         self.num_workers = num_workers
         if device == "auto":
             if torch.cuda.is_available():
-                if DistributedManager._is_initialized:
+                if DistributedManager.is_initialized():
                     device = DistributedManager().device
                 else:
                     device = "cuda:0"
