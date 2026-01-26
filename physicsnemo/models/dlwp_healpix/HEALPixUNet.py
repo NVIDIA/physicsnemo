@@ -16,22 +16,24 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Dict, Sequence
 
-import torch as th
+import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.models.dlwp_healpix_layers import HEALPixFoldFaces, HEALPixUnfoldFaces
+from physicsnemo.nn import HEALPixFoldFaces, HEALPixUnfoldFaces
+
+from .layers import _legacy_hydra_targets_warning, _remap_obj
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class MetaData(ModelMetaData):
-    """Metadata for the DLWP HEALPix UNet Model"""
+    r"""Metadata for the DLWP HEALPix UNet model."""
 
     # Optimization
     jit: bool = False
@@ -47,7 +49,81 @@ class MetaData(ModelMetaData):
 
 
 class HEALPixUNet(Module):
-    """Deep Learning Weather Prediction (DLWP) UNet on the HEALPix mesh."""
+    r"""Deep Learning Weather Prediction (DLWP) UNet on the HEALPix mesh.
+
+    Parameters
+    ----------
+    encoder : DictConfig
+        Instantiable configuration for the U-Net encoder block.
+    decoder : DictConfig
+        Instantiable configuration for the U-Net decoder block.
+    input_channels : int
+        Number of prognostic input channels per time step.
+    output_channels : int
+        Number of prognostic output channels per time step.
+    n_constants : int
+        Number of constant input channels provided for all faces.
+    decoder_input_channels : int
+        Number of prescribed decoder inputs per time step.
+    input_time_dim : int
+        Number of input time steps :math:`T_{in}`.
+    output_time_dim : int
+        Number of output time steps :math:`T_{out}`.
+    presteps : int, optional
+        Number of warm-up steps used to initialize recurrent states, by default ``0``.
+    enable_nhwc : bool, optional
+        If ``True``, use channels-last tensors.
+    enable_healpixpad : bool, optional
+        Enable CUDA HEALPix padding when the optional dependency is installed.
+    couplings : list, optional
+        Optional coupling specifications appended to the input feature channels.
+
+    Forward
+    -------
+    inputs : Sequence[torch.Tensor]
+        Input tensors shaped :math:`(B, F, T_{in}, C_{in}, H, W)` plus optional
+        decoder inputs and constants. When ``couplings`` is provided an additional
+        coupling tensor shaped :math:`(T_{in}, B, C_c, H, W)` is expected.
+    output_only_last : bool, optional
+        If ``True``, return only the last forecast step; otherwise return the full
+        integration horizon.
+
+    Outputs
+    -------
+    torch.Tensor
+        Predictions shaped :math:`(B, F, T_{out}, C_{out}, H, W)`.
+
+    """
+
+    __model_checkpoint_version__ = "0.2.0"
+    __supported_model_checkpoint_version__ = {
+        "0.1.0": _legacy_hydra_targets_warning,
+    }
+
+    @classmethod
+    def _backward_compat_arg_mapper(
+        cls, version: str, args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        r"""
+        Map arguments from older checkpoints to the current format.
+
+        Parameters
+        ----------
+        version : str
+            Version of the checkpoint being loaded.
+        args : Dict[str, Any]
+            Arguments dictionary from the checkpoint.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Updated arguments dictionary compatible with the current version.
+        """
+        args = super()._backward_compat_arg_mapper(version, args)
+        if version != "0.1.0":
+            return args
+
+        return _remap_obj(args)
 
     def __init__(
         self,
@@ -64,38 +140,8 @@ class HEALPixUNet(Module):
         enable_healpixpad: bool = False,
         couplings: list = [],
     ):
-        """
-        Parameters
-        ----------
-        encoder: DictConfig
-            dictionary of instantiable parameters for the U-net encoder
-        decoder: DictConfig
-            dictionary of instantiable parameters for the U-net decoder
-        input_channels: int
-            number of input channels expected in the input array schema. Note this should be the
-            number of input variables in the data, NOT including data reshaping for the encoder part.
-        output_channels: int
-            number of output channels expected in the output array schema, or output variables
-        n_constants: int
-            number of optional constants expected in the input arrays. If this is zero, no constants
-            should be provided as inputs to `forward`.
-        decoder_input_channels: int
-            number of optional prescribed variables expected in the decoder input array
-            for both inputs and outputs. If this is zero, no decoder inputs should be provided as inputs to `forward`.
-        input_time_dim: int
-            number of time steps in the input array
-        output_time_dim: int
-            number of time steps in the output array
-        presteps: int, optional
-            number of model steps to initialize recurrent states. default: 0
-        enable_nhwc: bool, optional
-            Model with [N, H, W, C] instead of [N, C, H, W]. default: False
-        enable_healpixpad: bool, optional
-            Enable CUDA HEALPixPadding if installed. default: False
-        couplings: list, optional
-            sequence of dictionaries that describe coupling mechanisms
-        """
-        super().__init__()
+        r"""Initialize the DLWP HEALPix UNet."""
+        super().__init__(meta=MetaData())
 
         if len(couplings) > 0:
             if n_constants == 0:
@@ -148,11 +194,25 @@ class HEALPixUNet(Module):
 
     @property
     def integration_steps(self):
-        """Number of integration steps"""
+        r"""
+        Number of implicit forward integration steps.
+
+        Returns
+        -------
+        int
+            Integration horizon :math:`T_{out} / T_{in}` (minimum 1).
+        """
         return max(self.output_time_dim // self.input_time_dim, 1)
 
     def _compute_input_channels(self) -> int:
-        """Calculate total number of input channels in the model"""
+        r"""
+        Calculate total number of input channels consumed by the encoder.
+
+        Returns
+        -------
+        int
+            Total channel count including couplings and constants.
+        """
         return (
             self.input_time_dim * (self.input_channels + self.decoder_input_channels)
             + self.n_constants
@@ -160,32 +220,51 @@ class HEALPixUNet(Module):
         )
 
     def _compute_coupled_channels(self, couplings):
-        c_channels = 0
-        for c in couplings:
-            c_channels += len(c["params"]["variables"]) * len(
-                c["params"]["input_times"]
-            )
-        return c_channels
-
-    def _compute_output_channels(self) -> int:
-        """Compute the total number of output channels in the model"""
-        return (1 if self.is_diagnostic else self.input_time_dim) * self.output_channels
-
-    def _reshape_inputs(self, inputs: Sequence, step: int = 0) -> th.Tensor:
-        """
-        Returns a single tensor to pass into the model encoder/decoder. Squashes the time/channel dimension and
-        concatenates in constants and decoder inputs.
+        r"""
+        Compute the number of additional coupling channels.
 
         Parameters
         ----------
-        inputs: Sequence
-            list of expected input tensors (inputs, decoder_inputs, constants)
-        step: int, optional
-            step number in the sequence of integration_stepsi. default: 0
+        couplings : list
+            Coupling configuration dictionaries.
 
         Returns
         -------
-        torch.Tensor: reshaped Tensor in expected shape for model encoder
+        int
+            Total coupling channels contributed to the encoder inputs.
+        """
+        return sum(
+            len(c["params"]["variables"]) * len(c["params"]["input_times"])
+            for c in couplings
+        )
+
+    def _compute_output_channels(self) -> int:
+        r"""
+        Compute the total number of output channels in the model.
+
+        Returns
+        -------
+        int
+            Output channel count for each integration step.
+        """
+        return (1 if self.is_diagnostic else self.input_time_dim) * self.output_channels
+
+    def _reshape_inputs(self, inputs: Sequence, step: int = 0) -> torch.Tensor:
+        r"""
+        Concatenate prognostic, decoder, constant, and coupling inputs for the encoder.
+
+        Parameters
+        ----------
+        inputs : Sequence
+            Tensors arranged as ``[prognostics, decoder_inputs, constants]`` with
+            optional couplings.
+        step : int, optional
+            Integration step index.
+
+        Returns
+        -------
+        torch.Tensor
+            Folded encoder input shaped :math:`(B \cdot F, C, H, W)`.
         """
 
         if len(self.couplings) > 0:
@@ -206,7 +285,7 @@ class HEALPixUNet(Module):
                 ),  # constants
                 inputs[3].permute(0, 2, 1, 3, 4),  # coupled inputs
             ]
-            res = th.cat(result, dim=self.channel_dim)
+            res = torch.cat(result, dim=self.channel_dim)
 
         else:
             if not (self.n_constants > 0 or self.decoder_input_channels > 0):
@@ -228,7 +307,7 @@ class HEALPixUNet(Module):
                         ...,
                     ].flatten(self.channel_dim, self.channel_dim + 1),  # DI
                 ]
-                res = th.cat(result, dim=self.channel_dim)
+                res = torch.cat(result, dim=self.channel_dim)
 
                 # fold faces into batch dim
                 res = self.fold(res)
@@ -243,7 +322,7 @@ class HEALPixUNet(Module):
                         *tuple([inputs[0].shape[0]] + len(inputs[1].shape) * [-1])
                     ),  # constants
                 ]
-                res = th.cat(result, dim=self.channel_dim)
+                res = torch.cat(result, dim=self.channel_dim)
 
                 # fold faces into batch dim
                 res = self.fold(res)
@@ -264,27 +343,26 @@ class HEALPixUNet(Module):
                     *tuple([inputs[0].shape[0]] + len(inputs[2].shape) * [-1])
                 ),  # constants
             ]
-            res = th.cat(result, dim=self.channel_dim)
+            res = torch.cat(result, dim=self.channel_dim)
 
         # fold faces into batch dim
         res = self.fold(res)
 
         return res
 
-    def _reshape_outputs(self, outputs: th.Tensor) -> th.Tensor:
-        """Returns a maultiple tensors to from the model decoder.
-        Splits the time/channel dimensions.
+    def _reshape_outputs(self, outputs: torch.Tensor) -> torch.Tensor:
+        r"""
+        Reshape decoder output back to explicit time and channel dimensions.
 
         Parameters
         ----------
-        inputs: Sequence
-            list of expected input tensors (inputs, decoder_inputs, constants)
-        step: int, optional
-            step number in the sequence of integration_steps
+        outputs : torch.Tensor
+            Decoder output shaped :math:`(B \cdot F, C, H, W)`.
 
         Returns
         -------
-        torch.Tensor: reshaped Tensor in expected shape for model outputs
+        torch.Tensor
+            Unfolded tensor shaped :math:`(B, F, T_{out}, C_{out}, H, W)`.
         """
 
         # unfold:
@@ -292,7 +370,7 @@ class HEALPixUNet(Module):
 
         # extract shape and reshape
         shape = tuple(outputs.shape)
-        res = th.reshape(
+        res = torch.reshape(
             outputs,
             shape=(
                 shape[0],
@@ -305,23 +383,31 @@ class HEALPixUNet(Module):
 
         return res
 
-    def forward(self, inputs: Sequence, output_only_last=False) -> th.Tensor:
-        """
-        Forward pass of the HEALPixUnet
+    def forward(self, inputs: Sequence, output_only_last: bool = False) -> torch.Tensor:
+        r"""
+        Forward pass of the HEALPix UNet.
 
         Parameters
         ----------
-        inputs: Sequence
-            Inputs to the model, of the form [prognostics|TISR|constants]
-            [B, F, T, C, H, W] is the format for prognostics and TISR
-            [F, C, H, W] is the format for constants
-        output_only_last: bool, optional
-            If only the last dimension of the outputs should be returned. default: False
+        inputs : Sequence
+            List ``[prognostics, decoder_inputs, constants]`` or with couplings
+            ``[prognostics, decoder_inputs, constants, couplings]`` where
+            prognostics and decoder inputs have shape :math:`(B, F, T, C, H, W)` and
+            constants have shape :math:`(F, C, H, W)`.
+        output_only_last : bool, optional
+            If ``True``, return only the final forecast step. Defaults to ``False``.
 
         Returns
         -------
-        th.Tensor: Predicted outputs
+        torch.Tensor
+            Model outputs shaped :math:`(B, F, T_{out}, C_{out}, H, W)`.
         """
+        if not torch.compiler.is_compiling():
+            if inputs[0].ndim != 6:
+                raise ValueError(
+                    "HEALPixUNet.forward expects prognostics shaped (B, F, T, C, H, W)"
+                )
+
         outputs = []
         for step in range(self.integration_steps):
             if step == 0:
@@ -349,6 +435,6 @@ class HEALPixUNet(Module):
         if output_only_last:
             res = outputs[-1]
         else:
-            res = th.cat(outputs, dim=self.channel_dim)
+            res = torch.cat(outputs, dim=self.channel_dim)
 
         return res

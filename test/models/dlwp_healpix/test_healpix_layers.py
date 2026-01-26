@@ -14,18 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
-import sys
 
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
-import numpy as np
 import pytest
 import torch
 
 from test import common
-from test.conftest import requires_module
 
 
 class MulX(torch.nn.Module):
@@ -39,112 +32,6 @@ class MulX(torch.nn.Module):
         return x * self.multiplier
 
 
-@requires_module("hydra")
-def test_HEALPixFoldFaces_initialization(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        HEALPixFoldFaces,
-    )
-
-    fold_func = HEALPixFoldFaces()
-    assert isinstance(fold_func, HEALPixFoldFaces)
-
-
-@requires_module("hydra")
-def test_HEALPixFoldFaces_forward(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        HEALPixFoldFaces,
-    )
-
-    fold_func = HEALPixFoldFaces()
-
-    tensor_size = torch.randint(low=2, high=4, size=(5,)).tolist()
-    output_size = (tensor_size[0] * tensor_size[1], *tensor_size[2:])
-    invar = torch.ones(*tensor_size, device=device)
-
-    outvar = fold_func(invar)
-    assert outvar.shape == output_size
-
-    fold_func = HEALPixFoldFaces(enable_nhwc=True)
-    assert fold_func(invar).shape == outvar.shape
-    assert fold_func(invar).stride() != outvar.stride()
-
-
-@requires_module("hydra")
-def test_HEALPixUnfoldFaces_initialization(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        HEALPixUnfoldFaces,
-    )
-
-    unfold_func = HEALPixUnfoldFaces()
-    assert isinstance(unfold_func, HEALPixUnfoldFaces)
-
-
-@requires_module("hydra")
-def test_HEALPixUnfoldFaces_forward(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        HEALPixUnfoldFaces,
-    )
-
-    num_faces = 12
-    unfold_func = HEALPixUnfoldFaces()
-
-    tensor_size = torch.randint(low=1, high=4, size=(4,)).tolist()
-    output_size = (tensor_size[0], num_faces, *tensor_size[1:])
-
-    # first dim is B * num_faces
-    tensor_size[0] *= num_faces
-    invar = torch.ones(*tensor_size, device=device)
-
-    outvar = unfold_func(invar)
-    assert outvar.shape == output_size
-
-
-@requires_module("hydra")
-@pytest.mark.parametrize("padding", [2, 3, 4])
-def test_HEALPixPadding_initialization(device, padding, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        HEALPixPadding,
-    )
-
-    pad_func = HEALPixPadding(padding)
-    assert isinstance(pad_func, HEALPixPadding)
-
-
-@requires_module("hydra")
-@pytest.mark.parametrize("padding", [2, 3, 4])
-def test_HEALPixPadding_forward(device, padding, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        HEALPixPadding,
-    )
-
-    num_faces = 12  # standard for healpix
-    batch_size = 2
-    pad_func = HEALPixPadding(padding)
-
-    # test invalid padding size
-    with pytest.raises(
-        ValueError, match=("invalid value for 'padding', expected int > 0 but got 0")
-    ):
-        pad_func = HEALPixPadding(0)
-
-    hw_size = torch.randint(low=4, high=24, size=(1,)).tolist()
-    c_size = torch.randint(low=3, high=7, size=(1,)).tolist()
-    hw_size = np.asarray(hw_size + hw_size)
-
-    # dims are B * F, C, H, W
-    # F = 12, and H == W
-    # HEALPixPadding expects a folded tensor so fold dims here
-    tensor_size = (batch_size * num_faces, *c_size, *hw_size)
-    invar = torch.rand(tensor_size, device=device)
-
-    # Healpix adds the padding size to each side
-    hw_padded_size = hw_size + (2 * padding)
-    out_size = (batch_size * num_faces, *c_size, *hw_padded_size)
-
-    outvar = pad_func(invar)
-    assert outvar.shape == out_size
-
-
 HEALPixLayer_testdata = [
     ("cuda:0", 2),
     ("cuda:0", 3),
@@ -155,10 +42,9 @@ HEALPixLayer_testdata = [
 ]
 
 
-@requires_module("hydra")
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
+    from physicsnemo.nn import (
         HEALPixLayer,
     )
 
@@ -166,10 +52,9 @@ def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
     assert isinstance(layer, HEALPixLayer)
 
 
-@requires_module("hydra")
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_forward(device, multiplier, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
+    from physicsnemo.nn import (
         HEALPixLayer,
     )
 

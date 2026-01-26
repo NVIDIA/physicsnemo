@@ -16,12 +16,12 @@
 
 from typing import Sequence
 
-import torch as th
+import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 
-class UNetDecoder(th.nn.Module):
+class UNetDecoder(torch.nn.Module):
     """Generic UNetDecoder that can be applied to arbitrary meshes."""
 
     def __init__(
@@ -111,7 +111,7 @@ class UNetDecoder(th.nn.Module):
                 rec_module = None
 
             self.decoder.append(
-                th.nn.ModuleDict(
+                torch.nn.ModuleDict(
                     {
                         "upsamp": up_sample_module,
                         "conv": conv_module,
@@ -120,7 +120,7 @@ class UNetDecoder(th.nn.Module):
                 )
             )
 
-        self.decoder = th.nn.ModuleList(self.decoder)
+        self.decoder = torch.nn.ModuleList(self.decoder)
 
         # (Linear) Output layer
         self.output_layer = instantiate(
@@ -132,7 +132,7 @@ class UNetDecoder(th.nn.Module):
             enable_healpixpad=enable_healpixpad,
         )
 
-    def forward(self, inputs: Sequence) -> th.Tensor:
+    def forward(self, inputs: Sequence) -> torch.Tensor:
         """
         Forward pass of the HEALPix Unet decoder
 
@@ -149,7 +149,7 @@ class UNetDecoder(th.nn.Module):
         for n, layer in enumerate(self.decoder):
             if layer["upsamp"] is not None:
                 up = layer["upsamp"](x)
-                x = th.cat([up, inputs[-1 - n]], dim=self.channel_dim)
+                x = torch.cat([up, inputs[-1 - n]], dim=self.channel_dim)
             x = layer["conv"](x)
             if layer["recurrent"] is not None:
                 x = layer["recurrent"](x)

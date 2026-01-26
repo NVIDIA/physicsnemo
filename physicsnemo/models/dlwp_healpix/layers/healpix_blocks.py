@@ -17,16 +17,15 @@
 from typing import Sequence, Tuple, Union
 
 import torch
-import torch as th
 
-from .healpix_layers import HEALPixLayer
+from physicsnemo.nn import HEALPixLayer
 
 #
 # RECURRENT BLOCKS
 #
 
 
-class ConvGRUBlock(th.nn.Module):
+class ConvGRUBlock(torch.nn.Module):
     """Class that implements a Convolutional GRU
     Code modified from
     https://github.com/happyjin/ConvGRU-pytorch/blob/master/convGRU.py
@@ -34,7 +33,7 @@ class ConvGRUBlock(th.nn.Module):
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         kernel_size: int = 1,
         enable_nhwc: bool = False,
@@ -75,7 +74,7 @@ class ConvGRUBlock(th.nn.Module):
             enable_nhwc=enable_nhwc,
             enable_healpixpad=enable_healpixpad,
         )
-        self.h = th.zeros(1, 1, 1, 1)
+        self.h = torch.zeros(1, 1, 1, 1)
 
     def forward(self, inputs: Sequence) -> Sequence:
         """Forward pass of the ConvGRUBlock
@@ -91,17 +90,17 @@ class ConvGRUBlock(th.nn.Module):
             Result of the forward pass
         """
         if inputs.shape != self.h.shape:
-            self.h = th.zeros_like(inputs)
-        combined = th.cat([inputs, self.h], dim=1)
+            self.h = torch.zeros_like(inputs)
+        combined = torch.cat([inputs, self.h], dim=1)
         combined_conv = self.conv_gates(combined)
 
-        gamma, beta = th.split(combined_conv, self.channels, dim=1)
-        reset_gate = th.sigmoid(gamma)
-        update_gate = th.sigmoid(beta)
+        gamma, beta = torch.split(combined_conv, self.channels, dim=1)
+        reset_gate = torch.sigmoid(gamma)
+        update_gate = torch.sigmoid(beta)
 
-        combined = th.cat([inputs, reset_gate * self.h], dim=1)
+        combined = torch.cat([inputs, reset_gate * self.h], dim=1)
         cc_cnm = self.conv_can(combined)
-        cnm = th.tanh(cc_cnm)
+        cnm = torch.tanh(cc_cnm)
 
         h_next = (1 - update_gate) * self.h + update_gate * cnm
         self.h = h_next
@@ -110,7 +109,7 @@ class ConvGRUBlock(th.nn.Module):
 
     def reset(self):
         """Reset the update gates"""
-        self.h = th.zeros_like(self.h)
+        self.h = torch.zeros_like(self.h)
 
 
 #
@@ -118,19 +117,19 @@ class ConvGRUBlock(th.nn.Module):
 #
 
 
-class BasicConvBlock(th.nn.Module):
+class BasicConvBlock(torch.nn.Module):
     """Convolution block consisting of n subsequent convolutions and activations"""
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         out_channels: int = 1,
         kernel_size: int = 3,
         dilation: int = 1,
         n_layers: int = 1,
         latent_channels: int = None,
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
     ):
@@ -176,7 +175,7 @@ class BasicConvBlock(th.nn.Module):
             )
             if activation is not None:
                 convblock.append(activation)
-        self.convblock = th.nn.Sequential(*convblock)
+        self.convblock = torch.nn.Sequential(*convblock)
 
     def forward(self, x):
         """Forward pass of the BasicConvBlock
@@ -194,14 +193,14 @@ class BasicConvBlock(th.nn.Module):
         return self.convblock(x)
 
 
-class ConvNeXtBlock(th.nn.Module):
+class ConvNeXtBlock(torch.nn.Module):
     """Class implementing a modified ConvNeXt network as described in https://arxiv.org/pdf/2201.03545.pdf
     and shown in figure 4
     """
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         latent_channels: int = 1,
         out_channels: int = 1,
@@ -209,7 +208,7 @@ class ConvNeXtBlock(th.nn.Module):
         dilation: int = 1,
         n_layers: int = 1,  # not used, but required for hydra instantiation
         upscale_factor: int = 4,
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
     ):
@@ -292,7 +291,7 @@ class ConvNeXtBlock(th.nn.Module):
                 enable_healpixpad=enable_healpixpad,
             )
         )
-        self.convblock = th.nn.Sequential(*convblock)
+        self.convblock = torch.nn.Sequential(*convblock)
 
     def forward(self, x):
         """Forward pass of the ConvNextBlock
@@ -310,7 +309,7 @@ class ConvNeXtBlock(th.nn.Module):
         return self.skip_module(x) + self.convblock(x)
 
 
-class DoubleConvNeXtBlock(th.nn.Module):
+class DoubleConvNeXtBlock(torch.nn.Module):
     """Modification of ConvNeXtBlock block this time putting two sequentially
     in a single block with the number of channels in the middle being the
     number of latent channels
@@ -318,7 +317,7 @@ class DoubleConvNeXtBlock(th.nn.Module):
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         out_channels: int = 1,
         kernel_size: int = 3,
@@ -326,7 +325,7 @@ class DoubleConvNeXtBlock(th.nn.Module):
         n_layers: int = 1,  # not used, but required for hydra instantiation
         upscale_factor: int = 4,
         latent_channels: int = 1,
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
     ):
@@ -427,7 +426,7 @@ class DoubleConvNeXtBlock(th.nn.Module):
         )
         if activation is not None:
             convblock1.append(activation)
-        self.convblock1 = th.nn.Sequential(*convblock1)
+        self.convblock1 = torch.nn.Sequential(*convblock1)
 
         # 2nd ConNeXt block, takes the output of the first convnext block
         convblock2 = []
@@ -473,7 +472,7 @@ class DoubleConvNeXtBlock(th.nn.Module):
         )
         if activation is not None:
             convblock2.append(activation)
-        self.convblock2 = th.nn.Sequential(*convblock2)
+        self.convblock2 = torch.nn.Sequential(*convblock2)
 
     def forward(self, x):
         """Forward pass of the DoubleConvNextBlock
@@ -494,14 +493,14 @@ class DoubleConvNeXtBlock(th.nn.Module):
         return self.skip_module2(x1) + self.convblock2(x1)
 
 
-class Multi_SymmetricConvNeXtBlock(th.nn.Module):
+class Multi_SymmetricConvNeXtBlock(torch.nn.Module):
     """
     Class for creating multi-block SymmetricConvNeXtBlock. Defaults to all SymmetricConvNeXtBlocks having same parameters
     """
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         latent_channels: int = 1,
         out_channels: int = 1,
@@ -509,7 +508,7 @@ class Multi_SymmetricConvNeXtBlock(th.nn.Module):
         dilation: int = 1,
         upscale_factor: int = 4,
         n_layers: int = 1,
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
     ):
@@ -522,7 +521,7 @@ class Multi_SymmetricConvNeXtBlock(th.nn.Module):
         super().__init__()
 
         # Create a ModuleList to store complete blocks
-        self.blocks = th.nn.ModuleList()
+        self.blocks = torch.nn.ModuleList()
 
         for i in range(n_layers):
             curr_in = in_channels if i == 0 else out_channels
@@ -550,7 +549,7 @@ class Multi_SymmetricConvNeXtBlock(th.nn.Module):
         return out
 
 
-class SymmetricConvNeXtBlock(th.nn.Module):
+class SymmetricConvNeXtBlock(torch.nn.Module):
     """Another modification of ConvNeXtBlock block this time using 4 layers and adding
     a layer that instead of going from in_channels to latent*upscale channesl goes to
     latent channels first
@@ -558,7 +557,7 @@ class SymmetricConvNeXtBlock(th.nn.Module):
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         latent_channels: int = 1,
         out_channels: int = 1,
@@ -566,7 +565,7 @@ class SymmetricConvNeXtBlock(th.nn.Module):
         dilation: int = 1,
         n_layers: int = 1,  # not used, but required for hydra instantiation
         upscale_factor: int = 4,
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
     ):
@@ -666,7 +665,7 @@ class SymmetricConvNeXtBlock(th.nn.Module):
         )
         if activation is not None:
             convblock.append(activation)
-        self.convblock = th.nn.Sequential(*convblock)
+        self.convblock = torch.nn.Sequential(*convblock)
 
     def forward(self, x):
         """Forward pass of the SymmetricConvNextBlock
@@ -686,123 +685,22 @@ class SymmetricConvNeXtBlock(th.nn.Module):
 
 
 #
-# DOWNSAMPLING BLOCKS
-#
-
-
-class MaxPool(th.nn.Module):
-    """This class provides a wrapper for a HEALPix (or other) tensor data
-    around the torch.nn.MaxPool2d class.
-    """
-
-    def __init__(
-        self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
-        pooling: int = 2,
-        enable_nhwc: bool = False,
-        enable_healpixpad: bool = False,
-    ):
-        """
-        Parameters
-        ----------
-        geometry_layer: torch.nn.Module, optional
-            The wrapper for the geometry of the tensor being bassed to MaxPool2d
-        pooling: int, optional
-            Pooling kernel size passed to geometry layer
-        enable_nhwc: bool, optional
-            Enable nhwc format, passed to wrapper
-        enable_healpixpad: bool, optional
-            If HEALPixPadding should be enabled, passed to wrapper
-        """
-        super().__init__()
-        self.maxpool = geometry_layer(
-            layer=torch.nn.MaxPool2d,
-            kernel_size=pooling,
-            enable_nhwc=enable_nhwc,
-            enable_healpixpad=enable_healpixpad,
-        )
-
-    def forward(self, x):
-        """Forward pass of the MaxPool
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            The values to MaxPool
-
-        Returns
-        -------
-        torch.Tensor
-            The MaxPooled values
-        """
-        return self.maxpool(x)
-
-
-class AvgPool(th.nn.Module):
-    """This class provides a wrapper for a HEALPix (or other) tensor data
-    around the torch.nn.AvgPool2d class.
-    """
-
-    def __init__(
-        self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
-        pooling: int = 2,
-        enable_nhwc: bool = False,
-        enable_healpixpad: bool = False,
-    ):
-        """
-        Parameters
-        ----------
-        geometry_layer: torch.nn.Module, optional
-            The wrapper for the geometry of the tensor being bassed to MaxPool2d
-        pooling: int, optional
-            Pooling kernel size passed to geometry layer
-        enable_nhwc: bool, optional
-            Enable nhwc format, passed to wrapper
-        enable_healpixpad: bool, optional
-            If HEALPixPadding should be enabled, passed to wrapper
-        """
-        super().__init__()
-        self.avgpool = geometry_layer(
-            layer=torch.nn.AvgPool2d,
-            kernel_size=pooling,
-            enable_nhwc=enable_nhwc,
-            enable_healpixpad=enable_healpixpad,
-        )
-
-    def forward(self, x):
-        """Forward pass of the AvgPool layer
-
-        Parameters
-        ----------
-        x: torch.Tensor
-            The values to average
-
-        Returns
-        -------
-        torch.Tensor
-            The averaged values
-        """
-        return self.avgpool(x)
-
-
-#
 # UPSAMPLING BLOCKS
 #
 
 
-class TransposedConvUpsample(th.nn.Module):
+class TransposedConvUpsample(torch.nn.Module):
     """This class provides a wrapper for a HEALPix (or other) tensor data
     around the torch.nn.ConvTranspose2d class.
     """
 
     def __init__(
         self,
-        geometry_layer: th.nn.Module = HEALPixLayer,
+        geometry_layer: torch.nn.Module = HEALPixLayer,
         in_channels: int = 3,
         out_channels: int = 1,
         upsampling: int = 2,
-        activation: th.nn.Module = None,
+        activation: torch.nn.Module = None,
         enable_nhwc: bool = False,
         enable_healpixpad: bool = False,
     ):
@@ -810,7 +708,7 @@ class TransposedConvUpsample(th.nn.Module):
         Parameters
         ----------
         geometry_layer: torch.nn.Module, optional
-            The wrapper for the geometry of the tensor being bassed to MaxPool2d
+            The wrapper for the geometry of the tensor being bassed to ConvTranspose2d
         in_channels: int, optional
             The number of input channels
         out_channels: int, optional
@@ -841,7 +739,7 @@ class TransposedConvUpsample(th.nn.Module):
         )
         if activation is not None:
             upsampler.append(activation)
-        self.upsampler = th.nn.Sequential(*upsampler)
+        self.upsampler = torch.nn.Sequential(*upsampler)
 
     def forward(self, x):
         """Forward pass of the TransposedConvUpsample layer
@@ -864,7 +762,7 @@ class TransposedConvUpsample(th.nn.Module):
 #
 
 
-class Interpolate(th.nn.Module):
+class Interpolate(torch.nn.Module):
     """Helper class that handles interpolation
     This is done as a class so that scale and mode can be stored
     """
@@ -879,7 +777,7 @@ class Interpolate(th.nn.Module):
             Interpolation mode used for upsampling, passed to torch.nn.functional.interpolate
         """
         super().__init__()
-        self.interp = th.nn.functional.interpolate
+        self.interp = torch.nn.functional.interpolate
         self.scale_factor = scale_factor
         self.mode = mode
 

@@ -59,9 +59,9 @@ physicsnemo/mesh @peterdsharpe
 # DATAPIPES
 physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
 physicsnemo/datapipes/cae/domino_datapipe.py @RishikeshRanade @coreyjadams
-physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian @Alexey-Kamenev
+physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
 physicsnemo/datapipes/cae/readers.py @mnabian
-physicsnemo/datapipes/gnn @mnabian @Alexey-Kamenev
+physicsnemo/datapipes/gnn @mnabian
 physicsnemo/datapipes/healpix @pzharrington 
 # Distributed tools
 physicsnemo/distributed @coreyjadams
@@ -103,16 +103,16 @@ physicsnemo/models/pangu @dallasfoster
 physicsnemo/models/swinvrnn @dallasfoster
 
 # figconvnet
-physicsnemo/models/figconvnet @Alexey-Kamenev
+physicsnemo/models/figconvnet @coreyjadams
 
 # FNO
 # NEEDSOWNER
 
 # GNN layers, mesh graphnet, graphcast
-physicsnemo/models/gnn_layers @mnabian @Alexey-Kamenev
-physicsnemo/models/meshgraphnet @mnabian @Alexey-Kamenev
-physicsnemo/models/graphcast @mnabian @Alexey-Kamenev
-physicsnemo/models/mesh_reduced @mnabian @Alexey-Kamenev
+physicsnemo/models/gnn_layers @mnabian
+physicsnemo/models/meshgraphnet @mnabian
+physicsnemo/models/graphcast @mnabian
+physicsnemo/models/mesh_reduced @mnabian
 physicsnemo/utils/mesh @mnabian
 
 # pix2pix
