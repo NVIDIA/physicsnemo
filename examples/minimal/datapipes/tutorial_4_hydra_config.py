@@ -53,7 +53,7 @@ Configuration Files
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from physicsnemo.datapipes.core import DataLoader
+from physicsnemo.datapipes import DataLoader
 
 
 @hydra.main(

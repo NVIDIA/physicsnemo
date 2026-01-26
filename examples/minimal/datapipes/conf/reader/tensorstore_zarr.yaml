@@ -16,7 +16,7 @@
 
 # TensorStore Zarr Reader Configuration
 # High-performance async reader for Zarr files using TensorStore
-_target_: physicsnemo.datapipes.core.readers.TensorStoreZarrReader
+_target_: physicsnemo.datapipes.readers.TensorStoreZarrReader
 path: ???
 group_pattern: "*.zarr"
 fields: null

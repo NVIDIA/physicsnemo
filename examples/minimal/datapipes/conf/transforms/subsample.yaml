@@ -17,7 +17,7 @@
 # SubsamplePoints Transform Configuration
 # Subsamples point clouds to a fixed number of points
 # Useful for handling variable-size point cloud data in batched training
-_target_: physicsnemo.datapipes.core.transforms.SubsamplePoints
+_target_: physicsnemo.datapipes.transforms.SubsamplePoints
 input_keys:
     - coords
     - features

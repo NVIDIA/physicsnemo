@@ -20,7 +20,7 @@
 # Method options:
 #   - mean_std: Applies (x - mean) / std
 #   - min_max: Applies (x - center) / half_range, normalizing to [-1, 1]
-_target_: physicsnemo.datapipes.core.transforms.Normalize
+_target_: physicsnemo.datapipes.transforms.Normalize
 _convert_: all
 input_keys:
     - features

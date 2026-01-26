@@ -64,7 +64,7 @@ reader:
 # DataLoader: Top-level component that instantiates everything recursively
 # -----------------------------------------------------------------------------
 dataloader:
-    _target_: physicsnemo.datapipes.core.DataLoader
+    _target_: physicsnemo.datapipes.DataLoader
     batch_size: 4
     shuffle: true
     drop_last: false
@@ -76,7 +76,7 @@ dataloader:
     # Dataset: Nested inside DataLoader
     # -------------------------------------------------------------------------
     dataset:
-        _target_: physicsnemo.datapipes.core.Dataset
+        _target_: physicsnemo.datapipes.Dataset
         device: auto
         num_workers: 2
 
