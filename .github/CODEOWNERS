@@ -62,16 +62,12 @@ physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
 physicsnemo/datapipes/cae/domino_datapipe.py @RishikeshRanade @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
 physicsnemo/datapipes/cae/readers.py @mnabian
-<<<<<<< HEAD
-physicsnemo/datapipes/gnn @mnabian @Alexey-Kamenev
+
+physicsnemo/datapipes/gnn @mnabian
 physicsnemo/datapipes/healpix @pzharrington
 examples/minimal/datapipes @coreyjadams
 test/datapipes/core @coreyjadams
 
-=======
-physicsnemo/datapipes/gnn @mnabian
-physicsnemo/datapipes/healpix @pzharrington 
->>>>>>> a89f585c (Update CODEOWNERS (#1340))
 # Distributed tools
 physicsnemo/distributed @coreyjadams
 
