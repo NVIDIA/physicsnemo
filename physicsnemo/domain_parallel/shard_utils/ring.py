@@ -100,12 +100,12 @@ def perform_ring_iteration(
     local_id_for_send = local_rank + 1 if local_rank < local_size - 1 else 0
     local_id_for_recv = local_rank - 1 if local_rank > 0 else local_size - 1
 
+    if ring_config.ring_direction == "backward":
+        # Swap send/recv directions for backward ring
+        local_id_for_send, local_id_for_recv = local_id_for_recv, local_id_for_send
+
     id_for_send = dist.get_global_rank(group=local_group, group_rank=local_id_for_send)
     id_for_recv = dist.get_global_rank(group=local_group, group_rank=local_id_for_recv)
-
-    if ring_config.ring_direction == "reverse":
-        # Swap
-        id_for_send, id_for_recv = id_for_recv, id_for_send
 
     if not tensor.is_contiguous():
         tensor = tensor.contiguous()
@@ -153,8 +153,9 @@ def perform_ring_iteration(
             torch.empty(0, dtype=dtype, device=device) for _ in range(local_size)
         ]
 
-        all_to_all_recv[id_for_recv] = tensor_recv
-        all_to_all_send[id_for_send] = tensor
+        # Use local ranks as indices into the arrays, not global ranks
+        all_to_all_recv[local_id_for_recv] = tensor_recv
+        all_to_all_send[local_id_for_send] = tensor
 
         # Perform exchange
         dist.all_to_all(all_to_all_recv, all_to_all_send, group=local_group)

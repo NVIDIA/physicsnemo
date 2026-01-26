@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from physicsnemo.core.module import Module
-from physicsnemo.models.diffusion.preconditioning import (
+from physicsnemo.diffusion.preconditioners import (
     EDMPrecond,
     EDMPrecondSR,
     EDMPrecondSuperResolution,

@@ -17,3 +17,11 @@
 
 class ExperimentalFeatureWarning(UserWarning):
     """Warning raised when using experimental features that may change without notice."""
+
+
+class FutureFeatureWarning(UserWarning):
+    """Warning raised when importing a module that is a placeholder for future functionality."""
+
+
+class LegacyFeatureWarning(DeprecationWarning):
+    """Warning raised when importing legacy functionality that will be deprecated in the future."""

@@ -14,28 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nullcontext
 from dataclasses import dataclass
-from itertools import chain
-from typing import Callable, List, Tuple, Union
+from typing import Literal, Union
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.module import Module
-from physicsnemo.nn import get_activation
 from physicsnemo.nn.gnn_layers.graph_types import GraphType
-from physicsnemo.nn.gnn_layers.mesh_edge_block import MeshEdgeBlock
-from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
-from physicsnemo.nn.gnn_layers.mesh_node_block import MeshNodeBlock
-from physicsnemo.nn.gnn_layers.utils import set_checkpoint_fn
 
 # Import the Kolmogorov–Arnold Network layer.
-# Ensure that the file defining KolmogorovArnoldNetwork is accessible (e.g. physicsnemo/nn/gnn_layers/kan_layer.py)
 from physicsnemo.nn.kan_layers import KolmogorovArnoldNetwork
+
+from .meshgraphnet import MeshGraphNet
 
 
 @dataclass
@@ -53,9 +45,8 @@ class MetaData(ModelMetaData):
     auto_grad: bool = True
 
 
-class MeshGraphKAN(Module):
-    """MeshGraphKAN network architecture with a Kolmogorov–Arnold Network (KAN)
-    node encoder.
+class MeshGraphKAN(MeshGraphNet):
+    r"""MeshGraphKAN with a Kolmogorov–Arnold Network (KAN) node encoder.
 
     Parameters
     ----------
@@ -65,47 +56,69 @@ class MeshGraphKAN(Module):
         Number of edge features.
     output_dim : int
         Number of outputs.
-    processor_size : int, optional
-        Number of message passing blocks, by default 15.
-    mlp_activation_fn : Union[str, List[str]], optional
-        Activation function for non-KAN components, by default 'relu'.
-    num_layers_node_processor : int, optional
-        Number of MLP layers for processing nodes in each message passing block, by default 2.
-    num_layers_edge_processor : int, optional
-        Number of MLP layers for processing edge features in each message passing block, by default 2.
-    hidden_dim_processor : int, optional
-        Hidden layer size for the message passing blocks, by default 128.
-    hidden_dim_node_encoder : int, optional
-        Hidden layer size for the node feature encoder, by default 128.
-        (This parameter is used here as the output dimension for the KAN node encoder.)
-    num_layers_node_encoder : Union[int, None], optional
-        Number of MLP layers for the node feature encoder. Ignored for the KAN.
-    hidden_dim_edge_encoder : int, optional
-        Hidden layer size for the edge feature encoder, by default 128.
-    num_layers_edge_encoder : Union[int, None], optional
-        Number of MLP layers for the edge feature encoder, by default 2.
-    hidden_dim_node_decoder : int, optional
-        Hidden layer size for the node feature decoder, by default 128.
-    num_layers_node_decoder : Union[int, None], optional
-        Number of MLP layers for the node feature decoder, by default 2.
-    aggregation : str, optional
-        Message aggregation type, by default "sum".
-    do_concat_trick : bool, default=False
+    processor_size : int, optional, default=15
+        Number of message passing blocks.
+    mlp_activation_fn : str, optional, default="relu"
+    Activation function for non-KAN components.
+    num_layers_node_processor : int, optional, default=2
+        Number of MLP layers for processing nodes in each message passing block.
+    num_layers_edge_processor : int, optional, default=2
+        Number of MLP layers for processing edge features in each message passing block.
+    hidden_dim_processor : int, optional, default=128
+        Hidden layer size for the message passing blocks.
+    hidden_dim_node_encoder : int, optional, default=128
+        Output dimension for the KAN node encoder.
+    num_layers_node_encoder : Union[int, None], optional, default=2
+        Ignored for the KAN node encoder.
+    hidden_dim_edge_encoder : int, optional, default=128
+        Hidden layer size for the edge feature encoder.
+    num_layers_edge_encoder : Union[int, None], optional, default=2
+        Number of MLP layers for the edge feature encoder.
+    hidden_dim_node_decoder : int, optional, default=128
+        Hidden layer size for the node feature decoder.
+    num_layers_node_decoder : Union[int, None], optional, default=2
+        Number of MLP layers for the node feature decoder.
+    aggregation : Literal["sum", "mean"], optional, default="sum"
+        Message aggregation type. Allowed values are ``"sum"`` and ``"mean"``.
+    do_concat_trick : bool, optional, default=False
         Whether to replace concat+MLP with MLP+idx+sum.
-    num_processor_checkpoint_segments : int, optional
-        Number of processor segments for gradient checkpointing, by default 0 (checkpointing disabled).
-    checkpoint_offloading : bool, optional
-        Whether to offload the checkpointing to the CPU, by default False.
-    recompute_activation : bool, optional
-        Whether to recompute activations during backward for memory savings, by default False.
-    num_harmonics : int, optional
-        Number of Fourier harmonics used in the KAN node encoder, by default 5.
+    num_processor_checkpoint_segments : int, optional, default=0
+        Number of processor segments for gradient checkpointing (0 disables checkpointing).
+    checkpoint_offloading : bool, optional, default=False
+        Whether to offload checkpointing to the CPU.
+    recompute_activation : bool, optional, default=False
+        Whether to recompute activations during backward for memory savings.
+    num_harmonics : int, optional, default=5
+        Number of Fourier harmonics used in the KAN node encoder.
 
-    Example
+    Forward
     -------
-    >>> # `norm_type` in MeshGraphNet layers is deprecated,
+    node_features : torch.Tensor
+        Input node features of shape :math:`(N_{nodes}, D_{in}^{node})`.
+    edge_features : torch.Tensor
+        Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
+    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+        Graph connectivity/topology container (PyG).
+        Connectivity/topology only. Do not duplicate node or edge features on the graph;
+        pass them via ``node_features`` and ``edge_features``. If present on
+        the graph, they will be ignored by the model.
+        ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
+        ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
+        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
+        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+
+
+    Outputs
+    -------
+    torch.Tensor
+        Output node features of shape :math:`(N_{nodes}, D_{out})`.
+
+    Examples
+    --------
+    >>> # ``norm_type`` in MeshGraphNet layers is deprecated,
     >>> # TE will be automatically used if possible unless told otherwise.
-    >>> # (You don't have to set this varialbe, it's faster to use TE!)
+    >>> # (You don't have to set this variable, it's faster to use TE!)
     >>> # Example of how to disable:
     >>> import os
     >>> os.environ['PHYSICSNEMO_FORCE_TE'] = 'False'
@@ -126,8 +139,11 @@ class MeshGraphKAN(Module):
 
     Note
     ----
-    Reference: Pfaff, Tobias, et al. "Learning mesh-based simulation with graph networks."
-    arXiv preprint arXiv:2010.03409 (2020).
+    References:
+    - `Learning Mesh-Based Simulation with Graph Networks <https://arxiv.org/pdf/2010.03409>`.
+    - `KAN: Kolmogorov–Arnold Networks <https://arxiv.org/pdf/2404.19756>`.
+    - `Interpretable physics-informed graph neural networks for
+        flood forecasting <https://onlinelibrary.wiley.com/doi/pdf/10.1111/mice.13484>`.
     """
 
     def __init__(
@@ -136,7 +152,7 @@ class MeshGraphKAN(Module):
         input_dim_edges: int,
         output_dim: int,
         processor_size: int = 15,
-        mlp_activation_fn: Union[str, List[str]] = "relu",
+        mlp_activation_fn: str = "relu",
         num_layers_node_processor: int = 2,
         num_layers_edge_processor: int = 2,
         hidden_dim_processor: int = 128,
@@ -146,26 +162,39 @@ class MeshGraphKAN(Module):
         num_layers_edge_encoder: Union[int, None] = 2,
         hidden_dim_node_decoder: int = 128,
         num_layers_node_decoder: Union[int, None] = 2,
-        aggregation: str = "sum",
+        aggregation: Literal["sum", "mean"] = "sum",
         do_concat_trick: bool = False,
         num_processor_checkpoint_segments: int = 0,
         checkpoint_offloading: bool = False,
         recompute_activation: bool = False,
         num_harmonics: int = 5,
     ):
-        super().__init__(meta=MetaData())
-
-        activation_fn = get_activation(mlp_activation_fn)
-
-        self.edge_encoder = MeshGraphMLP(
-            input_dim_edges,
-            output_dim=hidden_dim_processor,
-            hidden_dim=hidden_dim_edge_encoder,
-            hidden_layers=num_layers_edge_encoder,
-            activation_fn=activation_fn,
-            norm_type="LayerNorm",
+        # Build the standard MGN components
+        super().__init__(
+            input_dim_nodes=input_dim_nodes,
+            input_dim_edges=input_dim_edges,
+            output_dim=output_dim,
+            processor_size=processor_size,
+            mlp_activation_fn=mlp_activation_fn,
+            num_layers_node_processor=num_layers_node_processor,
+            num_layers_edge_processor=num_layers_edge_processor,
+            hidden_dim_processor=hidden_dim_processor,
+            hidden_dim_node_encoder=hidden_dim_node_encoder,
+            num_layers_node_encoder=num_layers_node_encoder,
+            hidden_dim_edge_encoder=hidden_dim_edge_encoder,
+            num_layers_edge_encoder=num_layers_edge_encoder,
+            hidden_dim_node_decoder=hidden_dim_node_decoder,
+            num_layers_node_decoder=num_layers_node_decoder,
+            aggregation=aggregation,
+            do_concat_trick=do_concat_trick,
+            num_processor_checkpoint_segments=num_processor_checkpoint_segments,
+            checkpoint_offloading=checkpoint_offloading,
             recompute_activation=recompute_activation,
+            norm_type="LayerNorm",
         )
+
+        # Override metadata to KAN-specific
+        self.meta = MetaData()
 
         # Replace the standard MLP node encoder with the KAN layer.
         self.node_encoder = KolmogorovArnoldNetwork(
@@ -175,199 +204,12 @@ class MeshGraphKAN(Module):
             add_bias=True,
         )
 
-        self.node_decoder = MeshGraphMLP(
-            hidden_dim_processor,
-            output_dim=output_dim,
-            hidden_dim=hidden_dim_node_decoder,
-            hidden_layers=num_layers_node_decoder,
-            activation_fn=activation_fn,
-            norm_type=None,
-            recompute_activation=recompute_activation,
-        )
-        self.processor = MeshGraphNetProcessor(
-            processor_size=processor_size,
-            input_dim_node=hidden_dim_processor,
-            input_dim_edge=hidden_dim_processor,
-            num_layers_node=num_layers_node_processor,
-            num_layers_edge=num_layers_edge_processor,
-            aggregation=aggregation,
-            norm_type="LayerNorm",
-            activation_fn=activation_fn,
-            do_concat_trick=do_concat_trick,
-            num_processor_checkpoint_segments=num_processor_checkpoint_segments,
-            checkpoint_offloading=checkpoint_offloading,
-        )
-
     def forward(
         self,
-        node_features: Tensor,
-        edge_features: Tensor,
-        graph: Union[GraphType, List[GraphType]],
+        node_features: Float[torch.Tensor, "num_nodes input_dim_nodes"],
+        edge_features: Float[torch.Tensor, "num_edges input_dim_edges"],
+        graph: Union[GraphType, list[GraphType]],
         **kwargs,
-    ) -> Tensor:
-        edge_features = self.edge_encoder(edge_features)
-        node_features = self.node_encoder(node_features)
-        x = self.processor(node_features, edge_features, graph)
-        x = self.node_decoder(x)
-        return x
-
-
-class MeshGraphNetProcessor(nn.Module):
-    """MeshGraphKAN processor block"""
-
-    def __init__(
-        self,
-        processor_size: int = 15,
-        input_dim_node: int = 128,
-        input_dim_edge: int = 128,
-        num_layers_node: int = 2,
-        num_layers_edge: int = 2,
-        aggregation: str = "sum",
-        norm_type: str = "LayerNorm",
-        activation_fn: nn.Module = nn.ReLU(),
-        do_concat_trick: bool = False,
-        num_processor_checkpoint_segments: int = 0,
-        checkpoint_offloading: bool = False,
-    ):
-        super().__init__()
-        self.processor_size = processor_size
-        self.num_processor_checkpoint_segments = num_processor_checkpoint_segments
-        self.checkpoint_offloading = (
-            checkpoint_offloading if (num_processor_checkpoint_segments > 0) else False
-        )
-
-        edge_block_invars = (
-            input_dim_node,
-            input_dim_edge,
-            input_dim_edge,
-            input_dim_edge,
-            num_layers_edge,
-            activation_fn,
-            norm_type,
-            do_concat_trick,
-            False,
-        )
-        node_block_invars = (
-            aggregation,
-            input_dim_node,
-            input_dim_edge,
-            input_dim_edge,
-            input_dim_edge,
-            num_layers_node,
-            activation_fn,
-            norm_type,
-            False,
-        )
-
-        edge_blocks = [
-            MeshEdgeBlock(*edge_block_invars) for _ in range(self.processor_size)
-        ]
-        node_blocks = [
-            MeshNodeBlock(*node_block_invars) for _ in range(self.processor_size)
-        ]
-        layers = list(chain(*zip(edge_blocks, node_blocks)))
-
-        self.processor_layers = nn.ModuleList(layers)
-        self.num_processor_layers = len(self.processor_layers)
-        self.set_checkpoint_segments(self.num_processor_checkpoint_segments)
-        self.set_checkpoint_offload_ctx(self.checkpoint_offloading)
-
-    def set_checkpoint_offload_ctx(self, enabled: bool):
-        """
-        Set the context for CPU offloading of checkpoints
-
-        Parameters
-        ----------
-        checkpoint_offloading : bool
-            whether to offload the checkpointing to the CPU
-        """
-        if enabled:
-            self.checkpoint_offload_ctx = torch.autograd.graph.save_on_cpu(
-                pin_memory=True
-            )
-        else:
-            self.checkpoint_offload_ctx = nullcontext()
-
-    def set_checkpoint_segments(self, checkpoint_segments: int):
-        """
-        Set the number of checkpoint segments
-
-        Parameters
-        ----------
-        checkpoint_segments : int
-            number of checkpoint segments
-
-        Raises
-        ------
-        ValueError
-            if the number of processor layers is not a multiple of the number of
-            checkpoint segments
-        """
-        if checkpoint_segments > 0:
-            if self.num_processor_layers % checkpoint_segments != 0:
-                raise ValueError(
-                    "Processor layers must be a multiple of checkpoint_segments"
-                )
-            segment_size = self.num_processor_layers // checkpoint_segments
-            self.checkpoint_segments = []
-            for i in range(0, self.num_processor_layers, segment_size):
-                self.checkpoint_segments.append((i, i + segment_size))
-            self.checkpoint_fn = set_checkpoint_fn(True)
-        else:
-            self.checkpoint_fn = set_checkpoint_fn(False)
-            self.checkpoint_segments = [(0, self.num_processor_layers)]
-
-    def run_function(
-        self, segment_start: int, segment_end: int
-    ) -> Callable[
-        [Tensor, Tensor, Union[GraphType, List[GraphType]]], Tuple[Tensor, Tensor]
-    ]:
-        """Custom forward for gradient checkpointing
-
-        Parameters
-        ----------
-        segment_start : int
-            Layer index as start of the segment
-        segment_end : int
-            Layer index as end of the segment
-
-        Returns
-        -------
-        Callable
-            Custom forward function
-        """
-        segment = self.processor_layers[segment_start:segment_end]
-
-        def custom_forward(
-            node_features: Tensor,
-            edge_features: Tensor,
-            graph: Union[GraphType, List[GraphType]],
-        ) -> Tuple[Tensor, Tensor]:
-            """Custom forward function"""
-            for module in segment:
-                edge_features, node_features = module(
-                    edge_features, node_features, graph
-                )
-            return edge_features, node_features
-
-        return custom_forward
-
-    @torch.jit.unused
-    def forward(
-        self,
-        node_features: Tensor,
-        edge_features: Tensor,
-        graph: Union[GraphType, List[GraphType]],
-    ) -> Tensor:
-        with self.checkpoint_offload_ctx:
-            for segment_start, segment_end in self.checkpoint_segments:
-                edge_features, node_features = self.checkpoint_fn(
-                    self.run_function(segment_start, segment_end),
-                    node_features,
-                    edge_features,
-                    graph,
-                    use_reentrant=False,
-                    preserve_rng_state=False,
-                )
-
-        return node_features
+    ) -> Float[torch.Tensor, "num_nodes output_dim"]:
+        # Reuse MeshGraphNet.forward (encodes edges, encodes nodes with KAN, runs processor, decodes)
+        return super().forward(node_features, edge_features, graph, **kwargs)

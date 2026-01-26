@@ -21,28 +21,38 @@ import json
 import os
 import pickle  # TODO remove
 import time
-
+from typing import Union
 import numpy as np
 import psutil
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from training_stats import default_collector, report, report0
-from physicsnemo.models.diffusion.training_utils import (
-    InfiniteSampler,
-    check_ddp_consistency,
+from physicsnemo.diffusion.utils import InfiniteSampler
+
+from misc import (
+    open_url,
     construct_class_by_name,
+    check_ddp_consistency,
     copy_params_and_buffers,
     ddp_sync,
-    format_time,
     print_module_summary,
 )
-from misc import open_url
 
-# # weather related
-# from .YParams import YParams
-# from .dataset import Era5Dataset, CWBDataset, CWBERA5DatasetV2, ZarrDataset
 
-# ----------------------------------------------------------------------------
+def _format_time(seconds: Union[int, float]) -> str:  # pragma: no cover
+    """Convert the seconds to human readable string with days, hours, minutes and seconds."""
+    s = int(np.rint(seconds))
+
+    if s < 60:
+        return "{0}s".format(s)
+    elif s < 60 * 60:
+        return "{0}m {1:02}s".format(s // 60, s % 60)
+    elif s < 24 * 60 * 60:
+        return "{0}h {1:02}m {2:02}s".format(s // (60 * 60), (s // 60) % 60, s % 60)
+    else:
+        return "{0}d {1:02}h {2:02}m".format(
+            s // (24 * 60 * 60), (s // (60 * 60)) % 24, (s // 60) % 60
+        )
 
 
 def training_loop(
@@ -169,7 +179,10 @@ def training_loop(
     )  # cifar10
     # interface_kwargs = dict(img_resolution=yparams.crop_size_x, img_channels=img_out_channels, img_in_channels=img_in_channels, img_out_channels=img_out_channels, label_dim=0)    #weather
 
-    if network_kwargs.class_name == "physicsnemo.models.diffusion.VEPrecond_dfsr_cond":
+    if (
+        network_kwargs.class_name
+        == "physicsnemo.diffusion.preconditioners.VEPrecond_dfsr_cond"
+    ):
         # Load dataset scaling parameters to compute physics-informed conditioning variable (PDE residual w.r.t. vorticity)
         interface_kwargs["dataset_mean"] = dataset_obj.stat["mean"]
         interface_kwargs["dataset_scale"] = dataset_obj.stat["scale"]
@@ -193,7 +206,7 @@ def training_loop(
 
     if (
         not network_kwargs.class_name
-        == "physicsnemo.models.diffusion.VEPrecond_dfsr_cond"
+        == "physicsnemo.diffusion.preconditioners.VEPrecond_dfsr_cond"
     ):
         if dist.rank == 0:
             with torch.no_grad():
@@ -399,7 +412,7 @@ def training_loop(
         fields += [f"tick {report0('Progress/tick', cur_tick):<5d}"]
         fields += [f"kimg {report0('Progress/kimg', cur_nimg / 1e3):<9.1f}"]
         fields += [
-            f"time {format_time(report0('Timing/total_sec', tick_end_time - start_time)):<12s}"
+            f"time {_format_time(report0('Timing/total_sec', tick_end_time - start_time)):<12s}"
         ]
         fields += [
             f"sec/tick {report0('Timing/sec_per_tick', tick_end_time - tick_start_time):<7.1f}"

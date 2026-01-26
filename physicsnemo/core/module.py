@@ -348,7 +348,7 @@ class Module(torch.nn.Module):
                 # Otherwise, try to import the class
                 _mod = importlib.import_module(arg_module)
                 _cls = getattr(_mod, arg_dict["__name__"])
-            except AttributeError:
+            except (AttributeError, ModuleNotFoundError):
                 # Cross fingers and hope for the best (maybe the class name changed)
                 _cls = cls
 
@@ -863,12 +863,12 @@ class Module(torch.nn.Module):
 
         # Define some helper functions
         def _from_checkpoint_process(
-            cls_in,
-            args,
-            metadata,
-            override_args,
-            strict,
-            mod_prefix="",
+            cls_in: type[Module],
+            args: Dict[str, Any],
+            metadata: Dict[str, Any],
+            override_args: Dict[str, Any],
+            strict: bool,
+            mod_prefix: str = "",
         ):
             """Recursively deserialize and instantiate nested physicsnemo.Module instances.
 
@@ -938,7 +938,7 @@ class Module(torch.nn.Module):
             )
 
             # Get the class from args
-            _cls = Module._get_class_from_args(args_ptr)
+            _cls = cls_in._get_class_from_args(args_ptr)
 
             # Check if the checkpoint version is compatible with the current version
             # If not, apply backward compatibility mapping if method exists
@@ -999,7 +999,7 @@ class Module(torch.nn.Module):
                 _cls._override_args(args_ptr["__args__"], override_args_ptr)
 
             # Instantiate the module
-            model = Module.instantiate(args_ptr)
+            model = cls_in.instantiate(args_ptr)
             return model
 
         # Download and cache the checkpoint file if needed

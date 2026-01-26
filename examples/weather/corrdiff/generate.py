@@ -32,22 +32,19 @@ from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper
 from physicsnemo.experimental.models.diffusion.preconditioning import (
     tEDMPrecondSuperRes,
 )
-from physicsnemo.models.diffusion.patching import GridPatching2D
+from physicsnemo.diffusion.multi_diffusion import GridPatching2D
 from physicsnemo import Module
-from physicsnemo.models.diffusion.sampling import (
+from physicsnemo.diffusion.samplers import (
     deterministic_sampler,
     stochastic_sampler,
 )
-from physicsnemo.models.diffusion.corrdiff_utils import (
-    NetCDFWriter,
-    get_time_from_range,
-    regression_step,
-    diffusion_step,
-)
+from physicsnemo.diffusion.generate import regression_step, diffusion_step
 
 from helpers.generate_helpers import (
     get_dataset_and_sampler,
     save_images,
+    NetCDFWriter,
+    get_time_from_range,
 )
 from helpers.train_helpers import set_patch_shape
 from datasets.dataset import register_dataset

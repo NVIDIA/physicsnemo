@@ -22,15 +22,16 @@ dynamic = ["version", "optional_dependencies"]
 
 dependencies = [
     "onnx>=1.14.0",
-    "warp-lang",
-    "pandas",
-    "nvtx",
+    "warp-lang>=1.5.0",
+    "pandas>=2.2.0",
+    "nvtx>=0.2.10",
     "treelib>=1.2.5",
     "numpy>=1.22.4",
     "torch>=2.4.0",
+    "torchvision>=0.19.0",
     "tqdm>=4.60.0",
     "requests>=2.32.2",
-    "GitPython",
+    "GitPython>=3.1.40",
     "s3fs>=2023.5.0",
     "packaging>=24.2",
     "timm>=1.0.22",
@@ -65,15 +66,29 @@ managed = true
 torch-sparse = ["torch"]
 torch-cluster = ["torch"]
 torch-scatter = ["torch"]
-earth2grid = ["setuptools", "torch"]
 
 [[tool.uv.index]]
 name = "nvidia"
 url = "https://pypi.nvidia.com"
+explicit = true  # Only use for packages that explicitly specify this index
 
+# PyTorch CUDA 13 index - used on Linux and Windows for torch builds compatible with cuml-cu13.
+# torch 2.10+ on PyPI (CUDA 12.8) pins cuda-bindings==12.9.4, which conflicts with
+# cuml-cu13's requirement for cuda-bindings>=13.0.1 via cuda-python.
+# The CUDA 13 build of torch pins cuda-bindings==13.0.3, which is compatible.
+# On Mac, we fall back to PyPI (CUDA is not available on macOS).
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.uv.sources]
-earth2grid = { url = "https://github.com/NVlabs/earth2grid/archive/main.tar.gz" }
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform != 'darwin'" },
+]
 cuml-cu13 = { index = "nvidia" }
 pylibraft-cu13 = { index = "nvidia" }
 cuml-cu12 = { index = "nvidia" } # TODO setup optional install groups for CUDA 12 installations
@@ -100,6 +115,7 @@ exclude = [
     "/examples",
     "/test",
     "/CODING_STANDARDS",
+    "/benchmarks",
 ]
 
 
@@ -109,6 +125,7 @@ exclude = [
 
 [dependency-groups]
 dev = [
+    "asv>=0.6.0",
     "coverage>=7.13.0",
     "import-linter>=2.7",
     "interrogate>=1.7.0",
@@ -119,6 +136,8 @@ dev = [
     "pytest-dependency>=0.6.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.8",
+    "pytest-testmon>=2.2.0",
+    "ipykernel>=7.1.0",
 ]
 
 #####################################################################
@@ -173,10 +192,6 @@ gnns = [
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
 ]
-healpix = [
-    "earth2grid",
-]
-
 
 #####################################################################
 # Linting configuration
@@ -190,6 +205,7 @@ lint.fixable = ["I"]
 
 # Never enforce `E501` (line length violations),
 # and `S311` (random number generators)
+# and `F722` which breaks jaxtyping annotations
 lint.ignore = ["E501", "S311", "F722"]
 
 # Exclude the docs and experimental folders (this applies to both lint and format)
@@ -212,24 +228,14 @@ DistributedAFNO = "physicsnemo.models.afno:DistributedAFNO"
 ModAFNO = "physicsnemo.models.afno:ModAFNO"
 
 # Diffusion UNets
-SongUNet = "physicsnemo.models.diffusion:SongUNet"
-SongUNetPosEmbd = "physicsnemo.models.diffusion:SongUNetPosEmbd"
-SongUNetPosLtEmbd = "physicsnemo.models.diffusion:SongUNetPosLtEmbd"
-DhariwalUNet = "physicsnemo.models.diffusion:DhariwalUNet"
+SongUNet = "physicsnemo.models.diffusion_unets:SongUNet"
+SongUNetPosEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosEmbd"
+SongUNetPosLtEmbd = "physicsnemo.models.diffusion_unets:SongUNetPosLtEmbd"
+DhariwalUNet = "physicsnemo.models.diffusion_unets:DhariwalUNet"
 
 # Diffusion wrappers
-CorrDiffRegressionUNet = "physicsnemo.models.diffusion:CorrDiffRegressionUNet"
-StormCastUNet = "physicsnemo.models.diffusion:StormCastUNet"
-
-# Diffusion Preconditioners
-EDMPrecond = "physicsnemo.models.diffusion:EDMPrecond"
-EDMPrecondSuperResolution = "physicsnemo.models.diffusion:EDMPrecondSuperResolution"
-EDMPrecondSR = "physicsnemo.models.diffusion:EDMPrecondSR"
-VEPrecond = "physicsnemo.models.diffusion:VEPrecond"
-VPPrecond = "physicsnemo.models.diffusion:VPPrecond"
-iDDPMPrecond = "physicsnemo.models.diffusion:iDDPMPrecond"
-VEPrecond_dfsr_cond = "physicsnemo.models.diffusion:VEPrecond_dfsr_cond"
-VEPrecond_dfsr = "physicsnemo.models.diffusion:VEPrecond_dfsr"
+CorrDiffRegressionUNet = "physicsnemo.models.diffusion_unets:CorrDiffRegressionUNet"
+StormCastUNet = "physicsnemo.models.diffusion_unets:StormCastUNet"
 
 # DLWP
 DLWP = "physicsnemo.models.dlwp:DLWP"

@@ -14,16 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Tuple, Union, Optional, Literal, Dict, Any, Callable, Type
+from typing import Tuple, Union, Optional, Literal, Dict, Any
 import torch
 import torch.nn as nn
 
-from physicsnemo.models.diffusion import PositionalEmbedding, Linear
+from physicsnemo.nn import PositionalEmbedding, Linear
 from dataclasses import dataclass
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.dit import DiTBlock
 from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer, TokenizerModuleBase, DetokenizerModuleBase
+
 
 @dataclass
 class MetaData(ModelMetaData):
@@ -102,7 +103,7 @@ class DiT(Module):
     block_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the DiTBlock modules.
     timestep_embed_kwargs (Dict[str, Any], optional):
-        Additional keyword arguments to be passed to :class:`physicsnemo.models.diffusion.PositionalEmbedding`.
+        Additional keyword arguments to be passed to :class:`physicsnemo.nn.PositionalEmbedding`.
     attn_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the attention module constructor, if using a custom attention backend.
     force_tokenization_fp32 (bool, optional):
@@ -181,6 +182,14 @@ class DiT(Module):
         self.patch_size = patch_size if isinstance(patch_size, (tuple, list)) else (patch_size, patch_size)
         self.num_heads = num_heads
         self.condition_dim = condition_dim
+        if attention_backend == "natten2d":
+            latent_hw = (
+                self.input_size[0] // self.patch_size[0],
+                self.input_size[1] // self.patch_size[1]
+            )
+            self.attn_kwargs_forward = {"latent_hw": latent_hw}
+        else:
+            self.attn_kwargs_forward = {}
 
         # Input validation
         if attention_backend not in ["timm", "transformer_engine", "natten2d"]:
@@ -317,7 +326,7 @@ class DiT(Module):
             c = t  # (B, D)
         
         for block in self.blocks:
-            x = block(x, c, p_dropout=p_dropout, attn_kwargs=attn_kwargs)  # (B, L, D)
+            x = block(x, c, p_dropout=p_dropout, attn_kwargs={**self.attn_kwargs_forward, **(attn_kwargs or {})})  # (B, L, D)
 
         # De-tokenize: (B, L, D) -> (B, C, H, W)
         if self.force_tokenization_fp32:

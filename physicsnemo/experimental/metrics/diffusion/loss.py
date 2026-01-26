@@ -18,14 +18,14 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from physicsnemo.metrics.diffusion.loss import ResidualLoss
+from physicsnemo.diffusion.metrics import ResidualLoss
 
 
 class tEDMResidualLoss(ResidualLoss):
     """
     Loss function for denoising score matching proposed in the paper
     `Heavy-Tailed Diffusion Models, Pandey et al. <https://arxiv.org/abs/2410.14171>`_
-    (t-EDM). A variant of :class:`~physicsnemo.metrics.diffusion.loss.ResidualLoss`
+    (t-EDM). A variant of :class:`~physicsnemo.diffusion.metrics.ResidualLoss`
     that uses a Student-t distribution for the noise. The loss function uses a
     pre-trained regression model to compute residuals and computes the denoising
     score matching loss on the latent state formed by the residuals.

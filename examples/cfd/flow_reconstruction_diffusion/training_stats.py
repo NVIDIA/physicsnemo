@@ -23,7 +23,7 @@ import re
 
 import numpy as np
 import torch
-from physicsnemo.models.diffusion.training_utils import EasyDict, profiled_function
+from misc import EasyDict, profiled_function
 
 # ----------------------------------------------------------------------------
 

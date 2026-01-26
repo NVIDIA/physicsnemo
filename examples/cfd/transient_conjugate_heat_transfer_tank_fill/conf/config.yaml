@@ -1,0 +1,212 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Hydra configuration for Domino transient conjugate heat-transfer training
+# Paths in this config are resolved relative to the location of train.py.
+
+defaults:
+  - _self_
+
+# ┌───────────────────────────────────────────┐
+# │            Project Details                │
+# └───────────────────────────────────────────┘
+project:
+  name: domino_transient_conjugate_heat_transfer
+  output_root: ./outputs
+
+hydra:
+  run:
+    dir: ${project.output_root}/${now:%Y%m%d_%H%M%S}
+  output_subdir: hydra
+
+# ┌───────────────────────────────────────────┐
+# │            Solution Variables             │
+# └───────────────────────────────────────────┘
+variables:
+  surface:
+    solution:
+      Pressure: scalar
+      Temperature: scalar
+      "Wall shear stress magnitude": scalar
+      "heat flux": vector
+  volume:
+    solution:
+      Pressure: scalar
+      Temperature: scalar
+      Velocity: vector
+      "heat flux": vector
+  global_parameters:
+    pressure_bar:
+      type: scalar
+      reference: 250.0
+    inlet_temperature_C:
+      type: scalar
+      reference: 25.0
+    run_time_s:
+      type: scalar
+      reference: 120.0
+    coil_position:
+      type: scalar
+      reference: 1.0
+
+# ┌───────────────────────────────────────────┐
+# │               Data Configs                │
+# └───────────────────────────────────────────┘
+data:
+  raw_dir: /path/to/raw_simulations
+  processed_dir: /path/to/processed_npz
+  future_steps: 12
+  splits:
+    train: []
+    val: []
+  bounding_box:
+    min: [-0.5, -0.2, -0.2]
+    max: [0.5, 0.2, 0.2]
+  bounding_box_surface:
+    min: [-0.5, -0.2, -0.2]
+    max: [0.5, 0.2, 0.2]
+  gpu_preprocessing: true
+  gpu_output: true
+  volume_sample_from_disk: false
+  preprocess_workers: 16
+  val_fraction: 0.2
+
+# ┌───────────────────────────────────────────┐
+# │         Domain Parallelism Settings       │
+# └───────────────────────────────────────────┘
+domain_parallelism:
+  domain_size: 1
+  shard_grid: false
+  shard_points: false
+
+# ┌───────────────────────────────────────────┐
+# │             Model Parameters              │
+# └───────────────────────────────────────────┘
+model:
+  model_type: combined # Use surface for surface predictions and volume for volume predictions
+  activation: gelu
+  loss_function:
+    loss_type: mse
+    area_weighing_factor: 10000.0
+  interp_res: [128, 64, 64]
+  use_sdf_in_basis_func: true
+  volume_points_sample: 2048
+  surface_points_sample: 2048
+  surface_sampling_algorithm: area_weighted
+  geom_points_sample: 30000
+  num_neighbors_surface: 6
+  num_neighbors_volume: 10
+  combine_volume_surface: false
+  return_volume_neighbors: false
+  use_surface_normals: false
+  use_surface_area: false
+  integral_loss_scaling_factor: 100.0
+  normalization: min_max_scaling
+  encode_parameters: true
+  surf_loss_scaling: 1.0
+  vol_loss_scaling: 1.0
+  geometry_encoding_type: sdf
+  solution_calculation_mode: two-loop
+  geometry_rep:
+    geo_conv:
+      base_neurons: 32
+      base_neurons_in: 1
+      base_neurons_out: 1
+      volume_radii: [0.0005, 0.005, 0.01]
+      surface_radii: [0.0005, 0.005, 0.01]
+      surface_hops: 1
+      volume_hops: 1
+      surface_neighbors_in_radius: [6, 12, 24]
+      volume_neighbors_in_radius: [8, 16, 32]
+      fourier_features: true
+      num_modes: 4
+      activation: ${model.activation}
+    geo_processor:
+      base_filters: 8
+      activation: ${model.activation}
+      processor_type: conv
+      self_attention: false
+      cross_attention: false
+      surface_sdf_scaling_factor: [0.01, 0.02, 0.04]
+      volume_sdf_scaling_factor: [0.04]
+  nn_basis_functions:
+    base_layer: 512
+    fourier_features: true
+    num_modes: 32
+    activation: ${model.activation}
+  local_point_conv:
+    activation: ${model.activation}
+  aggregation_model:
+    base_layer: 512
+    activation: ${model.activation}
+  position_encoder:
+    base_neurons: 512
+    activation: ${model.activation}
+    fourier_features: true
+    num_modes: 32
+  geometry_local:
+    volume_neighbors_in_radius: [64, 128]
+    surface_neighbors_in_radius: [32, 128]
+    volume_radii: [0.1, 0.25]
+    surface_radii: [0.05, 0.25]
+    base_layer: 512
+  parameter_model:
+    base_layer: 512
+    fourier_features: true
+    num_modes: 32
+    activation: ${model.activation}
+
+# ┌───────────────────────────────────────────┐
+# │             Training Configs              │
+# └───────────────────────────────────────────┘
+train:
+  batch_size: 1
+  epochs: 500
+  lr: 3e-4
+  lr_min: 1e-5
+  weight_decay: 0.0
+  device: cuda
+  amp: true
+  gradient_clip: null
+  log_interval: 10
+  val_interval: 1
+  checkpoint_dir: ${project.output_root}/checkpoints
+  checkpoint_interval: 10
+  resume: true
+
+# ┌───────────────────────────────────────────┐
+# │            Validation Configs             │
+# └───────────────────────────────────────────┘
+val:
+  batch_size: 1
+  num_workers: 0
+
+# ┌───────────────────────────────────────────┐
+# │              Logging Configs              │
+# └───────────────────────────────────────────┘
+logging:
+  log_dir: ${project.output_root}/tensorboard
+
+# ┌───────────────────────────────────────────┐
+# │         Testing / Inference Configs       │
+# └───────────────────────────────────────────┘
+inference:
+  output_dir: ${project.output_root}/inference
+  checkpoint: null
+  batch_size: 1
+  num_workers: 0
+  device: cuda
+  write_ground_truth: true

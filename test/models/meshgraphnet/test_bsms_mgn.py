@@ -91,6 +91,104 @@ def test_bsms_mgn_forward(pytestconfig, device, set_physicsnemo_force_te):
     )
 
 
+def test_bsms_mgn_constructor(device, pytestconfig, set_physicsnemo_force_te):
+    """Test BiStrideMeshGraphNet constructor: public attributes are set correctly"""
+    from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
+
+    kw = dict(
+        input_dim_nodes=7,
+        input_dim_edges=5,
+        output_dim=3,
+        processor_size=4,
+        mlp_activation_fn="relu",
+        num_layers_node_processor=2,
+        num_layers_edge_processor=2,
+        num_mesh_levels=3,
+        bistride_pos_dim=3,
+        num_layers_bistride=2,
+        bistride_unet_levels=2,
+        hidden_dim_processor=64,
+        hidden_dim_node_encoder=32,
+        num_layers_node_encoder=2,
+        hidden_dim_edge_encoder=16,
+        num_layers_edge_encoder=1,
+        hidden_dim_node_decoder=32,
+        num_layers_node_decoder=1,
+        aggregation="sum",
+        do_concat_trick=False,
+        num_processor_checkpoint_segments=0,
+        recompute_activation=False,
+    )
+
+    model = BiStrideMeshGraphNet(**kw).to(device)
+
+    # Public attributes reflect constructor args
+    assert model.input_dim_nodes == kw["input_dim_nodes"]
+    assert model.input_dim_edges == kw["input_dim_edges"]
+    assert model.output_dim == kw["output_dim"]
+    assert model.bistride_unet_levels == kw["bistride_unet_levels"]
+
+    # Key submodules exist
+    assert hasattr(model, "edge_encoder")
+    assert hasattr(model, "node_encoder")
+    assert hasattr(model, "processor")
+    assert hasattr(model, "node_decoder")
+    assert hasattr(model, "bistride_processor")
+
+
+@requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
+def test_bsms_mgn_shape_validation(pytestconfig, device, set_physicsnemo_force_te):
+    """Test shape validation errors for BiStrideMeshGraphNet.forward"""
+    import torch_geometric as pyg
+
+    from physicsnemo.models.meshgraphnet.bsms_mgn import BiStrideMeshGraphNet
+
+    model = BiStrideMeshGraphNet(
+        input_dim_nodes=4,
+        input_dim_edges=3,
+        output_dim=2,
+        processor_size=2,
+        hidden_dim_processor=16,
+        hidden_dim_node_encoder=8,
+        hidden_dim_edge_encoder=8,
+        num_layers_bistride=1,
+    ).to(device)
+    model.eval()
+
+    # Simple line graph
+    num_nodes = 6
+    edges = torch.stack(
+        [torch.arange(num_nodes - 1), torch.arange(num_nodes - 1) + 1], dim=0
+    ).long()
+    edges = pyg.utils.to_undirected(edges)
+    graph = pyg.data.Data(edge_index=edges).to(device)
+
+    good_node = torch.randn(num_nodes, 4).to(device)
+    good_edge = torch.randn(graph.num_edges, 3).to(device)
+    ms_edges = []
+    ms_ids = []
+
+    # Wrong node feature dimension
+    bad_node = torch.randn(num_nodes, 5).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node, good_edge, graph, ms_edges, ms_ids)
+
+    # Wrong edge feature dimension
+    bad_edge = torch.randn(graph.num_edges, 2).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_edges, 3\)"):
+        _ = model(good_node, bad_edge, graph, ms_edges, ms_ids)
+
+    # Wrong node feature rank (ndim)
+    bad_node_rank = torch.randn(2, num_nodes, 4).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node_rank, good_edge, graph, ms_edges, ms_ids)
+
+    # Wrong edge feature rank (ndim)
+    bad_edge_rank = torch.randn(2, graph.num_edges, 3).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_edges, 3\)"):
+        _ = model(good_node, bad_edge_rank, graph, ms_edges, ms_ids)
+
+
 @requires_module(["sparse_dot_mkl", "torch_geometric", "torch_scatter"])
 def test_bsms_mgn_ahmed(pytestconfig, ahmed_data_dir):
     from physicsnemo.datapipes.gnn.ahmed_body_dataset import AhmedBodyDataset

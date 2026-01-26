@@ -20,7 +20,7 @@ from typing import Any, Literal, Tuple, Union
 import numpy as np
 import torch
 
-from physicsnemo.models.diffusion.preconditioning import EDMPrecondSuperResolution
+from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
 from physicsnemo.core.meta import ModelMetaData
 
 
@@ -47,7 +47,7 @@ class tEDMPrecondSuperRes(EDMPrecondSuperResolution):
     """
     Preconditioning proposed in the paper `Heavy-Tailed Diffusion Models,
     Pandey et al. <https://arxiv.org/abs/2410.14171>`_ (t-EDM). A variant of
-    :class:`~physicsnemo.models.diffusion.preconditioning.EDMPrecondSuperResolution`
+    :class:`~physicsnemo.diffusion.preconditioners.EDMPrecondSuperResolution`
     that replaces the traditional Gaussian noise with a noise sampled from a
     Student-t distribution.
 
