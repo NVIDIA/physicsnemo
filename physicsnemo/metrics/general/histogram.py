@@ -27,7 +27,10 @@ from .ensemble_metrics import EnsembleMetrics
 Tensor = torch.Tensor
 
 
-@torch.compile
+# Note: Use @torch.jit.script (not @torch.compile) for functions with data-dependent
+# loops like `for i in range(num)`. torch.compile recompiles for each unique loop
+# bound, causing massive CI slowdowns when tests use varying shapes/bin counts.
+@torch.jit.script
 def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cover
     """Element-wise multi-dimensional linspace
 
@@ -61,7 +64,7 @@ def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cov
     return out
 
 
-@torch.compile
+@torch.jit.script
 def _low_memory_bin_reduction_counts(
     inputs: Tensor, bin_edges: Tensor, counts: Tensor, number_of_bins: int
 ):  # pragma: no cover
@@ -105,7 +108,7 @@ def _low_memory_bin_reduction_counts(
     return counts
 
 
-@torch.compile
+@torch.jit.script
 def _high_memory_bin_reduction_counts(
     inputs: Tensor, bin_edges: Tensor, counts: Tensor, number_of_bins: int
 ) -> Tensor:  # pragma: no cover
@@ -143,7 +146,7 @@ def _high_memory_bin_reduction_counts(
     return counts
 
 
-@torch.compile
+@torch.jit.script
 def _low_memory_bin_reduction_cdf(
     inputs: Tensor, bin_edges: Tensor, counts: Tensor, number_of_bins: int
 ) -> Tensor:  # pragma: no cover
@@ -177,7 +180,7 @@ def _low_memory_bin_reduction_cdf(
     return counts
 
 
-@torch.compile
+@torch.jit.script
 def _high_memory_bin_reduction_cdf(
     inputs: torch.Tensor,
     bin_edges: torch.Tensor,
