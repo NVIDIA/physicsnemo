@@ -24,6 +24,9 @@ from .histogram import cdf as cdf_function
 Tensor = torch.Tensor
 
 
+# Note: Use @torch.jit.script (not @torch.compile) because the sorted() call and
+# subsequent operations depend on input shapes. torch.compile recompiles for each
+# unique shape, causing massive CI slowdowns when tests use varying ensemble sizes.
 @torch.jit.script
 def _kernel_crps_implementation(pred: Tensor, obs: Tensor, biased: bool) -> Tensor:
     """An O(m log m) implementation of the kernel CRPS formulas"""
