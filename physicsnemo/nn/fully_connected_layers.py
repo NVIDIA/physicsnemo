@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable, Union
+from typing import Callable, Literal, Union
 
 import torch
 import torch.nn as nn
@@ -495,7 +495,7 @@ class Linear(Module):
         in_features: int,
         out_features: int,
         bias: bool = True,
-        init_mode: str = "kaiming_normal",
+        init_mode: Literal["xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"] = "kaiming_normal",
         init_weight: int = 1,
         init_bias: int = 0,
         amp_mode: bool = False,
