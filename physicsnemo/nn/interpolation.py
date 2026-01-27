@@ -331,7 +331,6 @@ def index_values_low_mem(points: Tensor, idx: Tensor) -> Tensor:
     return vertices4d
 
 
-@torch.compile
 def _grid_knn_idx(
     query_points: Tensor,
     grid: List[Tuple[float, float, int]],
