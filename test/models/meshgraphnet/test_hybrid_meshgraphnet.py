@@ -138,6 +138,18 @@ def test_hybrid_meshgraphnet_constructor(
         outvar = model(node_features, mesh_edge_features, world_edge_features, graph)
         assert outvar.shape == (num_nodes, kw_args["output_dim"])
 
+        # Check public attributes reflect constructor args
+        assert model.input_dim_nodes == kw_args["input_dim_nodes"]
+        assert model.input_dim_edges == kw_args["input_dim_edges"]
+        assert model.output_dim == kw_args["output_dim"]
+
+        # Check key submodules exist
+        assert hasattr(model, "mesh_edge_encoder")
+        assert hasattr(model, "world_edge_encoder")
+        assert hasattr(model, "node_encoder")
+        assert hasattr(model, "processor")
+        assert hasattr(model, "node_decoder")
+
 
 @requires_module("torch_geometric")
 def test_hybrid_meshgraphnet_optims(device, pytestconfig, set_physicsnemo_force_te):
@@ -296,3 +308,80 @@ def test_hybrid_meshgraphnet_deploy(device, pytestconfig, set_physicsnemo_force_
     invar = (node_features, mesh_edge_features, world_edge_features, graph)
     assert common.validate_onnx_export(model, invar)
     assert common.validate_onnx_runtime(model, invar)
+
+
+@requires_module("torch_geometric")
+def test_hybrid_meshgraphnet_shape_validation(
+    device, pytestconfig, set_physicsnemo_force_te
+):
+    """Test shape validation errors for HybridMeshGraphNet.forward"""
+    import torch_geometric as pyg
+
+    from physicsnemo.models.meshgraphnet import HybridMeshGraphNet
+
+    model = HybridMeshGraphNet(
+        input_dim_nodes=4,
+        input_dim_edges=3,
+        output_dim=2,
+    ).to(device)
+
+    num_nodes, num_mesh_edges, num_world_edges = 12, 10, 10
+    # Build a simple combined graph for hybrid edges
+    mesh_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_mesh_edges)]
+    )
+    mesh_edge_index = torch.stack([mesh_src, mesh_dst], dim=0)
+    world_src = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_world_edges)]
+    )
+    world_dst = torch.tensor(
+        [np.random.randint(num_nodes) for _ in range(num_world_edges)]
+    )
+    world_edge_index = torch.stack([world_src, world_dst], dim=0)
+    edge_index = torch.cat([mesh_edge_index, world_edge_index], dim=1)
+    graph = pyg.data.Data(edge_index=edge_index, num_nodes=num_nodes).to(device)
+
+    good_node = torch.randn(num_nodes, 4).to(device)
+    good_mesh_edge = torch.randn(num_mesh_edges, 3).to(device)
+    good_world_edge = torch.randn(num_world_edges, 3).to(device)
+
+    # Wrong node feature dimension
+    bad_node = torch.randn(num_nodes, 5).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node, good_mesh_edge, good_world_edge, graph)
+
+    # Wrong mesh edge feature dimension
+    bad_mesh_edge = torch.randn(num_mesh_edges, 2).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_mesh_edges, 3\)"
+    ):
+        _ = model(good_node, bad_mesh_edge, good_world_edge, graph)
+
+    # Wrong world edge feature dimension
+    bad_world_edge = torch.randn(num_world_edges, 2).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_world_edges, 3\)"
+    ):
+        _ = model(good_node, good_mesh_edge, bad_world_edge, graph)
+
+    # Wrong node feature rank (ndim)
+    bad_node_rank = torch.randn(2, num_nodes, 4).to(device)
+    with pytest.raises(ValueError, match=r"Expected tensor of shape \(N_nodes, 4\)"):
+        _ = model(bad_node_rank, good_mesh_edge, good_world_edge, graph)
+
+    # Wrong mesh edge feature rank (ndim)
+    bad_mesh_rank = torch.randn(2, num_mesh_edges, 3).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_mesh_edges, 3\)"
+    ):
+        _ = model(good_node, bad_mesh_rank, good_world_edge, graph)
+
+    # Wrong world edge feature rank (ndim)
+    bad_world_rank = torch.randn(2, num_world_edges, 3).to(device)
+    with pytest.raises(
+        ValueError, match=r"Expected tensor of shape \(N_world_edges, 3\)"
+    ):
+        _ = model(good_node, good_mesh_edge, bad_world_rank, graph)

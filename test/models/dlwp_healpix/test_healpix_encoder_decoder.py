@@ -14,25 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ruff: noqa: E402
-import os
-import sys
-
-script_path = os.path.abspath(__file__)
-sys.path.append(os.path.join(os.path.dirname(script_path), ".."))
-
 import torch
 
 from test import common
-from test.conftest import requires_module
 
 
-@requires_module("hydra")
 def test_UNetEncoder_initialize(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        ConvNeXtBlock,  # for convolutional layer
-        MaxPool,  # for downsampling
-        UNetEncoder,
-    )
+    from physicsnemo.models.dlwp_healpix.layers import ConvNeXtBlock, UNetEncoder
+    from physicsnemo.nn import HEALPixMaxPool
 
     channels = 2
     n_channels = (16, 32, 64)
@@ -43,7 +32,7 @@ def test_UNetEncoder_initialize(device, pytestconfig):
         "in_channels": channels,
     }
     down_sampling_block = {
-        "_target_": MaxPool,
+        "_target_": HEALPixMaxPool,
         "pooling": 2,
     }
 
@@ -69,13 +58,9 @@ def test_UNetEncoder_initialize(device, pytestconfig):
     torch.cuda.empty_cache()
 
 
-@requires_module("hydra")
 def test_UNetEncoder_forward(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        ConvNeXtBlock,  # for convolutional layer
-        MaxPool,  # for downsampling
-        UNetEncoder,
-    )
+    from physicsnemo.models.dlwp_healpix.layers import ConvNeXtBlock, UNetEncoder
+    from physicsnemo.nn import HEALPixMaxPool
 
     channels = 2
     hw_size = 16
@@ -88,7 +73,7 @@ def test_UNetEncoder_forward(device, pytestconfig):
         "in_channels": channels,
     }
     down_sampling_block = {
-        "_target_": MaxPool,
+        "_target_": HEALPixMaxPool,
         "pooling": 2,
     }
 
@@ -117,13 +102,9 @@ def test_UNetEncoder_forward(device, pytestconfig):
     torch.cuda.empty_cache()
 
 
-@requires_module("hydra")
 def test_UNetEncoder_reset(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
-        ConvNeXtBlock,  # for convolutional layer
-        MaxPool,  # for downsampling
-        UNetEncoder,
-    )
+    from physicsnemo.models.dlwp_healpix.layers import ConvNeXtBlock, UNetEncoder
+    from physicsnemo.nn import HEALPixMaxPool
 
     channels = 2
     n_channels = (16, 32, 64)
@@ -134,7 +115,7 @@ def test_UNetEncoder_reset(device, pytestconfig):
         "in_channels": channels,
     }
     down_sampling_block = {
-        "_target_": MaxPool,
+        "_target_": HEALPixMaxPool,
         "pooling": 2,
     }
 
@@ -153,9 +134,8 @@ def test_UNetEncoder_reset(device, pytestconfig):
     torch.cuda.empty_cache()
 
 
-@requires_module("hydra")
 def test_UNetDecoder_initilization(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix.layers import (
         BasicConvBlock,  # for the output layer
         ConvGRUBlock,  # for the recurrent layer
         ConvNeXtBlock,  # for convolutional layer
@@ -220,9 +200,8 @@ def test_UNetDecoder_initilization(device, pytestconfig):
     torch.cuda.empty_cache()
 
 
-@requires_module("hydra")
 def test_UNetDecoder_forward(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix.layers import (
         BasicConvBlock,  # for the output layer
         ConvGRUBlock,  # for the recurrent layer
         ConvNeXtBlock,  # for convolutional layer
@@ -306,9 +285,8 @@ def test_UNetDecoder_forward(device, pytestconfig):
     torch.cuda.empty_cache()
 
 
-@requires_module("hydra")
 def test_UNetDecoder_reset(device, pytestconfig):
-    from physicsnemo.models.dlwp_healpix_layers import (
+    from physicsnemo.models.dlwp_healpix.layers import (
         BasicConvBlock,  # for the output layer
         ConvGRUBlock,  # for the recurrent layer
         ConvNeXtBlock,  # for convolutional layer

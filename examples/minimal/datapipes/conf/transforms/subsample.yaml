@@ -14,24 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .healpix_blocks import (
-    AvgPool,
-    BasicConvBlock,
-    ConvGRUBlock,
-    ConvNeXtBlock,
-    DoubleConvNeXtBlock,
-    Interpolate,
-    MaxPool,
-    Multi_SymmetricConvNeXtBlock,
-    SymmetricConvNeXtBlock,
-    TransposedConvUpsample,
-)
-from .healpix_decoder import UNetDecoder
-from .healpix_encoder import UNetEncoder
-from .healpix_layers import (
-    HEALPixFoldFaces,
-    HEALPixLayer,
-    HEALPixPadding,
-    HEALPixPaddingv2,
-    HEALPixUnfoldFaces,
-)
+# SubsamplePoints Transform Configuration
+# Subsamples point clouds to a fixed number of points
+# Useful for handling variable-size point cloud data in batched training
+_target_: physicsnemo.datapipes.transforms.SubsamplePoints
+input_keys:
+    - coords
+    - features
+n_points: 10000
+algorithm: uniform # Options: "uniform" or "poisson_fixed"
+weights_key: null # Optional: key for weighted sampling (e.g., "surface_areas")
