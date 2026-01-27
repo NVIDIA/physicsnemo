@@ -190,7 +190,9 @@ class Conv2d(torch.nn.Module):
         down: bool = False,
         resample_filter: List[int] = [1, 1],
         fused_resample: bool = False,
-        init_mode: Literal["xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"] = "kaiming_normal",
+        init_mode: Literal[
+            "xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"
+        ] = "kaiming_normal",
         init_weight: float = 1.0,
         init_bias: float = 0.0,
         fused_conv_bias: bool = False,

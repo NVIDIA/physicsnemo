@@ -495,7 +495,9 @@ class Linear(Module):
         in_features: int,
         out_features: int,
         bias: bool = True,
-        init_mode: Literal["xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"] = "kaiming_normal",
+        init_mode: Literal[
+            "xavier_uniform", "xavier_normal", "kaiming_uniform", "kaiming_normal"
+        ] = "kaiming_normal",
         init_weight: int = 1,
         init_bias: int = 0,
         amp_mode: bool = False,
