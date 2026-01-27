@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# Tutorial 4: Point Cloud Pipeline Configuration (Modular)
+# =============================================================================
+#
+# This config demonstrates modular Hydra composition where:
+#   - Reader config is loaded from a separate file (conf/reader/)
+#   - Transform configs are loaded from separate files (conf/transforms/)
+#   - A single hydra.utils.instantiate() call builds the entire pipeline
+#
+# Run with:
+#   python tutorial_04_hydra_config.py --config-name tutorial_04_pointcloud
+#
+# Override from command line:
+#   python tutorial_04_hydra_config.py --config-name tutorial_04_pointcloud \
+#       dataloader.batch_size=8
+#
+# Switch reader (e.g., to NPZ):
+#   python tutorial_04_hydra_config.py --config-name tutorial_04_pointcloud \
+#       reader=npz reader.path=./output/npz_data/
+#
+# Override transform parameters:
+#   python tutorial_04_hydra_config.py --config-name tutorial_04_pointcloud \
+#       subsample.n_points=5000 normalize.stds.features=1.0
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Hydra Defaults: Compose configs from modular files
+# -----------------------------------------------------------------------------
+# Each default loads a config file into the specified key:
+#   - reader: zarr     -> loads conf/reader/zarr.yaml into 'reader' key
+#   - transforms/subsample@subsample -> loads conf/transforms/subsample.yaml into 'subsample' key
+#   - transforms/normalize@normalize -> loads conf/transforms/normalize.yaml into 'normalize' key
+# -----------------------------------------------------------------------------
+defaults:
+    - reader@reader: zarr
+    - transforms@subsample: subsample
+    - transforms@normalize: normalize
+    - _self_
+
+# -----------------------------------------------------------------------------
+# Reader overrides: Customize the reader loaded from defaults
+# -----------------------------------------------------------------------------
+reader:
+    path: ./output/pointcloud_data/
+
+# -----------------------------------------------------------------------------
+# DataLoader: Top-level component that instantiates everything recursively
+# -----------------------------------------------------------------------------
+dataloader:
+    _target_: physicsnemo.datapipes.DataLoader
+    batch_size: 4
+    shuffle: true
+    drop_last: false
+    prefetch_factor: 2
+    num_streams: 4
+    use_streams: true
+
+    # -------------------------------------------------------------------------
+    # Dataset: Nested inside DataLoader
+    # -------------------------------------------------------------------------
+    dataset:
+        _target_: physicsnemo.datapipes.Dataset
+        device: auto
+        num_workers: 2
+
+        # Reader: Reference the config loaded from defaults
+        reader: ${reader}
+
+        # Transforms: List referencing configs loaded from defaults
+        # Add or remove transforms by editing this list
+        transforms:
+            - ${subsample}
+            - ${normalize}
+
+# -----------------------------------------------------------------------------
+# Training settings
+# -----------------------------------------------------------------------------
+training:
+    num_epochs: 2
+    log_interval: 1

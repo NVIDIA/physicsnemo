@@ -85,7 +85,7 @@ class Mesh_ReducedTrainer:
         )
 
         if C.jit:
-            self.model = torch.jit.script(self.model).to(dist.device)
+            self.model = torch.compile(self.model.to(dist.device))
         else:
             self.model = self.model.to(dist.device)
         if C.watch_model and not C.jit and dist.rank == 0:
