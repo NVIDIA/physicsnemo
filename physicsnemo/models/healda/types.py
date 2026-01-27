@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -113,6 +114,8 @@ class UnifiedObservation:
 
 
 class Batch(TypedDict):
+    """Input of DA model on which Obs Encoder operates"""
+
     target: torch.Tensor  # (b, c, t, x) - main atmospheric variables
     condition: torch.Tensor  # (b, c_cond, t, x) - conditioning variables
     second_of_day: torch.Tensor  # (b, t) - seconds of day

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,7 +56,8 @@ def init_multiprocessing(rank, sync_device):
                         collection. Typically `torch.device('cuda', rank)`.
     """
     global _rank, _sync_device
-    assert not _sync_called
+    if _sync_called:
+        raise RuntimeError("init() has already been called")
     _rank = rank
     _sync_device = sync_device
 
@@ -101,7 +103,10 @@ def report(name, value):
             elems.square().sum(),
         ]
     )
-    assert moments.ndim == 1 and moments.shape[0] == _num_moments
+    if moments.ndim != 1 or moments.shape[0] != _num_moments:
+        raise ValueError(
+            f"Expected moments shape (1, {_num_moments}), got {moments.shape}"
+        )
     moments = moments.to(_counter_dtype)
 
     device = moments.device
@@ -191,7 +196,8 @@ class Collector:
         statistic between the last two calls to `update()`, or zero if
         no scalars were collected.
         """
-        assert self._regex.fullmatch(name)
+        if not self._regex.fullmatch(name):
+            raise ValueError(f"Name '{name}' does not match expected pattern")
         if name not in self._moments:
             self._moments[name] = torch.zeros([_num_moments], dtype=_counter_dtype)
         return self._moments[name]

@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -228,6 +229,8 @@ class HPXPatchEmbed(torch.nn.Module):
 
 
 class HPXPatchDecode(torch.nn.Module):
+    """Transposed convolution to upsample HEALPix patches to finer resolution. Final DiT layer."""
+
     def __init__(self, *, in_channels, out_channels, level_coarse, level_fine):
         super().__init__()
         patch_size = 2 ** (level_fine - level_coarse)

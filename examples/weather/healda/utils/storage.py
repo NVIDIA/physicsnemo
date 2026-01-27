@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,10 +25,13 @@ DEFAULT_PATH = os.path.expanduser("~/.config/rclone/rclone.conf")
 
 
 class StorageConfigError(Exception):
+    """Exception raised when storage configuration is invalid or missing."""
+
     pass
 
 
 def get_remote_config(remote_name, config_path=DEFAULT_PATH):
+    """Parse rclone config and return the section for the given remote."""
     if not remote_name:
         return None
     # Parse the rclone config file
@@ -44,6 +48,7 @@ def get_remote_config(remote_name, config_path=DEFAULT_PATH):
 
 
 def get_storage_options(remote_name, config_path=DEFAULT_PATH):
+    """Return S3 storage options dict for fsspec from rclone remote config."""
     remote_config = get_remote_config(remote_name, config_path)
 
     if remote_config is None:
@@ -70,6 +75,7 @@ def get_storage_options(remote_name, config_path=DEFAULT_PATH):
 
 
 def get_polars_storage_options(profile):
+    """Return S3 storage options dict for Polars from rclone remote config."""
     opts = get_storage_options(profile)
     key = opts["key"]
     secret = opts["secret"]
@@ -82,6 +88,7 @@ def get_polars_storage_options(profile):
 
 
 def get_duckdb_connection(profile):
+    """Return a DuckDB connection configured with S3 credentials from rclone."""
     import duckdb
 
     opts = get_storage_options(profile)
@@ -122,6 +129,7 @@ def _get_endpoint(opts):
 
 
 def get_pyarrow_filesystem(profile: str, **kwargs):
+    """Return a PyArrow S3FileSystem configured from rclone remote profile."""
     import pyarrow.fs
 
     opts = get_storage_options(profile)
@@ -138,6 +146,7 @@ def get_pyarrow_filesystem(profile: str, **kwargs):
 
 
 def get_obstore(profile: str, bucket=None, **kwargs):
+    """Return an obstore S3Store configured from rclone remote profile."""
     from obstore.store import S3Store
 
     opts = get_storage_options(profile)

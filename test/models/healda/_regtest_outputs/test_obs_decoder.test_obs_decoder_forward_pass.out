@@ -1,0 +1,6 @@
+Output shape: torch.Size([50, 1])
+Output mean: 0.203019
+Output std: 0.270797
+Output min: -0.618511
+Output max: 0.797052
+Output hash: 3a6b7998eb968dfc2cc37f5343bdacb980bdc07ebd90307d226c5992e9d006b6

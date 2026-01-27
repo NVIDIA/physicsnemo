@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -101,14 +102,18 @@ def _format_time(seconds: Union[int, float]) -> str:
 
 
 class CheckpointHandler:
+    """Manages checkpoint file naming and paths."""
+
     def __init__(self, run_dir, filename: str = "training-state-{}.checkpoint"):
         self.filename = filename
         self.run_dir = run_dir
 
     def get_filename(self, nimg):
+        """Return checkpoint filename for given image count."""
         return self.filename.format("%09d" % nimg)
 
     def get_path(self, nimg):
+        """Return full checkpoint path for given image count."""
         return os.path.join(self.run_dir, self.get_filename(nimg))
 
     def list_checkpoints(self, run_dir=None):
@@ -149,17 +154,21 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     def get_data_loaders(
         self, batch_gpu: int
     ) -> tuple[SpatioTemporalDataset, Iterable, Iterable]:
+        """Returns dataset, training loader, and validation loader."""
         pass
 
     def get_network(self) -> torch.nn.Module:
+        """Instantiates the model from config."""
         return models.get_model(self.model_config)
 
     @abc.abstractmethod
     def get_optimizer(self, parameters):
+        """Returns network optimizer"""
         pass
 
     @abc.abstractmethod
     def get_loss_fn(self):
+        """Returns the loss function."""
         pass
 
     @property
@@ -326,7 +335,8 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
     def _stage_tuple_batch(self, batch):
         indict = {}
         images, labels, condition = batch[:3]
-        assert images.ndim == 4
+        if images.ndim != 4:
+            raise ValueError(f"Expected images.ndim == 4, got {images.ndim}")
         indict["target"] = images.to(self.device)
         indict["condition"] = condition.to(self.device)
         indict["labels"] = labels.to(self.device)
@@ -499,7 +509,8 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
                     images, labels, condition = batch
                     augment_labels = None
 
-                assert images.ndim == 4
+                if images.ndim != 4:
+                    raise ValueError(f"Expected images.ndim == 4, got {images.ndim}")
 
                 images = images.to(self.device).to(torch.float32)
                 condition = condition.to(self.device).to(torch.float32)

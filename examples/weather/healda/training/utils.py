@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,12 +65,14 @@ try:
 except AttributeError:
 
     def nan_to_num(input, nan=0.0, posinf=None, neginf=None, *, out=None):  # pylint: disable=redefined-builtin
-        assert isinstance(input, torch.Tensor)
+        if not isinstance(input, torch.Tensor):
+            raise TypeError("input must be a torch.Tensor")
         if posinf is None:
             posinf = torch.finfo(input.dtype).max
         if neginf is None:
             neginf = torch.finfo(input.dtype).min
-        assert nan == 0
+        if nan != 0:
+            raise ValueError("nan must be 0")
         return torch.clamp(
             input.unsqueeze(0).nansum(0), min=neginf, max=posinf, out=out
         )
@@ -150,13 +153,19 @@ def profiled_function(fn):
 
 
 class InfiniteSampler(torch.utils.data.Sampler):
+    """Sampler that loops indefinitely over a dataset with shuffling."""
+
     def __init__(
         self, dataset, rank=0, num_replicas=1, shuffle=True, seed=0, window_size=0.5
     ):
-        assert len(dataset) > 0
-        assert num_replicas > 0
-        assert 0 <= rank < num_replicas
-        assert 0 <= window_size <= 1
+        if len(dataset) <= 0:
+            raise ValueError("dataset must have at least one element")
+        if num_replicas <= 0:
+            raise ValueError("num_replicas must be positive")
+        if not (0 <= rank < num_replicas):
+            raise ValueError("rank must be in [0, num_replicas)")
+        if not (0 <= window_size <= 1):
+            raise ValueError("window_size must be in [0, 1]")
         super().__init__(dataset)
         self.dataset = dataset
         self.rank = rank
@@ -190,22 +199,27 @@ class InfiniteSampler(torch.utils.data.Sampler):
 
 
 def params_and_buffers(module):
-    assert isinstance(module, torch.nn.Module)
+    if not isinstance(module, torch.nn.Module):
+        raise TypeError("module must be a torch.nn.Module")
     return list(module.parameters()) + list(module.buffers())
 
 
 def named_params_and_buffers(module):
-    assert isinstance(module, torch.nn.Module)
+    if not isinstance(module, torch.nn.Module):
+        raise TypeError("module must be a torch.nn.Module")
     return list(module.named_parameters()) + list(module.named_buffers())
 
 
 @torch.no_grad()
 def copy_params_and_buffers(src_module, dst_module, require_all=False):
-    assert isinstance(src_module, torch.nn.Module)
-    assert isinstance(dst_module, torch.nn.Module)
+    if not isinstance(src_module, torch.nn.Module):
+        raise TypeError("src_module must be a torch.nn.Module")
+    if not isinstance(dst_module, torch.nn.Module):
+        raise TypeError("dst_module must be a torch.nn.Module")
     src_tensors = dict(named_params_and_buffers(src_module))
     for name, tensor in named_params_and_buffers(dst_module):
-        assert (name in src_tensors) or (not require_all)
+        if require_all and name not in src_tensors:
+            raise ValueError(f"Parameter {name} not found in src_module")
         if name in src_tensors:
             tensor.copy_(src_tensors[name])
 
@@ -217,7 +231,8 @@ def copy_params_and_buffers(src_module, dst_module, require_all=False):
 
 @contextlib.contextmanager
 def ddp_sync(module, sync):
-    assert isinstance(module, torch.nn.Module)
+    if not isinstance(module, torch.nn.Module):
+        raise TypeError("module must be a torch.nn.Module")
     if sync or not isinstance(module, torch.nn.parallel.DistributedDataParallel):
         yield
     else:
@@ -230,7 +245,8 @@ def ddp_sync(module, sync):
 
 
 def check_ddp_consistency(module, ignore_regex=None):
-    assert isinstance(module, torch.nn.Module)
+    if not isinstance(module, torch.nn.Module):
+        raise TypeError("module must be a torch.nn.Module")
     for name, tensor in named_params_and_buffers(module):
         fullname = type(module).__name__ + "." + name
         if ignore_regex is not None and re.fullmatch(ignore_regex, fullname):
@@ -240,4 +256,5 @@ def check_ddp_consistency(module, ignore_regex=None):
             tensor = nan_to_num(tensor)
         other = tensor.clone()
         torch.distributed.broadcast(tensor=other, src=0)
-        assert (tensor == other).all(), fullname
+        if not (tensor == other).all():
+            raise ValueError(f"DDP inconsistency detected for {fullname}")

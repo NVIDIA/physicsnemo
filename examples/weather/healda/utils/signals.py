@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +40,8 @@ except signals.QuitEarly:
 
 
 class QuitEarly(Exception):
+    """Exception raised to signal early termination from a signal handler."""
+
     depth = 0
     quit_requested = False
 
@@ -62,6 +65,7 @@ def finish_before_quitting(func):
 
 
 def handler(signum, frame):
+    """Signal handler that raises QuitEarly when safe to do so."""
     if QuitEarly.depth == 0:
         raise QuitEarly(signum, frame)
     else:

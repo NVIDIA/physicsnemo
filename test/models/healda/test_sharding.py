@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +20,8 @@ These tests require multi-GPU and should be run with torchrun:
     torchrun --nproc_per_node=2 -m pytest test/models/healda/test_sharding.py
 """
 
+import os
+
 import pytest
 import torch
 import torch.distributed as dist
@@ -34,9 +37,14 @@ def _init_distributed():
         DistributedManager.initialize()
 
 
-# Skip if not enough GPUs or not launched with torchrun
+def _is_multi_rank_launch():
+    """Check if launched with torchrun/mpirun with multiple ranks."""
+    return int(os.environ.get("WORLD_SIZE", 1)) > 1
+
+
 requires_multi_gpu = pytest.mark.skipif(
-    torch.cuda.device_count() < 2, reason="Requires at least 2 GPUs"
+    not _is_multi_rank_launch(),
+    reason="Requires torchrun with >=2 ranks (torchrun --nproc_per_node=2)",
 )
 
 

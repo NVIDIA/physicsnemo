@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -73,6 +74,7 @@ def init(timeout_infinite=False):
 
 
 def get_rank():
+    """Return current process rank, or 0 if not distributed."""
     return torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
 
 
@@ -80,6 +82,7 @@ def get_rank():
 
 
 def get_world_size():
+    """Return world size, or 1 if not distributed."""
     return (
         torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
     )
@@ -96,6 +99,7 @@ def should_stop():
 
 
 def update_progress(cur, total):
+    """Progress callback stub (no-op by default)."""
     _ = cur, total
 
 

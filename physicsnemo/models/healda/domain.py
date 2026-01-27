@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +39,8 @@ class Domain(Protocol):
 
 
 class HealPixDomain(Domain):
+    """HEALPix domain."""
+
     def __init__(self, hpx: earth2grid.healpix.Grid):
         self._grid = hpx
 
@@ -50,6 +53,8 @@ class HealPixDomain(Domain):
 
 
 class PatchedHealpixDomain(Domain):
+    """Patch of HEALPix domain"""
+
     def __init__(self, hpx: earth2grid.healpix.Grid, patch_size: int = 128):
         self._grid = hpx
         self.patch_size = patch_size
@@ -63,6 +68,8 @@ class PatchedHealpixDomain(Domain):
 
 
 class Plane(Domain):
+    """2D rectangular grid domain."""
+
     def __init__(self, nx, ny):
         self.nx = nx
         self.ny = ny
@@ -72,6 +79,8 @@ class Plane(Domain):
 
 
 class Ring(Domain):
+    """1D ring domain."""
+
     def __init__(self, n):
         self.n = n
 

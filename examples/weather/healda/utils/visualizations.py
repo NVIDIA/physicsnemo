@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +57,7 @@ _extents = {
 
 
 def get_lim(target_crs, extents):
+    """Return axis limits for the given CRS and optional lat/lon extents."""
     if target_crs in [cartopy.crs.SouthPolarStereo(), cartopy.crs.NorthPolarStereo()]:
         lim = 4_500_000
         return -lim, lim, -lim, lim

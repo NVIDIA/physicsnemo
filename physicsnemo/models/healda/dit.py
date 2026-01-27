@@ -1,4 +1,6 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/dit_transformer_2d.py
+# Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/dit_transformer_2d.py
 """
 Adapted from the DiT code in the huggingface diffusers library
 
@@ -49,6 +51,8 @@ from .types import UnifiedObservation
 
 @dataclasses.dataclass
 class Output:
+    """DiT model forward pass output."""
+
     out: torch.Tensor
     obs: torch.Tensor | None = None
 
@@ -97,7 +101,8 @@ class AdaLayerNormZero(nn.Module):
         emb: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         def unsqueeze(gate):
-            assert gate.ndim == 2
+            if gate.ndim != 2:
+                raise ValueError(f"Expected gate.ndim == 2, got {gate.ndim}")
             return gate[:, None, None, :]
 
         emb = self.linear(emb)
@@ -247,6 +252,8 @@ def mask_causal_(attn):
 
 
 class TemporalAttention(torch.nn.Module):
+    """Multi-head attention over time dimension with optional RoPE."""
+
     def __init__(
         self,
         *,
@@ -304,6 +311,8 @@ class TemporalAttention(torch.nn.Module):
 
 
 class SpatialAttention(Attention):
+    """Multi-head attention over spatial dimension."""
+
     def forward(
         self,
         hidden_states,
@@ -323,6 +332,8 @@ class SpatialAttention(Attention):
 
 
 class SpatioTemporalAttention(Attention):
+    """Multi-head attention over flattened space-time dimension."""
+
     def forward(
         self,
         hidden_states,
@@ -693,7 +704,10 @@ class DiT(torch.nn.Module):
         self.temporal_attention = temporal_attention
         self.compile_dit = compile_dit
         self.as_vit = as_vit
-        assert level_in >= level_model
+        if level_in < level_model:
+            raise ValueError(
+                f"level_in must be >= level_model, got {level_in} < {level_model}"
+            )
         patch_size = 2 ** (level_in - level_model)
         self.level_model = level_model
 
