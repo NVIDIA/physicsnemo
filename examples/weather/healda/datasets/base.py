@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +45,8 @@ class TimeUnit(Enum):
 
 @dataclasses.dataclass
 class BatchInfo:
+    """Metadata describing model output"""
+
     channels: list[str]
     time_step: int = 1  # Time (in units `time_unit`) between consecutive frames
     time_unit: TimeUnit = TimeUnit.HOUR
@@ -131,6 +134,8 @@ class DatasetMetadata:
 
 @dataclasses.dataclass(frozen=True)
 class VariableConfig:
+    """Input variable set"""
+
     name: str
     variables_2d: list[str]
     variables_3d: list[str]
@@ -139,6 +144,8 @@ class VariableConfig:
 
 
 class SpatioTemporalDataset(Protocol):
+    """Protocol for time-indexed gridded datasets."""
+
     @property
     def domain(self) -> Domain:
         pass

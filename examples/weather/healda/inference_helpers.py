@@ -1,5 +1,18 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import dataclasses
 import enum
@@ -22,6 +35,8 @@ from physicsnemo.models.healda import ObsConfig, UnifiedObservation
 
 
 class Rolling(Dataset):
+    """Returns window_size consecutive frames from dataset."""
+
     def __init__(self, dataset, window_size, stride=1, step=1):
         self.dataset = dataset
         self.window_size = window_size
@@ -45,6 +60,8 @@ class Rolling(Dataset):
 
 
 class Batch(TypedDict):
+    """Input batch structure of DA model"""
+
     target: torch.Tensor
     condition: torch.Tensor
     second_of_day: torch.Tensor
@@ -77,6 +94,8 @@ def _to_batch(x, device, non_blocking=True):
 
 
 class InnovationType(enum.Enum):
+    """Observation-minus-background (innovation) type"""
+
     NONE = "none"
     ADJUSTED = "adjusted"
     UNADJUSTED = "unadjusted"

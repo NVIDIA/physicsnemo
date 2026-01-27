@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -354,6 +355,7 @@ class TrainingLoop(loop.TrainingLoopBase):
         return self._data_transform.device_transform(batch, device=self.device)
 
     def get_data_loaders(self, batch_gpu):
+        """Create train and test DataLoaders"""
         dataset = self.get_dataset(train=True)
         train_loader = self._get_loader(dataset, batch_size=batch_gpu, train=True)
         test_dataset = self.get_dataset(train=False)
@@ -542,6 +544,7 @@ class TrainingLoop(loop.TrainingLoopBase):
             self.ddp = self.net
 
     def get_optimizer(self, named_parameters):
+        """Builds optimizer, applying differential learning rate to observation embeddings and transformer blocks"""
         named_params = list(named_parameters)
         # Separate the obs embedding and transformer parameters to apply
         # lower learning rate to the obs embedding
@@ -599,6 +602,7 @@ class TrainingLoop(loop.TrainingLoopBase):
             )
 
     def get_loss_fn(self):
+        """Return loss function."""
         return None
 
     @staticmethod
@@ -624,6 +628,8 @@ class TrainingLoop(loop.TrainingLoopBase):
 
 @dataclasses.dataclass
 class CLI:
+    """Command-line interface config"""
+
     name: str = ""
     output_dir: str = config.CHECKPOINT_ROOT
     finetune_from: str = ""

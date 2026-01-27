@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,7 +73,8 @@ def frame_dropout(x, p_dropout):
 
 
 def shift_time(x, shift):
-    assert shift >= 0
+    if shift < 0:
+        raise ValueError(f"shift must be non-negative, got {shift}")
     t_dim = -2
     x = x.roll(shift, dims=t_dim)
     x[..., :shift, :] = 0.0
@@ -101,6 +103,7 @@ def _compute_frame_step(
 
 
 def get_label_from_obs_context_hours(obs_context_hours):
+    """Map observation context window to a label index for conditioning."""
     if isinstance(obs_context_hours, np.ndarray):
         obs_interval = obs_context_hours.tolist()
     else:
@@ -115,11 +118,14 @@ def get_label_from_obs_context_hours(obs_context_hours):
 
 @dataclasses.dataclass
 class NullTransform:
+    """Placeholder transform."""
+
     dataset: Literal["era5", "ufs"] = "era5"
     variable_config: VariableConfig = _default_config
 
 
 def get_sensors_for_config(config: ObsConfig):
+    """Return list of sensor names enabled by the ObsConfig."""
     sensors = ["atms", "mhs", "amsua", "amsub"]
     if config.use_infrared:
         sensors.append("iasi")
@@ -132,7 +138,11 @@ def get_sensors_for_config(config: ObsConfig):
 def _get_ufs_obs_loaders(
     obs_config: ObsConfig,
 ):
-    assert obs_config.innovation_type == "none"
+    if obs_config.innovation_type != "none":
+        raise ValueError(
+            f"innovation_type must be 'none' for UFS obs loaders, "
+            f"got '{obs_config.innovation_type}'"
+        )
 
     return [
         UFSUnifiedLoader(
@@ -210,6 +220,7 @@ def get_dataset(
     batch_transform=None,
     start_year: Optional[int] = None,
 ) -> torch.utils.data.Dataset:
+    """Build dataset for DA training or inference"""
     variable_config = variable_config or VARIABLE_CONFIGS[dataset]
 
     obs_input = obs_config is not None and obs_config.use_obs

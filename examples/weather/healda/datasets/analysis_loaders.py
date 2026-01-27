@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +39,8 @@ LABELS = [
 
 
 class PackedZarrLoader:
+    """Async loader for packed Zarr arrays with time-based indexing."""
+
     def __init__(self, entry, array_name, label: int):
         self.time = entry.to_xarray(chunks=None).indexes["time"]
         self._store = entry.to_zarr().store
@@ -66,6 +69,8 @@ class PackedZarrLoader:
 
 
 class ERA5Loader:
+    """Async loader for ERA5 reanalysis data on HEALPix grid."""
+
     def __init__(self, variable_config: VariableConfig):
         self.variable_config = variable_config
         variables_2d = [
@@ -163,6 +168,7 @@ def get_batch_info(
     time_step: int = 1,
     time_unit: TimeUnit = TimeUnit.HOUR,
 ) -> BatchInfo:
+    """Returns BatchInfo for the given variable config"""
     return BatchInfo(
         channels=[_encode_channel(tup) for tup in _get_index(config).tolist()],
         scales=_get_std(config),

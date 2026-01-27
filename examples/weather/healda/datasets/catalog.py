@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -105,13 +106,11 @@ def era5_hpx6():
     return _Zarr(environment.V6_ERA5_ZARR, environment.V6_ERA5_ZARR_PROFILE)
 
 
-def ufs_obs_parquet():
-    return _Parquet(environment.UFS_OBS_PATH + "amsua", "pbss")
-
-
 def ufs_obs():
+    """UFS obs parquet dataset."""
     return _Parquet(environment.UFS_OBS_PATH + "amsua", "pbss")
 
 
 def ufs():
+    """UFS analysis dataset"""
     return _Zarr(path=environment.UFS_HPX6_ZARR, profile=environment.UFS_ZARR_PROFILE)
