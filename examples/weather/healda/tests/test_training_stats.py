@@ -13,13 +13,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
+
+import pytest
 import torch
 import torch.distributed as dist
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import DTensor, Replicate
 from training import training_stats
 
+requires_distributed = pytest.mark.skipif(
+    not torch.cuda.is_available() or os.environ.get("RANK") is None,
+    reason="Requires CUDA and distributed environment (RANK env var)",
+)
 
+
+@requires_distributed
 def test_dtensor_report_and_sync():
     # Initialize distributed environment
     if not dist.is_initialized():

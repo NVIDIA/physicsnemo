@@ -16,9 +16,15 @@
 # ruff: noqa: S101
 
 import pytest
+import torch
 from datasets.prefetch_map import prefetch_map
 
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA not available"
+)
 
+
+@requires_cuda
 def test_prefetch_map_basic_functionality():
     """Test basic async dataloader functionality with simple data."""
     # Create simple test data using range
@@ -33,6 +39,7 @@ def test_prefetch_map_basic_functionality():
     assert list(async_loader) == list(range(0, 20, 2))
 
 
+@requires_cuda
 def test_prefetch_map_error_handling():
     """Test error handling when transform raises an exception."""
     data = list(range(4))  # [0, 1, 2, 3]

@@ -13,9 +13,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import pytest
 import torch
 from datasets.base import BatchInfo, TimeUnit
 from training import loop
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA not available"
+)
 
 
 class MockLoop(loop.TrainingLoopBase):
@@ -43,6 +48,7 @@ class MockLoop(loop.TrainingLoopBase):
         return torch.nn.MSELoss()
 
 
+@requires_cuda
 def test_loop_save_load(tmp_path):
     rundir = tmp_path
     loop = MockLoop(rundir.as_posix(), batch_gpu=1)
