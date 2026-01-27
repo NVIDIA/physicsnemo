@@ -67,6 +67,21 @@ def _load_state_dict_with_logging(
     return missing_keys, unexpected_keys
 
 
+def _ignore_device_buffer_keys(module, incompatible_keys):
+    """Post-hook to ignore device_buffer in missing/unexpected keys.
+
+    The device_buffer is a non-persistent buffer used for device tracking.
+    Old checkpoints (before v2.0.0) may have it saved (when it was persistent), and new
+    checkpoints won't have it. This hook ensures backward compatibility.
+    """
+    incompatible_keys.missing_keys[:] = [
+        k for k in incompatible_keys.missing_keys if not k.endswith("device_buffer")
+    ]
+    incompatible_keys.unexpected_keys[:] = [
+        k for k in incompatible_keys.unexpected_keys if not k.endswith("device_buffer")
+    ]
+
+
 class Module(torch.nn.Module):
     """The base class for all network models in PhysicsNeMo.
 
@@ -209,8 +224,10 @@ class Module(torch.nn.Module):
     def __init__(self, meta: Union[ModelMetaData, None] = None):
         super().__init__()
         self.meta = meta
-        self.register_buffer("device_buffer", torch.empty(0))
+        self.register_buffer("device_buffer", torch.empty(0), persistent=False)
         self._setup_logger()
+        # Register hook to handle device_buffer compatibility with old checkpoints
+        self.register_load_state_dict_post_hook(_ignore_device_buffer_keys)
 
     def __init_subclass__(cls, *, register=False, **kwargs):
         """
