@@ -5,7 +5,7 @@
 <img src="../../../docs/img/healda.png" width="800"/>
 </p>
 
-[📖 Paper](https://d1qx31qr3h6wln.cloudfront.net/publications/healDA-arxiv-v1.pdf) · 📦 Checkpoints (coming soon)
+[📖 Paper](https://arxiv.org/abs/2601.17636) · 📦 Checkpoints (coming soon)
 
 ---
 
@@ -94,10 +94,13 @@ python inference.py --help
 ## Citation
 
 ```bibtex
-@article{healda2025,
+@misc{gupta2026healdahighlightingimportanceinitial,
   title={HealDA: Highlighting the importance of initial errors in end-to-end AI weather forecasts},
-  author={Gupta, Aayush and Subramaniam, Akshay and Pritchard, Michael S. and Kashinath, Karthik and Frolov, Sergey and Lieberman, Kelsey and Miller, Christopher and Silverman, Nicholas and Brenowitz, Noah D.},
-  journal={arXiv preprint arXiv:XXXX.XXXXX},
-  year={2025}
+  author={Aayush Gupta and Akshay Subramaniam and Michael S. Pritchard and Karthik Kashinath and Sergey Frolov and Kelsey Lieberman and Christopher Miller and Nicholas Silverman and Noah D. Brenowitz},
+  year={2026},
+  eprint={2601.17636},
+  archivePrefix={arXiv},
+  primaryClass={physics.ao-ph},
+  url={https://arxiv.org/abs/2601.17636},
 }
 ```
