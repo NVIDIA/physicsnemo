@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +23,11 @@ import pandas as pd
 
 @dataclass
 class SensorConfig:
+    """
+    Sensor metadata that sets up data loading.
+    Defines the sensor name, platforms, channels, and normalization stats.
+    """
+
     name: str
     platforms: list[str]
     channels: int
@@ -67,6 +73,7 @@ class SensorConfig:
 
 
 def get_global_channel_id(sensor, raw_channel_ids):
+    """Map per-sensor raw channel IDs to unified global IDs (no overlap across sensors)."""
     raw_to_local = SENSOR_CONFIGS[sensor].raw_to_local
     channel_offset = SENSOR_OFFSET[sensor]
     local_channels = raw_to_local[raw_channel_ids] - 1  # Convert to 0-based indexing
@@ -141,6 +148,8 @@ SENSOR_CONFIGS = {
 # Concept of platform for conv is only used in etl, does not apply outside of etl. All conv obs have platform 0
 @dataclass(frozen=True)
 class ConvChannel:
+    """Conv sensor channel definition, used for ETL and creating channel table"""
+
     name: str
     platform: str
     nc_column: str

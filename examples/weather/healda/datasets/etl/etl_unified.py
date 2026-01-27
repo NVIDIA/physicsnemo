@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -91,15 +92,16 @@ def _get_conv_obs_columns_for_platform(platform: str) -> list[str]:
 @memory.cache
 def list_nc_files(path):
     """List all .nc4 files in the given directory tree."""
-    files = []
-    for root, dirs, fnames in os.walk(path):
-        for fname in fnames:
-            if fname.endswith(".nc4"):
-                files.append(os.path.relpath(os.path.join(root, fname), path))
-    return files
+    return [
+        os.path.relpath(os.path.join(root, fname), path)
+        for root, _, fnames in os.walk(path)
+        for fname in fnames
+        if fname.endswith(".nc4")
+    ]
 
 
 def get_channel_table():
+    """Build channel metadata table for all sensors."""
     nchan = [cfg.channels for cfg in SENSOR_CONFIGS.values()]
     sensor_id = np.arange(len(nchan)).repeat(nchan)
     id = np.arange(sensor_id.size).astype(np.uint16)

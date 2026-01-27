@@ -19,7 +19,7 @@ from physicsnemo.models.healda import DiT, ModelConfigV1
 
 
 def get_model(config: ModelConfigV1) -> torch.nn.Module:
-    """Instantiate DiT model from config. Supports 'dit-test' (small) and 'dit' (full) architectures."""
+    """Instantiate DiT model from config."""
     if config.architecture == "dit-test":
         return DiT(
             in_channels=config.condition_channels,

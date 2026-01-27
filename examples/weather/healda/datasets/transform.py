@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -110,6 +111,37 @@ def _get_static_condition(HPX_LEVEL, variable_config) -> torch.Tensor:
 
 @dataclasses.dataclass
 class TransformV2:
+    """Batch transform for normalizing state data and preparing observations for training.
+
+    Two-stage pipeline:
+        1. ``transform(times, frames)`` - CPU preprocessing, returns intermediate dict
+        2. ``device_transform(batch, device)`` - GPU transfer and featurization
+
+    Stage 1 - ``transform()`` returns dict with:
+        - ``target``: Normalized state tensor (B, C, T, X).
+        - ``unified_obs``: Tuple of (obs_tensors, offsets_3d, sensor_id_to_local).
+        - ``condition``: Static conditioning features (1, C_cond, X).
+        - ``second_of_day``, ``day_of_year``, ``timestamp``: Time encodings (B, T).
+
+    Intermediate ``unified_obs`` tuple structure:
+        - ``obs_tensors``: Dict of 1D tensors (N_obs,) - latitude, longitude,
+          observation, global_channel_id, sensor_id, platform_id, etc.
+        - ``offsets_3d``: Shape (S, B, T) cumulative end indices per sensor/batch/time.
+        - ``sensor_id_to_local``: Maps sensor_id to local index in offsets_3d.
+
+    Stage 2 - ``device_transform()`` converts ``unified_obs`` to ``UnifiedObservation``:
+        - Moves tensors to GPU
+        - Computes ``float_metadata`` via ``features.compute_unified_metadata()``
+          (encodes lat/lon, time deltas, zenith angles, etc.)
+        - Builds ``int_metadata`` tensor (N_obs, 6) with columns:
+          [sensor_id, hpx_pixel, local_channel, platform_id, obs_type, global_channel]
+        - Returns ``types.UnifiedObservation`` dataclass ready for model input.
+
+    Sensor grouping: Observations sorted by sensor_id with offsets_3d enabling
+    efficient (sensor, batch, time) slicing (see ``split_by_sensor`` in
+    ``physicsnemo.models.healda.types``).
+    """
+
     variable_config: VariableConfig = VARIABLE_CONFIGS["era5"]
     hpx_level: int = 10  # pixel level of the observations
     hpx_level_condition: int = 6

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,6 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# ruff: noqa: S608  # SQL constructed from trusted internal config, not user input
 import argparse
 import os
 import pathlib
@@ -77,7 +79,7 @@ def main():
 
         print(f"Processing {sensor}...")
         start = time.time()
-        sql = f"""
+        sql = f"""  # noqa: S608
         COPY (
           -- per-platform_id stats
           SELECT
