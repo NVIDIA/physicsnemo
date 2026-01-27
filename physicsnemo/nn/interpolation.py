@@ -59,7 +59,7 @@ def linear_step(x: Tensor) -> Tensor:
     -------
     >>> x = torch.tensor([-0.5, 0.5, 1.5])
     >>> linear_step(x)
-    tensor([0., 0.5, 1.])
+    tensor([0.0000, 0.5000, 1.0000])
     """
     return torch.clip(x, 0, 1)
 
