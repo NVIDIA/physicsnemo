@@ -5,7 +5,7 @@
 <img src="../../../docs/img/healda.png" width="800"/>
 </p>
 
-[📖 Paper](https://arxiv.org/abs/2601.17636) · 📦 Checkpoints (coming soon)
+[📄 arXiv](https://arxiv.org/abs/2601.17636) · 📦 Checkpoints (coming soon)
 
 ---
 
@@ -38,11 +38,13 @@ uv pip install --no-build-isolation \
 
 # 5. Install healda dependencies
 uv pip install -r examples/weather/healda/requirements.txt
+```
 
-# 6. Run commands
+#### Running training
+
+```bash
 cd examples/weather/healda
-python examples/weather/healda/train.py --help
-PYTHONPATH=. pytest tests/ -v
+python train.py --help
 ```
 
 ### Using pip
@@ -55,7 +57,7 @@ pip install nvidia-physicsnemo
 pip install setuptools hatchling
 pip install --no-build-isolation https://github.com/NVlabs/earth2grid/archive/main.tar.gz
 
-# 3. Install example dependencies
+# 3. Install healda dependencies
 pip install -r requirements.txt
 ```
 
