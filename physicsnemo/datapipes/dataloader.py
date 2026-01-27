@@ -60,21 +60,21 @@ class DataLoader:
     --------
     >>> from physicsnemo.datapipes import DataLoader, Dataset, HDF5Reader, Normalize
     >>>
-    >>> dataset = Dataset(
+    >>> dataset = Dataset(  # doctest: +SKIP
     ...     HDF5Reader("data.h5", fields=["input", "target"]),
     ...     transforms=Normalize(["input"], method="mean_std", means={"input": 0.0}, stds={"input": 1.0}),
     ...     device="cuda",  # Automatic GPU transfer
     ... )
-    >>> loader = DataLoader(dataset, batch_size=16, shuffle=True)
+    >>> loader = DataLoader(dataset, batch_size=16, shuffle=True)  # doctest: +SKIP
     >>>
-    >>> for batch in loader:
+    >>> for batch in loader:  # doctest: +SKIP
     ...     output = model(batch["input"])
 
     With DistributedSampler:
 
     >>> from torch.utils.data.distributed import DistributedSampler
-    >>> sampler = DistributedSampler(dataset)
-    >>> loader = DataLoader(dataset, batch_size=16, sampler=sampler)
+    >>> sampler = DistributedSampler(dataset)  # doctest: +SKIP
+    >>> loader = DataLoader(dataset, batch_size=16, sampler=sampler)  # doctest: +SKIP
     """
 
     def __init__(

@@ -26,6 +26,7 @@ Provides registries for transforms and readers, enabling:
 Examples
 --------
 >>> from physicsnemo.datapipes.registry import COMPONENT_REGISTRY
+>>> from physicsnemo.datapipes.transforms import Transform
 >>>
 >>> @COMPONENT_REGISTRY.register()
 ... class MyTransform(Transform):
@@ -35,7 +36,7 @@ Examples
 >>> cls = COMPONENT_REGISTRY.get("MyTransform")
 >>>
 >>> # List all registered components
->>> print(COMPONENT_REGISTRY.list())
+>>> print(COMPONENT_REGISTRY.list()) # doctest: +SKIP
 
 OmegaConf Resolver for Hydra configs
 ------------------------------------
@@ -85,6 +86,8 @@ class ComponentRegistry:
 
     Examples
     --------
+    >>> from physicsnemo.datapipes.registry import ComponentRegistry
+    >>> from physicsnemo.datapipes.transforms import Transform
     >>> registry = ComponentRegistry("transforms")
     >>>
     >>> @registry.register()
@@ -133,6 +136,8 @@ class ComponentRegistry:
 
         Examples
         --------
+        >>> from physicsnemo.datapipes.registry import registry
+        >>> from physicsnemo.datapipes.transforms import Transform
         >>> @registry.register()
         ... class MyTransform(Transform):
         ...     pass
@@ -255,9 +260,9 @@ def register(name: str | None = None) -> Callable[[Type[T]], Type[T]]:
     Examples
     --------
     >>> from physicsnemo.datapipes.registry import register
-    >>>
+    >>> from physicsnemo.datapipes.transforms import Transform
     >>> @register()
-    ... class MyTransform(Transform):
+    ... class ATransform(Transform):
     ...     pass
     >>>
     >>> @register("custom_name")

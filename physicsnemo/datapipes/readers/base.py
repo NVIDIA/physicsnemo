@@ -56,7 +56,7 @@ class Reader(ABC):
     --------
     Custom reader implementation:
 
-    >>> class MyReader(Reader):
+    >>> class MyReader(Reader):  # doctest: +SKIP
     ...     def __init__(self, path: str, **kwargs):
     ...         super().__init__(**kwargs)
     ...         self.data = load_my_data(path)

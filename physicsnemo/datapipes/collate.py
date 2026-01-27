@@ -122,13 +122,15 @@ class DefaultCollator(Collator):
     ... ]
     >>> collator = DefaultCollator()
     >>> batched_data = collator(samples)
-    >>> batched_data["x"].shape  # torch.Size([2, 10, 3])
+    >>> batched_data["x"].shape
+    torch.Size([2, 10, 3])
 
     With metadata collation enabled:
 
     >>> collator = DefaultCollator(collate_metadata=True)
     >>> batched_data, metadata_list = collator(samples)
-    >>> metadata_list  # [{"file": "a.h5"}, {"file": "b.h5"}]
+    >>> metadata_list
+    [{'file': 'a.h5'}, {'file': 'b.h5'}]
     """
 
     def __init__(
@@ -221,14 +223,17 @@ class ConcatCollator(Collator):
     ... ]
     >>> collator = ConcatCollator(dim=0, add_batch_idx=True)
     >>> batched_data = collator(samples)
-    >>> batched_data["points"].shape  # torch.Size([250, 3])
-    >>> batched_data["batch_idx"].shape  # torch.Size([250])
+    >>> batched_data["points"].shape
+    torch.Size([250, 3])
+    >>> batched_data["batch_idx"].shape
+    torch.Size([250])
 
     With metadata collation enabled:
 
     >>> collator = ConcatCollator(dim=0, add_batch_idx=True, collate_metadata=True)
     >>> batched_data, metadata_list = collator(samples)
-    >>> metadata_list  # [{"file": "a.h5"}, {"file": "b.h5"}]
+    >>> metadata_list
+    [{'file': 'a.h5'}, {'file': 'b.h5'}]
     """
 
     def __init__(

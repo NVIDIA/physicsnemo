@@ -54,31 +54,31 @@ class ZarrReader(Reader):
 
     >>> # Directory with sample_0.zarr, sample_1.zarr, ...
     >>> # Each contains arrays like "positions", "features", etc.
-    >>> reader = ZarrReader("data_dir/", group_pattern="sample_*.zarr")
-    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
+    >>> reader = ZarrReader("data_dir/", group_pattern="sample_*.zarr")  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
 
     Load only specific fields:
 
-    >>> reader = ZarrReader("data_dir/", fields=["positions", "velocity"])
-    >>> data, metadata = reader[0]
+    >>> reader = ZarrReader("data_dir/", fields=["positions", "velocity"])  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # doctest: +SKIP
 
     Load attributes from Zarr groups:
 
     >>> # If the Zarr group has attributes like "timestep" or "scale_factor",
     >>> # you can request them as fields:
-    >>> reader = ZarrReader("data_dir/", fields=["positions", "timestep", "scale_factor"])
-    >>> data, metadata = reader[0]  # data["timestep"] contains the attribute value
+    >>> reader = ZarrReader("data_dir/", fields=["positions", "timestep", "scale_factor"])  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # data["timestep"] contains the attribute value  # doctest: +SKIP
 
     With coordinated subsampling for large arrays:
 
-    >>> reader = ZarrReader(
+    >>> reader = ZarrReader(  # doctest: +SKIP
     ...     "data_dir/",
     ...     coordinated_subsampling={
     ...         "n_points": 50000,
     ...         "target_keys": ["volume_coords", "volume_fields"],
     ...     }
     ... )
-    >>> data, metadata = reader[0]
+    >>> data, metadata = reader[0]  # doctest: +SKIP
     """
 
     def __init__(

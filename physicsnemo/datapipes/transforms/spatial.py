@@ -187,7 +187,7 @@ class CreateGrid(Transform):
     >>> sample = TensorDict({})
     >>> result = transform(sample)
     >>> print(result["grid"].shape)
-    torch.Size([262144, 3])  # 64*64*64 = 262144
+    torch.Size([262144, 3])
     """
 
     def __init__(
@@ -444,7 +444,7 @@ class CenterOfMass(Transform):
     ... })
     >>> result = transform(sample)
     >>> print(result["center_of_mass"].shape)
-    torch.Size([1, 3])
+    torch.Size([3])
     """
 
     def __init__(

@@ -43,15 +43,15 @@ class NumpyReader(Reader):
 
     Example (single .npz):
         >>> # data.npz with arrays "positions" (N, 100, 3), "features" (N, 100)
-        >>> reader = NumpyReader("data.npz", fields=["positions", "features"])
-        >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
+        >>> reader = NumpyReader("data.npz", fields=["positions", "features"])  # doctest: +SKIP
+        >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
         >>> # Or load all arrays:
-        >>> reader = NumpyReader("data.npz")  # fields=None loads all
+        >>> reader = NumpyReader("data.npz")  # fields=None loads all  # doctest: +SKIP
 
     Example (directory):
         >>> # Directory with sample_0.npz, sample_1.npz, ...
-        >>> reader = NumpyReader("data_dir/", file_pattern="sample_*.npz")
-        >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
+        >>> reader = NumpyReader("data_dir/", file_pattern="sample_*.npz")  # doctest: +SKIP
+        >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
     """
 
     def __init__(

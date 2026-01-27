@@ -25,26 +25,6 @@ Designed for clean separation of concerns:
 - **Dataset**: Reader + transforms pipeline with optional auto device transfer
 - **DataLoader**: Batched iteration with optional prefetching
 
-Example:
-    >>> import physicsnemo.datapipes as dp
-    >>> from tensordict import TensorDict
-    >>>
-    >>> # Create a dataset with transforms and automatic device transfer
-    >>> dataset = dp.Dataset(
-    ...     reader=dp.HDF5Reader("data.h5", fields=["pressure", "velocity"]),
-    ...     transforms=[
-    ...         dp.Normalize(input_keys=["pressure"], means={"pressure": 0.0}, stds={"pressure": 1.0}),
-    ...         dp.SubsamplePoints(input_keys=["pressure", "velocity"], n=10000),
-    ...     ],
-    ...     device="cuda",  # Automatic GPU transfer!
-    ... )
-    >>>
-    >>> # Create a dataloader
-    >>> loader = dp.DataLoader(dataset, batch_size=16, shuffle=True)
-    >>>
-    >>> # Iterate over batches
-    >>> for data, metadata in loader:
-    ...     output = model(data["pressure"])
 """
 
 from tensordict import TensorDict

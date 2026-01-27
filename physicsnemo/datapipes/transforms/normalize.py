@@ -44,31 +44,42 @@ class Normalize(Transform):
 
     Parameters can be provided directly or loaded from a ``.npz`` file.
 
-    Example (mean-std scaling):
-        >>> norm = Normalize(
-        ...     input_keys=["pressure", "velocity"],
-        ...     method="mean_std",
-        ...     means={"pressure": 101325.0, "velocity": 0.0},
-        ...     stds={"pressure": 1000.0, "velocity": 10.0},
-        ... )
-        >>> normalized = norm(sample)
+    Examples
+    --------
+    Mean-std scaling:
 
-    Example (min-max scaling):
-        >>> norm = Normalize(
-        ...     input_keys=["pressure", "velocity"],
-        ...     method="min_max",
-        ...     mins={"pressure": 100000.0, "velocity": -50.0},
-        ...     maxs={"pressure": 110000.0, "velocity": 50.0},
-        ... )
-        >>> normalized = norm(sample)
+    >>> import torch
+    >>> from tensordict import TensorDict
+    >>> sample = TensorDict({
+    ...     "pressure": torch.tensor([101325.0, 102325.0, 100325.0]),
+    ...     "velocity": torch.tensor([10.0, -10.0, 0.0]),
+    ... })
+    >>> norm = Normalize(
+    ...     input_keys=["pressure", "velocity"],
+    ...     method="mean_std",
+    ...     means={"pressure": 101325.0, "velocity": 0.0},
+    ...     stds={"pressure": 1000.0, "velocity": 10.0},
+    ... )
+    >>> normalized = norm(sample)
+    >>> normalized["pressure"]
+    tensor([ 0.,  1., -1.])
+    >>> normalized["velocity"]
+    tensor([ 1., -1.,  0.])
 
-    Example (loading from file):
-        >>> norm = Normalize(
-        ...     input_keys=["pressure", "velocity"],
-        ...     method="mean_std",
-        ...     stats_file="normalization_stats.npz",
-        ... )
-        >>> normalized = norm(sample)
+    Min-max scaling (normalizes to [-1, 1]):
+
+    >>> sample = TensorDict({
+    ...     "pressure": torch.tensor([100000.0, 105000.0, 110000.0]),
+    ... })
+    >>> norm = Normalize(
+    ...     input_keys=["pressure"],
+    ...     method="min_max",
+    ...     mins={"pressure": 100000.0},
+    ...     maxs={"pressure": 110000.0},
+    ... )
+    >>> normalized = norm(sample)
+    >>> normalized["pressure"]
+    tensor([-1.,  0.,  1.])
     """
 
     def __init__(

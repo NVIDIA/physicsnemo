@@ -43,11 +43,17 @@ class Compose(Transform):
 
     Examples
     --------
-    >>> pipeline = Compose([
-    ...     Normalize(["pressure"], method="mean_std", means={"pressure": 0.0}, stds={"pressure": 1.0}),
-    ...     SubsamplePoints(["pressure"], n_points=1000),
-    ... ])
+    >>> from physicsnemo.datapipes.transforms import Normalize, SubsamplePoints
+    >>> from tensordict import TensorDict
+    >>> sample = TensorDict({
+    ...     "pressure": torch.tensor([101325.0, 102325.0, 100325.0]),
+    ... })
+    >>> normalize = Normalize(input_keys=["pressure"], method="mean_std", means={"pressure": 101325.0}, stds={"pressure": 1000.0})
+    >>> subsample = SubsamplePoints(input_keys=["pressure"], n_points=1000)
+    >>> pipeline = Compose([normalize, subsample])
     >>> transformed = pipeline(sample)
+    >>> transformed["pressure"]
+    tensor([ 0.,  1., -1.])
     """
 
     def __init__(self, transforms: Sequence[Transform]) -> None:

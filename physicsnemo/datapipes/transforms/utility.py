@@ -62,8 +62,8 @@ class Rename(Transform):
     ...     "other": torch.randn(100, 1)
     ... })
     >>> result = transform(data)
-    >>> print(list(result.keys()))
-    ['new_name', 'positions', 'other']
+    >>> print(sorted(result.keys()))
+    ['new_name', 'other', 'positions']
     """
 
     def __init__(

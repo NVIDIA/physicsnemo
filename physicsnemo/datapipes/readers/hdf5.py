@@ -53,15 +53,15 @@ class HDF5Reader(Reader):
     Single file mode:
 
     >>> # File structure: data.h5 with datasets "pressure" (N, 100), "velocity" (N, 100, 3)
-    >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])
-    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
-    >>> data["pressure"].shape  # torch.Size([100])
+    >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
+    >>> data["pressure"].shape  # torch.Size([100])  # doctest: +SKIP
 
     Directory mode:
 
     >>> # Directory with sample_0.h5, sample_1.h5, ...
-    >>> reader = HDF5Reader("data_dir/", file_pattern="sample_*.h5")
-    >>> data, metadata = reader[0]  # Loads all datasets from sample_0.h5
+    >>> reader = HDF5Reader("data_dir/", file_pattern="sample_*.h5")  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # Loads all datasets from sample_0.h5  # doctest: +SKIP
     """
 
     def __init__(

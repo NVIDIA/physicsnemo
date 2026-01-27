@@ -65,12 +65,12 @@ class VTKReader(Reader):
     >>> #     surface.vtp
     >>> #   ...
     >>>
-    >>> reader = VTKReader(
+    >>> reader = VTKReader(  # doctest: +SKIP
     ...     "data/",
     ...     keys_to_read=["stl_coordinates", "stl_faces", "surface_normals"],
     ... )
-    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
-    >>> print(data["stl_coordinates"].shape)  # (N, 3)
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
+    >>> print(data["stl_coordinates"].shape)  # (N, 3)  # doctest: +SKIP
 
     Available Keys:
         From .stl files:

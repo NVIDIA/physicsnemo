@@ -235,7 +235,7 @@ class NormalizeVectors(Transform):
 
             tensor = data[key]
             norm = torch.norm(tensor, dim=self.dim, keepdim=True)
-            normalized = tensor / (norm + self.eps)
+            normalized = tensor / norm.clamp(min=self.eps)
             updates[key] = normalized
 
         return data.update(updates)

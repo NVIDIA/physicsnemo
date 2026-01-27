@@ -72,26 +72,26 @@ class Dataset:
     other computation.
 
     >>> # Start prefetching
-    >>> dataset.prefetch(0, stream=stream0)
-    >>> dataset.prefetch(1, stream=stream1)
+    >>> dataset.prefetch(0, stream=stream0)  # doctest: +SKIP
+    >>> dataset.prefetch(1, stream=stream1)  # doctest: +SKIP
     >>>
     >>> # Retrieve results (waits if not ready)
-    >>> sample_0 = dataset[0]  # Uses prefetched result
+    >>> sample_0 = dataset[0]  # Uses prefetched result  # doctest: +SKIP
 
     Examples
     --------
     >>> from physicsnemo.datapipes import Dataset, HDF5Reader, Normalize
     >>>
-    >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])
-    >>> transforms = Normalize(
+    >>> reader = HDF5Reader("data.h5", fields=["pressure", "velocity"])  # doctest: +SKIP
+    >>> transforms = Normalize(  # doctest: +SKIP
     ...     ["pressure"],
     ...     method="mean_std",
-    ...     means={"pressure": 0.0},
-    ...     stds={"pressure": 1.0},
+    ...     means={"pressure": 0.0},  # doctest: +SKIP
+    ...     stds={"pressure": 1.0},  # doctest: +SKIP
     ... )
     >>>
-    >>> dataset = Dataset(reader, transforms=transforms, device="cuda")
-    >>> sample, metadata = dataset[0]
+    >>> dataset = Dataset(reader, transforms=transforms, device="cuda")  # doctest: +SKIP
+    >>> sample, metadata = dataset[0]  # doctest: +SKIP
     """
 
     def __init__(

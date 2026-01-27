@@ -59,24 +59,24 @@ class TensorStoreZarrReader(Reader):
     Basic usage:
 
     >>> # Directory with sample_0.zarr, sample_1.zarr, ...
-    >>> reader = TensorStoreZarrReader("data_dir/", group_pattern="sample_*.zarr")
-    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple
+    >>> reader = TensorStoreZarrReader("data_dir/", group_pattern="sample_*.zarr")  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # Returns (TensorDict, dict) tuple  # doctest: +SKIP
 
     Load only specific fields:
 
-    >>> reader = TensorStoreZarrReader("data_dir/", fields=["positions", "velocity"])
-    >>> data, metadata = reader[0]
+    >>> reader = TensorStoreZarrReader("data_dir/", fields=["positions", "velocity"])  # doctest: +SKIP
+    >>> data, metadata = reader[0]  # doctest: +SKIP
 
     With coordinated subsampling for large arrays:
 
-    >>> reader = TensorStoreZarrReader(
+    >>> reader = TensorStoreZarrReader(  # doctest: +SKIP
     ...     "data_dir/",
     ...     coordinated_subsampling={
     ...         "n_points": 50000,
     ...         "target_keys": ["volume_coords", "volume_fields"],
     ...     }
     ... )
-    >>> data, metadata = reader[0]
+    >>> data, metadata = reader[0]  # doctest: +SKIP
 
     Performance Tips:
         - Increase ``cache_bytes_limit`` for better performance on repeated access
