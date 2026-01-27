@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -83,18 +84,22 @@ def create_unified_observation(
         }
 
     # Generate observations
-    observations = []
     if ensure_all_sensors:
         # One per sensor first, then random
-        for sid in sensor_ids:
-            observations.append(random_obs_for_sensor(sid))
-        for _ in range(nobs - len(sensor_ids)):
-            sid = sensor_ids[torch.randint(0, len(sensor_ids), (1,)).item()]
-            observations.append(random_obs_for_sensor(sid))
+        observations = [random_obs_for_sensor(sid) for sid in sensor_ids]
+        observations.extend(
+            random_obs_for_sensor(
+                sensor_ids[torch.randint(0, len(sensor_ids), (1,)).item()]
+            )
+            for _ in range(nobs - len(sensor_ids))
+        )
     else:
-        for _ in range(nobs):
-            sid = sensor_ids[torch.randint(0, len(sensor_ids), (1,)).item()]
-            observations.append(random_obs_for_sensor(sid))
+        observations = [
+            random_obs_for_sensor(
+                sensor_ids[torch.randint(0, len(sensor_ids), (1,)).item()]
+            )
+            for _ in range(nobs)
+        ]
 
     # Sort by sensor_id (required for per-sensor processing)
     observations.sort(key=lambda x: x["sensor_id"])

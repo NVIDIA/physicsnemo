@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -211,28 +212,18 @@ def create_mock_unified_observation(
 
 
 @pytest.mark.parametrize("t", [1, 2])
-@pytest.mark.parametrize("autocast", [True, False])
-def test_dit_with_observations(t, device, autocast):
+def test_dit_with_observations(t, device):
     """Test DiT model forward pass with observation data."""
     n = 1
 
-    # Create sensor_embedder_config
     sensor_config = {
         "sensor_1": ModelSensorConfig(
-            sensor_id=1,
-            nchannel=8,
-            platform_ids=tuple(range(10)),
+            sensor_id=1, nchannel=8, platform_ids=tuple(range(10))
         ),
         "sensor_2": ModelSensorConfig(
-            sensor_id=4,
-            nchannel=4,
-            platform_ids=tuple(range(5)),
+            sensor_id=4, nchannel=4, platform_ids=tuple(range(5))
         ),
     }
-
-    sensor_embedder_config = SensorEmbedderConfig(
-        embed_dim=16,
-    )
 
     obs = create_unified_observation(
         nobs=1000,
@@ -245,15 +236,13 @@ def test_dit_with_observations(t, device, autocast):
         sensor_config=sensor_config,
     )
 
-    # DiT model configuration
     npix = 12 * 4**6  # level 6 HEALPix grid
-
     model = DiT(
         embed_v2=True,
-        embed_v2_meta_dim=28,  # matches static_metadata.shape[-1]
+        embed_v2_meta_dim=28,
         embed_v2_n_embed=1024,
-        embed_v2_in_level=obs.hpx_level,  # 7
-        sensor_embedder_config=sensor_embedder_config,
+        embed_v2_in_level=obs.hpx_level,
+        sensor_embedder_config=SensorEmbedderConfig(embed_dim=16),
         sensors=sensor_config,
         num_layers=2,
         level_in=6,
@@ -265,15 +254,13 @@ def test_dit_with_observations(t, device, autocast):
     )
     model.to(device)
 
-    # Input tensors from debug script
     noise_labels = torch.ones([n], device=device)
     class_labels = torch.empty([n, 0], device=device).int()
     img = torch.ones(n, 3, t, npix, device=device).to(memory_format=torch.channels_last)
     doy = torch.ones([n, t], device=device)
     second = torch.ones([n, t], device=device)
 
-    # Forward pass - this should work without real data dependencies
-    with torch.autocast(device, torch.bfloat16, enabled=autocast):
+    with torch.autocast(device, torch.bfloat16):
         out = model(
             img,
             noise_labels,

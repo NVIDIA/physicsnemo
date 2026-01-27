@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,12 +45,12 @@ from datasets.obs_filtering_utils import filter_observations
 from datasets.sensors import (
     SENSOR_CONFIGS,
 )
-from physicsnemo.models.healda import profiling
 
 LOCAL_CHANNEL_ID = pa.field("local_channel_id", pa.uint16())
 
 
 def get_channel_table():
+    """Return PyArrow table mapping observation channel IDs to sensor metadata and normalization stats."""
     import config.environment as config
 
     return UFSUnifiedLoader(
@@ -344,10 +345,11 @@ class UFSUnifiedLoader:
 
         # Combine all observations
         def process(t):
-            all_tables = []
-            for interval_time in self._get_interval_times(t):
-                for table in tables.get(interval_time, []):
-                    all_tables.append(table)
+            all_tables = [
+                table
+                for interval_time in self._get_interval_times(t)
+                for table in tables.get(interval_time, [])
+            ]
 
             if not all_tables:
                 return empty
@@ -363,9 +365,5 @@ class UFSUnifiedLoader:
 
     def _get_empty_table(self):
         # Return empty table with proper schema
-        # Create empty arrays for each field in the schema
-        empty_arrays = []
-        for field in self.output_schema:
-            empty_arrays.append(pa.array([], type=field.type))
-        template = pa.table(empty_arrays, schema=self.output_schema)
-        return template
+        empty_arrays = [pa.array([], type=field.type) for field in self.output_schema]
+        return pa.table(empty_arrays, schema=self.output_schema)
