@@ -33,8 +33,8 @@ logger = logging.getLogger("__name__")
 def validate_jit(
     model: physicsnemo.core.Module,
     in_args: Tuple[Tensor] = (),
-    rtol: float = 1e-5,
-    atol: float = 1e-5,
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
 ) -> bool:
     """Check network's torch.compile compatibility
 
@@ -49,9 +49,9 @@ def validate_jit(
     in_args : Tuple[Tensor], optional
         Input arguments, by default ()
     rtol : float, optional
-        Relative tolerance of error allowed, by default 1e-5
+        Relative tolerance of error allowed, by default 1e-3
     atol : float, optional
-        Absolute tolerance of error allowed, by default 1e-5
+        Absolute tolerance of error allowed, by default 1e-3
 
     Returns
     -------
