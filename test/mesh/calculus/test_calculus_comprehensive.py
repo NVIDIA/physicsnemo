@@ -334,7 +334,7 @@ class TestKeyParsing:
 
     def test_none_keys_all_fields(self, simple_tet_mesh):
         """Test keys=None computes all non-cached fields (excludes "_cache" sub-dict)."""
-        from physicsnemo.mesh.utilities import set_cached
+        from physicsnemo.mesh.utilities._cache import set_cached
 
         mesh = simple_tet_mesh
         mesh.point_data["field1"] = torch.ones(mesh.n_points)

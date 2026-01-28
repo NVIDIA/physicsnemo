@@ -186,7 +186,7 @@ class TestLaplacianManifoldDimensions:
         # Should raise NotImplementedError
         scalar_values = torch.randn(mesh.n_points, device=device)
 
-        with pytest.raises(NotImplementedError, match="triangle meshes"):
+        with pytest.raises(NotImplementedError, match="work-in-progress"):
             compute_laplacian_points_dec(mesh, scalar_values)
 
     def test_laplacian_not_implemented_for_3d(self, device):
@@ -210,7 +210,7 @@ class TestLaplacianManifoldDimensions:
         # Should raise NotImplementedError
         scalar_values = torch.randn(mesh.n_points, device=device)
 
-        with pytest.raises(NotImplementedError, match="triangle meshes"):
+        with pytest.raises(NotImplementedError, match="work-in-progress"):
             compute_laplacian_points_dec(mesh, scalar_values)
 
     def test_laplacian_wrapper_function(self, device):
