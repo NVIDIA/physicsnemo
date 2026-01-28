@@ -149,7 +149,6 @@ def measure_roughness(mesh: Mesh) -> float:
 
 def test_basic_smoothing_reduces_roughness():
     """Verify that smoothing reduces mesh roughness."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.2)
     roughness_before = measure_roughness(mesh)
@@ -164,7 +163,6 @@ def test_basic_smoothing_reduces_roughness():
 
 def test_smoothing_approximately_preserves_volume():
     """Check that smoothing approximately preserves total mesh volume."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     volume_before = mesh.cell_areas.sum()
@@ -181,7 +179,6 @@ def test_smoothing_approximately_preserves_volume():
 
 def test_relaxation_factor_scaling():
     """Larger relaxation factors should produce larger displacements per iteration."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.15)
 
@@ -204,7 +201,6 @@ def test_relaxation_factor_scaling():
 
 def test_n_iter_behavior():
     """More iterations should produce smoother results."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.15)
 
@@ -225,7 +221,6 @@ def test_n_iter_behavior():
 
 def test_inplace_vs_copy():
     """Verify inplace=True modifies original, inplace=False creates copy."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     original_points = mesh.points.clone()
@@ -313,7 +308,6 @@ def test_boundary_moves_when_disabled():
 
 def test_boundary_on_closed_surface():
     """Verify no boundaries detected on closed surface (sphere)."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
 
@@ -665,7 +659,6 @@ def test_zero_iterations_inplace():
 
 def test_large_relaxation_factor():
     """Large relaxation factor should remain stable."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
 
@@ -679,7 +672,6 @@ def test_large_relaxation_factor():
 
 def test_many_iterations():
     """Many iterations should complete without numerical issues."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
 
@@ -722,7 +714,6 @@ def test_isolated_vertices():
 
 def test_point_data_preserved():
     """All point_data fields should be retained."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     mesh.point_data["test_scalar"] = torch.randn(mesh.n_points)
@@ -742,7 +733,6 @@ def test_point_data_preserved():
 
 def test_cell_data_unchanged():
     """cell_data should be unmodified (only points move)."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     mesh.cell_data["test_data"] = torch.randn(mesh.n_cells)
@@ -755,7 +745,6 @@ def test_cell_data_unchanged():
 
 def test_global_data_unchanged():
     """global_data should be unmodified."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     mesh.global_data["test_value"] = torch.tensor(42.0)
@@ -770,7 +759,6 @@ def test_global_data_unchanged():
 
 def test_cells_connectivity_unchanged():
     """Cell connectivity should remain identical."""
-    pytest.importorskip("scipy")
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.1)
     original_cells = mesh.cells.clone()
