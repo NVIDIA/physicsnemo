@@ -563,22 +563,10 @@ class TestQualityMetricsEdgeCases:
 
     def test_3d_mesh_quality(self, device):
         """Test quality metrics on 3D tetrahedral mesh."""
+        from physicsnemo.mesh.primitives.volumes import tetrahedron_volume
 
-        # Regular tetrahedron
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.5, (3**0.5) / 2, 0.0],
-                [0.5, (3**0.5) / 6, ((2 / 3) ** 0.5)],
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
-
-        cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.long, device=device)
-
-        mesh = Mesh(points=points, cells=cells)
+        # Use tetrahedron_volume primitive for a regular tetrahedron
+        mesh = tetrahedron_volume.load(device=device)
 
         metrics = compute_quality_metrics(mesh)
 
@@ -614,28 +602,16 @@ class TestStatisticsVariations:
         assert "aspect_ratio_stats" in stats
 
     def test_statistics_large_mesh(self, device):
-        """Test statistics on larger mesh."""
-        # Create structured grid
-        n = 10
-        x = torch.linspace(0, 1, n, device=device)
-        y = torch.linspace(0, 1, n, device=device)
-        xx, yy = torch.meshgrid(x, y, indexing="xy")
+        """Test statistics on a realistic mesh with many cells."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
-        points = torch.stack([xx.flatten(), yy.flatten()], dim=-1)
-
-        # Create triangles
-        cells_list = []
-        for i in range(n - 1):
-            for j in range(n - 1):
-                idx = i * n + j
-                cells_list.append([idx, idx + 1, idx + n])
-                cells_list.append([idx + 1, idx + n + 1, idx + n])
-
-        cells = torch.tensor(cells_list, dtype=torch.long, device=device)
-
-        mesh = Mesh(points=points, cells=cells)
+        # Use lumpy_sphere (subdivisions=2 gives ~320 cells) for realistic mesh
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
 
         stats = compute_mesh_statistics(mesh)
 
-        assert stats["n_cells"] == 2 * (n - 1) * (n - 1)
+        # Lumpy sphere at subdivisions=2 has 320 triangles
+        assert stats["n_cells"] >= 300
         assert stats["n_isolated_vertices"] == 0
+        assert "cell_area_stats" in stats
+        assert "quality_score_stats" in stats

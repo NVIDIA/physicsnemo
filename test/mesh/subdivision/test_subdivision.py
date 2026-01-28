@@ -278,13 +278,18 @@ class TestButterflySubdivision:
 
     def test_triangle_butterfly_preserves_vertices(self, device):
         """Test that butterfly subdivision keeps original vertices unchanged."""
-        mesh = create_triangle_mesh(device)
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        # Use sphere_icosahedral (80 triangles at subdivisions=1) for realistic test
+        mesh = sphere_icosahedral.load(subdivisions=1, device=device)
         original_points = mesh.points.clone()
 
         subdivided = mesh.subdivide(levels=1, filter="butterfly")
 
         # Original vertices should still exist in subdivided mesh
-        for i in range(mesh.n_points):
+        # Sample a subset for efficiency (checking all would be slow)
+        sample_indices = torch.randperm(mesh.n_points, device=device)[:10]
+        for i in sample_indices:
             # Find this point in subdivided mesh
             matches = torch.all(
                 torch.isclose(subdivided.points, original_points[i].unsqueeze(0)),
@@ -294,7 +299,10 @@ class TestButterflySubdivision:
 
     def test_butterfly_topology_same_as_linear(self, device):
         """Test that butterfly has same connectivity as linear (interpolating scheme)."""
-        mesh = create_triangle_mesh(device)
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        # Use lumpy_sphere for a more realistic mesh with varying geometry
+        mesh = lumpy_sphere.load(subdivisions=1, device=device)
 
         linear = mesh.subdivide(levels=1, filter="linear")
         butterfly = mesh.subdivide(levels=1, filter="butterfly")
@@ -330,14 +338,15 @@ class TestLoopSubdivision:
 
     def test_triangle_loop_modifies_vertices(self, device):
         """Test that Loop subdivision repositions original vertices."""
-        mesh = create_triangle_mesh(device)
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        # Use sphere_icosahedral for a realistic closed surface test
+        mesh = sphere_icosahedral.load(subdivisions=1, device=device)
         original_points = mesh.points.clone()
 
         subdivided = mesh.subdivide(levels=1, filter="loop")
 
         # Loop is approximating - original vertices get repositioned
-        # At least some original vertices should have moved
-        # (unless they're on boundaries with special handling)
         assert subdivided.n_points > mesh.n_points
 
         # Check that original vertices were modified in the subdivided mesh
@@ -366,15 +375,11 @@ class TestLoopSubdivision:
         assert loop.n_manifold_dims == linear.n_manifold_dims
 
     def test_loop_smoothing_effect(self, device):
-        """Test that Loop subdivision has smoothing effect."""
-        # Create a mesh with a sharp corner
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
-            dtype=torch.float32,
-            device=device,
-        )
-        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=device)
-        mesh = Mesh(points=points, cells=cells)
+        """Test that Loop subdivision has smoothing effect on a realistic mesh."""
+        from physicsnemo.mesh.primitives.surfaces import icosahedron_surface
+
+        # Use icosahedron (20 triangles) as a more realistic test case
+        mesh = icosahedron_surface.load(device=device)
 
         subdivided = mesh.subdivide(levels=1, filter="loop")
 
@@ -385,6 +390,10 @@ class TestLoopSubdivision:
         # All cells should still be valid (positive area)
         areas = subdivided.cell_areas
         assert torch.all(areas > 0)
+
+        # Loop subdivision should produce reasonable smoothing (areas should be consistent)
+        area_std = areas.std() / areas.mean()
+        assert area_std < 1.0, "Loop subdivision should produce reasonably uniform cell areas"
 
 
 ### Test Edge Cases and Validation

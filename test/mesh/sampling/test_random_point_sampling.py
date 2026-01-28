@@ -480,3 +480,60 @@ class TestRandomSamplingParametrized:
             )
             assert sampled_specific.shape == (2, n_spatial_dims)
             assert_on_device(sampled_specific, device)
+
+
+class TestRealisticMeshSampling:
+    """Tests for sampling on realistic meshes (lumpy_sphere)."""
+
+    def test_lumpy_sphere_sampling(self, device):
+        """Test sampling on lumpy_sphere - a realistic 3D surface mesh."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        torch.manual_seed(42)
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+
+        # Sample one point per cell
+        sampled = sample_random_points_on_cells(mesh)
+
+        # Should get one point per cell
+        assert sampled.shape == (mesh.n_cells, 3)
+        assert_on_device(sampled, device)
+
+        # All samples should be on surface (approximately at radius ~1)
+        radii = torch.norm(sampled, dim=-1)
+        # With noise_amplitude=0.1, expect radius in [0.9, 1.1] roughly
+        assert torch.all(radii > 0.5), "Samples should be away from origin"
+        assert torch.all(radii < 2.0), "Samples should be near surface"
+
+    def test_lumpy_sphere_multiple_samples(self, device):
+        """Test multiple samples from specific cells on lumpy_sphere."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        torch.manual_seed(42)
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+
+        # Sample 10 points from the first 5 cells
+        n_samples = 50
+        cell_indices = torch.arange(5, device=device, dtype=torch.int64).repeat(10)
+        sampled = sample_random_points_on_cells(mesh, cell_indices=cell_indices)
+
+        assert sampled.shape == (n_samples, 3)
+        assert_on_device(sampled, device)
+
+        # Samples should have variation
+        std_dev = sampled.std(dim=0)
+        assert torch.all(std_dev > 0), "Samples should have variation"
+
+    def test_lumpy_sphere_specific_cells(self, device):
+        """Test sampling from specific cells on lumpy_sphere."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        torch.manual_seed(42)
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+
+        # Sample from specific cells (with repetition)
+        cell_indices = torch.tensor([0, 10, 50, 10, 0], device=device, dtype=torch.int64)
+        sampled = sample_random_points_on_cells(mesh, cell_indices=cell_indices)
+
+        assert sampled.shape == (5, 3)
+        assert_on_device(sampled, device)

@@ -116,22 +116,10 @@ class TestWatertight3D:
         exterior boundary. A truly watertight 3D mesh would require periodic boundaries
         or non-Euclidean topology (like a 3-torus embedded in 4D).
         """
-        import pyvista as pv
+        from physicsnemo.mesh.primitives.volumes import cube_volume
 
-        from physicsnemo.mesh.io import from_pyvista
-
-        ### Create a filled cube volume using ImageData and tessellate to tets
-        grid = pv.ImageData(
-            dimensions=(3, 3, 3),  # Simple 2x2x2 grid
-            spacing=(1.0, 1.0, 1.0),
-            origin=(0.0, 0.0, 0.0),
-        )
-
-        # Tessellate to tetrahedra
-        tet_grid = grid.tessellate()
-
-        mesh = from_pyvista(tet_grid, manifold_dim=3)
-        mesh = mesh.to(device)
+        ### Create a filled cube volume (tetrahedral mesh)
+        mesh = cube_volume.load(n_subdivisions=2, device=device)
 
         ### Even though this is a filled volume, it's NOT watertight
         # The exterior faces of the cube are boundary faces (appear only once)

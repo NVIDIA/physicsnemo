@@ -316,25 +316,18 @@ class TestRepairPipeline:
 
     def test_pipeline_clean_mesh_unchanged(self, device):
         """Test that clean mesh is unchanged by pipeline."""
-        points = torch.tensor(
-            [
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [0.5, 1.0],
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
-        cells = torch.tensor([[0, 1, 2]], dtype=torch.long, device=device)
-
-        mesh = Mesh(points=points, cells=cells)
+        # Use lumpy_sphere - a complex, watertight mesh that should be clean
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+        original_n_points = mesh.n_points
+        original_n_cells = mesh.n_cells
 
         mesh_clean, stats = repair_mesh(mesh)
 
         # Should be unchanged
-        assert mesh_clean.n_points == 3
-        assert mesh_clean.n_cells == 1
+        assert mesh_clean.n_points == original_n_points
+        assert mesh_clean.n_cells == original_n_cells
         assert stats["degenerates"]["n_zero_area_cells"] == 0
         assert stats["duplicates"]["n_duplicates_merged"] == 0
         assert stats["isolated"]["n_isolated_removed"] == 0
@@ -401,31 +394,10 @@ class TestHoleFilling:
 
     def test_closed_mesh_no_holes(self, device):
         """Test that closed mesh is unchanged."""
-        # Create closed tetrahedron surface
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.5, 1.0, 0.0],
-                [0.5, 0.5, 1.0],
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
-        # All 4 faces of tetrahedron
-        cells = torch.tensor(
-            [
-                [0, 1, 2],
-                [0, 1, 3],
-                [1, 2, 3],
-                [0, 2, 3],
-            ],
-            dtype=torch.long,
-            device=device,
-        )
-
-        mesh = Mesh(points=points, cells=cells)
+        # Use sphere_icosahedral - a complex watertight closed surface
+        mesh = sphere_icosahedral.load(subdivisions=1, device=device)
 
         mesh_filled, stats = fill_holes(mesh)
 
