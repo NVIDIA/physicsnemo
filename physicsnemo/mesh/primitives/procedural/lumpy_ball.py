@@ -137,26 +137,38 @@ def load(
     core_cells = torch.cat([zeros_col, shell1_faces], dim=1)  # (n_faces, 4)
 
     ### Step 7: Build inter-shell tetrahedra (prism decomposition)
-    # Vectorized: broadcasting + stacking instead of nested loops
-    # Each triangular prism between shells decomposes into 3 tetrahedra:
+    # Each triangular prism between shells decomposes into 3 tetrahedra.
+    # CRITICAL: We must use a CONSISTENT diagonal for each lateral rectangle,
+    # regardless of which adjacent face we're processing. This is achieved by
+    # sorting face vertices by their TEMPLATE index (not shell-offset index),
+    # so that a < b < c and the decomposition is canonical.
+    #
+    # With sorted vertices (a < b < c), the Freudenthal decomposition is:
     #   tet1: (a_in, b_in, c_in, a_out)
     #   tet2: (b_in, c_in, a_out, b_out)
     #   tet3: (c_in, a_out, b_out, c_out)
+    #
+    # This guarantees that for each lateral rectangle, adjacent prisms use
+    # the same diagonal, producing matching triangular faces.
     if n_shells > 1:
+        # Sort face vertices by template index to ensure consistent decomposition
+        sorted_faces = torch.sort(template.cells, dim=1)[0]  # (n_faces, 3)
+
         # Compute all shell pair offsets as tensors
         shell_indices = torch.arange(n_shells - 1, device=device)
         inner_offsets = 1 + shell_indices * n_verts_per_shell  # (n_shells-1,)
         outer_offsets = inner_offsets + n_verts_per_shell  # (n_shells-1,)
 
-        # Broadcast face indices across all shell pairs
-        # template.cells: (n_faces, 3) -> (1, n_faces, 3)
+        # Broadcast sorted face indices across all shell pairs
+        # sorted_faces: (n_faces, 3) -> (1, n_faces, 3)
         # offsets: (n_shells-1,) -> (n_shells-1, 1, 1)
         # Result: (n_shells-1, n_faces, 3)
-        faces_expanded = template.cells.unsqueeze(0)
+        faces_expanded = sorted_faces.unsqueeze(0)
         inner_faces = faces_expanded + inner_offsets.view(-1, 1, 1)
         outer_faces = faces_expanded + outer_offsets.view(-1, 1, 1)
 
         # Extract individual vertex indices: each has shape (n_shells-1, n_faces)
+        # Now a < b < c by template index, ensuring consistent diagonal choice
         a_in, b_in, c_in = inner_faces[..., 0], inner_faces[..., 1], inner_faces[..., 2]
         a_out, b_out, c_out = outer_faces[..., 0], outer_faces[..., 1], outer_faces[..., 2]
 
@@ -170,7 +182,26 @@ def load(
     else:
         inter_shell_cells = torch.empty((0, 4), dtype=torch.int64, device=device)
 
-    ### Step 8: Assemble and return Mesh
+    ### Step 8: Assemble all cells
     all_cells = torch.cat([core_cells, inter_shell_cells], dim=0)
+
+    ### Step 9: Fix tetrahedron orientation
+    # The vertex sorting for consistent diagonals may produce some tets with
+    # negative orientation (inverted). Detect and fix by swapping two vertices.
+    # Signed volume = (1/6) * (b-a) · ((c-a) × (d-a))
+    # Positive = consistent orientation, Negative = inverted
+    tet_verts = all_points[all_cells]  # (n_cells, 4, 3)
+    v0, v1, v2, v3 = tet_verts[:, 0], tet_verts[:, 1], tet_verts[:, 2], tet_verts[:, 3]
+    signed_volumes = torch.einsum(
+        "ij,ij->i", v1 - v0, torch.cross(v2 - v0, v3 - v0, dim=1)
+    )
+
+    # Flip inverted tets by swapping vertices 2 and 3 (changes sign of volume)
+    inverted = signed_volumes < 0
+    if inverted.any():
+        all_cells[inverted, 2], all_cells[inverted, 3] = (
+            all_cells[inverted, 3].clone(),
+            all_cells[inverted, 2].clone(),
+        )
 
     return Mesh(points=all_points, cells=all_cells)
