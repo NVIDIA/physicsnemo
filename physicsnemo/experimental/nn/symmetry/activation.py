@@ -21,6 +21,10 @@ The key insight is that scalar features (l=0) can have arbitrary pointwise
 activations applied, while higher-order features (l>0) must be scaled by
 invariant gates to preserve equivariance.
 
+This implementation is thematically similar and takes inspirations from
+the ``fairchem`` (MIT Licensed) repository, deviating in how data is
+laid out and thus how computation is performed.
+
 Classes
 -------
 GateActivation

@@ -24,6 +24,9 @@ operation, as opposed to unrolling the loop to operate on specific +/-m pairs
 per parity rules. See the ``forward`` pass documentation to see what the
 expected shapes and dimensions are.
 
+This implementation is thematically similar and takes inspirations from
+the ``fairchem`` (MIT Licensed) repository, deviating in how data is
+laid out and thus how computation is performed.
 
 This layout enables efficient GPU parallelization since:
 1. All (l, m) positions have the same shape
@@ -233,8 +236,11 @@ class SO2Convolution(nn.Module):
     torch.Size([100, 5, 3, 2, 320])
     >>> # Gate channels are at indices [64:]
     >>> gates = out[:, 0, 0, 0, 64:]  # Shape: [100, 256]
+
+    See Also
+    --------
+    GateActivation - Module for applying equivariance preserving non-linearities.
     """
-    # TODO: add a See Also section, link with GateActivation
 
     def __init__(
         self,
@@ -398,13 +404,24 @@ class SO2Convolution(nn.Module):
         Raises
         ------
         ValueError
-            If ``x_edge`` is required but not provided.
+            If ``x_edge`` is required but not provided, or if the input tensor
+            ``x`` has an incorrect shape.
         """
         # Validate inputs
         if not self.internal_weights and x_edge is None:
             raise ValueError(
                 "x_edge is required when edge_channels was specified at init"
             )
+
+        # Validate input shape (skip during torch.compile for performance)
+        if not torch.compiler.is_compiling():
+            expected_shape = (self.lmax + 1, self.mmax + 1, 2, self.in_channels)
+            actual_shape = tuple(x.shape[1:])  # Skip batch dimension
+            if actual_shape != expected_shape:
+                raise ValueError(
+                    f"Expected input shape [batch, {self.lmax + 1}, {self.mmax + 1}, 2, {self.in_channels}], "
+                    f"got shape {list(x.shape)}"
+                )
 
         # Apply edge modulation to INPUT (matching reference implementation)
         x = self._apply_edge_modulation(x, x_edge)
