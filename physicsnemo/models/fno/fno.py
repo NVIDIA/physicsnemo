@@ -867,7 +867,11 @@ class FNO(Module):
         activation_fn: str = "gelu",
         coord_features: bool = True,
     ) -> None:
-        super().__init__(meta=MetaData())
+        # Disable torch.compile for 4D FNO due to PyTorch FFT stride bug
+        # (https://github.com/pytorch/pytorch/issues/106623)
+        # The _fft_c2c meta kernel has incorrect strides for 4+ dimensions
+        jit_enabled = dimension != 4
+        super().__init__(meta=MetaData(jit=jit_enabled))
 
         self.num_fno_layers = num_fno_layers
         self.num_fno_modes = num_fno_modes
