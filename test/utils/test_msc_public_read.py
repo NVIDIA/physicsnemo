@@ -18,15 +18,15 @@
 import os
 from pathlib import Path
 
-import zarr
-
 from test.conftest import requires_module
 
 
 # Verifies that a Zarr file in a publicly accessible S3 bucket can be read using MSC (Multi-Storage Client).
 # See the [Multi-Storage Client README](/examples/multi_storage_client/README.md) for further information.
-@requires_module(["multistorageclient"])
+@requires_module(["multistorageclient", "zarr"])
 def test_msc_read(pytestconfig):
+    import zarr
+
     # Point at the MSC config file which specifies access information for the S3 bucket
     current_file = Path(__file__).resolve()
     current_dir = current_file.parent
