@@ -29,11 +29,9 @@ except ImportError:
     )
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
-
-import pytz
 
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
@@ -580,7 +578,7 @@ class ERA5DaliExternalSource:
         # Load sequence of timestamps
         if self.use_cos_zenith:
             year = self.start_year + year_idx
-            start_time = datetime(year, 1, 1, tzinfo=pytz.utc) + timedelta(
+            start_time = datetime(year, 1, 1, tzinfo=UTC) + timedelta(
                 hours=int(in_idx) * self.dt
             )
             timestamps = np.array(

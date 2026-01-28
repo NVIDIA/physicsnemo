@@ -37,7 +37,7 @@ class InterpolationType(enum.Enum):
 """
 
 
-@torch.jit.script
+@torch.compile
 def linear_step(x: Tensor) -> Tensor:
     """
     Clips the input tensor values between 0 and 1 using a linear step.
@@ -59,12 +59,12 @@ def linear_step(x: Tensor) -> Tensor:
     -------
     >>> x = torch.tensor([-0.5, 0.5, 1.5])
     >>> linear_step(x)
-    tensor([0., 0.5, 1.])
+    tensor([0.0000, 0.5000, 1.0000])
     """
     return torch.clip(x, 0, 1)
 
 
-@torch.jit.script
+@torch.compile
 def smooth_step_1(x: Tensor) -> Tensor:
     """
     Compute the smooth step interpolation of the input tensor values.
@@ -87,7 +87,7 @@ def smooth_step_1(x: Tensor) -> Tensor:
     return torch.clip(3 * x**2 - 2 * x**3, 0, 1)
 
 
-@torch.jit.script
+@torch.compile
 def smooth_step_2(x: Tensor) -> Tensor:
     """
     Compute the enhanced smooth step interpolation of the input tensor values.
@@ -110,7 +110,7 @@ def smooth_step_2(x: Tensor) -> Tensor:
     return torch.clip(x**3 * (6 * x**2 - 15 * x + 10), 0, 1)
 
 
-@torch.jit.script
+@torch.compile
 def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the nearest neighbor weighting for the given distance vector.
@@ -137,10 +137,9 @@ def nearest_neighbor_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
         but with the last two dimensions reduced to single dimensions.
 
     """
-    return torch.ones(dist_vec.shape[:-2] + [1] + [1], device=dist_vec.device)
+    return torch.ones(dist_vec.shape[:-2] + (1, 1), device=dist_vec.device)
 
 
-@torch.jit.script
 def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
     dim = lower_point.shape[-1]
     weights = []
@@ -155,7 +154,7 @@ def _hyper_cube_weighting(lower_point: Tensor, upper_point: Tensor) -> Tensor:
     return torch.unsqueeze(weights, dim=-1)
 
 
-@torch.jit.script
+@torch.compile
 def linear_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the linear weighting based on the distance vector and spacing.
@@ -178,7 +177,7 @@ def linear_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
-@torch.jit.script
+@torch.compile
 def smooth_step_1_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the weighting using the `smooth_step_1` function on the normalized
@@ -202,7 +201,7 @@ def smooth_step_1_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
-@torch.jit.script
+@torch.compile
 def smooth_step_2_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the weighting using the `smooth_step_2` function on the normalized
@@ -226,7 +225,7 @@ def smooth_step_2_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return _hyper_cube_weighting(lower_point, upper_point)
 
 
-# @torch.jit.script
+# @torch.compile
 def gaussian_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     """
     Compute the Gaussian weighting based on the distance vector and spacing.
@@ -246,8 +245,6 @@ def gaussian_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     dim = dx.size(-1)
     sharpen = 2.0
     sigma = dx / sharpen
-    print(sigma)
-    print(sigma.prod())
     factor = 1.0 / ((2.0 * math.pi) ** (dim / 2.0) * sigma.prod())
     gaussian = torch.exp(-0.5 * torch.square((dist_vec / sigma)))
     gaussian = factor * gaussian.prod(dim=-1)
@@ -256,7 +253,7 @@ def gaussian_weighting(dist_vec: Tensor, dx: Tensor) -> Tensor:
     return weights
 
 
-# @torch.jit.script
+# @torch.compile
 def _gather_nd(params: Tensor, indices: Tensor) -> Tensor:
     """As seen here https://discuss.pytorch.org/t/how-to-do-the-tf-gather-nd-in-pytorch/6445/30"""
     orig_shape = list(indices.shape)
@@ -278,7 +275,7 @@ def _gather_nd(params: Tensor, indices: Tensor) -> Tensor:
     return output.reshape(out_shape).contiguous()
 
 
-@torch.jit.script
+@torch.compile
 def index_values_high_mem(points: Tensor, idx: Tensor) -> Tensor:
     """
     Index values from the `points` tensor using the provided indices `idx`.
@@ -301,7 +298,7 @@ def index_values_high_mem(points: Tensor, idx: Tensor) -> Tensor:
     return out
 
 
-# @torch.jit.script
+# @torch.compile
 def index_values_low_mem(points: Tensor, idx: Tensor) -> Tensor:
     """
     Input:
@@ -334,7 +331,6 @@ def index_values_low_mem(points: Tensor, idx: Tensor) -> Tensor:
     return vertices4d
 
 
-@torch.jit.script
 def _grid_knn_idx(
     query_points: Tensor,
     grid: List[Tuple[float, float, int]],
@@ -370,7 +366,7 @@ def _grid_knn_idx(
     # TODO make for more general diminsions
     if len(grid) == 1:
         idx_row_0 = center_idx[..., 0:1] + idx_add
-        idx = idx_row_0.view(idx_row_0.shape[0:2] + torch.Size([int(stride)]))
+        idx = idx_row_0.view(*idx_row_0.shape[:2], stride)
     elif len(grid) == 2:
         dim_size_1 = grid[1][2]
         if padding:
@@ -379,9 +375,7 @@ def _grid_knn_idx(
         idx_row_0 = idx_row_0.unsqueeze(-1)
         idx_row_1 = center_idx[..., 1:2] + idx_add
         idx_row_1 = idx_row_1.unsqueeze(2)
-        idx = (idx_row_0 + idx_row_1).view(
-            idx_row_0.shape[0:2] + torch.Size([int(stride**2)])
-        )
+        idx = (idx_row_0 + idx_row_1).view(*idx_row_0.shape[:2], stride**2)
     elif len(grid) == 3:
         dim_size_1 = grid[1][2]
         dim_size_2 = grid[2][2]
@@ -394,9 +388,7 @@ def _grid_knn_idx(
         idx_row_1 = idx_row_1.unsqueeze(2).unsqueeze(-1)
         idx_row_2 = center_idx[..., 2:3] + idx_add
         idx_row_2 = idx_row_2.unsqueeze(2).unsqueeze(3)
-        idx = (idx_row_0 + idx_row_1 + idx_row_2).view(
-            idx_row_0.shape[0:2] + torch.Size([int(stride**3)])
-        )
+        idx = (idx_row_0 + idx_row_1 + idx_row_2).view(*idx_row_0.shape[:2], stride**3)
     else:
         raise RuntimeError
 
@@ -404,7 +396,7 @@ def _grid_knn_idx(
 
 
 # TODO currently the `tolist` operation is not supported by torch script and when fixed torch script will be used
-# @torch.jit.script
+# @torch.compile
 def interpolation(
     query_points: Tensor,
     context_grid: Tensor,

@@ -162,7 +162,7 @@ def main(cfg: DictConfig) -> None:
     load_model_params(model, cfg.checkpoint_filename)
 
     # compile
-    # model = torch.jit.script(model)
+    # model = torch.compile(model)
     # torch._dynamo.reset()
     # model = torch.compile(model, mode="reduce-overhead")
 
