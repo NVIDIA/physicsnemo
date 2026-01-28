@@ -69,13 +69,9 @@ def create_3d_surface_mesh() -> Mesh:
 
 def create_3d_tetrahedral_mesh() -> Mesh:
     """Create a simple 3D tetrahedral mesh."""
-    # Single tetrahedron
-    points = torch.tensor(
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        dtype=torch.float32,
-    )
-    cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
-    return Mesh(points=points, cells=cells)
+    from physicsnemo.mesh.primitives.basic import single_tetrahedron
+
+    return single_tetrahedron.load()
 
 
 ### Tests for backend selection
