@@ -99,7 +99,10 @@ def load(
     n_faces = template.n_cells
 
     ### Step 2: Generate shell radii (linear spacing from center to outer)
-    shell_radii = [radius * (i + 1) / n_shells for i in range(n_shells)]
+    # Vectorized: torch.arange instead of list comprehension
+    shell_radii = (
+        radius * torch.arange(1, n_shells + 1, device=device, dtype=torch.float32) / n_shells
+    )
 
     ### Step 3: Apply noise to canonical template (if any)
     # Noise is applied ONCE to the unit template, then all shells are scaled
@@ -116,54 +119,58 @@ def load(
         noisy_template_points = template.points
 
     ### Step 4: Build all vertices by scaling noisy template
-    # Center point at index 0
+    # Vectorized: broadcasting instead of list comprehension
+    # shell_radii: (n_shells,) -> (n_shells, 1, 1)
+    # noisy_template_points: (n_verts, 3) -> (1, n_verts, 3)
+    # Result: (n_shells, n_verts, 3) -> (n_shells * n_verts, 3)
     center = torch.zeros(1, 3, dtype=torch.float32, device=device)
-
-    # Shell vertices: scale noisy template to each radius
-    shell_points = [noisy_template_points * r for r in shell_radii]
-
-    # Concatenate: [center, shell_1_verts, shell_2_verts, ...]
-    all_points = torch.cat([center] + shell_points, dim=0)
+    shell_points = (
+        noisy_template_points.unsqueeze(0) * shell_radii.view(-1, 1, 1)
+    ).reshape(-1, 3)
+    all_points = torch.cat([center, shell_points], dim=0)
 
     ### Step 5: Build core tetrahedra (center to innermost shell)
-    # For each face (a, b, c) on innermost shell, create tet (center, a, b, c)
-    # Vertex indices in shell 1 start at offset 1
-    core_cells = []
-    offset = 1
-    for face_idx in range(n_faces):
-        face = template.cells[face_idx]
-        a, b, c = face[0].item() + offset, face[1].item() + offset, face[2].item() + offset
-        core_cells.append([0, a, b, c])  # 0 is center
+    # Vectorized: direct tensor operations instead of for loop
+    # template.cells: (n_faces, 3), add offset 1 to shift to shell 1 indices
+    shell1_faces = template.cells + 1  # (n_faces, 3)
+    zeros_col = torch.zeros(n_faces, 1, dtype=torch.int64, device=device)
+    core_cells = torch.cat([zeros_col, shell1_faces], dim=1)  # (n_faces, 4)
 
     ### Step 6: Build inter-shell tetrahedra (prism decomposition)
+    # Vectorized: broadcasting + stacking instead of nested loops
     # Each triangular prism between shells decomposes into 3 tetrahedra:
-    #   Prism vertices: inner (a, b, c), outer (a', b', c')
-    #   Decomposition:
-    #     tet1: (a, b, c, a')
-    #     tet2: (b, c, a', b')
-    #     tet3: (c, a', b', c')
-    inter_shell_cells = []
+    #   tet1: (a_in, b_in, c_in, a_out)
+    #   tet2: (b_in, c_in, a_out, b_out)
+    #   tet3: (c_in, a_out, b_out, c_out)
+    if n_shells > 1:
+        # Compute all shell pair offsets as tensors
+        shell_indices = torch.arange(n_shells - 1, device=device)
+        inner_offsets = 1 + shell_indices * n_verts_per_shell  # (n_shells-1,)
+        outer_offsets = inner_offsets + n_verts_per_shell  # (n_shells-1,)
 
-    for shell_idx in range(n_shells - 1):
-        inner_offset = 1 + shell_idx * n_verts_per_shell
-        outer_offset = 1 + (shell_idx + 1) * n_verts_per_shell
+        # Broadcast face indices across all shell pairs
+        # template.cells: (n_faces, 3) -> (1, n_faces, 3)
+        # offsets: (n_shells-1,) -> (n_shells-1, 1, 1)
+        # Result: (n_shells-1, n_faces, 3)
+        faces_expanded = template.cells.unsqueeze(0)
+        inner_faces = faces_expanded + inner_offsets.view(-1, 1, 1)
+        outer_faces = faces_expanded + outer_offsets.view(-1, 1, 1)
 
-        for face_idx in range(n_faces):
-            face = template.cells[face_idx]
-            a_in = face[0].item() + inner_offset
-            b_in = face[1].item() + inner_offset
-            c_in = face[2].item() + inner_offset
-            a_out = face[0].item() + outer_offset
-            b_out = face[1].item() + outer_offset
-            c_out = face[2].item() + outer_offset
+        # Extract individual vertex indices: each has shape (n_shells-1, n_faces)
+        a_in, b_in, c_in = inner_faces[..., 0], inner_faces[..., 1], inner_faces[..., 2]
+        a_out, b_out, c_out = outer_faces[..., 0], outer_faces[..., 1], outer_faces[..., 2]
 
-            # 3-tet decomposition of triangular prism
-            inter_shell_cells.append([a_in, b_in, c_in, a_out])
-            inter_shell_cells.append([b_in, c_in, a_out, b_out])
-            inter_shell_cells.append([c_in, a_out, b_out, c_out])
+        # Build 3 tetrahedra per prism: each stack produces (n_shells-1, n_faces, 4)
+        tet1 = torch.stack([a_in, b_in, c_in, a_out], dim=-1)
+        tet2 = torch.stack([b_in, c_in, a_out, b_out], dim=-1)
+        tet3 = torch.stack([c_in, a_out, b_out, c_out], dim=-1)
+
+        # Interleave and flatten: (n_shells-1, n_faces, 3, 4) -> ((n_shells-1)*n_faces*3, 4)
+        inter_shell_cells = torch.stack([tet1, tet2, tet3], dim=2).reshape(-1, 4)
+    else:
+        inter_shell_cells = torch.empty((0, 4), dtype=torch.int64, device=device)
 
     ### Step 7: Assemble and return Mesh
-    all_cells_list = core_cells + inter_shell_cells
-    all_cells = torch.tensor(all_cells_list, dtype=torch.int64, device=device)
+    all_cells = torch.cat([core_cells, inter_shell_cells], dim=0)
 
     return Mesh(points=all_points, cells=all_cells)
