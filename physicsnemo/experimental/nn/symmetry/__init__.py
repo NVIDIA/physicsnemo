@@ -23,6 +23,8 @@ Classes
 -------
 SO2Convolution
     SO(2) equivariant convolution layer using grid layout for efficient processing.
+GateActivation
+    Gated activation applying SiLU to l=0 and learned gating to l>0.
 
 Functions
 ---------
@@ -30,10 +32,12 @@ make_grid_mask
     Create a boolean mask for valid (l, m) pairs in the grid layout.
 """
 
+from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.experimental.nn.symmetry.so2_conv import SO2Convolution
 
 __all__ = [
+    "GateActivation",
     "SO2Convolution",
     "make_grid_mask",
 ]
