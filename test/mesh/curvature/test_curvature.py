@@ -61,36 +61,6 @@ def create_plane_mesh(size=2.0, n_subdivisions=2, device="cpu"):
     return Mesh(points=points, cells=cells)
 
 
-def create_cylinder_mesh(radius=1.0, height=2.0, n_circ=16, n_height=8, device="cpu"):
-    """Create a triangulated cylinder (2D manifold in 3D)."""
-    # Create cylindrical points
-    theta = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
-    z = torch.linspace(-height / 2, height / 2, n_height, device=device)
-
-    points = []
-    for z_val in z:
-        for theta_val in theta:
-            x = radius * torch.cos(theta_val)
-            y = radius * torch.sin(theta_val)
-            points.append([x.item(), y.item(), z_val.item()])
-
-    points = torch.tensor(points, dtype=torch.float32, device=device)
-
-    # Create cells
-    cells = []
-    for i in range(n_height - 1):
-        for j in range(n_circ):
-            idx = i * n_circ + j
-            next_j = (j + 1) % n_circ
-
-            # Two triangles per quad
-            cells.append([idx, idx + next_j - j, idx + n_circ])
-            cells.append([idx + next_j - j, idx + n_circ + next_j - j, idx + n_circ])
-
-    cells = torch.tensor(cells, dtype=torch.int64, device=device)
-    return Mesh(points=points, cells=cells)
-
-
 def create_line_curve_2d(n_points=10, curvature=1.0, device="cpu"):
     """Create a 1D circular arc in 2D (for testing 1D curvature)."""
     # Circle of given curvature (κ = 1/r)
@@ -320,8 +290,10 @@ class TestMeanCurvature:
 
     def test_cylinder_mean_curvature(self, device):
         """Test that cylinder has H = 1/(2r) (curved in one direction only)."""
+        from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
         radius = 1.0
-        mesh = create_cylinder_mesh(
+        mesh = cylinder_open.load(
             radius=radius,
             n_circ=64,
             n_height=32,
@@ -582,8 +554,10 @@ class TestPrincipalCurvatures:
 
     def test_cylinder_principal_curvatures(self, device):
         """Test cylinder has k1 = 1/r, k2 = 0."""
+        from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
         radius = 1.0
-        mesh = create_cylinder_mesh(
+        mesh = cylinder_open.load(
             radius=radius, n_circ=32, n_height=16, device=device
         )
 
