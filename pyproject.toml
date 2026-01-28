@@ -172,7 +172,6 @@ model-extras = [
     "vtk",
 ]
 datapipes-extras = [
-    "dask",
     "tfrecord",
     "nvidia-physicsnemo[model-extras]",
     "zarr>=3.0.0",

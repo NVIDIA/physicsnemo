@@ -15,7 +15,6 @@
 # limitations under the License.
 
 # System modules
-import importlib
 import logging
 import os
 import time
@@ -31,7 +30,6 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.healpix.utils import (
     XARRAY_AVAILABLE,
     _raise_missing_xarray,
@@ -41,26 +39,6 @@ from physicsnemo.distributed import DistributedManager
 
 from .coupledtimeseries_dataset import CoupledTimeSeriesDataset
 from .timeseries_dataset import TimeSeriesDataset
-
-# External modules
-# Check for optional dependencies
-DASK_AVAILABLE = check_version_spec("dask", hard_fail=False)
-
-if DASK_AVAILABLE:
-    _dask_diagnostics = importlib.import_module("dask.diagnostics")
-    ProgressBar = _dask_diagnostics.ProgressBar
-else:
-    ProgressBar = None
-
-
-def _check_dask_available():
-    """Raise an error if dask is not available."""
-    if not DASK_AVAILABLE:
-        raise ImportError(
-            "physicsnemo.datapipes.healpix.data_modules: dask is required for "
-            "this functionality. Install with: pip install dask"
-        )
-
 
 logger = logging.getLogger(__name__)
 
@@ -384,11 +362,9 @@ def create_time_series_dataset_classic(
 
     # writing out
     def _write_zarr(data, path):
-        _check_dask_available()
         write_job = data.to_zarr(path, compute=False, mode="w")
-        with ProgressBar():
-            logger.info(f"writing dataset to {path}")
-            write_job.compute()
+        logger.info(f"writing dataset to {path}")
+        write_job.compute()
 
     _write_zarr(data=result, path=dst_zarr)
 
