@@ -81,7 +81,7 @@ class SinusoidalEncoding(nn.Module):
     >>> x = torch.randn(4, 100, 3)  # (batch, points, xyz)
     >>> encoded = encoder(x)
     >>> encoded.shape
-    torch.Size([4, 100, 96])  # 3 * 32 = 96
+    torch.Size([4, 100, 96])
 
     Note
     ----
