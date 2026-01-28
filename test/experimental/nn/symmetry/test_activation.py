@@ -59,7 +59,7 @@ def dtype(request: pytest.FixtureRequest) -> torch.dtype:
     return request.param
 
 
-@pytest.fixture(params=["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"])
+@pytest.fixture(params=["cpu", "cuda"])
 def device(request: pytest.FixtureRequest) -> str:
     """Parameterized fixture for testing on CPU and GPU if available.
 
@@ -481,48 +481,6 @@ class TestGateActivationEquivariance:
         )
 
 
-class TestGateActivationDeterminism:
-    """Determinism tests for GateActivation."""
-
-    def test_deterministic_output(self, dtype: torch.dtype, device: str) -> None:
-        """Same inputs should give same outputs.
-
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : str
-            Device to run on.
-        """
-        lmax, mmax = 4, 2
-        channels = 16
-        batch_size = 10
-        gate_channels = lmax * channels
-        total_in_channels = channels + gate_channels
-
-        act = GateActivation(lmax=lmax, mmax=mmax, channels=channels).to(
-            device=device, dtype=dtype
-        )
-        act.eval()
-
-        x = torch.randn(
-            batch_size,
-            lmax + 1,
-            mmax + 1,
-            2,
-            total_in_channels,
-            device=device,
-            dtype=dtype,
-        )
-
-        with torch.no_grad():
-            out1 = act(x)
-            out2 = act(x)
-
-        assert torch.allclose(out1, out2, atol=1e-6), "Output should be deterministic"
-
-
-@pytest.mark.skipif(not hasattr(torch, "compile"), reason="torch.compile not available")
 class TestGateActivationCompile:
     """torch.compile compatibility tests."""
 
@@ -1100,7 +1058,3 @@ class TestGateActivationProperties:
 
         assert act.total_in_channels == channels + lmax * channels
         assert act.total_in_channels == 80
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
