@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""SO(2) equivariant convolution using regular tensor layout with masking.
+r"""SO(2) equivariant convolution using regular tensor layout with masking.
 
 The expected use case of this layer is to perform an equivariant convolution
 on some graph. The data layout is expected to be quite rigid: we use tensor
@@ -116,7 +116,7 @@ def _build_radial_mlp(channels_list: list[int]) -> nn.Sequential:
 
 
 class SO2Convolution(nn.Module):
-    """SO(2) equivariant convolution using regular, padded tensor layout.
+    r"""SO(2) equivariant convolution using regular, padded tensor layout.
 
     This layer performs SO(2) equivariant convolution on spherical harmonic
     coefficients arranged in a regular grid layout. The grid layout uses
@@ -143,26 +143,36 @@ class SO2Convolution(nn.Module):
         Maximum spherical harmonic order. Must be <= lmax.
     edge_channels : int, optional
         Number of edge feature channels for input modulation. When provided,
-        a RadialMLP is used to compute per-coefficient scaling factors from
-        edge features. The input is scaled element-wise before the linear
-        transform, matching the reference eSCN implementation. Default: None
+        an MLP stack is used to compute per-coefficient scaling factors from
+        edge features. The input is scaled element-wise before the actual
+        SO2 linear transform. Default: None
         (use internal/shared weights without edge modulation).
-    extra_m0_output_channels : int, optional
-        Additional output channels for m=0 only (used for gating scalars).
-        Default: None (no extra channels).
+    produce_gates : bool, optional
+        If True, produce additional gate channels embedded in the output tensor.
+        The gate channels are computed as ``lmax * out_channels`` additional
+        channels that are only non-zero at the (l=0, m=0, real) position.
+        These gate channels can be used for gating non-linearities to ensure
+        that they are equivariance preserving. Defaults to ``False``, which
+        means the output of this layer does not include the extra channels.
 
     Attributes
     ----------
     W_r : nn.Parameter
-        Real part of complex weights. Shape: ``[mmax+1, in_channels, out_channels]``.
+        Real part of complex weights.
+        Shape: ``[mmax+1, in_channels, out_channels + gate_channels]``.
     W_i : nn.Parameter
-        Imaginary part of complex weights. Shape: ``[mmax+1, in_channels, out_channels]``.
+        Imaginary part of complex weights.
+        Shape: ``[mmax+1, in_channels, out_channels + gate_channels]``.
     W_complex : torch.Tensor
         Combined weight tensor encoding complex multiplication structure.
-        Shape: ``[mmax+1, 2, 2, in_channels, out_channels]``.
+        Shape: ``[mmax+1, 2, 2, in_channels, out_channels + gate_channels]``.
     mask : torch.Tensor
         Float mask of shape ``[lmax+1, mmax+1]`` where 1.0 indicates valid
         (l, m) positions (i.e., m <= l), 0.0 otherwise.
+    gate_channels : int
+        Number of gate channels (0 if ``produce_gates=False``, else ``lmax * out_channels``).
+    total_out_channels : int
+        Total output channels including gate channels (``out_channels + gate_channels``).
 
     Notes
     -----
@@ -173,10 +183,16 @@ class SO2Convolution(nn.Module):
         - 2: real (index 0) and imaginary (index 1) components
         - in_channels: feature channels
 
-    Output tensor layout: ``[batch, lmax+1, mmax+1, 2, out_channels]``
+    Output tensor layout: ``[batch, lmax+1, mmax+1, 2, out_channels + gate_channels]``
 
     For m=0, the imaginary component is always zero (by SO(2) symmetry).
     This is enforced via explicit zeroing after the forward pass.
+
+    When ``produce_gates=True``, the gate channels are embedded directly in the
+    output tensor. A gate mask ensures that gate channel values are only non-zero
+    at the (l=0, m=0, real) position, making them SO(2) invariant scalars suitable
+    for gating higher-order features. The gate channels occupy indices
+    ``[out_channels:]`` in the last dimension of the output tensor.
 
     The complex multiplication is implemented using a combined weight tensor::
 
@@ -185,11 +201,10 @@ class SO2Convolution(nn.Module):
 
     This allows a single einsum to compute: ``out = einsum('blmrc,mRrco->blmRo', x, W)``
 
-    The weight initialization scales by ``1/sqrt(2)`` to maintain proper
-    variance with the complex multiplication structure.
-
     Examples
     --------
+    Basic usage without gates:
+
     >>> conv = SO2Convolution(
     ...     in_channels=64,
     ...     out_channels=64,
@@ -201,7 +216,25 @@ class SO2Convolution(nn.Module):
     >>> out = conv(x)
     >>> out.shape
     torch.Size([100, 5, 3, 2, 64])
+
+    With embedded gate channels:
+
+    >>> conv_with_gates = SO2Convolution(
+    ...     in_channels=64,
+    ...     out_channels=64,
+    ...     lmax=4,
+    ...     mmax=2,
+    ...     produce_gates=True,
+    ... )
+    >>> x = torch.randn(100, 5, 3, 2, 64)
+    >>> out = conv_with_gates(x)
+    >>> # Output has out_channels + lmax * out_channels = 64 + 4*64 = 320 channels
+    >>> out.shape
+    torch.Size([100, 5, 3, 2, 320])
+    >>> # Gate channels are at indices [64:]
+    >>> gates = out[:, 0, 0, 0, 64:]  # Shape: [100, 256]
     """
+    # TODO: add a See Also section, link with GateActivation
 
     def __init__(
         self,
@@ -210,7 +243,7 @@ class SO2Convolution(nn.Module):
         lmax: int,
         mmax: int,
         edge_channels: int | None = None,
-        extra_m0_output_channels: int | None = None,
+        produce_gates: bool = False,
     ) -> None:
         super().__init__()
 
@@ -230,13 +263,17 @@ class SO2Convolution(nn.Module):
         self.lmax = lmax
         self.mmax = mmax
         self.internal_weights = edge_channels is None
-        self.extra_m0_output_channels = extra_m0_output_channels
+        self.produce_gates = produce_gates
+
+        # compute number of gate channels
+        self.num_gate_channels = lmax * out_channels if produce_gates else 0
 
         # Complex weights: W = W_r + i*W_i
-        # Shape: [mmax+1, in_channels, out_channels]
+        # Shape: [mmax+1, in_channels, out_channels + gate_channels]
         # Each m-order has its own weight matrix
-        self.W_r = nn.Parameter(torch.empty(mmax + 1, in_channels, out_channels))
-        self.W_i = nn.Parameter(torch.empty(mmax + 1, in_channels, out_channels))
+        total_out = self.total_out_channels
+        self.W_r = nn.Parameter(torch.empty(mmax + 1, in_channels, total_out))
+        self.W_i = nn.Parameter(torch.empty(mmax + 1, in_channels, total_out))
 
         # Initialize weights with proper scaling for complex structure
         self._reset_parameters()
@@ -245,13 +282,22 @@ class SO2Convolution(nn.Module):
         # mask[l, m] = 1.0 if m <= l (valid position), 0.0 otherwise
         # Convert boolean mask to float for multiplication
         mask = make_grid_mask(lmax, mmax).float()
-        self.register_buffer("mask", mask, persistent=False)
+        self.register_buffer("mask", mask, persistent=True)
 
         # Mask to zero out m=0 imaginary component
         # Shape: [1, 1, mmax+1, 2, 1] for broadcasting
         m0_imag_mask = torch.ones(1, 1, mmax + 1, 2, 1)
         m0_imag_mask[:, :, 0, 1, :] = 0.0  # Zero out m=0 imaginary
-        self.register_buffer("m0_imag_mask", m0_imag_mask, persistent=False)
+        self.register_buffer("m0_imag_mask", m0_imag_mask, persistent=True)
+
+        # Gate mask: zeros gate channels except at (l=0, m=0, real=0)
+        # Only create if produce_gates=True
+        if self.produce_gates:
+            # Shape: [1, lmax+1, mmax+1, 2, out_channels + gate_channels]
+            gate_mask = torch.ones(1, lmax + 1, mmax + 1, 2, total_out)
+            gate_mask[..., out_channels:] = 0.0  # Zero all gate channels
+            gate_mask[:, 0, 0, 0, out_channels:] = 1.0  # Restore at (l=0, m=0, real)
+            self.register_buffer("gate_mask", gate_mask, persistent=True)
 
         # Optional radial function for edge-dependent input modulation
         self.rad_func: nn.Module | None = None
@@ -265,13 +311,10 @@ class SO2Convolution(nn.Module):
                 [edge_channels, edge_channels, rad_output_size]
             )
 
-        # Optional extra output channels for m=0 (gating)
-        self.fc_m0_extra: nn.Linear | None = None
-        if extra_m0_output_channels is not None:
-            # Linear layer from m=0 features to extra outputs
-            # Input: [batch, lmax+1, in_channels] -> [batch, extra_m0_output_channels]
-            m0_input_size = (lmax + 1) * in_channels
-            self.fc_m0_extra = nn.Linear(m0_input_size, extra_m0_output_channels)
+    @property
+    def total_out_channels(self) -> int:
+        """Total output channels including gate channels."""
+        return self.out_channels + self.num_gate_channels
 
     def _reset_parameters(self) -> None:
         """Initialize weights with proper scaling for complex structure.
@@ -290,7 +333,7 @@ class SO2Convolution(nn.Module):
     def W_complex(self) -> torch.Tensor:
         """Build combined weight tensor encoding complex multiplication.
 
-        Returns tensor of shape ``[mmax+1, 2, 2, in_channels, out_channels]``
+        Returns tensor of shape ``[mmax+1, 2, 2, in_channels, out_channels + gate_channels]``
         where indices are ``[m, out_ri, in_ri, in_ch, out_ch]``.
 
         The structure encodes the 2x2 block matrix for complex multiplication::
@@ -307,14 +350,16 @@ class SO2Convolution(nn.Module):
         Returns
         -------
         torch.Tensor
-            Combined weight tensor of shape ``[mmax+1, 2, 2, in_channels, out_channels]``.
+            Combined weight tensor of shape
+            ``[mmax+1, 2, 2, in_channels, out_channels + gate_channels]``.
         """
+        total_out = self.total_out_channels
         W = torch.zeros(
             self.mmax + 1,
             2,
             2,
             self.in_channels,
-            self.out_channels,
+            total_out,
             dtype=self.W_r.dtype,
             device=self.W_r.device,
         )
@@ -328,13 +373,7 @@ class SO2Convolution(nn.Module):
         self,
         x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"],
         x_edge: Float[torch.Tensor, "batch edge_channels"] | None = None,
-    ) -> (
-        Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels"]
-        | tuple[
-            Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels"],
-            Float[torch.Tensor, "batch extra_m0"],
-        ]
-    ):
+    ) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels_with_gates"]:
         """Apply SO(2) convolution to grid-layout spherical harmonic coefficients.
 
         Parameters
@@ -349,11 +388,12 @@ class SO2Convolution(nn.Module):
 
         Returns
         -------
-        out : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels"]
-            Output tensor with same layout as input but ``out_channels`` features.
-        extra_m0 : Float[torch.Tensor, "batch extra_m0"], optional
-            Extra m=0 output channels (for gating). Only returned if
-            ``extra_m0_output_channels`` was specified during initialization.
+        Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels_with_gates"]
+            Output tensor with shape ``[batch, lmax+1, mmax+1, 2, out_channels + gate_channels]``.
+            When ``produce_gates=False``, ``gate_channels=0`` and the output has
+            ``out_channels`` features. When ``produce_gates=True``, the output has
+            ``out_channels + lmax * out_channels`` features, where gate channels
+            (indices ``[out_channels:]``) are non-zero only at position (l=0, m=0, real).
 
         Raises
         ------
@@ -372,6 +412,7 @@ class SO2Convolution(nn.Module):
         # Apply convolution with standard (unmodulated) weights
         out = torch.einsum("blmrc,mRrco->blmRo", x, self.W_complex)
 
+        # TODO: merge masks into a single op
         # Apply mask for invalid (l, m) positions where m > l
         mask: torch.Tensor = self.mask  # type: ignore[assignment]
         out = out * mask[None, :, :, None, None]
@@ -380,12 +421,12 @@ class SO2Convolution(nn.Module):
         m0_imag_mask: torch.Tensor = self.m0_imag_mask  # type: ignore[assignment]
         out = out * m0_imag_mask
 
-        # Extract extra m=0 features if requested
-        if self.extra_m0_output_channels is not None:
-            extra_m0 = self._compute_extra_m0(x)
-            return out, extra_m0
-        else:
-            return out
+        # Apply gate mask if producing gates
+        if self.produce_gates:
+            gate_mask: torch.Tensor = self.gate_mask  # type: ignore[assignment]
+            out = out * gate_mask
+
+        return out
 
     def _apply_edge_modulation(
         self,
@@ -426,34 +467,6 @@ class SO2Convolution(nn.Module):
         # Element-wise multiplication (per-edge, per-coefficient scaling)
         return x * mod
 
-    def _compute_extra_m0(
-        self,
-        x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"],
-    ) -> Float[torch.Tensor, "batch extra_m0"]:
-        """Compute extra m=0 output channels for gating.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input tensor.
-
-        Returns
-        -------
-        torch.Tensor
-            Extra m=0 outputs of shape ``[batch, extra_m0_output_channels]``.
-        """
-        assert self.fc_m0_extra is not None
-
-        # Extract m=0 real components (imaginary is always 0 for m=0)
-        # Shape: [batch, lmax+1, in_channels]
-        x_m0_real = x[:, :, 0, 0, :]
-
-        # Flatten and apply linear layer
-        batch_size = x.shape[0]
-        x_m0_flat = x_m0_real.reshape(batch_size, -1)
-
-        return self.fc_m0_extra(x_m0_flat)
-
     def extra_repr(self) -> str:
         """Return a string representation of the layer's parameters."""
         s = (
@@ -462,6 +475,6 @@ class SO2Convolution(nn.Module):
         )
         if not self.internal_weights:
             s += ", edge_modulated=True"
-        if self.extra_m0_output_channels is not None:
-            s += f", extra_m0_output_channels={self.extra_m0_output_channels}"
+        if self.produce_gates:
+            s += f", produce_gates=True, gate_channels={self.num_gate_channels}"
         return s
