@@ -477,31 +477,42 @@ class TestLaplacian:
         )
 
     def test_dec_laplacian_quadratic_reasonable(self):
-        """DEC Laplacian of φ=||r||² gives reasonable approximation.
+        r"""DEC Laplacian of phi=z^2 gives correct surface Laplacian.
 
-        Note: Uses a Delaunay-quality mesh. Circumcentric duals work best on
-        well-centered meshes where circumcenters lie inside triangles. Axis-aligned
-        grids create poorly-conditioned duals.
+        For the Laplace-Beltrami operator on a unit sphere:
+            \Delta_S(z^2) = 2 - 6z^2
+
+        This is the SURFACE Laplacian (intrinsic to the manifold), not the
+        ambient 3D Laplacian. The result varies by position: negative near
+        poles (|z| ~ 1), positive near equator (z ~ 0).
+
+        Derivation: z^2 = cos^2(theta) can be decomposed into spherical harmonics
+        Y_0^0 and Y_2^0. The eigenvalue for l=2 is -l(l+1) = -6, giving the
+        position-dependent result.
         """
         from physicsnemo.mesh.primitives.surfaces import sphere_uv
 
-        # Use a sphere mesh which is naturally well-centered (close to Delaunay)
-        mesh = sphere_uv.load(radius=1.0, theta_resolution=20, phi_resolution=20)
+        # Use higher resolution for better accuracy
+        mesh = sphere_uv.load(radius=1.0, theta_resolution=40, phi_resolution=40)
 
-        # Test function: φ = z²
-        # On a sphere, this is NOT constant, so we get a non-trivial Laplacian
-        # Analytical: ∂²(z²)/∂z² = 2
+        # Test function: phi = z^2
         phi = mesh.points[:, 2] ** 2
 
         from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
         lap = compute_laplacian_points_dec(mesh, phi)
 
-        # Expected: 4 (∇²(x²+y²) = 2+2)
-        expected = 4.0
-        assert torch.abs(lap[4] - expected) < expected * 0.01, (
-            f"Laplacian at interior: {lap[4]:.3f}, expected ≈{expected}"
-        )
+        # Analytical surface Laplacian: Delta_S(z^2) = 2 - 6z^2
+        z = mesh.points[:, 2]
+        expected = 2 - 6 * z**2
+
+        # Verify correlation (should be ~1.0)
+        correlation = torch.corrcoef(torch.stack([lap, expected]))[0, 1]
+        assert correlation > 0.999, f"Correlation with analytical: {correlation:.6f}"
+
+        # Verify mean absolute error is small
+        mean_error = (lap - expected).abs().mean()
+        assert mean_error < 0.05, f"Mean error: {mean_error:.4f}"
 
 
 class TestManifolds:

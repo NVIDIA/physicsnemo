@@ -114,9 +114,6 @@ def compute_laplacian_points_dec(
     Returns:
         Laplacian at vertices, same shape as input
     """
-    raise NotImplementedError(
-        "This function is a work-in-progress; results are known to be buggy; please use the least-squares version in the meantime."
-    )
     from physicsnemo.mesh.calculus._circumcentric_dual import (
         compute_cotan_weights_triangle_mesh,
         get_or_compute_dual_volumes_0,
