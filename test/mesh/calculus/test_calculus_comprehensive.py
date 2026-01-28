@@ -248,7 +248,7 @@ class TestEdgeCases:
         mesh = simple_tet_mesh  # 3D manifold
         phi = torch.ones(mesh.n_points)
 
-        with pytest.raises(NotImplementedError, match="triangle meshes"):
+        with pytest.raises(NotImplementedError, match="work-in-progress"):
             compute_laplacian_points_dec(mesh, phi)
 
     def test_curl_on_2d_raises(self):
