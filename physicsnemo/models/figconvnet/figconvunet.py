@@ -404,19 +404,17 @@ class FIGConvUNet(BaseModel):
             ]
             for _ in range(1, num_down_blocks[level]):
                 down_block.extend(
-                    GridFeatureConv2DBlocksAndIntraCommunication(
-                        in_channels=hidden_channels[level + 1],
-                        out_channels=hidden_channels[level + 1],
-                down_block.extend([
-                    GridFeatureConv2DBlocksAndIntraCommunication(
-                        in_channels=hidden_channels[level + 1],
-                        out_channels=hidden_channels[level + 1],
-                        kernel_size=kernel_size,
-                        stride=1,
-                        compressed_spatial_dims=compressed_spatial_dims,
-                        communication_types=communication_types,
-                    )
-                ])
+                    [
+                        GridFeatureConv2DBlocksAndIntraCommunication(
+                            in_channels=hidden_channels[level + 1],
+                            out_channels=hidden_channels[level + 1],
+                            kernel_size=kernel_size,
+                            stride=1,
+                            compressed_spatial_dims=compressed_spatial_dims,
+                            communication_types=communication_types,
+                        )
+                    ]
+                )
             down_block = nn.Sequential(*down_block)
             self.down_blocks.append(down_block)
 
@@ -433,14 +431,16 @@ class FIGConvUNet(BaseModel):
             ]
             for _ in range(1, num_up_blocks[level]):
                 up_block.extend(
-                    GridFeatureConv2DBlocksAndIntraCommunication(
-                        in_channels=hidden_channels[level],
-                        out_channels=hidden_channels[level],
-                        kernel_size=kernel_size,
-                        up_stride=1,
-                        compressed_spatial_dims=compressed_spatial_dims,
-                        communication_types=communication_types,
-                    )
+                    [
+                        GridFeatureConv2DBlocksAndIntraCommunication(
+                            in_channels=hidden_channels[level],
+                            out_channels=hidden_channels[level],
+                            kernel_size=kernel_size,
+                            up_stride=1,
+                            compressed_spatial_dims=compressed_spatial_dims,
+                            communication_types=communication_types,
+                        )
+                    ]
                 )
             up_block = nn.Sequential(*up_block)
             self.up_blocks.append(up_block)
