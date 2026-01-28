@@ -60,11 +60,6 @@ def test_knn_1dmesh(
     sharded_points = scatter_tensor(points, 0, distributed_mesh, points_placements)
     sharded_queries = scatter_tensor(queries, 0, distributed_mesh, queries_placements)
 
-    print(f"Sharded points: {sharded_points} on rank {dm.rank}")
-
-    print(f"sharding shapes: {sharded_points._spec.sharding_shapes()}")
-    print(f"sharding shapes: {sharded_queries._spec.sharding_shapes()}")
-
     module = kNNModule()
 
     numerical_shard_tensor_check(

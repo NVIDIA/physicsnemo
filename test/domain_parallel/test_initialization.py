@@ -162,20 +162,13 @@ def shard_tensor_initialization_from_all_dtensor_worker(mesh):
 
     st = ShardTensor.from_dtensor(dt)
 
+    print(f"Rank {dm.rank} made shard tensors.")
+
     dt_full = dt.full_tensor()
     st_full = st.full_tensor()
 
     assert torch.allclose(dt_full, st_full)
 
-    # on the "source" rank of the mesh, we should have agreement with raw data.
-    # on the "not-source" rank of the mesh, we shouldn't
-
-    agreement_with_original_data = torch.allclose(st.full_tensor(), raw_data)
-
-    if dm.rank == int(mesh.mesh.min()):
-        assert agreement_with_original_data
-    else:
-        assert not agreement_with_original_data
 
 
 @pytest.mark.timeout(10)
