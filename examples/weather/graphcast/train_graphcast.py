@@ -139,10 +139,12 @@ class GraphCastTrainer(BaseTrainer):
         if cfg.checkpoint_decoder:
             self.model.set_checkpoint_decoder(True)
 
-        # JIT compile the model, and specify the device and dtype
+        # Compile the model, and specify the device and dtype
         if cfg.jit:
-            torch.jit.script(self.model).to(dtype=self.dtype).to(device=dist.device)
-            rank_zero_logger.success("JIT compiled the model")
+            self.model = (
+                torch.compile(self.model).to(dtype=self.dtype).to(device=dist.device)
+            )
+            rank_zero_logger.success("Compiled the model")
         else:
             self.model = self.model.to(dtype=self.dtype).to(device=dist.device)
         if cfg.watch_model and not cfg.jit and dist.rank == 0:
@@ -531,7 +533,7 @@ def main(cfg: DictConfig) -> None:
                     >= cfg.num_iters_step1 + cfg.num_iters_step2 + cfg.num_iters_step3
                 ):
                     if dist.rank == 0:
-                        del data_x, y
+                        del invar, invar_cat, outvar
                         torch.cuda.empty_cache()
                         error = trainer.validation.step(
                             channels=list(np.arange(cfg.num_channels_val)), iter=iter

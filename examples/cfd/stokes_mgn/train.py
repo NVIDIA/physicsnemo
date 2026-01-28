@@ -105,7 +105,7 @@ class MGNTrainer:
             hidden_dim_node_decoder=cfg.hidden_dim_node_decoder,
         )
         if cfg.jit:
-            self.model = torch.jit.script(self.model).to(dist.device)
+            self.model = torch.compile(self.model.to(dist.device))
         else:
             self.model = self.model.to(dist.device)
 

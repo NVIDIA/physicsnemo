@@ -92,8 +92,10 @@ class MGNTrainer:
         )
         if cfg.jit:
             if not self.model.meta.jit:
-                raise ValueError("MeshGraphNet is not yet JIT-compatible.")
-            self.model = torch.jit.script(self.model).to(self.dist.device)
+                raise ValueError(
+                    "MeshGraphNet is not yet compatible with torch.compile."
+                )
+            self.model = torch.compile(self.model).to(self.dist.device)
         else:
             self.model = self.model.to(self.dist.device)
         if cfg.watch_model and not cfg.jit and self.dist.rank == 0:

@@ -190,7 +190,7 @@ if PYG_AVAILABLE:
 
         return efeat
 
-    @torch.jit.script
+    @torch.compile
     def sum_edge_node_feat(
         efeat: Tensor,
         src_feat: Tensor,
