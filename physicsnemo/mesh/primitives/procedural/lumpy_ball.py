@@ -32,7 +32,7 @@ def load(
     radius: float = 1.0,
     n_shells: int = 3,
     subdivisions: int = 2,
-    noise_amplitude: float = 0.0,
+    noise_amplitude: float = 0.5,
     seed: int = 0,
     device: torch.device | str = "cpu",
 ) -> Mesh:
