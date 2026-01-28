@@ -264,3 +264,84 @@ class TestBoundaryEmptyMesh:
 
         assert boundary.n_cells == 0
         assert boundary.n_points == 0
+
+
+class TestLumpyBallBoundary:
+    """Test boundary extraction from lumpy_ball volumetric meshes."""
+
+    @pytest.mark.parametrize("subdivisions", [0, 1, 2, 3])
+    def test_boundary_cell_count(self, device, subdivisions):
+        """Boundary of lumpy_ball has exactly n_faces = 20 * 4^subdivisions cells."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
+
+        mesh = lumpy_ball.load(subdivisions=subdivisions, device=device)
+        boundary = mesh.get_boundary_mesh()
+
+        expected_faces = 20 * (4**subdivisions)
+        assert boundary.n_cells == expected_faces, (
+            f"Expected {expected_faces} boundary faces for subdivisions={subdivisions}, "
+            f"got {boundary.n_cells}"
+        )
+
+    @pytest.mark.parametrize("n_shells", [1, 2, 3])
+    def test_boundary_independent_of_shells(self, device, n_shells):
+        """Boundary cell count is independent of n_shells (only outer shell matters)."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
+
+        subdivisions = 1
+        mesh = lumpy_ball.load(n_shells=n_shells, subdivisions=subdivisions, device=device)
+        boundary = mesh.get_boundary_mesh()
+
+        expected_faces = 20 * (4**subdivisions)
+        assert boundary.n_cells == expected_faces
+
+    def test_boundary_is_watertight(self, device):
+        """Boundary surface of lumpy_ball is watertight (closed, no holes)."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
+
+        mesh = lumpy_ball.load(n_shells=2, subdivisions=2, device=device)
+        boundary = mesh.get_boundary_mesh()
+
+        assert boundary.is_watertight(), (
+            "Boundary surface should be watertight (every edge shared by exactly 2 faces)"
+        )
+
+    def test_boundary_is_manifold(self, device):
+        """Boundary surface of lumpy_ball is a valid 2D manifold."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
+
+        mesh = lumpy_ball.load(n_shells=2, subdivisions=2, device=device)
+        boundary = mesh.get_boundary_mesh()
+
+        assert boundary.is_manifold(), (
+            "Boundary surface should be manifold (no T-junctions or non-manifold edges)"
+        )
+
+    def test_boundary_manifold_dims(self, device):
+        """Boundary of 3D tetrahedral mesh is 2D triangular mesh."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
+
+        mesh = lumpy_ball.load(device=device)
+        boundary = mesh.get_boundary_mesh()
+
+        assert mesh.n_manifold_dims == 3, "lumpy_ball should be 3D (tetrahedra)"
+        assert boundary.n_manifold_dims == 2, "Boundary should be 2D (triangles)"
+        assert boundary.cells.shape[1] == 3, "Boundary cells should have 3 vertices each"
+
+    @pytest.mark.parametrize("noise_amplitude", [0.0, 0.3, 0.5])
+    def test_boundary_valid_with_noise(self, device, noise_amplitude):
+        """Boundary remains well-formed regardless of noise amplitude."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
+
+        mesh = lumpy_ball.load(
+            n_shells=2, noise_amplitude=noise_amplitude, seed=42, subdivisions=2, device=device
+        )
+        boundary = mesh.get_boundary_mesh()
+
+        # Cell count unaffected by noise (topology preserved)
+        expected_faces = 20 * (4**2)
+        assert boundary.n_cells == expected_faces
+
+        # Topology preserved
+        assert boundary.is_watertight()
+        assert boundary.is_manifold()
