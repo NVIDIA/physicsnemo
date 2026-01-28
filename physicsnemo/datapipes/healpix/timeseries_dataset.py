@@ -23,11 +23,15 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import torch
-import xarray as xr
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import Dataset
 
 from physicsnemo.datapipes.datapipe import Datapipe
+from physicsnemo.datapipes.healpix.utils import (
+    XARRAY_AVAILABLE,
+    _raise_missing_xarray,
+    xr,
+)
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
@@ -53,7 +57,7 @@ class TimeSeriesDataset(Dataset, Datapipe):
 
     def __init__(
         self,
-        dataset: xr.Dataset,
+        dataset: "xr.Dataset",
         scaling: DictConfig = None,
         input_time_dim: int = 1,
         output_time_dim: int = 1,
@@ -106,6 +110,10 @@ class TimeSeriesDataset(Dataset, Datapipe):
             self,
             meta=meta,
         )
+
+        if not XARRAY_AVAILABLE:
+            _raise_missing_xarray()
+
         self.ds = dataset
         self.scaling = OmegaConf.to_object(scaling) if scaling else None
         self.input_time_dim = input_time_dim

@@ -24,7 +24,6 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import torch
 import torch.distributed as dist
-import zarr
 from torch.distributed.tensor import Replicate, Shard
 
 from physicsnemo.core.version_check import check_version_spec
@@ -33,6 +32,12 @@ from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 
 TENSORSTORE_AVAILABLE = check_version_spec("tensorstore", hard_fail=False)
 PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
+ZARR_AVAILABLE = check_version_spec("zarr", hard_fail=False)
+
+if ZARR_AVAILABLE:
+    zarr = importlib.import_module("zarr")
+else:
+    zarr = None
 
 # Abstractions:
 # - want to read npy/npz/.zarr/.stl/.vtp files
@@ -47,8 +52,8 @@ PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
 This datapipe handles reading files from Zarr and piping into torch.Tensor objects.
 
 It's expected that the files are organized as groups, with each .zarr
-file representing one training example.  To improve IO performance, the files 
-should be chunked for each array.  The reader takes a list of keys in the 
+file representing one training example.  To improve IO performance, the files
+should be chunked for each array.  The reader takes a list of keys in the
 group to read, and will not read keys that are not specified.  The exception
 is if _no_ keys are passed, in which case _all_ keys will be read.
 """
@@ -316,6 +321,12 @@ class ZarrFileReader(BackendReader):
         keys_to_read_if_available: dict[str, torch.Tensor] | None,
     ) -> None:
         super().__init__(keys_to_read, keys_to_read_if_available)
+
+        if not ZARR_AVAILABLE:
+            raise ValueError(
+                "cae_dataset needs `zarr` but it is not availabe.  Install "
+                "with `pip install zarr`."
+            )
 
     def read_file_attributes(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
         """
@@ -606,7 +617,7 @@ else:
             )
 
 
-if TENSORSTORE_AVAILABLE:
+if TENSORSTORE_AVAILABLE and ZARR_AVAILABLE:
     ts = importlib.import_module("tensorstore")
 
     class TensorStoreZarrReader(BackendReader):

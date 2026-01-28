@@ -23,17 +23,25 @@ import torch
 from physicsnemo.core.version_check import check_version_spec
 
 VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
+
 if VTK_AVAILABLE:
     vtk = importlib.import_module("vtk")
 else:
-    raise ImportError(
-        "VTK is not installed, can not be used as a reader for VTK files.\n"
-        "Please see https://vtk.org/download/ for installation instructions."
-    )
+    vtk = None
+
+
+def _check_vtk_available():
+    """Raise an error if VTK is not available."""
+    if not VTK_AVAILABLE:
+        raise ImportError(
+            "VTK is not installed, can not be used as a reader for VTK files.\n"
+            "Please see https://vtk.org/download/ for installation instructions."
+        )
+
 
 Tensor = torch.Tensor
+
 if VTK_AVAILABLE:
-    vtk = importlib.import_module("vtk")
 
     def read_vtp(file_path: str) -> Any:  # TODO add support for older format (VTK)
         """

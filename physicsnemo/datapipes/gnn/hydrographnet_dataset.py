@@ -32,6 +32,7 @@ a dictionary of future hydrograph data for evaluation.
 """
 
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -46,10 +47,40 @@ from typing import Any, List, Optional, Union
 import numpy as np
 import requests
 import torch
-import torch_geometric as pyg
-from scipy.spatial import KDTree
 from torch.utils.data import Dataset
 from tqdm import tqdm
+
+from physicsnemo.core.version_check import check_version_spec
+
+# Check for optional dependencies
+PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
+SCIPY_AVAILABLE = check_version_spec("scipy", hard_fail=False)
+
+if PYG_AVAILABLE:
+    pyg = importlib.import_module("torch_geometric")
+else:
+    pyg = None
+
+if SCIPY_AVAILABLE:
+    _scipy_spatial = importlib.import_module("scipy.spatial")
+    KDTree = _scipy_spatial.KDTree
+else:
+    KDTree = None
+
+
+def _check_dependencies():
+    """Check that required optional dependencies are available."""
+    missing = []
+    if not PYG_AVAILABLE:
+        missing.append("torch_geometric")
+    if not SCIPY_AVAILABLE:
+        missing.append("scipy")
+    if missing:
+        raise ImportError(
+            f"HydroGraphDataset requires the following packages: {', '.join(missing)}. "
+            "Install with: pip install torch_geometric scipy"
+        )
+
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -308,6 +339,7 @@ class HydroGraphDataset(Dataset):
         rollout_length: Optional[int] = None,
         return_physics: bool = False,
     ):
+        _check_dependencies()
         if split not in {"train", "test"}:
             raise ValueError(f"Invalid split '{split}'. Expected 'train' or 'test'.")
 

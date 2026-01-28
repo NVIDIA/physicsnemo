@@ -28,30 +28,43 @@
 
 
 import datetime
+import importlib
 
 import numpy as np
 
-try:
-    import nvidia.dali as dali
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
+from physicsnemo.core.version_check import check_version_spec
+
+DALI_AVAILABLE = check_version_spec("nvidia.dali", hard_fail=False)
+
+if DALI_AVAILABLE:
+    dali = importlib.import_module("nvidia.dali")
+else:
+    dali = None
 
 RAD_PER_DEG = np.pi / 180.0
 DATETIME_2000 = datetime.datetime(2000, 1, 1, 12, 0, 0, tzinfo=datetime.UTC).timestamp()
 
 
+def _check_dali_available():
+    """Raise an error if DALI is not available."""
+    if not DALI_AVAILABLE:
+        raise ImportError(
+            "physicsnemo.datapipes.climate.utils.zenith_angle: "
+            "NVIDIA DALI package is required for cos_zenith_angle. "
+            "The package can be installed at:\n"
+            "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
+        )
+
+
 def _dali_mod(a, b):
+    _check_dali_available()
     return a - b * dali.math.floor(a / b)
 
 
 def cos_zenith_angle(
-    time: dali.types.DALIDataType,
-    latlon: dali.types.DALIDataType,
-):
+    time: "dali.types.DALIDataType",
+    latlon: "dali.types.DALIDataType",
+) -> "dali.types.DALIDataType":
     """
     Dali datapipe for computing Cosine of sun-zenith angle for lon, lat at time (UTC).
 
@@ -67,6 +80,7 @@ def cos_zenith_angle(
     dali.types.DALIDataType
         Cosine of sun-zenith angle. Shape `(seq_length, 1, nr_lat, nr_lon)`.
     """
+    _check_dali_available()
     lat = latlon[dali.newaxis, 0:1, :, :] * RAD_PER_DEG
     lon = latlon[dali.newaxis, 1:2, :, :] * RAD_PER_DEG
     time = time[:, dali.newaxis, dali.newaxis, dali.newaxis]
@@ -111,6 +125,7 @@ def _sun_ecliptic_longitude(model_time):
     Reference:
         http://www.geoastro.de/elevaz/basics/meeus.htm
     """
+    _check_dali_available()
     julian_centuries = _days_from_2000(model_time) / 36525.0
 
     # mean anomaly calculation
@@ -162,6 +177,7 @@ def _right_ascension_declination(model_time):
     """
     Right ascension and declination of the sun.
     """
+    _check_dali_available()
     julian_centuries = _days_from_2000(model_time) / 36525.0
     eps = _obliquity_star(julian_centuries)
 
@@ -197,6 +213,7 @@ def _star_cos_zenith(model_time, lat, lon):
         Zenith:
             https://en.wikipedia.org/wiki/Solar_zenith_angle
     """
+    _check_dali_available()
 
     ra, dec = _right_ascension_declination(model_time)
     h_angle = _local_hour_angle(model_time, lon, ra)

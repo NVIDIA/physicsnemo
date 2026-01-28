@@ -14,24 +14,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 import os
 import re
 from typing import Any, List
 
 import numpy as np
 import torch
-import torch_geometric as pyg
 from torch.utils.data import Dataset
+
+from physicsnemo.core.version_check import check_version_spec
 
 from .utils import load_json, read_vtp_file, save_json
 
-try:
-    import vtk
-except ImportError:
-    raise ImportError(
-        "Stokes flow Dataset requires the vtk and pyvista libraries. Install with "
-        + "pip install vtk pyvista"
-    )
+# Check for optional dependencies
+PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
+VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
+
+if PYG_AVAILABLE:
+    pyg = importlib.import_module("torch_geometric")
+else:
+    pyg = None
+
+if VTK_AVAILABLE:
+    vtk = importlib.import_module("vtk")
+else:
+    vtk = None
+
+
+def _check_dependencies():
+    """Check that required optional dependencies are available."""
+    missing = []
+    if not PYG_AVAILABLE:
+        missing.append("torch_geometric")
+    if not VTK_AVAILABLE:
+        missing.append("vtk")
+    if missing:
+        raise ImportError(
+            f"StokesDataset requires the following packages: {', '.join(missing)}. "
+            "Install with: pip install torch_geometric vtk"
+        )
 
 
 class StokesDataset(Dataset):
@@ -66,6 +88,7 @@ class StokesDataset(Dataset):
         normalize_keys=["u", "v", "p"],
         name="dataset",
     ):
+        _check_dependencies()
         self.name = name
         self.split = split
         self.num_samples = num_samples

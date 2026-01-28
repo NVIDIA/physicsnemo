@@ -14,29 +14,57 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 import torch
-import torch_geometric as pyg
 import yaml
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.nn.gnn_layers.utils import PyGData
 
-try:
-    import pyvista as pv
-    import vtk
-except ImportError:
-    raise ImportError(
-        "DrivAerNet Dataset requires the vtk and pyvista libraries. "
-        "Install with pip install vtk pyvista"
-    )
+# Check for optional dependencies
+PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
+PYVISTA_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
+VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
+
+if PYG_AVAILABLE:
+    pyg = importlib.import_module("torch_geometric")
+else:
+    pyg = None
+
+if PYVISTA_AVAILABLE:
+    pv = importlib.import_module("pyvista")
+else:
+    pv = None
+
+if VTK_AVAILABLE:
+    vtk = importlib.import_module("vtk")
+else:
+    vtk = None
+
+
+def _check_dependencies():
+    """Check that all required dependencies are available."""
+    missing = []
+    if not PYG_AVAILABLE:
+        missing.append("torch_geometric")
+    if not PYVISTA_AVAILABLE:
+        missing.append("pyvista")
+    if not VTK_AVAILABLE:
+        missing.append("vtk")
+    if missing:
+        raise ImportError(
+            f"DrivAerNetDataset requires the following packages: {', '.join(missing)}. "
+            "Install with: pip install torch_geometric pyvista vtk"
+        )
 
 
 @dataclass
@@ -95,6 +123,7 @@ class DrivAerNetDataset(Dataset, Datapipe):
         force_reload: bool = False,
         **kwargs,
     ) -> None:
+        _check_dependencies()
         Datapipe.__init__(self, meta=MetaData())
 
         self.name = name

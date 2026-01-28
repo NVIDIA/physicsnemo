@@ -14,23 +14,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""
+Custom dlwp compatible loss classes that allow for more sophisticated training optimization.
+
+Each custom loss should inherit all methods of th.nn._Loss base class or subclasses thereof.
+Additionally, custom loss classes should define a setup function which receives the trainer object.
+The setup function should be used to move tensors to appropriate gpus and finalize configuration
+of the loss calculation using information about the model (trainer.model) and trainer. Custom
+losses should also redefine the forward function to contain a flag indicating whether or not to
+average output channels. This is used in the varible wise logging of validation loss by the trainer.
+
+"""
+
+import importlib
 from typing import Sequence
 
 import numpy as np
 import torch as th
-import xarray as xr
 
-"""
-Custom dlwp compatible loss classes that allow for more sophisticated training optimization.
+from physicsnemo.core.version_check import check_version_spec
 
-Each custom loss should inherit all methods of th.nn._Loss base class or subclasses thereof. 
-Additionally, custom loss classes should define a setup function which receives the trainer object. 
-The setup function should be used to move tensors to appropriate gpus and finalize configuration
-of the loss calculation using information about the model (trainer.model) and trainer. Custom
-losses should also redefine the forward function to contain a flag indicating whether or not to 
-average output channels. This is used in the varible wise logging of validation loss by the trainer. 
+XARRAY_AVAILABLE = check_version_spec("xarray")
 
-"""
+if XARRAY_AVAILABLE:
+    xr = importlib.import_module("xarray")
+else:
+    xr = None
+
+
+def _raise_missing_xarray():
+    raise RuntimeError(
+        "xarray is required for healpix_loss but is not installed. "
+        "Please install xarray with: `pip install xarray`"
+    )
 
 
 class BaseMSE(th.nn.MSELoss):
@@ -165,6 +181,8 @@ class OceanMSE(th.nn.MSELoss):
         """
         reshape lsm and put on device
         """
+        if xr is None:
+            _raise_missing_xarray()
         self.lsm_ds = xr.open_dataset(self.lsm_file, **self.open_dict).constants.sel(
             self.selection_dict
         )
@@ -222,6 +240,8 @@ class WeightedOceanMSE(th.nn.MSELoss):
         pushes weights to cuda device
         """
         ### 1. OCEAN PREP ###
+        if xr is None:
+            _raise_missing_xarray()
         self.lsm_ds = xr.open_dataset(self.lsm_file, **self.open_dict).constants.sel(
             self.selection_dict
         )

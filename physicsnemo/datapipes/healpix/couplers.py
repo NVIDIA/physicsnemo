@@ -20,7 +20,12 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 import torch as th
-import xarray as xr
+
+from physicsnemo.datapipes.healpix.utils import (
+    XARRAY_AVAILABLE,
+    _raise_missing_xarray,
+    xr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +40,7 @@ class ConstantCoupler:
 
     def __init__(
         self,
-        dataset: xr.Dataset,
+        dataset: "xr.Dataset",
         batch_size: int,
         variables: Sequence,
         presteps: int = 0,
@@ -71,6 +76,9 @@ class ConstantCoupler:
             the right side of a averaging_window window.
             This is highly remcommended for training, default True
         """
+        if not XARRAY_AVAILABLE:
+            _raise_missing_xarray()
+
         # extract important meta data from ds
         self.ds = dataset
         self.batch_size = batch_size
@@ -280,7 +288,7 @@ class TrailingAverageCoupler:
 
     def __init__(
         self,
-        dataset: xr.Dataset,
+        dataset: "xr.Dataset",
         batch_size: int,
         variables: Sequence,
         presteps: int = 0,
@@ -319,6 +327,9 @@ class TrailingAverageCoupler:
             the right side of a averaging_window window.
             This is highly remcommended for training, default True
         """
+        if not XARRAY_AVAILABLE:
+            _raise_missing_xarray()
+
         # extract important meta data from ds
         self.ds = dataset
         self.batch_size = batch_size

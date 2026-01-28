@@ -14,11 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
 from abc import ABC, abstractmethod
 from typing import List, Tuple
 
 import numpy as np
-import xarray as xr
+
+from physicsnemo.core.version_check import check_version_spec
+
+XARRAY_AVAILABLE = check_version_spec("xarray", hard_fail=False)
+
+if XARRAY_AVAILABLE:
+    xr = importlib.import_module("xarray")
+else:
+    xr = None
 
 
 def latlon_grid(
@@ -117,6 +126,11 @@ class FileInvariant(Invariant):
         normalize=False,
         interp_method="linear",
     ):
+        if not XARRAY_AVAILABLE:
+            raise ImportError(
+                "FileInvariant requires xarray to be installed. "
+                "Install with: pip install xarray"
+            )
         with xr.open_dataset(filename) as ds:
             self.data = ds[var_name].astype(np.float32)
             self.lat = ds["latitude"].to_numpy().astype(np.float32)

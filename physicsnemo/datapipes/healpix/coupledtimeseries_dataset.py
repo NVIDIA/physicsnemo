@@ -23,7 +23,6 @@ from typing import Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import torch
-import xarray as xr
 from omegaconf import DictConfig, OmegaConf
 
 from physicsnemo.datapipes.meta import DatapipeMetaData
@@ -31,6 +30,7 @@ from physicsnemo.utils.insolation import insolation
 
 from . import couplers
 from .timeseries_dataset import TimeSeriesDataset
+from .utils import XARRAY_AVAILABLE, _raise_missing_xarray, xr
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
 
     def __init__(
         self,
-        dataset: xr.Dataset,
+        dataset: "xr.Dataset",
         scaling: DictConfig,
         input_variables: Sequence,
         output_variables: Sequence = None,
@@ -125,6 +125,9 @@ class CoupledTimeSeriesDataset(TimeSeriesDataset):
         train_noise_seed: int, optional
             Seed for the random number generator for adding noise to the training data, default 42
         """
+        if not XARRAY_AVAILABLE:
+            _raise_missing_xarray()
+
         self.input_variables = input_variables
         self.output_variables = (
             input_variables if output_variables is None else output_variables

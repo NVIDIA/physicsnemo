@@ -15,6 +15,7 @@
 # limitations under the License.
 
 # ruff: noqa: S101
+import importlib
 import json
 import logging
 import os
@@ -23,11 +24,42 @@ from typing import Optional
 
 import numpy as np
 import torch
-from tfrecord.torch.dataset import TFRecordDataset
 from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from torch_geometric.data import Data as PyGData
+
+from physicsnemo.core.version_check import check_version_spec
+
+# Check for optional dependencies
+PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
+TFRECORD_AVAILABLE = check_version_spec("tfrecord", hard_fail=False)
+
+if PYG_AVAILABLE:
+    _pyg_data = importlib.import_module("torch_geometric.data")
+    PyGData = _pyg_data.Data
+else:
+    PyGData = None
+
+if TFRECORD_AVAILABLE:
+    _tfrecord_torch = importlib.import_module("tfrecord.torch.dataset")
+    TFRecordDataset = _tfrecord_torch.TFRecordDataset
+else:
+    TFRecordDataset = None
+
+
+def _check_dependencies():
+    """Check that required optional dependencies are available."""
+    missing = []
+    if not PYG_AVAILABLE:
+        missing.append("torch_geometric")
+    if not TFRECORD_AVAILABLE:
+        missing.append("tfrecord")
+    if missing:
+        raise ImportError(
+            f"LagrangianDataset requires the following packages: {', '.join(missing)}. "
+            "Install with: pip install torch_geometric tfrecord"
+        )
+
 
 logger = logging.getLogger("lmgn")
 
@@ -143,6 +175,7 @@ class LagrangianDataset(Dataset):
         bounds: Optional[Sequence[tuple[float, float]]] = None,
         num_node_types: int = 6,
     ):
+        _check_dependencies()
         self.name = name
         self.data_dir = data_dir
         self.split = split

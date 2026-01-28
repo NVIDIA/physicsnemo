@@ -9,13 +9,13 @@ name = Prevent Upward Imports in the PhysicsNemo Structure
 type = layers
 containers=
    physicsnemo
-layers = 
+layers =
    experimental
    active_learning : diffusion
    models : datapipes : metrics : domain_parallel
    nn
    utils
-   distributed 
+   distributed
    core
 
 [importlinter:contract:physicsnemo-core]
@@ -23,7 +23,7 @@ name = Control Dependencies in PhysicsNeMo core
 type = layers
 containers=
    physicsnemo.core
-layers = 
+layers =
    module : registry
    meta
    warnings | version_check | filesystem
@@ -34,7 +34,7 @@ name = Control Dependencies in PhysicsNeMo distributed
 type = layers
 containers=
    physicsnemo.distributed
-layers = 
+layers =
    fft | autograd
    mappings
    utils
@@ -46,7 +46,7 @@ name = Control Dependencies in PhysicsNeMo utils
 type = layers
 containers=
    physicsnemo.utils
-layers = 
+layers =
    mesh | insolation | zenith_angle
    profiling
    checkpoint
@@ -58,7 +58,7 @@ name = Control Dependencies in PhysicsNeMo nn
 type = layers
 containers=
    physicsnemo.nn
-layers = 
+layers =
    fourier_layers | transformer_layers | unet_layers
    dgm_layers | mlp_layers | fully_connected_layers | gnn_layers | attention_layers
    activations | ball_query | conv_layers  | drop | fft  | fused_silu | interpolation | kan_layers  | resample_layers | sdf | siren_layers | spectral_layers | transformer_decoder  | weight_fact | weight_norm | embedding_layers | group_norm
@@ -70,12 +70,12 @@ name = Control Internal Dependencies in PhysicsNeMo nn GNN Layers
 type = layers
 containers=
    physicsnemo.nn.gnn_layers
-layers = 
+layers =
    bsms
    mesh_graph_decoder | mesh_graph_encoder
    mesh_node_block | mesh_edge_block
-   mesh_graph_mlp 
-   utils  
+   mesh_graph_mlp
+   utils
    graph
    distributed_graph
    graph_types
@@ -85,7 +85,7 @@ name = Prevent Imports between physicsnemo models
 type = layers
 containers=
    physicsnemo.models
-layers = 
+layers =
    mesh_reduced
    afno | dlwp | dlwp_healpix | domino | dpot | fengwu | figconvnet | fno | graphcast | meshgraphnet | pangu | pix2pix | rnn |  srrn | swinvrnn | topodiff | transolver  | vfgn | diffusion_unets
    unet
@@ -95,7 +95,7 @@ name = Control Internal Dependencies in PhysicsNeMo diffusion
 type = layers
 containers=
    physicsnemo.diffusion
-layers = 
+layers =
    generate
    samplers : metrics
    noise_schedulers | multi_diffusion | preconditioners | denoisers
@@ -105,5 +105,5 @@ layers =
 name = Prevent Non-listed external imports in physicsnemo
 type = forbidden_import
 container = physicsnemo
-exclude = 
-   datapipes
+exclude =
+   metrics

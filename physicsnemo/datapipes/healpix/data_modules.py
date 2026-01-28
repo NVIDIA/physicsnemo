@@ -15,6 +15,7 @@
 # limitations under the License.
 
 # System modules
+import importlib
 import logging
 import os
 import time
@@ -26,20 +27,40 @@ import numpy as np
 
 # distributed stuff
 import torch
-import xarray as xr
-
-# Internal modules
-from dask.diagnostics import ProgressBar
-
-# External modules
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
+from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.datapipes.healpix.utils import (
+    XARRAY_AVAILABLE,
+    _raise_missing_xarray,
+    xr,
+)
 from physicsnemo.distributed import DistributedManager
 
 from .coupledtimeseries_dataset import CoupledTimeSeriesDataset
 from .timeseries_dataset import TimeSeriesDataset
+
+# External modules
+# Check for optional dependencies
+DASK_AVAILABLE = check_version_spec("dask", hard_fail=False)
+
+if DASK_AVAILABLE:
+    _dask_diagnostics = importlib.import_module("dask.diagnostics")
+    ProgressBar = _dask_diagnostics.ProgressBar
+else:
+    ProgressBar = None
+
+
+def _check_dask_available():
+    """Raise an error if dask is not available."""
+    if not DASK_AVAILABLE:
+        raise ImportError(
+            "physicsnemo.datapipes.healpix.data_modules: dask is required for "
+            "this functionality. Install with: pip install dask"
+        )
+
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +96,7 @@ def open_time_series_dataset_classic_on_the_fly(
     suffix: Optional[str] = None,
     batch_size: int = 32,
     scaling: Optional[DictConfig] = None,
-) -> xr.Dataset:
+) -> "xr.Dataset":
     """
     Opens and merges multiple datasets that that contain individual variables
     into a single dataset
@@ -112,6 +133,9 @@ def open_time_series_dataset_classic_on_the_fly(
 
     merge_time = time.time()
     logger.info("merging input datasets")
+
+    if not XARRAY_AVAILABLE:
+        _raise_missing_xarray()
 
     datasets = []
     remove_attrs = ["mean", "std"] if "LL" in prefix else ["varlev", "mean", "std"]
@@ -187,7 +211,7 @@ def open_time_series_dataset_classic_on_the_fly(
 
 def open_time_series_dataset_classic_prebuilt(
     directory: str, dataset_name: str, constants: bool = False, batch_size: int = 32
-) -> xr.Dataset:
+) -> "xr.Dataset":
     """
     Opens an existing dataset
 
@@ -206,6 +230,9 @@ def open_time_series_dataset_classic_prebuilt(
     -------
     xr.Dataset: The opened dataset
     """
+
+    if not XARRAY_AVAILABLE:
+        _raise_missing_xarray()
 
     ds_path = Path(directory, dataset_name + ".zarr")
 
@@ -228,7 +255,7 @@ def create_time_series_dataset_classic(
     batch_size: int = 32,
     scaling: Optional[DictConfig] = None,
     overwrite: bool = False,
-) -> xr.Dataset:
+) -> "xr.Dataset":
     """
     Opens and merges multiple datasets that that contain individual variables
     into a single dataset
@@ -261,6 +288,9 @@ def create_time_series_dataset_classic(
     -------
     xr.Dataset: The merged dataset
     """
+    if not XARRAY_AVAILABLE:
+        _raise_missing_xarray()
+
     dst_zarr = os.path.join(dst_directory, dataset_name + ".zarr")
     file_exists = os.path.exists(dst_zarr)
 
@@ -354,6 +384,7 @@ def create_time_series_dataset_classic(
 
     # writing out
     def _write_zarr(data, path):
+        _check_dask_available()
         write_job = data.to_zarr(path, compute=False, mode="w")
         with ProgressBar():
             logger.info(f"writing dataset to {path}")
@@ -469,6 +500,9 @@ class TimeSeriesDataModule:
                 - providing this parameter configures the data loader to only produce this number of samples, and
                     NOT produce any target array.
         """
+        if not XARRAY_AVAILABLE:
+            _raise_missing_xarray()
+
         super().__init__()
         self.src_directory = src_directory
         self.dst_directory = dst_directory
@@ -915,6 +949,9 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         train_noise_seed: int, optional
             Seed for the random number generator for adding noise to the training data, default 42
         """
+        if not XARRAY_AVAILABLE:
+            _raise_missing_xarray()
+
         self.couplings = couplings
         self.add_train_noise = add_train_noise
         self.train_noise_params = train_noise_params

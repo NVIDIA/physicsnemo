@@ -213,25 +213,49 @@ The following license is provided from their source,
    limitations under the License.
 """
 
+import importlib
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import scipy.sparse
 import torch
 from torch.utils.data import Dataset
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.nn.gnn_layers.utils import GraphType
 
-try:
-    from sparse_dot_mkl import dot_product_mkl
-except ImportError:
-    import warnings
+SCIPY_AVAILABLE = check_version_spec("scipy", hard_fail=False)
+SPARSE_DOT_MKL_AVAILABLE = check_version_spec("sparse_dot_mkl", hard_fail=False)
 
-    warnings.warn(
-        "sparse_dot_mkl is not installed, install using: pip install sparse_dot_mkl"
-    )
+if SCIPY_AVAILABLE:
+    scipy_sparse = importlib.import_module("scipy.sparse")
+else:
+    scipy_sparse = None
+
+if SPARSE_DOT_MKL_AVAILABLE:
+    _sparse_dot_mkl = importlib.import_module("sparse_dot_mkl")
+    dot_product_mkl = _sparse_dot_mkl.dot_product_mkl
+else:
+    dot_product_mkl = None
+
+
+def _check_scipy_available():
+    """Raise an error if scipy is not available."""
+    if not SCIPY_AVAILABLE:
+        raise ImportError(
+            "physicsnemo.datapipes.gnn.bsms: scipy is required for BSMS-GNN operations. "
+            "Please install scipy with `pip install scipy`."
+        )
+
+
+def _check_sparse_dot_mkl_available():
+    """Raise an error if sparse_dot_mkl is not available."""
+    if not SPARSE_DOT_MKL_AVAILABLE:
+        raise ImportError(
+            "physicsnemo.datapipes.gnn.bsms: sparse_dot_mkl is required for accelerated "
+            "sparse matrix operations. Please install with `pip install sparse_dot_mkl`."
+        )
 
 
 _INF = 1 + 1e10
@@ -605,7 +629,8 @@ class Graph:
         Returns:
         scipy.sparse.coo_matrix: The sparse adjacency matrix.
         """
-        adj_mat = scipy.sparse.coo_matrix(
+        _check_scipy_available()
+        adj_mat = scipy_sparse.coo_matrix(
             (np.ones_like(edge_list[0]), (edge_list[0], edge_list[1])), shape=(n, n)
         )
         return adj_mat
@@ -659,13 +684,13 @@ class Graph:
         """
         if isinstance(adj_mat, np.ndarray):
             s, r = np.where(adj_mat.astype(bool))
-        elif isinstance(adj_mat, scipy.sparse.coo_matrix):
+        elif SCIPY_AVAILABLE and isinstance(adj_mat, scipy_sparse.coo_matrix):
             s, r = adj_mat.row, adj_mat.col
             dat = adj_mat.data
             valid = np.where(dat.astype(bool))[0]
             s, r = s[valid], r[valid]
-        elif isinstance(adj_mat, scipy.sparse.csr_matrix):
-            adj_mat = scipy.sparse.coo_matrix(adj_mat)
+        elif SCIPY_AVAILABLE and isinstance(adj_mat, scipy_sparse.csr_matrix):
+            adj_mat = scipy_sparse.coo_matrix(adj_mat)
             s, r = adj_mat.row, adj_mat.col
             dat = adj_mat.data
             valid = np.where(dat.astype(bool))[0]

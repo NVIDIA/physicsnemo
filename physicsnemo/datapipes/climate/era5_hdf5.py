@@ -14,30 +14,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import h5py
-import numpy as np
-import torch
-
-try:
-    import nvidia.dali as dali
-    import nvidia.dali.plugin.pytorch as dali_pth
-except ImportError:
-    raise ImportError(
-        "DALI dataset requires NVIDIA DALI package to be installed. "
-        + "The package can be installed at:\n"
-        + "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-    )
-
+import importlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple, Union
 
+import h5py
+import numpy as np
+import torch
+
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 
 from ..datapipe import Datapipe
 from ..meta import DatapipeMetaData
+
+DALI_AVAILABLE = check_version_spec("nvidia.dali", hard_fail=False)
+
+if DALI_AVAILABLE:
+    dali = importlib.import_module("nvidia.dali")
+    dali_pth = importlib.import_module("nvidia.dali.plugin.pytorch")
+else:
+    dali = None
+    dali_pth = None
+
+
+def _check_dali_available():
+    """Raise an error if DALI is not available."""
+    if not DALI_AVAILABLE:
+        raise ImportError(
+            "ERA5HDF5Datapipe requires NVIDIA DALI package to be installed. "
+            "The package can be installed at:\n"
+            "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
+        )
+
 
 Tensor = torch.Tensor
 
@@ -141,6 +153,7 @@ class ERA5HDF5Datapipe(Datapipe):
         process_rank: int = 0,
         world_size: int = 1,
     ):
+        _check_dali_available()
         super().__init__(meta=MetaData())
         self.batch_size = batch_size
         self.num_workers = num_workers
