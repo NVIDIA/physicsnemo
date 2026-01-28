@@ -309,7 +309,7 @@ class TestSO2Convolution:
         # Check invalid positions are zero
         mask = make_grid_mask(lmax, mmax).to(device=device)
 
-        for l in range(lmax + 1):
+        for l in range(lmax + 1):  # noqa: E741
             for m in range(mmax + 1):
                 if not mask[l, m]:
                     assert torch.allclose(
@@ -557,8 +557,86 @@ class TestSO2Convolution:
             "Different edge features should produce different outputs"
         )
 
-    def test_extra_m0_output(self, dtype: torch.dtype, device: str) -> None:
-        """Verify extra m0 channels are returned correctly.
+    @pytest.mark.parametrize("lmax", [1, 2, 4])
+    @pytest.mark.parametrize("mmax", [1, 2, 4])
+    def test_produce_gates(
+        self, dtype: torch.dtype, device: str, lmax: int, mmax: int
+    ) -> None:
+        """Verify gate channels are embedded correctly in output tensor.
+
+        When produce_gates=True, the output tensor should have additional
+        gate channels (lmax * out_channels) that are only non-zero at
+        the (l=0, m=0, real) position.
+
+        Parameters
+        ----------
+        dtype : torch.dtype
+            Data type for tensors.
+        device : str
+            Device to run on.
+        """
+        if mmax > lmax:
+            pytest.skip("mmax should not be greater than lmax.")
+        in_channels = 16
+        out_channels = 16
+        batch_size = 20
+
+        conv = SO2Convolution(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            lmax=lmax,
+            mmax=mmax,
+            produce_gates=True,
+        ).to(device=device, dtype=dtype)
+
+        # Verify num_gate_channels and total_out_channels properties
+        expected_gate_channels = lmax * out_channels  # 4 * 16 = 64
+        assert conv.num_gate_channels == expected_gate_channels, (
+            f"Expected num_gate_channels={expected_gate_channels}, got {conv.num_gate_channels}"
+        )
+        assert conv.total_out_channels == out_channels + expected_gate_channels
+
+        x = torch.randn(
+            batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
+        )
+
+        with torch.no_grad():
+            y = conv(x)
+
+        expected_total_channels = out_channels + expected_gate_channels
+        assert y.shape == (
+            batch_size,
+            lmax + 1,
+            mmax + 1,
+            2,
+            expected_total_channels,
+        ), (
+            f"Expected shape {(batch_size, lmax + 1, mmax + 1, 2, expected_total_channels)}, "
+            f"got {y.shape}"
+        )
+
+        # Gate channels (indices [out_channels:]) should be zero everywhere
+        # except at (l=0, m=0, real)
+        gate_channels_output = y[..., out_channels:]
+
+        # Check gates are zero at all positions except (l=0, m=0, real=0)
+        for l in range(lmax + 1):  # noqa: E741
+            for m in range(mmax + 1):
+                for ri in range(2):  # real=0, imag=1
+                    gate_slice = gate_channels_output[:, l, m, ri, :]
+                    if l == 0 and m == 0 and ri == 0:
+                        # This position should have non-zero gates (generically)
+                        # We can't guarantee non-zero due to random weights, but
+                        # at least verify the shape
+                        assert gate_slice.shape == (batch_size, expected_gate_channels)
+                    else:
+                        # All other positions should be zero
+                        assert torch.allclose(
+                            gate_slice, torch.zeros_like(gate_slice)
+                        ), f"Gate channels should be zero at (l={l}, m={m}, ri={ri})"
+
+    def test_produce_gates_false(self, dtype: torch.dtype, device: str) -> None:
+        """Verify produce_gates=False gives standard output without gate channels.
 
         Parameters
         ----------
@@ -570,7 +648,6 @@ class TestSO2Convolution:
         lmax, mmax = 4, 2
         in_channels = 16
         out_channels = 16
-        extra_m0 = 32
         batch_size = 20
 
         conv = SO2Convolution(
@@ -578,21 +655,22 @@ class TestSO2Convolution:
             out_channels=out_channels,
             lmax=lmax,
             mmax=mmax,
-            extra_m0_output_channels=extra_m0,
+            produce_gates=False,  # Default
         ).to(device=device, dtype=dtype)
+
+        # Verify num_gate_channels is 0
+        assert conv.num_gate_channels == 0
+        assert conv.total_out_channels == out_channels
 
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
 
-        result = conv(x)
+        with torch.no_grad():
+            y = conv(x)
 
-        # Should return tuple (output, extra_m0_features)
-        assert isinstance(result, tuple), "Should return tuple with extra_m0"
-        y, y_extra = result
-
+        # Output should have only out_channels
         assert y.shape == (batch_size, lmax + 1, mmax + 1, 2, out_channels)
-        assert y_extra.shape == (batch_size, extra_m0)
 
     def test_edge_modulation_produces_different_outputs(
         self, dtype: torch.dtype, device: str
@@ -1278,6 +1356,192 @@ class TestIntegration:
 
         expected_shape = (batch_size, lmax + 1, mmax + 1, 2, out_channels)
         assert y.shape == expected_shape, f"Expected {expected_shape}, got {y.shape}"
+
+
+# =============================================================================
+# TestSO2ConvolutionValidation
+# =============================================================================
+
+
+class TestSO2ConvolutionValidation:
+    """Tests for input shape and constructor validation in SO2Convolution.
+
+    These tests verify that SO2Convolution raises appropriate errors when
+    given invalid inputs, either at construction time or during forward pass.
+    """
+
+    def test_invalid_input_channels(self) -> None:
+        """Verify error when input tensor has wrong number of channels.
+
+        The input tensor's last dimension should match in_channels.
+        """
+        lmax, mmax = 4, 2
+        in_channels = 16
+        out_channels = 16
+        batch_size = 10
+
+        conv = SO2Convolution(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            lmax=lmax,
+            mmax=mmax,
+        )
+
+        # Wrong number of input channels (32 instead of 16)
+        x = torch.randn(batch_size, lmax + 1, mmax + 1, 2, 32)
+
+        with pytest.raises(ValueError, match=r"Expected input shape.*got shape"):
+            conv(x)
+
+    def test_invalid_input_lmax_dim(self) -> None:
+        """Verify error when input tensor has wrong lmax+1 dimension.
+
+        The second dimension should be lmax+1.
+        """
+        lmax, mmax = 4, 2
+        in_channels = 16
+        out_channels = 16
+        batch_size = 10
+
+        conv = SO2Convolution(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            lmax=lmax,
+            mmax=mmax,
+        )
+
+        # Wrong lmax dimension (3 instead of 5)
+        x = torch.randn(batch_size, 3, mmax + 1, 2, in_channels)
+
+        with pytest.raises(ValueError, match=r"Expected input shape.*got shape"):
+            conv(x)
+
+    def test_invalid_input_mmax_dim(self) -> None:
+        """Verify error when input tensor has wrong mmax+1 dimension.
+
+        The third dimension should be mmax+1.
+        """
+        lmax, mmax = 4, 2
+        in_channels = 16
+        out_channels = 16
+        batch_size = 10
+
+        conv = SO2Convolution(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            lmax=lmax,
+            mmax=mmax,
+        )
+
+        # Wrong mmax dimension (5 instead of 3)
+        x = torch.randn(batch_size, lmax + 1, 5, 2, in_channels)
+
+        with pytest.raises(ValueError, match=r"Expected input shape.*got shape"):
+            conv(x)
+
+    def test_invalid_input_real_imag_dim(self) -> None:
+        """Verify error when input tensor has wrong real/imag dimension.
+
+        The fourth dimension should be 2 (for real and imaginary components).
+        """
+        lmax, mmax = 4, 2
+        in_channels = 16
+        out_channels = 16
+        batch_size = 10
+
+        conv = SO2Convolution(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            lmax=lmax,
+            mmax=mmax,
+        )
+
+        # Wrong real/imag dimension (3 instead of 2)
+        x = torch.randn(batch_size, lmax + 1, mmax + 1, 3, in_channels)
+
+        with pytest.raises(ValueError, match=r"Expected input shape.*got shape"):
+            conv(x)
+
+    def test_invalid_lmax_negative(self) -> None:
+        """Verify error when constructor receives negative lmax.
+
+        The lmax parameter must be non-negative.
+        """
+        with pytest.raises(ValueError, match=r"lmax must be non-negative"):
+            SO2Convolution(
+                in_channels=16,
+                out_channels=16,
+                lmax=-1,
+                mmax=2,
+            )
+
+    def test_invalid_mmax_negative(self) -> None:
+        """Verify error when constructor receives negative mmax.
+
+        The mmax parameter must be non-negative.
+        """
+        with pytest.raises(ValueError, match=r"mmax must be non-negative"):
+            SO2Convolution(
+                in_channels=16,
+                out_channels=16,
+                lmax=4,
+                mmax=-1,
+            )
+
+    def test_invalid_mmax_gt_lmax(self) -> None:
+        """Verify error when constructor receives mmax > lmax.
+
+        The mmax parameter must be less than or equal to lmax.
+        """
+        with pytest.raises(ValueError, match=r"mmax.*must be <= lmax"):
+            SO2Convolution(
+                in_channels=16,
+                out_channels=16,
+                lmax=2,
+                mmax=4,
+            )
+
+    def test_invalid_in_channels(self) -> None:
+        """Verify error when constructor receives non-positive in_channels.
+
+        The in_channels parameter must be positive.
+        """
+        with pytest.raises(ValueError, match=r"in_channels must be positive"):
+            SO2Convolution(
+                in_channels=0,
+                out_channels=16,
+                lmax=4,
+                mmax=2,
+            )
+
+        with pytest.raises(ValueError, match=r"in_channels must be positive"):
+            SO2Convolution(
+                in_channels=-5,
+                out_channels=16,
+                lmax=4,
+                mmax=2,
+            )
+
+    def test_invalid_out_channels(self) -> None:
+        """Verify error when constructor receives non-positive out_channels.
+
+        The out_channels parameter must be positive.
+        """
+        with pytest.raises(ValueError, match=r"out_channels must be positive"):
+            SO2Convolution(
+                in_channels=16,
+                out_channels=0,
+                lmax=4,
+                mmax=2,
+            )
+
+        with pytest.raises(ValueError, match=r"out_channels must be positive"):
+            SO2Convolution(
+                in_channels=16,
+                out_channels=-5,
+                lmax=4,
+                mmax=2,
+            )
 
 
 if __name__ == "__main__":
