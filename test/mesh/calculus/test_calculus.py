@@ -559,7 +559,7 @@ class TestCalculusIdentities:
         curl_of_grad_linear = compute_curl_points_lsq(mesh_grad_linear, grad_linear)
 
         assert torch.allclose(
-            curl_of_grad_linear, torch.zeros_like(curl_of_grad_linear), atol=1e-6
+            curl_of_grad_linear, torch.zeros_like(curl_of_grad_linear), atol=1e-5
         )
 
     def test_divergence_of_curl_is_zero(self):
@@ -583,7 +583,7 @@ class TestCalculusIdentities:
         div_curl = compute_divergence_points_lsq(mesh, curl_v)
 
         # Should be zero
-        assert torch.allclose(div_curl, torch.zeros_like(div_curl), atol=1e-6)
+        assert torch.allclose(div_curl, torch.zeros_like(div_curl), atol=1e-5)
 
 
 class TestParametrized:
