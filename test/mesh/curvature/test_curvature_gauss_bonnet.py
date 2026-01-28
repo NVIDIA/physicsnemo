@@ -25,7 +25,6 @@ from physicsnemo.mesh.geometry.dual_meshes import (
 )
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import (
-    icosahedron_surface,
     octahedron_surface,
     sphere_icosahedral,
     tetrahedron_surface,
