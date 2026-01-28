@@ -170,7 +170,6 @@ def shard_tensor_initialization_from_all_dtensor_worker(mesh):
     assert torch.allclose(dt_full, st_full)
 
 
-
 @pytest.mark.timeout(10)
 @pytest.mark.multigpu_static
 def test_shard_tensor_initialization_from_all_dtensor(distributed_mesh, verbose=False):
