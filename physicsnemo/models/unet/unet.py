@@ -16,12 +16,13 @@
 
 import importlib
 from dataclasses import dataclass
-from typing import List, Optional, Union
+from typing import Literal, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
+from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -36,31 +37,51 @@ else:
 
 
 class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
-    """
-    A modified LayerNorm that reshapes and transposes the input tensor before
-    applying layer normalization, then restores the original shape after normalization.
+    r"""LayerNorm that normalizes over channels for spatial tensors.
 
-    This is useful when layer normalization is required over multiple dimensions
-    while preserving the original spatial structure of the input.
+    Reshapes and transposes the input tensor before applying layer normalization,
+    then restores the original shape. This enables layer normalization over the
+    channel dimension while preserving the spatial structure.
 
-    Parameters:
+    .. note::
+        When ``transformer_engine`` is installed, this class inherits from
+        :class:`transformer_engine.pytorch.LayerNorm`. Otherwise, it inherits
+        from :class:`torch.nn.LayerNorm`.
+
+    Parameters
     ----------
-        normalized_shape (int or list/tuple of ints): Input shape from an expected input of size. If a single integer is used,
-            it is treated as a singleton list.
-        eps (float, optional): A value added to the denominator for numerical stability. Default is 1e-5.
-        elementwise_affine (bool, optional): Whether to learn affine parameters (scale and shift). Default is True.
+    normalized_shape : int | Sequence[int]
+        Input shape over which to normalize. If a single integer, treated as a
+        singleton list.
+    eps : float, optional, default=1e-5
+        Value added to denominator for numerical stability.
+    elementwise_affine : bool, optional, default=True
+        Whether to learn affine parameters (scale and shift).
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The input tensor after applying reshaped layer normalization.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C, *spatial)` where :math:`C` is the
+        number of channels and :math:`*spatial` are spatial dimensions.
+
+    Outputs
+    -------
+    torch.Tensor
+        Normalized tensor with same shape as input.
     """
 
     def __init__(
-        self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True
-    ):
+        self,
+        normalized_shape: int | Sequence[int],
+        eps: float = 1e-5,
+        elementwise_affine: bool = True,
+    ) -> None:
         super().__init__(normalized_shape, eps, elementwise_affine)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels *spatial"]
+    ) -> Float[torch.Tensor, "batch channels *spatial"]:
+        """Forward pass applying reshaped layer normalization."""
         shape = x.shape
         x = x.view(shape[0], shape[1], -1).transpose(1, 2).contiguous()
         x = super().forward(x)
@@ -68,44 +89,65 @@ class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
         return x
 
 
-class ConvBlock(nn.Module):
-    """
-    A convolutional block, followed by an optional normalization and activation.
+class Conv3DBlock(Module):
+    r"""3D convolutional block with optional normalization and activation.
 
-    Parameters:
+    Applies a 3D convolution followed by optional normalization and activation
+    functions. Used as a building block in encoder and decoder paths.
+
+    Parameters
     ----------
-        in_channels (int): Number of channels in the input.
-        out_channels (int): Number of channels produced by the convolution.
-        kernel_size (int, tuple): Size of the convolving kernel. Default is 3.
-        stride (int, tuple): Stride of the convolution. Default is 1.
-        padding (int, tuple): Padding added to all sides of the input. Default is 1.
-        dilation (int, tuple): Spacing between kernel elements. Default is 1.
-        groups (int): Number of blocked connections from input channels to output channels. Default is 1.
-        bias (bool): If True, adds a learnable bias to the output. Default is True.
-        padding_mode (str): Padding mode to use. Default is 'zeros'.
-        activation (Optional[str]): Type of activation to use. Default is 'relu'.
-        normalization (Optional[str]): Type of normalization to use. Default is 'groupnorm'.
-        normalization_args (dict): Arguments for the normalization layer.
+    in_channels : int
+        Number of input channels :math:`C_{in}`.
+    out_channels : int
+        Number of output channels :math:`C_{out}`.
+    kernel_size : int | tuple[int, ...], optional, default=3
+        Size of the convolving kernel.
+    stride : int | tuple[int, ...], optional, default=1
+        Stride of the convolution.
+    padding : int | tuple[int, ...], optional, default=1
+        Padding added to all sides of the input.
+    dilation : int | tuple[int, ...], optional, default=1
+        Spacing between kernel elements.
+    groups : int, optional, default=1
+        Number of blocked connections from input to output channels.
+    bias : bool, optional, default=True
+        If ``True``, adds a learnable bias to the output.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    activation : str | None, optional, default="relu"
+        Activation function name from :mod:`torch.nn.functional`.
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
+        Additional arguments for the normalization layer.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The processed output tensor.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, D', H', W')`.
     """
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
-        padding: Union[int, tuple] = 1,
-        dilation: Union[int, tuple] = 1,
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
+        padding: int | tuple[int, ...] = 1,
+        dilation: int | tuple[int, ...] = 1,
         groups: int = 1,
         bias: bool = True,
-        padding_mode: str = "zeros",
-        activation: Optional[str] = "relu",
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        activation: str | None = "relu",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
+        normalization_args: dict | None = None,
     ):
         super().__init__()
         # Initialize convolution layer
@@ -150,53 +192,77 @@ class ConvBlock(nn.Module):
         else:
             self.norm = nn.Identity()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
+        """Forward pass through the convolutional block."""
         x = self.conv3d(x)
         x = self.norm(x)
         x = self.activation(x)
         return x
 
 
-class ConvTranspose(nn.Module):
-    """
-    A transposed convolutional block, followed by an optional normalization and activation.
+class ConvTranspose3D(Module):
+    r"""3D transposed convolutional block with optional normalization and activation.
 
-    Parameters:
+    Applies a transposed 3D convolution for upsampling, followed by optional
+    normalization and activation functions. Used in the decoder path.
+
+    Parameters
     ----------
-        in_channels (int): Number of channels in the input.
-        out_channels (int): Number of channels produced by the convolution.
-        kernel_size (int, tuple): Size of the convolving kernel. Default is 3.
-        stride (int, tuple): Stride of the convolution. Default is 2.
-        padding (int, tuple): Padding added to all sides of the input. Default is 1.
-        output_padding (int, tuple): Additional size added to one side of the output shape. Default is 1.
-        groups (int): Number of blocked connections from input channels to output channels. Default is 1.
-        bias (bool): If True, adds a learnable bias to the output. Default is True.
-        dilation (int, tuple): Spacing between kernel elements. Default is 1.
-        padding_mode (str): Padding mode to use. Default is 'zeros'.
-        activation (Optional[str]): Type of activation to use. Default is None.
-        normalization (Optional[str]): Type of normalization to use. Default is None.
-        normalization_args (dict): Arguments for the normalization layer.
+    in_channels : int
+        Number of input channels :math:`C_{in}`.
+    out_channels : int
+        Number of output channels :math:`C_{out}`.
+    kernel_size : int | tuple[int, ...], optional, default=3
+        Size of the convolving kernel.
+    stride : int | tuple[int, ...], optional, default=2
+        Stride of the convolution.
+    padding : int | tuple[int, ...], optional, default=1
+        Padding added to all sides of the input.
+    output_padding : int | tuple[int, ...], optional, default=1
+        Additional size added to one side of the output shape.
+    groups : int, optional, default=1
+        Number of blocked connections from input to output channels.
+    bias : bool, optional, default=True
+        If ``True``, adds a learnable bias to the output.
+    dilation : int | tuple[int, ...], optional, default=1
+        Spacing between kernel elements.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    activation : str | None, optional, default=None
+        Activation function name from :mod:`torch.nn.functional`.
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default=None
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
+        Additional arguments for the normalization layer.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The processed output tensor.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Upsampled output tensor of shape :math:`(B, C_{out}, D', H', W')`.
     """
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 2,
-        padding: Union[int, tuple] = 1,
-        output_padding: Union[int, tuple] = 1,
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 2,
+        padding: int | tuple[int, ...] = 1,
+        output_padding: int | tuple[int, ...] = 1,
         groups: int = 1,
         bias: bool = True,
-        dilation: Union[int, tuple] = 1,
-        padding_mode: str = "zeros",
-        activation: Optional[str] = None,
-        normalization: Optional[str] = None,
-        normalization_args: Optional[dict] = None,
+        dilation: int | tuple[int, ...] = 1,
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        activation: str | None = None,
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"] | None = None,
+        normalization_args: dict | None = None,
     ):
         super().__init__()
         # Initialize transposed convolution layer
@@ -242,39 +308,56 @@ class ConvTranspose(nn.Module):
         else:
             self.norm = nn.Identity()
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
+        """Forward pass through the transposed convolutional block."""
         x = self.conv3d_transpose(x)
         x = self.norm(x)
         x = self.activation(x)
         return x
 
 
-class Pool3d(nn.Module):
-    """
-    A pooling block that applies a specified 3D pooling operation over an input signal.
+class Pool3D(Module):
+    r"""3D pooling block.
 
-    Parameters:
+    Applies a specified 3D pooling operation (average or max) for downsampling.
+
+    Parameters
     ----------
-        pooling_type (str): Type of pooling operation ('AvgPool3d', 'MaxPool3d', or custom types if supported).
-        kernel_size (int, tuple): Size of the window to take a pool over.
-        stride (int, tuple, None): Stride of the pooling operation. Default is None (same as kernel_size).
-        padding (int, tuple): Implicit zero padding to be added on both sides of the input. Default is 0.
-        dilation (int, tuple): Control the spacing between the kernel points; useful for dilated pooling. Default is 1.
-        ceil_mode (bool): When True, will use ceil instead of floor to compute the output shape. Default is False.
-        count_include_pad (bool): Only used for AvgPool3d. If True, will include the zero-padding in the averaging calculation.
+    pooling_type : Literal["AvgPool3d", "MaxPool3d"], optional, default="AvgPool3d"
+        Type of pooling: ``"AvgPool3d"`` or ``"MaxPool3d"``.
+    kernel_size : int | tuple[int, ...], optional, default=2
+        Size of the pooling window.
+    stride : int | tuple[int, ...] | None, optional, default=None
+        Stride of the pooling. If ``None``, uses ``kernel_size``.
+    padding : int | tuple[int, ...], optional, default=0
+        Implicit zero padding on both sides of the input.
+    dilation : int | tuple[int, ...], optional, default=1
+        Spacing between kernel points (only for ``MaxPool3d``).
+    ceil_mode : bool, optional, default=False
+        If ``True``, use ceil instead of floor to compute output shape.
+    count_include_pad : bool, optional, default=True
+        For ``AvgPool3d`` only: include zero-padding in averaging.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The processed output tensor.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Pooled output tensor of shape :math:`(B, C, D', H', W')`.
     """
 
     def __init__(
         self,
-        pooling_type: str = "AvgPool3d",
-        kernel_size: Union[int, tuple] = 2,
-        stride: Optional[Union[int, tuple]] = None,
-        padding: Union[int, tuple] = 0,
-        dilation: Union[int, tuple] = 1,
+        pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "AvgPool3d",
+        kernel_size: int | tuple[int, ...] = 2,
+        stride: int | tuple[int, ...] | None = None,
+        padding: int | tuple[int, ...] = 0,
+        dilation: int | tuple[int, ...] = 1,
         ceil_mode: bool = False,
         count_include_pad: bool = True,
     ):
@@ -304,38 +387,56 @@ class Pool3d(nn.Module):
                 ceil_mode=ceil_mode,
             )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch channels depth height width"]
+    ) -> Float[torch.Tensor, "batch channels depth_out height_out width_out"]:
+        """Forward pass through the pooling layer."""
         return self.pooling(x)
 
 
-class AttentionBlock(nn.Module):
-    """
-    Attention block for the skip connections using LayerNorm instead of BatchNorm.
+class Attention3DBlock(Module):
+    r"""Attention gate for skip connections in 3D U-Net architectures.
 
-    Parameters:
+    Applies an attention mechanism to modulate skip connection features based
+    on the decoder's gating signal. Uses LayerNorm for normalization.
+
+    Parameters
     ----------
-        F_g (int): Number of channels in the decoder's features (query).
-        F_l (int): Number of channels in the encoder's features (key/value).
-        F_int (int): Number of intermediate channels (reduction in feature maps before attention computation).
+    F_g : int
+        Number of channels in the decoder's gating features (query) :math:`C_g`.
+    F_l : int
+        Number of channels in the encoder's skip features (key/value) :math:`C_l`.
+    F_int : int
+        Number of intermediate channels :math:`C_{int}` for attention computation.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The attended skip feature map.
+    g : torch.Tensor
+        Gating signal from decoder of shape :math:`(B, C_g, D, H, W)`.
+    x : torch.Tensor
+        Skip connection features from encoder of shape :math:`(B, C_l, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Attended skip features of shape :math:`(B, C_l, D, H, W)`.
     """
 
-    def __init__(self, F_g, F_l, F_int):
+    def __init__(self, F_g: int, F_l: int, F_int: int):
         super().__init__()
-        # The attention mechanism reduces the feature maps to F_int channels
+        # Project gating signal
         self.W_g = nn.Sequential(
             nn.Conv3d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
             ReshapedLayerNorm(F_int),
         )
 
+        # Project skip connection features
         self.W_x = nn.Sequential(
             nn.Conv3d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
             ReshapedLayerNorm(F_int),
         )
 
+        # Compute attention coefficients
         self.psi = nn.Sequential(
             nn.Conv3d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
             ReshapedLayerNorm(1),
@@ -344,50 +445,83 @@ class AttentionBlock(nn.Module):
 
         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, g, x):
-        # g is the decoder's upsampled features (query)
-        # x is the encoder's skip connection features (key/value)
-        g1 = self.W_g(g)
-        x1 = self.W_x(x)
+    def forward(
+        self,
+        g: Float[torch.Tensor, "batch c_g depth height width"],
+        x: Float[torch.Tensor, "batch c_l depth height width"],
+    ) -> Float[torch.Tensor, "batch c_l depth height width"]:
+        """Forward pass computing attention-weighted skip features."""
+        # Compute attention
+        g1 = self.W_g(g)  # (B, F_int, D, H, W)
+        x1 = self.W_x(x)  # (B, F_int, D, H, W)
         psi = self.relu(g1 + x1)
-        psi = self.psi(psi)
-        return x * psi  # element-wise multiplication with attention mask
+        psi = self.psi(psi)  # (B, 1, D, H, W)
+        return x * psi  # Element-wise multiplication with attention mask
 
 
-class EncoderBlock(nn.Module):
-    """
-    An encoder block that sequentially applies multiple convolutional blocks followed by a pooling operation, aggregating features at multiple scales.
+class Encoder3DBlock(Module):
+    r"""U-Net encoder block with multi-scale feature extraction.
 
-    Parameters:
+    Sequentially applies convolutional blocks with pooling operations to
+    progressively downsample and extract features at multiple scales.
+
+    Parameters
     ----------
-        in_channels (int): Number of channels in the input.
-        feature_map_channels (List[int]): List of the number of channels for each conv block within this encoder.
-        model_depth (int): Number of times the conv-pool operation should be repeated.
-        num_conv_blocks (int): Number of convolutional blocks per depth level.
-        activation (Optional[str]): Type of activation to use. Default is 'relu'.
-        pooling_type (str): Type of pooling to use ('AvgPool3d', 'MaxPool3d').
-        pool_size (int): Size of the window for the pooling operation.
+    in_channels : int
+        Number of input channels :math:`C_{in}`.
+    feature_map_channels : Sequence[int]
+        Channel sizes for each conv block. Length must equal
+        ``model_depth * num_conv_blocks``.
+    kernel_size : int | tuple[int, ...], optional, default=3
+        Size of the convolving kernel.
+    stride : int | tuple[int, ...], optional, default=1
+        Stride of the convolution.
+    model_depth : int, optional, default=4
+        Number of depth levels (conv-pool repetitions).
+    num_conv_blocks : int, optional, default=2
+        Number of convolutional blocks per depth level.
+    activation : str | None, optional, default="relu"
+        Activation function name.
+    padding : int, optional, default=1
+        Padding for convolutions.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    pooling_type : Literal["AvgPool3d", "MaxPool3d"], optional, default="AvgPool3d"
+        Type of pooling.
+    pool_size : int, optional, default=2
+        Pooling window size.
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
+        Additional normalization arguments.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The processed output tensor.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Encoded features at the deepest level.
     """
 
     def __init__(
         self,
         in_channels: int,
-        feature_map_channels: List[int],
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
+        feature_map_channels: Sequence[int],
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
         model_depth: int = 4,
         num_conv_blocks: int = 2,
-        activation: Optional[str] = "relu",
+        activation: str | None = "relu",
         padding: int = 1,
-        padding_mode: str = "zeros",
-        pooling_type: str = "AvgPool3d",
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "AvgPool3d",
         pool_size: int = 2,
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
+        normalization_args: dict | None = None,
     ):
         super().__init__()
 
@@ -402,7 +536,7 @@ class EncoderBlock(nn.Module):
         for depth in range(model_depth):
             for i in range(num_conv_blocks):
                 self.layers.append(
-                    ConvBlock(
+                    Conv3DBlock(
                         in_channels=current_channels,
                         out_channels=feature_map_channels[depth * num_conv_blocks + i],
                         kernel_size=kernel_size,
@@ -420,47 +554,79 @@ class EncoderBlock(nn.Module):
                 depth < model_depth - 1
             ):  # Add pooling between levels but not at the last level
                 self.layers.append(
-                    Pool3d(pooling_type=pooling_type, kernel_size=pool_size)
+                    Pool3D(pooling_type=pooling_type, kernel_size=pool_size)
                 )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
+        """Forward pass through the encoder block."""
         for layer in self.layers:
             x = layer(x)
         return x
 
 
-class DecoderBlock(nn.Module):
-    """
-    A decoder block that sequentially applies multiple transposed convolutional blocks, optionally concatenating features from the corresponding encoder.
+class Decoder3DBlock(Module):
+    r"""U-Net decoder block with upsampling and skip connection support.
 
-    Parameters:
+    Sequentially applies transposed convolutions for upsampling and regular
+    convolutions for feature processing. Designed to concatenate features
+    from the encoder (skip connections) externally.
+
+    Parameters
     ----------
-        in_channels (int): Number of channels in the input.
-        feature_map_channels (List[int]): List of the number of channels for each deconv block within this decoder.
-        model_depth (int): Number of times the deconv operation should be repeated.
-        num_conv_blocks (int): Number of deconvolutional blocks per depth level.
-        conv_activation (Optional[str]): Type of activation to usein conv layers. Default is 'relu'.
-        conv_transpose_activation (Optional[str]): Type of activation to use in deconv layers. Default is None.
+    out_channels : int
+        Number of output channels :math:`C_{out}`.
+    feature_map_channels : Sequence[int]
+        Channel sizes for each layer. Length must equal
+        ``model_depth * num_conv_blocks + 1``.
+    kernel_size : int | tuple[int, ...], optional, default=3
+        Size of the convolving kernel.
+    stride : int | tuple[int, ...], optional, default=1
+        Stride of the convolution.
+    model_depth : int, optional, default=3
+        Number of depth levels.
+    num_conv_blocks : int, optional, default=2
+        Number of convolutional blocks per depth level.
+    conv_activation : str | None, optional, default="relu"
+        Activation for convolutional layers.
+    conv_transpose_activation : str | None, optional, default=None
+        Activation for transposed convolutional layers.
+    padding : int, optional, default=1
+        Padding for convolutions.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
+        Additional normalization arguments.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The processed output tensor.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, D, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Decoded output tensor of shape :math:`(B, C_{out}, D', H', W')`.
     """
 
     def __init__(
         self,
         out_channels: int,
-        feature_map_channels: List[int],
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
+        feature_map_channels: Sequence[int],
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
         model_depth: int = 3,
         num_conv_blocks: int = 2,
-        conv_activation: Optional[str] = "relu",
-        conv_transpose_activation: Optional[str] = None,
+        conv_activation: str | None = "relu",
+        conv_transpose_activation: str | None = None,
         padding: int = 1,
-        padding_mode: str = "zeros",
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
+        normalization_args: dict | None = None,
     ):
         super().__init__()
 
@@ -477,7 +643,7 @@ class DecoderBlock(nn.Module):
             for i in range(num_conv_blocks):
                 if i == 0:
                     self.layers.append(
-                        ConvTranspose(
+                        ConvTranspose3D(
                             in_channels=current_channels,
                             out_channels=current_channels,
                             activation=conv_transpose_activation,
@@ -488,7 +654,7 @@ class DecoderBlock(nn.Module):
                     ]
 
                 self.layers.append(
-                    ConvBlock(
+                    Conv3DBlock(
                         in_channels=current_channels,
                         out_channels=feature_map_channels[depth * num_conv_blocks + i],
                         kernel_size=kernel_size,
@@ -504,7 +670,7 @@ class DecoderBlock(nn.Module):
 
         # Final convolution
         self.layers.append(
-            ConvBlock(
+            Conv3DBlock(
                 in_channels=current_channels,
                 out_channels=out_channels,
                 kernel_size=kernel_size,
@@ -516,7 +682,10 @@ class DecoderBlock(nn.Module):
             )
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch c_in depth height width"]
+    ) -> Float[torch.Tensor, "batch c_out depth_out height_out width_out"]:
+        """Forward pass through the decoder block."""
         for layer in self.layers:
             x = layer(x)
         return x
@@ -539,35 +708,96 @@ class MetaData(ModelMetaData):
 
 
 class UNet(Module):
-    """
-    U-Net model, featuring an encoder-decoder architecture with skip connections.
-    Default parameters are set to replicate the architecture here: https://lmb.informatik.uni-freiburg.de/people/ronneber/u-net/.
+    r"""3D U-Net model with encoder-decoder architecture and skip connections.
 
-    Parameters:
+    Implements the U-Net architecture for volumetric data, featuring an encoder
+    path for multi-scale feature extraction, a decoder path for upsampling, and
+    skip connections to preserve spatial information. Optionally supports
+    attention gates on skip connections.
+
+    Based on the original U-Net paper:
+    `U-Net: Convolutional Networks for Biomedical Image Segmentation
+    <https://lmb.informatik.uni-freiburg.de/people/ronneber/u-net/>`_.
+
+    Parameters
     ----------
-        in_channels (int): Number of channels in the input image.
-        out_channels (int): Number of channels in the output segmentation map.
-        model_depth (int): Number of levels in the U-Net, not counting the bottleneck layer.
-        feature_map_channels (List[int]): Number of channels for each conv block in the encoder and decoder.
-        num_conv_blocks (int): Number of convolutional blocks per level in the encoder and decoder.
-        conv_activation (Optional[str]): Type of activation to usein conv layers. Default is 'relu'.
-        conv_transpose_activation (Optional[str]): Type of activation to use in deconv layers. Default is None.
-        pooling_type (str): Type of pooling operation used in the encoder. Supports "AvgPool3d", "MaxPool3d".
-        pool_size (int): Size of the window for the pooling operation.
+    in_channels : int
+        Number of input channels :math:`C_{in}`.
+    out_channels : int
+        Number of output channels :math:`C_{out}`.
+    kernel_size : int | tuple[int, ...], optional, default=3
+        Size of the convolving kernel.
+    stride : int | tuple[int, ...], optional, default=1
+        Stride of the convolution.
+    model_depth : int, optional, default=5
+        Number of levels in the U-Net (including bottleneck).
+    feature_map_channels : Sequence[int], optional
+        Channel sizes for each conv block. Length must equal
+        ``model_depth * num_conv_blocks``.
+    num_conv_blocks : int, optional, default=2
+        Number of convolutional blocks per level.
+    conv_activation : str | None, optional, default="relu"
+        Activation function for convolutional layers.
+    conv_transpose_activation : str | None, optional, default=None
+        Activation function for transposed convolutional layers.
+    padding : int, optional, default=1
+        Padding for convolutions.
+    padding_mode : Literal["zeros", "reflect", "replicate", "circular"], optional, default="zeros"
+        Padding mode for convolutions.
+    pooling_type : Literal["AvgPool3d", "MaxPool3d"], optional, default="MaxPool3d"
+        Pooling type.
+    pool_size : int, optional, default=2
+        Pooling window size.
+    normalization : Literal["groupnorm", "batchnorm", "layernorm"] | None, optional, default="groupnorm"
+        Normalization type. If ``None``, no normalization is applied.
+    normalization_args : dict | None, optional, default=None
+        Additional normalization arguments.
+    use_attn_gate : bool, optional, default=False
+        Whether to use attention gates on skip connections.
+    attn_decoder_feature_maps : Sequence[int] | None, optional, default=None
+        Decoder channel sizes for attention (required if ``use_attn_gate=True``).
+    attn_feature_map_channels : Sequence[int] | None, optional, default=None
+        Encoder channel sizes for attention (required if ``use_attn_gate=True``).
+    attn_intermediate_channels : int | None, optional, default=None
+        Intermediate channels for attention computation.
+    gradient_checkpointing : bool, optional, default=True
+        Whether to use gradient checkpointing to reduce memory.
 
-    Returns:
+    Forward
     -------
-        torch.Tensor: The processed output tensor.
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, D, H, W)` where :math:`B` is
+        batch size, :math:`D` is depth, :math:`H` is height, and :math:`W` is width.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, D, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.unet import UNet
+    >>> model = UNet(
+    ...     in_channels=1,
+    ...     out_channels=1,
+    ...     model_depth=3,
+    ...     feature_map_channels=[16, 16, 32, 32, 64, 64],
+    ... )
+    >>> x = torch.randn(2, 1, 32, 32, 32)
+    >>> output = model(x)
+    >>> output.shape
+    torch.Size([2, 1, 32, 32, 32])
     """
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: Union[int, tuple] = 3,
-        stride: Union[int, tuple] = 1,
+        kernel_size: int | tuple[int, ...] = 3,
+        stride: int | tuple[int, ...] = 1,
         model_depth: int = 5,
-        feature_map_channels: List[int] = [
+        feature_map_channels: Sequence[int] = (
             64,
             64,
             128,
@@ -578,28 +808,31 @@ class UNet(Module):
             512,
             1024,
             1024,
-        ],
+        ),
         num_conv_blocks: int = 2,
-        conv_activation: Optional[str] = "relu",
-        conv_transpose_activation: Optional[str] = None,
+        conv_activation: str | None = "relu",
+        conv_transpose_activation: str | None = None,
         padding: int = 1,
-        padding_mode: str = "zeros",
-        pooling_type: str = "MaxPool3d",
+        padding_mode: Literal["zeros", "reflect", "replicate", "circular"] = "zeros",
+        pooling_type: Literal["AvgPool3d", "MaxPool3d"] = "MaxPool3d",
         pool_size: int = 2,
-        normalization: Optional[str] = "groupnorm",
-        normalization_args: Optional[dict] = None,
+        normalization: Literal["groupnorm", "batchnorm", "layernorm"]
+        | None = "groupnorm",
+        normalization_args: dict | None = None,
         use_attn_gate: bool = False,
-        attn_decoder_feature_maps=None,
-        attn_feature_map_channels=None,
-        attn_intermediate_channels=None,
+        attn_decoder_feature_maps: Sequence[int] | None = None,
+        attn_feature_map_channels: Sequence[int] | None = None,
+        attn_intermediate_channels: int | None = None,
         gradient_checkpointing: bool = True,
     ):
         super().__init__(meta=MetaData())
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.use_attn_gate = use_attn_gate
         self.gradient_checkpointing = gradient_checkpointing
 
         # Construct the encoder
-        self.encoder = EncoderBlock(
+        self.encoder = Encoder3DBlock(
             in_channels=in_channels,
             feature_map_channels=feature_map_channels,
             kernel_size=kernel_size,
@@ -622,7 +855,7 @@ class UNet(Module):
             ]  # Reverse and discard the first channel
         else:
             decoder_feature_maps = feature_map_channels[::-1]
-        self.decoder = DecoderBlock(
+        self.decoder = Decoder3DBlock(
             out_channels=out_channels,
             feature_map_channels=decoder_feature_maps,
             kernel_size=kernel_size,
@@ -639,9 +872,21 @@ class UNet(Module):
 
         # Initialize attention blocks for each skip connection
         if self.use_attn_gate:
+            if attn_decoder_feature_maps is None:
+                raise ValueError(
+                    "attn_decoder_feature_maps is required when use_attn_gate=True"
+                )
+            if attn_feature_map_channels is None:
+                raise ValueError(
+                    "attn_feature_map_channels is required when use_attn_gate=True"
+                )
+            if attn_intermediate_channels is None:
+                raise ValueError(
+                    "attn_intermediate_channels is required when use_attn_gate=True"
+                )
             self.attention_blocks = nn.ModuleList(
                 [
-                    AttentionBlock(
+                    Attention3DBlock(
                         F_g=attn_decoder_feature_maps[i],
                         F_l=attn_feature_map_channels[i],
                         F_int=attn_intermediate_channels,
@@ -650,27 +895,56 @@ class UNet(Module):
                 ]
             )
 
-    def checkpointed_forward(self, layer, x):
-        """Wrapper to apply gradient checkpointing if enabled."""
+    def _checkpointed_forward(self, layer: nn.Module, x: torch.Tensor) -> torch.Tensor:
+        """Apply gradient checkpointing to a layer if enabled.
+
+        Parameters
+        ----------
+        layer : nn.Module
+            The layer to apply.
+        x : torch.Tensor
+            Input tensor.
+
+        Returns
+        -------
+        torch.Tensor
+            Output of the layer.
+        """
         if self.gradient_checkpointing:
             return checkpoint.checkpoint(layer, x, use_reentrant=False)
         return layer(x)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Float[torch.Tensor, "batch in_channels depth height width"]
+    ) -> Float[torch.Tensor, "batch out_channels depth height width"]:
+        """Forward pass through the U-Net."""
+        # Validate input shape
+        if not torch.compiler.is_compiling():
+            if x.ndim != 5:
+                raise ValueError(
+                    f"Expected 5D input tensor (B, C, D, H, W), "
+                    f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[1] != self.in_channels:
+                raise ValueError(
+                    f"Expected input with {self.in_channels} channels, "
+                    f"got {x.shape[1]} in tensor with shape {tuple(x.shape)}"
+                )
+
         skip_features = []
         # Encoding path
         for layer in self.encoder.layers:
-            if isinstance(layer, Pool3d):
+            if isinstance(layer, Pool3D):
                 skip_features.append(x)
             # Apply checkpointing if enabled
-            x = self.checkpointed_forward(layer, x)
+            x = self._checkpointed_forward(layer, x)
 
         # Decoding path
         skip_features = skip_features[::-1]  # Reverse the skip features
         concats = 0  # Track number of concats
         for layer in self.decoder.layers:
-            if isinstance(layer, ConvTranspose):
-                x = self.checkpointed_forward(layer, x)
+            if isinstance(layer, ConvTranspose3D):
+                x = self._checkpointed_forward(layer, x)
                 if self.use_attn_gate:
                     # Apply attention to the skip connection
                     skip_att = self.attention_blocks[concats](x, skip_features[concats])
@@ -680,21 +954,6 @@ class UNet(Module):
                 concats += 1
             else:
                 # Apply checkpointing for other layers
-                x = self.checkpointed_forward(layer, x)
+                x = self._checkpointed_forward(layer, x)
 
         return x
-
-
-if __name__ == "__main__":
-    inputs = torch.randn(1, 1, 96, 96, 96).cuda()
-    print("The shape of inputs: ", inputs.shape)
-    model = UNet(
-        in_channels=1,
-        out_channels=1,
-        model_depth=5,
-        feature_map_channels=[64, 64, 128, 128, 256, 256, 512, 512, 1024, 1024],
-        num_conv_blocks=2,
-    ).cuda()
-    x = model(inputs)
-    print("model: ", model)
-    print("The shape of output: ", x.shape)

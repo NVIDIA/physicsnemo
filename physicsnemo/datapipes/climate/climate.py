@@ -17,13 +17,12 @@
 
 import json
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import chain
 
 import h5py
 import netCDF4 as nc
 import numpy as np
-import pytz
 import torch
 
 try:
@@ -730,7 +729,7 @@ class ClimateDaliExternalSource(ABC):
 
         # Load sequence of timestamps
         year = self.start_year + year_idx
-        start_time = datetime(year, 1, 1, tzinfo=pytz.utc) + timedelta(
+        start_time = datetime(year, 1, 1, tzinfo=UTC) + timedelta(
             hours=int(in_idx) * self.dt
         )
         timestamps = np.array(

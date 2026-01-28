@@ -19,9 +19,9 @@ from typing import List, Optional, Union
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from torch import Tensor
 
-import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core import ModelMetaData, Module
 from physicsnemo.nn import FCLayer, get_activation
 
@@ -42,35 +42,52 @@ class MetaData(ModelMetaData):
 
 
 class FullyConnected(Module):
-    """A densely-connected MLP architecture
+    r"""A densely-connected MLP architecture.
+
+    This model constructs a multi-layer perceptron with configurable depth,
+    width, activation functions, and optional skip connections. It uses
+    :class:`~physicsnemo.nn.FCLayer` for each hidden layer.
 
     Parameters
     ----------
-    in_features : int, optional
-        Size of input features, by default 512
-    layer_size : int, optional
-        Size of every hidden layer, by default 512
-    out_features : int, optional
-        Size of output features, by default 512
-    num_layers : int, optional
-        Number of hidden layers, by default 6
-    activation_fn : Union[str, List[str]], optional
-        Activation function to use, by default 'silu'
-    skip_connections : bool, optional
-        Add skip connections every 2 hidden layers, by default False
-    adaptive_activations : bool, optional
-        Use an adaptive activation function, by default False
-    weight_norm : bool, optional
-        Use weight norm on fully connected layers, by default False
-    weight_fact : bool, optional
-        Use weight factorization on fully connected layers, by default False
+    in_features : int, optional, default=512
+        Size of input features :math:`D_{in}`.
+    layer_size : int, optional, default=512
+        Size of every hidden layer :math:`D_{hidden}`.
+    out_features : int, optional, default=512
+        Size of output features :math:`D_{out}`.
+    num_layers : int, optional, default=6
+        Number of hidden layers.
+    activation_fn : Union[str, List[str]], optional, default="silu"
+        Activation function to use. Can be a single string or a list of strings
+        (one per layer). Supported values include ``"silu"``, ``"relu"``, ``"gelu"``.
+    skip_connections : bool, optional, default=False
+        Add skip connections every 2 hidden layers.
+    adaptive_activations : bool, optional, default=False
+        Use an adaptive activation function with learnable scaling parameter.
+    weight_norm : bool, optional, default=False
+        Use weight normalization on fully connected layers.
+    weight_fact : bool, optional, default=False
+        Use weight factorization on fully connected layers.
 
-    Example
+    Forward
     -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, D_{in})` where :math:`B` is the batch size.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, D_{out})`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> import physicsnemo.models.mlp
     >>> model = physicsnemo.models.mlp.FullyConnected(in_features=32, out_features=64)
-    >>> input = torch.randn(128, 32)
-    >>> output = model(input)
-    >>> output.size()
+    >>> x = torch.randn(128, 32)
+    >>> output = model(x)
+    >>> output.shape
     torch.Size([128, 64])
     """
 
@@ -88,6 +105,8 @@ class FullyConnected(Module):
     ) -> None:
         super().__init__(meta=MetaData())
 
+        self.in_features = in_features
+        self.out_features = out_features
         self.skip_connections = skip_connections
 
         if adaptive_activations:
@@ -128,7 +147,23 @@ class FullyConnected(Module):
             activation_par=None,
         )
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch in_features"]
+    ) -> Float[Tensor, "batch out_features"]:
+        """Forward pass through the MLP."""
+        # Validate input shape
+        if not torch.compiler.is_compiling():
+            if x.ndim < 2:
+                raise ValueError(
+                    f"Expected input tensor with at least 2 dimensions, "
+                    f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
+                )
+            if x.shape[-1] != self.in_features:
+                raise ValueError(
+                    f"Expected input with {self.in_features} features (last dimension), "
+                    f"got {x.shape[-1]} in tensor with shape {tuple(x.shape)}"
+                )
+
         x_skip: Optional[Tensor] = None
         for i, layer in enumerate(self.layers):
             x = layer(x)
