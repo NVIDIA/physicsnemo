@@ -16,110 +16,22 @@ from physicsnemo.mesh.smoothing import smooth_laplacian
 def create_noisy_sphere(
     n_points: int = 100, noise_scale: float = 0.1, seed: int = 0
 ) -> Mesh:
-    """Create a sphere mesh with added noise."""
-    torch.manual_seed(seed)
+    """Create a noisy sphere mesh using lumpy_sphere primitive.
 
-    # Use golden spiral for uniform distribution
-    indices = torch.arange(n_points, dtype=torch.float32)
-    phi = torch.acos(1 - 2 * (indices + 0.5) / n_points)
-    theta = torch.pi * (1 + 5**0.5) * indices
+    The lumpy_sphere primitive creates a sphere with procedural noise,
+    providing a realistic test mesh without requiring scipy.
+    """
+    from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 
-    x = torch.sin(phi) * torch.cos(theta)
-    y = torch.sin(phi) * torch.sin(theta)
-    z = torch.cos(phi)
-
-    points = torch.stack([x, y, z], dim=1)
-
-    # Add noise
-    points = points + torch.randn_like(points) * noise_scale
-
-    # Create triangulation using Delaunay-like approach (simplified)
-    # For testing, we'll use a simple convex hull approximation
-    # In practice, we'd use scipy or similar
-    from scipy.spatial import ConvexHull
-
-    hull = ConvexHull(points.numpy())
-    cells = torch.tensor(hull.simplices, dtype=torch.int64)
-
-    return Mesh(points=points, cells=cells)
-
-
-def create_open_cylinder(
-    radius: float = 1.0, height: float = 2.0, n_circ: int = 16, n_height: int = 8
-) -> Mesh:
-    """Create an open cylinder (tube) mesh."""
-    # Create points in cylindrical coordinates
-    theta = torch.linspace(0, 2 * torch.pi, n_circ + 1)[:-1]  # Exclude duplicate at 2π
-    z = torch.linspace(0, height, n_height)
-
-    # Grid of points
-    theta_grid, z_grid = torch.meshgrid(theta, z, indexing="ij")
-    x = radius * torch.cos(theta_grid).flatten()
-    y = radius * torch.sin(theta_grid).flatten()
-    z_flat = z_grid.flatten()
-
-    points = torch.stack([x, y, z_flat], dim=1)
-
-    # Create triangular cells
-    cells = []
-    for i in range(n_circ):
-        for j in range(n_height - 1):
-            # Current quad vertices
-            v0 = i * n_height + j
-            v1 = ((i + 1) % n_circ) * n_height + j
-            v2 = ((i + 1) % n_circ) * n_height + (j + 1)
-            v3 = i * n_height + (j + 1)
-
-            # Two triangles per quad
-            cells.append([v0, v1, v2])
-            cells.append([v0, v2, v3])
-
-    cells = torch.tensor(cells, dtype=torch.int64)
-    return Mesh(points=points, cells=cells)
-
-
-def create_cube_mesh(size: float = 1.0, subdivisions: int = 1) -> Mesh:
-    """Create a triangulated cube mesh with sharp 90° edges."""
-    # 8 corners of cube
-    s = size / 2
-    corners = torch.tensor(
-        [
-            [-s, -s, -s],
-            [s, -s, -s],
-            [s, s, -s],
-            [-s, s, -s],  # Bottom face
-            [-s, -s, s],
-            [s, -s, s],
-            [s, s, s],
-            [-s, s, s],  # Top face
-        ],
-        dtype=torch.float32,
+    # Use lumpy_sphere with amplified noise for smoothing tests
+    # subdivisions=1 gives ~80 cells, subdivisions=2 gives ~320 cells
+    # Scale noise_amplitude to be more pronounced for smoothing tests
+    mesh = lumpy_sphere.load(
+        subdivisions=1,
+        noise_amplitude=noise_scale * 3.0,
+        seed=seed,
     )
-
-    # Triangulate 6 faces (2 triangles per face)
-    faces = [
-        # Bottom (z = -s)
-        [0, 1, 2],
-        [0, 2, 3],
-        # Top (z = s)
-        [4, 6, 5],
-        [4, 7, 6],
-        # Front (y = -s)
-        [0, 5, 1],
-        [0, 4, 5],
-        # Back (y = s)
-        [2, 7, 3],
-        [2, 6, 7],
-        # Left (x = -s)
-        [0, 3, 7],
-        [0, 7, 4],
-        # Right (x = s)
-        [1, 5, 6],
-        [1, 6, 2],
-    ]
-
-    cells = torch.tensor(faces, dtype=torch.int64)
-    return Mesh(points=corners, cells=cells)
+    return mesh
 
 
 def measure_roughness(mesh: Mesh) -> float:
@@ -251,7 +163,9 @@ def test_inplace_vs_copy():
 
 def test_boundary_fixed_when_enabled():
     """Boundary vertices should not move when boundary_smoothing=True."""
-    mesh = create_open_cylinder(radius=1.0, height=2.0, n_circ=16, n_height=8)
+    from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
+    mesh = cylinder_open.load(radius=1.0, height=2.0, n_circ=16, n_height=8)
 
     # Get boundary vertices
     from physicsnemo.mesh.boundaries import get_boundary_edges
@@ -278,7 +192,9 @@ def test_boundary_fixed_when_enabled():
 
 def test_boundary_moves_when_disabled():
     """Boundary vertices should move when boundary_smoothing=False."""
-    mesh = create_open_cylinder(radius=1.0, height=2.0, n_circ=16, n_height=8)
+    from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
+    mesh = cylinder_open.load(radius=1.0, height=2.0, n_circ=16, n_height=8)
 
     # Get boundary vertices
     from physicsnemo.mesh.boundaries import get_boundary_edges
@@ -325,7 +241,9 @@ def test_boundary_on_closed_surface():
 
 def test_sharp_edges_preserved():
     """Sharp edges should be preserved when feature_smoothing=True."""
-    mesh = create_cube_mesh(size=2.0)
+    from physicsnemo.mesh.primitives.surfaces import cube_surface
+
+    mesh = cube_surface.load(size=2.0)
 
     # All vertices in a cube are on sharp 90° edges
     # With feature_angle=45°, all vertices should be constrained
@@ -352,7 +270,9 @@ def test_sharp_edges_preserved():
 
 def test_sharp_edges_smoothed():
     """Sharp edges should be smoothed when feature_smoothing=False."""
-    mesh = create_cube_mesh(size=2.0)
+    from physicsnemo.mesh.primitives.surfaces import cube_surface
+
+    mesh = cube_surface.load(size=2.0)
     original_points = mesh.points.clone()
 
     # Smooth without feature preservation
