@@ -16,15 +16,6 @@
 """
 Supports: FCN3, Aurora, FengWu, Pangu, and Mock/Persistence models.
 Output: HEALPix level 6 zarr format.
-
-Usage:
-    python -m forecast.forecast --init_path /path/to/init.zarr --out_dir /path/to/output
-
-Install notes:
-    FCN3: pip install "makani @ git+https://github.com/NVIDIA/modulus-makani.git"
-    Aurora: pip install "microsoft-aurora @ git+https://github.com/NickGeneva/aurora.git"
-    Pangu: pip install earth2studio[pangu]
-    FengWu: pip install earth2studio[onnx]
 """
 
 import argparse
@@ -58,8 +49,6 @@ from io_backend import RegriddingZarrBackend
 
 # Add healda utils to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "training"))
-
 import distributed as dist
 
 logger = logging.getLogger(__name__)

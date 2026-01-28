@@ -19,13 +19,16 @@ import functools
 import warnings
 
 import cftime
+import config.environment as config
 import earth2grid
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import torch
+import zarr
+from utils.storage import get_storage_options
 
-from datasets import features, static_data
+from datasets import catalog, features
 from datasets.analysis_loaders import (
     get_batch_info,
 )
@@ -66,6 +69,32 @@ ENCODE_OPTIONAL_COLUMNS = [
 ENCODE_ALL_COLUMNS = ENCODE_REQUIRED_COLUMNS + ENCODE_OPTIONAL_COLUMNS
 
 
+# Static data loaders (moved from static_data.py)
+@functools.cache
+def load_lfrac(hpx_level) -> torch.Tensor:
+    src_grid = earth2grid.latlon.equiangular_lat_lon_grid(nlat=768, nlon=1536)
+    hpx_grid = earth2grid.healpix.Grid(
+        level=hpx_level, pixel_order=earth2grid.healpix.NEST
+    )
+    regridder = earth2grid.get_regridder(src_grid, hpx_grid)
+
+    # get static iputs
+    land_data = zarr.open_group(
+        config.UFS_LAND_DATA_ZARR,
+        storage_options=get_storage_options(config.UFS_LAND_DATA_PROFILE),
+    )
+    land_fraction = land_data["lfrac"][:]
+    land_fraction = regridder(torch.from_numpy(land_fraction).to(torch.float64))
+    return land_fraction
+
+
+@functools.cache
+def load_orography() -> np.ndarray:
+    entry = catalog.ufs()
+    group = entry.to_zarr()
+    return group["orog"][:]
+
+
 def _cftime_to_timestamp(time: cftime.DatetimeGregorian) -> float:
     return datetime.datetime(
         *cftime.to_tuple(time), tzinfo=datetime.timezone.utc
@@ -95,8 +124,8 @@ def _compute_timestamp(time: cftime.datetime):
 
 
 def _get_static_condition(HPX_LEVEL, variable_config) -> torch.Tensor:
-    lfrac = static_data.load_lfrac(HPX_LEVEL)
-    orography = static_data.load_orography()
+    lfrac = load_lfrac(HPX_LEVEL)
+    orography = load_orography()
     # insert land mask
     orog_scale, orog_mean = 627.3885284872, 232.56013904090733
     lfrac_scale, lfrac_mean = 0.4695501683565522, 0.3410480857539571

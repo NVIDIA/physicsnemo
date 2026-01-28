@@ -19,7 +19,7 @@ Machine-learning (ML) weather models now rival leading numerical weather predict
 
 ## Installation
 
-### Using uv (recommended)
+### Using uv
 
 ```bash
 # 1. From PhysicsNeMo root directory
@@ -38,13 +38,6 @@ uv pip install --no-build-isolation \
 
 # 5. Install healda dependencies
 uv pip install -r examples/weather/healda/requirements.txt
-```
-
-#### Running training
-
-```bash
-cd examples/weather/healda
-python train.py --help
 ```
 
 ### Using pip
@@ -95,9 +88,9 @@ UFS_LAND_DATA_ZARR=/path/to/land_frac.zarr
 
 ## Data Preparation
 
-HealDA requires preprocessed observation data and ERA5 target fields.
+HealDA requires preprocessed observation data and ERA5 target fields. We source observational data from the [NOAA Unified Forecast System (UFS) GEFSv13 Replay dataset](https://psl.noaa.gov/data/ufs_replay/) (NOAA, 2024).
 
-See [`datasets/etl/`](datasets/etl/) for ETL scripts to prepare observation data into a parquet data format. We source observational data from the UFS Replay.
+See [`datasets/etl/`](datasets/etl/) for ETL scripts to prepare observation data into a parquet data format.
 
 ---
 
@@ -147,15 +140,14 @@ pip install torch-harmonics==0.8.0 --no-build-isolation
 pip install earth2studio[fcn3]
 ```
 
-> **Note:** torch-harmonics CUDA extension build can be slow. See [Earth2Studio docs](https://nvidia.github.io/earth2studio/userguide/about/install.html) for more information.
+> **Note:** See [Earth2Studio docs](https://nvidia.github.io/earth2studio/userguide/about/install.html) for more information or installing other forecast models beyond FCN3.
 
 #### Running forecasts
 
 Use the DA output to initialize the FCN3 forecast model and create a 10-day forecast (40 6-hour steps):
 
 ```bash
-cd scripts
-python forecast.py \
+python scripts/forecast.py \
     --init_path /path/to/da_output.zarr \
     --out_dir /path/to/forecast_output \
     --model FCN3 \
@@ -182,7 +174,15 @@ python scripts/score_forecast.py \
     --output_path /path/to/scores.nc
 ```
 
-> **ACC Metrics:** For Anomaly Correlation Coefficient, provide `--climatology_path` pointing to an ERA5 HEALPix climatology zarr. To create HPX64 climatology from WeatherBench2, use `scripts/preprocess_climatology.py`.
+To plot the metrics:
+
+```bash
+python scripts/plot_panel.py \
+    --stats /path/to/scores.nc \
+    --labels "HealDA-initialized FCN3" \
+    --metric crps \
+    --output_path /path/to/plots/crps_comparison.pdf
+```
 
 See `python inference.py --help` and `python scripts/forecast.py --help` for full options.
 

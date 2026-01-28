@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Plot multi-panel metric comparison (RMSE, ACC, CRPS, etc.)."""
+"""Plot multi-panel metric comparison (RMSE, CRPS, spread, etc.)."""
 
 import argparse
 
@@ -26,10 +26,8 @@ METRIC_LABELS = {
     "crps": "CRPS",
     "rmse_ens": "RMSE",
     "rmse_m0": "RMSE",
-    "acc_ens": "ACC",
-    "acc_m0": "ACC",
     "spread": "Spread",
-    "spread_error": "Spread-Skill Ratio",
+    "ssr": "Spread-Skill Ratio",
 }
 
 
@@ -40,7 +38,7 @@ def main():
     parser.add_argument(
         "--metric",
         default="rmse_ens",
-        help="Metric (rmse_ens, rmse_m0, acc_ens, acc_m0, crps, spread, spread_error)",
+        help="Metric (rmse_ens, rmse_m0, crps, spread, ssr)",
     )
     parser.add_argument("--fields", nargs="+", default=None, help="Fields to plot")
     parser.add_argument("--output_path", default="panel.pdf", help="Output file")

@@ -17,7 +17,6 @@
 """
 Score forecasts against reference (e.g., ERA5).
 Computes ensemble metrics (RMSE, spread, CRPS) per variable and lead time.
-ACC (Anomaly Correlation) computed if climatology provided.
 """
 
 import argparse
@@ -147,84 +146,10 @@ def get_valid_times(forecast: xr.Dataset) -> xr.DataArray:
     return times + lead_time
 
 
-def get_climatology_field(
-    clim_ds: xr.Dataset, field: str, unique_times: np.ndarray
-) -> xr.DataArray:
-    """Get climatology values for specific (dayofyear, hour) pairs"""
-    clim = resolve_field(clim_ds, field)
-    if clim is None:
-        raise ValueError(f"Could not resolve field '{field}' in climatology dataset")
-
-    # Build lookup from stored coordinates
-    d = clim_ds["dayofyear"].values.astype(int)
-    h = clim_ds["hour"].values.astype(int)
-    key_to_time = {(dd, hh): i for i, (dd, hh) in enumerate(zip(d, h))}
-
-    flat = np.array([key_to_time[(dd, hh)] for dd, hh in unique_times], dtype=int)
-    sel = clim.isel(time=xr.DataArray(flat, dims="unique_time"))
-    if "time" in sel.dims:
-        sel = sel.rename({"time": "unique_time"})
-    if "time" in sel.coords:
-        sel = sel.drop_vars("time").assign_coords(
-            {"unique_time": list(range(len(sel.unique_time)))}
-        )
-    return sel
-
-
-def setup_climatology_for_field(
-    clim_ds: xr.Dataset, field: str, valid_times: xr.DataArray
-) -> Optional[xr.DataArray]:
-    """Setup climatology lookup for a field given valid times."""
-    # Adjust dayofyear for non-leap years (climatology uses 366-day calendar)
-    years = valid_times.dt.year.values.ravel()
-    is_leap = (years % 4 == 0) & ((years % 100 != 0) | (years % 400 == 0))
-    hours = valid_times.dt.hour.values.ravel()
-    days = valid_times.dt.dayofyear.values.ravel().copy()
-    days[~is_leap & (days >= 60)] += 1
-
-    # Build unique (day, hour) pairs and mapping
-    unique_times = np.unique(np.column_stack([days, hours]), axis=0)
-    time_to_idx = {(d, h): i for i, (d, h) in enumerate(unique_times)}
-    time_indices = np.array([time_to_idx[(d, h)] for d, h in zip(days, hours)])
-    time_indices = time_indices.reshape(valid_times.shape)  # (lead_time, time)
-
-    time_indices_da = xr.DataArray(
-        time_indices,
-        dims=("lead_time", "time"),
-        coords={"lead_time": valid_times.lead_time, "time": valid_times.time},
-    )
-
-    try:
-        clim_field = get_climatology_field(clim_ds, field, unique_times)
-        return clim_field.isel(unique_time=time_indices_da)  # (lead_time, time, cells)
-    except (ValueError, KeyError) as e:
-        logger.warning(f"Could not load climatology for {field}: {e}")
-        return None
-
-
-def compute_acc(
-    pred: torch.Tensor, ref: torch.Tensor, clim: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute ACC for ensemble mean and member 0."""
-    ref_xr = xr.DataArray(ref.cpu().numpy(), dims=["lead_time", "cells"])
-    pred_xr = xr.DataArray(pred.cpu().numpy(), dims=["lead_time", "cells", "ensemble"])
-    clim_xr = xr.DataArray(clim.cpu().numpy(), dims=["lead_time", "cells"])
-    ref_anom = ref_xr - clim_xr
-    pred_anom = pred_xr - clim_xr
-
-    # Ensemble-mean ACC
-    acc_ens = xr.corr(ref_anom, pred_anom.mean("ensemble"), dim="cells")
-    # Member 0 ACC
-    acc_m0 = xr.corr(ref_anom, pred_anom.isel(ensemble=0), dim="cells")
-
-    return torch.from_numpy(acc_ens.values), torch.from_numpy(acc_m0.values)
-
-
 @torch.no_grad()
 def compute_metrics_for_field(
     reference_ds: xr.Dataset,
     forecast_ds: xr.Dataset,
-    climatology_ds: Optional[xr.Dataset],
     field: str,
     forecast_format: Literal["nest", "ring", "hpxpadxy"],
     reference_format: Literal["nest", "ring", "hpxpadxy"],
@@ -250,13 +175,6 @@ def compute_metrics_for_field(
     valid_times = get_valid_times(forecast)
     forecast = forecast.sel(time=valid_times.time)
     reference = reference.sel(time=valid_times)
-
-    # Climatology setup (optional - for ACC)
-    climatology_cells = None
-    if climatology_ds is not None:
-        climatology_cells = setup_climatology_for_field(
-            climatology_ds, field, valid_times
-        )
 
     metrics_list = []
     nan_warning_count = 0
@@ -285,14 +203,6 @@ def compute_metrics_for_field(
         metrics_t = unbiased_ensemble_metrics(forecast_t, reference_t)
         metrics_t["mse_m0"] = (forecast_t[:, :, 0] - reference_t) ** 2
 
-        if climatology_cells is not None:
-            climatology_t = torch.as_tensor(
-                climatology_cells.isel(time=t).transpose("lead_time", "cells").values
-            ).to(device)
-            acc_ens, acc_m0 = compute_acc(forecast_t, reference_t, climatology_t)
-            metrics_t["acc_ens"] = acc_ens
-            metrics_t["acc_m0"] = acc_m0
-
         metrics_list.append({k: v.cpu() for k, v in metrics_t.items()})
         del reference_t, forecast_t
         if torch.cuda.is_available():
@@ -317,11 +227,6 @@ def compute_metrics_for_field(
             torch.sqrt(torch.clamp(reduce_avg(metrics["mse_m0"]), min=0)).numpy(),
         ),
     }
-
-    if "acc_ens" in metrics:
-        data_vars["acc_ens"] = (("lead_time",), metrics["acc_ens"].mean(0).numpy())
-    if "acc_m0" in metrics:
-        data_vars["acc_m0"] = (("lead_time",), metrics["acc_m0"].mean(0).numpy())
 
     # Ensemble metrics (spread, CRPS, SSR)
     if "variance" in metrics:
@@ -349,17 +254,12 @@ def score_forecast(
     reference_path: str,
     forecast_path: str,
     fields: list[str],
-    climatology_path: Optional[str] = None,
     forecast_format: Literal["nest", "ring", "hpxpadxy"] = "nest",
     reference_format: Literal["nest", "ring", "hpxpadxy"] = "hpxpadxy",
 ) -> xr.Dataset:
     """Score forecast against reference with parallel processing across fields."""
     reference_ds = open_any(reference_path)
     forecast_ds = open_any(forecast_path)
-    climatology_ds = open_any(climatology_path) if climatology_path else None
-
-    if climatology_ds is None:
-        logger.info("No climatology provided, ACC metrics will not be computed")
 
     fields = get_common_fields([reference_ds, forecast_ds], fields)
     num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
@@ -369,7 +269,6 @@ def score_forecast(
         compute_metrics_for_field,
         reference_ds,
         forecast_ds,
-        climatology_ds,
         forecast_format=forecast_format,
         reference_format=reference_format,
         num_gpus=num_gpus,
@@ -417,12 +316,6 @@ def main():
         help="Path to reference zarr (from inference.py --use_analysis)",
     )
     parser.add_argument(
-        "--climatology_path",
-        type=str,
-        default=None,
-        help="Path to climatology zarr (for ACC, from preprocess_climatology.py)",
-    )
-    parser.add_argument(
         "--output_path", type=str, required=True, help="Path to save metrics (.nc)"
     )
     parser.add_argument(
@@ -457,7 +350,6 @@ def main():
         reference_path=args.reference_path,
         forecast_path=args.forecast_path,
         fields=fields,
-        climatology_path=args.climatology_path,
         forecast_format=args.forecast_format,
         reference_format=args.reference_format,
     )

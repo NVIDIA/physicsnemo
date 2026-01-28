@@ -29,9 +29,6 @@ CACHE_DIR = os.path.expanduser("~/.cache/healda")
 V6_ERA5_ZARR = os.getenv("V6_ERA5_ZARR", "")
 V6_ERA5_ZARR_PROFILE = os.getenv("V6_ERA5_ZARR_PROFILE", "")
 
-# Climatology processed from WeatherBench2
-ERA5_CLIMATOLOGY_ZARR = os.getenv("ERA5_CLIMATOLOGY_ZARR", "")
-
 ########
 # UFS #
 ########
