@@ -30,6 +30,7 @@ from datasets.sensors import (
     CONV_UV_IN_SITU_TYPES,
     SENSOR_CONFIGS,
     SENSOR_OFFSET,
+    QCLimits,
 )
 
 
@@ -61,11 +62,18 @@ def _get_conv_filter_expr(
     """Get filter expression for conventional observations."""
     is_gps = local_id <= 2
 
-    height_ok = pc.is_finite(height) & ((height >= 0) & (height <= 60000))
+    # Use QCLimits from sensors.py (single source of truth)
+    height_ok = pc.is_finite(height) & (
+        (height >= QCLimits.HEIGHT_MIN) & (height <= QCLimits.HEIGHT_MAX)
+    )
 
-    min_pressure = pc.if_else(is_gps, pa.scalar(0.5), pa.scalar(200))
+    min_pressure = pc.if_else(
+        is_gps,
+        pa.scalar(QCLimits.PRESSURE_MIN_GPS),
+        pa.scalar(QCLimits.PRESSURE_MIN_DEFAULT),
+    )
     pressure_ok = pc.is_finite(pressure)
-    pressure_ok &= (pressure >= min_pressure) & (pressure <= 1100)
+    pressure_ok &= (pressure >= min_pressure) & (pressure <= QCLimits.PRESSURE_MAX)
 
     ok = pressure_ok & height_ok
 

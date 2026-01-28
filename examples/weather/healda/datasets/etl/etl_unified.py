@@ -29,6 +29,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 from datasets.etl.combined_schema import (
@@ -44,6 +45,8 @@ from datasets.sensors import (
     get_global_channel_id,
 )
 
+load_dotenv()
+
 memory = joblib.Memory(".cache")
 
 TEST = False
@@ -51,8 +54,6 @@ TEST = False
 # Set single-threaded Arrow for better parallelization
 os.environ["ARROW_NUM_THREADS"] = "1"
 
-DEFAULT_UFS_RAW_OBS_DIR = "/lustre/fs1/portfolios/coreai/projects/coreai_climate_earth2/datasets/ufs-replay/raw_obs"
-DEFAULT_BASE_DIR = "/lustre/fs1/portfolios/coreai/projects/coreai_climate_earth2/datasets/ufs-replay/processed_obs_v6"
 
 # Satellite sensor columns
 SATELLITE_COLUMNS = [
@@ -155,14 +156,14 @@ def parse_args():
     parser.add_argument(
         "--input-dir",
         type=str,
-        default=DEFAULT_UFS_RAW_OBS_DIR,
-        help=f"Input directory containing raw observation files (default: {DEFAULT_UFS_RAW_OBS_DIR})",
+        default=os.getenv("UFS_RAW_OBS_DIR"),
+        help="Input directory containing raw observation files (default: $UFS_RAW_OBS_DIR from .env)",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default=DEFAULT_BASE_DIR,
-        help=f"Base output directory for processed data (default: {DEFAULT_BASE_DIR})",
+        default=os.getenv("UFS_OBS_PATH"),
+        help="Output directory for processed parquet data (default: $UFS_OBS_PATH from .env)",
     )
     parser.add_argument(
         "--type",

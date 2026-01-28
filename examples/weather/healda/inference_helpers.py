@@ -19,8 +19,10 @@ import enum
 import warnings
 from typing import TypedDict
 
+import numpy as np
 import pandas as pd
 import torch
+import zarr
 from datasets.dataset import VARIABLE_CONFIGS
 from datasets.dataset import (
     get_dataset as get_dataset_ufs,
@@ -101,36 +103,31 @@ class InnovationType(enum.Enum):
     UNADJUSTED = "unadjusted"
 
 
-class SaveMode(enum.Enum):
-    """Controls which data to save during inference."""
-
-    DATA = "data"  # Save only ground truth
-    INFERENCE = "inference"  # Save only model outputs
-    ALL = "all"  # Save both
-
-
 @dataclasses.dataclass
 class DAConfig:
     checkpoint_path: a[str, Help("Path to the checkpoint file")]
-    output_path: a[str, Help("Output NetCDF file path")] = "da_regression_output"
-    dataset: a[str, Help("Dataset to use (ufs or era5)")] = "ufs"
-    innovation_type: InnovationType = InnovationType.NONE
-    num_samples: a[int, Help("Number of samples to generate")] = 32
+    output_path: a[str, Help("Output zarr file path")] = "healda_analysis.zarr"
+    dataset: a[str, Help("Dataset to use (ufs or era5)")] = "era5"
+    innovation_type: a[InnovationType, Help("Obs-minus-background type")] = (
+        InnovationType.NONE
+    )
+    num_samples: a[int, Help("Number of samples (-1 for all)")] = 32
     time_frequency: a[str, Help("Spacing to sample times from")] = "12h"
-    use_infrared: a[bool, Help("Use infrared")] = False
-    use_conv: a[bool, Help("Use conv")] = True
-    context_start: a[int, Help("Context start (hours)")] = -21
-    context_end: a[int, Help("Context end (hours)")] = 3
-    batch_gpu: a[int, Help("Batch size")] = 8
-    z06_18_inits: a[bool, Help("Use 06z and 18z inits instead of 00z/12z")] = False
-    save_mode: SaveMode = SaveMode.ALL
-    use_analysis: bool = False
-    conv_uv_in_situ_only: bool = False
-    conv_gps_level1_only: bool = False
-    post_process_to_fcn3: bool = False
-    blend: float | None = None  # weight of forecast defaults to 0
-    use_class_labels: bool = False
-    use_12hr_residual_stats: bool = False
+    use_infrared: a[bool, Help("Use infrared observations")] = False
+    use_conv: a[bool, Help("Use conventional observations")] = True
+    context_start: a[int, Help("Obs window start (hours before analysis)")] = -21
+    context_end: a[int, Help("Obs window end (hours after analysis)")] = 3
+    batch_gpu: a[int, Help("Batch size per GPU")] = 8
+    z06_18_inits: a[bool, Help("Use 06z/18z inits instead of 00z/12z")] = False
+    use_analysis: a[
+        bool,
+        Help(
+            "Save out ground truth target dataset instead of predicted HealDA analysis"
+        ),
+    ] = False
+    conv_uv_in_situ_only: a[bool, Help("Exclude satellite UV (keep in-situ)")] = False
+    conv_gps_level1_only: a[bool, Help("Exclude GPS T/Q (keep bending angle)")] = False
+    use_class_labels: a[bool, Help("Use class labels for conditioning")] = False
     split: a[str, Help("Test (2022) or Train (2021)")] = "test"
 
 
@@ -165,7 +162,6 @@ class DAModel:
         )
         self._batch_info = None
         self.use_class_labels = args.use_class_labels
-        self.use_12hr_residual_stats = args.use_12hr_residual_stats
 
         self.variable_config = (
             VARIABLE_CONFIGS["default"]
@@ -297,8 +293,6 @@ def setup_zarr_output(
     Returns:
         Opened zarr group (mode='w')
     """
-    import numpy as np
-    import zarr
 
     group = zarr.open_group(output_path, mode="w")
 
@@ -330,126 +324,3 @@ def setup_zarr_output(
 
     zarr.consolidate_metadata(group.store)
     return group
-
-
-def post_process_to_fcn3(da_zarr_path: str, batch_info, pixel_order=None):
-    """Convert HPX zarr to FCN3-compatible lat-lon format.
-
-    Saves a fcn3 compatible zarr file, renaming and regridding fields. Saves to
-    original path with "_fcn3" suffix.
-
-    Args:
-        da_zarr_path: Path to input HPX zarr file
-        batch_info: BatchInfo object with channel names and normalization
-        pixel_order: HEALPix pixel ordering (default: HEALPIX_PAD_XY)
-
-    Returns:
-        Path to output fcn3 zarr file
-    """
-    import earth2grid
-    import numpy as np
-    import torch
-    import xarray as xr
-    import zarr
-    from earth2grid import healpix
-
-    if pixel_order is None:
-        pixel_order = earth2grid.healpix.HEALPIX_PAD_XY
-
-    da = xr.open_zarr(da_zarr_path)
-
-    out_map = {
-        "tcwv": "tcwv",
-        "tas": "t2m",
-        "uas": "u10m",
-        "vas": "v10m",
-        "100u": "u100m",
-        "100v": "v100m",
-        "pres_msl": "msl",
-    }
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # ---- rename and convert to torch ----
-    field_dict = {}
-    for c, name in enumerate(batch_info.channels):
-        arr_torch = torch.from_numpy(da[name].values.astype(np.float32)).to(device)
-        if name in out_map:
-            out_name = out_map[name]
-        else:
-            out_name = name.lower()
-        field_dict[out_name] = arr_torch
-
-    # ---- HPX -> lat-lon regridder ----
-    hpx_grid = healpix.Grid(level=6, pixel_order=pixel_order)
-    ll_grid = earth2grid.latlon.equiangular_lat_lon_grid(nlat=721, nlon=1440)
-    regridder = earth2grid.get_regridder(hpx_grid, ll_grid).to(torch.float32).to(device)
-
-    # ---- out zarr ----
-    out_store = da_zarr_path.rstrip("/").split(".zarr")[0] + "_fcn3.zarr"
-    g = zarr.open_group(out_store, mode="w")
-    print(f"out_store: {out_store}")
-
-    # get times from da
-    times_array = da["time"].values
-    time_v = g.create_array(
-        "time",
-        dtype=np.int64,
-        shape=times_array.shape,
-        chunks=times_array.shape,
-        dimension_names=["time"],
-    )
-    time_v[:] = times_array.astype("datetime64[s]").astype(np.int64)
-    time_v.attrs["units"] = "seconds since 1970-01-01 00:00:00"
-    time_v.attrs["calendar"] = "standard"
-
-    lat_arr = np.asarray(ll_grid.lat).squeeze()
-    if lat_arr.ndim != 1:  # handles (721,1)
-        lat_arr = lat_arr[:, 0]
-
-    lon_arr = np.asarray(ll_grid.lon).squeeze()
-    if lon_arr.ndim != 1:  # handles (1,1440)
-        lon_arr = lon_arr[0, :]
-
-    lat_v = g.create_array(
-        "lat",
-        dtype=np.float32,
-        shape=lat_arr.shape,
-        chunks=lat_arr.shape,
-        dimension_names=["lat"],
-    )
-    lat_v[:] = lat_arr
-
-    lon_v = g.create_array(
-        "lon",
-        dtype=np.float32,
-        shape=lon_arr.shape,
-        chunks=lon_arr.shape,
-        dimension_names=["lon"],
-    )
-    lon_v[:] = lon_arr
-
-    src_dims = da["tcwv"].dims
-
-    for name, arr in field_dict.items():
-        # flatten all leading dims, regrid each slice
-        lead_shape = arr.shape[:-1]
-        out = regridder(arr).cpu().numpy()
-
-        dim_names = tuple(src_dims[:-1]) + ("lat", "lon")
-        chunks = (*((1,) * len(lead_shape)), 721, 1440)
-
-        g.create_array(
-            name,
-            shape=out.shape,
-            dtype="f",
-            chunks=chunks,
-            fill_value=np.float32("nan"),
-            dimension_names=dim_names,
-            compressors=None,
-            overwrite=True,
-        )[:] = out
-
-    zarr.consolidate_metadata(g.store)
-
-    return out_store

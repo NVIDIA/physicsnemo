@@ -25,7 +25,6 @@ from datasets.transform import TransformV2, collate
 from inference_helpers import (
     DAConfig,
     DAModel,
-    post_process_to_fcn3,
     scoring_times,
     setup_zarr_output,
     write_to_zarr,
@@ -42,16 +41,12 @@ def _device_transform(batch, transform, device):
 def main():
     args = parse_args(DAConfig, convert_underscore_to_hyphen=False)
 
-    if args.post_process_to_fcn3 and args.dataset != "era5":
-        raise ValueError("can only post process to fcn3 if ussing ERA5 data")
-
     dist.init(timeout_infinite=True)
     dist.print0("Inference configuration:")
     dist.print0(f"  Dataset: {args.dataset}")
     dist.print0(f"  Innovation type: {args.innovation_type.value}")
     dist.print0(f"  Number of samples: {args.num_samples}")
     dist.print0(f"  Output: {args.output_path}")
-    dist.print0(f"  Save mode: {args.save_mode.value}")
 
     # Load the checkpoint
     dist.print0(f"Loading checkpoint from {args.checkpoint_path}")
@@ -146,9 +141,6 @@ def main():
                 raise KeyError(output_index, batch_times)
 
             write_to_zarr(group, channels, output_index, analysis_scaled.numpy())
-
-    if args.post_process_to_fcn3:
-        post_process_to_fcn3(args.output_path, da_model.batch_info)
 
     if dist.get_world_size() > 1:
         torch.distributed.barrier()

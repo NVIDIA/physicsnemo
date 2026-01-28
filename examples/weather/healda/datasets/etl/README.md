@@ -11,48 +11,55 @@ Pipeline to prepare UFS observation data for training.
 4. Re-run etl_unified.py   Regenerate channel_table with actual normalization stats
 ```
 
+## Configuration
+
+Configure paths in your `.env` file (see main [README](../../README.md)):
+
+- `UFS_RAW_OBS_DIR` — where raw NC4 files are downloaded
+- `UFS_OBS_PATH` — where processed parquet files are stored
+
 ## Step 1: Download
 
 `pull_from_noaa_s3.sh` downloads GSI diagnostic files from the public NOAA
 GEFS-v13 replay archive.
 
-- Edit `YEARS`, `SENSORS`, `KIND` in the script
+```bash
+./pull_from_noaa_s3.sh
+```
+
+- Downloads to `UFS_RAW_OBS_DIR` from `.env`
+- Edit `YEARS`, `SENSORS`, `KIND` in the script as needed
 - Requires [`s5cmd`](https://github.com/peak/s5cmd#installation)
-- Run with `--dry-run` to preview
 
 ## Step 2: Process
 
 `etl_unified.py` converts NC4 files to parquet with a unified schema.
 
-Example:
-
 ```bash
-python3 etl_unified.py \
-    --output-dir /path/to/output \
-    --sensor amsua,conv,atms,amsub,mhs \
-    --num-workers 32
+python3 etl_unified.py --sensor amsua,conv,atms,amsub,mhs --num-workers 32
 ```
+
+Defaults to `$UFS_RAW_OBS_DIR` as input and `$UFS_OBS_PATH` output dir using `.env`.
 
 ## Normalization Stats
 
-Normalization stats (mean/std per channel) are loaded from CSV files in
-`normalizations/`.
+Normalization stats (mean/std/min/max per channel) are stored in `etl/normalizations/`.
 
 **If CSVs are missing:** ETL defaults to mean=0, std=1 (with a warning).
-The observation parquet files are still valid — only the
-`channel_table.parquet` needs regeneration after computing proper stats.
+The observation parquet files are still valid — only `channel_table.parquet`
+needs regeneration after computing proper stats. If using our pretrained
+checkpoint, use the provided CSVs instead of recomputing to prevent any differences.
 
 **To recompute stats for new sensors:**
 
-1. Run ETL to produce parquet (stats will default to mean 0 and std 1)
-2. Run `compute_normalizations.py --data-root /path/to/output`
-3. Regenerate channel table:
-   `python3 etl_unified.py --output-dir /path/to/output --channel-table-only`
+1. Run ETL to produce parquet (stats will default to mean=0, std=1)
+1. Compute normalizations: `python3 compute_normalizations.py --sensors conv,amsua`
+1. Regenerate channel table: `python3 etl_unified.py --channel-table-only`
 
 ## Output Structure
 
 ```text
-processed_obs_v6_ges/
+processed_obs_v7_ges/
 ├── channel_table.parquet   # Channel metadata (IDs, normalization stats)
 ├── amsua/
 │   └── 20220101/0.parquet

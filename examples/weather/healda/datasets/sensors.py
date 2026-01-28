@@ -145,6 +145,18 @@ SENSOR_CONFIGS = {
 }
 
 
+class QCLimits:
+    """Conventional Observation QC filtering limits."""
+
+    # Height limits (meters)
+    HEIGHT_MIN = 0
+    HEIGHT_MAX = 60000
+    # Pressure limits (hPa)
+    PRESSURE_MIN_GPS = 0.5
+    PRESSURE_MIN_DEFAULT = 200
+    PRESSURE_MAX = 1100
+
+
 # Concept of platform for conv is only used in etl, does not apply outside of etl. All conv obs have platform 0
 @dataclass(frozen=True)
 class ConvChannel:
@@ -170,6 +182,7 @@ CONV_CHANNELS = [
 
 CONV_CHANNEL_NAMES = [c.name for c in CONV_CHANNELS]
 CONV_PLATFORMS = list(dict.fromkeys(c.platform for c in CONV_CHANNELS))
+CONV_GPS_CHANNELS = [i for i, c in enumerate(CONV_CHANNELS) if c.platform == "gps"]
 CONV_GPS_LEVEL2_CHANNELS = [
     i for i, c in enumerate(CONV_CHANNELS) if c.name in ("gps_t", "gps_q")
 ]
@@ -238,6 +251,9 @@ for name, cfg in SENSOR_CONFIGS.items():
     SENSOR_OFFSET[name] = offset
     offset += cfg.channels
 NCHANNEL = _next_power_of_two(max(offset, 1024))  # 1024
+
+# GPS channel Global_Channel_IDs (for use in SQL queries against parquet)
+CONV_GPS_GLOBAL_IDS = [SENSOR_OFFSET["conv"] + i for i in CONV_GPS_CHANNELS]
 
 
 SENSOR_NAME_TO_ID = {name: idx for idx, name in enumerate(SENSOR_CONFIGS.keys())}

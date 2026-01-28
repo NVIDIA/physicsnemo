@@ -66,7 +66,7 @@ def test_patch_embed():
 
 
 @pytest.mark.parametrize("checkpoint", [0, 1, 2])
-def test_dit(checkpoint):
+def test_dit(checkpoint, device):
     torch.manual_seed(0)
     net = DiT(
         num_layers=1,
@@ -77,7 +77,6 @@ def test_dit(checkpoint):
         label_dim=0,
     )
     net.gradient_checkpointing = checkpoint
-    device = "cuda"
     net.to(device)
 
     noise_labels = torch.zeros([1], device=device)
@@ -101,7 +100,7 @@ def test_dit(checkpoint):
     out.out.sum().backward()
 
 
-def test_dit_localize():
+def test_dit_localize(device):
     net = DiT(
         num_layers=1,
         level_in=4,
@@ -110,7 +109,6 @@ def test_dit_localize():
         in_channels=3,
         out_channels=3,
     )
-    device = "cuda"
     net.to(device)
 
     noise_labels = torch.ones([1], device=device)
@@ -282,9 +280,8 @@ def test_dit_with_observations(t, device):
     assert model.embed_v2_patch is not None
 
 
-def test_subdomain_dit():
+def test_subdomain_dit(device):
     """Test DiT with subdomain argument for regional processing."""
-    device = "cuda"
     level_in = 6
     level_model = 4
 

@@ -65,6 +65,34 @@ pip install -r requirements.txt
 
 ---
 
+## Configuration
+
+Create a `.env` file in the `examples/weather/healda/` directory with the following:
+
+```bash
+# Project paths
+PROJECT_ROOT=/path/to/project
+
+# Raw observation data (NC4 files downloaded from NOAA S3)
+UFS_RAW_OBS_DIR=/path/to/raw_obs
+
+# Processed observation data (parquet from ETL)
+UFS_OBS_PATH=/path/to/processed_obs
+# UFS_OBS_PROFILE=
+
+# ERA5 HEALPix zarr (training targets)
+V6_ERA5_ZARR=/path/to/era5_hpx.zarr
+# V6_ERA5_ZARR_PROFILE=
+
+# Land fraction mask
+UFS_LAND_DATA_ZARR=/path/to/land_frac.zarr
+# UFS_LAND_DATA_PROFILE=  
+```
+
+> **Note:** The `*_PROFILE` variables configure [rclone](https://rclone.org/) S3 profiles for cloud storage access. Leave empty for local paths.
+
+---
+
 ## Data Preparation
 
 HealDA requires preprocessed observation data and ERA5 target fields.
@@ -76,20 +104,68 @@ See [`datasets/etl/`](datasets/etl/) for ETL scripts to prepare observation data
 ## Training
 
 ```bash
-python train.py --help
+python train.py --name era5-v2-dense-noInfill-10M-fusion512-lrObs1e-4
 ```
 
-<!-- TODO: Add training configuration and examples -->
+This uses the paper configuration defined in `train.py`. See `python train.py --help` for options.
+
+> **Resource Requirements:** Training takes approximately **8.3 days on 1 H100 node** (8 GPUs total) with batch size 1 per GPU.
 
 ---
 
 ## Inference
 
+### Step 1: Generate DA Analysis (Initial Conditions)
+
+The following produces analyses for all of 2022. `See inference_helpers.py` to configure inference. Inference only requires ~20GB of memory and can produce an analysis in under 1 second on a single H100.
 ```bash
-python inference.py --help
+python inference.py \
+    /path/to/checkpoint.pt \
+    --output_path /path/to/da_output.zarr \
+    --context_start -21 \
+    --context_end 3 \
+    --time_frequency 6h \
+    --num_samples -1 \
+    --batch_gpu 1
 ```
 
-<!-- TODO: Add inference examples -->
+### Step 2: Forecast from HealDA initial conditions
+
+Use the DA output to initialize the FCN3 forecast model and create a 10-day forecast (40 6-hour steps):
+
+```bash
+cd scripts
+python forecast.py \
+    --init_path /path/to/da_output.zarr \
+    --out_dir /path/to/forecast_output \
+    --model FCN3 \
+    --num_steps 40 \
+    --num_ensemble 1 \
+    --num_times 1
+```
+
+> **Note:** The forecast script:
+> - Regrids HealDA analysis (HPX64) → 0.25° lat-lon for FCN3 input
+> - Regrids FCN3 output (0.25° lat-lon) → HPX64 NEST format for storage
+> - Maps field names automatically (e.g., `Z500` → `z500`)
+
+> **ERA5-initialized forecasts:** To create forecasts from ERA5 instead of DA output, run `inference.py` with `--use_analysis` flag to create an ERA5 zarr in the same format, then use that as `--init_path`.
+
+
+### Step 3: Score Forecasts
+
+Score forecasts against a reference dataset (also on HPX64 grid):
+
+```bash
+python scripts/score_forecast.py \
+    --forecast_path /path/to/forecast.zarr \
+    --reference_path /path/to/era5.zarr \
+    --output_path /path/to/scores.nc
+```
+
+> **ACC Metrics:** For Anomaly Correlation Coefficient, provide `--climatology_path` pointing to an ERA5 HEALPix climatology zarr. To create HPX64 climatology from WeatherBench2, use `scripts/preprocess_climatology.py`.
+
+See `python inference.py --help` and `python scripts/forecast.py --help` for full options.
 
 ---
 
