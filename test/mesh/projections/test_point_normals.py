@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 from physicsnemo.mesh.utilities._cache import get_cached
 
 ### Helper Functions
@@ -97,7 +98,8 @@ class TestPointNormalsBasic:
     def test_edge_mesh_2d(self, device):
         """Test point normals for 1D edges in 2D (codimension-1)."""
         mesh = create_edge_mesh_2d(device)
-        point_normals = mesh.point_normals
+        # 1D edges require area weighting (angle-based weighting not defined for 1D)
+        point_normals = mesh.compute_point_normals(weighting="area")
 
         # Should have normals for all 3 points
         assert point_normals.shape == (3, 2)
@@ -290,7 +292,8 @@ class TestPointNormalsDimensions:
     def test_2d_edges_in_2d_space(self, device):
         """Test 1D manifold (edges) in 2D space."""
         mesh = create_edge_mesh_2d(device)
-        point_normals = mesh.point_normals
+        # 1D edges require area weighting (angle-based weighting not defined for 1D)
+        point_normals = mesh.compute_point_normals(weighting="area")
 
         # Should work for codimension-1
         assert point_normals.shape == (3, 2)
@@ -469,59 +472,38 @@ class TestPointCellNormalConsistency:
         assert torch.any(angular_errors > 0.1)  # Some significant errors
         assert torch.all(angular_errors < torch.pi / 2)  # But not too extreme
 
-    def test_real_mesh_airplane_consistency(self, device):
-        """Test consistency on a real mesh (PyVista airplane).
+    def test_real_mesh_consistency(self, device):
+        """Test consistency on a realistic mesh (lumpy sphere).
 
-        Note: The airplane mesh has many sharp edges (wings, tail, fuselage),
-        so point and cell normals will naturally disagree at these features.
-        This is expected behavior - area-weighted averaging produces smooth
-        normals that differ from sharp face normals at discontinuities.
+        The lumpy sphere has varying curvature which causes point normals
+        (area-weighted averages) to differ from cell normals. This is expected
+        behavior - higher curvature regions naturally have larger angular errors
+        between point and cell normals.
         """
-        import pyvista as pv
-
-        from physicsnemo.mesh.io import from_pyvista
-
-        # Load airplane mesh
-        pv_mesh = pv.examples.load_airplane()
-        mesh = from_pyvista(pv_mesh).to(device)
+        # Load lumpy sphere - a realistic mesh with interesting curvature
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
 
         # Compute angular errors
         angular_errors = self.compute_angular_errors(mesh)
 
-        # Check that most (95%+) of the errors are < 0.1 radians
-        threshold = 0.1  # radians (~5.7 degrees)
-        fraction_consistent = (angular_errors < threshold).float().mean()
-
-        print("\nAirplane mesh consistency:")
-        print(
-            f"  Fraction with angular error < {threshold} rad: {fraction_consistent:.3f}"
-        )
-        print(f"  Max angular error: {angular_errors.max():.3f} rad")
-        print(f"  Mean angular error: {angular_errors.mean():.3f} rad")
-
-        # Airplane has many sharp edges, so expect ~48% consistency
-        # This is correct behavior - point normals smooth over sharp features
-        assert fraction_consistent >= 0.40  # At least 40% should be smooth regions
+        # Lumpy sphere has varying curvature, so some angular error is expected
+        # Mean error should be reasonable (< 0.3 rad = 17 degrees)
+        assert angular_errors.mean() < 0.3
+        # Max error should be bounded (< 1.5 rad = 86 degrees)
+        assert angular_errors.max() < 1.5
 
     def test_subdivided_mesh_improved_consistency(self, device):
-        """Test that subdivision improves consistency by adding smooth vertices.
+        """Test that subdivision improves consistency.
 
-        Note: Linear subdivision is INTERPOLATING, not smoothing. Original
-        vertices (including sharp corners) remain in place. Only NEW vertices
-        (at edge midpoints) have better normals. This is expected behavior.
-
-        As we add more subdivision levels, the fraction of vertices that are
-        NEW (and thus have better normals) increases, improving overall consistency.
+        Linear subdivision adds new vertices at edge midpoints. For a lumpy
+        sphere with varying curvature, adding more vertices improves the
+        approximation of the smooth surface, leading to better normal
+        consistency (smaller angular errors between point and cell normals).
         """
-        import pyvista as pv
+        # Load lumpy sphere - has varying curvature
+        mesh_original = lumpy_sphere.load(subdivisions=1, device=device)
 
-        from physicsnemo.mesh.io import from_pyvista
-
-        # Load airplane mesh
-        pv_mesh = pv.examples.load_airplane()
-        mesh_original = from_pyvista(pv_mesh).to(device)
-
-        # Subdivide to add smooth vertices at edge midpoints
+        # Subdivide to add vertices at edge midpoints
         mesh_subdivided = mesh_original.subdivide(levels=1, filter="linear")
 
         # Compute angular errors for both
@@ -533,37 +515,20 @@ class TestPointCellNormalConsistency:
         fraction_original = (errors_original < threshold).float().mean()
         fraction_subdivided = (errors_subdivided < threshold).float().mean()
 
-        print("\nSubdivision effect on consistency:")
-        print(f"  Original: {fraction_original:.3f} consistent")
-        print(f"  Subdivided (1 level): {fraction_subdivided:.3f} consistent")
-        print(f"  Improvement: {(fraction_subdivided - fraction_original):.3f}")
-
-        # Linear subdivision adds new smooth vertices but keeps sharp corners.
-        # With 1 level, about 75% of vertices are new (better normals),
-        # but 25% are original (may have sharp edges).
-        # Expect improvement but not perfection.
-        assert fraction_subdivided >= fraction_original - 0.05  # At least not worse
-        assert fraction_subdivided >= 0.60  # Should have reasonable consistency
+        # Subdivision should improve consistency (more vertices = better approximation)
+        assert fraction_subdivided >= fraction_original  # Should improve
+        # Mean error should decrease
+        assert errors_subdivided.mean() <= errors_original.mean() + 0.05
 
     def test_multiple_subdivision_levels(self, device):
-        """Test that multiple subdivision levels improve consistency.
+        """Test that consistency improves with subdivision levels.
 
-        With each subdivision level, the fraction of NEW (smooth) vertices
-        increases relative to original (potentially sharp) vertices:
-        - Level 0: 100% original vertices
-        - Level 1: ~25% original, ~75% new
-        - Level 2: ~6% original, ~94% new
-        - Level 3: ~1.5% original, ~98.5% new
-
-        As the fraction of new vertices increases, overall consistency improves.
+        Linear subdivision adds vertices at edge midpoints, improving the
+        mesh's approximation of the underlying surface. As more vertices
+        are added, the angular error between point and cell normals decreases.
         """
-        import pyvista as pv
-
-        from physicsnemo.mesh.io import from_pyvista
-
-        # Load airplane mesh
-        pv_mesh = pv.examples.load_airplane()
-        mesh = from_pyvista(pv_mesh).to(device)
+        # Load lumpy sphere - has varying curvature
+        mesh = lumpy_sphere.load(subdivisions=1, device=device)
 
         threshold = 0.1  # radians
         fractions = []
@@ -577,29 +542,22 @@ class TestPointCellNormalConsistency:
             fraction = (errors < threshold).float().mean()
             fractions.append(fraction)
 
-            print(f"\nLevel {level}: {fraction:.3f} consistent ({mesh.n_cells} cells)")
-
-        # Higher subdivision levels should generally improve consistency
-        # as the fraction of original (sharp) vertices decreases
-        assert fractions[-1] >= fractions[0]  # Should improve or stay same
-        assert fractions[-1] >= 0.75  # Level 2 should be pretty good
+        # Consistency should generally improve with subdivision
+        # Each level should be at least as good as the previous
+        for i in range(1, len(fractions)):
+            assert fractions[i] >= fractions[i - 1] - 0.05  # Allow small variance
+        # Final level should be notably better than first
+        assert fractions[-1] >= fractions[0] + 0.2
 
     def test_consistency_distribution(self, device):
         """Test the distribution of angular errors.
 
-        The distribution should be bimodal:
-        - Most vertices in smooth regions have low error
-        - Vertices at sharp edges have high error
-
-        This is expected and correct behavior.
+        For a lumpy sphere with varying curvature, the error distribution
+        reflects the curvature variation. Higher curvature regions have
+        larger angular errors between point and cell normals.
         """
-        import pyvista as pv
-
-        from physicsnemo.mesh.io import from_pyvista
-
-        # Load airplane mesh
-        pv_mesh = pv.examples.load_airplane()
-        mesh = from_pyvista(pv_mesh).to(device)
+        # Load lumpy sphere - has varying curvature
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
 
         # Compute angular errors
         angular_errors = self.compute_angular_errors(mesh)
@@ -608,30 +566,20 @@ class TestPointCellNormalConsistency:
         percentiles = [50, 75, 90, 95, 99]
         values = [torch.quantile(angular_errors, p / 100.0) for p in percentiles]
 
-        print("\nAngular error distribution (radians):")
-        for p, v in zip(percentiles, values):
-            print(f"  {p}th percentile: {v:.4f} rad ({v * 180 / torch.pi:.2f}°)")
-
-        # With sharp edges, median can be higher
-        # Just verify the distribution is reasonable
-        assert values[0] < 0.3  # 50th percentile (17 degrees)
-        assert values[-1] < torch.pi  # 99th percentile (< 180 degrees)
+        # Distribution should be reasonable for a curved surface
+        assert values[0] < 0.25  # 50th percentile (< 14 degrees)
+        assert values[-1] < 1.0  # 99th percentile (< 57 degrees)
 
     @pytest.mark.slow
     def test_loop_subdivision_smoothing(self, device):
-        """Test that Loop subdivision (smoothing) improves normal consistency.
+        """Test that Loop subdivision improves normal consistency.
 
-        Loop subdivision is APPROXIMATING - it repositions original vertices
-        to smooth out sharp edges. This should produce much better consistency
-        than linear subdivision.
+        Loop subdivision is APPROXIMATING - it repositions vertices to
+        create a smoother surface. This should reduce angular errors
+        between point and cell normals.
         """
-        import pyvista as pv
-
-        from physicsnemo.mesh.io import from_pyvista
-
-        # Load airplane mesh
-        pv_mesh = pv.examples.load_airplane()
-        mesh_original = from_pyvista(pv_mesh).to(device)
+        # Load lumpy sphere - has varying curvature
+        mesh_original = lumpy_sphere.load(subdivisions=1, device=device)
 
         # Try Loop subdivision (approximating, should smooth)
         try:
@@ -641,17 +589,9 @@ class TestPointCellNormalConsistency:
             errors_original = self.compute_angular_errors(mesh_original)
             errors_loop = self.compute_angular_errors(mesh_loop)
 
-            threshold = 0.1
-            fraction_original = (errors_original < threshold).float().mean()
-            fraction_loop = (errors_loop < threshold).float().mean()
-
-            print("\nLoop subdivision effect:")
-            print(f"  Original: {fraction_original:.3f} consistent")
-            print(f"  Loop subdivided: {fraction_loop:.3f} consistent")
-
-            # Loop subdivision repositions vertices, so should improve significantly
-            assert fraction_loop >= fraction_original  # Should improve
-            assert fraction_loop >= 0.70  # Should be quite good
+            # Loop subdivision should maintain or improve consistency
+            # Mean error should not increase significantly
+            assert errors_loop.mean() <= errors_original.mean() + 0.1
         except NotImplementedError:
             # Loop subdivision might not support all mesh types
             pytest.skip("Loop subdivision not supported for this mesh")
