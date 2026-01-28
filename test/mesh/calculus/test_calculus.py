@@ -7,7 +7,7 @@ fields with known derivatives. Verifies fundamental calculus identities.
 import pytest
 import torch
 
-from physicsnemo.mesh.primitives import procedural, volumes
+from physicsnemo.mesh.primitives import procedural
 
 
 ### Analytical field generators
@@ -183,7 +183,7 @@ class TestGradient:
 
     def test_gradient_of_constant_is_zero(self):
         """∇(const) = 0."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Create constant field
         const_value = 5.0
@@ -201,7 +201,7 @@ class TestGradient:
 
     def test_gradient_of_linear_is_exact(self):
         """∇(a·r) = a exactly for linear fields."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Linear field: φ = 2x + 3y - z
         coeffs = torch.tensor([2.0, 3.0, -1.0])
@@ -227,7 +227,7 @@ class TestGradient:
         The absolute value may have systematic bias in first-order methods, but
         the spatial variation (std dev) should be small relative to mean.
         """
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Quadratic field
         phi = (mesh.points**2).sum(dim=-1)
@@ -261,7 +261,7 @@ class TestDivergence:
 
     def test_uniform_divergence_3d(self):
         """v = [x,y,z], div(v) = 3 (constant everywhere)."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Vector field v = r
         v = mesh.points.clone()
@@ -278,7 +278,7 @@ class TestDivergence:
 
     def test_scaled_divergence_field(self):
         """v = [2x, 3y, 4z], div(v) = 2+3+4 = 9."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         v = mesh.points.clone()
         v[:, 0] *= 2.0
@@ -294,7 +294,7 @@ class TestDivergence:
 
     def test_zero_divergence_rotation(self):
         """v = [-y,x,0], div(v) = 0 (solenoidal field)."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Rotation field
         v = torch.zeros_like(mesh.points)
@@ -311,7 +311,7 @@ class TestDivergence:
 
     def test_zero_divergence_field_xyz(self):
         """v = [yz, xz, xy], div(v) = 0."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         x, y, z = mesh.points[:, 0], mesh.points[:, 1], mesh.points[:, 2]
         v = torch.stack([y * z, x * z, x * y], dim=-1)
@@ -330,7 +330,7 @@ class TestCurl:
 
     def test_uniform_curl_3d(self):
         """v = [-y,x,0], curl(v) = [0,0,2] (uniform curl)."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Rotation field
         v = torch.zeros_like(mesh.points)
@@ -350,7 +350,7 @@ class TestCurl:
 
     def test_zero_curl_conservative_field(self):
         """v = r = ∇(½||r||²), curl(v) = 0 (irrotational)."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Conservative field (gradient of potential)
         v = mesh.points.clone()
@@ -364,7 +364,7 @@ class TestCurl:
 
     def test_helical_field(self):
         """v = [-y, x, z], curl(v) = [0, 0, 2]."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         v = torch.zeros_like(mesh.points)
         v[:, 0] = -mesh.points[:, 1]
@@ -382,7 +382,7 @@ class TestCurl:
 
     def test_curl_multiple_axes(self):
         """Test curl with rotation about different axes (all linear fields)."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Test 1: Rotation about z-axis: v = [-y, x, 0], curl = [0, 0, 2]
         v_z = torch.zeros_like(mesh.points)
@@ -543,7 +543,7 @@ class TestCalculusIdentities:
 
     def test_curl_of_gradient_is_zero(self):
         """curl(∇φ) = 0 for any scalar field."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Should be zero (curl of conservative field)
         # For LINEAR potential, curl of gradient should be near-exact zero
@@ -564,7 +564,7 @@ class TestCalculusIdentities:
 
     def test_divergence_of_curl_is_zero(self):
         """div(curl(v)) = 0 for any vector field."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         # Use rotation field
         v = torch.zeros_like(mesh.points)
@@ -593,7 +593,7 @@ class TestParametrized:
     @pytest.mark.parametrize("method", ["lsq"])
     def test_gradient_exact_recovery(self, field_type, method):
         """Gradient of constant/linear fields should be exact."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
 
         if field_type == "constant":
             phi = torch.full((mesh.n_points,), 5.0)
@@ -614,7 +614,7 @@ class TestParametrized:
     @pytest.mark.parametrize("divergence_value", [1.0, 3.0, 9.0])
     def test_uniform_divergence_recovery(self, divergence_value):
         """Divergence of scaled identity field should be exact."""
-        mesh = volumes.cube_volume.load(size=1.0, n_subdivisions=5)
+        mesh = procedural.lumpy_ball.load()
         scale = divergence_value / mesh.n_spatial_dims
         v = mesh.points * scale
 

@@ -107,8 +107,8 @@ class TestWatertight3D:
 
         assert not mesh.is_watertight()
 
-    def test_filled_cube_not_watertight(self, device):
-        """Even a filled cube volume is not watertight (has exterior boundary).
+    def test_filled_volume_not_watertight(self, device):
+        """A filled volume mesh is not watertight (has exterior boundary).
 
         Note: For codimension-0 meshes (3D in 3D), being watertight means every
         triangular face is shared by exactly 2 tets. This is topologically impossible
@@ -116,13 +116,13 @@ class TestWatertight3D:
         exterior boundary. A truly watertight 3D mesh would require periodic boundaries
         or non-Euclidean topology (like a 3-torus embedded in 4D).
         """
-        from physicsnemo.mesh.primitives.volumes import cube_volume
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
 
-        ### Create a filled cube volume (tetrahedral mesh)
-        mesh = cube_volume.load(n_subdivisions=2, device=device)
+        ### Create a filled volume (tetrahedral mesh)
+        mesh = lumpy_ball.load(device=device)
 
         ### Even though this is a filled volume, it's NOT watertight
-        # The exterior faces of the cube are boundary faces (appear only once)
+        # The exterior faces are boundary faces (appear only once)
         # Only the interior faces are shared by 2 tets
         assert not mesh.is_watertight()
 
@@ -136,7 +136,7 @@ class TestWatertight3D:
 
         # Should have some boundary faces (appearing once)
         n_boundary_faces = (counts == 1).sum().item()
-        assert n_boundary_faces > 0, "Expected some boundary faces on cube exterior"
+        assert n_boundary_faces > 0, "Expected some boundary faces on volume exterior"
 
 
 class TestWatertight1D:
