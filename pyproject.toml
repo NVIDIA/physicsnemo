@@ -177,7 +177,6 @@ datapipes-extras = [
     "nvidia-physicsnemo[model-extras]",
     "zarr>=3.0.0",
     "xarray>=2025.6.1",
-    "nvidia-dali-cuda13",
     # torch_geometric is excluded here - the use cases in datapipes would need gnns below.
 ]
 
@@ -194,6 +193,7 @@ gnns = [
 perf = [
     "transformer_engine[pytorch]",
     "cuml-cu13",
+    "nvidia-dali-cuda130",
     "pylibraft-cu13", # Provides rmm
     "cupy-cuda13x",
 ]
