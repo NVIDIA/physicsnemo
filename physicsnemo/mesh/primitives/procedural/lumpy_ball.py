@@ -23,7 +23,6 @@ Dimensional: 3D manifold in 3D space (solid, no boundary on surface cells).
 """
 
 import torch
-import torch.nn.functional as F
 
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.surfaces import icosahedron_surface
@@ -85,58 +84,59 @@ def load(
     if noise_amplitude < 0:
         raise ValueError(f"noise_amplitude must be non-negative, got {noise_amplitude=}")
 
-    ### Step 1: Generate shell template (subdivided icosahedron at unit radius)
+    ### Step 1: Generate base icosahedron at unit radius
     template = icosahedron_surface.load(radius=1.0, device=device)
-    if subdivisions > 0:
-        template = template.subdivide(subdivisions, "linear")
-        # Project back to unit sphere
+
+    ### Step 2: Apply noise to base icosahedron (if any)
+    # Noise is applied to the base icosahedron (12 vertices) BEFORE subdivision.
+    # This creates smooth, coherent lumps after subdivision, matching lumpy_sphere.
+    # All shells are scaled versions of this noisy shape, ensuring shells remain
+    # strictly nested and tetrahedra remain valid regardless of noise amplitude.
+    if noise_amplitude > 0:
+        generator = torch.Generator(device=device).manual_seed(seed)
+        noise = noise_amplitude * torch.randn(
+            template.n_points, 1, generator=generator, device=device
+        )
+        # Log-normal scaling applied to base icosahedron (same as lumpy_sphere)
         template = Mesh(
-            points=F.normalize(template.points, dim=-1),
+            points=template.points * noise.exp(),
             cells=template.cells,
         )
+
+    ### Step 3: Subdivide with loop scheme (if any)
+    # Loop subdivision is an approximating scheme that smooths the noisy base
+    # icosahedron into broad, coherent lumps.
+    if subdivisions > 0:
+        template = template.subdivide(subdivisions, "loop")
 
     n_verts_per_shell = template.n_points
     n_faces = template.n_cells
 
-    ### Step 2: Generate shell radii (linear spacing from center to outer)
+    ### Step 4: Generate shell radii (linear spacing from center to outer)
     # Vectorized: torch.arange instead of list comprehension
     shell_radii = (
         radius * torch.arange(1, n_shells + 1, device=device, dtype=torch.float32) / n_shells
     )
 
-    ### Step 3: Apply noise to canonical template (if any)
-    # Noise is applied ONCE to the unit template, then all shells are scaled
-    # versions of this noisy shape. This ensures shells remain strictly nested
-    # and tetrahedra remain valid regardless of noise amplitude.
-    if noise_amplitude > 0:
-        generator = torch.Generator(device=device).manual_seed(seed)
-        noise = noise_amplitude * torch.randn(
-            n_verts_per_shell, 1, generator=generator, device=device
-        )
-        # Log-normal scaling applied to unit template (same as lumpy_sphere)
-        noisy_template_points = template.points * noise.exp()
-    else:
-        noisy_template_points = template.points
-
-    ### Step 4: Build all vertices by scaling noisy template
+    ### Step 5: Build all vertices by scaling template
     # Vectorized: broadcasting instead of list comprehension
     # shell_radii: (n_shells,) -> (n_shells, 1, 1)
-    # noisy_template_points: (n_verts, 3) -> (1, n_verts, 3)
+    # template.points: (n_verts, 3) -> (1, n_verts, 3)
     # Result: (n_shells, n_verts, 3) -> (n_shells * n_verts, 3)
     center = torch.zeros(1, 3, dtype=torch.float32, device=device)
     shell_points = (
-        noisy_template_points.unsqueeze(0) * shell_radii.view(-1, 1, 1)
+        template.points.unsqueeze(0) * shell_radii.view(-1, 1, 1)
     ).reshape(-1, 3)
     all_points = torch.cat([center, shell_points], dim=0)
 
-    ### Step 5: Build core tetrahedra (center to innermost shell)
+    ### Step 6: Build core tetrahedra (center to innermost shell)
     # Vectorized: direct tensor operations instead of for loop
     # template.cells: (n_faces, 3), add offset 1 to shift to shell 1 indices
     shell1_faces = template.cells + 1  # (n_faces, 3)
     zeros_col = torch.zeros(n_faces, 1, dtype=torch.int64, device=device)
     core_cells = torch.cat([zeros_col, shell1_faces], dim=1)  # (n_faces, 4)
 
-    ### Step 6: Build inter-shell tetrahedra (prism decomposition)
+    ### Step 7: Build inter-shell tetrahedra (prism decomposition)
     # Vectorized: broadcasting + stacking instead of nested loops
     # Each triangular prism between shells decomposes into 3 tetrahedra:
     #   tet1: (a_in, b_in, c_in, a_out)
@@ -170,7 +170,7 @@ def load(
     else:
         inter_shell_cells = torch.empty((0, 4), dtype=torch.int64, device=device)
 
-    ### Step 7: Assemble and return Mesh
+    ### Step 8: Assemble and return Mesh
     all_cells = torch.cat([core_cells, inter_shell_cells], dim=0)
 
     return Mesh(points=all_points, cells=all_cells)
