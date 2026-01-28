@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 r"""Normalization operation patches for ShardTensor.
 
 This module provides custom implementations of normalization operations
@@ -26,6 +27,8 @@ The module provides:
 - ``PartialGroupNorm``: Custom autograd function for group normalization
 - ``group_norm_wrapper``: Function handler for ``torch.nn.functional.group_norm``
 """
+
+from __future__ import annotations
 
 from typing import Any, Callable
 

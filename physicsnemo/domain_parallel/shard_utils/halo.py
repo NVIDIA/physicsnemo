@@ -30,6 +30,8 @@ The module includes:
 - Utility functions for slicing and applying halo regions
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Literal
 

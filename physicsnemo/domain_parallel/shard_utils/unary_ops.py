@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 r"""Unary operation helpers and dispatch wrappers for ShardTensor.
 
 This module provides:
@@ -22,6 +23,8 @@ This module provides:
   sharding metadata for ``ShardTensor``.
 - Small utility helpers for normalizing dimensions and constructing shapes.
 """
+
+from __future__ import annotations
 
 from typing import Sequence
 

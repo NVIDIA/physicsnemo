@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 r"""Ring communication utilities for distributed tensor operations.
 
 This module provides utilities for ring-based collective communication patterns.
@@ -25,6 +26,8 @@ The module provides:
 - ``RingPassingConfig``: Configuration dataclass for ring communication parameters
 - ``perform_ring_iteration``: Function to perform a single step of ring communication
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal

@@ -34,6 +34,8 @@ The module provides:
 - ``mean_wrapper``: Function handler for ``torch.mean`` on ShardTensor
 """
 
+from __future__ import annotations
+
 from typing import (
     Any,
     Callable,
