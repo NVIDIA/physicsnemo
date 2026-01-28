@@ -53,7 +53,7 @@ checkpoint, use the provided CSVs instead of recomputing to prevent any differen
 **To recompute stats for new sensors:**
 
 1. Run ETL to produce parquet (stats will default to mean=0, std=1)
-1. Compute normalizations: `python3 compute_normalizations.py --sensors conv,amsua`
+1. Compute normalizations: `python3 compute_normalizations.py --sensors conv,amsua,atms,mhs,amsub`
 1. Regenerate channel table: `python3 etl_unified.py --channel-table-only`
 
 ## Output Structure
