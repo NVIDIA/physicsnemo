@@ -253,7 +253,7 @@ def _aggregate_tensor_data(
     Returns:
         Aggregated data for unique facets
     """
-    from physicsnemo.mesh.utilities import scatter_aggregate
+    from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 
     ### Gather parent cell data for each candidate facet
     # Shape: (n_candidate_facets, *data_shape)

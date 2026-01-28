@@ -301,7 +301,7 @@ def _merge_point_data(
     Returns:
         Merged point data
     """
-    from physicsnemo.mesh.utilities import scatter_aggregate
+    from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 
     if len(point_data.keys()) == 0:
         return TensorDict(

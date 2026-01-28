@@ -115,7 +115,7 @@ class TestCacheIsolation:
         mesh = Mesh(points=points, cells=cells)
 
         # Manually add various cached properties to point_data
-        from physicsnemo.mesh.utilities import set_cached
+        from physicsnemo.mesh.utilities._cache import set_cached
 
         set_cached(mesh.point_data, "normals", torch.ones(3, 3))
         set_cached(mesh.point_data, "custom_cache", torch.zeros(3))
