@@ -60,54 +60,6 @@ def compute_gaussian_curvature_integral(mesh: Mesh) -> torch.Tensor:
     return total_curvature
 
 
-def create_lumpy_sphere_mesh(
-    perturbation_amplitude: float = 0.2,
-    subdivisions: int = 2,
-    seed: int = 0,
-    device: str = "cpu",
-) -> Mesh:
-    """Create a lumpy sphere by perturbing vertex radii of an icosahedron.
-
-    Args:
-        perturbation_amplitude: Amplitude of radial perturbations (0.2 means ±20%)
-        subdivisions: Number of Loop subdivision levels after perturbation
-        seed: Random seed for reproducibility
-        device: Compute device
-
-    Returns:
-        Mesh representing a lumpy sphere (topologically equivalent to sphere)
-    """
-    ### Create base icosahedron
-    mesh = icosahedron_surface.load(radius=1.0, device=device)
-
-    ### Perturb vertex radii
-    torch.manual_seed(seed)
-    n_points = mesh.n_points
-
-    # Random radii in range [1-amplitude, 1+amplitude]
-    radii = torch.rand(n_points, dtype=torch.float32, device=device) * (
-        2 * perturbation_amplitude
-    ) + (1.0 - perturbation_amplitude)
-
-    # Apply radial perturbations
-    perturbed_points = mesh.points * radii.unsqueeze(-1)
-
-    mesh = Mesh(
-        points=perturbed_points,
-        cells=mesh.cells,
-        point_data=mesh.point_data,
-        cell_data=mesh.cell_data,
-        global_data=mesh.global_data,
-    )
-
-    ### Subdivide with Loop to create smooth lumpy surface
-    # This creates wavelengths significantly longer than mesh side length
-    if subdivisions > 0:
-        mesh = mesh.subdivide(levels=subdivisions, filter="loop")
-
-    return mesh
-
-
 ### Test Perfect Sphere Convergence
 
 
@@ -223,11 +175,13 @@ class TestLumpySphereDiscretizationInvariance:
     @pytest.mark.parametrize("seed", [0, 42, 123])
     def test_lumpy_sphere_gauss_bonnet_value(self, device, seed):
         """Test that lumpy sphere has ∫∫ K dA ≈ 4π."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
         expected_integral = 4.0 * torch.pi
 
         ### Create lumpy sphere with moderate perturbation
-        mesh = create_lumpy_sphere_mesh(
-            perturbation_amplitude=0.2,  # ±20%
+        mesh = lumpy_sphere.load(
+            noise_amplitude=0.2,
             subdivisions=2,
             seed=seed,
             device=device,
@@ -250,9 +204,11 @@ class TestLumpySphereDiscretizationInvariance:
         This is the key test: after initial subdivision, further refinement
         should not significantly change the integral value.
         """
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
         ### Create lumpy sphere at subdivision level 2
-        mesh_coarse = create_lumpy_sphere_mesh(
-            perturbation_amplitude=0.2,
+        mesh_coarse = lumpy_sphere.load(
+            noise_amplitude=0.2,
             subdivisions=2,
             seed=seed,
             device=device,
@@ -298,11 +254,13 @@ class TestGaussBonnetRobustness:
     @pytest.mark.parametrize("amplitude", [0.1, 0.2, 0.4])
     def test_different_perturbation_amplitudes(self, device, amplitude):
         """Test Gauss-Bonnet with different perturbation strengths."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
         expected_integral = 4.0 * torch.pi
 
         ### Create lumpy sphere with given perturbation amplitude
-        mesh = create_lumpy_sphere_mesh(
-            perturbation_amplitude=amplitude,
+        mesh = lumpy_sphere.load(
+            noise_amplitude=amplitude,
             subdivisions=2,
             seed=42,
             device=device,
