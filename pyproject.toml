@@ -155,23 +155,18 @@ utils-extras = [
     "line_profiler",
     "vtk",
     "stl",
-    "pylibraft-cu13", # Provides rmm
-    "cupy-cuda13x",
 ]
 mesh-extras = [
     "matplotlib>=3.10.7",
     "pyvista>=0.46.4",
 ]
 nn-extras = [
-    "cuml-cu13",
-    "transformer_engine[pytorch]",
     "scipy",
     "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
-    "transformer_engine[pytorch]",
     "netCDF4",
     "pyvista",
     "vtk",
@@ -182,6 +177,8 @@ datapipes-extras = [
     "nvidia-physicsnemo[model-extras]",
     "zarr>=3.0.0",
     "xarray>=2025.6.1",
+    "nvidia-dali-cuda13",
+    # torch_geometric is excluded here - the use cases in datapipes would need gnns below.
 ]
 
 # Use case specific dependency groups.
@@ -192,6 +189,13 @@ gnns = [
     "torch_cluster",
     # "nvfuser",
     "nvidia-physicsnemo[model-extras]",
+]
+
+perf = [
+    "transformer_engine[pytorch]",
+    "cuml-cu13",
+    "pylibraft-cu13", # Provides rmm
+    "cupy-cuda13x",
 ]
 
 #####################################################################
