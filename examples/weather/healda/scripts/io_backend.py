@@ -23,6 +23,7 @@ import earth2grid
 import numpy as np
 import pandas as pd
 import torch
+import xarray as xr
 import zarr
 from earth2grid import healpix, latlon
 from earth2studio.utils.type import CoordSystem
@@ -32,6 +33,15 @@ from regridding import ConservativeRegridder, add_south_pole_mean
 class RegriddingZarrBackend:
     """Interface for a generic IO backend. Assume 0.25 output grid."""
 
+    _VAR_MAP = {
+        "t2m": "tas",
+        "u10m": "uas",
+        "v10m": "vas",
+        "u100m": "100u",
+        "v100m": "100v",
+        "msl": "pres_msl",
+    }
+
     def __init__(
         self,
         zarr_path,
@@ -39,13 +49,23 @@ class RegriddingZarrBackend:
         out_vars,
         n_ensemble,
         nsteps,
+        rank,
         regrid_conservative=False,
+        init_zarr_path=None,
     ):
         self.out_vars = out_vars
         self.n_ensemble = n_ensemble
         self.nsteps = nsteps
         self.regrid_conservative = regrid_conservative
-        self._init_group(zarr_path, times)
+        self.init_zarr_path = init_zarr_path
+        if rank == 0:
+            self._init_group(zarr_path, times)
+
+        # Load original HEALPix init data for t=0 bypass
+        if init_zarr_path:
+            self.init_ds = xr.open_zarr(init_zarr_path)
+        else:
+            self.init_ds = None
 
         self.group = zarr.open_consolidated(zarr_path)
         self.times = pd.DatetimeIndex(self.group["time"][:].astype("datetime64[s]"))
@@ -69,13 +89,29 @@ class RegriddingZarrBackend:
         regridder = self.regridder_to_hpx.to(array.device)
         return regridder(array)
 
-    def _update_coords(self, zarr_path):
+    def _update_coords(self, zarr_path, requested_times):
         nensemble = self.n_ensemble
         first_var = self.out_vars[0]
         group = zarr.open_group(zarr_path, mode="a")
         if first_var in group:
             existing_array = group[first_var]
             existing_ensemble_size = existing_array.shape[1]
+
+            # Validate times match
+            if "time" in group:
+                existing_times = pd.DatetimeIndex(
+                    group["time"][:].astype("datetime64[s]")
+                )
+                requested_times_s = pd.DatetimeIndex(
+                    np.asarray(requested_times).astype("datetime64[s]")
+                )
+                if not existing_times.equals(requested_times_s):
+                    raise ValueError(
+                        f"Existing zarr has times {existing_times[0]} to {existing_times[-1]} "
+                        f"({len(existing_times)} times), but requested {requested_times_s[0]} to "
+                        f"{requested_times_s[-1]} ({len(requested_times_s)} times). "
+                        "Please delete the zarr or use a different output path."
+                    )
 
             if existing_ensemble_size > nensemble:
                 raise ValueError(
@@ -116,7 +152,7 @@ class RegriddingZarrBackend:
 
         zarr_exists = len(group) > 0 and any(key in group for key in self.out_vars)
         if zarr_exists:
-            return self._update_coords(zarr_path)
+            return self._update_coords(zarr_path, times)
 
         # Create new zarr structure
         print(f"Creating zarr at {zarr_path}")
@@ -187,7 +223,7 @@ class RegriddingZarrBackend:
         group.attrs["healpix_nside"] = 64
         group.attrs["healpix_ncells"] = 49152
         group.attrs["healpix_pixel_order"] = "NEST"
-        group.attrs["description"] = "FCN3 ensemble forecasts in HEALPix format"
+        group.attrs["description"] = "ensemble forecasts in HEALPix format"
 
         zarr.consolidate_metadata(group.store)
         print(
@@ -233,16 +269,12 @@ class RegriddingZarrBackend:
         array_name : str | list[str]
             Name(s) of the array(s) that will be written to.
         """
-        # Ensure all models output 721 lat before regridding
-        x_processed = [add_south_pole_mean(array) for array in x]
-        regridded = {
-            name: self._regrid(array) for name, array in zip(array_name, x_processed)
-        }
-
         coords_time = pd.DatetimeIndex(coords["time"]).floor("s")
         time_idx = self.times.get_indexer(coords_time)
         if np.any(time_idx == -1):
-            raise ValueError(f"Time mismatch: {coords_time[time_idx == -1]} not in {self.times}")
+            raise ValueError(
+                f"Time mismatch: {coords_time[time_idx == -1]} not in {self.times}"
+            )
 
         time_idx = np.atleast_1d(time_idx)
         step = coords["lead_time"] // np.timedelta64(6, "h")
@@ -255,6 +287,12 @@ class RegriddingZarrBackend:
             step = step[-1:]
         ensemble_idx = np.atleast_1d(ensemble_idx)
 
+        # Ensure all models output 721 lat before regridding
+        x_processed = [add_south_pole_mean(array) for array in x]
+        regridded = {
+            name: self._regrid(array) for name, array in zip(array_name, x_processed)
+        }
+
         for var_name in array_name:
             nt = len(time_idx)
             ne = len(ensemble_idx)
@@ -265,7 +303,32 @@ class RegriddingZarrBackend:
             if array.ndim == 3:  # Missing ensemble dimension
                 array = array[:, np.newaxis, :, :]  # Add ensemble dimension
 
+            # Map e2studio var name to init zarr var name
+            init_var = None
+            if self.init_ds is not None:
+                if var_name in self.init_ds:
+                    init_var = var_name
+                elif var_name.upper() in self.init_ds:
+                    init_var = var_name.upper()
+                elif self._VAR_MAP.get(var_name) in self.init_ds:
+                    init_var = self._VAR_MAP[var_name]
+            can_bypass_t0 = init_var is not None
+
             for i, j, k in itertools.product(range(nt), range(ne), range(nstep)):
-                self.group[var_name][time_idx[i], ensemble_idx[j], step[k]] = array[
-                    i, j, k
-                ]
+                if step[k] == 0 and can_bypass_t0:
+                    # Write original analysis data directly without regridding effects
+                    orig = self.init_ds[init_var].sel(time=coords_time[i]).values
+                    orig_tensor = torch.as_tensor(orig)
+                    orig_nest = earth2grid.healpix.reorder(
+                        orig_tensor,
+                        earth2grid.healpix.HEALPIX_PAD_XY,
+                        earth2grid.healpix.PixelOrder.NEST,
+                    )
+                    self.group[var_name][time_idx[i], ensemble_idx[j], 0] = (
+                        orig_nest.numpy()
+                    )
+                else:
+                    # Write regridded data
+                    self.group[var_name][time_idx[i], ensemble_idx[j], step[k]] = array[
+                        i, j, k
+                    ]

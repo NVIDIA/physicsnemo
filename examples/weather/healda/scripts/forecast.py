@@ -14,8 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Simplified forecast script for running weather model inference.
-
 Supports: FCN3, Aurora, FengWu, Pangu, and Mock/Persistence models.
 Output: HEALPix level 6 zarr format.
 
@@ -33,7 +31,9 @@ import argparse
 import gc
 import logging
 import os
+import sys
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, Literal
 
 import earth2grid
@@ -50,13 +50,17 @@ from earth2studio.models.px.fcn3 import VARIABLES as FCN3_VARIABLES
 from earth2studio.models.px.pangu import VARIABLES as PANGU_VARIABLES
 from earth2studio.models.px.pangu import Pangu6
 from earth2studio.perturbation import Zero
-from earth2studio.px.fengwu import VARIABLES as FENGWU_VARIABLES
-from earth2studio.px.fengwu import FengWu
 from earth2studio.run import deterministic as e2s_deterministic
 from earth2studio.run import ensemble as e2s_ensemble
-
-# from fengwu_model import FengWu, VARIABLES as FENGWU_VARIABLES
+from fengwu_model import VARIABLES as FENGWU_VARIABLES
+from fengwu_model import FengWu
 from io_backend import RegriddingZarrBackend
+
+# Add healda utils to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "training"))
+
+import distributed as dist
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +185,9 @@ class DataArrayZarr:
         self._on_latlon_grid = "lat" in da.dims and "lon" in da.dims
 
         if not self._on_latlon_grid and "cells" not in da.dims:
-            raise ValueError("DataArray must have 'cells' dimension for non-latlon grids")
+            raise ValueError(
+                "DataArray must have 'cells' dimension for non-latlon grids"
+            )
 
         # Move 'time' and 'variable' to front
         for lead in ("variable", "time"):
@@ -266,7 +272,28 @@ class DataArrayZarr:
         return xr.DataArray(out, dims=out_dims, coords=out_coords)
 
 
+def filter_paired_times(
+    times: pd.DatetimeIndex, delta: pd.Timedelta
+) -> pd.DatetimeIndex:
+    """Filter times to only those where (t - delta) also exists in times.
+
+    Aurora and FengWu require (t-6h, t) pairs for initialization.
+    """
+    time_set = set(times)
+    mask = [(t - delta) in time_set for t in times]
+    return times[mask]
+
+
+def subsample(dataset, num_samples: int) -> list[int]:
+    """Sample indices using golden ratio for quasi-random uniform distribution."""
+    golden_ratio = 1.618033988749
+    n = len(dataset)
+    indices = [int((i * n * golden_ratio) % n) for i in range(num_samples)]
+    return sorted(indices)
+
+
 def setup_logging():
+    """Setup logging"""
     logging.basicConfig(level=logging.INFO)
     logger.setLevel(logging.INFO)
 
@@ -275,7 +302,7 @@ def main(argv=None):
     """Run forecast inference.
 
     Supports multiple weather models with HEALPix zarr output format.
-    Single-GPU, batch_size=1 for simplicity.
+    Distributes work (times) across all available GPUs.
     """
     parser = argparse.ArgumentParser(description="Run weather forecast inference")
     parser.add_argument(
@@ -292,6 +319,16 @@ def main(argv=None):
         "--num_ensemble", type=int, default=1, help="Number of ensemble members"
     )
     parser.add_argument(
+        "--z06_18_inits",
+        action="store_true",
+        help="Use 06/18 UTC times instead of 00/12",
+    )
+    parser.add_argument(
+        "--all_utc_times",
+        action="store_true",
+        help="Use all 00/06/12/18 UTC times",
+    )
+    parser.add_argument(
         "--model",
         type=str.lower,
         choices=["fcn3", "aurora", "pangu", "fengwu", "mock"],
@@ -303,6 +340,7 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
+    dist.init()
     setup_logging()
 
     # Create model config
@@ -329,32 +367,72 @@ def main(argv=None):
 
     ds = DataArrayZarr(args.init_path, nlat=model_config.nlat, nlon=model_config.nlon)
     times = pd.to_datetime(ds.da.time.values)
+    logger.info(f"Zarr contains {len(times)} times: {times[0]} to {times[-1]}")
 
-    # Filter to 00/12 UTC and limit to num_times
-    mask = times.hour.isin([0, 12])
+    # Aurora and FengWu require (t-6h, t) pairs for initialization
+    if args.model in ["aurora", "fengwu"]:
+        orig_len = len(times)
+        times = filter_paired_times(times, pd.Timedelta(hours=6))
+        logger.info(f"Filtered {orig_len - len(times)} unpaired times for {args.model}")
+
+    # Filter by UTC time
+    if args.all_utc_times:
+        mask = times.hour.isin([0, 6, 12, 18])
+        times = times[mask]
+    elif args.z06_18_inits:
+        mask = times.hour.isin([6, 18])
+        times = times[mask]
+    else:
+        mask = times.hour.isin([0, 12])
+        times = times[mask]
+
+    if len(times) == 0:
+        logger.warning("No valid UTC times found after filtering. Using all available.")
+        times = pd.to_datetime(ds.da.time.values)
+
+    # Remove last 10 days of December (Dec 22-31) to keep forecasts within year
+    mask = ~((times.month == 12) & (times.day >= 22))
     times = times[mask]
-    times = times[: args.num_times]
 
-    logger.info(f"Running {len(times)} forecasts: {times[0]} to {times[-1]}")
+    if len(times) == 0:
+        raise ValueError("No valid times found after filtering")
 
-    # Setup output
-    os.makedirs(args.out_dir, exist_ok=True)
+    if args.num_times < len(times):
+        sample_indices = subsample(times, args.num_times)
+        times = times[sample_indices]
+        logger.info(f"Sampled {len(times)} times across year")
+
+    rank, world_size = dist.get_rank(), dist.get_world_size()
+    times = times[rank::world_size]
+
+    logger.info(
+        f"Rank {rank}: processing {len(times)} times from {times[0] if len(times) > 0 else 'N/A'} to {times[-1] if len(times) > 0 else 'N/A'}"
+    )
+
+    # Setup output (only create directory on rank 0)
+    if dist.get_rank() == 0:
+        os.makedirs(args.out_dir, exist_ok=True)
+
+    if dist.get_world_size() > 1:
+        torch.distributed.barrier()
+
     zarr_path = os.path.join(args.out_dir, "forecast.zarr")
 
     io_backend = RegriddingZarrBackend(
         zarr_path=zarr_path,
         times=times,
+        rank=rank,
         out_vars=model_config.variables,
         n_ensemble=nensemble,
         nsteps=args.num_steps,
+        init_zarr_path=args.init_path,
     )
 
-    # Run inference
     model = model_config.model
     perturbation = Zero()
 
     for i, t in enumerate(times):
-        logger.info(f"[{i + 1}/{len(times)}] Forecasting from {t}")
+        logger.info(f"Rank {rank}: [{i + 1}/{len(times)}] Forecasting from {t}")
 
         with torch.autocast(
             device_type="cuda", dtype=torch.bfloat16, enabled=args.bfloat16
@@ -383,7 +461,13 @@ def main(argv=None):
         gc.collect()
         torch.cuda.empty_cache()
 
+    if dist.get_world_size() > 1:
+        torch.distributed.barrier()
+
     logger.info(f"Forecast complete. Output: {zarr_path}")
+
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":

@@ -131,6 +131,26 @@ python inference.py \
 
 ### Step 2: Forecast from HealDA initial conditions
 
+#### Installing FCN3 dependencies
+
+FCN3 requires `earth2studio`. Recommended to install torch-harmonics with CUDA extensions for best performance:
+
+```bash
+# Using uv
+export FORCE_CUDA_EXTENSION=1
+uv pip install torch-harmonics==0.8.0 --no-build-isolation
+uv pip install earth2studio[fcn3]
+
+# Or using pip
+export FORCE_CUDA_EXTENSION=1
+pip install torch-harmonics==0.8.0 --no-build-isolation
+pip install earth2studio[fcn3]
+```
+
+> **Note:** torch-harmonics CUDA extension build can be slow. See [Earth2Studio docs](https://nvidia.github.io/earth2studio/userguide/about/install.html) for more information.
+
+#### Running forecasts
+
 Use the DA output to initialize the FCN3 forecast model and create a 10-day forecast (40 6-hour steps):
 
 ```bash
@@ -147,7 +167,6 @@ python forecast.py \
 > **Note:** The forecast script:
 > - Regrids HealDA analysis (HPX64) → 0.25° lat-lon for FCN3 input
 > - Regrids FCN3 output (0.25° lat-lon) → HPX64 NEST format for storage
-> - Maps field names automatically (e.g., `Z500` → `z500`)
 
 > **ERA5-initialized forecasts:** To create forecasts from ERA5 instead of DA output, run `inference.py` with `--use_analysis` flag to create an ERA5 zarr in the same format, then use that as `--init_path`.
 

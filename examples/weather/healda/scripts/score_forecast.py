@@ -18,8 +18,6 @@
 Score forecasts against reference (e.g., ERA5).
 Computes ensemble metrics (RMSE, spread, CRPS) per variable and lead time.
 ACC (Anomaly Correlation) computed if climatology provided.
-
-Parallelizes across fields using ProcessPoolExecutor.
 """
 
 import argparse
@@ -92,9 +90,20 @@ def get_common_fields(
 ) -> list[str]:
     """Get fields that exist in all datasets."""
     fields = fields or DEFAULT_SCORE_FIELDS
-    return [
-        f for f in fields if all(resolve_field(ds, f) is not None for ds in datasets)
-    ]
+    common = []
+    for f in fields:
+        found_in_all = all(resolve_field(ds, f) is not None for ds in datasets)
+        if found_in_all:
+            common.append(f)
+        else:
+            # Log which dataset is missing the field
+            missing_in = [
+                i for i, ds in enumerate(datasets) if resolve_field(ds, f) is None
+            ]
+            logger.warning(
+                f"Skipping field '{f}' - not found in dataset(s): {missing_in}"
+            )
+    return common
 
 
 def open_any(path: str, storage_options: Optional[dict] = None) -> xr.Dataset:
@@ -195,15 +204,20 @@ def setup_climatology_for_field(
 
 def compute_acc(
     pred: torch.Tensor, ref: torch.Tensor, clim: torch.Tensor
-) -> torch.Tensor:
-    """Compute ACC for member 0."""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute ACC for ensemble mean and member 0."""
     ref_xr = xr.DataArray(ref.cpu().numpy(), dims=["lead_time", "cells"])
     pred_xr = xr.DataArray(pred.cpu().numpy(), dims=["lead_time", "cells", "ensemble"])
     clim_xr = xr.DataArray(clim.cpu().numpy(), dims=["lead_time", "cells"])
     ref_anom = ref_xr - clim_xr
     pred_anom = pred_xr - clim_xr
+
+    # Ensemble-mean ACC
+    acc_ens = xr.corr(ref_anom, pred_anom.mean("ensemble"), dim="cells")
+    # Member 0 ACC
     acc_m0 = xr.corr(ref_anom, pred_anom.isel(ensemble=0), dim="cells")
-    return torch.from_numpy(acc_m0.values)
+
+    return torch.from_numpy(acc_ens.values), torch.from_numpy(acc_m0.values)
 
 
 @torch.no_grad()
@@ -275,7 +289,9 @@ def compute_metrics_for_field(
             climatology_t = torch.as_tensor(
                 climatology_cells.isel(time=t).transpose("lead_time", "cells").values
             ).to(device)
-            metrics_t["acc_m0"] = compute_acc(forecast_t, reference_t, climatology_t)
+            acc_ens, acc_m0 = compute_acc(forecast_t, reference_t, climatology_t)
+            metrics_t["acc_ens"] = acc_ens
+            metrics_t["acc_m0"] = acc_m0
 
         metrics_list.append({k: v.cpu() for k, v in metrics_t.items()})
         del reference_t, forecast_t
@@ -302,15 +318,26 @@ def compute_metrics_for_field(
         ),
     }
 
+    if "acc_ens" in metrics:
+        data_vars["acc_ens"] = (("lead_time",), metrics["acc_ens"].mean(0).numpy())
     if "acc_m0" in metrics:
         data_vars["acc_m0"] = (("lead_time",), metrics["acc_m0"].mean(0).numpy())
 
+    # Ensemble metrics (spread, CRPS, SSR)
     if "variance" in metrics:
-        data_vars["spread"] = (
-            ("lead_time",),
-            torch.sqrt(reduce_avg(metrics["variance"])).numpy(),
+        spread = torch.sqrt(reduce_avg(metrics["variance"]))
+        rmse_ens = torch.sqrt(torch.clamp(reduce_avg(metrics["mse"]), min=0))
+        R = forecast_ds.sizes.get("ensemble", 1)
+        # SSR = sqrt((R+1)/R) * spread / rmse
+        ssr = (
+            torch.sqrt(torch.tensor((R + 1) / R))
+            * spread
+            / torch.clamp(rmse_ens, min=1e-9)
         )
+
+        data_vars["spread"] = (("lead_time",), spread.numpy())
         data_vars["crps"] = (("lead_time",), reduce_avg(metrics["crps"]).numpy())
+        data_vars["ssr"] = (("lead_time",), ssr.numpy())
 
     return xr.Dataset(
         data_vars,
@@ -422,6 +449,8 @@ def main():
     args = parser.parse_args()
 
     fields = args.fields or DEFAULT_SCORE_FIELDS
+    logger.info(f"Forecast: {args.forecast_path}")
+    logger.info(f"Reference: {args.reference_path}")
     logger.info(f"Scoring {len(fields)} fields: {fields}")
 
     metrics = score_forecast(

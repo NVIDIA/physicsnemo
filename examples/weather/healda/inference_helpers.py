@@ -112,7 +112,7 @@ class DAConfig:
         InnovationType.NONE
     )
     num_samples: a[int, Help("Number of samples (-1 for all)")] = 32
-    time_frequency: a[str, Help("Spacing to sample times from")] = "12h"
+    time_frequency: a[str, Help("Spacing to sample times from")] = "6h"
     use_infrared: a[bool, Help("Use infrared observations")] = False
     use_conv: a[bool, Help("Use conventional observations")] = True
     context_start: a[int, Help("Obs window start (hours before analysis)")] = -21

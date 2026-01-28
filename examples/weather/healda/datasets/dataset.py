@@ -16,7 +16,7 @@
 
 import dataclasses
 import datetime
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 import config.environment as config
 import numpy as np
@@ -79,17 +79,6 @@ def shift_time(x, shift):
     x = x.roll(shift, dims=t_dim)
     x[..., :shift, :] = 0.0
     return x
-
-
-def collate(batch: list[dict[str, Any]]):
-    """Collate a batch of samples for masked training.
-
-    Uses default_collate for tensor fields.
-    """
-    data_tensors = [
-        {k: v for k, v in sample.items() if torch.is_tensor(v)} for sample in batch
-    ]
-    return torch.utils.data.default_collate(data_tensors)
 
 
 def _compute_frame_step(

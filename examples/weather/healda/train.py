@@ -41,7 +41,6 @@ import training.loop
 from datasets.base import BatchInfo, TimeUnit, VariableConfig
 from datasets.dataset import (
     VARIABLE_CONFIGS,
-    collate,
     get_batch_info,
     get_dataset,
     get_sensors_for_config,
@@ -56,8 +55,7 @@ from datasets.sensors import (
     SENSOR_CONFIGS,
     SENSOR_NAME_TO_ID,
 )
-from datasets.transform import TransformV2
-from datasets.transform import collate as collate_v2
+from datasets.transform import TransformV2, collate
 from training import loop
 from utils import distributed as dist
 from utils.dataclass_parser import parse_args, parse_dict
@@ -285,7 +283,6 @@ class TrainingLoop(loop.TrainingLoopBase):
         """Helper to create a DataLoader with common settings."""
         if num_workers is None:
             num_workers = self.dataloader_num_workers
-        collate_fn = collate_v2 if self.obs_config.use_obs else collate
 
         return torch.utils.data.DataLoader(
             dataset,
@@ -294,7 +291,7 @@ class TrainingLoop(loop.TrainingLoopBase):
             multiprocessing_context="spawn" if num_workers > 0 else None,
             batch_size=batch_size,
             num_workers=num_workers,
-            collate_fn=collate_fn,
+            collate_fn=collate,
             pin_memory=pin_memory,
             persistent_workers=True if num_workers > 0 else False,
             in_order=True,
@@ -636,21 +633,49 @@ class CLI:
     resume_dir: str = ""
     loop: TrainingLoop = dataclasses.field(
         default_factory=lambda: TrainingLoop(
-            total_ticks=250,
-            steps_per_tick=1200,
-            state_dump_ticks=1,
-            snapshot_ticks=1000000,  # don't save snapshots
-            batch_size=32,
-            batch_gpu=4,
-            lr=1e-4,
-            lr_min=0.0,
-            lr_rampup_img=32 * 1000,
+            architecture="dit-l_reg_hpx6_per_sensor",
+            legacy_label_bias=True,
+            batch_size=8,
+            batch_gpu=1,
+            lr=0.0005,
+            lr_obs=0.0001,
+            lr_rampup_img=50000,
             flat_imgs=0,
-            decay_imgs=300_000 * 32,
-            opt="adamw",
-            dataloader_num_workers=8,
-            dataloader_prefetch_factor=100,
+            decay_imgs=10000000,
+            lr_min=0.0,
             gradient_clip_max_norm=1.0,
+            steps_per_tick=2500,
+            snapshot_ticks=100,
+            state_dump_ticks=2,
+            print_steps=1,
+            loss_type="huber",
+            loss_reduction="v1",
+            huber_delta=0.1,
+            dataloader_num_workers=5,
+            dataloader_prefetch_factor=12,
+            total_ticks=250,
+            era5_chunk_size=24,
+            weight_decay=0.05,
+            drop_path=0.1,
+            p_dropout=0.05,
+            compile_dit=True,
+            obs_config=ObsConfig(
+                use_obs=True,
+                innovation_type="none",
+                context_start=-21,
+                context_end=3,
+                use_conv=True,
+                dropout=0.0,
+                conv_uv_in_situ_only=False,
+                conv_gps_level1_only=False,
+            ),
+            embed_v2=True,
+            dit_qk_rms_norm=True,
+            sensor_embedder_config=SensorEmbedderConfig(
+                embed_dim=32,
+                fusion_dim=512,
+                use_channel_platform_embedding_table=False,
+            ),
         )
     )
 
@@ -660,7 +685,7 @@ warnings.filterwarnings(action="ignore", message="Cannot do a zero-copy NCHW to 
 
 LOOPS = {}
 
-# Main paper configuration: ERA5 observation-to-state training
+# HealDA v1 configuration: ERA5 observation-to-state training
 LOOPS["era5-v2-dense-noInfill-10M-fusion512-lrObs1e-4"] = TrainingLoop(
     architecture="dit-l_reg_hpx6_per_sensor",
     legacy_label_bias=True,

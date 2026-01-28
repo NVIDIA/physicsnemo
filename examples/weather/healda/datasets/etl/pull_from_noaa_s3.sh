@@ -9,8 +9,8 @@
 # ---------------------------------------------------------------
 set -euo pipefail
 
-# Set your destination directory
-DST_DIR="${HEALDA_RAW_OBS_DIR:-/path/to/your/raw_obs}"
+# Set your destination directory (or set UFS_RAW_OBS_DIR env var)
+DST_DIR="${UFS_RAW_OBS_DIR:-/path/to/your/raw_obs}"
 
 
 export S5CMD_STAT_PERIOD=10s

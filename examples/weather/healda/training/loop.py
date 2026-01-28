@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import abc
+import contextlib
 import dataclasses
 import gc
 import glob
@@ -42,7 +43,6 @@ from utils import distributed as dist
 from utils.signals import QuitEarly, finish_before_quitting, handler
 
 from physicsnemo.models.healda import ModelConfigV1, profiling
-from training import utils as misc
 
 from . import training_stats
 
@@ -56,6 +56,25 @@ TRAINER_METADATA_FILENAME = "loop.json"
 
 
 logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------------------
+# Context manager for easily enabling/disabling DistributedDataParallel
+# synchronization.
+
+
+@contextlib.contextmanager
+def ddp_sync(module, sync):
+    if not isinstance(module, torch.nn.Module):
+        raise TypeError("module must be a torch.nn.Module")
+    if sync or not isinstance(module, torch.nn.parallel.DistributedDataParallel):
+        yield
+    else:
+        with module.no_sync():
+            yield
+
+
+# ----------------------------------------------------------------------------
 
 
 def _to_batch(x, device, non_blocking=True):
@@ -358,9 +377,7 @@ class TrainingLoopBase(loop.TrainingLoopBase, abc.ABC):
         total_loss = 0.0
         time_start = time.time()
         for round_idx in range(self.num_accumulation_rounds):
-            with misc.ddp_sync(
-                self.ddp, (round_idx == self.num_accumulation_rounds - 1)
-            ):
+            with ddp_sync(self.ddp, (round_idx == self.num_accumulation_rounds - 1)):
                 with profiling.nvtx_range("load data"):
                     batch = next(dataset_iterator)
 
