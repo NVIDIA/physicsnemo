@@ -4,7 +4,6 @@ Tests validate that topology checking functions correctly identify watertight
 meshes and topological manifolds.
 """
 
-import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh

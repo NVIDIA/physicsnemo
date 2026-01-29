@@ -7,7 +7,6 @@ Tests validate that mesh cleaning correctly:
 - Preserves data through cleaning operations
 """
 
-import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh

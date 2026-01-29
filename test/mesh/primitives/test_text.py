@@ -1,7 +1,6 @@
 """Tests for text rendering primitives."""
 
 import pytest
-import torch
 
 # Skip this module if matplotlib is not available (text primitives require it)
 pytest.importorskip("matplotlib")
