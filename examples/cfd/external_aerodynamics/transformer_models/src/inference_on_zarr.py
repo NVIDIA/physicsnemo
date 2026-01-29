@@ -157,7 +157,7 @@ def batched_inference_loop(
 
             # Normalize to 3D (B, tokens, features) - datapipe may add extra dims
             while fx.ndim > 3:
-                fx = fx.squeeze(1)
+                fx = fx.squeeze(-2)  # squeeze token dim from right
 
             # Broadcast single-token fx, or slice full-mesh fx
             if fx.shape[1] == 1:
