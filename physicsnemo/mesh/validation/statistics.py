@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.validation.quality import compute_quality_metrics
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -99,30 +101,24 @@ def compute_mesh_statistics(
     )
 
     ### Compute quality metrics statistics
-    try:
-        from physicsnemo.mesh.validation.quality import compute_quality_metrics
+    quality_metrics = compute_quality_metrics(mesh)
 
-        quality_metrics = compute_quality_metrics(mesh)
+    if "aspect_ratio" in quality_metrics.keys():
+        aspect_ratios = quality_metrics["aspect_ratio"]
+        stats["aspect_ratio_stats"] = (
+            aspect_ratios.min().item(),
+            aspect_ratios.mean().item(),
+            aspect_ratios.max().item(),
+            aspect_ratios.std(correction=0).item(),
+        )
 
-        if "aspect_ratio" in quality_metrics.keys():
-            aspect_ratios = quality_metrics["aspect_ratio"]
-            stats["aspect_ratio_stats"] = (
-                aspect_ratios.min().item(),
-                aspect_ratios.mean().item(),
-                aspect_ratios.max().item(),
-                aspect_ratios.std(correction=0).item(),
-            )
-
-        if "quality_score" in quality_metrics.keys():
-            quality_scores = quality_metrics["quality_score"]
-            stats["quality_score_stats"] = (
-                quality_scores.min().item(),
-                quality_scores.mean().item(),
-                quality_scores.max().item(),
-                quality_scores.std(correction=0).item(),
-            )
-    except Exception:
-        # If quality computation fails, skip it
-        pass
+    if "quality_score" in quality_metrics.keys():
+        quality_scores = quality_metrics["quality_score"]
+        stats["quality_score_stats"] = (
+            quality_scores.min().item(),
+            quality_scores.mean().item(),
+            quality_scores.max().item(),
+            quality_scores.std(correction=0).item(),
+        )
 
     return stats
