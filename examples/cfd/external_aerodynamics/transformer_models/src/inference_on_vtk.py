@@ -261,7 +261,7 @@ def build_data_dict(
     data_dict = {}
 
     # Always read STL geometry (needed for SDF in volume mode, center of mass calculation)
-    stl_path = run_dir / f"drivaer_{run_idx}_single_solid.stl"
+    stl_path = run_dir / f"{run_idx}_surface.stl"
     if stl_path.exists():
         stl_data = read_stl_geometry(str(stl_path), device)
         data_dict.update(stl_data)
@@ -276,7 +276,7 @@ def build_data_dict(
 
     # Read surface data if needed
     if data_mode in ["surface", "combined"]:
-        vtp_path = run_dir / f"boundary_{run_idx}.vtp"
+        vtp_path = run_dir / f"{run_idx}_boundary.vtp"
         if not vtp_path.exists():
             # Try alternative naming
             vtp_files = list(run_dir.glob("boundary_*.vtp"))
@@ -328,6 +328,8 @@ def write_surface_predictions_to_vtk(
     """
     Write surface predictions to a VTP file.
 
+    Supports both pressure-only (out_dim=1) and full predictions (out_dim=4).
+
     Parameters
     ----------
     vtp_path : str
@@ -335,7 +337,9 @@ def write_surface_predictions_to_vtk(
     output_path : str
         Path to write the output VTP file.
     predictions : torch.Tensor
-        Model predictions, shape (num_cells, 4) - [pressure, wss_x, wss_y, wss_z].
+        Model predictions, shape (num_cells, out_dim) where:
+        - out_dim=1: [pressure]
+        - out_dim=4: [pressure, wss_x, wss_y, wss_z]
     air_density : float
         Air density for dimensional scaling.
     stream_velocity : float
@@ -347,18 +351,23 @@ def write_surface_predictions_to_vtk(
     # Convert to numpy
     pred_np = predictions.cpu().numpy()
 
-    # Split into pressure and wall shear stress
-    pred_pressure = pred_np[:, 0]  # Shape: (num_cells,)
-    pred_wss = pred_np[:, 1:4]  # Shape: (num_cells, 3)
+    # Determine output dimension
+    out_dim = pred_np.shape[-1] if pred_np.ndim > 1 else 1
 
     # Scale to physical units
     dynamic_pressure = air_density * stream_velocity**2
-    pred_pressure = pred_pressure * dynamic_pressure
-    pred_wss = pred_wss * dynamic_pressure
 
-    # Add to mesh
-    output_mesh.cell_data["PredictedPressure"] = pred_pressure
-    output_mesh.cell_data["PredictedWallShearStress"] = pred_wss
+    if out_dim == 1:
+        # Pressure-only mode
+        pred_pressure = pred_np.reshape(-1) * dynamic_pressure
+        output_mesh.cell_data["PredictedPressure"] = pred_pressure
+    else:
+        # Full mode with pressure + wall shear stress
+        pred_pressure = pred_np[:, 0] * dynamic_pressure
+        pred_wss = pred_np[:, 1:4] * dynamic_pressure
+
+        output_mesh.cell_data["PredictedPressure"] = pred_pressure
+        output_mesh.cell_data["PredictedWallShearStress"] = pred_wss
 
     # Save
     output_mesh.save(output_path)
@@ -452,7 +461,6 @@ def create_datapipe(
     optional_keys = [
         "include_normals",
         "include_sdf",
-        "broadcast_global_features",
         "include_geometry",
         "geometry_sampling",
         "translational_invariance",
@@ -464,6 +472,12 @@ def create_datapipe(
     for key in optional_keys:
         if cfg.data.get(key, None) is not None:
             overrides[key] = cfg.data[key]
+
+    # IMPORTANT: Always disable broadcast_global_features in the datapipe for inference
+    # on large meshes. The broadcasting will be done per sub-batch in batched_inference_loop
+    # to avoid memory explosion on huge meshes.
+    # This works regardless of how the model was trained (broadcast true or false).
+    overrides["broadcast_global_features"] = False
 
     # Create the datapipe with no resolution limit (we handle batching ourselves)
     datapipe = TransolverDataPipe(
@@ -603,11 +617,9 @@ def inference_on_vtk(cfg: DictConfig) -> None:
 
     # Find all run directories
     if run_indices is not None:
-        run_dirs = [input_dir / f"run_{idx}" for idx in run_indices]
+        run_dirs = [input_dir / f"{idx}" for idx in run_indices]
     else:
-        run_dirs = sorted(
-            [d for d in input_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
-        )
+        run_dirs = sorted([d for d in input_dir.iterdir() if d.is_dir()])
 
     logger.info(f"Found {len(run_dirs)} run directories to process")
 
@@ -617,7 +629,7 @@ def inference_on_vtk(cfg: DictConfig) -> None:
 
     # Process each run
     for run_dir in this_device_runs:
-        run_idx = int(run_dir.name.split("_")[1])
+        run_idx = int(run_dir.name)
         logger.info(f"Processing run {run_idx}: {run_dir}")
 
         start_time = time.time()
@@ -657,11 +669,11 @@ def inference_on_vtk(cfg: DictConfig) -> None:
             run_output_dir.mkdir(parents=True, exist_ok=True)
 
             if data_mode in ["surface", "combined"]:
-                vtp_path = run_dir / f"boundary_{run_idx}.vtp"
+                vtp_path = run_dir / f"{run_idx}_boundary.vtp"
                 if not vtp_path.exists():
-                    vtp_path = list(run_dir.glob("boundary_*.vtp"))[0]
+                    vtp_path = list(run_dir.glob(f"{run_idx}_boundary.vtp"))[0]
 
-                output_vtp = run_output_dir / f"pred_boundary_{run_idx}.vtp"
+                output_vtp = run_output_dir / f"pred_{run_idx}_boundary.vtp"
                 write_surface_predictions_to_vtk(
                     str(vtp_path),
                     str(output_vtp),

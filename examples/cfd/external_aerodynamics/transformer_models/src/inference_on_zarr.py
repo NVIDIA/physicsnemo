@@ -145,11 +145,25 @@ def batched_inference_loop(
         local_embeddings = batch["embeddings"][:, index_block]
         local_fields = batch["fields"][:, index_block]
 
-        # fx does not need to be sliced for TransolverX:
+        # Handle fx (global features) based on model type:
         if "geometry" not in batch.keys():
+            # Transolver path - fx is broadcast to all points, slice for sub-batch
             local_fx = batch["fx"][:, index_block]
         else:
-            local_fx = batch["fx"]
+            # GeoTransolver path - broadcast fx to sub-batch size on-demand
+            # (avoids memory explosion on large meshes by not pre-broadcasting to full mesh)
+            sub_batch_size = index_block.shape[0]
+            fx = batch["fx"]
+
+            # Normalize to 3D (B, tokens, features) - datapipe may add extra dims
+            while fx.ndim > 3:
+                fx = fx.squeeze(1)
+
+            # Broadcast single-token fx, or slice full-mesh fx
+            if fx.shape[1] == 1:
+                local_fx = fx.expand(-1, sub_batch_size, -1)
+            else:
+                local_fx = fx[:, index_block]
 
         local_batch = {
             "fx": local_fx,
@@ -340,55 +354,10 @@ def inference(cfg: DictConfig) -> None:
             metrics = metrics_fn_surface(
                 global_predictions, global_targets, dist_manager
             )
-            # Compute the drag and loss coefficients:
-            # (Index on [0] is to remove the 1 batch index)
-            pred_pressure, pred_shear = torch.split(
-                global_predictions[0], (1, 3), dim=-1
-            )
 
-            pred_pressure = pred_pressure.reshape(-1)
-            pred_drag_coeff, _, _ = compute_force_coefficients(
-                batch["surface_normals"][0],
-                batch["surface_areas"],
-                coeff,
-                pred_pressure,
-                pred_shear,
-                torch.tensor([[1, 0, 0]], device=dist_manager.device),
-            )
-
-            pred_lift_coeff, _, _ = compute_force_coefficients(
-                batch["surface_normals"][0],
-                batch["surface_areas"],
-                coeff,
-                pred_pressure,
-                pred_shear,
-                torch.tensor([[0, 0, 1]], device=dist_manager.device),
-            )
-
-            # true_fields = val_dataset.unscale_model_targets(batch["fields"], air_density=air_density, stream_velocity=stream_velocity)
-            true_pressure, true_shear = torch.split(global_targets[0], (1, 3), dim=-1)
-
-            true_pressure = true_pressure.reshape(-1)
-            true_drag_coeff, _, _ = compute_force_coefficients(
-                batch["surface_normals"][0],
-                batch["surface_areas"],
-                coeff,
-                true_pressure,
-                true_shear,
-                torch.tensor([[1, 0, 0]], device=dist_manager.device),
-            )
-
-            true_lift_coeff, _, _ = compute_force_coefficients(
-                batch["surface_normals"][0],
-                batch["surface_areas"],
-                coeff,
-                true_pressure,
-                true_shear,
-                torch.tensor([[0, 0, 1]], device=dist_manager.device),
-            )
-
-            pred_lift_coeff = pred_lift_coeff.item()
-            pred_drag_coeff = pred_drag_coeff.item()
+            # Determine output dimension for handling pressure-only vs full predictions
+            out_dim = global_predictions.shape[-1]
+            has_shear = out_dim >= 4
 
             # Extract metric values and convert tensors to floats
             l2_pressure = (
@@ -406,39 +375,104 @@ def inference(cfg: DictConfig) -> None:
                 if hasattr(metrics["mae_pressure_surf"], "item")
                 else metrics["mae_pressure_surf"]
             )
-            l2_wall_shear_stress = (
-                metrics["l2_wall_shear_stress"].item()
-                if hasattr(metrics["l2_wall_shear_stress"], "item")
-                else metrics["l2_wall_shear_stress"]
-            )
-            l1_wall_shear_stress = (
-                metrics["l1_wall_shear_stress"].item()
-                if hasattr(metrics["l1_wall_shear_stress"], "item")
-                else metrics["l1_wall_shear_stress"]
-            )
-            mae_wall_shear_stress = (
-                metrics["mae_wall_shear_stress"].item()
-                if hasattr(metrics["mae_wall_shear_stress"], "item")
-                else metrics["mae_wall_shear_stress"]
-            )
 
-            results.append(
-                [
-                    batch_idx,
-                    f"{loss:.4f}",
-                    f"{l2_pressure:.4f}",
-                    f"{l1_pressure:.4f}",
-                    f"{mae_pressure:.4f}",
-                    f"{l2_wall_shear_stress:.4f}",
-                    f"{l1_wall_shear_stress:.4f}",
-                    f"{mae_wall_shear_stress:.4f}",
-                    f"{pred_drag_coeff:.4f}",
-                    f"{pred_lift_coeff:.4f}",
-                    f"{true_drag_coeff:.4f}",
-                    f"{true_lift_coeff:.4f}",
-                    f"{elapsed:.4f}",
-                ]
-            )
+            if has_shear:
+                # Compute the drag and lift coefficients when we have pressure + wall shear stress
+                # (Index on [0] is to remove the 1 batch index)
+                pred_pressure, pred_shear = torch.split(
+                    global_predictions[0], (1, 3), dim=-1
+                )
+
+                pred_pressure = pred_pressure.reshape(-1)
+                pred_drag_coeff, _, _ = compute_force_coefficients(
+                    batch["surface_normals"][0],
+                    batch["surface_areas"],
+                    coeff,
+                    pred_pressure,
+                    pred_shear,
+                    torch.tensor([[1, 0, 0]], device=dist_manager.device),
+                )
+
+                pred_lift_coeff, _, _ = compute_force_coefficients(
+                    batch["surface_normals"][0],
+                    batch["surface_areas"],
+                    coeff,
+                    pred_pressure,
+                    pred_shear,
+                    torch.tensor([[0, 0, 1]], device=dist_manager.device),
+                )
+
+                true_pressure, true_shear = torch.split(
+                    global_targets[0], (1, 3), dim=-1
+                )
+
+                true_pressure = true_pressure.reshape(-1)
+                true_drag_coeff, _, _ = compute_force_coefficients(
+                    batch["surface_normals"][0],
+                    batch["surface_areas"],
+                    coeff,
+                    true_pressure,
+                    true_shear,
+                    torch.tensor([[1, 0, 0]], device=dist_manager.device),
+                )
+
+                true_lift_coeff, _, _ = compute_force_coefficients(
+                    batch["surface_normals"][0],
+                    batch["surface_areas"],
+                    coeff,
+                    true_pressure,
+                    true_shear,
+                    torch.tensor([[0, 0, 1]], device=dist_manager.device),
+                )
+
+                pred_lift_coeff = pred_lift_coeff.item()
+                pred_drag_coeff = pred_drag_coeff.item()
+
+                l2_wall_shear_stress = (
+                    metrics["l2_wall_shear_stress"].item()
+                    if hasattr(metrics["l2_wall_shear_stress"], "item")
+                    else metrics["l2_wall_shear_stress"]
+                )
+                l1_wall_shear_stress = (
+                    metrics["l1_wall_shear_stress"].item()
+                    if hasattr(metrics["l1_wall_shear_stress"], "item")
+                    else metrics["l1_wall_shear_stress"]
+                )
+                mae_wall_shear_stress = (
+                    metrics["mae_wall_shear_stress"].item()
+                    if hasattr(metrics["mae_wall_shear_stress"], "item")
+                    else metrics["mae_wall_shear_stress"]
+                )
+
+                results.append(
+                    [
+                        batch_idx,
+                        f"{loss:.4f}",
+                        f"{l2_pressure:.4f}",
+                        f"{l1_pressure:.4f}",
+                        f"{mae_pressure:.4f}",
+                        f"{l2_wall_shear_stress:.4f}",
+                        f"{l1_wall_shear_stress:.4f}",
+                        f"{mae_wall_shear_stress:.4f}",
+                        f"{pred_drag_coeff:.4f}",
+                        f"{pred_lift_coeff:.4f}",
+                        f"{true_drag_coeff:.4f}",
+                        f"{true_lift_coeff:.4f}",
+                        f"{elapsed:.4f}",
+                    ]
+                )
+            else:
+                # Pressure-only mode (out_dim=1)
+                results.append(
+                    [
+                        batch_idx,
+                        f"{loss:.4f}",
+                        f"{l2_pressure:.4f}",
+                        f"{l1_pressure:.4f}",
+                        f"{mae_pressure:.4f}",
+                        f"{elapsed:.4f}",
+                    ]
+                )
 
         elif cfg.data.mode == "volume":
             if stream_velocity is not None:
@@ -528,35 +562,57 @@ def inference(cfg: DictConfig) -> None:
             )
 
     if cfg.data.mode == "surface":
-        pred_drag_coeffs = [r[8] for r in results]
-        pred_lift_coeffs = [r[9] for r in results]
-        true_drag_coeffs = [r[10] for r in results]
-        true_lift_coeffs = [r[11] for r in results]
+        # Determine if we have shear data based on results row length
+        # Full results: 13 columns, Pressure-only: 6 columns
+        has_shear_results = len(results[0]) > 6 if results else False
 
-        # Compute the R2 scores for lift and drag:
-        r2_lift = r2_score(true_lift_coeffs, pred_lift_coeffs)
-        r2_drag = r2_score(true_drag_coeffs, pred_drag_coeffs)
+        if has_shear_results:
+            pred_drag_coeffs = [r[8] for r in results]
+            pred_lift_coeffs = [r[9] for r in results]
+            true_drag_coeffs = [r[10] for r in results]
+            true_lift_coeffs = [r[11] for r in results]
 
-        headers = [
-            "Batch",
-            "Loss",
-            "L2 Pressure",
-            "L1 Pressure",
-            "MAE Pressure",
-            "L2 Wall Shear Stress",
-            "L1 Wall Shear Stress",
-            "MAE Wall Shear Stress",
-            "Predicted Drag Coefficient",
-            "Pred Lift Coefficient",
-            "True Drag Coefficient",
-            "True Lift Coefficient",
-            "Elapsed (s)",
-        ]
-        logger.info(
-            f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
-        )
-        logger.info(f"R2 score for lift: {r2_lift:.4f}")
-        logger.info(f"R2 score for drag: {r2_drag:.4f}")
+            # Compute the R2 scores for lift and drag:
+            r2_lift = r2_score(true_lift_coeffs, pred_lift_coeffs)
+            r2_drag = r2_score(true_drag_coeffs, pred_drag_coeffs)
+
+            headers = [
+                "Batch",
+                "Loss",
+                "L2 Pressure",
+                "L1 Pressure",
+                "MAE Pressure",
+                "L2 Wall Shear Stress",
+                "L1 Wall Shear Stress",
+                "MAE Wall Shear Stress",
+                "Predicted Drag Coefficient",
+                "Pred Lift Coefficient",
+                "True Drag Coefficient",
+                "True Lift Coefficient",
+                "Elapsed (s)",
+            ]
+            logger.info(
+                f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
+            )
+            logger.info(f"R2 score for lift: {r2_lift:.4f}")
+            logger.info(f"R2 score for drag: {r2_drag:.4f}")
+        else:
+            # Pressure-only mode
+            headers = [
+                "Batch",
+                "Loss",
+                "L2 Pressure",
+                "L1 Pressure",
+                "MAE Pressure",
+                "Elapsed (s)",
+            ]
+            logger.info(
+                f"Results:\n{tabulate(results, headers=headers, tablefmt='github')}"
+            )
+            logger.info(
+                "Note: Pressure-only mode (out_dim=1) - no wall shear stress or force coefficients computed"
+            )
+
         csv_filename = f"{cfg.output_dir}/{cfg.run_id}/surface_inference_results_{datetime.now()}.csv"
         with open(csv_filename, "w", newline="") as f:
             writer = csv.writer(f)
