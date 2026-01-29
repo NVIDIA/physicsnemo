@@ -14,16 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Unary operation helpers and dispatch wrappers for `ShardTensor`.
+
+r"""Unary operation helpers and dispatch wrappers for ShardTensor.
 
 This module provides:
-- A dispatch-level wrapper for `torch.unsqueeze` that preserves and adjusts
-  sharding metadata for `ShardTensor`.
+
+- A dispatch-level wrapper for ``torch.unsqueeze`` that preserves and adjusts
+  sharding metadata for ``ShardTensor``.
 - Small utility helpers for normalizing dimensions and constructing shapes.
 """
 
-from typing import Dict, List, Sequence
+from __future__ import annotations
+
+from typing import Sequence
 
 import torch
 from torch.distributed.tensor.placement_types import (
@@ -36,18 +39,22 @@ aten = torch.ops.aten
 
 
 def unsqueeze_shape(shape: torch.Size | Sequence[int], dim: int) -> torch.Size:
-    """
-    Return a new `torch.Size` with a singleton dimension inserted at `dim`.
+    r"""Return a new torch.Size with a singleton dimension inserted at ``dim``.
 
-    - If `dim` is within the current rank, the new dimension is inserted at that index.
-    - This mirrors the behavior of `torch.unsqueeze` at the shape level.
+    If ``dim`` is within the current rank, the new dimension is inserted at
+    that index. This mirrors the behavior of ``torch.unsqueeze`` at the shape level.
 
-    Args:
-        shape: The original shape as a `torch.Size` or sequence of integers.
-        dim: The dimension index at which to insert a singleton dimension.
+    Parameters
+    ----------
+    shape : torch.Size | Sequence[int]
+        The original shape as a ``torch.Size`` or sequence of integers.
+    dim : int
+        The dimension index at which to insert a singleton dimension.
 
-    Returns:
-        A new `torch.Size` with the inserted dimension.
+    Returns
+    -------
+    torch.Size
+        A new ``torch.Size`` with the inserted dimension.
     """
     o_shape = list(shape)
     o_shape.insert(dim, 1)
@@ -55,37 +62,47 @@ def unsqueeze_shape(shape: torch.Size | Sequence[int], dim: int) -> torch.Size:
 
 
 def normalize_dim(dim: int, tensor_rank: int) -> int:
-    """
-    Normalize a possibly negative `dim` to a non-negative index for a given rank.
+    r"""Normalize a possibly negative ``dim`` to a non-negative index for a given rank.
 
-    Follows PyTorch semantics for unsqueeze:
-    when `dim < 0`, the effective index is `tensor_rank + dim + 1`.
+    Follows PyTorch semantics for unsqueeze: when ``dim < 0``, the effective
+    index is ``tensor_rank + dim + 1``.
 
-    Args:
-        dim: The (possibly negative) dimension index.
-        tensor_rank: The rank (number of dimensions) of the tensor.
+    Parameters
+    ----------
+    dim : int
+        The (possibly negative) dimension index.
+    tensor_rank : int
+        The rank (number of dimensions) of the tensor.
 
-    Returns:
+    Returns
+    -------
+    int
         The normalized non-negative dimension index.
     """
     return dim if dim >= 0 else (dim % (tensor_rank + 1))
 
 
 def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
-    """
-    Dispatch-level wrapper for `aten.unsqueeze` on `ShardTensor`.
+    r"""Dispatch-level wrapper for ``aten.unsqueeze`` on ShardTensor.
 
-    Ensures the output `ShardTensor` has correct placements and sharding shapes
+    Ensures the output ShardTensor has correct placements and sharding shapes
     after inserting a singleton dimension. Replicated placements stay replicated.
     Sharded placements remain sharded, but their shard dimension is shifted by
     one if the unsqueezed dimension is before or equal to the shard dimension.
 
-    Args:
-        input: The input `ShardTensor`.
-        dim: The dimension index at which to insert a singleton dimension. May be negative.
+    Parameters
+    ----------
+    input : ShardTensor
+        The input ShardTensor.
+    dim : int
+        The dimension index at which to insert a singleton dimension.
+        May be negative.
 
-    Returns:
-        A new `ShardTensor` with the local tensor unsqueezed and sharding metadata adjusted.
+    Returns
+    -------
+    ShardTensor
+        A new ShardTensor with the local tensor unsqueezed and sharding
+        metadata adjusted.
     """
     # This is a _dispatch_level_ wrapper, so we're intercepting aten.unsqueeze
 
@@ -118,7 +135,7 @@ def unsqueeze_wrapper(input: ShardTensor, dim: int) -> ShardTensor:
             output_placements.append(p)
 
     in_sharding_shapes = input._spec.sharding_shapes()
-    out_sharding_shapes: Dict[int, List[torch.Size]] = {
+    out_sharding_shapes: dict[int, list[torch.Size]] = {
         mesh_dim: [unsqueeze_shape(s, dim) for s in in_sharding_shapes[mesh_dim]]
         for mesh_dim in in_sharding_shapes.keys()
     }

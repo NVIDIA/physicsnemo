@@ -26,10 +26,10 @@ from torch import Tensor
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.nn import get_activation
-from physicsnemo.nn.gnn_layers.mesh_edge_block import HybridMeshEdgeBlock
-from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
-from physicsnemo.nn.gnn_layers.mesh_node_block import HybridMeshNodeBlock
-from physicsnemo.nn.gnn_layers.utils import GraphType
+from physicsnemo.nn.module.gnn_layers.mesh_edge_block import HybridMeshEdgeBlock
+from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
+from physicsnemo.nn.module.gnn_layers.mesh_node_block import HybridMeshNodeBlock
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
 from physicsnemo.utils.profiling import profile
 
 # Import the MeshGraphNet
@@ -112,16 +112,16 @@ class HybridMeshGraphNet(MeshGraphNet):
         Mesh edge features of shape :math:`(N_{mesh\_edges}, D_{in}^{edge})`.
     world_edge_features : torch.Tensor
         World edge features of shape :math:`(N_{world\_edges}, D_{in}^{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
 
 
     Outputs
@@ -361,16 +361,16 @@ class HybridMeshGraphNetProcessor(MeshGraphNetProcessor):
         Mesh edge features of shape :math:`(N_{mesh\_edges}, D_{edge})`.
     world_edge_features : torch.Tensor
         World edge features of shape :math:`(N_{world\_edges}, D_{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------

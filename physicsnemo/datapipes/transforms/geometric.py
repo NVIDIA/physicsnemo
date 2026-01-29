@@ -30,7 +30,7 @@ from tensordict import TensorDict
 
 from physicsnemo.datapipes.registry import register
 from physicsnemo.datapipes.transforms.base import Transform
-from physicsnemo.nn.sdf import signed_distance_field
+from physicsnemo.nn.functional import signed_distance_field
 
 
 @register()

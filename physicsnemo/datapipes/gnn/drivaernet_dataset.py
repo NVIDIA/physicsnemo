@@ -28,7 +28,7 @@ from torch.utils.data import Dataset
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from physicsnemo.nn.gnn_layers.utils import PyGData
+from physicsnemo.nn.module.gnn_layers.utils import PyGData
 
 # Check for optional dependencies
 PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)

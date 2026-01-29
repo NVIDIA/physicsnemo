@@ -22,8 +22,8 @@ from torch import Tensor
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.models.meshgraphnet import MeshGraphNet
-from physicsnemo.nn.gnn_layers.bsms import BistrideGraphMessagePassing
-from physicsnemo.nn.gnn_layers.utils import GraphType
+from physicsnemo.nn.module.gnn_layers.bsms import BistrideGraphMessagePassing
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 
 @dataclass
@@ -108,16 +108,16 @@ class BiStrideMeshGraphNet(MeshGraphNet):
         Input node features of shape :math:`(N_{nodes}, D_{in}^{node})`.
     edge_features : torch.Tensor
         Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
         Requires ``graph.pos`` with shape :math:`(N_{nodes}, \text{bistride\_pos\_dim})` for bi-stride.
     ms_edges : Iterable[torch.Tensor], optional
         Multi-scale edge lists; each is typically an integer tensor of shape :math:`(2, E_l)`.

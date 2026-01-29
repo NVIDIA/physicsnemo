@@ -223,7 +223,7 @@ import torch
 from torch.utils.data import Dataset
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn.gnn_layers.utils import GraphType
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 SCIPY_AVAILABLE = check_version_spec("scipy", hard_fail=False)
 SPARSE_DOT_MKL_AVAILABLE = check_version_spec("sparse_dot_mkl", hard_fail=False)

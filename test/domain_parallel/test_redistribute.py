@@ -14,8 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Test redistribution between different sharding schemes on ShardTensor.
+r"""Tests for ShardTensor redistribution between different sharding schemes.
 
 One major feature of ShardTensor is that it knows both the global shape
 and local layout of every shard, and can seamlessly translate between them.
@@ -23,9 +22,16 @@ and local layout of every shard, and can seamlessly translate between them.
 In many ways, this is an extension of DTensor's utilities, but we're testing
 here specifically any uneven shardings, etc.
 
-The tests will test over 1d and 2d meshes of shard tensors, with increasingly
-complex resharding requirements.  In all cases, the input tensors are sharded:
-(Shard(1),) for 1d, (Shard(1), Shard(2)) for 2d.
+The tests cover 1D and 2D meshes of shard tensors with increasingly complex
+resharding requirements. In all cases, the input tensors are sharded:
+``(Shard(1),)`` for 1D, ``(Shard(1), Shard(2))`` for 2D.
+
+Test cases include:
+
+- No-op redistributions (same source and target placements)
+- Shard to Replicate (gather operations)
+- Replicate to Shard (scatter operations)
+- Shard to Shard on different dimensions (all-to-all transpose)
 """
 
 import pytest
@@ -38,8 +44,26 @@ from physicsnemo.domain_parallel import ShardTensor
 
 
 def shard_tensor_factory(mesh, requires_grad=False, uneven=True):
-    """
-    Generate a shard tensor on the mesh
+    r"""Generate a ShardTensor on the mesh for testing.
+
+    Creates a randomly-valued tensor sharded according to the mesh dimensions.
+    Can create either even or uneven sharding depending on the ``uneven`` parameter.
+
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        The device mesh to create the ShardTensor on.
+    requires_grad : bool, default=False
+        Whether the tensor requires gradients.
+    uneven : bool, default=True
+        If ``True``, creates tensors with different sizes on each rank.
+        If ``False``, creates tensors with uniform sizes across ranks.
+
+    Returns
+    -------
+    ShardTensor
+        A ShardTensor with shape ``(100, *, ..., 100)`` where the middle
+        dimensions depend on mesh rank if ``uneven=True``.
     """
 
     dm = DistributedManager()
@@ -155,6 +179,17 @@ def test_shard_tensor_redistribute2d(
 
 
 def run_shard_tensor_redistribute(mesh, redistribution_case, verbose=False):
+    r"""Run a single redistribution test case.
+
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        The device mesh to test on.
+    redistribution_case : Tuple[str, List[Placement]]
+        Tuple of (case_name, target_placements) describing the redistribution.
+    verbose : bool, default=False
+        If ``True``, print debugging information.
+    """
     case_name, dst_placements = redistribution_case
 
     # Create initial sharded tensor

@@ -28,7 +28,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from physicsnemo.nn.ball_query import BQWarp
+from physicsnemo.nn import BQWarp
 from physicsnemo.utils.profiling import profile
 
 

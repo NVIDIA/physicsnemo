@@ -15,8 +15,22 @@
 # limitations under the License.
 
 
+r"""Ring communication utilities for distributed tensor operations.
+
+This module provides utilities for ring-based collective communication patterns.
+Ring communication is useful for operations where data needs to be passed around
+in a circular fashion between processes, such as ring attention.
+
+The module provides:
+
+- ``RingPassingConfig``: Configuration dataclass for ring communication parameters
+- ``perform_ring_iteration``: Function to perform a single step of ring communication
+"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Literal
 
 import torch
 import torch.distributed as dist
@@ -25,16 +39,23 @@ from torch.distributed.device_mesh import DeviceMesh
 
 @dataclass
 class RingPassingConfig:
-    """Configuration for ring-based communication operations.
+    r"""Configuration for ring-based communication operations.
 
     This class encapsulates all parameters needed for ring communication patterns,
     making it easier to pass consistent configurations between functions.
 
-    Attributes:
-        mesh_dim (int): Mesh dimension for the ring communication
-        tensor_dim (int): Tensor dimension involved in the communication
-        mesh_size (int): Size of the mesh for this communication
-        communication_method (str): Method for exchanging data ("p2p" or "a2a")
+    Attributes
+    ----------
+    mesh_dim : int
+        Mesh dimension for the ring communication.
+    mesh_size : int
+        Size of the mesh for this communication.
+    ring_direction : Literal["forward", "backward"]
+        Direction of ring communication. ``"forward"`` sends to rank+1,
+        ``"backward"`` sends to rank-1. Default is ``"forward"``.
+    communication_method : Literal["p2p", "a2a"]
+        Method for exchanging data. ``"p2p"`` uses point-to-point operations,
+        ``"a2a"`` uses all-to-all. Default is ``"a2a"``.
     """
 
     VALID_COMM_METHODS = ["p2p", "a2a"]
@@ -47,10 +68,12 @@ class RingPassingConfig:
     communication_method: Literal["p2p", "a2a"] = "a2a"
 
     def __post_init__(self) -> None:
-        """Validate configuration parameters after initialization.
+        r"""Validate configuration parameters after initialization.
 
-        Raises:
-            ValueError: If invalid communication method is specified
+        Raises
+        ------
+        ValueError
+            If invalid communication method or ring direction is specified.
         """
 
         if self.communication_method not in self.VALID_COMM_METHODS:
@@ -70,22 +93,30 @@ def perform_ring_iteration(
     tensor: torch.Tensor,
     mesh: DeviceMesh,
     ring_config: RingPassingConfig,
-    recv_shape: Union[torch.Size, None] = None,
+    recv_shape: torch.Size | None = None,
 ) -> torch.Tensor:
-    """
-    Performs a ring collective communication where all tensors are the same size.
+    r"""Perform a single step of ring collective communication.
 
-    Tensors are sent to the next rank in the ring, and wrap around from rank N-1 to rank 0.
-    This implements a single step of ring communication where each process sends data to
-    its neighbor and receives data from its other neighbor.
+    Tensors are sent to the next rank in the ring, and wrap around from rank N-1
+    to rank 0. This implements a single step of ring communication where each
+    process sends data to its neighbor and receives data from its other neighbor.
 
-    Args:
-        tensor (torch.Tensor): The tensor to be sent in this ring communication step
-        mesh (DeviceMesh): Device mesh that defines the distributed process group
-        ring_config (RingPassingConfig): Configuration for the ring communication pattern
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        The tensor to be sent in this ring communication step.
+    mesh : DeviceMesh
+        Device mesh that defines the distributed process group.
+    ring_config : RingPassingConfig
+        Configuration for the ring communication pattern.
+    recv_shape : Union[torch.Size, None], optional
+        Shape of the tensor to receive. If ``None``, assumes same shape as
+        the tensor being sent.
 
-    Returns:
-        torch.Tensor: The tensor received from the previous rank in the ring
+    Returns
+    -------
+    torch.Tensor
+        The tensor received from the previous rank in the ring.
     """
 
     dtype = tensor.dtype

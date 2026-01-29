@@ -23,7 +23,7 @@ import torch
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.nn import DownSample3D, FuserLayer, UpSample3D
-from physicsnemo.nn.utils import (
+from physicsnemo.nn.module.utils import (
     PatchEmbed2D,
     PatchEmbed3D,
     PatchRecovery2D,
