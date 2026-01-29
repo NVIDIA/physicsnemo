@@ -393,7 +393,9 @@ class TestLoopSubdivision:
 
         # Loop subdivision should produce reasonable smoothing (areas should be consistent)
         area_std = areas.std() / areas.mean()
-        assert area_std < 1.0, "Loop subdivision should produce reasonably uniform cell areas"
+        assert area_std < 1.0, (
+            "Loop subdivision should produce reasonably uniform cell areas"
+        )
 
 
 ### Test Edge Cases and Validation

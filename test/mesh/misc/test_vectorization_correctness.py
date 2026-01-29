@@ -472,7 +472,9 @@ class TestGaussianCurvatureCorrectness:
         # Lumpy sphere has varying curvature, but should mostly be positive
         finite_K = K_cells[torch.isfinite(K_cells)]
         positive_fraction = (finite_K > 0).float().mean()
-        assert positive_fraction > 0.5, f"Expected mostly positive curvature, got {positive_fraction:.2%}"
+        assert positive_fraction > 0.5, (
+            f"Expected mostly positive curvature, got {positive_fraction:.2%}"
+        )
 
         ### Verify curvature values are in reasonable range
         assert torch.abs(finite_K).max() < 100.0, "Unreasonably large curvature values"

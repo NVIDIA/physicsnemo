@@ -557,9 +557,7 @@ class TestPrincipalCurvatures:
         from physicsnemo.mesh.primitives.surfaces import cylinder_open
 
         radius = 1.0
-        mesh = cylinder_open.load(
-            radius=radius, n_circ=32, n_height=16, device=device
-        )
+        mesh = cylinder_open.load(radius=radius, n_circ=32, n_height=16, device=device)
 
         K = mesh.gaussian_curvature_vertices
         H = mesh.mean_curvature_vertices

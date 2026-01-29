@@ -27,7 +27,6 @@ from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives.curves import circle_2d
 from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
-
 ###############################################################################
 # 1D Manifolds (Closed Curves)
 ###############################################################################

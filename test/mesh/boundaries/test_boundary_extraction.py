@@ -289,7 +289,9 @@ class TestLumpyBallBoundary:
         from physicsnemo.mesh.primitives.procedural import lumpy_ball
 
         subdivisions = 1
-        mesh = lumpy_ball.load(n_shells=n_shells, subdivisions=subdivisions, device=device)
+        mesh = lumpy_ball.load(
+            n_shells=n_shells, subdivisions=subdivisions, device=device
+        )
         boundary = mesh.get_boundary_mesh()
 
         expected_faces = 20 * (4**subdivisions)
@@ -326,7 +328,9 @@ class TestLumpyBallBoundary:
 
         assert mesh.n_manifold_dims == 3, "lumpy_ball should be 3D (tetrahedra)"
         assert boundary.n_manifold_dims == 2, "Boundary should be 2D (triangles)"
-        assert boundary.cells.shape[1] == 3, "Boundary cells should have 3 vertices each"
+        assert boundary.cells.shape[1] == 3, (
+            "Boundary cells should have 3 vertices each"
+        )
 
     @pytest.mark.parametrize("noise_amplitude", [0.0, 0.3, 0.5])
     def test_boundary_valid_with_noise(self, device, noise_amplitude):
@@ -334,7 +338,11 @@ class TestLumpyBallBoundary:
         from physicsnemo.mesh.primitives.procedural import lumpy_ball
 
         mesh = lumpy_ball.load(
-            n_shells=2, noise_amplitude=noise_amplitude, seed=42, subdivisions=2, device=device
+            n_shells=2,
+            noise_amplitude=noise_amplitude,
+            seed=42,
+            subdivisions=2,
+            device=device,
         )
         boundary = mesh.get_boundary_mesh()
 

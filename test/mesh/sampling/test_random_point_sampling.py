@@ -534,7 +534,9 @@ class TestRealisticMeshSampling:
         mesh = lumpy_sphere.load(subdivisions=2, device=device)
 
         # Sample from specific cells (with repetition)
-        cell_indices = torch.tensor([0, 10, 50, 10, 0], device=device, dtype=torch.int64)
+        cell_indices = torch.tensor(
+            [0, 10, 50, 10, 0], device=device, dtype=torch.int64
+        )
         sampled = sample_random_points_on_cells(mesh, cell_indices=cell_indices)
 
         assert sampled.shape == (5, 3)

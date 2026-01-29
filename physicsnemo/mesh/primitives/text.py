@@ -60,9 +60,7 @@ def _sample_curve_segment(p0, control_points, pn, num_samples: int):
         )
 
 
-def _text_to_path(
-    text: str, font_size: float = 12.0, samples_per_unit: float = 10
-):
+def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 10):
     """Convert text to sampled path with edges.
 
     Returns:

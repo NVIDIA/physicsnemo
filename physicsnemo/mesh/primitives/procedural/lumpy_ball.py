@@ -82,7 +82,9 @@ def load(
     if subdivisions < 0:
         raise ValueError(f"subdivisions must be non-negative, got {subdivisions=}")
     if noise_amplitude < 0:
-        raise ValueError(f"noise_amplitude must be non-negative, got {noise_amplitude=}")
+        raise ValueError(
+            f"noise_amplitude must be non-negative, got {noise_amplitude=}"
+        )
 
     ### Step 1: Generate base icosahedron at unit radius
     template = icosahedron_surface.load(radius=1.0, device=device)
@@ -115,7 +117,9 @@ def load(
     ### Step 4: Generate shell radii (linear spacing from center to outer)
     # Vectorized: torch.arange instead of list comprehension
     shell_radii = (
-        radius * torch.arange(1, n_shells + 1, device=device, dtype=torch.float32) / n_shells
+        radius
+        * torch.arange(1, n_shells + 1, device=device, dtype=torch.float32)
+        / n_shells
     )
 
     ### Step 5: Build all vertices by scaling template
@@ -124,9 +128,9 @@ def load(
     # template.points: (n_verts, 3) -> (1, n_verts, 3)
     # Result: (n_shells, n_verts, 3) -> (n_shells * n_verts, 3)
     center = torch.zeros(1, 3, dtype=torch.float32, device=device)
-    shell_points = (
-        template.points.unsqueeze(0) * shell_radii.view(-1, 1, 1)
-    ).reshape(-1, 3)
+    shell_points = (template.points.unsqueeze(0) * shell_radii.view(-1, 1, 1)).reshape(
+        -1, 3
+    )
     all_points = torch.cat([center, shell_points], dim=0)
 
     ### Step 6: Build core tetrahedra (center to innermost shell)
@@ -170,7 +174,11 @@ def load(
         # Extract individual vertex indices: each has shape (n_shells-1, n_faces)
         # Now a < b < c by template index, ensuring consistent diagonal choice
         a_in, b_in, c_in = inner_faces[..., 0], inner_faces[..., 1], inner_faces[..., 2]
-        a_out, b_out, c_out = outer_faces[..., 0], outer_faces[..., 1], outer_faces[..., 2]
+        a_out, b_out, c_out = (
+            outer_faces[..., 0],
+            outer_faces[..., 1],
+            outer_faces[..., 2],
+        )
 
         # Build 3 tetrahedra per prism: each stack produces (n_shells-1, n_faces, 4)
         tet1 = torch.stack([a_in, b_in, c_in, a_out], dim=-1)

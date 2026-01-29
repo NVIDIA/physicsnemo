@@ -73,9 +73,7 @@ def test_basic_smoothing_reduces_roughness():
     assert torch.isfinite(torch.tensor(roughness_after)), (
         f"Roughness should be finite: {roughness_after=}"
     )
-    assert roughness_after < 1.0, (
-        f"Roughness should be bounded: {roughness_after=}"
-    )
+    assert roughness_after < 1.0, f"Roughness should be bounded: {roughness_after=}"
 
 
 def test_smoothing_approximately_preserves_volume():

@@ -17,7 +17,6 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.primitives import procedural
 
-
 ###############################################################################
 # Helper Functions - Analytical Field Generators
 ###############################################################################
@@ -854,8 +853,12 @@ class TestLaplacianSphericalHarmonics:
 
         lap = compute_laplacian_points_dec(mesh, phi)
 
-        assert lap.abs().max() < 1e-5, f"Laplacian of constant: max={lap.abs().max():.6f}"
-        assert lap.abs().mean() < 1e-6, f"Laplacian of constant: mean={lap.abs().mean():.6f}"
+        assert lap.abs().max() < 1e-5, (
+            f"Laplacian of constant: max={lap.abs().max():.6f}"
+        )
+        assert lap.abs().mean() < 1e-6, (
+            f"Laplacian of constant: mean={lap.abs().mean():.6f}"
+        )
 
     def test_laplacian_spherical_harmonic_Y10(self):
         r"""Verify \Delta_S(z) = -2z (eigenvalue -2 for l=1).
@@ -878,9 +881,9 @@ class TestLaplacianSphericalHarmonics:
         ratio = lap[mask] / phi[mask]
 
         mean_eigenvalue = ratio.mean()
-        assert (
-            abs(mean_eigenvalue - (-2.0)) < 0.1
-        ), f"Y_1^0 eigenvalue: {mean_eigenvalue:.4f}, expected -2.0"
+        assert abs(mean_eigenvalue - (-2.0)) < 0.1, (
+            f"Y_1^0 eigenvalue: {mean_eigenvalue:.4f}, expected -2.0"
+        )
 
         # Verify correlation with expected
         correlation = torch.corrcoef(torch.stack([lap, expected]))[0, 1]
@@ -907,9 +910,9 @@ class TestLaplacianSphericalHarmonics:
         ratio = lap[mask] / phi[mask]
 
         mean_eigenvalue = ratio.mean()
-        assert (
-            abs(mean_eigenvalue - (-6.0)) < 0.15
-        ), f"Y_2^0 eigenvalue: {mean_eigenvalue:.4f}, expected -6.0"
+        assert abs(mean_eigenvalue - (-6.0)) < 0.15, (
+            f"Y_2^0 eigenvalue: {mean_eigenvalue:.4f}, expected -6.0"
+        )
 
         # Verify correlation
         correlation = torch.corrcoef(torch.stack([lap, expected]))[0, 1]
@@ -933,9 +936,9 @@ class TestLaplacianSphericalHarmonics:
         ratio_xz = lap_xz[mask] / phi_xz[mask]
         mean_eigenvalue_xz = ratio_xz.mean()
 
-        assert (
-            abs(mean_eigenvalue_xz - (-6.0)) < 0.15
-        ), f"Y_2^1 (xz) eigenvalue: {mean_eigenvalue_xz:.4f}, expected -6.0"
+        assert abs(mean_eigenvalue_xz - (-6.0)) < 0.15, (
+            f"Y_2^1 (xz) eigenvalue: {mean_eigenvalue_xz:.4f}, expected -6.0"
+        )
 
         # Test yz
         phi_yz = y * z
@@ -945,9 +948,9 @@ class TestLaplacianSphericalHarmonics:
         ratio_yz = lap_yz[mask] / phi_yz[mask]
         mean_eigenvalue_yz = ratio_yz.mean()
 
-        assert (
-            abs(mean_eigenvalue_yz - (-6.0)) < 0.15
-        ), f"Y_2^1 (yz) eigenvalue: {mean_eigenvalue_yz:.4f}, expected -6.0"
+        assert abs(mean_eigenvalue_yz - (-6.0)) < 0.15, (
+            f"Y_2^1 (yz) eigenvalue: {mean_eigenvalue_yz:.4f}, expected -6.0"
+        )
 
     def test_laplacian_spherical_harmonic_Y22(self):
         r"""Verify \Delta_S(x^2-y^2) = -6(x^2-y^2) (eigenvalue -6 for l=2, m=2).
@@ -967,9 +970,9 @@ class TestLaplacianSphericalHarmonics:
         ratio_x2y2 = lap_x2y2[mask] / phi_x2y2[mask]
         mean_eigenvalue_x2y2 = ratio_x2y2.mean()
 
-        assert (
-            abs(mean_eigenvalue_x2y2 - (-6.0)) < 0.15
-        ), f"Y_2^2 (x^2-y^2) eigenvalue: {mean_eigenvalue_x2y2:.4f}, expected -6.0"
+        assert abs(mean_eigenvalue_x2y2 - (-6.0)) < 0.15, (
+            f"Y_2^2 (x^2-y^2) eigenvalue: {mean_eigenvalue_x2y2:.4f}, expected -6.0"
+        )
 
         # Test xy
         phi_xy = x * y
@@ -979,9 +982,9 @@ class TestLaplacianSphericalHarmonics:
         ratio_xy = lap_xy[mask] / phi_xy[mask]
         mean_eigenvalue_xy = ratio_xy.mean()
 
-        assert (
-            abs(mean_eigenvalue_xy - (-6.0)) < 0.15
-        ), f"Y_2^2 (xy) eigenvalue: {mean_eigenvalue_xy:.4f}, expected -6.0"
+        assert abs(mean_eigenvalue_xy - (-6.0)) < 0.15, (
+            f"Y_2^2 (xy) eigenvalue: {mean_eigenvalue_xy:.4f}, expected -6.0"
+        )
 
 
 ###############################################################################
@@ -1261,7 +1264,9 @@ class TestLaplacianManifoldDimensions:
         # Should raise NotImplementedError
         scalar_values = torch.randn(mesh.n_points)
 
-        with pytest.raises(NotImplementedError, match="only implemented for triangle meshes"):
+        with pytest.raises(
+            NotImplementedError, match="only implemented for triangle meshes"
+        ):
             compute_laplacian_points_dec(mesh, scalar_values)
 
     def test_laplacian_not_implemented_for_3d(self):
@@ -1286,7 +1291,9 @@ class TestLaplacianManifoldDimensions:
         # Should raise NotImplementedError
         scalar_values = torch.randn(mesh.n_points)
 
-        with pytest.raises(NotImplementedError, match="only implemented for triangle meshes"):
+        with pytest.raises(
+            NotImplementedError, match="only implemented for triangle meshes"
+        ):
             compute_laplacian_points_dec(mesh, scalar_values)
 
     def test_laplacian_flat_mesh_quadratic(self):
@@ -1326,9 +1333,9 @@ class TestLaplacianManifoldDimensions:
 
         # Interior vertex (index 4) should have Laplacian = 4
         interior_lap = lap[4]
-        assert (
-            abs(interior_lap - 4.0) < 0.01
-        ), f"Flat mesh Laplacian at interior: {interior_lap:.4f}, expected 4.0"
+        assert abs(interior_lap - 4.0) < 0.01, (
+            f"Flat mesh Laplacian at interior: {interior_lap:.4f}, expected 4.0"
+        )
 
 
 ###############################################################################
@@ -1689,7 +1696,9 @@ class TestEdgeCases:
         mesh = simple_tet_mesh  # 3D manifold
         phi = torch.ones(mesh.n_points)
 
-        with pytest.raises(NotImplementedError, match="only implemented for triangle meshes"):
+        with pytest.raises(
+            NotImplementedError, match="only implemented for triangle meshes"
+        ):
             compute_laplacian_points_dec(mesh, phi)
 
     def test_curl_on_2d_raises(self):

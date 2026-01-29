@@ -156,9 +156,9 @@ class TestLumpyBall:
 
         # No-noise mesh should have points approximately on sphere shells
         # (center point at origin, shell points at expected radii)
-        assert torch.allclose(
-            mesh_no_noise.points[0], torch.zeros(3), atol=1e-6
-        ), "Center point should be at origin"
+        assert torch.allclose(mesh_no_noise.points[0], torch.zeros(3), atol=1e-6), (
+            "Center point should be at origin"
+        )
 
     def test_center_point(self):
         """Test that center point is at origin."""
