@@ -70,23 +70,29 @@ class TestBoundaryVertices:
         theta = torch.linspace(0, 2 * torch.pi, n_circ + 1, device=device)[:-1]
         z_vals = torch.linspace(-1.0, 1.0, n_height, device=device)
 
-        points = []
-        for z in z_vals:
-            for t in theta:
-                points.append([torch.cos(t).item(), torch.sin(t).item(), z.item()])
-        points = torch.tensor(points, dtype=torch.float32, device=device)
+        # Vectorized cylinder point generation: (n_height, n_circ) grid
+        z_grid, theta_grid = torch.meshgrid(z_vals, theta, indexing="ij")
+        points = torch.stack(
+            [theta_grid.cos(), theta_grid.sin(), z_grid], dim=-1
+        ).reshape(-1, 3)
 
-        # Create cells
-        cells = []
-        for i in range(n_height - 1):
-            for j in range(n_circ):
-                idx = i * n_circ + j
-                next_j = (j + 1) % n_circ
-                cells.append([idx, idx + next_j - j, idx + n_circ])
-                cells.append(
-                    [idx + next_j - j, idx + n_circ + next_j - j, idx + n_circ]
-                )
-        cells = torch.tensor(cells, dtype=torch.int64, device=device)
+        # Vectorized cell generation for cylinder (wrapping around circumference)
+        i_idx, j_idx = torch.meshgrid(
+            torch.arange(n_height - 1, device=device),
+            torch.arange(n_circ, device=device),
+            indexing="ij",
+        )
+        i_idx, j_idx = i_idx.reshape(-1), j_idx.reshape(-1)
+        j_next = (j_idx + 1) % n_circ  # Wrap around for cylinder
+        # Vertex indices for quad corners
+        v0 = i_idx * n_circ + j_idx
+        v1 = i_idx * n_circ + j_next
+        v2 = (i_idx + 1) * n_circ + j_idx
+        v3 = (i_idx + 1) * n_circ + j_next
+        # Two triangles per quad
+        tri1 = torch.stack([v0, v1, v2], dim=-1)
+        tri2 = torch.stack([v1, v3, v2], dim=-1)
+        cells = torch.cat([tri1, tri2], dim=0).to(torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
         is_boundary = get_boundary_vertices(mesh)

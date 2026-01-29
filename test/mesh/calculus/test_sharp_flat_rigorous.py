@@ -147,11 +147,8 @@ class TestVectorCalculusIdentities:
         div_grad_f = compute_divergence_points_dec(mesh, grad_f)
         lap_f = compute_laplacian_points_dec(mesh, f)
 
-        ### Document the discrepancy
         # In smooth calculus: div(grad) = Δ exactly
         # In discrete DEC: may differ since ♯ and ♭ are not exact inverses
-        discrepancy = abs(div_grad_f[0] - lap_f[0])
-
         # Both should at least have the same sign and order of magnitude
         assert (
             torch.sign(div_grad_f[0]) == torch.sign(lap_f[0])

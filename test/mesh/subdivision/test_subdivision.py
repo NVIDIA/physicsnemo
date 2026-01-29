@@ -475,24 +475,26 @@ class TestSubdivisionScaling:
         """Test subdivision on larger mesh."""
         # Create a moderately large triangle mesh
         n = 10
-        points = []
-        cells = []
 
-        for i in range(n):
-            for j in range(n):
-                points.append([float(i), float(j)])
+        # Vectorized grid point generation
+        i_coords, j_coords = torch.meshgrid(
+            torch.arange(n, dtype=torch.float32, device=device),
+            torch.arange(n, dtype=torch.float32, device=device),
+            indexing="ij",
+        )
+        points = torch.stack([i_coords, j_coords], dim=-1).reshape(-1, 2)
 
-        points = torch.tensor(points, dtype=torch.float32, device=device)
-
-        # Create triangular cells
-        for i in range(n - 1):
-            for j in range(n - 1):
-                idx = i * n + j
-                # Two triangles per quad
-                cells.append([idx, idx + 1, idx + n])
-                cells.append([idx + 1, idx + n + 1, idx + n])
-
-        cells = torch.tensor(cells, dtype=torch.int64, device=device)
+        # Vectorized cell generation: two triangles per quad
+        i_idx, j_idx = torch.meshgrid(
+            torch.arange(n - 1, device=device),
+            torch.arange(n - 1, device=device),
+            indexing="ij",
+        )
+        idx = (i_idx * n + j_idx).reshape(-1)  # (n-1)^2 quads
+        # Triangle 1: [idx, idx+1, idx+n], Triangle 2: [idx+1, idx+n+1, idx+n]
+        tri1 = torch.stack([idx, idx + 1, idx + n], dim=-1)
+        tri2 = torch.stack([idx + 1, idx + n + 1, idx + n], dim=-1)
+        cells = torch.cat([tri1, tri2], dim=0).to(torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
         # Should handle reasonably large mesh

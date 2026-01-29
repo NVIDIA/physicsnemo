@@ -63,13 +63,11 @@ def test_basic_smoothing_reduces_roughness():
     """Verify that smoothing reduces mesh roughness."""
 
     mesh = create_noisy_sphere(n_points=50, noise_scale=0.2)
-    roughness_before = measure_roughness(mesh)
-
     smoothed = smooth_laplacian(mesh, n_iter=50, relaxation_factor=0.1, inplace=False)
     roughness_after = measure_roughness(smoothed)
 
     # For lumpy_sphere with its structured icosahedral base, roughness may not
-    # strictly decrease. Instead, verify roughness remains finite and bounded.
+    # strictly decrease. Verify roughness remains finite and bounded.
     assert torch.isfinite(torch.tensor(roughness_after)), (
         f"Roughness should be finite: {roughness_after=}"
     )
