@@ -5,10 +5,13 @@ This module wires together all components of the remeshing pipeline.
 
 from typing import TYPE_CHECKING
 
+from physicsnemo.core.version_check import require_version_spec
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
+@require_version_spec("pyacvd")
 def remesh(
     mesh: "Mesh",
     n_clusters: int,
@@ -58,12 +61,13 @@ def remesh(
         - Point and cell data are not transferred (topology changes fundamentally)
         - Output cell orientation may differ from input
     """
-    from pyacvd import Clustering
+    import importlib
 
     from physicsnemo.mesh.io import from_pyvista, to_pyvista
     from physicsnemo.mesh.repair import repair_mesh
 
-    clustering = Clustering(to_pyvista(mesh))
+    pyacvd = importlib.import_module("pyacvd")
+    clustering = pyacvd.Clustering(to_pyvista(mesh))
     clustering.cluster(n_clusters)
     new_mesh = from_pyvista(clustering.create_mesh())
     new_mesh, stats = repair_mesh(new_mesh)
