@@ -452,7 +452,6 @@ def create_datapipe(
     optional_keys = [
         "include_normals",
         "include_sdf",
-        "broadcast_global_features",
         "include_geometry",
         "geometry_sampling",
         "translational_invariance",
@@ -464,6 +463,12 @@ def create_datapipe(
     for key in optional_keys:
         if cfg.data.get(key, None) is not None:
             overrides[key] = cfg.data[key]
+
+    # IMPORTANT: Always disable broadcast_global_features in the datapipe for inference
+    # on large meshes. The broadcasting will be done per sub-batch in batched_inference_loop
+    # to avoid memory explosion on huge meshes.
+    # This works regardless of how the model was trained (broadcast true or false).
+    overrides["broadcast_global_features"] = False
 
     # Create the datapipe with no resolution limit (we handle batching ourselves)
     datapipe = TransolverDataPipe(

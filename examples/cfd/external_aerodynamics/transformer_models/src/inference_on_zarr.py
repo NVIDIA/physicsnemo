@@ -145,11 +145,25 @@ def batched_inference_loop(
         local_embeddings = batch["embeddings"][:, index_block]
         local_fields = batch["fields"][:, index_block]
 
-        # fx does not need to be sliced for TransolverX:
+        # Handle fx (global features) based on model type:
         if "geometry" not in batch.keys():
+            # Transolver path - fx is broadcast to all points, slice for sub-batch
             local_fx = batch["fx"][:, index_block]
         else:
-            local_fx = batch["fx"]
+            # GeoTransolver path - broadcast fx to sub-batch size on-demand
+            # (avoids memory explosion on large meshes by not pre-broadcasting to full mesh)
+            sub_batch_size = index_block.shape[0]
+            fx = batch["fx"]
+
+            # Normalize to 3D (B, tokens, features) - datapipe may add extra dims
+            while fx.ndim > 3:
+                fx = fx.squeeze(1)
+
+            # Broadcast single-token fx, or slice full-mesh fx
+            if fx.shape[1] == 1:
+                local_fx = fx.expand(-1, sub_batch_size, -1)
+            else:
+                local_fx = fx[:, index_block]
 
         local_batch = {
             "fx": local_fx,

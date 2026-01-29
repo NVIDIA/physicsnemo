@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed memory explosion during GeoTransolver inference on large meshes (2M+ cells).
+  The `broadcast_global_features` is now disabled in the datapipe for VTK inference,
+  with per-sub-batch broadcasting in `batched_inference_loop` to maintain compatibility
+  with models trained with `broadcast_global_features: true`.
+
 ### Security
 
 ### Dependencies
