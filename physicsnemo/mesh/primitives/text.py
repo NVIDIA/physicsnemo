@@ -66,12 +66,14 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
     Returns:
         Tuple of (points, edges, matplotlib Path object)
     """
-    from matplotlib.font_manager import FontProperties
-    from matplotlib.path import Path
-    from matplotlib.textpath import TextPath
+    import importlib
 
-    fp = FontProperties(family="sans-serif", weight="bold")
-    text_path = TextPath((0, 0), text, size=font_size, prop=fp)
+    font_manager = importlib.import_module("matplotlib.font_manager")
+    mpl_path = importlib.import_module("matplotlib.path")
+    textpath = importlib.import_module("matplotlib.textpath")
+
+    fp = font_manager.FontProperties(family="sans-serif", weight="bold")
+    text_path = textpath.TextPath((0, 0), text, size=font_size, prop=fp)
 
     verts = torch.tensor(text_path.vertices.copy(), dtype=torch.float32)
     codes = torch.tensor(text_path.codes.copy(), dtype=torch.int64)
@@ -85,7 +87,7 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
     while i < len(codes):
         code = codes[i].item()
 
-        if code == Path.MOVETO:
+        if code == mpl_path.Path.MOVETO:
             if path_points:
                 path_points.append(path_points[0])
                 n_edges = len(path_points) - 1
@@ -101,10 +103,10 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
                 current_offset += len(path_points)
             path_points = [verts[i]]
             i += 1
-        elif code == Path.LINETO:
+        elif code == mpl_path.Path.LINETO:
             path_points.append(verts[i])
             i += 1
-        elif code == Path.CURVE3:
+        elif code == mpl_path.Path.CURVE3:
             dist = torch.norm(verts[i + 1] - path_points[-1]).item()
             num_samples = max(5, int(dist * samples_per_unit))
             sampled = _sample_curve_segment(
@@ -112,7 +114,7 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
             )
             path_points.extend(sampled[1:])
             i += 2
-        elif code == Path.CURVE4:
+        elif code == mpl_path.Path.CURVE4:
             dist = torch.norm(verts[i + 2] - path_points[-1]).item()
             num_samples = max(5, int(dist * samples_per_unit))
             sampled = _sample_curve_segment(
@@ -120,7 +122,7 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
             )
             path_points.extend(sampled[1:])
             i += 3
-        elif code == Path.CLOSEPOLY:
+        elif code == mpl_path.Path.CLOSEPOLY:
             if path_points:
                 path_points.append(path_points[0])
                 n_edges = len(path_points) - 1
@@ -159,10 +161,8 @@ def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 
     center = points.mean(dim=0)
     points = points - center
 
-    from matplotlib.path import Path as MplPath
-
     centered_vertices = text_path.vertices - center.cpu().numpy()
-    text_path = MplPath(centered_vertices, text_path.codes)
+    text_path = mpl_path.Path(centered_vertices, text_path.codes)
 
     return points, edges, text_path
 
@@ -200,11 +200,14 @@ def _refine_edges(points: torch.Tensor, edges: torch.Tensor, max_length: float):
 
 def _group_letters(text_path):
     """Group polygons into letters using signed area and containment."""
+    import importlib
+
     import numpy as np
-    from matplotlib.path import Path as MplPath
+
+    mpl_path = importlib.import_module("matplotlib.path")
 
     path_codes = np.array(text_path.codes)
-    closepoly_indices = np.where(path_codes == MplPath.CLOSEPOLY)[0]
+    closepoly_indices = np.where(path_codes == mpl_path.Path.CLOSEPOLY)[0]
 
     outers, holes = [], []
     start_idx = 0
@@ -228,7 +231,7 @@ def _group_letters(text_path):
             continue
         outer_verts = text_path.vertices[outer_start:outer_end]
         outer_codes = text_path.codes[outer_start:outer_end]
-        outer_path = MplPath(outer_verts, outer_codes)
+        outer_path = mpl_path.Path(outer_verts, outer_codes)
 
         contained_holes = []
         for hole_start, hole_end in holes:
@@ -245,11 +248,14 @@ def _group_letters(text_path):
 
 def _winding_number(points: torch.Tensor, path) -> torch.Tensor:
     """Compute winding number for path containment test."""
+    import importlib
+
     import numpy as np
-    from matplotlib.path import Path as MplPath
+
+    mpl_path = importlib.import_module("matplotlib.path")
 
     path_codes = np.array(path.codes)
-    moveto_indices = np.where(path_codes == MplPath.MOVETO)[0]
+    moveto_indices = np.where(path_codes == mpl_path.Path.MOVETO)[0]
     total_winding = torch.zeros(len(points), dtype=torch.float32, device=points.device)
 
     for i, start_idx in enumerate(moveto_indices):
@@ -312,9 +318,12 @@ def _get_letter_points(points, edges, text_path, polygon_ranges):
 
 def _triangulate(points, edges, text_path):
     """Triangulate text letter-by-letter with hole support."""
+    import importlib
+
     import numpy as np
-    from matplotlib.path import Path as MplPath
-    from matplotlib.tri import Triangulation
+
+    mpl_path = importlib.import_module("matplotlib.path")
+    mpl_tri = importlib.import_module("matplotlib.tri")
 
     letter_groups = _group_letters(text_path)
 
@@ -336,7 +345,7 @@ def _triangulate(points, edges, text_path):
         letter_points = points[letter_point_indices]
         letter_points_np = letter_points.cpu().numpy()
 
-        tri = Triangulation(letter_points_np[:, 0], letter_points_np[:, 1])
+        tri = mpl_tri.Triangulation(letter_points_np[:, 0], letter_points_np[:, 1])
 
         if text_path.vertices is None or text_path.codes is None:
             continue
@@ -349,7 +358,7 @@ def _triangulate(points, edges, text_path):
 
         combined_verts = np.vstack(combined_verts)
         combined_codes = np.hstack(combined_codes)
-        letter_path = MplPath(combined_verts, combined_codes)
+        letter_path = mpl_path.Path(combined_verts, combined_codes)
 
         centroids_np = letter_points_np[tri.triangles].mean(axis=1)
         centroids_torch = torch.tensor(centroids_np, dtype=torch.float32)
