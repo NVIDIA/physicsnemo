@@ -14,6 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Utility functions for ShardTensor operation testing.
+
+This module provides helper functions for testing ``ShardTensor`` operations,
+including:
+
+- Collective assertions that fail on all ranks if any rank fails
+- Tensor comparison utilities for distributed testing
+- Module de-parallelization for comparing distributed vs local results
+- Numerical validation framework for ShardTensor operations
+"""
+
 import copy
 from collections.abc import Iterable
 from typing import Optional
@@ -31,16 +42,24 @@ def collective_assert(
     msg: str = "Assertion failed",
     group: Optional[dist.ProcessGroup] = None,
 ) -> None:
-    """
-    Collective assertion that fails on all ranks if any rank fails.
+    r"""Collective assertion that fails on all ranks if any rank fails.
 
     This prevents hangs in distributed tests where one rank might fail
     while others continue waiting for collective operations.
 
-    Args:
-        condition: The condition to check (True = pass, False = fail)
-        msg: Error message to display if assertion fails
-        group: Optional process group for the collective. If None, uses default group.
+    Parameters
+    ----------
+    condition : bool
+        The condition to check (``True`` = pass, ``False`` = fail).
+    msg : str, default="Assertion failed"
+        Error message to display if assertion fails.
+    group : Optional[dist.ProcessGroup], optional
+        Process group for the collective. If ``None``, uses default group.
+
+    Raises
+    ------
+    AssertionError
+        If any rank in the group has ``condition=False``.
     """
     # Convert condition to tensor (1 = pass, 0 = fail)
     local_result = torch.tensor(
@@ -64,18 +83,29 @@ def collective_assert_close(
     msg: str = "Tensors not close",
     group: Optional[dist.ProcessGroup] = None,
 ) -> None:
-    """
-    Collective version of torch.allclose assertion.
+    r"""Collective version of ``torch.allclose`` assertion.
 
     Fails on all ranks if any rank's tensors are not close.
 
-    Args:
-        tensor1: First tensor to compare
-        tensor2: Second tensor to compare
-        atol: Absolute tolerance
-        rtol: Relative tolerance
-        msg: Error message to display if assertion fails
-        group: Optional process group for the collective
+    Parameters
+    ----------
+    tensor1 : torch.Tensor
+        First tensor to compare.
+    tensor2 : torch.Tensor
+        Second tensor to compare.
+    atol : float, default=1e-5
+        Absolute tolerance.
+    rtol : float, default=1e-5
+        Relative tolerance.
+    msg : str, default="Tensors not close"
+        Error message to display if assertion fails.
+    group : Optional[dist.ProcessGroup], optional
+        Process group for the collective.
+
+    Raises
+    ------
+    AssertionError
+        If any rank's tensors fail the ``allclose`` check.
     """
     is_close = torch.allclose(tensor1, tensor2, atol=atol, rtol=rtol)
     if not is_close:
@@ -92,26 +122,51 @@ def collective_assert_equal(
     msg: str = "Values not equal",
     group: Optional[dist.ProcessGroup] = None,
 ) -> None:
-    """
-    Collective assertion for equality.
+    r"""Collective assertion for equality.
 
     Fails on all ranks if any rank's values are not equal.
 
-    Args:
-        value1: First value to compare
-        value2: Second value to compare
-        msg: Error message to display if assertion fails
-        group: Optional process group for the collective
+    Parameters
+    ----------
+    value1 : Any
+        First value to compare.
+    value2 : Any
+        Second value to compare.
+    msg : str, default="Values not equal"
+        Error message to display if assertion fails.
+    group : Optional[dist.ProcessGroup], optional
+        Process group for the collective.
+
+    Raises
+    ------
+    AssertionError
+        If any rank's values are not equal.
     """
     collective_assert(value1 == value2, f"{msg}: {value1} != {value2}", group)
 
 
 def unparallelize_module(module):
-    """
-    This is the inverse of "distribute_module".  Don't use this except in tests.
+    r"""Convert a distributed module back to a regular module.
 
-    (Why need this?  We're leveraging distribute_module to make sure all
-    ranks have the same weights, if needed, instead of relying on random seeds.)
+    This is the inverse of ``distribute_module``. Should only be used in tests.
+
+    We use this because we leverage ``distribute_module`` to ensure all ranks
+    have the same weights (instead of relying on random seeds), and then need
+    to convert back to compare distributed vs local results.
+
+    Parameters
+    ----------
+    module : torch.nn.Module
+        The distributed module to unparallelize.
+
+    Returns
+    -------
+    torch.nn.Module
+        The module with DTensor parameters replaced by regular tensors.
+
+    Warning
+    -------
+    This function is for testing purposes only. Do not use in production code.
     """
     for name, param in list(module._parameters.items()):
         if isinstance(param, torch.nn.Parameter) and isinstance(param.data, DTensor):
@@ -136,18 +191,46 @@ def generate_image_like_data(
     device: torch.device = None,
     dtype: torch.dtype = None,
 ) -> torch.Tensor:
-    """
-    Generate a random image-like tensor
+    r"""Generate a random image-like tensor.
+
+    Parameters
+    ----------
+    batch_size : int
+        Number of samples in the batch.
+    C_in : int
+        Number of input channels.
+    spatial_shape : tuple[int, ...]
+        Spatial dimensions (H, W) for 2D or (D, H, W) for 3D, etc.
+    device : torch.device, optional
+        Device to create the tensor on.
+    dtype : torch.dtype, optional
+        Data type of the tensor.
+
+    Returns
+    -------
+    torch.Tensor
+        Random tensor of shape ``(batch_size, C_in, *spatial_shape)``.
     """
     return torch.randn(batch_size, C_in, *spatial_shape, device=device, dtype=dtype)
 
 
 def sharded_to_local(container):
-    """
-    Convert a ShardTensor to a local tensor.
+    r"""Convert a ShardTensor or DTensor to a local (full) tensor.
 
-    In case the input is an iterable containing ShardTensors, this will convert
-    each ShardTensor to a local tensor.
+    Recursively processes containers (dicts, lists, tuples) to convert any
+    ShardTensor or DTensor instances to their full tensor representation.
+
+    Parameters
+    ----------
+    container : Any
+        A ShardTensor, DTensor, dict, iterable, or other value.
+
+    Returns
+    -------
+    Any
+        The same structure with ShardTensor/DTensor replaced by full tensors.
+        If the original tensor required gradients, the returned tensor will
+        be detached and have ``requires_grad=True``.
     """
     if isinstance(container, ShardTensor) or isinstance(container, DTensor):
         local_output = container.full_tensor()
@@ -163,14 +246,26 @@ def sharded_to_local(container):
 
 
 def validate_shard_tensor_spec(shard_tensor, group: Optional[dist.ProcessGroup] = None):
-    """
-    Take a shard tensor and cross check on the dimensions and shapes.
+    r"""Validate ShardTensor specification consistency.
 
-    Basically, this is a consistency-check on sharding shapes.
+    Cross-checks the tensor's dimensions and shapes to ensure the sharding
+    specification is internally consistent. Verifies that:
 
-    Args:
-        shard_tensor: The ShardTensor to validate
-        group: Optional process group for collective assertions
+    - Sharded mesh dimensions have corresponding sharding shapes
+    - Sharding shapes have correct length for the mesh size
+    - Local tensor shape matches the listed shape for this rank
+
+    Parameters
+    ----------
+    shard_tensor : ShardTensor
+        The ShardTensor to validate.
+    group : Optional[dist.ProcessGroup], optional
+        Process group for collective assertions.
+
+    Raises
+    ------
+    AssertionError
+        If any consistency check fails on any rank.
     """
 
     # Check out shard shapes
@@ -215,7 +310,30 @@ def default_tensor_comparison(
     atol,
     rtol,
     group: Optional[dist.ProcessGroup] = None,
-):
+) -> bool:
+    r"""Compare a local tensor output with a distributed (ShardTensor) output.
+
+    Validates that the distributed output matches the local output within
+    tolerances, and that the ShardTensor spec is internally consistent.
+
+    Parameters
+    ----------
+    output : torch.Tensor
+        The reference local tensor output.
+    d_output : ShardTensor or torch.Tensor
+        The distributed output to compare.
+    atol : float
+        Absolute tolerance for comparison.
+    rtol : float
+        Relative tolerance for comparison.
+    group : Optional[dist.ProcessGroup], optional
+        Process group for collective assertions.
+
+    Returns
+    -------
+    bool
+        ``True`` if comparison passes on all ranks.
+    """
     if not isinstance(output, torch.Tensor):
         if isinstance(output, Iterable):
             return all(
@@ -244,6 +362,18 @@ def default_tensor_comparison(
 
 
 def default_loss_fn(output):
+    r"""Default loss function for testing: compute mean of output.
+
+    Parameters
+    ----------
+    output : torch.Tensor
+        The tensor to compute loss on.
+
+    Returns
+    -------
+    torch.Tensor
+        Scalar mean of the output.
+    """
     return output.mean()
 
 
@@ -258,7 +388,40 @@ def numerical_shard_tensor_check(
     atol: float = 1e-5,
     rtol: float = 1e-5,
     group: Optional[dist.ProcessGroup] = None,
-):
+) -> None:
+    r"""Numerically validate a ShardTensor operation against local computation.
+
+    Runs the same module on both distributed (ShardTensor) inputs and local
+    (full tensor) inputs, then compares the results to verify correctness.
+
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        The device mesh for distributed computation.
+    module : torch.nn.Module
+        The module to test.
+    input_args : Iterable
+        Positional arguments to the module (may contain ShardTensors).
+    input_kwargs : dict
+        Keyword arguments to the module (may contain ShardTensors).
+    check_grads : bool, default=False
+        If ``True``, also verify gradients match between distributed and local.
+    fwd_comparison_fn : callable, default=default_tensor_comparison
+        Function to compare forward outputs.
+    loss_fn : callable, default=default_loss_fn
+        Function to compute loss for backward pass (if ``check_grads=True``).
+    atol : float, default=1e-5
+        Absolute tolerance for comparisons.
+    rtol : float, default=1e-5
+        Relative tolerance for comparisons.
+    group : Optional[dist.ProcessGroup], optional
+        Process group for collective assertions.
+
+    Raises
+    ------
+    AssertionError
+        If forward outputs don't match or (if checking grads) gradients don't match.
+    """
     # Make sure the module's parameters all align on ever rank of the mesh:
     d_module = distribute_module(module, device_mesh=mesh)
     # (By default this replicates)

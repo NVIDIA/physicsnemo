@@ -14,17 +14,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Custom reduction operations for ShardTensor.
+
+This module provides custom autograd functions for reduction operations
+(sum, mean) on ``ShardTensor`` objects. The key challenges addressed are:
+
+1. **Uneven sharding**: Requires careful accumulation of partial results.
+   This is particularly important for ``mean`` where the weight of each
+   local contribution depends on its size relative to the global tensor.
+
+2. **Gradient distribution**: Backward gradient distribution ensures that
+   the shape of local gradients matches the local tensor shape on each rank.
+
+The module provides:
+
+- ``ShardedSum``: Custom autograd function for sum reduction
+- ``ShardedMean``: Custom autograd function for mean reduction with proper weighting
+- ``sum_wrapper``: Function handler for ``torch.sum`` on ShardTensor
+- ``mean_wrapper``: Function handler for ``torch.mean`` on ShardTensor
+"""
+
+from __future__ import annotations
+
 from typing import (
     Any,
     Callable,
-    Dict,
     Iterable,
-    List,
-    Optional,
-    Set,
-    Tuple,
     TypeVar,
-    Union,
 )
 
 import torch
@@ -44,20 +60,26 @@ DimT = TypeVar("DimT", None, int, Iterable[int])
 
 def normalize_dim(
     dim: DimT, tensor_ndim: int, as_set: bool = False, handle_negatives: bool = True
-) -> Union[Optional[Tuple[int, ...]], Set[int]]:
-    """
-    Normalize dimension argument to a consistent form.
+) -> tuple[int, ...] | set[int] | None:
+    r"""Normalize dimension argument to a consistent form.
 
-    Args:
-        dim: The dimension(s) to normalize. Can be None, int, or iterable of ints.
-        tensor_ndim: Number of dimensions in the tensor.
-        as_set: If True, return a set of dimensions instead of a tuple.
-        handle_negatives: If True, convert negative dimensions to positive ones.
+    Parameters
+    ----------
+    dim : DimT
+        The dimension(s) to normalize. Can be ``None``, ``int``, or iterable of ints.
+    tensor_ndim : int
+        Number of dimensions in the tensor.
+    as_set : bool, default=False
+        If ``True``, return a set of dimensions instead of a tuple.
+    handle_negatives : bool, default=True
+        If ``True``, convert negative dimensions to positive ones.
 
-    Returns:
-        - None if dim is None and as_set is False
-        - A set of all dimensions if dim is None and as_set is True
-        - A tuple of dimensions (or set if as_set is True)
+    Returns
+    -------
+    Union[Optional[Tuple[int, ...]], Set[int]]
+        - ``None`` if ``dim`` is ``None`` and ``as_set`` is ``False``
+        - A set of all dimensions if ``dim`` is ``None`` and ``as_set`` is ``True``
+        - A tuple of dimensions (or set if ``as_set`` is ``True``)
     """
     if dim is None:
         if as_set:
@@ -81,15 +103,19 @@ def normalize_dim(
 
 
 def is_full_reduction(dim: DimT, tensor_ndim: int) -> bool:
-    """
-    Determine if this is a full reduction.
+    r"""Determine if this is a full reduction.
 
-    Args:
-        dim: The dimension(s) to check. Can be None, int, or iterable of ints.
-        tensor_ndim: Number of dimensions in the tensor.
+    Parameters
+    ----------
+    dim : DimT
+        The dimension(s) to check. Can be ``None``, ``int``, or iterable of ints.
+    tensor_ndim : int
+        Number of dimensions in the tensor.
 
-    Returns:
-        bool: True if all dimensions are being reduced, False otherwise.
+    Returns
+    -------
+    bool
+        ``True`` if all dimensions are being reduced, ``False`` otherwise.
     """
     if dim is None:
         return True
@@ -100,18 +126,24 @@ def is_full_reduction(dim: DimT, tensor_ndim: int) -> bool:
 
 def compute_result_placements(
     tensor: ShardTensor, dim: DimT, reduction_name: str, keepdim: bool = False
-) -> List[Union[Partial, Shard]]:
-    """
-    Compute placement info for reduction result.
+) -> list[Partial | Shard]:
+    r"""Compute placement info for reduction result.
 
-    Args:
-        tensor: The input ShardTensor being reduced.
-        dim: The dimension(s) to reduce. Can be None, int, or iterable of ints.
-        reduction_name: Type of reduction operation ("sum", "avg", etc.).
-        keepdim: Whether to preserve reduced dimensions with size 1.
+    Parameters
+    ----------
+    tensor : ShardTensor
+        The input ShardTensor being reduced.
+    dim : DimT
+        The dimension(s) to reduce. Can be ``None``, ``int``, or iterable of ints.
+    reduction_name : str
+        Type of reduction operation (``"sum"``, ``"avg"``, etc.).
+    keepdim : bool, default=False
+        Whether to preserve reduced dimensions with size 1.
 
-    Returns:
-        List[Union[Partial, Shard]]: Placement specifications for the result tensor.
+    Returns
+    -------
+    List[Union[Partial, Shard]]
+        Placement specifications for the result tensor.
     """
     if is_full_reduction(dim, tensor.ndim):
         return [
@@ -145,16 +177,21 @@ def compute_result_placements(
 def reduction_shape(
     S: torch.Size, dim: DimT = None, keepdim: bool = False
 ) -> torch.Size:
-    """
-    Calculate the resulting shape after a reduction operation.
+    r"""Calculate the resulting shape after a reduction operation.
 
-    Args:
-        S: Original shape of the tensor.
-        dim: The dimension(s) to reduce. Can be None, int, or iterable of ints.
-        keepdim: Whether to preserve reduced dimensions with size 1.
+    Parameters
+    ----------
+    S : torch.Size
+        Original shape of the tensor.
+    dim : DimT, optional
+        The dimension(s) to reduce. Can be ``None``, ``int``, or iterable of ints.
+    keepdim : bool, default=False
+        Whether to preserve reduced dimensions with size 1.
 
-    Returns:
-        torch.Size: The shape after reduction.
+    Returns
+    -------
+    torch.Size
+        The shape after reduction.
     """
     shape = list(S)
     if dim is None:
@@ -174,17 +211,22 @@ def reduction_shape(
 
 def compute_result_sharding_shapes(
     tensor: ShardTensor, dim: DimT, keepdim: bool
-) -> Dict[int, List[torch.Size]]:
-    """
-    Compute sharding sizes for the result of a reduction operation.
+) -> dict[int, list[torch.Size]]:
+    r"""Compute sharding sizes for the result of a reduction operation.
 
-    Args:
-        tensor: The input ShardTensor being reduced.
-        dim: The dimension(s) to reduce. Can be None, int, or iterable of ints.
-        keepdim: Whether to preserve reduced dimensions with size 1.
+    Parameters
+    ----------
+    tensor : ShardTensor
+        The input ShardTensor being reduced.
+    dim : DimT
+        The dimension(s) to reduce. Can be ``None``, ``int``, or iterable of ints.
+    keepdim : bool
+        Whether to preserve reduced dimensions with size 1.
 
-    Returns:
-        Dict[int, List[torch.Size]]: Mapping of mesh dimensions to sharding shapes.
+    Returns
+    -------
+    Dict[int, List[torch.Size]]
+        Mapping of mesh dimensions to sharding shapes.
     """
     if is_full_reduction(dim, tensor.ndim):
         return {}
@@ -209,15 +251,19 @@ def compute_result_sharding_shapes(
 def create_sharded_grad_input(
     local_grad_input: torch.Tensor, original_spec: Any
 ) -> ShardTensor:
-    """
-    Create a ShardTensor from local gradient input.
+    r"""Create a ShardTensor from local gradient input.
 
-    Args:
-        local_grad_input: The local gradient tensor.
-        original_spec: The original ShardTensor's spec to use for placement.
+    Parameters
+    ----------
+    local_grad_input : torch.Tensor
+        The local gradient tensor.
+    original_spec : ShardTensorSpec
+        The original ShardTensor's spec to use for placement.
 
-    Returns:
-        ShardTensor: A distributed tensor with the same sharding as the original input.
+    Returns
+    -------
+    ShardTensor
+        A distributed tensor with the same sharding as the original input.
     """
     return ShardTensor.from_local(
         local_grad_input,
@@ -227,25 +273,35 @@ def create_sharded_grad_input(
     )
 
 
-# Base class for sharded reductions
 class ShardedReductionBase(torch.autograd.Function):
-    """Base class for implementing custom autograd functions for sharded tensor reductions."""
+    r"""Base class for implementing custom autograd functions for sharded tensor reductions.
+
+    This class provides common setup functionality for reduction operations,
+    saving necessary context for the backward pass including the original spec,
+    dimensions being reduced, and local tensor shape.
+    """
 
     @staticmethod
     def setup_ctx(
         ctx: Any, tensor: ShardTensor, dim: DimT, keepdim: bool
-    ) -> Tuple[Optional[Tuple[int, ...]], bool]:
-        """
-        Save common context information for backward pass.
+    ) -> tuple[tuple[int, ...] | None, bool]:
+        r"""Save common context information for backward pass.
 
-        Args:
-            ctx: The autograd context object.
-            tensor: The input ShardTensor being reduced.
-            dim: The dimension(s) to reduce.
-            keepdim: Whether to preserve reduced dimensions with size 1.
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            The autograd context object.
+        tensor : ShardTensor
+            The input ShardTensor being reduced.
+        dim : DimT
+            The dimension(s) to reduce.
+        keepdim : bool
+            Whether to preserve reduced dimensions with size 1.
 
-        Returns:
-            Tuple[Optional[Tuple[int, ...]], bool]: Normalized dimension and keepdim flag.
+        Returns
+        -------
+        Tuple[Optional[Tuple[int, ...]], bool]
+            Tuple containing normalized dimension and keepdim flag.
         """
         ctx.original_spec = tensor._spec
         ctx.output_requires_grad = tensor.requires_grad
@@ -266,11 +322,13 @@ class ShardedReductionBase(torch.autograd.Function):
         return dim, keepdim
 
 
-# Specific reduction implementations
 class ShardedSum(ShardedReductionBase):
-    """
-    Custom autograd function for sum reduction of sharded tensors.
+    r"""Custom autograd function for sum reduction of sharded tensors.
+
     Handles both forward and backward passes with proper gradient computation.
+    The forward pass computes local sums and creates appropriate partial
+    placements. The backward pass broadcasts gradients back to match the
+    original tensor shape.
     """
 
     @staticmethod
@@ -279,20 +337,27 @@ class ShardedSum(ShardedReductionBase):
         tensor: ShardTensor,
         dim: DimT = None,
         keepdim: bool = False,
-        dtype: Optional[torch.dtype] = None,
+        dtype: torch.dtype | None = None,
     ) -> ShardTensor:
-        """
-        Forward pass for sum reduction on ShardTensor.
+        r"""Forward pass for sum reduction on ShardTensor.
 
-        Args:
-            ctx: The autograd context object.
-            tensor: The input ShardTensor to be reduced.
-            dim: The dimension(s) to reduce.
-            keepdim: Whether to preserve reduced dimensions with size 1.
-            dtype: Output data type (optional).
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            The autograd context object.
+        tensor : ShardTensor
+            The input ShardTensor to be reduced.
+        dim : DimT, optional
+            The dimension(s) to reduce.
+        keepdim : bool, default=False
+            Whether to preserve reduced dimensions with size 1.
+        dtype : Optional[torch.dtype], optional
+            Output data type.
 
-        Returns:
-            ShardTensor: The result of sum reduction.
+        Returns
+        -------
+        ShardTensor
+            The result of sum reduction.
         """
         dim, keepdim = ShardedReductionBase.setup_ctx(ctx, tensor, dim, keepdim)
 
@@ -318,16 +383,21 @@ class ShardedSum(ShardedReductionBase):
     @staticmethod
     def backward(
         ctx: Any, grad_output: ShardTensor
-    ) -> Tuple[ShardTensor, None, None, None]:
-        """
-        Backward pass for sum reduction.
+    ) -> tuple[ShardTensor, None, None, None]:
+        r"""Backward pass for sum reduction.
 
-        Args:
-            ctx: The autograd context object.
-            grad_output: Gradient of the loss with respect to the output.
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            The autograd context object.
+        grad_output : ShardTensor
+            Gradient of the loss with respect to the output.
 
-        Returns:
-            Tuple containing gradients for each input in the forward pass.
+        Returns
+        -------
+        Tuple[ShardTensor, None, None, None]
+            Tuple containing gradient for input tensor and ``None`` for
+            dim, keepdim, and dtype (not differentiable).
         """
         original_spec = ctx.original_spec
         dim = ctx.dim
@@ -366,9 +436,12 @@ class ShardedSum(ShardedReductionBase):
 
 
 class ShardedMean(ShardedReductionBase):
-    """
-    Custom autograd function for mean reduction of sharded tensors.
-    Handles both forward and backward passes with proper gradient computation and scaling.
+    r"""Custom autograd function for mean reduction of sharded tensors.
+
+    Handles both forward and backward passes with proper gradient computation
+    and scaling. The key challenge is that with uneven sharding, each rank's
+    local mean must be weighted by its local size relative to the global size
+    to produce the correct global mean.
     """
 
     @staticmethod
@@ -377,20 +450,27 @@ class ShardedMean(ShardedReductionBase):
         tensor: ShardTensor,
         dim: DimT = None,
         keepdim: bool = False,
-        dtype: Optional[torch.dtype] = None,
+        dtype: torch.dtype | None = None,
     ) -> ShardTensor:
-        """
-        Forward pass for mean reduction on ShardTensor.
+        r"""Forward pass for mean reduction on ShardTensor.
 
-        Args:
-            ctx: The autograd context object.
-            tensor: The input ShardTensor to be reduced.
-            dim: The dimension(s) to reduce.
-            keepdim: Whether to preserve reduced dimensions with size 1.
-            dtype: Output data type (optional).
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            The autograd context object.
+        tensor : ShardTensor
+            The input ShardTensor to be reduced.
+        dim : DimT, optional
+            The dimension(s) to reduce.
+        keepdim : bool, default=False
+            Whether to preserve reduced dimensions with size 1.
+        dtype : Optional[torch.dtype], optional
+            Output data type.
 
-        Returns:
-            ShardTensor: The result of mean reduction.
+        Returns
+        -------
+        ShardTensor
+            The result of mean reduction.
         """
         dim, keepdim = ShardedReductionBase.setup_ctx(ctx, tensor, dim, keepdim)
 
@@ -436,16 +516,21 @@ class ShardedMean(ShardedReductionBase):
     @staticmethod
     def backward(
         ctx: Any, grad_output: ShardTensor
-    ) -> Tuple[ShardTensor, None, None, None]:
-        """
-        Backward pass for mean reduction.
+    ) -> tuple[ShardTensor, None, None, None]:
+        r"""Backward pass for mean reduction.
 
-        Args:
-            ctx: The autograd context object.
-            grad_output: Gradient of the loss with respect to the output.
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            The autograd context object.
+        grad_output : ShardTensor
+            Gradient of the loss with respect to the output.
 
-        Returns:
-            Tuple containing gradients for each input in the forward pass.
+        Returns
+        -------
+        Tuple[ShardTensor, None, None, None]
+            Tuple containing gradient for input tensor and ``None`` for
+            dim, keepdim, and dtype (not differentiable).
         """
         original_spec = ctx.original_spec
         dim = ctx.dim
@@ -495,42 +580,57 @@ class ShardedMean(ShardedReductionBase):
 
 
 def sum_wrapper(
-    func: Callable, types: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+    func: Callable, types: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> ShardTensor:
-    """
-    Wrapper function for ShardTensor sum reduction.
+    r"""Wrapper function for ShardTensor sum reduction.
 
-    In Args and kwargs:
-        tensor: Input ShardTensor to reduce.
-        dim: The dimension(s) to reduce.
-        keepdim: Whether to preserve reduced dimensions with size 1.
-        *args: Additional positional arguments.
-        **kwargs: Additional keyword arguments.
+    This function is registered as a handler for ``torch.sum`` on ShardTensor
+    inputs. It unpacks the arguments and delegates to ``ShardedSum.apply``.
 
-    Returns:
-        ShardTensor: Result of sum reduction.
+    Parameters
+    ----------
+    func : Callable
+        The original function being wrapped (``torch.sum``).
+    types : Any
+        Types of the arguments (unused).
+    args : Tuple[Any, ...]
+        Positional arguments containing tensor, dim, keepdim, etc.
+    kwargs : Dict[str, Any]
+        Keyword arguments.
+
+    Returns
+    -------
+    ShardTensor
+        Result of sum reduction.
     """
     tensor, dim, keepdim, extra_args, extra_kwargs = unpack_args(*args, **kwargs)
 
     return ShardedSum.apply(tensor, dim, keepdim, *extra_args, **extra_kwargs)
 
 
-# TODO - accept func, types, args, kwargs instead
 def mean_wrapper(
-    func: Callable, types: Any, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+    func: Callable, types: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
 ) -> ShardTensor:
-    """
-    Wrapper function for ShardTensor mean reduction.
+    r"""Wrapper function for ShardTensor mean reduction.
 
-    Args:
-        tensor: Input ShardTensor to reduce.
-        dim: The dimension(s) to reduce.
-        keepdim: Whether to preserve reduced dimensions with size 1.
-        *args: Additional positional arguments.
-        **kwargs: Additional keyword arguments.
+    This function is registered as a handler for ``torch.mean`` on ShardTensor
+    inputs. It unpacks the arguments and delegates to ``ShardedMean.apply``.
 
-    Returns:
-        ShardTensor: Result of mean reduction.
+    Parameters
+    ----------
+    func : Callable
+        The original function being wrapped (``torch.mean``).
+    types : Any
+        Types of the arguments (unused).
+    args : Tuple[Any, ...]
+        Positional arguments containing tensor, dim, keepdim, etc.
+    kwargs : Dict[str, Any]
+        Keyword arguments.
+
+    Returns
+    -------
+    ShardTensor
+        Result of mean reduction.
     """
     tensor, dim, keepdim, extra_args, extra_kwargs = unpack_args(*args, **kwargs)
 
@@ -543,19 +643,34 @@ def unpack_args(
     keepdim: bool = False,
     *args: Any,
     **kwargs: Any,
-) -> Tuple[ShardTensor, DimT, bool, Tuple[Any, ...], Dict[str, Any]]:
-    """
-    Unpack arguments for reduction functions.  Maps default args from torch.
+) -> tuple[ShardTensor, DimT, bool, tuple[Any, ...], dict[str, Any]]:
+    r"""Unpack arguments for reduction functions.
 
-    Returns:
-        tensor: Input ShardTensor to reduce.
-        dim: The dimension(s) to reduce.
+    Maps default arguments from torch reduction functions to a consistent format.
+
+    Parameters
+    ----------
+    tensor : ShardTensor
+        Input ShardTensor to reduce.
+    dim : DimT, optional
+        The dimension(s) to reduce.
+    keepdim : bool, default=False
+        Whether to preserve reduced dimensions with size 1.
+    *args : Any
+        Additional positional arguments.
+    **kwargs : Any
+        Additional keyword arguments.
+
+    Returns
+    -------
+    Tuple[ShardTensor, DimT, bool, Tuple[Any, ...], Dict[str, Any]]
+        Tuple containing tensor, dim, keepdim, extra args, and extra kwargs.
     """
     return tensor, dim, keepdim, args, kwargs
 
 
 # Map the reduction ops to their handlers
-reduction_mapping: Dict[str, Callable] = {
+reduction_mapping: dict[str, Callable] = {
     "sum": sum_wrapper,
     "avg": mean_wrapper,
 }

@@ -17,7 +17,7 @@
 import pytest
 import torch
 
-from physicsnemo.nn.conv_layers import (
+from physicsnemo.nn import (
     ConvLayer,
     ConvResidualBlock,
     TransposeConvLayer,

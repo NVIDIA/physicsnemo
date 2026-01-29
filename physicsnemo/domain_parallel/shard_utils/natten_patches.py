@@ -14,8 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import importlib.util
-from typing import Any, Callable, List, Tuple, Union
+from typing import Any, Callable
 
 import torch
 import wrapt
@@ -36,22 +38,29 @@ __all__ = ["na2d_wrapper"]
 
 
 def compute_halo_from_kernel_and_dilation(kernel_size: int, dilation: int) -> int:
-    """Compute the halo size needed for neighborhood attention along a single dimension.
+    r"""Compute the halo size needed for neighborhood attention along a single dimension.
 
     For neighborhood attention, the halo size is determined by the kernel size and dilation.
     Currently only supports odd kernel sizes with dilation=1.
 
-    Args:
-        kernel_size: Size of attention kernel window along this dimension
-        dilation: Dilation factor for attention kernel
+    Parameters
+    ----------
+    kernel_size : int
+        Size of attention kernel window along this dimension.
+    dilation : int
+        Dilation factor for attention kernel.
 
-    Returns:
-        Required halo size on each side of a data chunk
+    Returns
+    -------
+    int
+        Required halo size on each side of a data chunk.
 
-    Raises:
-        MissingShardPatch: If kernel configuration is not supported for sharding
-            - Even kernel sizes not supported
-            - Dilation != 1 not supported
+    Raises
+    ------
+    MissingShardPatch
+        If kernel configuration is not supported for sharding:
+        - Even kernel sizes not supported
+        - Dilation != 1 not supported
     """
     # Currently, reject even kernel_sizes and dilation != 1:
     if kernel_size % 2 == 0:
@@ -73,16 +82,22 @@ def compute_halo_configs_from_natten_args(
     example_input: ShardTensor,
     kernel_size: int,
     dilation: int,
-) -> List[HaloConfig]:
-    """Compute halo configurations for a sharded tensor based on convolution arguments.
+) -> list[HaloConfig]:
+    r"""Compute halo configurations for a sharded tensor based on neighborhood attention arguments.
 
-    Args:
-        example_input: The sharded tensor that will be used in neighborhood attention
-        kernel_size: Size of attention kernel window
-        dilation: Dilation factor for attention kernel
+    Parameters
+    ----------
+    example_input : ShardTensor
+        The sharded tensor that will be used in neighborhood attention.
+    kernel_size : int
+        Size of attention kernel window.
+    dilation : int
+        Dilation factor for attention kernel.
 
-    Returns:
-        List of HaloConfig objects for each sharded dimension
+    Returns
+    -------
+    List[HaloConfig]
+        List of HaloConfig objects for each sharded dimension.
     """
     # Compute required halo size from kernel parameters
     halo_size = compute_halo_from_kernel_and_dilation(kernel_size, dilation)
@@ -127,30 +142,42 @@ def partial_na2d(
     dilation: int,
     base_func: Callable,
 ) -> ShardTensor:
-    """
-    High Level, differentiable function to compute neighborhood attention on a sharded tensor.
+    r"""High-level, differentiable function to compute neighborhood attention on a sharded tensor.
 
     Operation works like so:
-    - Figure out the size of halos needed.
-    - Apply the halo padding (differentiable)
-    - Perform the neighborhood attention on the padded tensor. (differentiable)
-    - "UnHalo" the output tensor (different from, say, convolutions)
-    - Return the updated tensor as a ShardTensor.
 
-    Args:
-        q: Query tensor as ShardTensor
-        k: Key tensor as ShardTensor
-        v: Value tensor as ShardTensor
-        kernel_size: Size of attention kernel window
-        dilation: Dilation factor for attention kernel
-        base_func: The base neighborhood attention function to call with padded tensors
+    1. Figure out the size of halos needed.
+    2. Apply the halo padding (differentiable)
+    3. Perform the neighborhood attention on the padded tensor. (differentiable)
+    4. "UnHalo" the output tensor (different from, say, convolutions)
+    5. Return the updated tensor as a ShardTensor.
 
-    Returns:
-        ShardTensor containing the result of neighborhood attention
+    Parameters
+    ----------
+    q : ShardTensor
+        Query tensor as ShardTensor.
+    k : ShardTensor
+        Key tensor as ShardTensor.
+    v : ShardTensor
+        Value tensor as ShardTensor.
+    kernel_size : int
+        Size of attention kernel window.
+    dilation : int
+        Dilation factor for attention kernel.
+    base_func : Callable
+        The base neighborhood attention function to call with padded tensors.
 
-    Raises:
-        MissingShardPatch: If kernel configuration is not supported for sharding
-        UndeterminedShardingError: If input tensor types are mismatched
+    Returns
+    -------
+    ShardTensor
+        ShardTensor containing the result of neighborhood attention.
+
+    Raises
+    ------
+    MissingShardPatch
+        If kernel configuration is not supported for sharding.
+    UndeterminedShardingError
+        If input tensor types are mismatched.
     """
 
     # First, get the tensors locally and perform halos:
@@ -191,31 +218,59 @@ if natten_spec is not None:
         "natten.functional", "na2d", enabled=ShardTensor.patches_enabled
     )
     def na2d_wrapper(
-        wrapped: Any, instance: Any, args: tuple, kwargs: dict
-    ) -> Union[torch.Tensor, ShardTensor]:
-        """Wrapper for natten.functional.na2d to support sharded tensors.
+        wrapped: Callable, instance: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> torch.Tensor | ShardTensor:
+        r"""Wrapper for ``natten.functional.na2d`` to support sharded tensors.
 
-        Handles both regular torch.Tensor inputs and distributed ShardTensor inputs.
+        Handles both regular ``torch.Tensor`` inputs and distributed ShardTensor inputs.
         For regular tensors, passes through to the wrapped na2d function.
         For ShardTensor inputs, handles adding halos and applying distributed na2d.
 
-        Args:
-            wrapped: Original na2d function being wrapped
-            instance: Instance the wrapped function is bound to
-            args: Positional arguments containing query, key, value tensors
-            kwargs: Keyword arguments including kernel_size and dilation
+        Parameters
+        ----------
+        wrapped : Callable
+            Original na2d function being wrapped.
+        instance : Any
+            Instance the wrapped function is bound to (unused).
+        args : tuple[Any, ...]
+            Positional arguments containing query, key, value tensors.
+        kwargs : dict[str, Any]
+            Keyword arguments including ``kernel_size`` and ``dilation``.
 
-        Returns:
-            Result tensor as either torch.Tensor or ShardTensor depending on input types
+        Returns
+        -------
+        Union[torch.Tensor, ShardTensor]
+            Result tensor as either ``torch.Tensor`` or ShardTensor depending on input types.
 
-        Raises:
-            UndeterminedShardingError: If input tensor types are mismatched
+        Raises
+        ------
+        UndeterminedShardingError
+            If input tensor types are mismatched.
         """
 
         def fetch_qkv(
             q: Any, k: Any, v: Any, *args: Any, **kwargs: Any
-        ) -> Tuple[Any, Any, Any]:
-            """Helper to extract query, key, value tensors from args."""
+        ) -> tuple[Any, Any, Any]:
+            r"""Extract query, key, value tensors from args.
+
+            Parameters
+            ----------
+            q : Any
+                Query tensor.
+            k : Any
+                Key tensor.
+            v : Any
+                Value tensor.
+            *args : Any
+                Additional positional arguments (unused).
+            **kwargs : Any
+                Additional keyword arguments (unused).
+
+            Returns
+            -------
+            Tuple[Any, Any, Any]
+                Tuple of (query, key, value) tensors.
+            """
             return q, k, v
 
         q, k, v = fetch_qkv(*args)
@@ -237,7 +292,20 @@ if natten_spec is not None:
 else:
 
     def na2d_wrapper(*args: Any, **kwargs: Any) -> None:
-        """Placeholder wrapper when natten module is not installed."""
+        r"""Placeholder wrapper when natten module is not installed.
+
+        Parameters
+        ----------
+        *args : Any
+            Positional arguments (unused).
+        **kwargs : Any
+            Keyword arguments (unused).
+
+        Raises
+        ------
+        Exception
+            Always raised indicating natten is not installed.
+        """
         raise Exception(
             "na2d_wrapper not supported because module 'natten' not installed"
         )

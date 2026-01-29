@@ -16,29 +16,73 @@
 
 import math
 from dataclasses import dataclass
-from typing import Tuple, Union
+from typing import Callable, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.nn import get_activation
 
-Tensor = torch.Tensor
-
 
 def _get_same_padding(x: int, k: int, s: int) -> int:
-    """Function to compute "same" padding. Inspired from:
-    https://github.com/huggingface/pytorch-image-models/blob/0.5.x/timm/models/layers/padding.py
+    r"""
+    Compute the "same" padding size for a 1D convolution dimension.
+
+    Parameters
+    ----------
+    x : int
+        Input size.
+    k : int
+        Kernel size.
+    s : int
+        Stride size.
+
+    Returns
+    -------
+    int
+        Padding size for "same" output resolution.
     """
     return max(s * math.ceil(x / s) - s - x + k, 0)
 
 
 def _pad_periodically_equatorial(
-    main_face, left_face, right_face, top_face, bottom_face, nr_rot, size=2
-):
+    main_face: Float[torch.Tensor, "batch channels height width"],
+    left_face: Float[torch.Tensor, "batch channels height width"],
+    right_face: Float[torch.Tensor, "batch channels height width"],
+    top_face: Float[torch.Tensor, "batch channels height width"],
+    bottom_face: Float[torch.Tensor, "batch channels height width"],
+    nr_rot: int,
+    size: int = 2,
+) -> Float[torch.Tensor, "batch channels height_out width_out"]:
+    r"""
+    Periodically pad a cubed-sphere equatorial face using adjacent faces.
+
+    Parameters
+    ----------
+    main_face : torch.Tensor
+        Equatorial face tensor of shape :math:`(B, C, H, W)`.
+    left_face : torch.Tensor
+        Left neighbor face tensor of shape :math:`(B, C, H, W)`.
+    right_face : torch.Tensor
+        Right neighbor face tensor of shape :math:`(B, C, H, W)`.
+    top_face : torch.Tensor
+        Top neighbor face tensor of shape :math:`(B, C, H, W)`.
+    bottom_face : torch.Tensor
+        Bottom neighbor face tensor of shape :math:`(B, C, H, W)`.
+    nr_rot : int
+        Number of 90-degree rotations applied to the polar faces.
+    size : int, optional, default=2
+        Padding size applied along spatial dimensions.
+
+    Returns
+    -------
+    torch.Tensor
+        Padded face tensor of shape :math:`(B, C, H + 2p, W + 2p)`.
+    """
     if nr_rot != 0:
         top_face = torch.rot90(top_face, k=nr_rot, dims=(-2, -1))
         bottom_face = torch.rot90(bottom_face, k=nr_rot, dims=(-1, -2))
@@ -58,15 +102,42 @@ def _pad_periodically_equatorial(
 
 
 def _pad_periodically_polar(
-    main_face,
-    left_face,
-    right_face,
-    top_face,
-    bottom_face,
-    rot_axis_left,
-    rot_axis_right,
-    size=2,
-):
+    main_face: Float[torch.Tensor, "batch channels height width"],
+    left_face: Float[torch.Tensor, "batch channels height width"],
+    right_face: Float[torch.Tensor, "batch channels height width"],
+    top_face: Float[torch.Tensor, "batch channels height width"],
+    bottom_face: Float[torch.Tensor, "batch channels height width"],
+    rot_axis_left: tuple[int, int],
+    rot_axis_right: tuple[int, int],
+    size: int = 2,
+) -> Float[torch.Tensor, "batch channels height_out width_out"]:
+    r"""
+    Periodically pad a cubed-sphere polar face using adjacent faces.
+
+    Parameters
+    ----------
+    main_face : torch.Tensor
+        Polar face tensor of shape :math:`(B, C, H, W)`.
+    left_face : torch.Tensor
+        Left neighbor face tensor of shape :math:`(B, C, H, W)`.
+    right_face : torch.Tensor
+        Right neighbor face tensor of shape :math:`(B, C, H, W)`.
+    top_face : torch.Tensor
+        Top neighbor face tensor of shape :math:`(B, C, H, W)`.
+    bottom_face : torch.Tensor
+        Bottom neighbor face tensor of shape :math:`(B, C, H, W)`.
+    rot_axis_left : tuple[int, int]
+        Rotation axes for the left neighbor face.
+    rot_axis_right : tuple[int, int]
+        Rotation axes for the right neighbor face.
+    size : int, optional, default=2
+        Padding size applied along spatial dimensions.
+
+    Returns
+    -------
+    torch.Tensor
+        Padded face tensor of shape :math:`(B, C, H + 2p, W + 2p)`.
+    """
     left_face = torch.rot90(left_face, dims=rot_axis_left)
     right_face = torch.rot90(right_face, dims=rot_axis_right)
     padded_data_temp = torch.cat(
@@ -84,7 +155,28 @@ def _pad_periodically_polar(
     return padded_data
 
 
-def _cubed_conv_wrapper(faces, equator_conv, polar_conv):
+def _cubed_conv_wrapper(
+    faces: Sequence[Float[torch.Tensor, "batch channels height width"]],
+    equator_conv: nn.Conv2d,
+    polar_conv: nn.Conv2d,
+) -> list[Float[torch.Tensor, "batch channels height_out width_out"]]:
+    r"""
+    Apply face-wise convolution with cubed-sphere padding.
+
+    Parameters
+    ----------
+    faces : Sequence[torch.Tensor]
+        Sequence of six faces, each of shape :math:`(B, C, H, W)`.
+    equator_conv : torch.nn.Conv2d
+        Convolution applied to equatorial faces (indices 0-3).
+    polar_conv : torch.nn.Conv2d
+        Convolution applied to polar faces (indices 4-5).
+
+    Returns
+    -------
+    list[torch.Tensor]
+        List of six convolved faces, each of shape :math:`(B, C', H', W')`.
+    """
     # compute the required padding
     padding_size = _get_same_padding(
         x=faces[0].size(-1), k=equator_conv.kernel_size[0], s=equator_conv.stride[0]
@@ -177,9 +269,29 @@ def _cubed_conv_wrapper(faces, equator_conv, polar_conv):
     return output
 
 
-def _cubed_non_conv_wrapper(faces, layer):
-    output = [layer(faces[i]) for i in range(6)]
-    return output
+def _cubed_non_conv_wrapper(
+    faces: Sequence[Float[torch.Tensor, "batch channels height width"]],
+    layer: Callable[
+        [Float[torch.Tensor, "batch channels height width"]],
+        Float[torch.Tensor, "batch channels height width"],
+    ],
+) -> list[Float[torch.Tensor, "batch channels height width"]]:
+    r"""
+    Apply a non-convolutional layer to each cubed-sphere face.
+
+    Parameters
+    ----------
+    faces : Sequence[torch.Tensor]
+        Sequence of six faces, each of shape :math:`(B, C, H, W)`.
+    layer : Callable[[torch.Tensor], torch.Tensor]
+        Callable applied independently to each face tensor.
+
+    Returns
+    -------
+    list[torch.Tensor]
+        List of transformed faces, each of shape :math:`(B, C', H', W')`.
+    """
+    return [layer(face) for face in faces]
 
 
 @dataclass
@@ -198,43 +310,48 @@ class MetaData(ModelMetaData):
 
 
 class DLWP(Module):
-    """A Convolutional model for Deep Learning Weather Prediction that
-    works on Cubed-sphere grids.
+    r"""
+    Convolutional U-Net for Deep Learning Weather Prediction on cubed-sphere grids.
 
-    This model expects the input to be of shape [N, C, 6, Res, Res]
+    This model operates on cubed-sphere data with six faces and applies face-aware
+    padding so that convolutions respect cubed-sphere connectivity.
+
+    Based on `Weyn et al. (2021) <https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2021MS002502>`_.
 
     Parameters
     ----------
     nr_input_channels : int
-        Number of channels in the input
+        Number of input channels :math:`C_{in}`.
     nr_output_channels : int
-        Number of channels in the output
-    nr_initial_channels : int
-        Number of channels in the initial convolution. This governs the overall channels
-        in the model.
-    activation_fn : str
-        Activation function for the convolutions
-    depth : int
-        Depth for the U-Net
-    clamp_activation : Tuple of ints, floats or None
-        The min and max value used for torch.clamp()
+        Number of output channels :math:`C_{out}`.
+    nr_initial_channels : int, optional, default=64
+        Number of channels in the first convolution block :math:`C_{init}`. Defaults to 64.
+    activation_fn : str, optional, default="leaky_relu"
+        Activation name resolved with :func:`~physicsnemo.nn.get_activation`. Defaults to "leaky_relu".
+    depth : int, optional, default=2
+        Depth of the U-Net encoder/decoder stacks. Defaults to 2.
+    clamp_activation : Tuple[float | int | None, float | int | None], optional, default=(None, 10.0)
+        Minimum and maximum bounds applied via ``torch.clamp`` after activation. Defaults to (None, 10.0).
 
-    Example
+    Forward
     -------
-    >>> model = physicsnemo.models.dlwp.DLWP(
-    ... nr_input_channels=2,
-    ... nr_output_channels=4,
-    ... )
-    >>> input = torch.randn(4, 2, 6, 64, 64) # [N, C, F, Res, Res]
-    >>> output = model(input)
-    >>> output.size()
-    torch.Size([4, 4, 6, 64, 64])
+    cubed_sphere_input : torch.Tensor
+        Input tensor of shape :math:`(B, C_{in}, F, H, W)` with :math:`F=6` faces.
 
-    Note
-    ----
-    Reference: Weyn, Jonathan A., et al. "Sub‐seasonal forecasting with a large ensemble
-     of deep‐learning weather prediction models." Journal of Advances in Modeling Earth
-     Systems 13.7 (2021): e2021MS002502.
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(B, C_{out}, F, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models import DLWP
+    >>> model = DLWP(nr_input_channels=2, nr_output_channels=4)
+    >>> inputs = torch.randn(4, 2, 6, 64, 64)
+    >>> outputs = model(inputs)
+    >>> outputs.shape
+    torch.Size([4, 4, 6, 64, 64])
     """
 
     def __init__(
@@ -248,7 +365,8 @@ class DLWP(Module):
             None,
             10.0,
         ),
-    ):
+    ) -> None:
+        r"""Initialize the DLWP model."""
         super().__init__(meta=MetaData())
 
         self.nr_input_channels = nr_input_channels
@@ -316,7 +434,22 @@ class DLWP(Module):
         self.polar_last = nn.Conv2d(outs, self.nr_output_channels, kernel_size=1)
 
     # define activation layers
-    def activation(self, x: Tensor):
+    def activation(
+        self, x: Float[torch.Tensor, "batch channels height width"]
+    ) -> Float[torch.Tensor, "batch channels height width"]:
+        r"""
+        Apply activation and optional clamping to a face tensor.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input face tensor of shape :math:`(B, C, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Activated face tensor of shape :math:`(B, C, H, W)`.
+        """
         x = self.activation_fn(x)
         if any(isinstance(c, (float, int)) for c in self.clamp_activation):
             x = torch.clamp(
@@ -324,22 +457,44 @@ class DLWP(Module):
             )
         return x
 
-    def forward(self, cubed_sphere_input):
-        # do some input checks
-        if cubed_sphere_input.size(-3) != 6:
-            raise ValueError("The input must have 6 faces.")
-        if cubed_sphere_input.size(-2) != cubed_sphere_input.size(-1):
-            raise ValueError("The input must have equal height and width")
+    def forward(
+        self,
+        cubed_sphere_input: Float[torch.Tensor, "batch channels faces height width"],
+    ) -> Float[torch.Tensor, "batch channels_out faces height width"]:
+        r"""Apply the DLWP forward pass to cubed-sphere input data."""
+        # Input validation (skip under torch.compile)
+        if not torch.compiler.is_compiling():
+            if cubed_sphere_input.ndim != 5:
+                raise ValueError(
+                    "Expected input tensor of shape (B, C, F, H, W) but got tensor of "
+                    f"shape {tuple(cubed_sphere_input.shape)}"
+                )
+            batch, channels, faces_count, height, width = cubed_sphere_input.shape
+            if channels != self.nr_input_channels:
+                raise ValueError(
+                    f"Expected input tensor with {self.nr_input_channels} channels but "
+                    f"got {channels} channels"
+                )
+            if faces_count != 6:
+                raise ValueError(
+                    "Expected input tensor of shape (B, C, 6, H, W) but got tensor of "
+                    f"shape {tuple(cubed_sphere_input.shape)}"
+                )
+            if height != width:
+                raise ValueError(
+                    "Expected input tensor of shape (B, C, F, H, H) but got tensor of "
+                    f"shape {tuple(cubed_sphere_input.shape)}"
+                )
 
-        # split the cubed_sphere_input into individual faces
+        # Split cubed-sphere input into individual faces
         faces = torch.split(
             cubed_sphere_input, split_size_or_sections=1, dim=2
-        )  # split along face dim
-
-        faces = [torch.squeeze(face, dim=2) for face in faces]
+        )  # (B, C, 1, H, W)
+        faces = [torch.squeeze(face, dim=2) for face in faces]  # (B, C, H, W)
 
         encoder_states = []
 
+        # Encoder: per-face convolutions with downsampling
         for i, (equatorial_layer, polar_layer) in enumerate(
             zip(self.equatorial_downsample, self.polar_downsample)
         ):
@@ -349,6 +504,7 @@ class DLWP(Module):
                 encoder_states.append(faces)
                 faces = _cubed_non_conv_wrapper(faces, self.avg_pool)
 
+        # Bottleneck convolutions
         for i, (equatorial_layer, polar_layer) in enumerate(
             zip(self.equatorial_mid_layers, self.polar_mid_layers)
         ):
@@ -356,6 +512,7 @@ class DLWP(Module):
             faces = _cubed_non_conv_wrapper(faces, self.activation)
 
         j = 0
+        # Decoder: upsample, concatenate skip connections, and convolve
         for i, (equatorial_layer, polar_layer) in enumerate(
             zip(self.equatorial_upsample, self.polar_upsample)
         ):
@@ -363,13 +520,14 @@ class DLWP(Module):
                 encoder_faces = encoder_states[len(encoder_states) - j - 1]
                 faces = _cubed_non_conv_wrapper(faces, self.upsample_layer)
                 faces = [
-                    torch.cat((face_1, face_2), dim=1)
+                    torch.cat((face_1, face_2), dim=1)  # (B, 2*C, H, W)
                     for face_1, face_2 in zip(faces, encoder_faces)
                 ]
                 j += 1
             faces = _cubed_conv_wrapper(faces, equatorial_layer, polar_layer)
             faces = _cubed_non_conv_wrapper(faces, self.activation)
 
+        # Final face-wise projection and reassembly
         faces = _cubed_conv_wrapper(faces, self.equatorial_last, self.polar_last)
         output = torch.stack(faces, dim=2)
 
