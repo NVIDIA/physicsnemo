@@ -63,7 +63,7 @@ def remesh(
     """
     import importlib
 
-    from physicsnemo.mesh.io import from_pyvista, to_pyvista
+    from physicsnemo.mesh.io.io_pyvista import from_pyvista, to_pyvista
     from physicsnemo.mesh.repair import repair_mesh
 
     pyacvd = importlib.import_module("pyacvd")
