@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
@@ -26,17 +25,18 @@ from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.10.0", hard_fail=False)
+te = OptionalImport("transformer_engine.pytorch")
 
-if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine.pytorch")
+# Determine base class at module load time, inside conditional to avoid import-time access
+if te.available:
+    _LayerNormBase = te.LayerNorm
 else:
-    te = None
+    _LayerNormBase = nn.LayerNorm
 
 
-class ReshapedLayerNorm(te.LayerNorm if te else nn.LayerNorm):
+class ReshapedLayerNorm(_LayerNormBase):
     r"""LayerNorm that normalizes over channels for spatial tensors.
 
     Reshapes and transposes the input tensor before applying layer normalization,

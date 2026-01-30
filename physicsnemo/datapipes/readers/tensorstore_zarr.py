@@ -23,7 +23,6 @@ optimized caching. Supports coordinated subsampling for large arrays.
 
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -31,15 +30,12 @@ from typing import Any, Optional
 import numpy as np
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
-# Check if tensorstore is available
-TENSORSTORE_AVAILABLE = check_version_spec("tensorstore", hard_fail=False)
-
-if TENSORSTORE_AVAILABLE:
-    ts = importlib.import_module("tensorstore")
+# Lazy import for optional dependency
+ts = OptionalImport("tensorstore")
 
 
 @register()
@@ -139,13 +135,6 @@ class TensorStoreZarrReader(Reader):
         ValueError
             If no Zarr groups found.
         """
-        if not TENSORSTORE_AVAILABLE:
-            raise ImportError(
-                "TensorStore is required for TensorStoreZarrReader but is not installed.\n"
-                "Install it with: pip install tensorstore\n"
-                "See https://google.github.io/tensorstore/ for more information."
-            )
-
         super().__init__(
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,

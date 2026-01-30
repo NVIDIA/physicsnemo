@@ -22,21 +22,18 @@ Supports reading from a directory of Zarr groups, one sample per group.
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
-ZARR_AVAILABLE = check_version_spec("zarr", "3.0.0", hard_fail=False)
-
-if ZARR_AVAILABLE:
-    zarr = importlib.import_module("zarr")
+# Lazy import for optional dependency
+zarr = OptionalImport("zarr")
 
 
 @register()
@@ -133,11 +130,6 @@ class ZarrReader(Reader):
         ValueError
             If no Zarr groups found in directory.
         """
-        if not ZARR_AVAILABLE:
-            raise ImportError(
-                "zarr is required for ZarrReader. Install with: pip install zarr"
-            )
-
         super().__init__(
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,

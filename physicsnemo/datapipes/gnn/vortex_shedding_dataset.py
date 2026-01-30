@@ -15,7 +15,6 @@
 # limitations under the License.
 
 
-import importlib
 import json
 import os
 
@@ -24,37 +23,12 @@ import torch
 from torch.nn import functional as F
 from torch.utils.data import Dataset
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.gnn.utils import load_json, save_json
 
-# Check for optional dependencies
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
-TFRECORD_AVAILABLE = check_version_spec("tfrecord", hard_fail=False)
-
-if PYG_AVAILABLE:
-    pyg = importlib.import_module("torch_geometric")
-else:
-    pyg = None
-
-if TFRECORD_AVAILABLE:
-    _tfrecord_torch = importlib.import_module("tfrecord.torch.dataset")
-    TFRecordDataset = _tfrecord_torch.TFRecordDataset
-else:
-    TFRecordDataset = None
-
-
-def _check_dependencies():
-    """Check that required optional dependencies are available."""
-    missing = []
-    if not PYG_AVAILABLE:
-        missing.append("torch_geometric")
-    if not TFRECORD_AVAILABLE:
-        missing.append("tfrecord")
-    if missing:
-        raise ImportError(
-            f"VortexSheddingDataset requires the following packages: {', '.join(missing)}. "
-            "Install with: pip install torch_geometric tfrecord"
-        )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+tfrecord_torch = OptionalImport("tfrecord.torch.dataset")
 
 
 class VortexSheddingDataset(Dataset):
@@ -90,7 +64,6 @@ class VortexSheddingDataset(Dataset):
         num_steps=600,
         noise_std=0.02,
     ):
-        _check_dependencies()
         self.name = name
         self.data_dir = data_dir
         self.split = split
@@ -324,7 +297,7 @@ class VortexSheddingDataset(Dataset):
         description = {k: "byte" for k in meta["field_names"]}
 
         # Create dataset with transform to decode records.
-        dataset = TFRecordDataset(
+        dataset = tfrecord_torch.TFRecordDataset(
             tfrecord_path,
             index_path,
             description,

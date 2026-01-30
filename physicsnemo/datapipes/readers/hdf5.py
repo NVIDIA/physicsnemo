@@ -22,21 +22,17 @@ Supports reading from single HDF5 files or directories of HDF5 files.
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import Any, Optional
 
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
-# Check if h5py is available
-H5PY_AVAILABLE = check_version_spec("h5py", hard_fail=False)
-
-if H5PY_AVAILABLE:
-    h5py = importlib.import_module("h5py")
+# Lazy import for optional dependency
+h5py = OptionalImport("h5py")
 
 
 @register()
@@ -103,11 +99,6 @@ class HDF5Reader(Reader):
         ValueError
             If no HDF5 files found in directory.
         """
-        if not H5PY_AVAILABLE:
-            raise ImportError(
-                "h5py is required for HDF5Reader. Install with: pip install h5py"
-            )
-
         super().__init__(
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,

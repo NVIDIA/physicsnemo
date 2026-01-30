@@ -14,18 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 from typing import Any, Callable, Dict, Tuple, Union
 
 import torch
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
-from physicsnemo.nn.module.gnn_layers.graph_types import (
-    PYG_AVAILABLE,
-    GraphType,
-    raise_missing_pyg_error,
-)
+from physicsnemo.core.version_check import OptionalImport
+from physicsnemo.nn.module.gnn_layers.graph_types import GraphType
+
+# Lazy imports for optional dependencies - no import happens until accessed
+pyg_data = OptionalImport("torch_geometric.data")
+torch_scatter = OptionalImport("torch_scatter")
 
 
 def checkpoint_identity(layer: Callable, *args: Any, **kwargs: Any) -> Any:
@@ -79,323 +79,298 @@ def set_checkpoint_fn(do_checkpointing: bool) -> Callable:
         return checkpoint_identity
 
 
-if PYG_AVAILABLE:
-    pyg_data = importlib.import_module("torch_geometric.data")
-    torch_scatter = importlib.import_module("torch_scatter")
+def concat_message_function(edges: Tensor) -> Dict[str, Tensor]:
+    """Concatenates source node, destination node, and edge features.
+
+    Parameters
+    ----------
+    edges : Tensor
+        Edges.
+
+    Returns
+    -------
+    Dict[Tensor]
+        Concatenated source node, destination node, and edge features.
+    """
+    # concats src node , dst node, and edge features
+    cat_feat = torch.cat((edges.data["x"], edges.src["x"], edges.dst["x"]), dim=1)
+    return {"cat_feat": cat_feat}
+
+
+def concat_efeat_pyg(
+    efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
+    graph: GraphType,
+) -> Tensor:
+    """Concatenates edge features with source and destination node features.
+    Use for PyG graphs.
+
+    Parameters
+    ----------
+    efeat : Tensor
+        Edge features.
+    nfeat : Tensor | Tuple[Tensor]
+        Node features.
+    graph : PyGData
+        Graph.
+
+    Returns
+    -------
+    Tensor
+        Concatenated edge features with source and destination node features.
+    """
+    PyGHeteroData = pyg_data.HeteroData
+    src_feat, dst_feat = nfeat if isinstance(nfeat, Tuple) else (nfeat, nfeat)
+    if isinstance(graph, PyGHeteroData):
+        src_idx, dst_idx = graph[graph.edge_types[0]].edge_index.long()
+    else:
+        src_idx, dst_idx = graph.edge_index.long()
+    cat_feat = torch.cat((efeat, src_feat[src_idx], dst_feat[dst_idx]), dim=1)
+    return cat_feat
+
+
+def concat_efeat(
+    efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[Tensor]],
+    graph: GraphType,
+) -> Tensor:
+    """Concatenates edge features with source and destination node features.
+    Use for homogeneous graphs.
+
+    Parameters
+    ----------
+    efeat : Tensor
+        Edge features.
+    nfeat : Tensor | Tuple[Tensor]
+        Node features.
+    graph : GraphType
+        Graph.
+
+    Returns
+    -------
+    Tensor
+        Concatenated edge features with source and destination node features.
+    """
     PyGData = pyg_data.Data
     PyGHeteroData = pyg_data.HeteroData
 
-    def concat_message_function(edges: Tensor) -> Dict[str, Tensor]:
-        """Concatenates source node, destination node, and edge features.
-
-        Parameters
-        ----------
-        edges : Tensor
-            Edges.
-
-        Returns
-        -------
-        Dict[Tensor]
-            Concatenated source node, destination node, and edge features.
-        """
-        # concats src node , dst node, and edge features
-        cat_feat = torch.cat((edges.data["x"], edges.src["x"], edges.dst["x"]), dim=1)
-        return {"cat_feat": cat_feat}
-
-    def concat_efeat_pyg(
-        efeat: Tensor,
-        nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
-        graph: PyGData | PyGHeteroData,
-    ) -> Tensor:
-        """Concatenates edge features with source and destination node features.
-        Use for PyG graphs.
-
-        Parameters
-        ----------
-        efeat : Tensor
-            Edge features.
-        nfeat : Tensor | Tuple[Tensor]
-            Node features.
-        graph : PyGData
-            Graph.
-
-        Returns
-        -------
-        Tensor
-            Concatenated edge features with source and destination node features.
-        """
-        src_feat, dst_feat = nfeat if isinstance(nfeat, Tuple) else (nfeat, nfeat)
-        if isinstance(graph, PyGHeteroData):
-            src_idx, dst_idx = graph[graph.edge_types[0]].edge_index.long()
-        else:
-            src_idx, dst_idx = graph.edge_index.long()
-        cat_feat = torch.cat((efeat, src_feat[src_idx], dst_feat[dst_idx]), dim=1)
-        return cat_feat
-
-    def concat_efeat(
-        efeat: Tensor,
-        nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: GraphType,
-    ) -> Tensor:
-        """Concatenates edge features with source and destination node features.
-        Use for homogeneous graphs.
-
-        Parameters
-        ----------
-        efeat : Tensor
-            Edge features.
-        nfeat : Tensor | Tuple[Tensor]
-            Node features.
-        graph : GraphType
-            Graph.
-
-        Returns
-        -------
-        Tensor
-            Concatenated edge features with source and destination node features.
-        """
-        if isinstance(nfeat, Tensor):
-            if isinstance(graph, (PyGData, PyGHeteroData)):
-                efeat = concat_efeat_pyg(efeat, nfeat, graph)
-            else:
-                raise ValueError(f"Unsupported graph type: {type(graph)}")
-        elif isinstance(nfeat, Tuple):
-            src_feat, dst_feat = nfeat
-            # update edge features through concatenating edge and node features
-            if isinstance(graph, (PyGData, PyGHeteroData)):
-                efeat = concat_efeat_pyg(efeat, (src_feat, dst_feat), graph)
-            else:
-                raise ValueError(f"Unsupported graph type: {type(graph)}")
-        else:
-            raise ValueError(f"Unsupported node feature type: {type(nfeat)}")
-
-        return efeat
-
-    def concat_efeat_hetero(
-        mesh_efeat: Tensor,
-        world_efeat: Tensor,
-        nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
-        graph: GraphType,
-    ) -> Tensor:
-        """Concatenates edge features with source and destination node features.
-        Use for heterogeneous graphs.
-        """
-
-        if isinstance(graph, PyGData):
-            efeat = concat_efeat_pyg(
-                torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph
-            )
-        else:
-            raise ValueError(f"Unsupported graph type: {type(graph)}")
-
-        return efeat
-
-    @torch.compile
-    def sum_edge_node_feat(
-        efeat: Tensor,
-        src_feat: Tensor,
-        dst_feat: Tensor,
-        src_idx: Tensor,
-        dst_idx: Tensor,
-    ) -> Tensor:
-        """Sums edge features with source and destination node features.
-
-        Parameters
-        ----------
-        efeat : Tensor
-            Edge features.
-        src_feat : Tensor
-            Source node features.
-        dst_feat : Tensor
-            Destination node features.
-        src_idx : Tensor
-            Source node indices.
-        dst_idx : Tensor
-            Destination node indices.
-
-        Returns
-        -------
-        Tensor
-            Sum of edge features with source and destination node features.
-        """
-
-        return efeat + src_feat[src_idx] + dst_feat[dst_idx]
-
-    def sum_efeat(
-        efeat: Tensor,
-        nfeat: Union[Tensor, Tuple[Tensor]],
-        graph: GraphType,
-    ):
-        """Sums edge features with source and destination node features.
-
-        Parameters
-        ----------
-        efeat : Tensor
-            Edge features.
-        nfeat : Tensor | Tuple[Tensor]
-            Node features (static setting) or tuple of node features of
-            source and destination nodes (bipartite setting).
-        graph : GraphType
-            The underlying graph.
-
-        Returns
-        -------
-        Tensor
-            Sum of edge features with source and destination node features.
-        """
-        if isinstance(nfeat, Tensor):
-            if isinstance(graph, PyGData):
-                src_feat, dst_feat = nfeat, nfeat
-                src, dst = graph.edge_index.long()
-                sum_efeat = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
-            else:
-                raise ValueError(f"Unsupported graph type: {type(graph)}")
-        else:
-            src_feat, dst_feat = nfeat
-            if isinstance(graph, (PyGData, PyGHeteroData)):
-                if isinstance(graph, PyGHeteroData):
-                    src, dst = graph[graph.edge_types[0]].edge_index.long()
-                else:
-                    src, dst = graph.edge_index.long()
-                sum_efeat = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
-            else:
-                raise ValueError(f"Unsupported graph type: {type(graph)}")
-
-        return sum_efeat
-
-    def agg_concat_pyg(
-        efeat: Tensor,
-        nfeat: Tensor,
-        graph: PyGData | PyGHeteroData,
-        aggregation: str,
-    ) -> Tensor:
-        if isinstance(graph, PyGHeteroData):
-            _, dst = graph[graph.edge_types[0]].edge_index.long()
-        else:
-            _, dst = graph.edge_index.long()
-        h_dest = torch_scatter.scatter(
-            efeat, dst, dim=0, dim_size=nfeat.shape[0], reduce=aggregation
-        )
-        cat_feat = torch.cat((h_dest, nfeat), -1)
-        return cat_feat
-
-    def aggregate_and_concat(
-        efeat: Tensor,
-        nfeat: Tensor,
-        graph: GraphType,
-        aggregation: str,
-    ):
-        """
-        Aggregates edge features and concatenates result with destination node features.
-
-        Parameters
-        ----------
-        efeat : Tensor
-            Edge features.
-        nfeat : Tensor
-            Node features (destination nodes).
-        graph : GraphType
-            Graph.
-        aggregation : str
-            Aggregation method (sum or mean).
-
-        Returns
-        -------
-        Tensor
-            Aggregated edge features concatenated with destination node features.
-
-        Raises
-        ------
-        RuntimeError
-            If aggregation method is not sum or mean.
-        """
-
+    if isinstance(nfeat, Tensor):
         if isinstance(graph, (PyGData, PyGHeteroData)):
-            cat_feat = agg_concat_pyg(efeat, nfeat, graph, aggregation)
+            efeat = concat_efeat_pyg(efeat, nfeat, graph)
         else:
             raise ValueError(f"Unsupported graph type: {type(graph)}")
+    elif isinstance(nfeat, Tuple):
+        src_feat, dst_feat = nfeat
+        # update edge features through concatenating edge and node features
+        if isinstance(graph, (PyGData, PyGHeteroData)):
+            efeat = concat_efeat_pyg(efeat, (src_feat, dst_feat), graph)
+        else:
+            raise ValueError(f"Unsupported graph type: {type(graph)}")
+    else:
+        raise ValueError(f"Unsupported node feature type: {type(nfeat)}")
 
-        return cat_feat
+    return efeat
 
-    def aggregate_and_concat_hetero(
-        mesh_efeat: Tensor,
-        world_efeat: Tensor,
-        nfeat: Tensor,
-        graph: GraphType,
-        aggregation: str,
-    ):
-        """
-        Aggregates edge features and concatenates result with destination node features.
-        Use for heterogeneous graphs.
 
-        Parameters
-        ----------
-        mesh_efeat : Tensor
-            Mesh edge features.
-        world_efeat : Tensor
-            World edge features.
-        nfeat : Tensor
-            Node features (destination nodes).
-        graph : GraphType
-            Graph.
-        aggregation : str
-            Aggregation method (sum or mean).
+def concat_efeat_hetero(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[Tensor, Tensor]],
+    graph: GraphType,
+) -> Tensor:
+    """Concatenates edge features with source and destination node features.
+    Use for heterogeneous graphs.
+    """
+    PyGData = pyg_data.Data
 
-        Returns
-        -------
-        Tensor
-            Aggregated edge features concatenated with destination node features.
+    if isinstance(graph, PyGData):
+        efeat = concat_efeat_pyg(
+            torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph
+        )
+    else:
+        raise ValueError(f"Unsupported graph type: {type(graph)}")
 
-        Raises
-        ------
-        RuntimeError
-            If aggregation method is not sum or mean.
-        """
+    return efeat
 
+
+@torch.compile
+def sum_edge_node_feat(
+    efeat: Tensor,
+    src_feat: Tensor,
+    dst_feat: Tensor,
+    src_idx: Tensor,
+    dst_idx: Tensor,
+) -> Tensor:
+    """Sums edge features with source and destination node features.
+
+    Parameters
+    ----------
+    efeat : Tensor
+        Edge features.
+    src_feat : Tensor
+        Source node features.
+    dst_feat : Tensor
+        Destination node features.
+    src_idx : Tensor
+        Source node indices.
+    dst_idx : Tensor
+        Destination node indices.
+
+    Returns
+    -------
+    Tensor
+        Sum of edge features with source and destination node features.
+    """
+    return efeat + src_feat[src_idx] + dst_feat[dst_idx]
+
+
+def sum_efeat(
+    efeat: Tensor,
+    nfeat: Union[Tensor, Tuple[Tensor]],
+    graph: GraphType,
+):
+    """Sums edge features with source and destination node features.
+
+    Parameters
+    ----------
+    efeat : Tensor
+        Edge features.
+    nfeat : Tensor | Tuple[Tensor]
+        Node features (static setting) or tuple of node features of
+        source and destination nodes (bipartite setting).
+    graph : GraphType
+        The underlying graph.
+
+    Returns
+    -------
+    Tensor
+        Sum of edge features with source and destination node features.
+    """
+    PyGData = pyg_data.Data
+    PyGHeteroData = pyg_data.HeteroData
+
+    if isinstance(nfeat, Tensor):
         if isinstance(graph, PyGData):
-            cat_feat = agg_concat_pyg(
-                torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph, aggregation
-            )
+            src_feat, dst_feat = nfeat, nfeat
+            src, dst = graph.edge_index.long()
+            result = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
+        else:
+            raise ValueError(f"Unsupported graph type: {type(graph)}")
+    else:
+        src_feat, dst_feat = nfeat
+        if isinstance(graph, (PyGData, PyGHeteroData)):
+            if isinstance(graph, PyGHeteroData):
+                src, dst = graph[graph.edge_types[0]].edge_index.long()
+            else:
+                src, dst = graph.edge_index.long()
+            result = sum_edge_node_feat(efeat, src_feat, dst_feat, src, dst)
         else:
             raise ValueError(f"Unsupported graph type: {type(graph)}")
 
-        return cat_feat
+    return result
 
 
-else:
+def agg_concat_pyg(
+    efeat: Tensor,
+    nfeat: Tensor,
+    graph: GraphType,
+    aggregation: str,
+) -> Tensor:
+    PyGHeteroData = pyg_data.HeteroData
 
-    def concat_message_function(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+    if isinstance(graph, PyGHeteroData):
+        _, dst = graph[graph.edge_types[0]].edge_index.long()
+    else:
+        _, dst = graph.edge_index.long()
+    h_dest = torch_scatter.scatter(
+        efeat, dst, dim=0, dim_size=nfeat.shape[0], reduce=aggregation
+    )
+    cat_feat = torch.cat((h_dest, nfeat), -1)
+    return cat_feat
 
-    def concat_efeat_pyg(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
 
-    def concat_efeat(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+def aggregate_and_concat(
+    efeat: Tensor,
+    nfeat: Tensor,
+    graph: GraphType,
+    aggregation: str,
+):
+    """
+    Aggregates edge features and concatenates result with destination node features.
 
-    def concat_efeat_hetero(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+    Parameters
+    ----------
+    efeat : Tensor
+        Edge features.
+    nfeat : Tensor
+        Node features (destination nodes).
+    graph : GraphType
+        Graph.
+    aggregation : str
+        Aggregation method (sum or mean).
 
-    def sum_edge_node_feat(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+    Returns
+    -------
+    Tensor
+        Aggregated edge features concatenated with destination node features.
 
-    def sum_efeat(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+    Raises
+    ------
+    RuntimeError
+        If aggregation method is not sum or mean.
+    """
+    PyGData = pyg_data.Data
+    PyGHeteroData = pyg_data.HeteroData
 
-    def agg_concat_pyg(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+    if isinstance(graph, (PyGData, PyGHeteroData)):
+        cat_feat = agg_concat_pyg(efeat, nfeat, graph, aggregation)
+    else:
+        raise ValueError(f"Unsupported graph type: {type(graph)}")
 
-    def aggregate_and_concat(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+    return cat_feat
 
-    def aggregate_and_concat_hetero(*args, **kwargs):
-        """Placeholder for when PyG is not available."""
-        raise_missing_pyg_error()
+
+def aggregate_and_concat_hetero(
+    mesh_efeat: Tensor,
+    world_efeat: Tensor,
+    nfeat: Tensor,
+    graph: GraphType,
+    aggregation: str,
+):
+    """
+    Aggregates edge features and concatenates result with destination node features.
+    Use for heterogeneous graphs.
+
+    Parameters
+    ----------
+    mesh_efeat : Tensor
+        Mesh edge features.
+    world_efeat : Tensor
+        World edge features.
+    nfeat : Tensor
+        Node features (destination nodes).
+    graph : GraphType
+        Graph.
+    aggregation : str
+        Aggregation method (sum or mean).
+
+    Returns
+    -------
+    Tensor
+        Aggregated edge features concatenated with destination node features.
+
+    Raises
+    ------
+    RuntimeError
+        If aggregation method is not sum or mean.
+    """
+    PyGData = pyg_data.Data
+
+    if isinstance(graph, PyGData):
+        cat_feat = agg_concat_pyg(
+            torch.cat((mesh_efeat, world_efeat), dim=0), nfeat, graph, aggregation
+        )
+    else:
+        raise ValueError(f"Unsupported graph type: {type(graph)}")
+
+    return cat_feat

@@ -30,15 +30,13 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from physicsnemo.datapipes.healpix.utils import (
-    XARRAY_AVAILABLE,
-    _raise_missing_xarray,
-    xr,
-)
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.distributed import DistributedManager
 
 from .coupledtimeseries_dataset import CoupledTimeSeriesDataset
 from .timeseries_dataset import TimeSeriesDataset
+
+xr = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +109,6 @@ def open_time_series_dataset_classic_on_the_fly(
 
     merge_time = time.time()
     logger.info("merging input datasets")
-
-    if not XARRAY_AVAILABLE:
-        _raise_missing_xarray()
 
     datasets = []
     remove_attrs = ["mean", "std"] if "LL" in prefix else ["varlev", "mean", "std"]
@@ -209,9 +204,6 @@ def open_time_series_dataset_classic_prebuilt(
     xr.Dataset: The opened dataset
     """
 
-    if not XARRAY_AVAILABLE:
-        _raise_missing_xarray()
-
     ds_path = Path(directory, dataset_name + ".zarr")
 
     if not ds_path.exists():
@@ -266,9 +258,6 @@ def create_time_series_dataset_classic(
     -------
     xr.Dataset: The merged dataset
     """
-    if not XARRAY_AVAILABLE:
-        _raise_missing_xarray()
-
     dst_zarr = os.path.join(dst_directory, dataset_name + ".zarr")
     file_exists = os.path.exists(dst_zarr)
 
@@ -476,9 +465,6 @@ class TimeSeriesDataModule:
                 - providing this parameter configures the data loader to only produce this number of samples, and
                     NOT produce any target array.
         """
-        if not XARRAY_AVAILABLE:
-            _raise_missing_xarray()
-
         super().__init__()
         self.src_directory = src_directory
         self.dst_directory = dst_directory
@@ -925,9 +911,6 @@ class CoupledTimeSeriesDataModule(TimeSeriesDataModule):
         train_noise_seed: int, optional
             Seed for the random number generator for adding noise to the training data, default 42
         """
-        if not XARRAY_AVAILABLE:
-            _raise_missing_xarray()
-
         self.couplings = couplings
         self.add_train_noise = add_train_noise
         self.train_noise_params = train_noise_params

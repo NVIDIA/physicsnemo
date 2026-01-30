@@ -14,23 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
-
 import torch
 from einops import rearrange
 from torch.nn.functional import elu, gelu, leaky_relu, relu, sigmoid, silu, tanh
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn.module.utils.utils import _validate_amp
 
 # Import apex GroupNorm if installed only
-_is_apex_available = False
-if torch.cuda.is_available():
-    try:
-        apex_gn_module = importlib.import_module("apex.contrib.group_norm")
-        ApexGroupNorm = getattr(apex_gn_module, "GroupNorm")
-        _is_apex_available = True
-    except ImportError:
-        pass
+apex_gn = OptionalImport("apex.contrib.group_norm")
 
 
 def _compute_groupnorm_groups(
@@ -114,7 +106,7 @@ def get_group_norm(
     of groups might be adjusted to satisfy the ``min_channels_per_group``
     condition.
     """
-    if use_apex_gn and not _is_apex_available:
+    if use_apex_gn and not apex_gn.available:
         raise ValueError("'apex' is not installed, set `use_apex_gn=False`")
 
     act: str | None = act.lower() if act else act
@@ -123,7 +115,7 @@ def get_group_norm(
         num_groups: int = _compute_groupnorm_groups(
             num_channels, num_groups, min_channels_per_group
         )
-        return ApexGroupNorm(
+        return apex_gn.GroupNorm(
             num_groups=num_groups,
             num_channels=num_channels,
             eps=eps,

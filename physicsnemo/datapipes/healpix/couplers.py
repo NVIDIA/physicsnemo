@@ -21,11 +21,9 @@ import numpy as np
 import pandas as pd
 import torch as th
 
-from physicsnemo.datapipes.healpix.utils import (
-    XARRAY_AVAILABLE,
-    _raise_missing_xarray,
-    xr,
-)
+from physicsnemo.core.version_check import OptionalImport
+
+xr = OptionalImport("xarray")
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +74,6 @@ class ConstantCoupler:
             the right side of a averaging_window window.
             This is highly remcommended for training, default True
         """
-        if not XARRAY_AVAILABLE:
-            _raise_missing_xarray()
-
         # extract important meta data from ds
         self.ds = dataset
         self.batch_size = batch_size
@@ -327,9 +322,6 @@ class TrailingAverageCoupler:
             the right side of a averaging_window window.
             This is highly remcommended for training, default True
         """
-        if not XARRAY_AVAILABLE:
-            _raise_missing_xarray()
-
         # extract important meta data from ds
         self.ds = dataset
         self.batch_size = batch_size

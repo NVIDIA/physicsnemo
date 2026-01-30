@@ -16,26 +16,12 @@
 
 """Reusable HEALPix tensor utilities and padding layers."""
 
-import importlib
-
 import torch
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-HEALPIXPAD_AVAILABLE = check_version_spec("earth2grid", "0.1.0", hard_fail=False)
-
-if HEALPIXPAD_AVAILABLE:
-    hpx_pad = importlib.import_module("earth2grid.healpix._padding").pad
-else:
-
-    def hpx_pad(*args, **kwargs):
-        """Dummy symbol for missing earth2grid backend."""
-        raise ImportError(
-            "earth2grid is not installed, cannot use it as a backend for HEALPix "
-            "padding. Install earth2grid from https://github.com/NVlabs/earth2grid.git "
-            "to enable the accelerated path."
-        )
+_earth2grid = OptionalImport("earth2grid.healpix._padding")
 
 
 def _raise_shape_error(name: str, tensor: torch.Tensor, message: str) -> None:
@@ -463,7 +449,7 @@ class HEALPixPaddingv2(torch.nn.Module):
             torch.cuda.nvtx.range_push("HEALPixPaddingv2:forward")
 
         unfolded = self.unfold(x)
-        padded = hpx_pad(unfolded, self.padding)
+        padded = _earth2grid.pad(unfolded, self.padding)
         result = self.fold(padded)
 
         if torch.cuda.is_available():
@@ -523,7 +509,7 @@ class HEALPixLayer(torch.nn.Module):
             padding = ((kernel_size - 1) // 2) * dilation
             if (
                 enable_healpixpad
-                and HEALPIXPAD_AVAILABLE
+                and _earth2grid.available
                 and torch.cuda.is_available()
                 and not enable_nhwc
             ):  # pragma: no cover

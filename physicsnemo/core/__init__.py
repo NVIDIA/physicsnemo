@@ -18,6 +18,6 @@ from .function_spec import FunctionSpec
 from .meta import ModelMetaData
 from .module import Module
 from .registry import ModelRegistry
-from .version_check import check_version_spec
+from .version_check import OptionalImport
 
-__all__ = ["ModelMetaData", "Module", "ModelRegistry", "FunctionSpec"]
+__all__ = ["ModelMetaData", "Module", "ModelRegistry", "FunctionSpec", "OptionalImport"]

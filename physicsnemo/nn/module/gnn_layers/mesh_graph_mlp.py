@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 from typing import Optional, Tuple, Union
 
 import torch
@@ -23,101 +22,80 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.autograd.function import once_differentiable
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn.module.fused_silu import silu_backward_for
 from physicsnemo.nn.module.layer_norm import get_layer_norm_class
 from physicsnemo.utils.profiling import profile
 
 from .utils import GraphType, concat_efeat, concat_efeat_hetero, sum_efeat
 
-NV_FUSER_AVAILABLE = check_version_spec("nvfuser", hard_fail=False)
+# Lazy import for optional nvfuser dependency
+nvfuser = OptionalImport("nvfuser")
 
-if NV_FUSER_AVAILABLE:
-    nvfuser = importlib.import_module("nvfuser")
 
-    FusionDefinition = nvfuser.FusionDefinition
+class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
+    """Custom SiLU + Linear autograd function"""
 
-    class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
-        """Custom SiLU + Linear autograd function"""
+    @staticmethod
+    def forward(
+        ctx,
+        features: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+    ) -> torch.Tensor:
+        # by combining SiLU and a Linear transformation
+        # we can avoid storing the activation
+        # at the cost of recomputing it during the backward
+        out = F.silu(features)
+        out = F.linear(out, weight, bias)
+        ctx.save_for_backward(features, weight)
+        return out
 
-        @staticmethod
-        def forward(
-            ctx,
-            features: torch.Tensor,
-            weight: torch.Tensor,
-            bias: torch.Tensor,
-        ) -> torch.Tensor:
-            # by combining SiLU and a Linear transformation
-            # we can avoid storing the activation
-            # at the cost of recomputing it during the backward
+    @staticmethod
+    @once_differentiable
+    def backward(
+        ctx, grad_output: torch.Tensor
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
+        """backward pass of the SiLU + Linear function"""
+
+        (
+            need_dgrad,
+            need_wgrad,
+            need_bgrad,
+        ) = ctx.needs_input_grad
+        features, weight = ctx.saved_tensors
+
+        grad_features = None
+        grad_weight = None
+        grad_bias = None
+
+        if need_bgrad:
+            grad_bias = grad_output.sum(dim=0)
+
+        if need_wgrad:
             out = F.silu(features)
-            out = F.linear(out, weight, bias)
-            ctx.save_for_backward(features, weight)
-            return out
+            grad_weight = grad_output.T @ out
 
-        @staticmethod
-        @once_differentiable
-        def backward(
-            ctx, grad_output: torch.Tensor
-        ) -> Tuple[
-            Optional[torch.Tensor],
-            Optional[torch.Tensor],
-            Optional[torch.Tensor],
-        ]:
-            """backward pass of the SiLU + Linear function"""
+        if need_dgrad:
+            grad_features = grad_output @ weight
 
-            (
-                need_dgrad,
-                need_wgrad,
-                need_bgrad,
-            ) = ctx.needs_input_grad
-            features, weight = ctx.saved_tensors
+            with nvfuser.FusionDefinition() as fd:
+                silu_backward_for(
+                    fd,
+                    features.dtype,
+                    features.dim(),
+                    features.size(),
+                    features.stride(),
+                )
 
-            grad_features = None
-            grad_weight = None
-            grad_bias = None
+            grad_silu = fd.execute([features])[0]
+            grad_features = grad_features * grad_silu
 
-            if need_bgrad:
-                grad_bias = grad_output.sum(dim=0)
-
-            if need_wgrad:
-                out = F.silu(features)
-                grad_weight = grad_output.T @ out
-
-            if need_dgrad:
-                grad_features = grad_output @ weight
-
-                with FusionDefinition() as fd:
-                    silu_backward_for(
-                        fd,
-                        features.dtype,
-                        features.dim(),
-                        features.size(),
-                        features.stride(),
-                    )
-
-                grad_silu = fd.execute([features])[0]
-                grad_features = grad_features * grad_silu
-
-            return grad_features, grad_weight, grad_bias
-
-else:
-
-    def raise_missing_nvfuser():
-        msg = "MeshGraphMLP: An error occured. Either nvfuser is not installed or the version is "
-        "incompatible. Please retry after installing correct version of nvfuser. "
-        "The new version of nvfuser should be available in PyTorch container version "
-        ">= 23.10. "
-        "https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/index.html. "
-        "If using a source install method, please refer nvFuser repo for installation "
-        ("guidelines https://github.com/NVIDIA/Fuser.",)
-        raise ImportError(msg)
-
-    class CustomSiLuLinearAutogradFunction(torch.autograd.Function):
-        """Placeholder for when nvfuser is not available."""
-
-        def __init__(self):
-            raise_missing_nvfuser()
+        return grad_features, grad_weight, grad_bias
 
 
 class MeshGraphMLP(nn.Module):

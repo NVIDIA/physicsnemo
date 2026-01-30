@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,31 +23,16 @@ import h5py
 import numpy as np
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 
 from ..datapipe import Datapipe
 from ..meta import DatapipeMetaData
 
-DALI_AVAILABLE = check_version_spec("nvidia.dali", hard_fail=False)
-
-if DALI_AVAILABLE:
-    dali = importlib.import_module("nvidia.dali")
-    dali_pth = importlib.import_module("nvidia.dali.plugin.pytorch")
-else:
-    dali = None
-    dali_pth = None
-
-
-def _check_dali_available():
-    """Raise an error if DALI is not available."""
-    if not DALI_AVAILABLE:
-        raise ImportError(
-            "ERA5HDF5Datapipe requires NVIDIA DALI package to be installed. "
-            "The package can be installed at:\n"
-            "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-        )
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
 
 
 Tensor = torch.Tensor
@@ -153,7 +137,6 @@ class ERA5HDF5Datapipe(Datapipe):
         process_rank: int = 0,
         world_size: int = 1,
     ):
-        _check_dali_available()
         super().__init__(meta=MetaData())
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -355,7 +338,7 @@ class ERA5HDF5Datapipe(Datapipe):
         if not self.mu.shape == self.sd.shape == (1, len(self.channels), 1, 1):
             raise AssertionError("Error, normalisation arrays have wrong shape")
 
-    def _create_pipeline(self) -> dali.Pipeline:
+    def _create_pipeline(self) -> "dali.Pipeline":
         """Create DALI pipeline
 
         Returns
@@ -565,7 +548,7 @@ class ERA5DaliExternalSource:
             self.start_year: int = cos_zenith_args.get("start_year")
 
     def __call__(
-        self, sample_info: dali.types.SampleInfo
+        self, sample_info: "dali.types.SampleInfo"
     ) -> Tuple[Tensor, Tensor, np.ndarray]:
         if sample_info.iteration >= self.num_batches:
             raise StopIteration()

@@ -15,7 +15,6 @@
 # limitations under the License.
 
 
-import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple, Union
@@ -24,45 +23,16 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 from .readers import read_cgns, read_vtp, read_vtu
 
-DALI_AVAILABLE = check_version_spec("nvidia.dali", hard_fail=False)
-VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
-
-if DALI_AVAILABLE:
-    dali = importlib.import_module("nvidia.dali")
-    dali_pth = importlib.import_module("nvidia.dali.plugin.pytorch")
-else:
-    dali = None
-    dali_pth = None
-
-if VTK_AVAILABLE:
-    vtk = importlib.import_module("vtk")
-else:
-    vtk = None
-
-
-def _check_dali_available():
-    """Raise an error if DALI is not available."""
-    if not DALI_AVAILABLE:
-        raise ImportError(
-            "MeshDatapipe requires NVIDIA DALI package to be installed. "
-            "The package can be installed at:\n"
-            "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-        )
-
-
-def _check_vtk_available():
-    """Raise an error if VTK is not available."""
-    if not VTK_AVAILABLE:
-        raise ImportError(
-            "MeshDatapipe requires VTK package to be installed. "
-            "Install with: pip install vtk"
-        )
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+vtk = OptionalImport("vtk")
 
 
 @dataclass
@@ -129,8 +99,6 @@ class MeshDatapipe(Datapipe):
         cache_data: bool = False,
         parallel: bool = True,
     ):
-        _check_dali_available()
-        _check_vtk_available()
         super().__init__(meta=MetaData())
         self.file_format = file_format
         self.variables = variables

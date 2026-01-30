@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import json
 import pathlib
 import time
@@ -26,18 +25,15 @@ import torch
 import torch.distributed as dist
 from torch.distributed.tensor import Replicate, Shard
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.distributed.utils import compute_split_shapes
 from physicsnemo.domain_parallel import ShardTensor, ShardTensorSpec
 
-TENSORSTORE_AVAILABLE = check_version_spec("tensorstore", hard_fail=False)
-PV_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
-ZARR_AVAILABLE = check_version_spec("zarr", hard_fail=False)
+# Lazy imports for optional dependencies
+tensorstore = OptionalImport("tensorstore")
+pv = OptionalImport("pyvista")
+zarr = OptionalImport("zarr")
 
-if ZARR_AVAILABLE:
-    zarr = importlib.import_module("zarr")
-else:
-    zarr = None
 
 # Abstractions:
 # - want to read npy/npz/.zarr/.stl/.vtp files
@@ -322,12 +318,6 @@ class ZarrFileReader(BackendReader):
     ) -> None:
         super().__init__(keys_to_read, keys_to_read_if_available)
 
-        if not ZARR_AVAILABLE:
-            raise ValueError(
-                "cae_dataset needs `zarr` but it is not availabe.  Install "
-                "with `pip install zarr`."
-            )
-
     def read_file_attributes(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
         """
         Read the attributes of a file and return a dictionary of tensors.
@@ -471,316 +461,305 @@ class ZarrFileReader(BackendReader):
         return data, specs
 
 
-if PV_AVAILABLE:
-    pv = importlib.import_module("pyvista")
+class VTKFileReader(BackendReader):
+    """
+    Reader for vtk files.
+    """
 
-    class VTKFileReader(BackendReader):
+    def __init__(
+        self,
+        keys_to_read: list[str] | None,
+        keys_to_read_if_available: dict[str, torch.Tensor] | None,
+    ) -> None:
+        super().__init__(keys_to_read, keys_to_read_if_available)
+
+        self.stl_file_keys = [
+            "stl_coordinates",
+            "stl_centers",
+            "stl_faces",
+            "stl_areas",
+        ]
+        self.vtp_file_keys = [
+            "surface_mesh_centers",
+            "surface_normals",
+            "surface_mesh_sizes",
+            "CpMeanTrim",
+            "pMeanTrim",
+            "wallShearStressMeanTrim",
+        ]
+        self.vtu_file_keys = [
+            "volume_mesh_centers",
+            "volume_fields",
+        ]
+
+        self.exclude_patterns = [
+            "single_solid",
+        ]
+
+    def get_file_name(self, dir_name: pathlib.Path, extension: str) -> pathlib.Path:
         """
-        Reader for vtk files.
+        Get the file name for a given directory and extension.
         """
+        # >>> matches = [p for p in list(dir_name.iterdir()) if p.suffix == ".stl" and not any(pattern in p.name for pattern in exclude_patterns)]
+        matches = [
+            p
+            for p in dir_name.iterdir()
+            if p.suffix == extension
+            and not any(pattern in p.name for pattern in self.exclude_patterns)
+        ]
+        if len(matches) == 0:
+            raise FileNotFoundError(f"No {extension} files found in {dir_name}")
+        fname = matches[0]
+        return dir_name / fname
 
-        def __init__(
-            self,
-            keys_to_read: list[str] | None,
-            keys_to_read_if_available: dict[str, torch.Tensor] | None,
-        ) -> None:
-            super().__init__(keys_to_read, keys_to_read_if_available)
-
-            self.stl_file_keys = [
-                "stl_coordinates",
-                "stl_centers",
-                "stl_faces",
-                "stl_areas",
-            ]
-            self.vtp_file_keys = [
-                "surface_mesh_centers",
-                "surface_normals",
-                "surface_mesh_sizes",
-                "CpMeanTrim",
-                "pMeanTrim",
-                "wallShearStressMeanTrim",
-            ]
-            self.vtu_file_keys = [
-                "volume_mesh_centers",
-                "volume_fields",
-            ]
-
-            self.exclude_patterns = [
-                "single_solid",
-            ]
-
-        def get_file_name(self, dir_name: pathlib.Path, extension: str) -> pathlib.Path:
-            """
-            Get the file name for a given directory and extension.
-            """
-            # >>> matches = [p for p in list(dir_name.iterdir()) if p.suffix == ".stl" and not any(pattern in p.name for pattern in exclude_patterns)]
-            matches = [
-                p
-                for p in dir_name.iterdir()
-                if p.suffix == extension
-                and not any(pattern in p.name for pattern in self.exclude_patterns)
-            ]
-            if len(matches) == 0:
-                raise FileNotFoundError(f"No {extension} files found in {dir_name}")
-            fname = matches[0]
-            return dir_name / fname
-
-        def read_file(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
-            """
-            Read a set of files and return a dictionary of tensors.
-            """
-
-            # This reader attempts to only read what's necessary, and not more.
-            # So, the functions that do the reading are each "one file" functions
-            # and we open them for processing only when necessary.
-
-            return_data = {}
-
-            # Note that this reader is, already, running in a background thread.
-            # It may or may not help to further thread these calls.
-            if any(key in self.stl_file_keys for key in self.keys_to_read):
-                stl_path = self.get_file_name(filename, ".stl")
-                stl_data = self.read_data_from_stl(stl_path)
-                return_data.update(stl_data)
-            if any(key in self.vtp_file_keys for key in self.keys_to_read):
-                vtp_path = self.get_file_name(filename, ".vtp")
-                vtp_data = self.read_data_from_vtp(vtp_path)
-                return_data.update(vtp_data)
-            if any(key in self.vtu_file_keys for key in self.keys_to_read):
-                raise NotImplementedError("VTU files are not supported yet.")
-
-            return self.fill_optional_keys(return_data)
-
-        def read_file_sharded(
-            self, filename: pathlib.Path, parallel_rank: int, parallel_size: int
-        ) -> tuple[dict[str, torch.Tensor], dict[str, ShardTensorSpec]]:
-            """
-            Read a file and return a dictionary of tensors.
-            """
-            raise NotImplementedError("Not implemented yet.")
-
-        def read_data_from_stl(
-            self,
-            stl_path: str,
-        ) -> dict:
-            """
-            Reads surface mesh data from an STL file and prepares a batch dictionary for inference.
-
-            Args:
-                stl_path (str): Path to the STL file.
-
-            Returns:
-                dict: Batch dictionary with mesh faces and coordinates as torch tensors.
-            """
-
-            mesh = pv.read(stl_path)
-
-            batch = {}
-
-            faces = mesh.faces.reshape(-1, 4)
-            faces = faces[:, 1:]
-
-            batch["stl_faces"] = faces.flatten()
-
-            batch["stl_coordinates"] = mesh.points
-            batch["surface_normals"] = mesh.cell_normals
-
-            batch = {k: torch.from_numpy(v) for k, v in batch.items()}
-
-            return batch
-
-        def read_data_from_vtp(self, vtp_path: str) -> dict:
-            """
-            Read vtp file from a file
-            """
-
-            raise NotImplementedError("Not implemented yet.")
-
-        def set_volume_sampling_size(self, volume_sampling_size: int):
-            """
-            This is not supported for vtk files.
-            """
-            raise NotImplementedError(
-                "volume sampling directly from disk is not supported for vtk files."
-            )
-else:
-
-    class VTKFileReader(BackendReader):
+    def read_file(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
         """
-        Dummy reader for vtk files.
+        Read a set of files and return a dictionary of tensors.
         """
 
-        def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "CAE Dataset: VTKFileReader is not available without pyvista.\n"
-                "Please see https://docs.pyvista.org/getting-started/installation.html for installation instructions."
-            )
+        # This reader attempts to only read what's necessary, and not more.
+        # So, the functions that do the reading are each "one file" functions
+        # and we open them for processing only when necessary.
 
+        return_data = {}
 
-if TENSORSTORE_AVAILABLE and ZARR_AVAILABLE:
-    ts = importlib.import_module("tensorstore")
+        # Note that this reader is, already, running in a background thread.
+        # It may or may not help to further thread these calls.
+        if any(key in self.stl_file_keys for key in self.keys_to_read):
+            stl_path = self.get_file_name(filename, ".stl")
+            stl_data = self.read_data_from_stl(stl_path)
+            return_data.update(stl_data)
+        if any(key in self.vtp_file_keys for key in self.keys_to_read):
+            vtp_path = self.get_file_name(filename, ".vtp")
+            vtp_data = self.read_data_from_vtp(vtp_path)
+            return_data.update(vtp_data)
+        if any(key in self.vtu_file_keys for key in self.keys_to_read):
+            raise NotImplementedError("VTU files are not supported yet.")
 
-    class TensorStoreZarrReader(BackendReader):
+        return self.fill_optional_keys(return_data)
+
+    def read_file_sharded(
+        self, filename: pathlib.Path, parallel_rank: int, parallel_size: int
+    ) -> tuple[dict[str, torch.Tensor], dict[str, ShardTensorSpec]]:
         """
-        Reader for tensorstore zarr files.
+        Read a file and return a dictionary of tensors.
+        """
+        raise NotImplementedError("Not implemented yet.")
+
+    def read_data_from_stl(
+        self,
+        stl_path: str,
+    ) -> dict:
+        """
+        Reads surface mesh data from an STL file and prepares a batch dictionary for inference.
+
+        Args:
+            stl_path (str): Path to the STL file.
+
+        Returns:
+            dict: Batch dictionary with mesh faces and coordinates as torch tensors.
         """
 
-        def __init__(
-            self,
-            keys_to_read: list[str] | None,
-            keys_to_read_if_available: dict[str, torch.Tensor] | None,
-            cache_bytes_limit: int = 10_000_000,
-            data_copy_concurrency: int = 72,
-            file_io_concurrency: int = 72,
-        ) -> None:
-            super().__init__(keys_to_read, keys_to_read_if_available)
+        mesh = pv.read(stl_path)
 
-            self.spec_template = {
-                "driver": "auto",
-                "kvstore": {
-                    "driver": "file",
-                    "path": None,
-                },
+        batch = {}
+
+        faces = mesh.faces.reshape(-1, 4)
+        faces = faces[:, 1:]
+
+        batch["stl_faces"] = faces.flatten()
+
+        batch["stl_coordinates"] = mesh.points
+        batch["surface_normals"] = mesh.cell_normals
+
+        batch = {k: torch.from_numpy(v) for k, v in batch.items()}
+
+        return batch
+
+    def read_data_from_vtp(self, vtp_path: str) -> dict:
+        """
+        Read vtp file from a file
+        """
+
+        raise NotImplementedError("Not implemented yet.")
+
+    def set_volume_sampling_size(self, volume_sampling_size: int):
+        """
+        This is not supported for vtk files.
+        """
+        raise NotImplementedError(
+            "volume sampling directly from disk is not supported for vtk files."
+        )
+
+
+class TensorStoreZarrReader(BackendReader):
+    """
+    Reader for tensorstore zarr files.
+    """
+
+    def __init__(
+        self,
+        keys_to_read: list[str] | None,
+        keys_to_read_if_available: dict[str, torch.Tensor] | None,
+        cache_bytes_limit: int = 10_000_000,
+        data_copy_concurrency: int = 72,
+        file_io_concurrency: int = 72,
+    ) -> None:
+        super().__init__(keys_to_read, keys_to_read_if_available)
+
+        self.spec_template = {
+            "driver": "auto",
+            "kvstore": {
+                "driver": "file",
+                "path": None,
+            },
+        }
+
+        self.context = tensorstore.Context(
+            {
+                "cache_pool": {"total_bytes_limit": cache_bytes_limit},
+                "data_copy_concurrency": {"limit": data_copy_concurrency},
+                "file_io_concurrency": {"limit": file_io_concurrency},
             }
+        )
 
-            self.context = ts.Context(
-                {
-                    "cache_pool": {"total_bytes_limit": cache_bytes_limit},
-                    "data_copy_concurrency": {"limit": data_copy_concurrency},
-                    "file_io_concurrency": {"limit": file_io_concurrency},
-                }
+    def read_file_attributes(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
+        """
+        Read the attributes of a file and return a dictionary of tensors.
+        """
+        store_spec = self.spec_template["kvstore"].copy()
+        store_spec["path"] = str(filename)
+        store = tensorstore.KvStore.open(store_spec).result()
+
+        keys = store.list().result()
+
+        def to_tensor_dict(attributes_dict):
+            attributes = {}
+            for k, v in attributes_dict.items():
+                try:
+                    attributes[k] = torch.tensor(v)
+                except (TypeError, ValueError, RuntimeError):  # noqa PERF203
+                    pass
+            return attributes
+
+        # Zarr 3 check:
+        if b"/zarr.json" in keys:
+            zarr_json = store.read(b"/zarr.json").result()
+            # load into json's parser:
+            attributes_dict = json.loads(zarr_json.value)["attributes"]
+            return to_tensor_dict(attributes_dict)
+        elif b"/.zattrs" in keys:
+            # Zarr 2:
+            zarr_attrs = store.read(b"/.zattrs").result()
+            attributes_dict = json.loads(zarr_attrs.value)
+            return to_tensor_dict(attributes_dict)
+        else:
+            return {}
+
+    def read_file(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
+        """
+        Read a file and return a dictionary of tensors.
+        """
+
+        # We need to figure out, first, which keys are attributes.
+        attributes = self.read_file_attributes(filename)
+
+        local_keys_to_read = set(self.keys_to_read) - set(attributes.keys())
+
+        # Trigger an async open of each data item:
+        read_futures = {}
+        for key in local_keys_to_read:
+            spec = self.spec_template.copy()
+            spec["kvstore"]["path"] = str(filename) + "/" + str(key)
+
+            read_futures[key] = tensorstore.open(
+                spec, create=False, open=True, context=self.context
             )
 
-        def read_file_attributes(
-            self, filename: pathlib.Path
-        ) -> dict[str, torch.Tensor]:
-            """
-            Read the attributes of a file and return a dictionary of tensors.
-            """
-            store_spec = self.spec_template["kvstore"].copy()
-            store_spec["path"] = str(filename)
-            store = ts.KvStore.open(store_spec).result()
+        # Wait for all the opens to conclude:
+        read_futures = {key: read_futures[key].result() for key in read_futures.keys()}
 
-            keys = store.list().result()
-
-            def to_tensor_dict(attributes_dict):
-                attributes = {}
-                for k, v in attributes_dict.items():
-                    try:
-                        attributes[k] = torch.tensor(v)
-                    except (TypeError, ValueError, RuntimeError):  # noqa PERF203
-                        pass
-                return attributes
-
-            # Zarr 3 check:
-            if b"/zarr.json" in keys:
-                zarr_json = store.read(b"/zarr.json").result()
-                # load into json's parser:
-                attributes_dict = json.loads(zarr_json.value)["attributes"]
-                return to_tensor_dict(attributes_dict)
-            elif b"/.zattrs" in keys:
-                # Zarr 2:
-                zarr_attrs = store.read(b"/.zattrs").result()
-                attributes_dict = json.loads(zarr_attrs.value)
-                return to_tensor_dict(attributes_dict)
+        # Make sure to select the slice outside of the loop.
+        if self.is_volumetric:
+            volume_key = next(key for key in read_futures.keys() if "volume" in key)
+            volume_shape = read_futures[volume_key].shape[0]
+            if self.volume_sampling_size is not None:
+                volume_slice = self.select_random_sections_from_slice(
+                    0,
+                    volume_shape,
+                    self.volume_sampling_size,
+                )
             else:
-                return {}
+                volume_slice = slice(0, volume_shape)
 
-        def read_file(self, filename: pathlib.Path) -> dict[str, torch.Tensor]:
-            """
-            Read a file and return a dictionary of tensors.
-            """
+        # Trigger an async read of each data item:
+        # (Each item will be a numpy ndarray after this:)
+        tensor_futures = {}
+        for key in local_keys_to_read:
+            if "volume" not in key:
+                tensor_futures[key] = read_futures[key].read()
+            # For the volume data, read the slice:
+            else:
+                tensor_futures[key] = read_futures[key][volume_slice].read()
 
-            # We need to figure out, first, which keys are attributes.
-            attributes = self.read_file_attributes(filename)
+        # Convert them to torch tensors:
+        # (make sure to block for the result)
+        data = {
+            key: torch.as_tensor(tensor_futures[key].result(), dtype=torch.float32)
+            for key in local_keys_to_read
+        }
 
-            local_keys_to_read = set(self.keys_to_read) - set(attributes.keys())
+        # Patch in the attributes:
+        data.update(attributes)
 
-            # Trigger an async open of each data item:
-            read_futures = {}
-            for key in local_keys_to_read:
-                spec = self.spec_template.copy()
-                spec["kvstore"]["path"] = str(filename) + "/" + str(key)
+        return self.fill_optional_keys(data)
 
-                read_futures[key] = ts.open(
-                    spec, create=False, open=True, context=self.context
-                )
+    def read_file_sharded(
+        self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
+    ) -> tuple[dict[str, torch.Tensor], dict[str, dict]]:
+        """
+        Read a file and return a dictionary of tensors.
+        """
+        # We need to figure out, first, which keys are attributes.
+        attributes = self.read_file_attributes(filename)
 
-            # Wait for all the opens to conclude:
-            read_futures = {
-                key: read_futures[key].result() for key in read_futures.keys()
-            }
+        local_keys_to_read = set(self.keys_to_read) - set(attributes.keys())
 
-            # Make sure to select the slice outside of the loop.
-            if self.is_volumetric:
-                volume_key = next(key for key in read_futures.keys() if "volume" in key)
-                volume_shape = read_futures[volume_key].shape[0]
-                if self.volume_sampling_size is not None:
-                    volume_slice = self.select_random_sections_from_slice(
-                        0,
-                        volume_shape,
-                        self.volume_sampling_size,
-                    )
-                else:
-                    volume_slice = slice(0, volume_shape)
+        # We need the coordinates of this GPU:
+        this_rank = device_mesh.get_local_rank()
+        domain_size = dist.get_world_size(group=device_mesh.get_group())
 
-            # Trigger an async read of each data item:
-            # (Each item will be a numpy ndarray after this:)
-            tensor_futures = {}
-            for key in local_keys_to_read:
-                if "volume" not in key:
-                    tensor_futures[key] = read_futures[key].read()
-                # For the volume data, read the slice:
-                else:
-                    tensor_futures[key] = read_futures[key][volume_slice].read()
+        # This pulls a list of store objects in tensorstore:
+        stores = {}
+        for key in local_keys_to_read:
+            spec = self.spec_template.copy()
+            spec["kvstore"]["path"] = str(filename) + "/" + str(key)
 
-            # Convert them to torch tensors:
-            # (make sure to block for the result)
-            data = {
-                key: torch.as_tensor(tensor_futures[key].result(), dtype=torch.float32)
-                for key in local_keys_to_read
-            }
+            stores[key] = tensorstore.open(
+                spec, create=False, open=True, context=self.context
+            )
 
-            # Patch in the attributes:
-            data.update(attributes)
+        stores = {key: stores[key].result() for key in stores.keys()}
 
-            return self.fill_optional_keys(data)
-
-        def read_file_sharded(
-            self, filename: pathlib.Path, device_mesh: torch.distributed.DeviceMesh
-        ) -> tuple[dict[str, torch.Tensor], dict[str, dict]]:
-            """
-            Read a file and return a dictionary of tensors.
-            """
-            # We need to figure out, first, which keys are attributes.
-            attributes = self.read_file_attributes(filename)
-
-            local_keys_to_read = set(self.keys_to_read) - set(attributes.keys())
-
-            # We need the coordinates of this GPU:
-            this_rank = device_mesh.get_local_rank()
-            domain_size = dist.get_world_size(group=device_mesh.get_group())
-
-            # This pulls a list of store objects in tensorstore:
-            stores = {}
-            for key in local_keys_to_read:
-                spec = self.spec_template.copy()
-                spec["kvstore"]["path"] = str(filename) + "/" + str(key)
-
-                stores[key] = ts.open(
-                    spec, create=False, open=True, context=self.context
-                )
-
-            stores = {key: stores[key].result() for key in stores.keys()}
-
-            data = {}
-            specs = {}
-            for key in local_keys_to_read:
-                # Open the array in zarr without reading it and get info:
-                store = stores[key]
-                array_shape = store.shape
-                if array_shape == ():
-                    # Read scalars from every rank and use replicate sharding
+        data = {}
+        specs = {}
+        for key in local_keys_to_read:
+            # Open the array in zarr without reading it and get info:
+            store = stores[key]
+            array_shape = store.shape
+            if array_shape == ():
+                # Read scalars from every rank and use replicate sharding
+                _slice = np.s_[:]
+                # raw_data = torch.from_numpy(store[:])
+                placement = [
+                    Replicate(),
+                ]
+                chunk_sizes = None
+            else:
+                target_dim = 0
+                if array_shape[target_dim] < domain_size:
+                    # If the array is smaller than the number of ranks,
+                    # again read and use replicate sharding:
                     _slice = np.s_[:]
                     # raw_data = torch.from_numpy(store[:])
                     placement = [
@@ -788,69 +767,39 @@ if TENSORSTORE_AVAILABLE and ZARR_AVAILABLE:
                     ]
                     chunk_sizes = None
                 else:
-                    target_dim = 0
-                    if array_shape[target_dim] < domain_size:
-                        # If the array is smaller than the number of ranks,
-                        # again read and use replicate sharding:
-                        _slice = np.s_[:]
-                        # raw_data = torch.from_numpy(store[:])
-                        placement = [
-                            Replicate(),
-                        ]
-                        chunk_sizes = None
-                    else:
-                        # Read partially from the data and use Shard(target_dim) sharding
-                        chunk_start, chunk_stop, chunk_sizes = (
-                            self._get_slice_boundaries(
-                                store.shape, this_rank, domain_size
-                            )
-                        )
-                        _slice = np.s_[chunk_start:chunk_stop]
-                        # raw_data = torch.from_numpy(zarr_array[chunk_start:chunk_stop])
-                        placement = [
-                            Shard(target_dim),
-                        ]
-
-                        # Turn chunk sizes into a dict over mesh dim 0:
-                        chunk_sizes = {0: chunk_sizes}
-
-                # Trigger the reads as async:
-                data[key] = store[_slice].read()
-                specs[key] = (placement, chunk_sizes)
-
-            # Finally, await the full data read:
-            for key in local_keys_to_read:
-                data[key] = torch.as_tensor(data[key].result())
-
-            # Patch in the optional keys:
-            data = self.fill_optional_keys(data)
-            for key in data.keys():
-                if key not in specs:
-                    specs[key] = (
-                        [
-                            Replicate(),
-                        ],
-                        {},
+                    # Read partially from the data and use Shard(target_dim) sharding
+                    chunk_start, chunk_stop, chunk_sizes = self._get_slice_boundaries(
+                        store.shape, this_rank, domain_size
                     )
+                    _slice = np.s_[chunk_start:chunk_stop]
+                    # raw_data = torch.from_numpy(zarr_array[chunk_start:chunk_stop])
+                    placement = [
+                        Shard(target_dim),
+                    ]
 
-            return data, specs
+                    # Turn chunk sizes into a dict over mesh dim 0:
+                    chunk_sizes = {0: chunk_sizes}
 
-else:
+            # Trigger the reads as async:
+            data[key] = store[_slice].read()
+            specs[key] = (placement, chunk_sizes)
 
-    class TensorStoreZarrReader(BackendReader):
-        """
-        Null reader for tensorstore zarr files.
-        """
+        # Finally, await the full data read:
+        for key in local_keys_to_read:
+            data[key] = torch.as_tensor(data[key].result())
 
-        def __init__(
-            self,
-            keys_to_read: list[str] | None,
-            keys_to_read_if_available: dict[str, torch.Tensor] | None,
-        ) -> None:
-            # Raise an exception on construction if we get here:
-            raise NotImplementedError(
-                "TensorStoreZarrReader is not available without tensorstore.  `pip install tensorstore`."
-            )
+        # Patch in the optional keys:
+        data = self.fill_optional_keys(data)
+        for key in data.keys():
+            if key not in specs:
+                specs[key] = (
+                    [
+                        Replicate(),
+                    ],
+                    {},
+                )
+
+        return data, specs
 
 
 def is_vtk_directory(file: pathlib.Path) -> bool:
@@ -1004,11 +953,11 @@ class CAEDataset:
             )
             return file_reader, files
         elif all(file.suffix == ".zarr" and file.is_dir() for file in files):
-            if TENSORSTORE_AVAILABLE:
+            try:
                 file_reader = TensorStoreZarrReader(
                     self._keys_to_read, self._keys_to_read_if_available
                 )
-            else:
+            except (ImportError, NotImplementedError):
                 file_reader = ZarrFileReader(
                     self._keys_to_read, self._keys_to_read_if_available
                 )

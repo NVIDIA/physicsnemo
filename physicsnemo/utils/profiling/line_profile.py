@@ -14,16 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import warnings
 from pathlib import Path
 from typing import Any, Callable
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .core import PhysicsNeMoProfilerWrapper, _Profiler_Singleton
 
-LINE_PROFILER_AVAILABLE = check_version_spec("line_profiler", hard_fail=False)
+line_profiler = OptionalImport("line_profiler")
 
 
 class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singleton):
@@ -52,8 +51,8 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Sets up the LineProfiler if available, otherwise disables profiling functionality
         with a warning.
         """
-        if LINE_PROFILER_AVAILABLE:
-            LineProfiler = importlib.import_module("line_profiler").LineProfiler
+        if line_profiler.available:
+            LineProfiler = line_profiler.LineProfiler
             self._profiler = LineProfiler()
         else:
             warnings.warn(
@@ -70,7 +69,7 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Args:
             output_top: Path to the directory where profiling results should be saved
         """
-        if not LINE_PROFILER_AVAILABLE:
+        if not line_profiler.available:
             return
 
         if not self.enabled:
@@ -101,7 +100,7 @@ class LineProfileWrapper(PhysicsNeMoProfilerWrapper, metaclass=_Profiler_Singlet
         Returns:
             The profiled function wrapped with LineProfiler
         """
-        if not LINE_PROFILER_AVAILABLE:
+        if not line_profiler.available:
             return fn
         f = self._profiler(fn)
         return f

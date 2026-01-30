@@ -38,15 +38,13 @@ import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver.Physics_Attention import gumbel_softmax
 from physicsnemo.nn import BQWarp
 from physicsnemo.nn import Mlp
 
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
+# Optional imports
+te = OptionalImport("transformer_engine.pytorch")
 
 
 class ContextProjector(nn.Module):
@@ -126,7 +124,7 @@ class ContextProjector(nn.Module):
         self.use_te = use_te
 
         # Choose linear layer implementation based on backend
-        linear_layer = te.Linear if (use_te and TE_AVAILABLE) else nn.Linear
+        linear_layer = te.Linear if use_te else nn.Linear
 
         # Input projection layers for query and key
         self.in_project_x = linear_layer(dim, inner_dim)

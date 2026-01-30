@@ -14,14 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import logging
 
 import numpy as np
 import torch
 from torch import Tensor
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.graphcast.utils.graph_backend import (
     PyGGraphBackend,
 )
@@ -39,13 +38,8 @@ from .icosahedral_mesh import (
     merge_meshes,
 )
 
-SKLEARN_AVAILABLE = check_version_spec("scikit-learn", "0.20.0", hard_fail=False)
-
-if SKLEARN_AVAILABLE:
-    sklearn_neighbors = importlib.import_module("sklearn.neighbors")
-    NearestNeighbors = sklearn_neighbors.NearestNeighbors
-else:
-    NearestNeighbors = None
+# Lazy import for optional scikit-learn dependency
+_sklearn_neighbors = OptionalImport("sklearn.neighbors")
 
 
 logger = logging.getLogger(__name__)
@@ -165,13 +159,6 @@ class Graph:
         GraphType
             Graph2mesh graph.
         """
-        if NearestNeighbors is None:
-            raise ImportError(
-                "scikit-learn is not installed, cannot use create_g2m_graph method. "
-                "The GraphCast model requires scikit-learn for k-nearest neighbor computations. "
-                "To install scikit-learn, run: pip install scikit-learn"
-            )
-
         # get the max edge length of icosphere with max order
 
         max_edge_len = max_edge_length(
@@ -181,7 +168,9 @@ class Graph:
         # create the grid2mesh bipartite graph
         cartesian_grid = latlon2xyz(self.lat_lon_grid_flat)
         n_nbrs = 4
-        neighbors = NearestNeighbors(n_neighbors=n_nbrs).fit(self.mesh_vertices)
+        neighbors = _sklearn_neighbors.NearestNeighbors(n_neighbors=n_nbrs).fit(
+            self.mesh_vertices
+        )
         distances, indices = neighbors.kneighbors(cartesian_grid)
 
         src, dst = [], []
@@ -232,18 +221,13 @@ class Graph:
         GraphType
             Mesh2grid graph.
         """
-        if NearestNeighbors is None:
-            raise ImportError(
-                "scikit-learn is not installed, cannot use create_m2g_graph method. "
-                "The GraphCast model requires scikit-learn for k-nearest neighbor computations. "
-                "To install scikit-learn, run: pip install scikit-learn"
-            )
-
         # create the mesh2grid bipartite graph
         cartesian_grid = latlon2xyz(self.lat_lon_grid_flat)
         face_centroids = get_face_centroids(self.mesh_vertices, self.mesh_faces)
         n_nbrs = 1
-        neighbors = NearestNeighbors(n_neighbors=n_nbrs).fit(face_centroids)
+        neighbors = _sklearn_neighbors.NearestNeighbors(n_neighbors=n_nbrs).fit(
+            face_centroids
+        )
         _, indices = neighbors.kneighbors(cartesian_grid)
         indices = indices.flatten()
 

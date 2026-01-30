@@ -18,7 +18,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import random
 import warnings
 from dataclasses import dataclass
@@ -32,9 +31,10 @@ from torch.utils.checkpoint import checkpoint
 
 from physicsnemo.core import Module
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-TORCH_SCATTER_AVAILABLE = check_version_spec("torch_scatter", hard_fail=False)
+# Lazy import for optional torch_scatter dependency
+torch_scatter = OptionalImport("torch_scatter")
 
 STD_EPSILON = 1e-8
 
@@ -246,110 +246,92 @@ class EdgeBlock(Module):
         return node_attr, updated_edges, receivers, senders
 
 
-if TORCH_SCATTER_AVAILABLE:
-    scatter = importlib.import_module("torch_scatter").scatter
+class NodeBlock(Module):
+    """
+    Update the nodes attributes by collecting the sender and/or receiver-nodes'
+    edge attributes, pass through the node-MLP network.
 
-    class NodeBlock(Module):
-        """
-        Update the nodes attributes by collecting the sender and/or receiver-nodes'
-        edge attributes, pass through the node-MLP network.
+    Parameters
+    ----------
+    mlp_hidden_size : int
+        Number of channels/ features in the hidden layers
+    mlp_num_hidden_layers : int
+        Number of hidden layers
+    latent_size : int
+        Number of latent channels
+    aggr : str, optional, default = "add"
+        operation to collect the node attributes
+    use_receiver_nodes : bool, optional, default = True
+        whether to take the receiver-node's edges atrributes into compute
+    use_sender_nodes : bool, optional, default = True
+        whether to take the sender-node's edges atrributes into compute
 
-        Parameters
-        ----------
-        mlp_hidden_size : int
-            Number of channels/ features in the hidden layers
-        mlp_num_hidden_layers : int
-            Number of hidden layers
-        latent_size : int
-            Number of latent channels
-        aggr : str, optional, default = "add"
-            operation to collect the node attributes
-        use_receiver_nodes : bool, optional, default = True
-            whether to take the receiver-node's edges atrributes into compute
-        use_sender_nodes : bool, optional, default = True
-            whether to take the sender-node's edges atrributes into compute
+    # Example
+    # -------
+    # >>> #2D convolutional encoder decoder
+    # >>> model = physicsnemo.models.graph_network.NodeBlock(
+    # ... mlp_hidden_size=128,
+    # ... mlp_num_hidden_layers=2,
+    # ... latent_size=128,
+    # ... node_dim=0)
+    # >>> input = (node_attr, edge_attr, receiver_list, sender_list)
+    # >>> output = updated_node_attr, edge_attr, receiver_list, sender_list
+    # >>> output.size()
 
-        # Example
-        # -------
-        # >>> #2D convolutional encoder decoder
-        # >>> model = physicsnemo.models.graph_network.NodeBlock(
-        # ... mlp_hidden_size=128,
-        # ... mlp_num_hidden_layers=2,
-        # ... latent_size=128,
-        # ... node_dim=0)
-        # >>> input = (node_attr, edge_attr, receiver_list, sender_list)
-        # >>> output = updated_node_attr, edge_attr, receiver_list, sender_list
-        # >>> output.size()
+    """
 
-        """
+    def __init__(
+        self,
+        mlp_hidden_size,
+        mlp_num_hidden_layers,
+        latent_size,
+        aggr="add",
+        node_dim=0,
+        use_received_edges=True,
+        use_sent_edges=False,
+    ):
+        super().__init__(meta=MetaData(name="vfgn_nodeblock"))
+        self.aggr = aggr
+        self.node_dim = node_dim
 
-        def __init__(
-            self,
-            mlp_hidden_size,
-            mlp_num_hidden_layers,
-            latent_size,
-            aggr="add",
-            node_dim=0,
-            use_received_edges=True,
-            use_sent_edges=False,
-        ):
-            super().__init__(meta=MetaData(name="vfgn_nodeblock"))
-            self.aggr = aggr
-            self.node_dim = node_dim
+        self.use_received_edges = use_received_edges
+        self.use_sent_edges = use_sent_edges
 
-            self.use_received_edges = use_received_edges
-            self.use_sent_edges = use_sent_edges
+        self._node_model = MLPNet(mlp_hidden_size, mlp_num_hidden_layers, latent_size)
 
-            self._node_model = MLPNet(
-                mlp_hidden_size, mlp_num_hidden_layers, latent_size
+    def forward(self, x, edge_attr, receivers, senders):
+        nodes_to_collect = []
+        nodes_to_collect.append(x)
+
+        dim_size = x.shape[self.node_dim]
+
+        # aggregate received edges
+        if self.use_received_edges:
+            receivers_edge = torch_scatter.scatter(
+                dim=self.node_dim,
+                dim_size=dim_size,
+                index=receivers,
+                src=edge_attr,
+                reduce=self.aggr,
             )
+            nodes_to_collect.append(receivers_edge)
 
-        def forward(self, x, edge_attr, receivers, senders):
-            nodes_to_collect = []
-            nodes_to_collect.append(x)
-
-            dim_size = x.shape[self.node_dim]
-
-            # aggregate received edges
-            if self.use_received_edges:
-                receivers_edge = scatter(
-                    dim=self.node_dim,
-                    dim_size=dim_size,
-                    index=receivers,
-                    src=edge_attr,
-                    reduce=self.aggr,
-                )
-                nodes_to_collect.append(receivers_edge)
-
-            # aggregate sent edges
-            if self.use_sent_edges:
-                senders_edge = scatter(
-                    dim=self.node_dim,
-                    dim_size=dim_size,
-                    index=senders,
-                    src=edge_attr,
-                    reduce=self.aggr,
-                )
-                nodes_to_collect.append(senders_edge)
-
-            collected_nodes = torch.cat(nodes_to_collect, axis=-1)
-
-            updated_nodes = self._node_model(collected_nodes)
-
-            return updated_nodes, edge_attr, receivers, senders
-
-else:
-
-    class NodeBlock(Module):
-        """
-        Dummy class for when torch_scatter is not available.
-        """
-
-        def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "VFGN pipeline requires the PyTorch_Geometric library. Install the "
-                + "package at: https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html"
+        # aggregate sent edges
+        if self.use_sent_edges:
+            senders_edge = torch_scatter.scatter(
+                dim=self.node_dim,
+                dim_size=dim_size,
+                index=senders,
+                src=edge_attr,
+                reduce=self.aggr,
             )
+            nodes_to_collect.append(senders_edge)
+
+        collected_nodes = torch.cat(nodes_to_collect, axis=-1)
+
+        updated_nodes = self._node_model(collected_nodes)
+
+        return updated_nodes, edge_attr, receivers, senders
 
 
 class InteractionNet(torch.nn.Module):

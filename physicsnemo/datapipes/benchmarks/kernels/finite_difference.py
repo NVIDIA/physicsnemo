@@ -15,17 +15,7 @@
 # limitations under the License.
 
 
-try:
-    import warp as wp
-except ImportError:
-    print(
-        """NVIDIA WARP is required for this datapipe. This package is under the 
-NVIDIA Source Code License (NVSCL). To install use:
-
-pip install warp-lang
-"""
-    )
-    raise SystemExit(1)
+import warp as wp
 
 from .indexing import index_clamped_edges_batched_2d, index_zero_edges_batched_2d
 

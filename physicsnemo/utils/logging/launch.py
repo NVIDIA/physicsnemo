@@ -27,7 +27,6 @@ import torch.cuda.profiler as profiler
 from physicsnemo.distributed import DistributedManager, reduce_loss
 
 from .console import PythonLogger
-from .wandb import WANDB_AVAILABLE
 from .wandb import alert as _wandb_alert
 from .wandb import wandb as _wandb
 
@@ -134,7 +133,7 @@ class LaunchLogger(object):
 
         # Set x axis metric to epoch for this namespace
         if self.wandb_backend:
-            if WANDB_AVAILABLE:
+            if _wandb.available:
                 _wandb.define_metric(name_space + "/mini_batch_*", step_metric="iter")
                 _wandb.define_metric(name_space + "/*", step_metric="epoch")
             else:
@@ -289,7 +288,7 @@ class LaunchLogger(object):
             and self.epoch % self.epoch_alert_freq == 0
         ):
             if self.wandb_backend:
-                if WANDB_AVAILABLE:
+                if _wandb.available:
                     # TODO: Make this a little more informative?
 
                     _wandb_alert(
@@ -331,7 +330,7 @@ class LaunchLogger(object):
 
         # WandB Logging
         if self.wandb_backend:
-            if WANDB_AVAILABLE:
+            if _wandb.available:
                 # For WandB send step in as a metric
                 # Step argument in lod function does not work with multiple log calls at
                 # different intervals
@@ -366,7 +365,7 @@ class LaunchLogger(object):
             return
 
         if self.wandb_backend:
-            if WANDB_AVAILABLE:
+            if _wandb.available:
                 _wandb.log({artifact_file: figure})
             else:
                 self.pyLogger.warning("WandB not installed, turning off")

@@ -18,28 +18,21 @@
 This file creates a uniform interface for the graph type, usable in typing contexts.
 """
 
-import importlib
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias, Union
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-PYG_AVAILABLE = check_version_spec(
-    "torch_geometric", hard_fail=False
-) and check_version_spec("torch_scatter", hard_fail=False)
+# Lazy imports for optional dependencies - no import happens until accessed
+_pyg = OptionalImport("torch_geometric")
+_torch_scatter = OptionalImport("torch_scatter")
 
-if PYG_AVAILABLE:
-    PyGData = importlib.import_module("torch_geometric.data").Data
-    PyGHeteroData = importlib.import_module("torch_geometric.data").HeteroData
+# Type alias that works regardless of whether PyG is installed
+if TYPE_CHECKING:
+    from torch_geometric.data import Data as PyGData
+    from torch_geometric.data import HeteroData as PyGHeteroData
 
-    GraphType: TypeAlias = PyGData | PyGHeteroData
-
+    GraphType: TypeAlias = Union[PyGData, PyGHeteroData]
 else:
+    # At runtime, we use None as a placeholder to avoid triggering imports.
+    # Actual type checks should use isinstance with OptionalImport accessors.
     GraphType: TypeAlias = None
-
-
-def raise_missing_pyg_error():
-    msg = "MeshGraphNet requires PyTorch Geometric and torch_scatter.\n"
-    "Install it from here:\n"
-    "  https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html\n"
-
-    raise ImportError(msg)

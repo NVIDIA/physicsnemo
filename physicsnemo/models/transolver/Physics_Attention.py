@@ -30,26 +30,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import importlib
 from abc import ABC, abstractmethod
 
 import torch
 import torch.nn as nn
-
-from physicsnemo.core.version_check import check_version_spec
-
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
-
-if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine.pytorch")
-else:
-    te = None
-
 from einops import rearrange
 from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Replicate
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.domain_parallel import ShardTensor
+
+te = OptionalImport("transformer_engine.pytorch")
 
 
 def gumbel_softmax(logits: torch.Tensor, tau: float = 1.0) -> torch.Tensor:

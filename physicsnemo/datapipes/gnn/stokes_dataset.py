@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import os
 import re
 from typing import Any, List
@@ -23,37 +22,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .utils import load_json, read_vtp_file, save_json
 
-# Check for optional dependencies
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
-VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
-
-if PYG_AVAILABLE:
-    pyg = importlib.import_module("torch_geometric")
-else:
-    pyg = None
-
-if VTK_AVAILABLE:
-    vtk = importlib.import_module("vtk")
-else:
-    vtk = None
-
-
-def _check_dependencies():
-    """Check that required optional dependencies are available."""
-    missing = []
-    if not PYG_AVAILABLE:
-        missing.append("torch_geometric")
-    if not VTK_AVAILABLE:
-        missing.append("vtk")
-    if missing:
-        raise ImportError(
-            f"StokesDataset requires the following packages: {', '.join(missing)}. "
-            "Install with: pip install torch_geometric vtk"
-        )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+vtk = OptionalImport("vtk")
 
 
 class StokesDataset(Dataset):
@@ -88,7 +63,6 @@ class StokesDataset(Dataset):
         normalize_keys=["u", "v", "p"],
         name="dataset",
     ):
-        _check_dependencies()
         self.name = name
         self.split = split
         self.num_samples = num_samples
@@ -258,7 +232,7 @@ class StokesDataset(Dataset):
         outvar_keys: List[str],
         to_bidirected: bool = True,
         add_self_loop: bool = False,
-    ) -> pyg.data.Data:
+    ) -> "pyg.data.Data":
         """
         Create a PyG graph from vtkPolyData.
 

@@ -14,18 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
-
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.nn.module.gnn_layers.mesh_edge_block import MeshEdgeBlock
 from physicsnemo.nn.module.gnn_layers.mesh_node_block import MeshNodeBlock
 from physicsnemo.nn.module.gnn_layers.utils import GraphType, set_checkpoint_fn
 
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
+# Lazy import for optional transformer_engine dependency
+te = OptionalImport("transformer_engine")
 
 
 class GraphCastProcessor(nn.Module):
@@ -182,73 +181,59 @@ class GraphCastProcessor(nn.Module):
         return efeat, nfeat
 
 
-if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine")
+class GraphCastProcessorGraphTransformer(nn.Module):
+    """Processor block used in GenCast operating on a latent space
+    represented by hierarchy of icosahedral meshes.
 
-    class GraphCastProcessorGraphTransformer(nn.Module):
-        """Processor block used in GenCast operating on a latent space
-        represented by hierarchy of icosahedral meshes.
+    Parameters
+    ----------
+    attn_mask : torch.Tensor
+        Attention mask to be applied within the transformer layers.
+    processor_layers : int, optional (default=16)
+        Number of processing layers.
+    input_dim_nodes : int, optional (default=512)
+        Dimension of the input features for each node.
+    hidden_dim : int, optional (default=512)
+        Dimension of the hidden features within the transformer layers.
+    """
 
-        Parameters
-        ----------
-        attn_mask : torch.Tensor
-            Attention mask to be applied within the transformer layers.
-        processor_layers : int, optional (default=16)
-            Number of processing layers.
-        input_dim_nodes : int, optional (default=512)
-            Dimension of the input features for each node.
-        hidden_dim : int, optional (default=512)
-            Dimension of the hidden features within the transformer layers.
-        """
+    def __init__(
+        self,
+        attention_mask: torch.Tensor,
+        num_attention_heads: int = 4,
+        processor_layers: int = 16,
+        input_dim_nodes: int = 512,
+        hidden_dim: int = 512,
+    ):
+        super().__init__()
+        self.num_attention_heads = num_attention_heads
+        self.hidden_dim = hidden_dim
+        self.attention_mask = torch.tensor(attention_mask, dtype=torch.bool)
+        self.register_buffer("mask", self.attention_mask, persistent=False)
 
-        def __init__(
-            self,
-            attention_mask: torch.Tensor,
-            num_attention_heads: int = 4,
-            processor_layers: int = 16,
-            input_dim_nodes: int = 512,
-            hidden_dim: int = 512,
-        ):
-            super().__init__()
-            self.num_attention_heads = num_attention_heads
-            self.hidden_dim = hidden_dim
-            self.attention_mask = torch.tensor(attention_mask, dtype=torch.bool)
-            self.register_buffer("mask", self.attention_mask, persistent=False)
-
-            layers = [
-                te.pytorch.TransformerLayer(
-                    hidden_size=input_dim_nodes,
-                    ffn_hidden_size=hidden_dim,
-                    num_attention_heads=num_attention_heads,
-                    layer_number=i + 1,
-                    fuse_qkv_params=False,
-                )
-                for i in range(processor_layers)
-            ]
-            self.processor_layers = nn.ModuleList(layers)
-
-        def forward(
-            self,
-            nfeat: Tensor,
-        ) -> Tensor:
-            nfeat = nfeat.unsqueeze(1)
-            # TODO make sure reshaping the last dim to (h, d) is done automatically in the transformer layer
-            for module in self.processor_layers:
-                nfeat = module(
-                    nfeat,
-                    attention_mask=self.mask,
-                    self_attn_mask_type="arbitrary",
-                )
-
-            return torch.squeeze(nfeat, 1)
-
-else:
-
-    class GraphCastProcessorGraphTransformer(nn.Module):
-        """Dummy class for when transformer engine is not available."""
-
-        def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "GraphCastProcessorGraphTransformer: transformer engine is not installed, can not be used as a backend for a graph transformer.\n"
-                "Please install transformer engine with: pip install transformer-engine"
+        layers = [
+            te.pytorch.TransformerLayer(
+                hidden_size=input_dim_nodes,
+                ffn_hidden_size=hidden_dim,
+                num_attention_heads=num_attention_heads,
+                layer_number=i + 1,
+                fuse_qkv_params=False,
             )
+            for i in range(processor_layers)
+        ]
+        self.processor_layers = nn.ModuleList(layers)
+
+    def forward(
+        self,
+        nfeat: Tensor,
+    ) -> Tensor:
+        nfeat = nfeat.unsqueeze(1)
+        # TODO make sure reshaping the last dim to (h, d) is done automatically in the transformer layer
+        for module in self.processor_layers:
+            nfeat = module(
+                nfeat,
+                attention_mask=self.mask,
+                self_attn_mask_type="arbitrary",
+            )
+
+        return torch.squeeze(nfeat, 1)

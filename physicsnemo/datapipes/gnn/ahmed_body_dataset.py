@@ -15,12 +15,11 @@
 # limitations under the License.
 
 import concurrent.futures as cf
-import importlib
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import numpy as np
 import torch
@@ -28,48 +27,19 @@ import yaml
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.meta import DatapipeMetaData
 
 from .utils import load_json, read_vtp_file, save_json
 
-# Check for optional dependencies
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
-PYVISTA_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
-VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
+if TYPE_CHECKING:
+    from torch_geometric.data import Data as PyGData
 
-if PYG_AVAILABLE:
-    pyg = importlib.import_module("torch_geometric")
-    PyGData = importlib.import_module("torch_geometric.data").Data
-else:
-    pyg = None
-    PyGData = None
-
-if PYVISTA_AVAILABLE:
-    pv = importlib.import_module("pyvista")
-else:
-    pv = None
-
-if VTK_AVAILABLE:
-    vtk = importlib.import_module("vtk")
-else:
-    vtk = None
-
-
-def _check_dependencies():
-    """Check that required optional dependencies are available."""
-    missing = []
-    if not PYG_AVAILABLE:
-        missing.append("torch_geometric")
-    if not PYVISTA_AVAILABLE:
-        missing.append("pyvista")
-    if not VTK_AVAILABLE:
-        missing.append("vtk")
-    if missing:
-        raise ImportError(
-            f"AhmedBodyDataset requires the following packages: {', '.join(missing)}. "
-            "Install with: pip install torch_geometric pyvista vtk"
-        )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+pyg_data = OptionalImport("torch_geometric.data")
+pv = OptionalImport("pyvista")
+vtk = OptionalImport("vtk")
 
 
 logger = logging.getLogger(__name__)
@@ -134,7 +104,6 @@ class AhmedBodyDataset(Dataset):
         *args,
         **kwargs,
     ):
-        _check_dependencies()
         self._init_impl(data_dir, split, *args, **kwargs)
 
     def _init_impl(
@@ -602,7 +571,7 @@ class AhmedBodyDataset(Dataset):
             edges = pyg.utils.to_undirected(edges)
         if add_self_loop:
             edges, _ = pyg.utils.add_self_loops(edges)
-        graph = PyGData(edge_index=edges)
+        graph = pyg_data.Data(edge_index=edges)
 
         # Assign node features using the vertex data
         graph.pos = torch.tensor(vertices, dtype=torch.float32)

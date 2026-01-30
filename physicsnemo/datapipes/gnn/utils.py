@@ -14,31 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import json
 import os
 from typing import Any, Dict
 
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
-
-if VTK_AVAILABLE:
-    vtk = importlib.import_module("vtk")
-else:
-    vtk = None
-
-
-def _check_vtk_available():
-    """Raise an error if VTK is not available."""
-    if not VTK_AVAILABLE:
-        raise ImportError(
-            "physicsnemo.datapipes.gnn.utils: vtk is required for VTP file reading. "
-            "Install with `pip install vtk`. "
-            "See https://vtk.org/download/ for more information."
-        )
+# Lazy import for optional dependency
+vtk = OptionalImport("vtk")
 
 
 def read_vtp_file(file_path: str) -> Any:
@@ -55,7 +40,6 @@ def read_vtp_file(file_path: str) -> Any:
     vtkPolyData
         The polydata read from the VTP file.
     """
-    _check_vtk_available()
 
     # Check if file exists
     if not os.path.exists(file_path):

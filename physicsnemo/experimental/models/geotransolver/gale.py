@@ -29,16 +29,14 @@ from einops import rearrange
 from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver.Physics_Attention import (
     PhysicsAttentionIrregularMesh,
 )
 from physicsnemo.models.transolver.transolver import MLP
 
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
+# Optional imports
+te = OptionalImport("transformer_engine.pytorch")
 
 
 class GALE(PhysicsAttentionIrregularMesh):
@@ -371,12 +369,6 @@ class GALE_block(nn.Module):
         context_dim: int = 0,
     ) -> None:
         super().__init__()
-
-        if use_te and not TE_AVAILABLE:
-            raise ImportError(
-                "Transformer Engine is not installed. "
-                "Please install it with: pip install transformer-engine>=0.1.0"
-            )
 
         self.last_layer = last_layer
 

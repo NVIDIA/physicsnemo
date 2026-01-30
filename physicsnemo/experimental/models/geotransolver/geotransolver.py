@@ -33,16 +33,14 @@ from jaxtyping import Float
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.models.transolver.transolver import MLP
 
 from .context_projector import GlobalContextBuilder
 from .gale import GALE_block
 
-# Check optional dependency availability
-TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
-if TE_AVAILABLE:
-    import transformer_engine.pytorch as te
+# Optional imports
+te = OptionalImport("transformer_engine.pytorch")
 
 
 @dataclass

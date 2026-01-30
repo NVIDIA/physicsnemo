@@ -14,48 +14,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 from typing import List
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-VTK_AVAILABLE = check_version_spec("vtk", hard_fail=False)
+vtk = OptionalImport("vtk")
 
-if VTK_AVAILABLE:
-    vtk = importlib.import_module("vtk")
+
+def combine_vtp_files(input_files: List[str], output_file: str) -> None:
+    """
+    Combine multiple VTP files into a single VTP file.
+
+    Args:
+    - input_files (list[str]): List of paths to the input VTP files to be combined.
+    - output_file (str): Path to save the combined VTP file.
+    """
     vtkAppendPolyData = vtk.vtkAppendPolyData
     vtkPolyData = vtk.vtkPolyData
     vtkXMLPolyDataReader = vtk.vtkXMLPolyDataReader
     vtkXMLPolyDataWriter = vtk.vtkXMLPolyDataWriter
 
-    def combine_vtp_files(input_files: List[str], output_file: str) -> None:
-        """
-        Combine multiple VTP files into a single VTP file.
+    reader = vtkXMLPolyDataReader()
+    append = vtkAppendPolyData()
 
-        Args:
-        - input_files (list[str]): List of paths to the input VTP files to be combined.
-        - output_file (str): Path to save the combined VTP file.
-        """
-        reader = vtkXMLPolyDataReader()
-        append = vtkAppendPolyData()
+    for file in input_files:
+        reader.SetFileName(file)
+        reader.Update()
+        polydata = vtkPolyData()
+        polydata.ShallowCopy(reader.GetOutput())
+        append.AddInputData(polydata)
 
-        for file in input_files:
-            reader.SetFileName(file)
-            reader.Update()
-            polydata = vtkPolyData()
-            polydata.ShallowCopy(reader.GetOutput())
-            append.AddInputData(polydata)
+    append.Update()
 
-        append.Update()
-
-        writer = vtkXMLPolyDataWriter()
-        writer.SetFileName(output_file)
-        writer.SetInputData(append.GetOutput())
-        writer.Write()
-
-else:
-
-    def combine_vtp_files(*args, **kwargs):
-        raise RuntimeError(
-            "combine_vtp_files: VTK is not available, please install vtk with `pip install vtk`"
-        )
+    writer = vtkXMLPolyDataWriter()
+    writer.SetFileName(output_file)
+    writer.SetInputData(append.GetOutput())
+    writer.Write()

@@ -15,12 +15,11 @@
 # limitations under the License.
 
 # ruff: noqa: S101
-import importlib
 import json
 import logging
 import os
 from collections.abc import Sequence
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import torch
@@ -28,37 +27,14 @@ from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.data import Dataset
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-# Check for optional dependencies
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
-TFRECORD_AVAILABLE = check_version_spec("tfrecord", hard_fail=False)
+if TYPE_CHECKING:
+    from torch_geometric.data import Data as PyGData
 
-if PYG_AVAILABLE:
-    _pyg_data = importlib.import_module("torch_geometric.data")
-    PyGData = _pyg_data.Data
-else:
-    PyGData = None
-
-if TFRECORD_AVAILABLE:
-    _tfrecord_torch = importlib.import_module("tfrecord.torch.dataset")
-    TFRecordDataset = _tfrecord_torch.TFRecordDataset
-else:
-    TFRecordDataset = None
-
-
-def _check_dependencies():
-    """Check that required optional dependencies are available."""
-    missing = []
-    if not PYG_AVAILABLE:
-        missing.append("torch_geometric")
-    if not TFRECORD_AVAILABLE:
-        missing.append("tfrecord")
-    if missing:
-        raise ImportError(
-            f"LagrangianDataset requires the following packages: {', '.join(missing)}. "
-            "Install with: pip install torch_geometric tfrecord"
-        )
+# Lazy imports for optional dependencies
+pyg_data = OptionalImport("torch_geometric.data")
+tfrecord_torch = OptionalImport("tfrecord.torch.dataset")
 
 
 logger = logging.getLogger("lmgn")
@@ -85,7 +61,7 @@ def compute_edge_index(pos, radius):
     return edge_index
 
 
-def compute_edge_attr(graph: PyGData, radius: float = 0.015) -> PyGData:
+def compute_edge_attr(graph: "PyGData", radius: float = 0.015) -> "PyGData":
     """Computes edge attributes (displacement and distance).
 
     Parameters
@@ -108,7 +84,7 @@ def compute_edge_attr(graph: PyGData, radius: float = 0.015) -> PyGData:
     return graph
 
 
-def graph_update(graph: PyGData, radius) -> PyGData:
+def graph_update(graph: "PyGData", radius) -> "PyGData":
     """Updates graph structure by reconstructing edges based on positions.
 
     Parameters
@@ -175,7 +151,6 @@ class LagrangianDataset(Dataset):
         bounds: Optional[Sequence[tuple[float, float]]] = None,
         num_node_types: int = 6,
     ):
-        _check_dependencies()
         self.name = name
         self.data_dir = data_dir
         self.split = split
@@ -281,7 +256,7 @@ class LagrangianDataset(Dataset):
 
         node_targets = torch.cat((target_pos, target_vel, target_acc), dim=-1)
 
-        graph = PyGData(num_nodes=node_features.shape[0])
+        graph = pyg_data.Data(num_nodes=node_features.shape[0])
         graph.x = node_features
         graph.y = node_targets
         graph.pos = pos_t
@@ -411,7 +386,7 @@ class LagrangianDataset(Dataset):
 
         return torch.cat((position, vel_history, boundary_features, node_type), dim=-1)
 
-    def unpack_inputs(self, graph: PyGData):
+    def unpack_inputs(self, graph: "PyGData"):
         """Unpacks the graph inputs into position, velocity and node type.
 
         Returns:
@@ -428,7 +403,7 @@ class LagrangianDataset(Dataset):
         node_type = ndata[..., -self.num_node_types :]
         return pos, vel, node_type
 
-    def unpack_targets(self, graph: PyGData):
+    def unpack_targets(self, graph: "PyGData"):
         """Unpacks the graph targets into position, velocity and acceleration.
 
         Returns:
@@ -578,7 +553,7 @@ class LagrangianDataset(Dataset):
             sequence_description["step_context"] = "byte"
 
         # Create dataset with transform to decode records.
-        dataset = TFRecordDataset(
+        dataset = tfrecord_torch.TFRecordDataset(
             tfrecord_path,
             index_path,
             description,

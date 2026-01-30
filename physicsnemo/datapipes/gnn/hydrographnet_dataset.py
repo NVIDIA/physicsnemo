@@ -32,7 +32,6 @@ a dictionary of future hydrograph data for evaluation.
 """
 
 import hashlib
-import importlib
 import json
 import logging
 import math
@@ -50,36 +49,11 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-# Check for optional dependencies
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
-SCIPY_AVAILABLE = check_version_spec("scipy", hard_fail=False)
-
-if PYG_AVAILABLE:
-    pyg = importlib.import_module("torch_geometric")
-else:
-    pyg = None
-
-if SCIPY_AVAILABLE:
-    _scipy_spatial = importlib.import_module("scipy.spatial")
-    KDTree = _scipy_spatial.KDTree
-else:
-    KDTree = None
-
-
-def _check_dependencies():
-    """Check that required optional dependencies are available."""
-    missing = []
-    if not PYG_AVAILABLE:
-        missing.append("torch_geometric")
-    if not SCIPY_AVAILABLE:
-        missing.append("scipy")
-    if missing:
-        raise ImportError(
-            f"HydroGraphDataset requires the following packages: {', '.join(missing)}. "
-            "Install with: pip install torch_geometric scipy"
-        )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+scipy_spatial = OptionalImport("scipy.spatial")
 
 
 # Setup logging
@@ -339,7 +313,6 @@ class HydroGraphDataset(Dataset):
         rollout_length: Optional[int] = None,
         return_physics: bool = False,
     ):
-        _check_dependencies()
         if split not in {"train", "test"}:
             raise ValueError(f"Invalid split '{split}'. Expected 'train' or 'test'.")
 
@@ -411,7 +384,7 @@ class HydroGraphDataset(Dataset):
 
         # Build the graph connectivity using a k-d tree.
         num_nodes = xy_coords.shape[0]
-        kdtree = KDTree(xy_coords)
+        kdtree = scipy_spatial.KDTree(xy_coords)
         _, neighbors = kdtree.query(xy_coords, k=self.k + 1)
         edge_index = np.vstack(
             [(i, nbr) for i, nbrs in enumerate(neighbors) for nbr in nbrs if nbr != i]

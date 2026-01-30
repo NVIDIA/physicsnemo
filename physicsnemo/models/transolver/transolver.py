@@ -30,7 +30,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import importlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,7 +39,7 @@ import torch.nn as nn
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .Embedding import timestep_embedding
 
@@ -51,11 +50,7 @@ from .Physics_Attention import (
     PhysicsAttentionStructuredMesh3D,
 )
 
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
-if TE_AVAILABLE:
-    te = importlib.import_module("transformer_engine.pytorch")
-else:
-    te = None
+te = OptionalImport("transformer_engine.pytorch")
 
 
 ACTIVATION = {
@@ -128,11 +123,6 @@ class Transolver_block(nn.Module):
         plus: bool = False,
     ):
         super().__init__()
-
-        if use_te and not TE_AVAILABLE:
-            raise ImportError(
-                "Transformer Engine is not installed. Please install it with `pip install transformer-engine`."
-            )
 
         self.last_layer = last_layer
         if use_te:

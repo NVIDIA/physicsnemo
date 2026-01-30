@@ -23,6 +23,8 @@ import pytest
 import torch
 from tensordict import TensorDict
 
+from test.conftest import requires_module
+
 # ============================================================================
 # TensorStoreZarrReader Tests
 # ============================================================================
@@ -30,16 +32,6 @@ from tensordict import TensorDict
 
 class TestTensorStoreZarrReader:
     """Tests for TensorStoreZarrReader."""
-
-    @pytest.fixture
-    def tensorstore_available(self):
-        """Check if tensorstore is available."""
-        try:
-            import tensorstore  # noqa: F401
-
-            return True
-        except ImportError:
-            pytest.skip("TensorStore not installed")
 
     @pytest.fixture
     def zarr_v2_data_dir(self, tmp_path):
@@ -96,21 +88,8 @@ class TestTensorStoreZarrReader:
 
         return tmp_path
 
-    def test_import_error_without_tensorstore(self, tmp_path):
-        """Test that ImportError is raised when tensorstore not installed."""
-        # This test checks the error handling
-        from physicsnemo.datapipes.readers.tensorstore_zarr import (
-            TENSORSTORE_AVAILABLE,
-            TensorStoreZarrReader,
-        )
-
-        if TENSORSTORE_AVAILABLE:
-            pytest.skip("TensorStore is installed, cannot test ImportError")
-
-        with pytest.raises(ImportError, match="TensorStore is required"):
-            TensorStoreZarrReader(tmp_path)
-
-    def test_basic_loading(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_basic_loading(self, zarr_v2_data_dir):
         """Test basic data loading."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -128,7 +107,8 @@ class TestTensorStoreZarrReader:
         assert data["positions"].shape == (100, 3)
         assert data["features"].shape == (100, 8)
 
-    def test_field_selection(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_field_selection(self, zarr_v2_data_dir):
         """Test loading specific fields."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -147,7 +127,8 @@ class TestTensorStoreZarrReader:
         assert "positions" in data
         assert "features" not in data
 
-    def test_default_values(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_default_values(self, zarr_v2_data_dir):
         """Test default values for missing fields."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -166,9 +147,8 @@ class TestTensorStoreZarrReader:
         assert "missing_field" in data
         torch.testing.assert_close(data["missing_field"], default_tensor)
 
-    def test_missing_required_field_raises(
-        self, tensorstore_available, zarr_v2_data_dir
-    ):
+    @requires_module("tensorstore")
+    def test_missing_required_field_raises(self, zarr_v2_data_dir):
         """Test that missing required field raises KeyError."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -183,7 +163,8 @@ class TestTensorStoreZarrReader:
         with pytest.raises(KeyError, match="nonexistent"):
             reader[0]
 
-    def test_path_not_found_raises(self, tensorstore_available, tmp_path):
+    @requires_module("tensorstore")
+    def test_path_not_found_raises(self, tmp_path):
         """Test that nonexistent path raises FileNotFoundError."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -192,7 +173,8 @@ class TestTensorStoreZarrReader:
         with pytest.raises(FileNotFoundError):
             TensorStoreZarrReader(tmp_path / "nonexistent")
 
-    def test_path_not_directory_raises(self, tensorstore_available, tmp_path):
+    @requires_module("tensorstore")
+    def test_path_not_directory_raises(self, tmp_path):
         """Test that file path raises ValueError."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -204,7 +186,8 @@ class TestTensorStoreZarrReader:
         with pytest.raises(ValueError, match="directory"):
             TensorStoreZarrReader(file_path)
 
-    def test_no_zarr_groups_raises(self, tensorstore_available, tmp_path):
+    @requires_module("tensorstore")
+    def test_no_zarr_groups_raises(self, tmp_path):
         """Test that empty directory raises ValueError."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -213,7 +196,8 @@ class TestTensorStoreZarrReader:
         with pytest.raises(ValueError, match="No Zarr groups"):
             TensorStoreZarrReader(tmp_path, group_pattern="*.zarr")
 
-    def test_coordinated_subsampling(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_coordinated_subsampling(self, zarr_v2_data_dir):
         """Test coordinated subsampling."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -234,9 +218,8 @@ class TestTensorStoreZarrReader:
         assert data["positions"].shape[0] == 50
         assert data["features"].shape[0] == 50
 
-    def test_coordinated_subsampling_too_few_points_raises(
-        self, tensorstore_available, zarr_v2_data_dir
-    ):
+    @requires_module("tensorstore")
+    def test_coordinated_subsampling_too_few_points_raises(self, zarr_v2_data_dir):
         """Test that requesting more points than available raises."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -254,7 +237,8 @@ class TestTensorStoreZarrReader:
         with pytest.raises(ValueError, match="less than"):
             reader[0]
 
-    def test_sample_metadata(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_sample_metadata(self, zarr_v2_data_dir):
         """Test metadata includes source info."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -269,7 +253,8 @@ class TestTensorStoreZarrReader:
         assert "index" in metadata
         assert metadata["index"] == 0
 
-    def test_negative_indexing(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_negative_indexing(self, zarr_v2_data_dir):
         """Test negative indexing."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -282,7 +267,8 @@ class TestTensorStoreZarrReader:
 
         torch.testing.assert_close(last_data["positions"], also_last["positions"])
 
-    def test_repr(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_repr(self, zarr_v2_data_dir):
         """Test string representation."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -295,7 +281,8 @@ class TestTensorStoreZarrReader:
         assert "TensorStoreZarrReader" in repr_str
         assert "len=5" in repr_str
 
-    def test_repr_with_subsampling(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_repr_with_subsampling(self, zarr_v2_data_dir):
         """Test repr with subsampling info."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -311,9 +298,8 @@ class TestTensorStoreZarrReader:
 
         assert "subsampling=50" in repr_str
 
-    def test_supports_coordinated_subsampling_property(
-        self, tensorstore_available, zarr_v2_data_dir
-    ):
+    @requires_module("tensorstore")
+    def test_supports_coordinated_subsampling_property(self, zarr_v2_data_dir):
         """Test _supports_coordinated_subsampling property."""
         from physicsnemo.datapipes.readers.tensorstore_zarr import (
             TensorStoreZarrReader,
@@ -323,7 +309,8 @@ class TestTensorStoreZarrReader:
 
         assert reader._supports_coordinated_subsampling is True
 
-    def test_pin_memory(self, tensorstore_available, zarr_v2_data_dir):
+    @requires_module("tensorstore")
+    def test_pin_memory(self, zarr_v2_data_dir):
         """Test pin_memory option."""
         pytest.importorskip("torch")
 
@@ -354,17 +341,7 @@ class TestVTKReader:
     """Tests for VTKReader."""
 
     @pytest.fixture
-    def pyvista_available(self):
-        """Check if pyvista is available."""
-        try:
-            import pyvista  # noqa: F401
-
-            return True
-        except ImportError:
-            pytest.skip("PyVista not installed")
-
-    @pytest.fixture
-    def stl_data_dir(self, tmp_path, pyvista_available):
+    def stl_data_dir(self, tmp_path):
         """Create STL test data using pyvista."""
         import pyvista as pv
 
@@ -379,7 +356,7 @@ class TestVTKReader:
         return tmp_path
 
     @pytest.fixture
-    def stl_with_exclude_pattern(self, tmp_path, pyvista_available):
+    def stl_with_exclude_pattern(self, tmp_path):
         """Create STL data with files to exclude."""
         import pyvista as pv
 
@@ -408,7 +385,8 @@ class TestVTKReader:
         with pytest.raises(ImportError, match="PyVista is required"):
             VTKReader(tmp_path)
 
-    def test_basic_loading(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_basic_loading(self, stl_data_dir):
         """Test basic STL loading."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -424,7 +402,8 @@ class TestVTKReader:
         assert "stl_centers" in data
         assert "surface_normals" in data
 
-    def test_field_selection(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_field_selection(self, stl_data_dir):
         """Test loading specific fields."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -437,7 +416,8 @@ class TestVTKReader:
         assert "stl_centers" not in data
         assert "surface_normals" not in data
 
-    def test_exclude_patterns(self, pyvista_available, stl_with_exclude_pattern):
+    @requires_module("pyvista")
+    def test_exclude_patterns(self, stl_with_exclude_pattern):
         """Test file exclusion patterns."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -447,14 +427,16 @@ class TestVTKReader:
         data, metadata = reader[0]
         assert "stl_coordinates" in data
 
-    def test_path_not_found_raises(self, pyvista_available, tmp_path):
+    @requires_module("pyvista")
+    def test_path_not_found_raises(self, tmp_path):
         """Test that nonexistent path raises FileNotFoundError."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
         with pytest.raises(FileNotFoundError):
             VTKReader(tmp_path / "nonexistent")
 
-    def test_path_not_directory_raises(self, pyvista_available, tmp_path):
+    @requires_module("pyvista")
+    def test_path_not_directory_raises(self, tmp_path):
         """Test that file path raises ValueError."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -464,7 +446,8 @@ class TestVTKReader:
         with pytest.raises(ValueError, match="directory"):
             VTKReader(file_path)
 
-    def test_no_vtk_directories_raises(self, pyvista_available, tmp_path):
+    @requires_module("pyvista")
+    def test_no_vtk_directories_raises(self, tmp_path):
         """Test that empty directory raises ValueError."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -474,7 +457,8 @@ class TestVTKReader:
         with pytest.raises(ValueError, match="No directories containing VTK"):
             VTKReader(tmp_path)
 
-    def test_sample_metadata(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_sample_metadata(self, stl_data_dir):
         """Test metadata includes source info."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -487,7 +471,8 @@ class TestVTKReader:
         assert "index" in metadata
         assert metadata["index"] == 0
 
-    def test_stl_data_shapes(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_stl_data_shapes(self, stl_data_dir):
         """Test that STL data has correct shapes."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -507,7 +492,8 @@ class TestVTKReader:
         assert data["stl_centers"].ndim == 2
         assert data["stl_centers"].shape[1] == 3
 
-    def test_stl_areas_computed(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_stl_areas_computed(self, stl_data_dir):
         """Test that STL areas are computed."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -521,9 +507,8 @@ class TestVTKReader:
         # All areas should be positive
         assert (data["stl_areas"] > 0).all()
 
-    def test_supports_coordinated_subsampling_false(
-        self, pyvista_available, stl_data_dir
-    ):
+    @requires_module("pyvista")
+    def test_supports_coordinated_subsampling_false(self, stl_data_dir):
         """Test _supports_coordinated_subsampling returns False."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -531,7 +516,8 @@ class TestVTKReader:
 
         assert reader._supports_coordinated_subsampling is False
 
-    def test_negative_indexing(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_negative_indexing(self, stl_data_dir):
         """Test negative indexing."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -544,7 +530,8 @@ class TestVTKReader:
             last_data["stl_coordinates"], also_last["stl_coordinates"]
         )
 
-    def test_repr(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_repr(self, stl_data_dir):
         """Test string representation."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -555,7 +542,8 @@ class TestVTKReader:
         assert "VTKReader" in repr_str
         assert "len=3" in repr_str
 
-    def test_iteration(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_iteration(self, stl_data_dir):
         """Test iteration over reader."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -567,7 +555,8 @@ class TestVTKReader:
         for i, (data, metadata) in enumerate(samples):
             assert metadata["index"] == i
 
-    def test_pin_memory(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_pin_memory(self, stl_data_dir):
         """Test pin_memory option."""
         if not torch.cuda.is_available():
             pytest.skip("CUDA not available for pin_memory test")
@@ -580,7 +569,8 @@ class TestVTKReader:
 
         assert data["stl_coordinates"].is_pinned()
 
-    def test_field_names_property(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_field_names_property(self, stl_data_dir):
         """Test field_names property."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 
@@ -591,7 +581,8 @@ class TestVTKReader:
         assert "stl_coordinates" in field_names
         assert "stl_faces" in field_names
 
-    def test_vtp_not_implemented(self, pyvista_available, stl_data_dir):
+    @requires_module("pyvista")
+    def test_vtp_not_implemented(self, stl_data_dir):
         """Test that VTP reading raises NotImplementedError."""
         from physicsnemo.datapipes.readers.vtk import VTKReader
 

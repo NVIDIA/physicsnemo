@@ -35,26 +35,13 @@ if timm_v1_0_16:
 else:
     from timm.models.vision_transformer import Attention
 
-try:
-    from transformer_engine.pytorch import MultiheadAttention
-    TE_AVAILABLE = True
-except ImportError:
-    TE_AVAILABLE = False
-
-try:
-    from apex.normalization import FusedLayerNorm
-
-    APEX_AVAILABLE = True
-except ImportError:
-    APEX_AVAILABLE = False
-
-try:
-    from natten.functional import na2d
-    NATTEN_AVAILABLE = True
-except ImportError:
-    NATTEN_AVAILABLE = False
-
 from physicsnemo.core import Module
+from physicsnemo.core.version_check import OptionalImport
+
+# Optional imports
+te = OptionalImport("transformer_engine.pytorch")
+apex = OptionalImport("apex.normalization")
+natten = OptionalImport("natten.functional")
 from physicsnemo.nn import Mlp
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
@@ -87,11 +74,7 @@ def get_layer_norm(
         and expects a tensor shape (B, L, D) as input, returning a normalized tensor of the same shape.
     """
     if layernorm_backend == "apex":
-        if not APEX_AVAILABLE:
-            raise ImportError(
-                "Apex is not available. Please install Apex to use FusedLayerNorm or choose 'torch'."
-            )
-        return FusedLayerNorm(hidden_size, elementwise_affine=elementwise_affine, eps=eps)
+        return apex.FusedLayerNorm(hidden_size, elementwise_affine=elementwise_affine, eps=eps)
     if layernorm_backend == "torch":
         return nn.LayerNorm(hidden_size, elementwise_affine=elementwise_affine, eps=eps)
     raise ValueError("layernorm_backend must be one of 'apex' or 'torch'.")
@@ -241,17 +224,12 @@ class TESelfAttention(AttentionModuleBase):
     """
     def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
         super().__init__()
-        if not TE_AVAILABLE:
-            raise ImportError(
-                "Transformer Engine is not installed. Please install it with `pip install transformer-engine`."
-            )
-
         if proj_drop_rate > 0:
             warnings.warn(
                 "Transformer Engine MultiheadAttention does not support projection dropout (proj_drop_rate > 0). "
                 "The specified proj_drop_rate will be ignored."
             )
-        self.attn_op = MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
+        self.attn_op = te.MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, mask_type: Optional[str] = "no_mask") -> torch.Tensor:
         if attn_mask is not None:
@@ -311,11 +289,6 @@ class Natten2DSelfAttention(AttentionModuleBase):
         norm_layer: Literal["apex", "torch"] = "torch",
     ):
         super().__init__()
-        if not NATTEN_AVAILABLE:
-            raise ImportError(
-                "Natten is not installed. Please install it into your environment."
-            )
-
         if hidden_size % num_heads != 0:
             raise ValueError("hidden_size should be divisible by num_heads")
 
@@ -362,9 +335,9 @@ class Natten2DSelfAttention(AttentionModuleBase):
         )
         if isinstance(q, ShardTensor):
             # Use automatic halo padding for sharded tensors
-            x = partial_na2d(q, k, v, kernel_size=self.attn_kernel, base_func=na2d, dilation=1)
+            x = partial_na2d(q, k, v, kernel_size=self.attn_kernel, base_func=natten.na2d, dilation=1)
         else:
-            x = na2d(q, k, v, kernel_size=self.attn_kernel)
+            x = natten.na2d(q, k, v, kernel_size=self.attn_kernel)
         x = self.attn_drop(x)
         x = rearrange(x, "b h w head c -> b (h w) (head c)")
 
@@ -635,11 +608,6 @@ class ProjLayer(nn.Module):
         layernorm_backend: Literal["apex", "torch"] = "torch",
     ):
         super().__init__()
-        if layernorm_backend == "apex" and not APEX_AVAILABLE:
-            raise ImportError(
-                "Apex is not available. Please install Apex to use ProjLayer with FusedLayerNorm.\
-                Or use 'torch' as layernorm_backend."
-            )
         self.proj_layer_norm = get_layer_norm(
             hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
         )

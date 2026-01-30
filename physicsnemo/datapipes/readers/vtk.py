@@ -22,22 +22,18 @@ Supports reading mesh data from directories containing VTK files using PyVista.
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.readers.base import Reader
 from physicsnemo.datapipes.registry import register
 
-# Check if pyvista is available
-PYVISTA_AVAILABLE = check_version_spec("pyvista", hard_fail=False)
-
-if PYVISTA_AVAILABLE:
-    pv = importlib.import_module("pyvista")
+# Lazy import for optional dependency
+pv = OptionalImport("pyvista")
 
 
 @register()
@@ -125,14 +121,6 @@ class VTKReader(Reader):
         ValueError
             If no valid VTK directories found.
         """
-        if not PYVISTA_AVAILABLE:
-            raise ImportError(
-                "PyVista is required for VTKReader but is not installed.\n"
-                "Install it with: pip install pyvista\n"
-                "See https://docs.pyvista.org/getting-started/installation.html "
-                "for more information."
-            )
-
         super().__init__(
             pin_memory=pin_memory,
             include_index_in_metadata=include_index_in_metadata,

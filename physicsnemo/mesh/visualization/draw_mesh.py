@@ -20,14 +20,19 @@ from typing import TYPE_CHECKING, Literal
 
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
+# Lazy imports for visualization backends
+_matplotlib = OptionalImport("matplotlib")
+_pyvista = OptionalImport("pyvista")
+
 # Check availability at module load (add new backends here)
 BACKENDS_INSTALLED: dict[str, bool] = {
-    name: check_version_spec(name) for name in ["matplotlib", "pyvista"]
+    "matplotlib": _matplotlib.available,
+    "pyvista": _pyvista.available,
 }
 
 

@@ -14,16 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import os
 import warnings
 
 import torch
 from torch import nn
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
+te = OptionalImport("transformer_engine.pytorch")
 
 
 def remove_extra_state_hook_for_torch(
@@ -96,9 +95,7 @@ def get_layer_norm_class() -> nn.Module:
 
     # This is to allow users to force the use of TE or pytorch layer norm
     force_te_setting = os.environ.get("PHYSICSNEMO_FORCE_TE")
-    te_available = (
-        TE_AVAILABLE  # make a local copy to avoid changing the global variable
-    )
+    te_available = te.available
 
     # Can't use transformer engine without cuda:
     if not torch.cuda.is_available():
@@ -122,7 +119,6 @@ def get_layer_norm_class() -> nn.Module:
             )
 
     if te_available:
-        te = importlib.import_module("transformer_engine.pytorch")
         base = te.LayerNorm
     else:
         base = nn.LayerNorm

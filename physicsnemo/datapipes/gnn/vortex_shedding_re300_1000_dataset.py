@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import os
 
 import numpy as np
@@ -22,28 +21,13 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
 from .utils import load_json, save_json
 
-# Check for optional dependencies
-PYG_AVAILABLE = check_version_spec("torch_geometric", hard_fail=False)
-
-if PYG_AVAILABLE:
-    pyg = importlib.import_module("torch_geometric")
-    PyGDataLoader = importlib.import_module("torch_geometric.loader").DataLoader
-else:
-    pyg = None
-    PyGDataLoader = None
-
-
-def _check_dependencies():
-    """Check that required optional dependencies are available."""
-    if not PYG_AVAILABLE:
-        raise ImportError(
-            "VortexSheddingRe300To1000Dataset requires torch_geometric. "
-            "Install with: pip install torch_geometric"
-        )
+# Lazy imports for optional dependencies
+pyg = OptionalImport("torch_geometric")
+pyg_loader = OptionalImport("torch_geometric.loader")
 
 
 class LatentDataset(Dataset):
@@ -84,7 +68,6 @@ class LatentDataset(Dataset):
         position_pivotal=None,
         dist=None,
     ):
-        _check_dependencies()
         self.name = name
         self.split = split
         self.sequence_len = sequence_len
@@ -134,7 +117,7 @@ class LatentDataset(Dataset):
                 name="vortex_shedding_train", split="test"
             )
 
-        dataloader = PyGDataLoader(
+        dataloader = pyg_loader.DataLoader(
             dataset, batch_size=1, shuffle=False, drop_last=False, pin_memory=True
         )
         record_z = []
@@ -172,7 +155,6 @@ class VortexSheddingRe300To1000Dataset(Dataset):
     """
 
     def __init__(self, name="dataset", data_dir="dataset", split="train"):
-        _check_dependencies()
         self.name = name
         self.data_dir = data_dir
 

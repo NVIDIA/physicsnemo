@@ -26,15 +26,12 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import Dataset
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.datapipe import Datapipe
-from physicsnemo.datapipes.healpix.utils import (
-    XARRAY_AVAILABLE,
-    _raise_missing_xarray,
-    xr,
-)
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.insolation import insolation
 
+xr = OptionalImport("xarray")
 logger = logging.getLogger(__name__)
 
 
@@ -110,9 +107,6 @@ class TimeSeriesDataset(Dataset, Datapipe):
             self,
             meta=meta,
         )
-
-        if not XARRAY_AVAILABLE:
-            _raise_missing_xarray()
 
         self.ds = dataset
         self.scaling = OmegaConf.to_object(scaling) if scaling else None

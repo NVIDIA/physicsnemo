@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ast
 import importlib.util
 import os
 import sys
@@ -196,6 +197,101 @@ def flatten_deps(tree: Dict) -> Set[str]:
 
     recurse(tree)
     return packages
+
+
+def is_type_checking_only_import(module_path: str, imported_module: str) -> bool:
+    """Check if an import only occurs inside TYPE_CHECKING blocks.
+
+    Returns True if the import is ONLY inside TYPE_CHECKING blocks,
+    meaning it's not a runtime dependency.
+
+    Parameters
+    ----------
+    module_path : str
+        Dotted module path (e.g., "physicsnemo.models.afno")
+    imported_module : str
+        The top-level module being imported (e.g., "numpy")
+
+    Returns
+    -------
+    bool
+        True if the import only appears in TYPE_CHECKING blocks
+    """
+    # Convert module path to file path
+    try:
+        spec = importlib.util.find_spec(module_path)
+        if spec is None or spec.origin is None:
+            return False
+        file_path = spec.origin
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            source = f.read()
+        tree = ast.parse(source, filename=file_path)
+    except (SyntaxError, OSError):
+        return False
+
+    runtime_imports: Set[str] = set()
+    type_checking_imports: Set[str] = set()
+
+    def get_imported_modules(node: ast.Import | ast.ImportFrom) -> Set[str]:
+        """Extract top-level module names from an import node."""
+        modules = set()
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                # Get top-level module (e.g., "numpy" from "numpy.typing")
+                modules.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module.split(".")[0])
+        return modules
+
+    def is_type_checking_block(node: ast.If) -> bool:
+        """Check if an If node is a TYPE_CHECKING block."""
+        test = node.test
+        # Handle: if TYPE_CHECKING:
+        if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
+            return True
+        # Handle: if typing.TYPE_CHECKING:
+        if isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING":
+            return True
+        return False
+
+    def visit_body(body: list, in_type_checking: bool = False):
+        """Visit a list of statements, tracking TYPE_CHECKING context."""
+        for node in body:
+            if isinstance(node, ast.If):
+                if is_type_checking_block(node):
+                    # Process the if-body as type-checking imports
+                    visit_body(node.body, in_type_checking=True)
+                    # The else-body is runtime (if TYPE_CHECKING is False)
+                    visit_body(node.orelse, in_type_checking=False)
+                else:
+                    visit_body(node.body, in_type_checking)
+                    visit_body(node.orelse, in_type_checking)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                modules = get_imported_modules(node)
+                if in_type_checking:
+                    type_checking_imports.update(modules)
+                else:
+                    runtime_imports.update(modules)
+            elif isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                # Imports inside functions/classes are runtime
+                visit_body(node.body, in_type_checking=False)
+            elif hasattr(node, "body"):
+                visit_body(node.body, in_type_checking)
+
+    visit_body(tree.body)
+
+    # The import is type-checking-only if it appears in type_checking_imports
+    # but NOT in runtime_imports
+    return (
+        imported_module in type_checking_imports
+        and imported_module not in runtime_imports
+    )
 
 
 def remove_standard_library(packages: Set[str]) -> Set[str]:

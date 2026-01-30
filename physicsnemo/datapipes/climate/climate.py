@@ -15,76 +15,33 @@
 # limitations under the License.
 
 
-import importlib
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Iterable, List, Mapping, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Iterable, List, Mapping, Tuple, Union
 
 import h5py
 import numpy as np
 import torch
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
 from physicsnemo.datapipes.climate.utils.zenith_angle import cos_zenith_angle
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
 from physicsnemo.utils.logging import PythonLogger
 
-# Check for optional dependencies
-DALI_AVAILABLE = check_version_spec("nvidia.dali", hard_fail=False)
-NETCDF4_AVAILABLE = check_version_spec("netCDF4", hard_fail=False)
-SCIPY_AVAILABLE = check_version_spec("scipy", hard_fail=False)
+if TYPE_CHECKING:
+    from scipy.io import netcdf_file
 
-if DALI_AVAILABLE:
-    dali = importlib.import_module("nvidia.dali")
-    dali_pth = importlib.import_module("nvidia.dali.plugin.pytorch")
-else:
-    dali = None
-    dali_pth = None
-
-if NETCDF4_AVAILABLE:
-    nc = importlib.import_module("netCDF4")
-else:
-    nc = None
-
-if SCIPY_AVAILABLE:
-    _scipy_io = importlib.import_module("scipy.io")
-    netcdf_file = _scipy_io.netcdf_file
-else:
-    netcdf_file = None
-
-
-def _check_dali_available():
-    """Raise an error if DALI is not available."""
-    if not DALI_AVAILABLE:
-        raise ImportError(
-            "ClimateDatapipe requires NVIDIA DALI package to be installed. "
-            "The package can be installed at:\n"
-            "https://docs.nvidia.com/deeplearning/dali/user-guide/docs/installation.html"
-        )
-
-
-def _check_netcdf4_available():
-    """Raise an error if netCDF4 is not available."""
-    if not NETCDF4_AVAILABLE:
-        raise ImportError(
-            "ClimateNetCDF4DaliExternalSource requires netCDF4 package. "
-            "Install with: pip install netCDF4"
-        )
-
-
-def _check_scipy_available():
-    """Raise an error if scipy is not available."""
-    if not SCIPY_AVAILABLE:
-        raise ImportError(
-            "Climate datapipe requires scipy for netcdf file reading. "
-            "Install with: pip install scipy"
-        )
+# Lazy imports for optional dependencies
+dali = OptionalImport("nvidia.dali")
+dali_pth = OptionalImport("nvidia.dali.plugin.pytorch")
+nc = OptionalImport("netCDF4")
+scipy_io = OptionalImport("scipy.io")
 
 
 Tensor = torch.Tensor
@@ -246,7 +203,6 @@ class ClimateDataSourceSpec:
             with h5py.File(self.data_paths[0], "r") as f:
                 dataset_shape = f["fields"].shape
         else:
-            _check_netcdf4_available()
             with nc.Dataset(self.data_paths[0], "r") as f:
                 var_shape = f[self.variables[0]].shape
                 dataset_shape = (var_shape[0], len(self.variables)) + var_shape[1:]
@@ -463,7 +419,6 @@ class ClimateDatapipe(Datapipe):
         process_rank: int = 0,
         world_size: int = 1,
     ):
-        _check_dali_available()
         super().__init__(meta=MetaData())
         self.sources = list(sources)
         self.batch_size = batch_size
@@ -611,7 +566,7 @@ class ClimateDatapipe(Datapipe):
                 inv = self._crop_to_window(inv)
             yield dali.types.Constant(inv)
 
-    def _create_pipeline(self) -> dali.Pipeline:
+    def _create_pipeline(self) -> "dali.Pipeline":
         """Create DALI pipeline
 
         Returns
@@ -750,7 +705,9 @@ class ClimateDaliExternalSource(ABC):
         """Write data from year index `year_idx` and sample index `idx` to output"""
         pass
 
-    def __call__(self, sample_info: dali.types.SampleInfo) -> Tuple[Tensor, np.ndarray]:
+    def __call__(
+        self, sample_info: "dali.types.SampleInfo"
+    ) -> Tuple[Tensor, np.ndarray]:
         if sample_info.iteration >= self.num_batches:
             raise StopIteration()
 
@@ -829,10 +786,10 @@ class ClimateNetCDF4DaliExternalSource(ClimateDaliExternalSource):
             # causes crashes.
             reader = self.backend_kwargs.get("reader", "netcdf4")
             if reader == "scipy":
-                _check_scipy_available()
-                self.data_files[year_idx] = netcdf_file(self.data_paths[year_idx])
+                self.data_files[year_idx] = scipy_io.netcdf_file(
+                    self.data_paths[year_idx]
+                )
             elif reader == "netcdf4":
-                _check_netcdf4_available()
                 self.data_files[year_idx] = nc.Dataset(self.data_paths[year_idx], "r")
                 self.data_files[year_idx].set_auto_maskandscale(False)
 

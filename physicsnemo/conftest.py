@@ -34,13 +34,10 @@ import importlib
 import logging
 import os
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import OptionalImport
 
-PYTEST_AVAILABLE = check_version_spec("pytest", hard_fail=False)
-if PYTEST_AVAILABLE:
-    pytest = importlib.import_module("pytest")
-else:
-    pytest = None
+# Lazy import for optional pytest dependency
+pytest = OptionalImport("pytest")
 
 
 def pytest_ignore_collect(collection_path, config):
