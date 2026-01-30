@@ -30,6 +30,8 @@ SO2Convolution
     SO(2) equivariant convolution layer using grid layout for efficient processing.
 GateActivation
     Gated activation applying SiLU to l=0 and learned gating to l>0.
+EdgeRotation
+    Compute Wigner D-matrices for edge rotations in equivariant networks.
 
 Functions
 ---------
@@ -40,8 +42,10 @@ make_grid_mask
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.experimental.nn.symmetry.so2_conv import SO2Convolution
+from physicsnemo.experimental.nn.symmetry.wigner import EdgeRotation
 
 __all__ = [
+    "EdgeRotation",
     "GateActivation",
     "SO2Convolution",
     "make_grid_mask",
