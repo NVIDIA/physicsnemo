@@ -64,7 +64,6 @@ __all__ = [
     "rotate_grid_coefficients",
     "compute_wigner_d_matrices",
 ]
-
 # Numerical stability constant
 _EPS = 1e-7
 

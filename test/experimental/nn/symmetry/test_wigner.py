@@ -839,6 +839,21 @@ class TestEdgeRotation:
             f"Expected shape (4, 5, 10, 16), got {D.shape}"
         )
 
+    def test_forward_shape_parameterized(self, dtype, device) -> None:
+        r"""Test forward shape with parameterized dtype and device."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+        model = model.to(dtype=dtype, device=device)
+
+        num_nodes, max_neighbors = 3, 4
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
+
+        D = model(edge_vecs)
+
+        assert D.shape == (3, 4, 9, 9), f"Expected shape (3, 4, 9, 9), got {D.shape}"
+        assert D.dtype == dtype, f"Expected dtype {dtype}, got {D.dtype}"
+        assert D.device.type == device.type, f"Expected device {device}, got {D.device}"
+
     # =========================================================================
     # Mathematical Correctness Tests
     # =========================================================================
@@ -1024,6 +1039,28 @@ class TestEdgeRotation:
             rtol=rtol,
             atol=atol,
             msg=f"Masked edge should have identity (dtype={dtype}, device={device})",
+        )
+
+    def test_mask_parameterized(self, dtype, device) -> None:
+        r"""Test masking with parameterized dtype and device."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+        model = model.to(dtype=dtype, device=device)
+
+        num_nodes, max_neighbors = 2, 3
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
+
+        mask = torch.ones(num_nodes, max_neighbors, dtype=torch.bool, device=device)
+        mask[0, 0] = False
+
+        D = model(edge_vecs, mask=mask)
+
+        identity = model._get_identity_reduced(1, dtype, device)
+
+        rtol, atol = get_rtol_atol(dtype)
+
+        assert torch.allclose(D[0, 0], identity[0], rtol=rtol, atol=atol), (
+            f"Masked edge should have identity (dtype={dtype}, device={device})"
         )
 
     # =========================================================================
