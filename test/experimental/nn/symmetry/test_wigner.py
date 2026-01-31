@@ -19,12 +19,720 @@ r"""Test suite for EdgeRotation module.
 Tests the EdgeRotation class for computing Wigner D-matrices from edge
 direction vectors, which is used for rotating spherical harmonic embeddings
 to edge-aligned local frames in equivariant networks.
+
+Testing scope includes a bunch of hard-coded regression tests,
+both against serialized `sympy` results (in `wigner_reference`),
+as well as properties (e.g. orthogonality) in addition to the
+usual `nn.Module` tests like shapes and whatnot.
 """
+
+import math
 
 import pytest
 import torch
 
-from physicsnemo.experimental.nn.symmetry.wigner import EdgeRotation
+from physicsnemo.experimental.nn.symmetry.wigner import (
+    EdgeRotation,
+    _compute_d_matrix,
+    _compute_J_matrix,
+    edge_vectors_to_euler_angles,
+)
+from test.experimental.nn.symmetry.wigner_reference import (
+    D_MATRICES_BETA_0,
+    D_MATRICES_BETA_PI,
+    D_MATRICES_BETA_PI_2,
+    J_MATRICES,
+    verify_d_matrix_orthogonality,
+    verify_d_matrix_symmetry,
+    verify_j_matrix_from_d,
+    verify_j_matrix_involution,
+)
+
+# =============================================================================
+# Tolerance Helper for Multi-Precision Testing
+# =============================================================================
+
+
+def get_rtol_atol(dtype: torch.dtype) -> tuple:
+    """Return (rtol, atol) appropriate for the given torch dtype.
+
+    Parameters
+    ----------
+    dtype : torch.dtype
+        The data type to get tolerances for.
+
+    Returns
+    -------
+    tuple
+        A tuple of (rtol, atol) values appropriate for the dtype.
+
+    Notes
+    -----
+    Tolerances were empirically determined by measuring orthogonality errors
+    (||D @ D^T - I||_max) across 100 random edge vectors and 8 special cases
+    (axis-aligned and diagonal directions). Each tolerance provides a 2-3x
+    safety margin over the measured maximum error:
+
+    - float16:  measured max ~2.0e-3, tolerance 5e-3 (2.5x margin)
+    - bfloat16: measured max ~1.6e-2, tolerance 3e-2 (2x margin)
+    - float32:  measured max ~7.2e-7, tolerance 2e-6 (3x margin)
+    - float64:  measured max ~4.8e-7, tolerance 1e-6 (2x margin)
+    """
+    if dtype == torch.float16:
+        # Measured max: 1.95e-3, using 2.5x safety margin
+        return 5e-3, 5e-3
+    if dtype == torch.bfloat16:
+        # Measured max: 1.56e-2, using 2x safety margin
+        return 3e-2, 3e-2
+    if dtype == torch.float32:
+        # Measured max: 7.15e-7, using 3x safety margin
+        return 2e-6, 2e-6
+    if dtype == torch.float64:
+        # Measured max: 4.79e-7, using 2x safety margin
+        return 1e-6, 1e-6
+    # Default fallback for other dtypes
+    return 1e-5, 1e-5
+
+
+def compute_expected_dims(lmax: int, mmax: int) -> tuple:
+    """Compute expected (full_dim, reduced_dim) for given lmax and mmax.
+
+    Parameters
+    ----------
+    lmax : int
+        Maximum angular momentum degree.
+    mmax : int
+        Maximum azimuthal quantum number (m-truncation).
+
+    Returns
+    -------
+    tuple
+        (full_dim, reduced_dim) where:
+        - full_dim = (lmax + 1)^2
+        - reduced_dim = sum over l of min(2*mmax + 1, 2*l + 1)
+    """
+    full_dim = (lmax + 1) ** 2
+    reduced_dim = sum(min(2 * mmax + 1, 2 * ell + 1) for ell in range(lmax + 1))
+    return full_dim, reduced_dim
+
+
+# =============================================================================
+# Fixtures for parameterized dtype/device testing
+# =============================================================================
+
+
+@pytest.fixture(params=[torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def dtype(request):
+    """Parameterized dtype fixture."""
+    return request.param
+
+
+@pytest.fixture(params=["cpu", "cuda"])
+def device(request):
+    """Parameterized device fixture."""
+    if request.param == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    return torch.device(request.param)
+
+
+@pytest.fixture(
+    params=[
+        (0, 0),
+        (1, 0),
+        (1, 1),
+        (2, 0),
+        (2, 1),
+        (2, 2),
+        (3, 1),
+        (3, 2),
+        (3, 3),
+        (4, 2),
+        (4, 4),
+    ]
+)
+def lmax_mmax(request):
+    """Parameterized (lmax, mmax) fixture."""
+    return request.param
+
+
+# =============================================================================
+# Tests for Internal Functions
+# =============================================================================
+
+
+class TestWignerInternalFunctions:
+    """Test suite for internal Wigner d-matrix and J-matrix functions.
+
+    Note: The `_compute_d_matrix_from_lower` function (used for l >= 3) has
+    numerical instabilities at edge cases (beta=0 or beta=pi) due to the
+    factorial-based formula involving 0^negative exponents. Tests for l=3
+    are limited to beta values where the formula is numerically stable.
+    The closed-form implementations for l=0,1,2 are tested at all beta values.
+    """
+
+    # =========================================================================
+    # _compute_d_matrix tests
+    # =========================================================================
+
+    @pytest.mark.parametrize("ell", [0, 1, 2])
+    def test_d_matrix_beta_zero(self, ell: int) -> None:
+        r"""d-matrix at beta=0 should be identity.
+
+        Note: Only tested for l=0,1,2 which use closed-form formulas.
+        The generic formula for l>=3 has numerical issues at beta=0.
+        """
+        beta = torch.tensor([0.0], dtype=torch.float64)
+        d = _compute_d_matrix(ell, beta).squeeze(0)
+
+        expected = D_MATRICES_BETA_0[ell]
+        torch.testing.assert_close(
+            d,
+            expected,
+            rtol=1e-10,
+            atol=1e-10,
+            msg=f"d-matrix at beta=0 for l={ell} does not match identity",
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2, 3])
+    def test_d_matrix_beta_pi_2(self, ell: int) -> None:
+        r"""d-matrix at beta=pi/2 should match SymPy reference.
+
+        This is the critical case for J-matrix computation, tested for all l.
+        """
+        beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        d = _compute_d_matrix(ell, beta).squeeze(0)
+
+        expected = D_MATRICES_BETA_PI_2[ell]
+        torch.testing.assert_close(
+            d,
+            expected,
+            rtol=1e-10,
+            atol=1e-10,
+            msg=f"d-matrix at beta=pi/2 for l={ell} does not match reference",
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2])
+    def test_d_matrix_beta_pi(self, ell: int) -> None:
+        r"""d-matrix at beta=pi should have anti-diagonal pattern.
+
+        Note: Only tested for l=0,1,2 which use closed-form formulas.
+        The generic formula for l>=3 has numerical issues at beta=pi.
+        """
+        beta = torch.tensor([math.pi], dtype=torch.float64)
+        d = _compute_d_matrix(ell, beta).squeeze(0)
+
+        expected = D_MATRICES_BETA_PI[ell]
+        torch.testing.assert_close(
+            d,
+            expected,
+            rtol=1e-10,
+            atol=1e-10,
+            msg=f"d-matrix at beta=pi for l={ell} does not match reference",
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2, 3])
+    def test_d_matrix_orthogonality(self, ell: int) -> None:
+        r"""d-matrix should be orthogonal: D^T @ D = I at beta=pi/2."""
+        beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        d = _compute_d_matrix(ell, beta).squeeze(0)
+
+        assert verify_d_matrix_orthogonality(d, tol=1e-10), (
+            f"d-matrix for l={ell} is not orthogonal"
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2])
+    @pytest.mark.parametrize(
+        "beta_val", [0.0, math.pi / 6, math.pi / 4, math.pi / 3, math.pi / 2, math.pi]
+    )
+    def test_d_matrix_orthogonality_various_beta(
+        self, ell: int, beta_val: float
+    ) -> None:
+        r"""d-matrix should be orthogonal for various beta values.
+
+        Note: Only tested for l=0,1,2 which use closed-form formulas.
+        """
+        beta = torch.tensor([beta_val], dtype=torch.float64)
+        d = _compute_d_matrix(ell, beta).squeeze(0)
+
+        assert verify_d_matrix_orthogonality(d, tol=1e-10), (
+            f"d-matrix for l={ell}, beta={beta_val} is not orthogonal"
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2])
+    def test_d_matrix_symmetry(self, ell: int) -> None:
+        r"""d^l_{m,m'}(beta) = (-1)^{m-m'} * d^l_{m',m}(beta).
+
+        Note: Only tested for l=0,1,2 which use closed-form formulas.
+        """
+        beta = torch.tensor([math.pi / 3], dtype=torch.float64)
+        d = _compute_d_matrix(ell, beta).squeeze(0)
+
+        assert verify_d_matrix_symmetry(ell, d, tol=1e-10), (
+            f"d-matrix for l={ell} does not satisfy symmetry relation"
+        )
+
+    # =========================================================================
+    # _compute_J_matrix tests
+    # =========================================================================
+
+    @pytest.mark.parametrize("ell", [0, 1, 2, 3])
+    def test_j_matrix_values(self, ell: int) -> None:
+        r"""J matrix should match SymPy reference."""
+        J = _compute_J_matrix(ell, dtype=torch.float64)
+
+        expected = J_MATRICES[ell]
+        torch.testing.assert_close(
+            J,
+            expected,
+            rtol=1e-10,
+            atol=1e-10,
+            msg=f"J matrix for l={ell} does not match reference",
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2, 3])
+    def test_j_matrix_involution(self, ell: int) -> None:
+        r"""J @ J should equal identity (involution property)."""
+        J = _compute_J_matrix(ell, dtype=torch.float64)
+
+        assert verify_j_matrix_involution(J, tol=1e-12), (
+            f"J matrix for l={ell} is not an involution (J @ J != I)"
+        )
+
+    @pytest.mark.parametrize("ell", [0, 1, 2, 3])
+    def test_j_matrix_from_d(self, ell: int) -> None:
+        r"""J should equal diag((-1)^i) @ d(pi/2)."""
+        J = _compute_J_matrix(ell, dtype=torch.float64)
+
+        beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        d_pi2 = _compute_d_matrix(ell, beta).squeeze(0)
+
+        assert verify_j_matrix_from_d(ell, J, d_pi2, tol=1e-12), (
+            f"J matrix for l={ell} does not satisfy J = diag((-1)^i) @ d(pi/2)"
+        )
+
+    # =========================================================================
+    # edge_vectors_to_euler_angles tests
+    # =========================================================================
+
+    def test_euler_y_axis(self) -> None:
+        r"""y-axis direction should give beta=0."""
+        edge = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edge)
+
+        assert torch.allclose(beta, torch.zeros_like(beta), atol=1e-10), (
+            f"y-axis should give beta=0, got {beta.item()}"
+        )
+        assert torch.allclose(gamma, torch.zeros_like(gamma), atol=1e-10), (
+            f"gamma should always be 0, got {gamma.item()}"
+        )
+
+    def test_euler_negative_y_axis(self) -> None:
+        r"""Negative y-axis should give beta=pi."""
+        edge = torch.tensor([[0.0, -1.0, 0.0]], dtype=torch.float64)
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edge)
+
+        expected_beta = torch.tensor([math.pi], dtype=torch.float64)
+        assert torch.allclose(beta, expected_beta, atol=1e-10), (
+            f"Negative y-axis should give beta=pi, got {beta.item()}"
+        )
+
+    def test_euler_x_axis(self) -> None:
+        r"""x-axis direction: beta=pi/2, alpha=pi/2."""
+        edge = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edge)
+
+        expected_beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        expected_alpha = torch.tensor([math.pi / 2], dtype=torch.float64)
+
+        assert torch.allclose(beta, expected_beta, atol=1e-10), (
+            f"x-axis should give beta=pi/2, got {beta.item()}"
+        )
+        assert torch.allclose(alpha, expected_alpha, atol=1e-10), (
+            f"x-axis should give alpha=pi/2, got {alpha.item()}"
+        )
+
+    def test_euler_z_axis(self) -> None:
+        r"""z-axis direction: beta=pi/2, alpha=0."""
+        edge = torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float64)
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edge)
+
+        expected_beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        expected_alpha = torch.tensor([0.0], dtype=torch.float64)
+
+        assert torch.allclose(beta, expected_beta, atol=1e-10), (
+            f"z-axis should give beta=pi/2, got {beta.item()}"
+        )
+        assert torch.allclose(alpha, expected_alpha, atol=1e-10), (
+            f"z-axis should give alpha=0, got {alpha.item()}"
+        )
+
+    def test_euler_negative_x_axis(self) -> None:
+        r"""Negative x-axis direction: beta=pi/2, alpha=-pi/2."""
+        edge = torch.tensor([[-1.0, 0.0, 0.0]], dtype=torch.float64)
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edge)
+
+        expected_beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        expected_alpha = torch.tensor([-math.pi / 2], dtype=torch.float64)
+
+        assert torch.allclose(beta, expected_beta, atol=1e-10), (
+            f"Negative x-axis should give beta=pi/2, got {beta.item()}"
+        )
+        assert torch.allclose(alpha, expected_alpha, atol=1e-10), (
+            f"Negative x-axis should give alpha=-pi/2, got {alpha.item()}"
+        )
+
+    def test_euler_negative_z_axis(self) -> None:
+        r"""Negative z-axis direction: beta=pi/2, alpha=pi."""
+        edge = torch.tensor([[0.0, 0.0, -1.0]], dtype=torch.float64)
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edge)
+
+        expected_beta = torch.tensor([math.pi / 2], dtype=torch.float64)
+        expected_alpha = torch.tensor([math.pi], dtype=torch.float64)
+
+        assert torch.allclose(beta, expected_beta, atol=1e-10), (
+            f"Negative z-axis should give beta=pi/2, got {beta.item()}"
+        )
+        assert torch.allclose(alpha, expected_alpha, atol=1e-10), (
+            f"Negative z-axis should give alpha=pi, got {alpha.item()}"
+        )
+
+    def test_euler_unnormalized_vectors(self) -> None:
+        r"""Unnormalized edge vectors should give same result as normalized."""
+        edge_unnorm = torch.tensor([[2.0, 0.0, 0.0]], dtype=torch.float64)
+        edge_norm = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
+
+        alpha1, beta1, gamma1 = edge_vectors_to_euler_angles(edge_unnorm)
+        alpha2, beta2, gamma2 = edge_vectors_to_euler_angles(edge_norm)
+
+        assert torch.allclose(alpha1, alpha2, atol=1e-10)
+        assert torch.allclose(beta1, beta2, atol=1e-10)
+        assert torch.allclose(gamma1, gamma2, atol=1e-10)
+
+    def test_euler_batch_processing(self) -> None:
+        r"""Test batch processing of edge vectors."""
+        edges = torch.tensor(
+            [
+                [0.0, 1.0, 0.0],  # y-axis
+                [1.0, 0.0, 0.0],  # x-axis
+                [0.0, 0.0, 1.0],  # z-axis
+            ],
+            dtype=torch.float64,
+        )
+        alpha, beta, gamma = edge_vectors_to_euler_angles(edges)
+
+        assert alpha.shape == (3,)
+        assert beta.shape == (3,)
+        assert gamma.shape == (3,)
+
+        # Check individual results
+        assert torch.allclose(
+            beta[0], torch.tensor(0.0, dtype=torch.float64), atol=1e-10
+        )
+        assert torch.allclose(
+            beta[1], torch.tensor(math.pi / 2, dtype=torch.float64), atol=1e-10
+        )
+        assert torch.allclose(
+            beta[2], torch.tensor(math.pi / 2, dtype=torch.float64), atol=1e-10
+        )
+
+
+# =============================================================================
+# EdgeRotation Regression Tests
+# =============================================================================
+
+
+class TestEdgeRotationRegression:
+    """Regression tests with hardcoded expected values."""
+
+    def test_lmax2_y_axis_values(self) -> None:
+        """Hardcoded test: y-axis edge with lmax=2 should give identity."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+
+        edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
+        model = model.to(dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        # For y-axis (beta=0, alpha=0, gamma=0), the rotation should be identity
+        expected = torch.eye(9, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
+
+        assert torch.allclose(D, expected, rtol=1e-5, atol=1e-5), (
+            "D matrix for y-axis should be identity"
+        )
+
+    def test_lmax2_x_axis_values(self) -> None:
+        """Hardcoded test: x-axis edge with lmax=2."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+
+        edge_vecs = torch.tensor([[[1.0, 0.0, 0.0]]], dtype=torch.float64)
+        model = model.to(dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        # For x-axis: alpha=pi/2, beta=pi/2, gamma=0
+        # The D matrix should be orthogonal
+        D_squeezed = D[0, 0]
+        product = torch.matmul(D_squeezed, D_squeezed.T)
+        identity = torch.eye(9, dtype=torch.float64)
+
+        assert torch.allclose(product, identity, rtol=1e-5, atol=1e-5), (
+            "D @ D^T should be identity for x-axis"
+        )
+
+        # The D matrix should not be identity (alpha and beta are non-zero)
+        assert not torch.allclose(D_squeezed, identity, rtol=1e-3, atol=1e-3), (
+            "D for x-axis should not be identity"
+        )
+
+    def test_lmax2_z_axis_values(self) -> None:
+        """Hardcoded test: z-axis edge with lmax=2."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+
+        edge_vecs = torch.tensor([[[0.0, 0.0, 1.0]]], dtype=torch.float64)
+        model = model.to(dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        # For z-axis: alpha=0, beta=pi/2, gamma=0
+        D_squeezed = D[0, 0]
+        product = torch.matmul(D_squeezed, D_squeezed.T)
+        identity = torch.eye(9, dtype=torch.float64)
+
+        assert torch.allclose(product, identity, rtol=1e-5, atol=1e-5), (
+            "D @ D^T should be identity for z-axis"
+        )
+
+    def test_specific_edge_vectors(self, dtype, device) -> None:
+        """Test specific edge vectors against precomputed D matrices."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+        model = model.to(dtype=dtype, device=device)
+
+        # Test with normalized diagonal direction
+        edge_vecs = torch.tensor(
+            [[[1.0 / math.sqrt(3), 1.0 / math.sqrt(3), 1.0 / math.sqrt(3)]]],
+            dtype=dtype,
+            device=device,
+        )
+
+        D = model(edge_vecs)
+
+        # D should be orthogonal
+        D_squeezed = D[0, 0]
+        product = torch.matmul(D_squeezed, D_squeezed.T)
+        identity = torch.eye(9, dtype=dtype, device=device)
+
+        rtol, atol = get_rtol_atol(dtype)
+        assert torch.allclose(product, identity, rtol=rtol, atol=atol), (
+            f"D @ D^T should be identity for diagonal vector (dtype={dtype}, device={device})"
+        )
+
+    def test_lmax3_regression(self) -> None:
+        """Regression test for lmax=3."""
+        lmax = 3
+        model = EdgeRotation(lmax=lmax)
+
+        # Test y-axis (identity case)
+        edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
+        model = model.to(dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        # Should be identity for y-axis
+        expected = torch.eye(16, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
+
+        assert torch.allclose(D, expected, rtol=1e-5, atol=1e-5), (
+            "D matrix for y-axis at lmax=3 should be identity"
+        )
+
+    def test_mmax_reduction_regression(self) -> None:
+        """Regression test for mmax < lmax."""
+        lmax = 3
+        mmax = 1
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+
+        edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
+        model = model.to(dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        # Check shape: reduced_dim = 1 + 3 + 3 + 3 = 10, full_dim = 16
+        assert D.shape == (1, 1, 10, 16), (
+            f"Expected shape (1, 1, 10, 16), got {D.shape}"
+        )
+
+
+# =============================================================================
+# TestEdgeRotationParameterized - Parameterized lmax/mmax tests
+# =============================================================================
+
+
+class TestEdgeRotationParameterized:
+    """End-to-end functionality tests with parameterized lmax/mmax combinations."""
+
+    def test_output_shape(self, lmax_mmax) -> None:
+        """Verify output tensor shape is correct for all lmax/mmax combinations."""
+        lmax, mmax = lmax_mmax
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+
+        num_nodes, max_neighbors = 3, 4
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3)
+
+        D = model(edge_vecs)
+
+        full_dim, reduced_dim = compute_expected_dims(lmax, mmax)
+        expected_shape = (num_nodes, max_neighbors, reduced_dim, full_dim)
+
+        assert D.shape == expected_shape, (
+            f"lmax={lmax}, mmax={mmax}: expected shape {expected_shape}, got {D.shape}"
+        )
+
+    def test_dimensions_stored(self, lmax_mmax) -> None:
+        """Verify _full_dim and _reduced_dim attributes are correct."""
+        lmax, mmax = lmax_mmax
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+
+        full_dim, reduced_dim = compute_expected_dims(lmax, mmax)
+
+        assert model._full_dim == full_dim, (
+            f"lmax={lmax}, mmax={mmax}: expected _full_dim={full_dim}, got {model._full_dim}"
+        )
+        assert model._reduced_dim == reduced_dim, (
+            f"lmax={lmax}, mmax={mmax}: expected _reduced_dim={reduced_dim}, got {model._reduced_dim}"
+        )
+
+    def test_orthogonality_full_mmax(self, lmax_mmax) -> None:
+        """When mmax=lmax, D @ D^T should be identity (orthogonal matrix)."""
+        lmax, mmax = lmax_mmax
+        if mmax != lmax:
+            pytest.skip(
+                "Orthogonality test only applies when mmax=lmax (square matrix)"
+            )
+
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+        model = model.to(dtype=torch.float64)
+
+        num_edges = 5
+        edge_vecs = torch.randn(num_edges, 1, 3, dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        full_dim = (lmax + 1) ** 2
+        identity = torch.eye(full_dim, dtype=torch.float64)
+
+        for i in range(num_edges):
+            D_i = D[i, 0]
+            product = torch.matmul(D_i, D_i.T)
+            assert torch.allclose(product, identity, rtol=1e-5, atol=1e-5), (
+                f"lmax={lmax}: D @ D^T not identity for edge {i}"
+            )
+
+    def test_y_axis_identity(self, lmax_mmax) -> None:
+        """Y-axis edge should give identity rotation for all lmax values."""
+        lmax, mmax = lmax_mmax
+        if mmax != lmax:
+            pytest.skip("Identity test only applies when mmax=lmax (square matrix)")
+
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+        model = model.to(dtype=torch.float64)
+
+        # Y-axis edge (identity direction in this convention)
+        edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
+
+        D = model(edge_vecs)
+
+        full_dim = (lmax + 1) ** 2
+        expected = torch.eye(full_dim, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
+
+        assert torch.allclose(D, expected, rtol=1e-5, atol=1e-5), (
+            f"lmax={lmax}: D matrix for y-axis should be identity"
+        )
+
+    def test_j_matrices_registered(self, lmax_mmax) -> None:
+        """Verify all J matrices are registered as buffers."""
+        lmax, mmax = lmax_mmax
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+
+        for ell in range(lmax + 1):
+            buffer_name = f"_J_{ell}"
+            assert hasattr(model, buffer_name), f"Missing buffer {buffer_name}"
+            J_l = getattr(model, buffer_name)
+            expected_shape = (2 * ell + 1, 2 * ell + 1)
+            assert J_l.shape == expected_shape, (
+                f"J_{ell} has shape {J_l.shape}, expected {expected_shape}"
+            )
+
+    def test_gradient_flow(self, lmax_mmax) -> None:
+        """Verify gradients flow through for all lmax/mmax combinations."""
+        lmax, mmax = lmax_mmax
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+        model = model.to(dtype=torch.float64)
+
+        edge_vecs = torch.randn(2, 3, 3, dtype=torch.float64, requires_grad=True)
+
+        D = model(edge_vecs)
+        loss = D.sum()
+        loss.backward()
+
+        assert edge_vecs.grad is not None, (
+            f"lmax={lmax}, mmax={mmax}: gradients should flow to edge_vecs"
+        )
+        assert torch.isfinite(edge_vecs.grad).all(), (
+            f"lmax={lmax}, mmax={mmax}: gradients should be finite"
+        )
+
+    def test_dtype_device_consistency(self, lmax_mmax, dtype, device) -> None:
+        """Verify dtype and device are preserved for all combinations."""
+        lmax, mmax = lmax_mmax
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+        model = model.to(dtype=dtype, device=device)
+
+        edge_vecs = torch.randn(2, 2, 3, dtype=dtype, device=device)
+
+        D = model(edge_vecs)
+
+        assert D.dtype == dtype, (
+            f"lmax={lmax}, mmax={mmax}: expected dtype {dtype}, got {D.dtype}"
+        )
+        assert D.device.type == device.type, (
+            f"lmax={lmax}, mmax={mmax}: expected device {device.type}, got {D.device.type}"
+        )
+
+    def test_mask_identity_shape(self, lmax_mmax) -> None:
+        """Verify masked edges get identity with correct shape."""
+        lmax, mmax = lmax_mmax
+        model = EdgeRotation(lmax=lmax, mmax=mmax)
+
+        num_nodes, max_neighbors = 2, 3
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3)
+
+        # Mask out first edge
+        mask = torch.ones(num_nodes, max_neighbors, dtype=torch.bool)
+        mask[0, 0] = False
+
+        D = model(edge_vecs, mask=mask)
+
+        # Verify shape is still correct
+        full_dim, reduced_dim = compute_expected_dims(lmax, mmax)
+        expected_shape = (num_nodes, max_neighbors, reduced_dim, full_dim)
+
+        assert D.shape == expected_shape, (
+            f"lmax={lmax}, mmax={mmax}: masked output shape {D.shape} != expected {expected_shape}"
+        )
+
+        # Verify masked edge has identity
+        identity = model._get_identity_reduced(1, D.dtype, D.device)
+        assert torch.allclose(D[0, 0], identity[0], rtol=1e-5, atol=1e-5), (
+            f"lmax={lmax}, mmax={mmax}: masked edge should have identity"
+        )
+
+
+# =============================================================================
+# TestEdgeRotation - Misc. infra
+# =============================================================================
 
 
 class TestEdgeRotation:
@@ -123,12 +831,27 @@ class TestEdgeRotation:
             f"Expected shape (4, 5, 10, 16), got {D.shape}"
         )
 
+    def test_forward_shape_parameterized(self, dtype, device) -> None:
+        r"""Test forward shape with parameterized dtype and device."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+        model = model.to(dtype=dtype, device=device)
+
+        num_nodes, max_neighbors = 3, 4
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
+
+        D = model(edge_vecs)
+
+        assert D.shape == (3, 4, 9, 9), f"Expected shape (3, 4, 9, 9), got {D.shape}"
+        assert D.dtype == dtype, f"Expected dtype {dtype}, got {D.dtype}"
+        assert D.device.type == device.type, f"Expected device {device}, got {D.device}"
+
     # =========================================================================
     # Mathematical Correctness Tests
     # =========================================================================
 
     def test_y_axis_gives_identity(self) -> None:
-        r"""Edge [0,1,0] should give D ≈ I.
+        r"""Edge [0,1,0] should give D = I.
 
         In the convention used, beta = acos(y), so pointing along y-axis
         (y=1) gives beta=0. Combined with alpha=0 when x=z=0, this
@@ -150,7 +873,7 @@ class TestEdgeRotation:
         )
 
     def test_orthogonality(self) -> None:
-        r"""For each edge, D @ D^T ≈ I (within the full block-diagonal)."""
+        r"""For each edge, D @ D^T = I (within the full block-diagonal)."""
         lmax = 2
         model = EdgeRotation(lmax=lmax)
 
@@ -161,7 +884,7 @@ class TestEdgeRotation:
         D = model(edge_vecs)
 
         # When mmax = lmax, D is square (full_dim x full_dim)
-        # Check D @ D^T ≈ I for each edge
+        # Check D @ D^T = I for each edge
         identity = torch.eye(9, dtype=torch.float64)
 
         for i in range(num_nodes):
@@ -170,6 +893,29 @@ class TestEdgeRotation:
                 product = torch.matmul(D_ij, D_ij.T)
                 assert torch.allclose(product, identity, rtol=1e-5, atol=1e-5), (
                     f"D @ D^T not identity for edge [{i}, {j}]"
+                )
+
+    def test_orthogonality_parameterized(self, dtype, device) -> None:
+        r"""Test orthogonality with parameterized dtype and device."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+        model = model.to(dtype=dtype, device=device)
+
+        num_nodes, max_neighbors = 2, 3
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
+
+        D = model(edge_vecs)
+
+        identity = torch.eye(9, dtype=dtype, device=device)
+        rtol, atol = get_rtol_atol(dtype)
+
+        for i in range(num_nodes):
+            for j in range(max_neighbors):
+                D_ij = D[i, j]
+                product = torch.matmul(D_ij, D_ij.T)
+                assert torch.allclose(product, identity, rtol=rtol, atol=atol), (
+                    f"D @ D^T not identity for edge [{i}, {j}] "
+                    f"(dtype={dtype}, device={device})"
                 )
 
     def test_negative_y_axis(self) -> None:
@@ -250,6 +996,28 @@ class TestEdgeRotation:
             "mask=None should behave same as all-True mask"
         )
 
+    def test_mask_parameterized(self, dtype, device) -> None:
+        r"""Test masking with parameterized dtype and device."""
+        lmax = 2
+        model = EdgeRotation(lmax=lmax)
+        model = model.to(dtype=dtype, device=device)
+
+        num_nodes, max_neighbors = 2, 3
+        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
+
+        mask = torch.ones(num_nodes, max_neighbors, dtype=torch.bool, device=device)
+        mask[0, 0] = False
+
+        D = model(edge_vecs, mask=mask)
+
+        identity = model._get_identity_reduced(1, dtype, device)
+
+        rtol, atol = get_rtol_atol(dtype)
+
+        assert torch.allclose(D[0, 0], identity[0], rtol=rtol, atol=atol), (
+            f"Masked edge should have identity (dtype={dtype}, device={device})"
+        )
+
     # =========================================================================
     # State Dict Tests
     # =========================================================================
@@ -269,17 +1037,15 @@ class TestEdgeRotation:
                 f"Wrong shape for {key} in state_dict"
             )
 
-    def test_state_dict_roundtrip(self) -> None:
+    def test_state_dict_roundtrip(self, lmax_mmax) -> None:
         r"""Save/load model and verify identical output."""
-        lmax = 2
-        mmax = 1
-        model1 = EdgeRotation(lmax=lmax, mmax=mmax)
+        model1 = EdgeRotation(*lmax_mmax)
 
         # Save state dict
         state_dict = model1.state_dict()
 
         # Create new model and load state dict
-        model2 = EdgeRotation(lmax=lmax, mmax=mmax)
+        model2 = EdgeRotation(*lmax_mmax)
         model2.load_state_dict(state_dict)
 
         # Test with same input
@@ -292,90 +1058,62 @@ class TestEdgeRotation:
             "Model output should be identical after state_dict roundtrip"
         )
 
-    # =========================================================================
-    # Dtype/Device Tests
-    # =========================================================================
+    def test_dtype_device(self, dtype, device, lmax_mmax) -> None:
+        r"""Test dtype and device handling with fixtures."""
+        model = EdgeRotation(*lmax_mmax)
+        model = model.to(dtype=dtype, device=device)
 
-    def test_dtype_float32(self) -> None:
-        r"""Float32 input → float32 output."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
-
-        edge_vecs = torch.randn(2, 3, 3, dtype=torch.float32)
+        edge_vecs = torch.randn(2, 3, 3, dtype=dtype, device=device)
         D = model(edge_vecs)
 
-        assert D.dtype == torch.float32, f"Expected float32 output, got {D.dtype}"
-
-    def test_dtype_float64(self) -> None:
-        r"""Float64 input → float64 output."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
-
-        edge_vecs = torch.randn(2, 3, 3, dtype=torch.float64)
-        D = model(edge_vecs)
-
-        assert D.dtype == torch.float64, f"Expected float64 output, got {D.dtype}"
-
-    @pytest.mark.cuda
-    def test_cuda_device(self) -> None:
-        r"""CUDA tensor placement."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
-        model = model.cuda()
-
-        edge_vecs = torch.randn(2, 3, 3, device="cuda")
-        D = model(edge_vecs)
-
-        assert D.device.type == "cuda", f"Expected CUDA output, got {D.device}"
+        assert D.dtype == dtype, f"Expected {dtype} output, got {D.dtype}"
+        assert D.device.type == device.type, (
+            f"Expected {device.type} output, got {D.device.type}"
+        )
 
     # =========================================================================
     # Gradient Tests
     # =========================================================================
 
-    def test_gradient_flow(self) -> None:
-        r"""Verify gradients flow through edge_vecs."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
+    def test_gradient_flow(self, dtype, device, lmax_mmax) -> None:
+        r"""Test gradient flow with parameterized dtype and device."""
+        model = EdgeRotation(*lmax_mmax)
+        model = model.to(dtype=dtype, device=device)
 
-        edge_vecs = torch.randn(2, 3, 3, dtype=torch.float64, requires_grad=True)
-        model = model.to(dtype=torch.float64)
+        edge_vecs = torch.randn(2, 3, 3, dtype=dtype, device=device, requires_grad=True)
 
         D = model(edge_vecs)
 
-        # Compute a scalar loss
         loss = D.sum()
         loss.backward()
 
-        assert edge_vecs.grad is not None, "Gradients should flow to edge_vecs"
-        assert torch.isfinite(edge_vecs.grad).all(), "Gradients should be finite"
-        assert not torch.allclose(edge_vecs.grad, torch.zeros_like(edge_vecs.grad)), (
-            "Gradients should be non-zero"
+        assert edge_vecs.grad is not None, (
+            f"Gradients should flow to edge_vecs (dtype={dtype}, device={device})"
+        )
+        assert torch.isfinite(edge_vecs.grad).all(), (
+            f"Gradients should be finite (dtype={dtype}, device={device})"
         )
 
     # =========================================================================
     # Batch Consistency Tests
     # =========================================================================
 
-    def test_batch_consistency(self) -> None:
-        r"""Same edge vector in different batch positions → same D matrix."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
+    def test_batch_consistency(self, dtype, device, lmax_mmax) -> None:
+        r"""Test batch consistency with parameterized dtype and device."""
+        model = EdgeRotation(*lmax_mmax)
+        model = model.to(dtype=dtype, device=device)
 
-        # Create edge vectors where some are duplicated
-        single_edge = torch.randn(3, dtype=torch.float64)
+        single_edge = torch.randn(3, dtype=dtype, device=device)
 
-        # Place same edge in different positions
-        edge_vecs = torch.randn(3, 4, 3, dtype=torch.float64)
+        edge_vecs = torch.randn(3, 4, 3, dtype=dtype, device=device)
         edge_vecs[0, 1] = single_edge
         edge_vecs[2, 3] = single_edge
 
-        model = model.to(dtype=torch.float64)
         D = model(edge_vecs)
 
-        # D matrices for same edge vector should be identical
-        assert torch.allclose(D[0, 1], D[2, 3], rtol=1e-10, atol=1e-10), (
-            "Same edge vector should produce same D matrix"
+        rtol, atol = get_rtol_atol(dtype)
+
+        assert torch.allclose(D[0, 1], D[2, 3], rtol=rtol, atol=atol), (
+            f"Same edge vector should produce same D matrix "
+            f"(dtype={dtype}, device={device})"
         )

@@ -47,9 +47,8 @@ from __future__ import annotations
 import math
 
 import torch
+from torch import nn
 from jaxtyping import Bool, Float
-
-from physicsnemo import Module
 
 # Numerical stability constant
 _EPS = 1e-7
@@ -407,7 +406,7 @@ def _compute_J_matrix(
 # =============================================================================
 
 
-class EdgeRotation(Module):
+class EdgeRotation(nn.Module):
     r"""Compute Wigner D-matrices for edge rotations in equivariant networks.
 
     This module computes the rotation matrices needed to transform spherical
