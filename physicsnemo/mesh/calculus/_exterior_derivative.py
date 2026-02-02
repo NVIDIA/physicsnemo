@@ -58,7 +58,10 @@ def exterior_derivative_0(
         - edge_connectivity: Edge vertex indices, shape (n_edges, 2)
 
     Example:
-        For a triangle mesh with scalar field f at vertices:
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> f = torch.randn(mesh.n_points)  # scalar field at vertices
         >>> edge_df, edges = exterior_derivative_0(mesh, f)
         >>> # edge_df[i] = f[edges[i,1]] - f[edges[i,0]]
     """

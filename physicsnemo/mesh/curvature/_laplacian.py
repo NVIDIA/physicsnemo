@@ -52,6 +52,8 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
         ValueError: If codimension != 1 (mean curvature requires normals)
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> laplacian_coords = compute_laplacian_at_points(mesh)
         >>> # Use for mean curvature: H = ||laplacian_coords|| / (2 * voronoi_area)
     """
@@ -119,6 +121,10 @@ def compute_cotangent_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor
         Tensor of shape (n_edges,) containing cotangent weights
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
         >>> weights = compute_cotangent_weights(mesh, edges)
         >>> # Use in Laplacian: L_ij = w_ij if connected, else 0
     """

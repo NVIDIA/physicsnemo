@@ -156,12 +156,13 @@ def compute_barycentric_coordinates_pairwise(
         For each pair, the coordinates sum to 1.
 
     Example:
+        >>> import torch
         >>> # For BVH results: each query has specific candidate cells
         >>> n_pairs = 1000
         >>> query_points = torch.randn(n_pairs, 3)
         >>> cell_vertices = torch.randn(n_pairs, 3, 3)  # Triangles in 3D
         >>> bary = compute_barycentric_coordinates_pairwise(query_points, cell_vertices)
-        >>> bary.shape  # (1000, 3) instead of (1000, 1000, 3) from full version
+        >>> assert bary.shape == (1000, 3)  # instead of (1000, 1000, 3) from full version
     """
 
     ### Compute relative vectors from first vertex to all others
@@ -447,15 +448,14 @@ def sample_data_at_points(
         ValueError: If data_source is invalid.
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
         >>> # Sample cell data at specific points
-        >>> query_pts = torch.tensor([[0.5, 0.5], [1.0, 1.0]])
-        >>> sampled_data = sample_at_points(mesh, query_pts, data_source="cells")
-        >>>
-        >>> # Interpolate point data using barycentric coordinates
-        >>> sampled_data = sample_at_points(mesh, query_pts, data_source="points")
-        >>>
-        >>> # Project onto nearest cell (for surfaces in 3D, etc.)
-        >>> sampled_data = sample_at_points(mesh, query_pts, project_onto_nearest_cell=True)
+        >>> query_pts = torch.tensor([[0.3, 0.3], [0.8, 0.5]])
+        >>> sampled_data = sample_data_at_points(mesh, query_pts, data_source="cells")
+        >>> assert "pressure" in sampled_data.keys()
     """
     if data_source not in ["cells", "points"]:
         raise ValueError(f"Invalid {data_source=}. Must be 'cells' or 'points'.")

@@ -56,10 +56,13 @@ def extract_boundary_mesh_data(
         boundary_cell_data: Aggregated TensorDict for boundary mesh cells
 
     Example:
-        >>> # Extract surface of a tetrahedral mesh
-        >>> tet_mesh = Mesh(points, tetrahedra)
-        >>> boundary_cells, boundary_data = extract_boundary_mesh_data(tet_mesh)
-        >>> boundary_mesh = Mesh(points=tet_mesh.points, cells=boundary_cells, cell_data=boundary_data)
+        >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
+        >>> from physicsnemo.mesh import Mesh
+        >>> # Extract surface of a volume mesh
+        >>> vol_mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
+        >>> boundary_cells, boundary_data = extract_boundary_mesh_data(vol_mesh)
+        >>> boundary_mesh = Mesh(points=vol_mesh.points, cells=boundary_cells, cell_data=boundary_data)
+        >>> assert boundary_mesh.n_manifold_dims == 2  # Surface triangles
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
         _aggregate_point_data_to_facets,

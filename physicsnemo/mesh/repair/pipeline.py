@@ -65,13 +65,10 @@ def repair_mesh(
         operation name to its individual stats dict
 
     Example:
-        >>> mesh_clean, stats = repair_mesh(
-        ...     mesh,
-        ...     remove_duplicates=True,
-        ...     remove_degenerates=True,
-        ...     remove_isolated=True,
-        ... )
-        >>> print(f"Removed {stats['degenerates']['n_cells_original'] - stats['degenerates']['n_cells_final']} cells")
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh_clean, stats = repair_mesh(mesh, remove_duplicates=True)
+        >>> assert "duplicates" in stats
     """
     current_mesh = mesh
     all_stats = {}

@@ -365,11 +365,11 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
         NotImplementedError: If n_manifold_dims is not 2
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Smooth a rough triangulated surface
-        >>> mesh = create_triangle_mesh()
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> smooth = subdivide_loop(mesh)
         >>> # Original vertices have moved; result is smoother
-        >>> smoother = smooth.subdivide(levels=2, filter="loop")
     """
     from physicsnemo.mesh.mesh import Mesh
 

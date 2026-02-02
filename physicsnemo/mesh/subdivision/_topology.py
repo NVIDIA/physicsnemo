@@ -45,10 +45,11 @@ def extract_unique_edges(mesh: "Mesh") -> tuple[torch.Tensor, torch.Tensor]:
           (n_cells * n_edges_per_cell,), allowing reshaping to (n_cells, n_edges_per_cell).
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> triangle_mesh = two_triangles_2d.load()
         >>> edges, inverse = extract_unique_edges(triangle_mesh)
         >>> # edges[i] contains the two vertex indices for edge i
         >>> # inverse[j] gives the unique edge index for candidate edge j
-        >>> # For triangles: inverse can be reshaped to (n_cells, 3)
     """
     ### Special case: 1D manifolds (edges)
     # For 1D meshes, the cells ARE edges, so we just return them directly

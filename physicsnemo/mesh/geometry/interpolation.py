@@ -80,6 +80,8 @@ def compute_barycentric_gradients(
         Hirani Remark 2.7.2 (lines 1260-1288)
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> grads = compute_barycentric_gradients(mesh)
         >>> # grads[i, j, :] is ∇φ for j-th vertex of i-th cell
         >>> # Use in sharp operator with α♯(v) = Σ α(edge) × weight × grad

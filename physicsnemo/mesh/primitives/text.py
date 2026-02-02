@@ -424,8 +424,8 @@ def text_1d_2d(
 
     Example:
         >>> mesh = text_1d_2d("Hello", font_size=10.0)
-        >>> mesh.n_manifold_dims  # 1
-        >>> mesh.n_spatial_dims   # 2
+        >>> assert mesh.n_manifold_dims == 1
+        >>> assert mesh.n_spatial_dims == 2
     """
     if isinstance(device, str):
         device = torch.device(device)
@@ -465,8 +465,8 @@ def text_2d_2d(
 
     Example:
         >>> mesh = text_2d_2d("Hello", font_size=10.0)
-        >>> mesh.n_manifold_dims  # 2
-        >>> mesh.n_spatial_dims   # 2
+        >>> assert mesh.n_manifold_dims == 2
+        >>> assert mesh.n_spatial_dims == 2
     """
     if isinstance(device, str):
         device = torch.device(device)
@@ -508,8 +508,8 @@ def text_3d_3d(
 
     Example:
         >>> mesh = text_3d_3d("Hello", font_size=10.0, extrusion_height=1.0)
-        >>> mesh.n_manifold_dims  # 3
-        >>> mesh.n_spatial_dims   # 3
+        >>> assert mesh.n_manifold_dims == 3
+        >>> assert mesh.n_spatial_dims == 3
     """
     if isinstance(device, str):
         device = torch.device(device)
@@ -568,8 +568,8 @@ def text_2d_3d(
 
     Example:
         >>> mesh = text_2d_3d("Hello", font_size=10.0, extrusion_height=1.0)
-        >>> mesh.n_manifold_dims  # 2
-        >>> mesh.n_spatial_dims   # 3
+        >>> assert mesh.n_manifold_dims == 2
+        >>> assert mesh.n_spatial_dims == 3
     """
     volume = text_3d_3d(
         text, font_size, samples_per_unit, max_segment_length, extrusion_height, device

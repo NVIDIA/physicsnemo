@@ -172,6 +172,8 @@ def compute_cotan_weights_triangle_mesh(
         "Discrete Exterior Calculus" and Meyer et al. (2003).
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> # Standard usage
         >>> weights, edges = compute_cotan_weights_triangle_mesh(mesh)
         >>> # Get weights only

@@ -60,16 +60,12 @@ def remesh(
         ValueError: If n_clusters <= 0 or weights have wrong shape
 
     Example:
-        >>> # Remesh a triangle mesh to ~1000 triangles
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> from physicsnemo.mesh.remeshing import remesh
-        >>> simplified = remesh(mesh, n_clusters=1000)
-        >>> print(f"Original: {mesh.n_cells} cells, {mesh.n_points} points")
-        >>> print(f"Remeshed: {simplified.n_cells} cells, {simplified.n_points} points")
-        >>>
-        >>> # With custom weights to preserve detail in certain regions
-        >>> weights = torch.ones(mesh.n_points)
-        >>> weights[important_region_mask] = 10.0  # 10x more clusters here
-        >>> detailed = remesh(mesh, n_clusters=500, weights=weights)
+        >>> mesh = sphere_icosahedral.load(subdivisions=3)
+        >>> # Remesh a triangle mesh to ~100 triangles
+        >>> simplified = remesh(mesh, n_clusters=100)
+        >>> assert simplified.n_cells > 0
 
     Note:
         - Works for 1D, 2D, 3D, and higher-dimensional manifolds

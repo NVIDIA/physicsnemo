@@ -62,10 +62,11 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
         For isolated vertices (no incident cells), curvature is NaN.
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Sphere of radius r has K = 1/r² everywhere
-        >>> sphere_mesh = create_sphere_mesh(radius=2.0)
+        >>> sphere_mesh = sphere_icosahedral.load(radius=2.0, subdivisions=3)
         >>> K = gaussian_curvature_vertices(sphere_mesh)
-        >>> assert K.mean() ≈ 0.25  # 1/(2.0)²
+        >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
 
     Note:
         Satisfies discrete Gauss-Bonnet theorem:
@@ -127,6 +128,8 @@ def gaussian_curvature_cells(mesh: "Mesh") -> torch.Tensor:
         3. Apply angle defect formula on dual mesh
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> sphere_mesh = sphere_icosahedral.load(subdivisions=2)
         >>> K_cells = gaussian_curvature_cells(sphere_mesh)
         >>> # Should be positive for sphere
     """

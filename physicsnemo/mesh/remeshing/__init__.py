@@ -35,13 +35,11 @@ Current limitations:
 - Higher cluster counts relative to mesh resolution produce better manifold quality
 
 Example:
-    >>> # Remesh a triangle mesh to ~1000 triangles
-    >>> remeshed = remesh(mesh, n_clusters=1000)
-    >>>
-    >>> # With custom vertex weights for adaptive remeshing
-    >>> weights = torch.ones(mesh.n_points)
-    >>> weights[important_region] = 10.0
-    >>> remeshed = remesh(mesh, n_clusters=500, weights=weights)
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> mesh = sphere_icosahedral.load(subdivisions=3)
+    >>> # Remesh a triangle mesh to ~100 triangles
+    >>> remeshed = remesh(mesh, n_clusters=100)
+    >>> assert remeshed.n_cells > 0
 """
 
 from physicsnemo.mesh.remeshing._remeshing import remesh

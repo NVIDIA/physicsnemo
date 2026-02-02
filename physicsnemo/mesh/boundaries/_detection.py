@@ -41,8 +41,9 @@ def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
         Boolean tensor of shape (n_points,) where True indicates boundary vertices
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
         >>> # Cylinder with open ends
-        >>> mesh = create_cylinder_mesh(radius=1.0, n_circ=32, n_height=16)
+        >>> mesh = cylinder_open.load(n_circ=32, n_height=16)
         >>> is_boundary = get_boundary_vertices(mesh)
         >>> # Top and bottom circles are boundary vertices
         >>> assert is_boundary.sum() == 2 * 32  # 64 boundary vertices
@@ -105,6 +106,8 @@ def get_boundary_cells(
         Boolean tensor of shape (n_cells,) where True indicates boundary cells
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Two triangles sharing an edge, with 4 boundary edges total
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
@@ -172,8 +175,9 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
         Returns empty tensor of shape (0, 2) for watertight meshes.
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
         >>> # Cylinder with open ends
-        >>> mesh = create_cylinder_mesh(radius=1.0, n_circ=32, n_height=16)
+        >>> mesh = cylinder_open.load(n_circ=32, n_height=16)
         >>> boundary_edges = get_boundary_edges(mesh)
         >>> # Top and bottom circles each have 32 edges = 64 total
         >>> assert len(boundary_edges) == 64

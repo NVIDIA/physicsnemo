@@ -42,17 +42,14 @@ def is_watertight(mesh: "Mesh") -> bool:
         True if mesh is watertight (no boundary facets), False otherwise
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
         >>> # Closed sphere is watertight
-        >>> sphere = create_sphere_mesh(subdivisions=3)
-        >>> is_watertight(sphere)  # True
+        >>> sphere = sphere_icosahedral.load(subdivisions=3)
+        >>> assert is_watertight(sphere) == True
         >>>
         >>> # Open cylinder with holes at ends
-        >>> cylinder = create_cylinder_mesh(closed=False)
-        >>> is_watertight(cylinder)  # False
-        >>>
-        >>> # Single tetrahedron has 4 boundary faces
-        >>> tet = Mesh(points, cells=torch.tensor([[0, 1, 2, 3]]))
-        >>> is_watertight(tet)  # False
+        >>> cylinder = cylinder_open.load()
+        >>> assert is_watertight(cylinder) == False
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
         categorize_facets_by_count,
@@ -97,17 +94,14 @@ def is_manifold(
         True if mesh passes the specified manifold checks, False otherwise
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
         >>> # Valid manifold (sphere)
-        >>> sphere = create_sphere_mesh(subdivisions=3)
-        >>> is_manifold(sphere)  # True
-        >>>
-        >>> # Non-manifold mesh with T-junction (edge shared by 3+ faces)
-        >>> non_manifold = create_t_junction_mesh()
-        >>> is_manifold(non_manifold)  # False
+        >>> sphere = sphere_icosahedral.load(subdivisions=3)
+        >>> assert is_manifold(sphere) == True
         >>>
         >>> # Manifold with boundary (open cylinder)
-        >>> cylinder = create_cylinder_mesh(closed=False)
-        >>> is_manifold(cylinder)  # True (manifold with boundary is OK)
+        >>> cylinder = cylinder_open.load()
+        >>> assert is_manifold(cylinder) == True  # manifold with boundary is OK
 
     Note:
         This function checks topological constraints but does not check for

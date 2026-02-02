@@ -70,10 +70,11 @@ def mean_curvature_vertices(
         ValueError: If mesh is not codimension-1
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Sphere of radius r has H = 1/r everywhere
-        >>> sphere = create_sphere_mesh(radius=2.0)
+        >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
         >>> H = mean_curvature_vertices(sphere)
-        >>> assert H.mean() ≈ 0.5  # 1/2.0
+        >>> # H.mean() ≈ 0.5 (= 1/2.0)
 
     Note:
         For a sphere with outward normals, H > 0.

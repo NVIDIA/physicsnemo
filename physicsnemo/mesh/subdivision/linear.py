@@ -68,15 +68,11 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
         - n_cells = original_n_cells * 2^n_manifold_dims
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> # Triangle mesh: 2 triangles -> 8 triangles
-        >>> mesh = create_triangle_mesh()
+        >>> mesh = two_triangles_2d.load()
         >>> subdivided = subdivide_linear(mesh)
         >>> assert subdivided.n_cells == mesh.n_cells * 4  # 2^2 for 2D
-
-        >>> # Tetrahedral mesh: 1 tet -> 8 tets
-        >>> tet_mesh = create_tet_mesh()
-        >>> subdivided = subdivide_linear(tet_mesh)
-        >>> assert subdivided.n_cells == tet_mesh.n_cells * 8  # 2^3 for 3D
     """
     from physicsnemo.mesh.mesh import Mesh
 

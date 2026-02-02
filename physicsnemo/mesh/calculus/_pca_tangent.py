@@ -61,7 +61,8 @@ def estimate_tangent_space_pca(
         7. Remaining eigenvectors span normal space
 
     Example:
-        >>> # For curve in 3D
+        >>> from physicsnemo.mesh.primitives.curves import helix_3d
+        >>> curve_mesh = helix_3d.load()
         >>> tangent_basis, normal_basis = estimate_tangent_space_pca(curve_mesh)
         >>> # tangent_basis: (n_points, 1, 3) - tangent direction
         >>> # normal_basis: (n_points, 2, 3) - normal plane basis
@@ -222,9 +223,11 @@ def project_gradient_to_tangent_space_pca(
         Intrinsic gradients projected onto tangent space, same shape as input
 
     Example:
-        >>> # Curve in 3D
-        >>> grad_extrinsic = compute_gradient_extrinsic(mesh, values)
-        >>> grad_intrinsic = project_gradient_to_tangent_space_pca(mesh, grad_extrinsic)
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.curves import helix_3d
+        >>> mesh = helix_3d.load()
+        >>> gradients = torch.randn(mesh.n_points, mesh.n_spatial_dims)
+        >>> grad_intrinsic = project_gradient_to_tangent_space_pca(mesh, gradients)
     """
     ### Estimate tangent space using PCA
     tangent_basis, _ = estimate_tangent_space_pca(mesh, k_neighbors)

@@ -45,13 +45,15 @@ def get_point_to_cells_adjacency(mesh: "Mesh") -> Adjacency:
         contain point i. Isolated points (not in any cells) have empty lists.
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Triangle mesh with 4 points, 2 triangles
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> adj = get_point_to_cells_adjacency(mesh)
         >>> adj.to_list()
-        [[0], [0, 1], [0, 1], [1]]  # Point 0 in cell 0, point 1 in cells 0&1, etc.
+        [[0], [0, 1], [0, 1], [1]]
     """
     ### Handle empty mesh
     if mesh.n_cells == 0 or mesh.n_points == 0:
@@ -100,13 +102,15 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
         share a cell (edge) with point i. Isolated points have empty lists.
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Three points forming a single triangle
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0.5, 1.]])
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> adj = get_point_to_points_adjacency(mesh)
         >>> adj.to_list()
-        [[1, 2], [0, 2], [0, 1]]  # Each point connected to the other two
+        [[1, 2], [0, 2], [0, 1]]
     """
     from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
 

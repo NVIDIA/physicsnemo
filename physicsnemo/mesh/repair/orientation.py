@@ -49,8 +49,10 @@ def fix_orientation(
         ValueError: If mesh is not a 2D manifold in 3D
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> mesh_oriented, stats = fix_orientation(mesh)
-        >>> print(f"Flipped {stats['n_faces_flipped']} faces")
+        >>> assert "n_faces_flipped" in stats
     """
     if mesh.n_manifold_dims != 2:
         raise ValueError(

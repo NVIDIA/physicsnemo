@@ -69,9 +69,11 @@ def smooth_laplacian(
         ValueError: If n_iter < 0 or relaxation_factor <= 0
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> # Basic smoothing
-        >>> smoothed = smooth_laplacian(mesh, n_iter=100, relaxation_factor=0.1)
-        >>>
+        >>> smoothed = smooth_laplacian(mesh, n_iter=10, relaxation_factor=0.1)
+        >>> assert smoothed.n_points == mesh.n_points
         >>> # Preserve boundaries and sharp edges
         >>> smoothed = smooth_laplacian(
         ...     mesh,

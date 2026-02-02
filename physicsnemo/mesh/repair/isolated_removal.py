@@ -45,9 +45,10 @@ def remove_isolated_vertices(
         - "n_points_final": Final number of points
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> mesh_clean, stats = remove_isolated_vertices(mesh)
-        >>> print(f"Removed {stats['n_isolated_removed']} isolated vertices")
-        >>> assert stats['n_isolated_removed'] >= 0
+        >>> assert stats["n_isolated_removed"] == 0  # no isolated in clean mesh
     """
     n_original = mesh.n_points
     device = mesh.points.device

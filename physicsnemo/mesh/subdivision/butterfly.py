@@ -197,8 +197,9 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
         NotImplementedError: If n_manifold_dims is not 2 (may be relaxed in future)
 
     Example:
+        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Smooth a triangular surface
-        >>> mesh = create_triangle_mesh_3d()
+        >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> smooth = subdivide_butterfly(mesh)
         >>> # smooth has same connectivity as linear subdivision
         >>> # but smoother geometry from weighted stencils

@@ -62,10 +62,12 @@ def _apply_cotan_laplacian_operator(
         Laplacian applied to data, shape (n_vertices, *data_shape)
 
     Example:
+        >>> import torch
         >>> # For scalar field
-        >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field, device)
-        >>> # For vector field (point coordinates)
-        >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, points, device)
+        >>> n_points, edges = 4, torch.tensor([[0, 1], [1, 2], [0, 2]])
+        >>> weights = torch.ones(3)
+        >>> scalar_field = torch.randn(4)
+        >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field, "cpu")
     """
     ### Initialize output with same shape as data
     if data.ndim == 1:

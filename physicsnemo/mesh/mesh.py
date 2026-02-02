@@ -809,10 +809,11 @@ class Mesh:
             Isolated vertices have NaN curvature.
 
         Example:
+            >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
             >>> # Sphere of radius r has K = 1/r²
-            >>> sphere = create_sphere_mesh(radius=2.0)
+            >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
             >>> K = sphere.gaussian_curvature_vertices
-            >>> assert K.mean() ≈ 0.25
+            >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
 
         Note:
             Satisfies discrete Gauss-Bonnet theorem:
@@ -840,6 +841,8 @@ class Mesh:
             Tensor of shape (n_cells,) containing Gaussian curvature at cells.
 
         Example:
+            >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+            >>> mesh = sphere_icosahedral.load(subdivisions=2)
             >>> K_cells = mesh.gaussian_curvature_cells
         """
         cached = get_cached(self.cell_data, "gaussian_curvature")
@@ -878,10 +881,11 @@ class Mesh:
             ValueError: If mesh is not codimension-1
 
         Example:
+            >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
             >>> # Sphere of radius r has H = 1/r
-            >>> sphere = create_sphere_mesh(radius=2.0)
+            >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
             >>> H = sphere.mean_curvature_vertices
-            >>> assert H.mean() ≈ 0.5
+            >>> # H.mean() ≈ 0.5 (= 1/2.0)
         """
         cached = get_cached(self.point_data, "mean_curvature")
         if cached is None:
@@ -1138,15 +1142,12 @@ class Mesh:
             IndexError: If any cell_indices are out of bounds.
 
         Example:
+            >>> import torch
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> # Sample one point from each cell uniformly
             >>> points = mesh.sample_random_points_on_cells()
-            >>>
-            >>> # Sample points from specific cells (with repeats allowed)
-            >>> cell_indices = torch.tensor([0, 0, 1, 5, 5, 5])
-            >>> points = mesh.sample_random_points_on_cells(cell_indices=cell_indices)
-            >>>
-            >>> # Sample with concentration toward cell centers
-            >>> points = mesh.sample_random_points_on_cells(alpha=3.0)
+            >>> assert points.shape == (mesh.n_cells, mesh.n_spatial_dims)
         """
         from physicsnemo.mesh.sampling import sample_random_points_on_cells
 
@@ -1187,12 +1188,12 @@ class Mesh:
             for query points outside the mesh (unless project_onto_nearest_cell=True).
 
         Example:
-            >>> # Sample cell data at specific points
-            >>> query_pts = torch.tensor([[0.5, 0.5], [1.0, 1.0]])
+            >>> import torch
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
+            >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
+            >>> query_pts = torch.tensor([[0.3, 0.3], [0.8, 0.5]])
             >>> sampled_data = mesh.sample_data_at_points(query_pts, data_source="cells")
-            >>>
-            >>> # Interpolate point data
-            >>> sampled_data = mesh.sample_data_at_points(query_pts, data_source="points")
         """
         from physicsnemo.mesh.sampling import sample_data_at_points
 
@@ -1390,16 +1391,15 @@ class Mesh:
                 (would result in negative manifold dimension).
 
         Example:
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
             >>> # Extract edges from a triangle mesh (codimension 1)
-            >>> triangle_mesh = Mesh(points, triangular_cells)
+            >>> triangle_mesh = two_triangles_2d.load()
             >>> edge_mesh = triangle_mesh.get_facet_mesh(manifold_codimension=1)
-            >>> edge_mesh.n_manifold_dims  # 1 (edges)
+            >>> assert edge_mesh.n_manifold_dims == 1  # edges
             >>>
             >>> # Extract vertices from a triangle mesh (codimension 2)
             >>> vertex_mesh = triangle_mesh.get_facet_mesh(manifold_codimension=2)
-            >>> vertex_mesh.n_manifold_dims  # 0 (vertices)
-            >>>
-            >>> # Extract with area-weighted data aggregation
+            >>> assert vertex_mesh.n_manifold_dims == 0  # vertices
             >>> facet_mesh = triangle_mesh.get_facet_mesh(
             ...     data_source="cells",
             ...     data_aggregation="area_weighted"
@@ -1472,15 +1472,17 @@ class Mesh:
             new cells connectivity representing the boundary.
 
         Example:
-            >>> # Extract triangular surface of a tetrahedral mesh
-            >>> tet_mesh = Mesh(points, tetrahedra)
-            >>> surface_mesh = tet_mesh.get_boundary_mesh()
-            >>> surface_mesh.n_manifold_dims  # 2 (triangles)
+            >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
+            >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+            >>> # Extract triangular surface of a volume mesh
+            >>> vol_mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
+            >>> surface_mesh = vol_mesh.get_boundary_mesh()
+            >>> assert surface_mesh.n_manifold_dims == 2  # triangles
             >>>
             >>> # For a closed watertight sphere
-            >>> sphere = create_sphere_mesh(subdivisions=3)
+            >>> sphere = sphere_icosahedral.load(subdivisions=3)
             >>> boundary = sphere.get_boundary_mesh()
-            >>> boundary.n_cells  # 0 (no boundary)
+            >>> assert boundary.n_cells == 0  # no boundary
         """
         ### Call kernel to extract boundary mesh data
         from physicsnemo.mesh.boundaries import extract_boundary_mesh_data
@@ -1512,17 +1514,14 @@ class Mesh:
             True if mesh is watertight (no boundary facets), False otherwise
 
         Example:
+            >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
             >>> # Closed sphere is watertight
-            >>> sphere = create_sphere_mesh(subdivisions=3)
-            >>> sphere.is_watertight()  # True
+            >>> sphere = sphere_icosahedral.load(subdivisions=3)
+            >>> assert sphere.is_watertight() == True
             >>>
             >>> # Open cylinder with holes at ends
-            >>> cylinder = create_cylinder_mesh(closed=False)
-            >>> cylinder.is_watertight()  # False
-            >>>
-            >>> # Single tetrahedron has 4 boundary faces
-            >>> tet = Mesh(points, cells=torch.tensor([[0, 1, 2, 3]]))
-            >>> tet.is_watertight()  # False
+            >>> cylinder = cylinder_open.load()
+            >>> assert cylinder.is_watertight() == False
         """
         from physicsnemo.mesh.boundaries import is_watertight
 
@@ -1547,17 +1546,14 @@ class Mesh:
             True if mesh passes the specified manifold checks, False otherwise
 
         Example:
+            >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
             >>> # Valid manifold (sphere)
-            >>> sphere = create_sphere_mesh(subdivisions=3)
-            >>> sphere.is_manifold()  # True
-            >>>
-            >>> # Non-manifold mesh with T-junction (edge shared by 3+ faces)
-            >>> non_manifold = create_t_junction_mesh()
-            >>> non_manifold.is_manifold()  # False
+            >>> sphere = sphere_icosahedral.load(subdivisions=3)
+            >>> assert sphere.is_manifold() == True
             >>>
             >>> # Manifold with boundary (open cylinder)
-            >>> cylinder = create_cylinder_mesh(closed=False)
-            >>> cylinder.is_manifold()  # True (manifold with boundary is OK)
+            >>> cylinder = cylinder_open.load()
+            >>> assert cylinder.is_manifold() == True  # manifold with boundary is OK
 
         Note:
             This function checks topological constraints but does not check for
@@ -1578,7 +1574,8 @@ class Mesh:
             contain point i. Isolated points (not in any cells) have empty lists.
 
         Example:
-            >>> mesh = from_pyvista(pv.examples.load_airplane())
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> adj = mesh.get_point_to_cells_adjacency()
             >>> # Get cells containing point 0
             >>> cells_of_point_0 = adj.to_list()[0]
@@ -1598,7 +1595,8 @@ class Mesh:
             share a cell (edge) with point i. Isolated points have empty lists.
 
         Example:
-            >>> mesh = from_pyvista(pv.examples.load_airplane())
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> adj = mesh.get_point_to_points_adjacency()
             >>> # Get neighbors of point 0
             >>> neighbors_of_point_0 = adj.to_list()[0]
@@ -1625,9 +1623,10 @@ class Mesh:
             share a k-codimension facet with cell i.
 
         Example:
-            >>> mesh = from_pyvista(pv.examples.load_tetbeam())
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> adj = mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
-            >>> # Get cells sharing a face with cell 0
+            >>> # Get cells sharing an edge with cell 0
             >>> neighbors_of_cell_0 = adj.to_list()[0]
         """
         from physicsnemo.mesh.neighbors import get_cell_to_cells_adjacency
@@ -1648,7 +1647,8 @@ class Mesh:
             number of vertices (n_manifold_dims + 1).
 
         Example:
-            >>> mesh = from_pyvista(pv.examples.load_airplane())
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> adj = mesh.get_cells_to_points_adjacency()
             >>> # Get vertices of cell 0
             >>> vertices_of_cell_0 = adj.to_list()[0]
@@ -2092,15 +2092,13 @@ class Mesh:
             Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
 
         Example:
+            >>> import torch
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
+            >>> mesh.point_data["pressure"] = torch.randn(mesh.n_points)
             >>> # Compute gradient of pressure
             >>> mesh_grad = mesh.compute_point_derivatives(keys="pressure")
             >>> grad_p = mesh_grad.point_data["pressure_gradient"]
-            >>>
-            >>> # Multiple fields with DEC method
-            >>> mesh_grad = mesh.compute_point_derivatives(
-            ...     keys=["pressure", "temperature"],
-            ...     method="dec"
-            ... )
         """
         from physicsnemo.mesh.calculus import compute_point_derivatives
 
@@ -2130,6 +2128,10 @@ class Mesh:
             Self (mesh) with gradient fields added to cell_data (modified in place)
 
         Example:
+            >>> import torch
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
+            >>> mesh.cell_data["pressure"] = torch.randn(mesh.n_cells)
             >>> # Compute gradient of cell-centered pressure
             >>> mesh_grad = mesh.compute_cell_derivatives(keys="pressure")
         """
@@ -2169,9 +2171,10 @@ class Mesh:
             Dictionary with validation results
 
         Example:
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> report = mesh.validate()
-            >>> if not report["valid"]:
-            >>>     print(f"Validation failed: {report}")
+            >>> assert report["valid"] == True
         """
         from physicsnemo.mesh.validation import validate_mesh
 
@@ -2197,9 +2200,10 @@ class Mesh:
         - quality_score: Combined metric in [0,1] (1.0 is perfect)
 
         Example:
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> metrics = mesh.quality_metrics
-            >>> poor_cells = metrics["quality_score"] < 0.3
-            >>> print(f"Found {poor_cells.sum()} poor quality cells")
+            >>> assert "quality_score" in metrics.keys()
         """
         from physicsnemo.mesh.validation import compute_quality_metrics
 
@@ -2213,9 +2217,10 @@ class Mesh:
         edge length distributions, area distributions, and quality metrics.
 
         Example:
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+            >>> mesh = two_triangles_2d.load()
             >>> stats = mesh.statistics
-            >>> print(f"Mesh: {stats['n_points']} points, {stats['n_cells']} cells")
-            >>> print(f"Edge lengths: min={stats['edge_length_stats'][0]:.3f}")
+            >>> assert "n_points" in stats and "n_cells" in stats
         """
         from physicsnemo.mesh.validation import compute_mesh_statistics
 
@@ -2269,18 +2274,12 @@ class Mesh:
             NotImplementedError: If butterfly/loop filter used with non-2D manifold
 
         Example:
+            >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
             >>> # Linear subdivision of triangular mesh
-            >>> mesh = create_triangle_mesh()
+            >>> mesh = two_triangles_2d.load()
             >>> refined = mesh.subdivide(levels=2, filter="linear")
             >>> # Each triangle splits into 4, twice: 2 -> 8 -> 32 triangles
-            >>>
-            >>> # Smooth subdivision with Loop scheme
-            >>> smooth = mesh.subdivide(levels=3, filter="loop")
-            >>> # Produces smooth limit surface after 3 iterations
-            >>>
-            >>> # Butterfly for interpolating smooth subdivision
-            >>> butterfly = mesh.subdivide(levels=1, filter="butterfly")
-            >>> # Smoother than linear, preserves original vertices
+            >>> assert refined.n_cells == mesh.n_cells * 16
 
         Note:
             Multi-level subdivision is achieved by iterative application.
@@ -2348,12 +2347,14 @@ class Mesh:
             Cleaned mesh with same structure but repaired topology
 
         Example:
+            >>> import torch
+            >>> from physicsnemo.mesh import Mesh
             >>> # Mesh with duplicate points
             >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.], [1., 1.]])
             >>> cells = torch.tensor([[0, 1, 3], [2, 1, 3]])
             >>> mesh = Mesh(points=points, cells=cells)
             >>> cleaned = mesh.clean()
-            >>> cleaned.n_points  # 3 (points 0 and 2 merged)
+            >>> assert cleaned.n_points == 3  # points 0 and 2 merged
             >>>
             >>> # Adjust tolerance for coarser merging
             >>> mesh_loose = mesh.clean(rtol=1e-6, atol=1e-6)

@@ -75,10 +75,10 @@ def validate_mesh(
         ValueError: If raise_on_error=True and validation fails
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> report = validate_mesh(mesh)
-        >>> if not report["valid"]:
-        >>>     print(f"Found {report['n_degenerate_cells']} degenerate cells")
-        >>>     print(f"Indices: {report['degenerate_cell_indices']}")
+        >>> assert report["valid"] == True
     """
     results = {
         "valid": True,
@@ -292,10 +292,10 @@ def check_duplicate_cell_vertices(mesh: "Mesh") -> tuple[int, torch.Tensor]:
         Tuple of (n_invalid_cells, invalid_cell_indices)
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> n_invalid, indices = check_duplicate_cell_vertices(mesh)
-        >>> if n_invalid > 0:
-        >>>     print(f"Found {n_invalid} cells with duplicate vertices")
-        >>>     mesh = mesh.slice_cells(~torch.isin(torch.arange(mesh.n_cells), indices))
+        >>> assert n_invalid == 0  # clean mesh has no duplicate vertices
     """
     if mesh.n_cells == 0:
         return 0, torch.tensor([], dtype=torch.long, device=mesh.cells.device)

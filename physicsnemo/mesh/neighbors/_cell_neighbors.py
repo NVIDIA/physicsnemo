@@ -57,13 +57,15 @@ def get_cell_to_cells_adjacency(
         once per source cell.
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Two triangles sharing an edge
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> adj = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
         >>> adj.to_list()
-        [[1], [0]]  # Triangle 0 neighbors triangle 1 (share edge [1,2])
+        [[1], [0]]
     """
     from physicsnemo.mesh.boundaries import (
         categorize_facets_by_count,
@@ -295,13 +297,15 @@ def get_cells_to_points_adjacency(mesh: "Mesh") -> Adjacency:
         number of vertices (n_manifold_dims + 1).
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Triangle mesh with 2 cells
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> adj = get_cells_to_points_adjacency(mesh)
         >>> adj.to_list()
-        [[0, 1, 2], [1, 3, 2]]  # Vertices of each triangle
+        [[0, 1, 2], [1, 3, 2]]
     """
     ### Handle empty mesh
     if mesh.n_cells == 0:

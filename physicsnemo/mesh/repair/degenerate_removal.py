@@ -49,8 +49,10 @@ def remove_degenerate_cells(
         - "n_cells_final": Final number of cells
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> mesh_clean, stats = remove_degenerate_cells(mesh)
-        >>> print(f"Removed {stats['n_zero_area_cells']} degenerate cells")
+        >>> assert stats["n_cells_final"] == mesh.n_cells  # no degenerates in clean mesh
     """
     n_original = mesh.n_cells
     device = mesh.points.device

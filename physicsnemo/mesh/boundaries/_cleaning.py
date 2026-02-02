@@ -96,6 +96,8 @@ def merge_duplicate_points(
         point_mapping: Mapping from old to new point indices, shape (n_points,)
 
     Example:
+        >>> import torch
+        >>> from tensordict import TensorDict
         >>> # Two points at same location
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.]])
         >>> cells = torch.tensor([[0, 1], [1, 2]])
@@ -103,8 +105,8 @@ def merge_duplicate_points(
         ...     points, cells, TensorDict({}, batch_size=[3])
         ... )
         >>> # Points 0 and 2 are merged
-        >>> len(merged_points)  # 2
-        >>> mapping  # tensor([0, 1, 0])
+        >>> assert len(merged_points) == 2
+        >>> assert torch.equal(mapping, torch.tensor([0, 1, 0]))
     """
     n_points = len(points)
     device = points.device
@@ -371,12 +373,14 @@ def remove_duplicate_cells(
         unique_cell_data: Cell data for unique cells
 
     Example:
+        >>> import torch
+        >>> from tensordict import TensorDict
         >>> # Two cells with same vertices
         >>> cells = torch.tensor([[0, 1, 2], [1, 0, 2], [3, 4, 5]])
         >>> unique_cells, _ = remove_duplicate_cells(
         ...     cells, TensorDict({}, batch_size=[3])
         ... )
-        >>> len(unique_cells)  # 2 (cells 0 and 1 are duplicates)
+        >>> assert len(unique_cells) == 2  # cells 0 and 1 are duplicates
     """
     if len(cells) == 0:
         return cells, cell_data
@@ -454,13 +458,15 @@ def remove_unused_points(
             Unused points map to -1
 
     Example:
+        >>> import torch
+        >>> from tensordict import TensorDict
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [2., 2.]])
         >>> cells = torch.tensor([[0, 1, 2]])  # Point 3 is unused
         >>> used_points, updated_cells, _, mapping = remove_unused_points(
         ...     points, cells, TensorDict({}, batch_size=[4])
         ... )
-        >>> len(used_points)  # 3
-        >>> mapping  # tensor([0, 1, 2, -1])
+        >>> assert len(used_points) == 3
+        >>> assert torch.equal(mapping, torch.tensor([0, 1, 2, -1]))
     """
     n_points = len(points)
     device = points.device
@@ -531,12 +537,14 @@ def clean_mesh(
         Cleaned mesh with same structure but repaired topology
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Mesh with duplicate points
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.], [1., 1.]])
         >>> cells = torch.tensor([[0, 1, 3], [2, 1, 3]])
         >>> mesh = Mesh(points=points, cells=cells)
-        >>> cleaned = mesh.clean()
-        >>> cleaned.n_points  # 3 (points 0 and 2 merged)
+        >>> cleaned = clean_mesh(mesh)
+        >>> assert cleaned.n_points == 3  # points 0 and 2 merged
     """
     points = mesh.points
     cells = mesh.cells

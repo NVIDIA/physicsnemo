@@ -93,15 +93,14 @@ def categorize_facets_by_count(
         If filtering is applied, only the matching facets and their data are returned.
 
     Example:
+        >>> import torch
+        >>> # Create candidate facets from a simple mesh (edges from 2 triangles)
+        >>> candidate_facets = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 2], [1, 3], [2, 3]])
         >>> # Find boundary facets (appear exactly once)
         >>> boundary_facets, _, counts = categorize_facets_by_count(
         ...     candidate_facets, target_counts="boundary"
         ... )
-        >>>
-        >>> # Find shared facets (appear 2+ times)
-        >>> shared, inv, counts = categorize_facets_by_count(
-        ...     candidate_facets, target_counts="shared"
-        ... )
+        >>> assert boundary_facets.shape[0] == 4  # 4 boundary edges
     """
     ### Deduplicate and count occurrences
     unique_facets, inverse_indices, counts = torch.unique(
@@ -189,14 +188,15 @@ def extract_candidate_facets(
         ValueError: If manifold_codimension is invalid for the given cells
 
     Example:
+        >>> import torch
         >>> # Extract edges (codim 1) from triangles
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> facets, parents = extract_candidate_facets(cells, manifold_codimension=1)
-        >>> facets.shape  # (3, 2) - three edges with 2 vertices each
+        >>> assert facets.shape == (3, 2)  # three edges with 2 vertices each
 
         >>> # Extract vertices (codim 2) from triangles
         >>> facets, parents = extract_candidate_facets(cells, manifold_codimension=2)
-        >>> facets.shape  # (3, 1) - three vertices
+        >>> assert facets.shape == (3, 1)  # three vertices
     """
     n_cells, n_vertices_per_cell = cells.shape
     n_vertices_per_subsimplex = n_vertices_per_cell - manifold_codimension

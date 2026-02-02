@@ -86,6 +86,10 @@ def compute_edge_support_volume_cell_fractions(
         5. Fraction = (dual length in triangle) / (total dual length)
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
         >>> fractions = compute_edge_support_volume_cell_fractions(mesh, edges)
         >>> # fractions[i, j] = fraction of edge i's support volume in its j-th cell
     """

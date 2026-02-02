@@ -61,7 +61,11 @@ def _scatter_add_cell_contributions_to_vertices(
         contributions: Volume contribution from each cell to its vertices
 
     Example:
+        >>> import torch
         >>> # Add 1/3 of each triangle area to each vertex
+        >>> dual_volumes = torch.zeros(4)
+        >>> triangle_cells = torch.tensor([[0, 1, 2], [1, 2, 3]])
+        >>> triangle_areas = torch.tensor([0.5, 0.5])
         >>> _scatter_add_cell_contributions_to_vertices(
         ...     dual_volumes, triangle_cells, triangle_areas / 3.0
         ... )
@@ -130,6 +134,8 @@ def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
         NotImplementedError: If n_manifold_dims > 3
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> dual_vols = compute_dual_volumes_0(mesh)
         >>> # Use in Hodge star: ⋆f(⋆v) = f(v) × dual_vols[v]
         >>> # Use in Laplacian: Δf(v) = (1/dual_vols[v]) × Σ w_ij(f_j - f_i)

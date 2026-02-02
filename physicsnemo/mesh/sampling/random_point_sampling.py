@@ -60,13 +60,11 @@ def sample_random_points_on_cells(
         IndexError: If any cell_indices are out of bounds.
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> # Sample one point from each cell uniformly
         >>> points = sample_random_points_on_cells(mesh)
-        >>>
-        >>> # Sample points from specific cells (with repeats allowed)
-        >>> cell_indices = torch.tensor([0, 0, 1, 5, 5, 5])  # 2 from cell 0, 1 from cell 1, 3 from cell 5
-        >>> points = sample_random_points_on_cells(mesh, cell_indices=cell_indices)
-        >>>
+        >>> assert points.shape == (mesh.n_cells, mesh.n_spatial_dims)
         >>> # Sample with concentration toward cell centers
         >>> points = sample_random_points_on_cells(mesh, alpha=3.0)
     """

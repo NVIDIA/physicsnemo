@@ -57,10 +57,10 @@ def compute_mesh_statistics(
         Dictionary with statistics
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> stats = compute_mesh_statistics(mesh)
-        >>> print(f"Mesh: {stats['n_points']} points, {stats['n_cells']} cells")
-        >>> print(f"Edge lengths: {stats['edge_length_stats']}")
-        >>> print(f"Quality: {stats['quality_score_stats']}")
+        >>> assert "n_points" in stats and "n_cells" in stats
     """
     stats = {
         "n_points": mesh.n_points,

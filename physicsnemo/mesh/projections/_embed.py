@@ -67,26 +67,28 @@ def embed_in_spatial_dims(
             impossible configuration where manifold exceeds ambient space)
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Embed 2D triangle mesh in 2D space into 3D space
         >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh_2d = Mesh(points=points_2d, cells=cells)
-        >>> mesh_2d.n_spatial_dims  # 2
+        >>> assert mesh_2d.n_spatial_dims == 2
         >>>
         >>> # Embed in 3D (points become [x, y, 0])
         >>> mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
-        >>> mesh_3d.n_spatial_dims  # 3
-        >>> mesh_3d.points.shape  # (3, 3)
-        >>> mesh_3d.points[0]  # tensor([0., 0., 0.])
+        >>> assert mesh_3d.n_spatial_dims == 3
+        >>> assert mesh_3d.points.shape == (3, 3)
+        >>> assert torch.allclose(mesh_3d.points[0], torch.tensor([0., 0., 0.]))
         >>>
         >>> # Project back to 2D
         >>> mesh_2d_again = embed_in_spatial_dims(mesh_3d, target_n_spatial_dims=2)
-        >>> torch.allclose(mesh_2d_again.points, points_2d)  # True
+        >>> assert torch.allclose(mesh_2d_again.points, points_2d)
         >>>
         >>> # Codimension changes affect normal computation
-        >>> mesh_2d.codimension  # 0 (no normals defined)
-        >>> mesh_3d.codimension  # 1 (normals now defined!)
-        >>> mesh_3d.cell_normals.shape  # (1, 3)
+        >>> assert mesh_2d.codimension == 0  # no normals defined
+        >>> assert mesh_3d.codimension == 1  # normals now defined!
+        >>> assert mesh_3d.cell_normals.shape == (1, 3)
 
     Note:
         When spatial dimensions change, all cached geometric properties are cleared

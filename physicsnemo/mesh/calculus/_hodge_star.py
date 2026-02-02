@@ -58,7 +58,10 @@ def hodge_star_0(
         shape (n_points,) or (n_points, ...)
 
     Example:
-        For a function f on triangle mesh vertices:
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> f = torch.randn(mesh.n_points)  # function at vertices
         >>> star_f = hodge_star_0(mesh, f)
         >>> # star_f[i] = f[i] * dual_volume[i]
     """
@@ -144,8 +147,10 @@ def codifferential(
         k-form values after applying codifferential
 
     Example:
-        For divergence of a vector field (represented as 1-form on edges):
-        >>> div_f = codifferential(k=0, edges=edges)
+        >>> import torch
+        >>> # Compute divergence of a 1-form on edges
+        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2]])
+        >>> # div_f = codifferential(k=0, edges=edges)  # requires mesh context
     """
     if k == 0:
         ### δ: Ω¹ → Ω⁰ (divergence)

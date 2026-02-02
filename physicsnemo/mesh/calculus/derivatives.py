@@ -57,16 +57,13 @@ def compute_point_derivatives(
         Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh.point_data["pressure"] = torch.randn(mesh.n_points)
         >>> # Compute gradient of pressure field
-        >>> mesh_with_grad = mesh.compute_point_derivatives(keys="pressure")
+        >>> mesh_with_grad = compute_point_derivatives(mesh, keys="pressure")
         >>> grad_p = mesh_with_grad.point_data["pressure_gradient"]
-        >>>
-        >>> # Compute both intrinsic and extrinsic for surface
-        >>> mesh_grad = mesh.compute_point_derivatives(
-        ...     keys="temperature",
-        ...     gradient_type="both",
-        ...     method="dec"
-        ... )
     """
     from physicsnemo.mesh.calculus.gradient import (
         compute_gradient_points_dec,

@@ -122,9 +122,10 @@ def compute_angles_at_vertices(mesh: "Mesh") -> torch.Tensor:
         For isolated vertices, angle is 0.
 
     Example:
-        >>> # For a flat triangle mesh, interior vertices should have angle ≈ 2π
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> triangle_mesh = two_triangles_2d.load()
         >>> angles = compute_angles_at_vertices(triangle_mesh)
-        >>> assert torch.allclose(angles[interior_vertices], 2*torch.pi * torch.ones(...))
+        >>> # Angles are computed at each vertex
     """
     device = mesh.points.device
     n_points = mesh.n_points

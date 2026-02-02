@@ -31,6 +31,8 @@ Mean Curvature (Extrinsic):
 
 Example:
     >>> from physicsnemo.mesh.curvature import gaussian_curvature_vertices, mean_curvature_vertices
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
     >>>
     >>> # Compute Gaussian curvature
     >>> K = gaussian_curvature_vertices(mesh)

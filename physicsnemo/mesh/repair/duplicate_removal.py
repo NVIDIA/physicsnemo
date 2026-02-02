@@ -54,8 +54,9 @@ def remove_duplicate_vertices(
         vectorized with no Python loops over points.
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> mesh_clean, stats = remove_duplicate_vertices(mesh, tolerance=1e-6)
-        >>> print(f"Merged {stats['n_duplicates_merged']} duplicate vertices")
         >>> assert mesh_clean.validate()["valid"]
     """
     n_original = mesh.n_points

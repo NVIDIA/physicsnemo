@@ -77,13 +77,16 @@ def sample_data_at_points(
             with BVH acceleration).
 
     Example:
-        >>> # Build BVH once, reuse for many queries
+        >>> import torch
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> from physicsnemo.mesh.spatial import BVH
+        >>> mesh = two_triangles_2d.load()
+        >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
+        >>> # Build BVH once, reuse for many queries
         >>> bvh = BVH.from_mesh(mesh)
-        >>>
-        >>> # Sample at many points efficiently
-        >>> query_pts = torch.rand(10000, 3)
+        >>> query_pts = torch.tensor([[0.3, 0.3]])
         >>> result = sample_data_at_points(mesh, query_pts, bvh=bvh)
+        >>> assert "pressure" in result.keys()
     """
     if data_source not in ["cells", "points"]:
         raise ValueError(f"Invalid {data_source=}. Must be 'cells' or 'points'.")

@@ -29,9 +29,10 @@ All schemes work by:
 
 Example:
     >>> from physicsnemo.mesh.subdivision import subdivide_linear
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
     >>> subdivided = subdivide_linear(mesh)
-    >>> # Or use the Mesh method:
-    >>> subdivided = mesh.subdivide(levels=2, filter="loop")
+    >>> assert subdivided.n_cells == mesh.n_cells * 4  # 2^2 for 2D
 """
 
 from physicsnemo.mesh.subdivision.butterfly import subdivide_butterfly

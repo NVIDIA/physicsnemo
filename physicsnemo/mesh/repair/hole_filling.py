@@ -50,8 +50,10 @@ def fill_holes(
         ValueError: If mesh is not a 2D manifold
 
     Example:
-        >>> mesh_filled, stats = fill_holes(mesh, max_hole_edges=20)
-        >>> print(f"Filled {stats['n_holes_filled']} holes with {stats['n_faces_added']} triangles")
+        >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
+        >>> mesh = cylinder_open.load()
+        >>> mesh_filled, stats = fill_holes(mesh, max_hole_edges=40)
+        >>> assert stats["n_holes_detected"] >= 0
     """
     if mesh.n_manifold_dims != 2:
         raise ValueError(

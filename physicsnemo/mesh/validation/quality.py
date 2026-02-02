@@ -46,9 +46,10 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
         TensorDict of shape (n_cells,) with quality metrics
 
     Example:
+        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+        >>> mesh = two_triangles_2d.load()
         >>> metrics = compute_quality_metrics(mesh)
-        >>> poor_cells = metrics["quality_score"] < 0.3
-        >>> print(f"Found {poor_cells.sum()} poor quality cells")
+        >>> assert "quality_score" in metrics.keys()
     """
     if mesh.n_cells == 0:
         return TensorDict(

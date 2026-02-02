@@ -70,30 +70,34 @@ def extrude(
         NotImplementedError: If capping=True (not yet implemented)
 
     Example:
+        >>> import torch
+        >>> from physicsnemo.mesh import Mesh
         >>> # Extrude a triangle (2D) in 3D space to create a triangular prism
         >>> # tessellated into 3 tetrahedra
         >>> points = torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]])
         >>> cells = torch.tensor([[0, 1, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> extruded = extrude(mesh, vector=[0., 0., 1.])
-        >>> extruded.n_manifold_dims  # 3 (tetrahedra)
-        >>> extruded.n_cells  # 3 (one triangle → three tetrahedra)
+        >>> assert extruded.n_manifold_dims == 3  # tetrahedra
+        >>> assert extruded.n_cells == 3  # one triangle → three tetrahedra
         >>>
         >>> # Extrude an edge (1D) in 2D space to create a triangle
         >>> points = torch.tensor([[0., 0.], [1., 0.]])
         >>> cells = torch.tensor([[0, 1]])
         >>> mesh = Mesh(points=points, cells=cells)
         >>> extruded = extrude(mesh, vector=[0., 1.])
-        >>> extruded.n_manifold_dims  # 2 (triangles)
-        >>> extruded.n_cells  # 2 (one edge → two triangles)
+        >>> assert extruded.n_manifold_dims == 2  # triangles
+        >>> assert extruded.n_cells == 2  # one edge → two triangles
         >>>
         >>> # Extrude a 2D surface into higher dimensions
+        >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
+        >>> triangles = torch.tensor([[0, 1, 2]])
         >>> mesh_2d_in_2d = Mesh(points_2d, triangles)  # [2, 2] mesh
         >>> # This raises ValueError by default:
         >>> # extruded = extrude(mesh_2d_in_2d)
         >>> # But works with allow_new_spatial_dims:
         >>> extruded = extrude(mesh_2d_in_2d, allow_new_spatial_dims=True)
-        >>> extruded.n_spatial_dims  # 3 (new dimension added)
+        >>> assert extruded.n_spatial_dims == 3  # new dimension added
 
     Note:
         The tessellation pattern for an N-simplex with vertices [v0, v1, ..., vN]
