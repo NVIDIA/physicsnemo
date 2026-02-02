@@ -13,21 +13,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-from .legacy import (  # noqa: F401
-    EDMPrecond,
-    EDMPrecondSR,
-    EDMPrecondSuperResolution,
-    VEPrecond,
-    VEPrecond_dfsr,
-    VEPrecond_dfsr_cond,
-    VPPrecond,
-    iDDPMPrecond,
-)
-from .preconditioners import (  # noqa: F401
-    BaseAffinePreconditioner,
-    EDMPreconditioner,
-    IDDPMPreconditioner,
-    VEPreconditioner,
-    VPPreconditioner,
-)
