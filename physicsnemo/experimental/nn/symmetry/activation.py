@@ -37,12 +37,14 @@ GateActivation
 """
 
 from __future__ import annotations
+from typing import Callable
 
 import torch
 from jaxtyping import Float
 from torch import nn, Tensor
 
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
+from physicsnemo.nn import get_activation
 
 __all__ = [
     "GateActivation",
@@ -122,7 +124,7 @@ class GateActivation(nn.Module):
     SO2Convolution - SO2-preserving linear transformation layer.
     """
 
-    def __init__(self, lmax: int, mmax: int, channels: int) -> None:
+    def __init__(self, lmax: int, mmax: int, channels: int, activation: str | Callable = "silu") -> None:
         super().__init__()
 
         if lmax < 1:
@@ -163,7 +165,14 @@ class GateActivation(nn.Module):
         self.register_buffer("m0_imag_mask", m0_imag_mask, persistent=True)
 
         # Activation functions
-        self.scalar_act = nn.SiLU()
+        if isinstance(activation, Callable):
+            self.scalar_act = activation
+        elif isinstance(activation, str):
+            self.scalar_act = get_activation(activation)
+        else:
+            raise RuntimeError(
+                f"GateActivation supports Callable or str specification of activation functions. Got {activation}."
+            )
         self.gate_act = nn.Sigmoid()
 
     @property

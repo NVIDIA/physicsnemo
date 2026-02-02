@@ -38,6 +38,7 @@ import math
 
 import pytest
 import torch
+from torch import nn
 
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
@@ -192,6 +193,30 @@ class TestGateActivationBasic:
         assert torch.allclose(actual_l0, expected_l0, rtol=1e-5, atol=1e-5), (
             "l=0 should have SiLU activation applied"
         )
+
+    @pytest.mark.parametrize(
+        "activation", ["silu", "relu", "stan", nn.functional.sigmoid, nn.SiLU()]
+    )
+    def test_str_activation(self, device: str, activation: str) -> None:
+        lmax, mmax = 4, 2
+        channels = 16
+        batch_size = 10
+        gate_channels = lmax * channels
+        total_in_channels = channels + gate_channels
+
+        act = GateActivation(lmax=lmax, mmax=mmax, channels=channels).to(device=device)
+
+        x = torch.randn(
+            batch_size,
+            lmax + 1,
+            mmax + 1,
+            2,
+            total_in_channels,
+            device=device,
+        )
+
+        with torch.no_grad():
+            _ = act(x)
 
     def test_l_gt_0_gets_gating(self, dtype: torch.dtype, device: str) -> None:
         """l>0 positions should be scaled by sigmoid(gates).
