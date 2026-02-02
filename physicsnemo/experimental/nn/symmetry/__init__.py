@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -31,11 +31,9 @@ SO2Convolution
 GateActivation
     Gated activation applying SiLU to l=0 and learned gating to l>0.
 EdgeRotation
-    Apply Wigner D-matrix rotations to spherical harmonic embeddings.
-    Use ``get_wigner_matrices()`` to compute and cache D-matrices, then
-    call the module to apply rotations.
-SO3ConvolutionBlock
-    SO(3) block-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
+    Compute Wigner D-matrices for edge rotations in equivariant networks.
+SO3AtomwiseBlock
+    SO(3) atom-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
 
 Functions
 ---------
@@ -46,7 +44,7 @@ make_grid_mask
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.experimental.nn.symmetry.so2_conv import SO2Convolution
-from physicsnemo.experimental.nn.symmetry.so3_block import SO3ConvolutionBlock
+from physicsnemo.experimental.nn.symmetry.so3_atomwise import SO3ConvolutionBlock
 from physicsnemo.experimental.nn.symmetry.wigner import EdgeRotation
 
 __all__ = [
