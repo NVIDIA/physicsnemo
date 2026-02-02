@@ -190,8 +190,12 @@ class TestGateActivationBasic:
         expected_l0 = torch.nn.functional.silu(x[:, 0, 0, 0, :channels])
         actual_l0 = out[:, 0, 0, 0, :]
 
-        assert torch.allclose(actual_l0, expected_l0, rtol=1e-5, atol=1e-5), (
-            "l=0 should have SiLU activation applied"
+        torch.testing.assert_close(
+            actual_l0,
+            expected_l0,
+            rtol=1e-5,
+            atol=1e-5,
+            msg="l=0 should have SiLU activation applied",
         )
 
     @pytest.mark.parametrize(
@@ -262,8 +266,12 @@ class TestGateActivationBasic:
         expected = x[:, 2, 1, 0, :channels] * gate_l2  # real part
         actual = out[:, 2, 1, 0, :]
 
-        assert torch.allclose(actual, expected, rtol=1e-5, atol=1e-5), (
-            "l>0 positions should be scaled by sigmoid(gates)"
+        torch.testing.assert_close(
+            actual,
+            expected,
+            rtol=1e-5,
+            atol=1e-5,
+            msg="l>0 positions should be scaled by sigmoid(gates)",
         )
 
     def test_invalid_positions_zero(
@@ -309,10 +317,13 @@ class TestGateActivationBasic:
         for l_idx in range(lmax + 1):
             for m_idx in range(mmax + 1):
                 if not mask[l_idx, m_idx]:
-                    assert torch.allclose(
+                    torch.testing.assert_close(
                         out[:, l_idx, m_idx, :, :],
                         torch.zeros_like(out[:, l_idx, m_idx, :, :]),
-                    ), f"Invalid position (l={l_idx}, m={m_idx}) should be zero"
+                        rtol=0,
+                        atol=0,
+                        msg=f"Invalid position (l={l_idx}, m={m_idx}) should be zero",
+                    )
 
     def test_m0_imaginary_zero(
         self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
@@ -353,8 +364,12 @@ class TestGateActivationBasic:
 
         # m=0 imaginary should be zero for all l
         m0_imag = out[:, :, 0, 1, :]
-        assert torch.allclose(m0_imag, torch.zeros_like(m0_imag)), (
-            "m=0 imaginary should be zero"
+        torch.testing.assert_close(
+            m0_imag,
+            torch.zeros_like(m0_imag),
+            rtol=0,
+            atol=0,
+            msg="m=0 imaginary should be zero",
         )
 
 
@@ -481,15 +496,20 @@ class TestGateActivationEquivariance:
         x[:, :, 0, 1, :] = 0.0  # Zero m=0 imaginary
 
         def rotate_grid(x: torch.Tensor, phi: float) -> torch.Tensor:
-            """Rotate grid-layout features by angle phi around z-axis."""
+            """Rotate grid-layout features by angle phi around z-axis.
+
+            Only rotates the feature channels (first `channels` values).
+            Gate channels (channels:) are invariant and remain unchanged.
+            """
             x_rot = x.clone()
             for m in range(1, mmax + 1):
                 cos_phi = math.cos(m * phi)
                 sin_phi = math.sin(m * phi)
-                x_real = x[:, :, m, 0, :]
-                x_imag = x[:, :, m, 1, :]
-                x_rot[:, :, m, 0, :] = x_real * cos_phi - x_imag * sin_phi
-                x_rot[:, :, m, 1, :] = x_real * sin_phi + x_imag * cos_phi
+                # Only rotate feature channels, not gate channels
+                x_real = x[:, :, m, 0, :channels]
+                x_imag = x[:, :, m, 1, :channels]
+                x_rot[:, :, m, 0, :channels] = x_real * cos_phi - x_imag * sin_phi
+                x_rot[:, :, m, 1, :channels] = x_real * sin_phi + x_imag * cos_phi
             return x_rot
 
         phi = 0.7
@@ -506,8 +526,12 @@ class TestGateActivationEquivariance:
         # Should be equal (gates are invariant)
         rtol = 1e-4 if dtype == torch.float32 else 1e-10
         atol = 1e-4 if dtype == torch.float32 else 1e-10
-        assert torch.allclose(y1, y2, rtol=rtol, atol=atol), (
-            f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}"
+        torch.testing.assert_close(
+            y1,
+            y2,
+            rtol=rtol,
+            atol=atol,
+            msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
 
@@ -589,7 +613,7 @@ class TestGateActivationCompile:
 
         rtol = 1e-4 if dtype == torch.float32 else 1e-10
         atol = 1e-4 if dtype == torch.float32 else 1e-10
-        assert torch.allclose(out_eager, out_compiled, rtol=rtol, atol=atol)
+        torch.testing.assert_close(out_eager, out_compiled, rtol=rtol, atol=atol)
 
     def test_compile_backward(self, dtype: torch.dtype, device: str) -> None:
         """Backward pass should work with torch.compile.
@@ -696,7 +720,7 @@ class TestGateActivationHardcoded:
         with torch.no_grad():
             y2 = act(x2)
 
-        assert torch.allclose(y, y2), "Forward pass should be deterministic"
+        torch.testing.assert_close(y, y2, msg="Forward pass should be deterministic")
 
         # Verify basic properties
         assert y.shape == (batch_size, lmax + 1, mmax + 1, 2, channels)
@@ -704,7 +728,7 @@ class TestGateActivationHardcoded:
 
         # Verify l=0 has SiLU applied (m=0, real part)
         expected_l0 = torch.nn.functional.silu(x[:, 0, 0, 0, :channels])
-        assert torch.allclose(y[:, 0, 0, 0, :], expected_l0, rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(y[:, 0, 0, 0, :], expected_l0, rtol=1e-5, atol=1e-5)
 
     def test_zero_gates(self, dtype: torch.dtype, device: str) -> None:
         """Test behavior with zero gates (sigmoid(0) = 0.5).
@@ -744,8 +768,12 @@ class TestGateActivationHardcoded:
         # l>0 should be scaled by 0.5 (sigmoid(0))
         # Check l=1, m=0, real part (valid position)
         expected_l1 = x[:, 1, 0, 0, :channels] * 0.5
-        assert torch.allclose(y[:, 1, 0, 0, :], expected_l1, rtol=1e-5, atol=1e-5), (
-            "With zero gates, l>0 should be scaled by 0.5"
+        torch.testing.assert_close(
+            y[:, 1, 0, 0, :],
+            expected_l1,
+            rtol=1e-5,
+            atol=1e-5,
+            msg="With zero gates, l>0 should be scaled by 0.5",
         )
 
     def test_large_positive_gates(self, dtype: torch.dtype, device: str) -> None:
@@ -785,9 +813,13 @@ class TestGateActivationHardcoded:
 
         # l>0 should be approximately unchanged (scaled by ~1)
         # Check l=1, m=0, real part (valid position)
-        assert torch.allclose(
-            y[:, 1, 0, 0, :], x[:, 1, 0, 0, :channels], rtol=1e-3, atol=1e-3
-        ), "With large positive gates, l>0 should be approximately unchanged"
+        torch.testing.assert_close(
+            y[:, 1, 0, 0, :],
+            x[:, 1, 0, 0, :channels],
+            rtol=1e-3,
+            atol=1e-3,
+            msg="With large positive gates, l>0 should be approximately unchanged",
+        )
 
     def test_large_negative_gates(self, dtype: torch.dtype, device: str) -> None:
         """Test behavior with large negative gates (sigmoid approaches 0).
@@ -826,12 +858,13 @@ class TestGateActivationHardcoded:
 
         # l>0 should be approximately zero (scaled by ~0)
         # Check l=1, m=0, real part (valid position)
-        assert torch.allclose(
+        torch.testing.assert_close(
             y[:, 1, 0, 0, :],
             torch.zeros_like(y[:, 1, 0, 0, :]),
             rtol=1e-3,
             atol=1e-3,
-        ), "With large negative gates, l>0 should be approximately zero"
+            msg="With large negative gates, l>0 should be approximately zero",
+        )
 
 
 class TestGateActivationBatchIndependence:
@@ -874,11 +907,19 @@ class TestGateActivationBatchIndependence:
         rtol = 1e-5 if dtype == torch.float32 else 1e-10
         atol = 1e-5 if dtype == torch.float32 else 1e-10
 
-        assert torch.allclose(y_batch[0], y0[0], rtol=rtol, atol=atol), (
-            "Batch processing should match individual processing for sample 0"
+        torch.testing.assert_close(
+            y_batch[0],
+            y0[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Batch processing should match individual processing for sample 0",
         )
-        assert torch.allclose(y_batch[1], y1[0], rtol=rtol, atol=atol), (
-            "Batch processing should match individual processing for sample 1"
+        torch.testing.assert_close(
+            y_batch[1],
+            y1[0],
+            rtol=rtol,
+            atol=atol,
+            msg="Batch processing should match individual processing for sample 1",
         )
 
 

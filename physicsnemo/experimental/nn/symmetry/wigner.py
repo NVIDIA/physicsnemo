@@ -40,6 +40,8 @@ Key Components
     Module that computes Wigner D-matrices from edge direction vectors.
 :func:`edge_vectors_to_euler_angles`
     Convert edge direction vectors to Euler angles (ZYZ convention).
+:func:`rotate_grid_coefficients`
+    Apply Wigner D-matrix rotation to grid-layout spherical harmonic coefficients.
 """
 
 from __future__ import annotations
@@ -49,6 +51,13 @@ import math
 import torch
 from torch import nn
 from jaxtyping import Bool, Float
+
+__all__ = [
+    "EdgeRotation",
+    "edge_vectors_to_euler_angles",
+    "rotate_grid_coefficients",
+    "compute_wigner_d_matrices",
+]
 
 # Numerical stability constant
 _EPS = 1e-7
@@ -129,15 +138,12 @@ def edge_vectors_to_euler_angles(
 
     Returns
     -------
-    tuple of (alpha, beta, gamma)
-        Euler angles in radians. gamma is always 0 for edge rotations.
-
-        - alpha : Float[torch.Tensor, "..."]
-            Azimuthal angle (rotation about z-axis).
-        - beta : Float[torch.Tensor, "..."]
-            Polar angle (rotation about y-axis).
-        - gamma : Float[torch.Tensor, "..."]
-            Roll angle (always zero for edges).
+    alpha : Float[torch.Tensor, "..."]
+        Azimuthal angle in radians, range [−π, π].
+    beta : Float[torch.Tensor, "..."]
+        Polar angle in radians, range [0, π].
+    gamma : Float[torch.Tensor, "..."]
+        Roll angle in radians (always zero for edge rotations).
 
     Examples
     --------
@@ -402,15 +408,498 @@ def _compute_J_matrix(
 
 
 # =============================================================================
+# Grid-layout coefficient rotation utility
+# =============================================================================
+
+
+def _apply_rotation_to_grid(
+    x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"],
+    D: Float[torch.Tensor, "batch full_dim full_dim"],
+    lmax: int,
+    mmax: int,
+) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]:
+    """Apply a pre-computed Wigner D-matrix to grid-layout spherical harmonic coefficients.
+
+    This implementation uses real arithmetic only, and the rotation is
+    applied to both real and complex components.
+
+    Parameters
+    ----------
+    x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
+        Input coefficients in grid layout.
+    D : Float[torch.Tensor, "batch full_dim full_dim"]
+        Pre-computed block-diagonal Wigner D-matrix from compute_wigner_d_matrices.
+        Shape [batch, (lmax+1)^2, (lmax+1)^2] with real values.
+    lmax : int
+        Maximum spherical harmonic degree.
+    mmax : int
+        Maximum spherical harmonic order in the grid layout.
+
+    Returns
+    -------
+    Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
+        Rotated coefficients in grid layout.
+
+    Notes
+    -----
+    The grid layout stores only m >= 0 with real and imaginary parts separated:
+    - x[:, l, m, 0, :] = real part of Y_l^m
+    - x[:, l, m, 1, :] = imaginary part of Y_l^m
+
+    For real spherical harmonics, the relation for negative m is:
+    - Y_l^{-m} real part = (-1)^m * Y_l^m real part
+    - Y_l^{-m} imag part = (-1)^{m+1} * Y_l^m imag part
+    """
+    batch_size = x.shape[0]
+    device = x.device
+    dtype = x.dtype
+    channels = x.shape[4]
+
+    # Initialize output
+    out = torch.zeros_like(x)
+
+    # Process each degree l separately
+    offset = 0  # Track position in the full D-matrix
+    for ell in range(lmax + 1):
+        full_dim_l = 2 * ell + 1
+        m_limit = min(mmax, ell)
+
+        # Extract D^l block from the full block-diagonal D-matrix
+        D_l = D[:, offset : offset + full_dim_l, offset : offset + full_dim_l]
+
+        # Build full representation for this l: [batch, 2*l+1, 2, channels]
+        # Ordering: m = l, l-1, ..., 0, ..., -l
+        x_l_full = torch.zeros(
+            batch_size, full_dim_l, 2, channels, dtype=dtype, device=device
+        )
+
+        # Fill positive m (and m=0) from grid
+        for m in range(m_limit + 1):
+            idx = (
+                ell - m
+            )  # Position in full ordering (m=l is at idx=0, m=0 is at idx=l)
+            x_l_full[:, idx, 0, :] = x[:, ell, m, 0, :]  # real part
+            x_l_full[:, idx, 1, :] = x[:, ell, m, 1, :]  # imag part
+
+        # Fill negative m using Y_l^{-m} = (-1)^m * conj(Y_l^m)
+        # For real SH: real(-m) = (-1)^m * real(m), imag(-m) = (-1)^{m+1} * imag(m)
+        for m in range(1, m_limit + 1):
+            idx_neg = ell + m  # Position for -m in full ordering
+            sign_real = (-1) ** m
+            sign_imag = (-1) ** (m + 1)
+            x_l_full[:, idx_neg, 0, :] = sign_real * x[:, ell, m, 0, :]
+            x_l_full[:, idx_neg, 1, :] = sign_imag * x[:, ell, m, 1, :]
+
+        # Apply rotation using real arithmetic only
+        # D_l is a real matrix: [batch, full_dim_l, full_dim_l]
+        # x_l_full: [batch, full_dim_l, 2, channels]
+        # We want: y[b, i, ri, c] = sum_j D[b, i, j] * x[b, j, ri, c]
+        # Reshape for batch matrix multiplication: [batch, full_dim_l, 2*channels]
+        x_l_flat = x_l_full.reshape(batch_size, full_dim_l, 2 * channels)
+
+        # Apply D-matrix: simple batch matrix multiplication (no complex arithmetic!)
+        y_l_flat = torch.bmm(D_l, x_l_flat)  # [batch, full_dim_l, 2*channels]
+
+        # Reshape back: [batch, full_dim_l, 2, channels]
+        y_l_full = y_l_flat.reshape(batch_size, full_dim_l, 2, channels)
+
+        # Extract m >= 0 back to grid layout
+        for m in range(m_limit + 1):
+            idx = ell - m
+            out[:, ell, m, 0, :] = y_l_full[:, idx, 0, :]  # real part
+            out[:, ell, m, 1, :] = y_l_full[:, idx, 1, :]  # imag part
+
+        # Move to next block
+        offset += full_dim_l
+
+    # Enforce m=0 reality constraint: imaginary part must be zero
+    # This is a fundamental property of spherical harmonics Y_l^0
+    out[:, :, 0, 1, :] = 0.0
+
+    return out
+
+
+def rotate_grid_coefficients(
+    x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"],
+    rotation: (
+        tuple[
+            Float[torch.Tensor, "batch"] | float,
+            Float[torch.Tensor, "batch"] | float,
+            Float[torch.Tensor, "batch"] | float,
+        ]
+        | Float[torch.Tensor, "batch full_dim full_dim"]
+    ),
+) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]:
+    r"""Apply Wigner D-matrix rotation to grid-layout spherical harmonic coefficients.
+
+    This function rotates spherical harmonic coefficients by applying the
+    Wigner D-matrix corresponding to the given rotation. The rotation can be
+    specified either as Euler angles or as a pre-computed D-matrix.
+
+    Parameters
+    ----------
+    x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
+        Input coefficients in grid layout where:
+        - batch: number of samples
+        - lmax+1: degrees from l=0 to l=lmax
+        - mmax+1: orders from m=0 to m=mmax (non-negative m only)
+        - 2: real (index 0) and imaginary (index 1) components
+        - channels: feature channels
+    rotation : tuple[torch.Tensor, torch.Tensor, torch.Tensor] | Float[torch.Tensor, "batch full_dim full_dim"]
+        The rotation, specified as either:
+        - A tuple of (alpha, beta, gamma) Euler angles in **radians** (ZYZ convention),
+          each of shape [batch] or scalar. Valid ranges: α, γ ∈ [0, 2π), β ∈ [0, π].
+        - A pre-computed block-diagonal Wigner D-matrix of shape
+          [batch, (lmax+1)^2, (lmax+1)^2] from compute_wigner_d_matrices
+
+    Returns
+    -------
+    Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
+        Rotated coefficients in grid layout with the same shape as input.
+
+    Examples
+    --------
+    Using Euler angles:
+
+    >>> import torch
+    >>> from physicsnemo.experimental.nn.symmetry.wigner import rotate_grid_coefficients
+    >>> batch, lmax, mmax, channels = 4, 3, 2, 8
+    >>> x = torch.randn(batch, lmax + 1, mmax + 1, 2, channels)
+    >>> alpha = torch.rand(batch) * 2 * torch.pi
+    >>> beta = torch.rand(batch) * torch.pi
+    >>> gamma = torch.rand(batch) * 2 * torch.pi
+    >>> x_rotated = rotate_grid_coefficients(x, (alpha, beta, gamma))
+    >>> x_rotated.shape
+    torch.Size([4, 4, 3, 2, 8])
+
+    Using pre-computed D-matrix:
+
+    >>> from physicsnemo.experimental.nn.symmetry.wigner import compute_wigner_d_matrices
+    >>> D = compute_wigner_d_matrices(alpha, beta, gamma, lmax=3)
+    >>> x_rotated = rotate_grid_coefficients(x, D)
+    >>> x_rotated.shape
+    torch.Size([4, 4, 3, 2, 8])
+
+    Notes
+    -----
+    The Wigner D-matrix rotation is applied per-channel and per-degree l.
+    Each degree l has its own (2l+1) x (2l+1) rotation matrix that mixes
+    coefficients with different m values but the same l.
+    """
+    device = x.device
+    dtype = x.dtype
+
+    if not torch.compiler.is_compiling():
+        if x.ndim != 5:
+            raise ValueError(
+                f"Expected 5D tensor [batch, lmax+1, mmax+1, 2, channels], got {x.ndim}D"
+            )
+        if x.shape[1] < x.shape[2]:
+            raise ValueError(f"Expected lmax (dim 1) <= mmax (dim 2), got {x.shape}")
+        if x.shape[3] != 2:
+            raise ValueError(
+                f"Expected dimension 3 to be 2 (real/imag), got {x.shape[3]}"
+            )
+
+    # infer values from tensor shape
+    batch_size = x.shape[0]
+    lmax = x.shape[1] - 1
+    mmax = x.shape[2] - 1
+
+    # Detect input type and compute D-matrix if needed
+    if isinstance(rotation, tuple):
+        # Euler angles provided - compute D-matrix
+        alpha, beta, gamma = rotation
+
+        # Handle scalar angles
+        if isinstance(alpha, (int, float)):
+            alpha = torch.full((batch_size,), float(alpha), dtype=dtype, device=device)
+        if isinstance(beta, (int, float)):
+            beta = torch.full((batch_size,), float(beta), dtype=dtype, device=device)
+        if isinstance(gamma, (int, float)):
+            gamma = torch.full((batch_size,), float(gamma), dtype=dtype, device=device)
+
+        D = compute_wigner_d_matrices(alpha, beta, gamma, lmax)
+    else:
+        # Assume D-matrix provided directly
+        D = rotation
+
+        # Validate D-matrix shape
+        if not torch.compiler.is_compiling():
+            full_dim = (lmax + 1) ** 2
+            if D.ndim != 3:
+                raise ValueError(
+                    f"Expected D-matrix to be 3D [batch, full_dim, full_dim], got {D.ndim}D with shape {tuple(D.shape)}"
+                )
+            if D.shape[0] != batch_size:
+                raise ValueError(
+                    f"D-matrix batch size {D.shape[0]} does not match input batch size {batch_size}"
+                )
+            if D.shape[1] != full_dim or D.shape[2] != full_dim:
+                raise ValueError(
+                    f"Expected D-matrix shape [batch, {full_dim}, {full_dim}], got [batch, {D.shape[1]}, {D.shape[2]}]"
+                )
+
+    # Apply the rotation using the helper function
+    return _apply_rotation_to_grid(x, D, lmax, mmax)
+
+
+# =============================================================================
+# Standalone Wigner D-matrix computation
+# =============================================================================
+
+
+def compute_wigner_d_matrices(
+    alpha: Float[torch.Tensor, "batch"],
+    beta: Float[torch.Tensor, "batch"],
+    gamma: Float[torch.Tensor, "batch"],
+    lmax: int,
+    J_matrices: list[torch.Tensor] | None = None,
+) -> Float[torch.Tensor, "batch full_dim full_dim"]:
+    r"""Compute block-diagonal Wigner D-matrices from Euler angles.
+
+    This function computes Wigner D-matrices that describe rotations of spherical
+    harmonic coefficients. The matrices are organized in a block-diagonal structure,
+    where each block corresponds to a different angular momentum degree l.
+
+    The computation uses the factored formula:
+
+    .. math::
+
+        D^l(\alpha, \beta, \gamma) = Z(\alpha) \cdot J \cdot Z(\beta) \cdot J \cdot Z(\gamma)
+
+    where Z is the z-axis rotation matrix (diagonal with Z_mm = exp(i m φ)) and
+    J is a precomputed involution matrix satisfying J^2 = I.
+
+    Parameters
+    ----------
+    alpha : Float[torch.Tensor, "batch"]
+        First Euler angle in radians (ZYZ convention), rotation about z-axis.
+        Valid range: [0, 2π).
+    beta : Float[torch.Tensor, "batch"]
+        Second Euler angle in radians (ZYZ convention), rotation about y-axis.
+        Valid range: [0, π].
+    gamma : Float[torch.Tensor, "batch"]
+        Third Euler angle in radians (ZYZ convention), rotation about z-axis.
+        Valid range: [0, 2π).
+    lmax : int
+        Maximum spherical harmonic degree. Output will have shape
+        [batch, (lmax+1)^2, (lmax+1)^2].
+    J_matrices : list[torch.Tensor] | None, optional
+        Pre-computed J matrices for each degree l (0 to lmax).
+        If None, they will be computed on-the-fly.
+        Each J_matrices[l] should have shape [2l+1, 2l+1].
+
+    Returns
+    -------
+    Float[torch.Tensor, "batch full_dim full_dim"]
+        Block-diagonal Wigner D-matrices where full_dim = (lmax+1)^2.
+        Each batch element is an orthogonal matrix representing a rotation
+        in the spherical harmonic basis.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.nn.symmetry.wigner import compute_wigner_d_matrices
+    >>> batch_size = 4
+    >>> lmax = 2
+    >>> alpha = torch.randn(batch_size) * 2 * torch.pi
+    >>> beta = torch.rand(batch_size) * torch.pi
+    >>> gamma = torch.randn(batch_size) * 2 * torch.pi
+    >>> D = compute_wigner_d_matrices(alpha, beta, gamma, lmax)
+    >>> D.shape
+    torch.Size([4, 9, 9])
+    >>> # Verify orthogonality
+    >>> I = torch.eye(9)
+    >>> torch.allclose(D @ D.transpose(-2, -1), I.unsqueeze(0), atol=1e-5)
+    True
+
+    Notes
+    -----
+    The output matrices are orthogonal, meaning D @ D^T = I. The inverse
+    rotation is simply the transpose.
+
+    This function appears to be a lot more complex than it would be to
+    avoid many small tensor allocations: the large tensors are allocated
+    up front, and the operations are written to try and make use of them
+    without re-allocating unnecessarily.
+    """
+    # Validate inputs
+    if not torch.compiler.is_compiling():
+        if alpha.ndim != 1:
+            raise ValueError(
+                f"Expected alpha to be 1D tensor, got {alpha.ndim}D with shape {tuple(alpha.shape)}"
+            )
+        if beta.ndim != 1:
+            raise ValueError(
+                f"Expected beta to be 1D tensor, got {beta.ndim}D with shape {tuple(beta.shape)}"
+            )
+        if gamma.ndim != 1:
+            raise ValueError(
+                f"Expected gamma to be 1D tensor, got {gamma.ndim}D with shape {tuple(gamma.shape)}"
+            )
+        if alpha.shape[0] != beta.shape[0] or alpha.shape[0] != gamma.shape[0]:
+            raise ValueError(
+                f"All Euler angles must have same batch size, got alpha={alpha.shape[0]}, "
+                f"beta={beta.shape[0]}, gamma={gamma.shape[0]}"
+            )
+        if lmax < 0:
+            raise ValueError(f"lmax must be non-negative, got {lmax}")
+
+    batch_size = alpha.shape[0]
+    device = alpha.device
+    dtype = alpha.dtype
+    full_dim = (lmax + 1) ** 2
+
+    # Compute J matrices if not provided
+    if J_matrices is None:
+        J_matrices = []
+        for ell in range(lmax + 1):
+            J_l = _compute_J_matrix(ell, dtype=torch.float32, device=device)
+            J_matrices.append(J_l)
+
+    # Prepare padded J matrices for vectorized computation
+    max_dim = 2 * lmax + 1
+    num_blocks = lmax + 1
+
+    # Pad J matrices to max_dim x max_dim
+    J_padded = torch.zeros(
+        num_blocks, max_dim, max_dim, dtype=torch.float32, device=device
+    )
+    for ell in range(num_blocks):
+        dim_l = 2 * ell + 1
+        J_l = J_matrices[ell].to(dtype=torch.float32, device=device)
+        J_padded[ell, :dim_l, :dim_l] = J_l
+
+    # Prepare m-values for each block
+    m_vals_padded = torch.zeros(num_blocks, max_dim, dtype=dtype, device=device)
+    m_flip_padded = torch.zeros(num_blocks, max_dim, dtype=dtype, device=device)
+    for ell in range(num_blocks):
+        dim_l = 2 * ell + 1
+        m_vals_l = torch.arange(ell, -ell - 1, -1, dtype=dtype, device=device)
+        m_vals_padded[ell, :dim_l] = m_vals_l
+        m_flip_padded[ell, :dim_l] = -m_vals_l
+
+    # Prepare flip indices
+    flip_indices = torch.zeros(num_blocks, max_dim, dtype=torch.long, device=device)
+    for ell in range(num_blocks):
+        dim_l = 2 * ell + 1
+        flip_indices[ell, :dim_l] = torch.arange(dim_l - 1, -1, -1, device=device)
+
+    # Convert J_padded to target dtype
+    J_padded = J_padded.to(dtype=dtype)
+
+    # Compute trigonometric values
+    # alpha: (B,) -> (B, 1, 1) for broadcasting with m_vals: (num_blocks, max_dim)
+    # Result: (B, num_blocks, max_dim)
+    alpha_expanded = alpha.view(batch_size, 1, 1)
+    beta_expanded = beta.view(batch_size, 1, 1)
+    gamma_expanded = gamma.view(batch_size, 1, 1)
+
+    cos_alpha = torch.cos(alpha_expanded * m_vals_padded)  # (B, num_blocks, max_dim)
+    sin_alpha = torch.sin(alpha_expanded * m_vals_padded)
+    cos_beta = torch.cos(beta_expanded * m_vals_padded)
+    sin_beta_flip = torch.sin(beta_expanded * m_flip_padded)
+    cos_gamma = torch.cos(gamma_expanded * m_vals_padded)
+    sin_gamma_flip = torch.sin(gamma_expanded * m_flip_padded)
+
+    # Prepare flipped J matrices for efficient computation
+    ell_idx = torch.arange(num_blocks, device=device)
+    J_flipped_rows = J_padded[
+        ell_idx.view(-1, 1), flip_indices, :
+    ]  # (num_blocks, max_dim, max_dim)
+
+    J_flipped_cols = torch.gather(
+        J_padded,
+        dim=2,
+        index=flip_indices.unsqueeze(1).expand(-1, max_dim, -1),
+    )  # (num_blocks, max_dim, max_dim)
+
+    # Step 1: A = Z(α) · J for all blocks
+    # A[b, ell, i, k] = cos_alpha[b, ell, i] * J[ell, i, k] + sin_alpha[b, ell, i] * J[ell, flip[i], k]
+    A = torch.einsum("bni,nik->bnik", cos_alpha, J_padded) + torch.einsum(
+        "bni,nik->bnik", sin_alpha, J_flipped_rows
+    )
+    # A shape: (B, num_blocks, max_dim, max_dim)
+
+    # Step 2: B = J · Z(γ) for all blocks
+    # B[b, ell, k, j] = J[ell, k, j] * cos_gamma[b, ell, j] + J[ell, k, flip[j]] * sin_gamma_flip[b, ell, j]
+    B = torch.einsum("nkj,bnj->bnkj", J_padded, cos_gamma) + torch.einsum(
+        "nkj,bnj->bnkj", J_flipped_cols, sin_gamma_flip
+    )
+    # B shape: (B, num_blocks, max_dim, max_dim)
+
+    # Step 3: AZ = A · Z(β) for all blocks (element-wise with flip)
+    A_flipped = torch.gather(
+        A,
+        dim=3,
+        index=flip_indices.view(1, num_blocks, 1, max_dim).expand(
+            batch_size, -1, max_dim, -1
+        ),
+    )
+    AZ = A * cos_beta.unsqueeze(2) + A_flipped * sin_beta_flip.unsqueeze(2)
+    # AZ shape: (B, num_blocks, max_dim, max_dim)
+
+    # Step 4: D = AZ @ B for all blocks using batched matmul
+    # Reshape for bmm: (B * num_blocks, max_dim, max_dim)
+    AZ_flat = AZ.reshape(batch_size * num_blocks, max_dim, max_dim)
+    B_flat = B.reshape(batch_size * num_blocks, max_dim, max_dim)
+    D_flat = torch.bmm(AZ_flat, B_flat)
+    D_padded = D_flat.reshape(batch_size, num_blocks, max_dim, max_dim)
+    # D_padded shape: (B, num_blocks, max_dim, max_dim)
+
+    # Step 5: Scatter padded blocks into block-diagonal output
+    # Precompute scatter indices
+    row_indices = []
+    col_indices = []
+    block_indices = []
+    local_row = []
+    local_col = []
+
+    offset = 0
+    for ell in range(num_blocks):
+        dim_l = 2 * ell + 1
+        for i in range(dim_l):
+            for j in range(dim_l):
+                row_indices.append(offset + i)
+                col_indices.append(offset + j)
+                block_indices.append(ell)
+                local_row.append(i)
+                local_col.append(j)
+        offset += dim_l
+
+    scatter_row = torch.tensor(row_indices, dtype=torch.long, device=device)
+    scatter_col = torch.tensor(col_indices, dtype=torch.long, device=device)
+    scatter_block = torch.tensor(block_indices, dtype=torch.long, device=device)
+    scatter_local_row = torch.tensor(local_row, dtype=torch.long, device=device)
+    scatter_local_col = torch.tensor(local_col, dtype=torch.long, device=device)
+
+    # Gather values from padded representation
+    values = D_padded[:, scatter_block, scatter_local_row, scatter_local_col]
+    # values: (B, num_elements)
+
+    # Create output and scatter
+    wigner = torch.zeros(batch_size, full_dim, full_dim, dtype=dtype, device=device)
+    batch_idx = (
+        torch.arange(batch_size, device=device).view(-1, 1).expand(-1, len(scatter_row))
+    )
+    wigner[batch_idx, scatter_row, scatter_col] = values
+
+    return wigner
+
+
+# =============================================================================
 # EdgeRotation module
 # =============================================================================
 
 
 class EdgeRotation(nn.Module):
-    r"""Compute Wigner D-matrices for edge rotations in equivariant networks.
+    r"""Compute and apply Wigner D-matrices for edge rotations in equivariant networks.
 
-    This module computes the rotation matrices needed to transform spherical
-    harmonic coefficients between the global frame and edge-aligned local frames.
+    This module computes rotation matrices needed to transform spherical
+    harmonic coefficients between the global frame and edge-aligned local frames,
+    and can apply these rotations to embeddings.
+
     It uses Wigner D-matrices organized in a block-diagonal structure with
     optional reduction to lower orders for efficiency.
 
@@ -450,12 +939,27 @@ class EdgeRotation(nn.Module):
 
     Examples
     --------
+    Computing D-matrices:
+
     >>> import torch
     >>> edge_rot = EdgeRotation(lmax=2, mmax=1)
     >>> edge_vecs = torch.randn(4, 5, 3)  # 4 nodes, 5 neighbors each
-    >>> D = edge_rot(edge_vecs)
+    >>> D = edge_rot(edge_vecs)  # or edge_rot.get_wigner_matrices(edge_vecs)
     >>> D.shape
     torch.Size([4, 5, 7, 9])
+
+    Applying rotations to embeddings:
+
+    >>> x = torch.randn(4, 5, 9, 64)  # [nodes, neighbors, (lmax+1)^2, channels]
+    >>> x_rotated = edge_rot.apply_rotation(x, edge_vecs=edge_vecs)
+    >>> x_rotated.shape
+    torch.Size([4, 5, 7, 64])  # reduced_dim = 7
+
+    Using pre-computed D-matrices:
+
+    >>> D = edge_rot(edge_vecs)
+    >>> x_rotated = edge_rot.apply_rotation(x, wigner=D)
+    >>> x_back = edge_rot.apply_rotation(x_rotated, wigner=D, inverse=True)
 
     Notes
     -----
@@ -648,117 +1152,25 @@ class EdgeRotation(nn.Module):
         beta: torch.Tensor,
         gamma: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute full block-diagonal Wigner D-matrix (fully vectorized).
+        """Compute full block-diagonal Wigner D-matrix.
 
-        This implementation pads all blocks to max_dim and computes all l values
-        simultaneously to minimize kernel launches and intermediate allocations.
-
-        The key insight is that Z(φ) has only diagonal and anti-diagonal
-        non-zero elements, so ZxDense and DensexZ can be computed in O(dim²)
-        instead of O(dim³).
+        This method delegates to the standalone ``compute_wigner_d_matrices``
+        function for code reuse. It passes the precomputed J matrices to avoid
+        recomputing them on every call.
         """
-        batch_size = alpha.shape[0]
-        device = alpha.device
-        dtype = alpha.dtype
-        num_blocks = self.lmax + 1
-        max_dim = self._max_dim
+        # Collect J matrices from registered buffers
+        J_matrices = []
+        for ell in range(self.lmax + 1):
+            J_matrices.append(self._get_J_matrix(ell))
 
-        # Get precomputed buffers
-        J_padded = self._J_padded.to(
-            dtype=dtype, device=device
-        )  # (num_blocks, max_dim, max_dim)
-        m_vals = self._m_vals_padded.to(
-            dtype=dtype, device=device
-        )  # (num_blocks, max_dim)
-        m_flip = self._m_flip_padded.to(
-            dtype=dtype, device=device
-        )  # (num_blocks, max_dim)
-        flip_idx = self._flip_indices.to(device=device)  # (num_blocks, max_dim)
-
-        # Compute all trig values at once
-        # alpha: (B,) -> (B, 1, 1) for broadcasting with m_vals: (num_blocks, max_dim)
-        # Result: (B, num_blocks, max_dim)
-        alpha_expanded = alpha.view(batch_size, 1, 1)
-        beta_expanded = beta.view(batch_size, 1, 1)
-        gamma_expanded = gamma.view(batch_size, 1, 1)
-
-        cos_alpha = torch.cos(alpha_expanded * m_vals)  # (B, num_blocks, max_dim)
-        sin_alpha = torch.sin(alpha_expanded * m_vals)
-        cos_beta = torch.cos(beta_expanded * m_vals)
-        sin_beta_flip = torch.sin(beta_expanded * m_flip)
-        cos_gamma = torch.cos(gamma_expanded * m_vals)
-        sin_gamma_flip = torch.sin(gamma_expanded * m_flip)
-
-        # For gathering flipped rows/columns, we need advanced indexing
-        # J_padded[ell, flip_idx[ell], :] gives the flipped rows for each block
-        ell_idx = torch.arange(num_blocks, device=device)
-        J_flipped_rows = J_padded[
-            ell_idx.view(-1, 1), flip_idx, :
-        ]  # (num_blocks, max_dim, max_dim)
-
-        # For J_flipped_cols: J_padded[ell, :, flip_idx[ell, :]]
-        # Use gather along dim=2
-        J_flipped_cols = torch.gather(
-            J_padded,
-            dim=2,
-            index=flip_idx.unsqueeze(1).expand(-1, max_dim, -1),
-        )  # (num_blocks, max_dim, max_dim)
-
-        # Step 1: A = Z(α) · J for all blocks
-        # A[b, ell, i, k] = cos_alpha[b, ell, i] * J[ell, i, k] + sin_alpha[b, ell, i] * J[ell, flip[i], k]
-        A = torch.einsum("bni,nik->bnik", cos_alpha, J_padded) + torch.einsum(
-            "bni,nik->bnik", sin_alpha, J_flipped_rows
+        # Call the standalone function
+        return compute_wigner_d_matrices(
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            lmax=self.lmax,
+            J_matrices=J_matrices,
         )
-        # A shape: (B, num_blocks, max_dim, max_dim)
-
-        # Step 2: B = J · Z(γ) for all blocks
-        # B[b, ell, k, j] = J[ell, k, j] * cos_gamma[b, ell, j] + J[ell, k, flip[j]] * sin_gamma_flip[b, ell, j]
-        B = torch.einsum("nkj,bnj->bnkj", J_padded, cos_gamma) + torch.einsum(
-            "nkj,bnj->bnkj", J_flipped_cols, sin_gamma_flip
-        )
-        # B shape: (B, num_blocks, max_dim, max_dim)
-
-        # Step 3: AZ = A · Z(β) for all blocks (element-wise with flip)
-        # Need A[:, :, :, flip_idx] - gather along last dimension
-        A_flipped = torch.gather(
-            A,
-            dim=3,
-            index=flip_idx.view(1, num_blocks, 1, max_dim).expand(
-                batch_size, -1, max_dim, -1
-            ),
-        )
-        AZ = A * cos_beta.unsqueeze(2) + A_flipped * sin_beta_flip.unsqueeze(2)
-        # AZ shape: (B, num_blocks, max_dim, max_dim)
-
-        # Step 4: D = AZ @ B for all blocks using batched matmul
-        # Reshape for bmm: (B * num_blocks, max_dim, max_dim)
-        AZ_flat = AZ.reshape(batch_size * num_blocks, max_dim, max_dim)
-        B_flat = B.reshape(batch_size * num_blocks, max_dim, max_dim)
-        D_flat = torch.bmm(AZ_flat, B_flat)
-        D_padded = D_flat.reshape(batch_size, num_blocks, max_dim, max_dim)
-        # D_padded shape: (B, num_blocks, max_dim, max_dim)
-
-        # Step 5: Scatter padded blocks into block-diagonal output
-        # Gather from D_padded and scatter to wigner using precomputed indices
-        # D_padded: (B, num_blocks, max_dim, max_dim)
-        # We want: wigner[b, row_idx, col_idx] = D_padded[b, block_idx, local_row, local_col]
-        values = D_padded[
-            :, self._scatter_block, self._scatter_local_row, self._scatter_local_col
-        ]
-        # values: (B, num_elements)
-
-        # Create output and scatter using advanced indexing
-        wigner = torch.zeros(
-            batch_size, self._full_dim, self._full_dim, dtype=dtype, device=device
-        )
-        batch_idx = (
-            torch.arange(batch_size, device=device)
-            .view(-1, 1)
-            .expand(-1, len(self._scatter_row))
-        )
-        wigner[batch_idx, self._scatter_row, self._scatter_col] = values
-
-        return wigner
 
     def _extract_reduced(
         self,
@@ -891,3 +1303,141 @@ class EdgeRotation(nn.Module):
             wigner = self._apply_mask(wigner, mask)
 
         return wigner
+
+    def get_wigner_matrices(
+        self,
+        edge_vecs: Float[torch.Tensor, "... 3"],
+        mask: Bool[torch.Tensor, "..."] | None = None,
+    ) -> Float[torch.Tensor, "... reduced_dim full_dim"]:
+        """Compute Wigner D-matrices for edge rotations.
+
+        This is an alias for forward() with a more descriptive name.
+
+        Parameters
+        ----------
+        edge_vecs : Float[torch.Tensor, "... 3"]
+            Edge direction vectors.
+        mask : Bool[torch.Tensor, "..."], optional
+            Mask for valid edges.
+
+        Returns
+        -------
+        Float[torch.Tensor, "... reduced_dim full_dim"]
+            Wigner D-matrices for rotating to edge-aligned frames.
+        """
+        return self.forward(edge_vecs, mask)
+
+    def apply_rotation(
+        self,
+        x: Float[torch.Tensor, "... full_dim channels"],
+        edge_vecs: Float[torch.Tensor, "... 3"] | None = None,
+        wigner: Float[torch.Tensor, "... reduced_dim full_dim"] | None = None,
+        inverse: bool = False,
+    ) -> Float[torch.Tensor, "..."]:
+        """Apply Wigner D-matrix rotation to spherical harmonic coefficients.
+
+        This method rotates embeddings to/from edge-aligned local frames.
+        Either edge_vecs or wigner must be provided.
+
+        TODO: Refactor this to be the behavior for `forward`
+
+        Parameters
+        ----------
+        x : Float[torch.Tensor, "... full_dim channels"]
+            Spherical harmonic coefficients to rotate. The full_dim should be
+            (lmax+1)^2 for the full representation.
+        edge_vecs : Float[torch.Tensor, "... 3"], optional
+            Edge direction vectors. If provided, computes Wigner D-matrices.
+            Cannot be used together with `wigner`.
+        wigner : Float[torch.Tensor, "... reduced_dim full_dim"], optional
+            Pre-computed Wigner D-matrices. If provided, uses these directly.
+            Cannot be used together with `edge_vecs`.
+        inverse : bool, default=False
+            If True, apply inverse rotation (transpose of D-matrix).
+            Use inverse=True to rotate from edge frame back to global frame.
+
+        Returns
+        -------
+        Float[torch.Tensor, "... reduced_dim channels"] or Float[torch.Tensor, "... full_dim channels"]
+            Rotated coefficients. If inverse=False, output has reduced_dim.
+            If inverse=True, output has full_dim.
+
+        Examples
+        --------
+        >>> edge_rot = EdgeRotation(lmax=4, mmax=2)
+        >>> x = torch.randn(10, 5, 25, 64)  # [nodes, neighbors, (lmax+1)^2, channels]
+        >>> edge_vecs = torch.randn(10, 5, 3)  # Edge directions
+        >>>
+        >>> # Rotate to edge frame
+        >>> x_edge = edge_rot.apply_rotation(x, edge_vecs=edge_vecs)
+        >>> # x_edge shape: [10, 5, reduced_dim, 64]
+        >>>
+        >>> # Later, rotate back to global frame (reuse computed D-matrices)
+        >>> wigner = edge_rot(edge_vecs)  # Get D-matrices
+        >>> x_global = edge_rot.apply_rotation(x_edge, wigner=wigner, inverse=True)
+
+        Notes
+        -----
+        The rotation is applied via batch matrix multiplication:
+        - Forward: y = D @ x (rotate to edge frame)
+        - Inverse: y = D^T @ x (rotate back to global frame)
+
+        Since Wigner D-matrices are orthogonal, D^{-1} = D^T.
+        """
+        # Validate inputs
+        if edge_vecs is None and wigner is None:
+            raise ValueError("Either edge_vecs or wigner must be provided")
+        if edge_vecs is not None and wigner is not None:
+            raise ValueError("Cannot provide both edge_vecs and wigner")
+
+        # Compute wigner if needed
+        if wigner is None:
+            wigner = self.forward(edge_vecs)  # type: ignore[arg-type]
+
+        # Get shapes
+        *batch_dims, dim_in, channels = x.shape
+        *_, reduced_dim, full_dim = wigner.shape
+
+        # Validate dimensions
+        if not torch.compiler.is_compiling():
+            if inverse:
+                # For inverse rotation, input should have reduced_dim
+                if dim_in != reduced_dim:
+                    raise ValueError(
+                        f"For inverse rotation, input dim {dim_in} doesn't match "
+                        f"Wigner reduced_dim {reduced_dim}"
+                    )
+            else:
+                # For forward rotation, input should have full_dim
+                if dim_in != full_dim:
+                    raise ValueError(
+                        f"Input dim {dim_in} doesn't match Wigner full_dim {full_dim}"
+                    )
+
+        # Flatten batch dimensions for bmm
+        batch_size = 1
+        for d in batch_dims:
+            batch_size *= d
+
+        x_flat = x.reshape(batch_size, dim_in, channels)
+        wigner_flat = wigner.reshape(batch_size, reduced_dim, full_dim)
+
+        if inverse:
+            # D^T @ x: transpose the D-matrix
+            # wigner_flat: [batch, reduced_dim, full_dim]
+            # For inverse: D^T: [batch, full_dim, reduced_dim]
+            # Input x has shape [batch, reduced_dim, channels]
+            # Output: [batch, full_dim, channels]
+            wigner_T = wigner_flat.transpose(-2, -1)  # [batch, full_dim, reduced_dim]
+            y_flat = torch.bmm(wigner_T, x_flat)
+            out_dim = full_dim
+        else:
+            # D @ x: forward rotation
+            # wigner: [batch, reduced_dim, full_dim]
+            # x: [batch, full_dim, channels]
+            # y: [batch, reduced_dim, channels]
+            y_flat = torch.bmm(wigner_flat, x_flat)
+            out_dim = reduced_dim
+
+        # Reshape back to original batch dims
+        return y_flat.reshape(*batch_dims, out_dim, channels)

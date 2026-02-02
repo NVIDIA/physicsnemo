@@ -21,7 +21,7 @@
 
 """Symmetry-equivariant neural network layers.
 
-This module provides layers for building SO(2) equivariant neural networks
+This module provides layers for building SO(2) and SO(3) equivariant neural networks
 for processing spherical harmonic representations.
 
 Classes
@@ -32,6 +32,8 @@ GateActivation
     Gated activation applying SiLU to l=0 and learned gating to l>0.
 EdgeRotation
     Compute Wigner D-matrices for edge rotations in equivariant networks.
+SO3AtomwiseBlock
+    SO(3) atom-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
 
 Functions
 ---------
@@ -42,11 +44,13 @@ make_grid_mask
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.experimental.nn.symmetry.so2_conv import SO2Convolution
+from physicsnemo.experimental.nn.symmetry.so3_atomwise import SO3ConvolutionBlock
 from physicsnemo.experimental.nn.symmetry.wigner import EdgeRotation
 
 __all__ = [
     "EdgeRotation",
     "GateActivation",
     "SO2Convolution",
+    "SO3ConvolutionBlock",
     "make_grid_mask",
 ]
