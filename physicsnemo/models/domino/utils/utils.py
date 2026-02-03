@@ -28,7 +28,7 @@ from typing import Any, Sequence
 import torch
 from jaxtyping import Float, Int
 
-from physicsnemo.nn.neighbors import knn
+from physicsnemo.nn.functional import knn
 
 
 def calculate_center_of_mass(

@@ -14,9 +14,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Halo exchange utilities for distributed tensor operations.
+
+This module provides functionality for halo padding operations in distributed computing
+environments. Halo padding is a technique used in distributed tensor operations where
+each process needs access to a small region of data (the "halo") from neighboring
+processes to perform local computations correctly.
+
+The module includes:
+
+- ``HaloConfig``: Configuration class for halo exchange parameters
+- ``HaloPadding``: Autograd-compatible function for adding halo padding
+- ``UnHaloPadding``: Autograd-compatible function for removing halo padding
+- Primitives for halo exchange operations
+- Utility functions for slicing and applying halo regions
+"""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional, Tuple
+from typing import Literal
 
 import torch
 import torch.distributed as dist
@@ -25,35 +42,29 @@ from torch.distributed.device_mesh import DeviceMesh
 
 from physicsnemo.utils.profiling import profile
 
-"""Halo exchange utilities for distributed tensor operations.
-
-This module provides functionality for halo padding operations in distributed computing
-environments. Halo padding is a technique used in distributed tensor operations where
-each process needs access to a small region of data (the "halo") from neighboring
-processes to perform local computations correctly.
-
-The module includes:
-- HaloConfig: Configuration class for halo exchange parameters
-- Autograd-compatible functions for forward and backward passes
-- Primitives for halo exchange operations
-- Utility functions for slicing and applying halo regions
-
-"""
-
 
 @dataclass
 class HaloConfig:
-    """Configuration for halo padding operations.
+    r"""Configuration for halo padding operations.
 
     This class encapsulates all parameters needed for halo exchange operations,
     making it easier to pass consistent configurations between functions.
 
-    Attributes:
-        mesh_dim (int): Mesh dimension for this padding operation
-        tensor_dim (int): Tensor dimension to pad/unpad
-        halo_size (int): Size of halo padding (assumed symmetric)
-        edge_padding_size (int): Edge padding size (puts 0s on the edge tensors)
-        communication_method (str): Method for exchanging halos ("p2p" or "a2a")
+    Attributes
+    ----------
+    mesh_dim : int
+        Mesh dimension for this padding operation.
+    tensor_dim : int
+        Tensor dimension to pad/unpad.
+    halo_size : int
+        Size of halo padding (assumed symmetric on both sides).
+    edge_padding_size : int
+        Edge padding size (puts zeros on the edge tensors). Default is 0.
+    async_op : bool
+        Whether to perform the operation asynchronously. Default is ``False``.
+    communication_method : Literal["p2p", "a2a"]
+        Method for exchanging halos. ``"p2p"`` uses point-to-point operations,
+        ``"a2a"`` uses all-to-all. Default is ``"a2a"``.
     """
 
     mesh_dim: int
@@ -66,11 +77,14 @@ class HaloConfig:
     VALID_COMM_METHODS = ["p2p", "a2a"]
     communication_method: CommMethod = "a2a"
 
-    def __post_init__(self):
-        """Validate configuration parameters after initialization.
+    def __post_init__(self) -> None:
+        r"""Validate configuration parameters after initialization.
 
-        Raises:
-            ValueError: If invalid padding type or communication method is specified
+        Raises
+        ------
+        ValueError
+            If invalid communication method is specified, or if async_op is
+            requested with p2p communication (not supported).
         """
 
         if self.communication_method not in self.VALID_COMM_METHODS:
@@ -92,16 +106,26 @@ def halo_padding(
     mesh: DeviceMesh,
     halo_config: HaloConfig,
 ) -> torch.Tensor:
-    """High-level, differentiable function to apply halo padding with gradient support.
+    r"""Apply halo padding with gradient support.
 
-    Args:
-        tensor: torch.Tensor to apply halo padding to
-        mesh: DeviceMesh containing device information that the halo is performed on
-        halo_config: Configuration object containing all halo parameters
+    High-level, differentiable function that adds halo regions from neighboring
+    ranks to the local tensor.
 
-    Returns:
-        Padded tensor with halos added locally to each chunk.  This is *not* a ShardTensor - it
-        is a torch.Tensor that has had local edges replicated from neighboring ranks.
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Tensor to apply halo padding to.
+    mesh : DeviceMesh
+        Device mesh containing device information that the halo is performed on.
+    halo_config : HaloConfig
+        Configuration object containing all halo parameters.
+
+    Returns
+    -------
+    torch.Tensor
+        Padded tensor with halos added locally to each chunk. This is *not* a
+        ShardTensor - it is a ``torch.Tensor`` that has had local edges
+        replicated from neighboring ranks.
     """
 
     return HaloPadding.apply(tensor, mesh, halo_config)
@@ -113,25 +137,32 @@ def unhalo_padding(
     mesh: DeviceMesh,
     halo_config: HaloConfig,
 ) -> torch.Tensor:
-    """High-level, differentiable function to apply unhalo padding with gradient support.
+    r"""Remove halo padding with gradient support.
 
-    This function removes halo regions from a tensor according to the provided configuration.
-    It is the inverse operation of halo_padding and maintains differentiability for gradients.
+    High-level, differentiable function that removes halo regions from a tensor
+    according to the provided configuration. It is the inverse operation of
+    ``halo_padding`` and maintains differentiability for gradients.
 
-    Args:
-        tensor: Padded tensor with halos to be removed
-        mesh: DeviceMesh containing device information for the operation
-        halo_config: Configuration object containing all halo parameters
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Padded tensor with halos to be removed.
+    mesh : DeviceMesh
+        Device mesh containing device information for the operation.
+    halo_config : HaloConfig
+        Configuration object containing all halo parameters.
 
-    Returns:
-        Tensor with halo regions removed according to the configuration
+    Returns
+    -------
+    torch.Tensor
+        Tensor with halo regions removed according to the configuration.
     """
 
     return UnHaloPadding.apply(tensor, mesh, halo_config)
 
 
 class HaloPadding(torch.autograd.Function):
-    """Autograd Function for applying and removing halo padding.
+    r"""Autograd function for applying halo padding.
 
     This class handles the forward and backward passes for halo padding operations,
     maintaining proper gradient flow between distributed tensors.
@@ -144,16 +175,23 @@ class HaloPadding(torch.autograd.Function):
         mesh: DeviceMesh,
         config: HaloConfig,
     ) -> torch.Tensor:
-        """Add halo padding to a tensor in the forward pass.
+        r"""Add halo padding to a tensor in the forward pass.
 
-        Args:
-            ctx: Autograd context for saving tensors/variables for backward
-            tensor: torch.Tensor to apply halo padding to
-            mesh: DeviceMesh containing device information that the halo is performed on
-            config: HaloConfig defining padding parameters
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving tensors/variables for backward.
+        tensor : torch.Tensor
+            Tensor to apply halo padding to.
+        mesh : DeviceMesh
+            Device mesh containing device information that the halo is performed on.
+        config : HaloConfig
+            HaloConfig defining padding parameters.
 
-        Returns:
-            Padded tensor with halos added locally to each chunk
+        Returns
+        -------
+        torch.Tensor
+            Padded tensor with halos added locally to each chunk.
         """
 
         # Save context for backward pass
@@ -170,15 +208,21 @@ class HaloPadding(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx: torch.autograd.function.FunctionCtx, grad_output: torch.Tensor
-    ) -> Tuple[torch.Tensor, None, None]:
-        """Handle gradients by removing halo padding and applying halo gradients.
+    ) -> tuple[torch.Tensor, None, None]:
+        r"""Handle gradients by removing halo padding and applying halo gradients.
 
-        Args:
-            ctx: Autograd context from forward pass
-            grad_output: Gradient tensor with halo padding
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context from forward pass.
+        grad_output : torch.Tensor
+            Gradient tensor with halo padding.
 
-        Returns:
-            Tuple of (gradient for input Tensor, None)
+        Returns
+        -------
+        Tuple[torch.Tensor, None, None]
+            Tuple of (gradient for input tensor, ``None`` for mesh,
+            ``None`` for config).
         """
         mesh = ctx.mesh
         config = ctx.config
@@ -193,33 +237,44 @@ class HaloPadding(torch.autograd.Function):
 
 
 class UnHaloPadding(torch.autograd.Function):
-    """Autograd Function for removing halo padding with gradient support.
+    r"""Autograd function for removing halo padding with gradient support.
 
     This class implements the forward and backward passes for unhalo padding operations.
     In the forward pass, it removes halo regions from the input tensor according to the
     configuration. In the backward pass, it adds zero padding in the halo regions to
     maintain the correct shape for gradient propagation.
 
-    This is the inverse operation of HaloPadding and maintains differentiability.
+    This is the inverse operation of ``HaloPadding`` and maintains differentiability.
     """
 
     @staticmethod
     def forward(
-        ctx, tensor: torch.Tensor, mesh: DeviceMesh, config: HaloConfig
+        ctx: torch.autograd.function.FunctionCtx,
+        tensor: torch.Tensor,
+        mesh: DeviceMesh,
+        config: HaloConfig,
     ) -> torch.Tensor:
-        """
-        Forward pass for unhalo padding.
+        r"""Forward pass for unhalo padding.
 
-        Conceptually, this is a truncated version of the bwd pass of halo padding.
-        It is actually collective-free in the forward pass, since we just cut pieces off.
+        Conceptually, this is a truncated version of the backward pass of halo
+        padding. It is collective-free in the forward pass since we just cut
+        pieces off. We still require the mesh to save it for the backward pass.
 
-        We still require the mesh to save it for the backward pass.
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving tensors/variables for backward.
+        tensor : torch.Tensor
+            Tensor to remove halo padding from.
+        mesh : DeviceMesh
+            Device mesh containing device information that the halo is performed on.
+        config : HaloConfig
+            HaloConfig defining padding parameters.
 
-        Args:
-            ctx: Autograd context for saving tensors/variables for backward
-            tensor: torch.Tensor to apply halo padding to
-            mesh: DeviceMesh containing device information that the halo is performed on
-            config: HaloConfig defining padding parameters
+        Returns
+        -------
+        torch.Tensor
+            Tensor with halo regions removed.
         """
 
         # Save context for backward pass
@@ -240,25 +295,27 @@ class UnHaloPadding(torch.autograd.Function):
 
     @staticmethod
     def backward(
-        ctx,
+        ctx: torch.autograd.function.FunctionCtx,
         grad_output: torch.Tensor,
-    ) -> Tuple[torch.Tensor, None, None]:
-        """
-        Backward pass for unhalo padding.
+    ) -> tuple[torch.Tensor, None, None]:
+        r"""Backward pass for unhalo padding.
 
         In the backward pass, we need to add zero tensors where we previously
         removed the halo regions in the forward pass. This effectively pads
         the gradient with zeros in the halo regions.
 
-        Args:
-            ctx: Autograd context containing saved tensors/variables from forward
-            grad_output: Gradient of the loss with respect to the output of forward
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context containing saved tensors/variables from forward.
+        grad_output : torch.Tensor
+            Gradient of the loss with respect to the output of forward.
 
-        Returns:
-            Tuple containing:
-            - Gradient with respect to the input tensor
-            - None for mesh parameter (not differentiable)
-            - None for config parameter (not differentiable)
+        Returns
+        -------
+        Tuple[torch.Tensor, None, None]
+            Tuple containing gradient with respect to the input tensor,
+            ``None`` for mesh, and ``None`` for config (not differentiable).
         """
 
         left_zeros = torch.zeros(
@@ -285,21 +342,26 @@ def halo_padding_fwd_primitive(
     mesh: DeviceMesh,
     halo_config: HaloConfig,
 ) -> torch.Tensor:
-    """
-    Forward primitive for halo padding.
+    r"""Forward primitive for halo padding.
 
-    Halo padding is meant for operations
-    that are applying a localized function (like convolution, but need not be conv)
-    to a spatially sharded tensor.  During the forward pass, the inputs from the
-    neighboring tensors are copied from remote regions and appended to the local image.
+    Halo padding is meant for operations that apply a localized function
+    (like convolution, but need not be conv) to a spatially sharded tensor.
+    During the forward pass, the inputs from the neighboring tensors are
+    copied from remote regions and appended to the local image.
 
-    Args:
-        local_tensor: The local tensor chunk to pad with halos
-        mesh: Device mesh containing sharding information
-        halo_config: HaloConfig defining padding parameters
+    Parameters
+    ----------
+    local_tensor : torch.Tensor
+        The local tensor chunk to pad with halos.
+    mesh : DeviceMesh
+        Device mesh containing sharding information.
+    halo_config : HaloConfig
+        HaloConfig defining padding parameters.
 
-    Returns:
-        Padded tensor with halos from neighboring ranks
+    Returns
+    -------
+    torch.Tensor
+        Padded tensor with halos from neighboring ranks.
     """
     # It's not optimized, but we pull of the halo from both sides currently.  One
     # gets discarded on the edge ranks.  But, it would have to wait
@@ -346,23 +408,31 @@ def slice_halo_regions(
     local_tensor: torch.Tensor,
     mesh: DeviceMesh,
     halo_config: HaloConfig,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Splits a tensor into left halo, center, and right halo regions.
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""Split a tensor into left halo, center, and right halo regions.
 
-    This primitive function divides the input tensor along the specified dimension into
-    three parts: left halo region, central tensor (without halos), and right halo region.
-    The slicing boundaries are determined based on the rank in the mesh and the halo configuration.
+    This primitive function divides the input tensor along the specified dimension
+    into three parts: left halo region, central tensor (without halos), and right
+    halo region. The slicing boundaries are determined based on the rank in the
+    mesh and the halo configuration.
 
-    "left" and "right" do not necessarily correspond to spatial locations, but instead
-    think of "left" as the region closer to rank 0 and "right" closer to rank N-1.
+    Note that "left" and "right" do not necessarily correspond to spatial locations.
+    Instead, think of "left" as the region closer to rank 0 and "right" closer to
+    rank N-1.
 
-    Args:
-        local_tensor: Input tensor to be sliced
-        mesh: DeviceMesh containing device information
-        halo_config: Configuration defining halo parameters and dimensions
+    Parameters
+    ----------
+    local_tensor : torch.Tensor
+        Input tensor to be sliced.
+    mesh : DeviceMesh
+        Device mesh containing device information.
+    halo_config : HaloConfig
+        Configuration defining halo parameters and dimensions.
 
-    Returns:
-        Tuple of (left_slice, central_slice, right_slice) tensors
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        Tuple of (left_slice, central_slice, right_slice) tensors.
     """
 
     # Get process group info
@@ -394,20 +464,26 @@ def halo_padding_bwd_primitive(
     mesh: DeviceMesh,
     halo_config: HaloConfig,
 ) -> torch.Tensor:
-    """Backward primitive for halo padding.
+    r"""Backward primitive for halo padding.
 
     Recall the forward pass is a concatenation of neighboring regions.
     The backward pass takes the gradients of the padded images, slices
     off the pieces that represent the halos, performs a halo collective,
     and *adds* the gradients to their original positions in the local grads.
 
-    Args:
-        grad_output: Gradient tensor from upstream operations
-        mesh: Device mesh containing sharding information
-        halo_config: HaloConfig defining padding parameters
+    Parameters
+    ----------
+    grad_output : torch.Tensor
+        Gradient tensor from upstream operations.
+    mesh : DeviceMesh
+        Device mesh containing sharding information.
+    halo_config : HaloConfig
+        HaloConfig defining padding parameters.
 
-    Returns:
-        Gradient tensor with halo contributions applied
+    Returns
+    -------
+    torch.Tensor
+        Gradient tensor with halo contributions applied.
     """
 
     grad_to_left, local_grad, grad_to_right = slice_halo_regions(
@@ -445,25 +521,37 @@ def perform_halo_collective(
     halo_to_right: torch.Tensor,
     method: Literal["p2p", "a2a"] = "a2a",
     async_op: bool = False,
-) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-    """Performs collective communication to exchange halo regions between ranks.
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    r"""Perform collective communication to exchange halo regions between ranks.
 
     There is an assumption made here that messages are symmetric between paired
-    processes in terms of message size.  So, size(message_to_right) == size(message_from_left).
+    processes in terms of message size. So, ``size(message_to_right) == size(message_from_left)``.
     This assumption is used when preparing buffers for the incoming messages.
 
     If messages aren't being sent in one direction, it's expected to take
     in an empty tensor with the proper device and dtype still.
 
-    Args:
-        mesh: Device mesh for communication
-        mesh_dim: Mesh dimension for exchange
-        halo_to_left: Halo tensor to send left
-        halo_to_right: Halo tensor to send right
-        method: Communication method ("p2p" or "a2a")
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        Device mesh for communication.
+    mesh_dim : int
+        Mesh dimension for exchange.
+    halo_to_left : torch.Tensor
+        Halo tensor to send to the left neighbor.
+    halo_to_right : torch.Tensor
+        Halo tensor to send to the right neighbor.
+    method : Literal["p2p", "a2a"], default="a2a"
+        Communication method. ``"p2p"`` uses point-to-point operations,
+        ``"a2a"`` uses all-to-all.
+    async_op : bool, default=False
+        Whether to perform the operation asynchronously.
 
-    Returns:
-        Tuple of (halo from left, halo from right) tensors
+    Returns
+    -------
+    Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]
+        Tuple of (halo from left, halo from right) tensors. May be ``None``
+        for edge ranks that have no neighbor in that direction.
     """
 
     # We get the dtype and device from the first non-None tensor
@@ -591,20 +679,28 @@ def apply_halo_tensors(
     mesh: DeviceMesh,
     halo_config: HaloConfig,
     local_tensor: torch.Tensor,
-    halo_from_left: Optional[torch.Tensor],
-    halo_from_right: Optional[torch.Tensor],
+    halo_from_left: torch.Tensor | None,
+    halo_from_right: torch.Tensor | None,
 ) -> torch.Tensor:
-    """Combines local tensor with received halos and edge padding.
+    r"""Combine local tensor with received halos and edge padding.
 
-    Args:
-        mesh: Device mesh for process info
-        halo_config: HaloConfig defining padding parameters
-        local_tensor: Local tensor chunk
-        halo_from_left: Halo received from left rank
-        halo_from_right: Halo received from right rank
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        Device mesh for process info.
+    halo_config : HaloConfig
+        HaloConfig defining padding parameters.
+    local_tensor : torch.Tensor
+        Local tensor chunk.
+    halo_from_left : Optional[torch.Tensor]
+        Halo received from left rank, or ``None`` if on left edge.
+    halo_from_right : Optional[torch.Tensor]
+        Halo received from right rank, or ``None`` if on right edge.
 
-    Returns:
-        Padded tensor with halos from neighboring ranks
+    Returns
+    -------
+    torch.Tensor
+        Padded tensor with halos from neighboring ranks.
     """
     # Get process group info
     local_group = mesh.get_group(halo_config.mesh_dim)
@@ -651,21 +747,29 @@ def apply_grad_halo(
     halo_from_left: torch.Tensor,
     halo_from_right: torch.Tensor,
 ) -> torch.Tensor:
-    """Applies halo gradients to input gradient tensor.
+    r"""Apply halo gradients to input gradient tensor.
 
-    The forward pass of a halo is padding to edges.  The backward
-    pass is to trim add the halos to the edges of the local region
-    (in the same locations that were sent previously).
+    The forward pass of a halo is padding to edges. The backward pass is to
+    add the halo gradients to the edges of the local region (in the same
+    locations that were sent previously).
 
-    Args:
-        mesh: Device mesh for process info
-        halo_config: HaloConfig defining padding parameters
-        grad_input: Input gradient tensor
-        halo_from_left: Gradient from left halo
-        halo_from_right: Gradient from right halo
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        Device mesh for process info.
+    halo_config : HaloConfig
+        HaloConfig defining padding parameters.
+    grad_input : torch.Tensor
+        Input gradient tensor.
+    halo_from_left : torch.Tensor
+        Gradient from left halo.
+    halo_from_right : torch.Tensor
+        Gradient from right halo.
 
-    Returns:
-        Updated gradient tensor with halo gradients applied
+    Returns
+    -------
+    torch.Tensor
+        Updated gradient tensor with halo gradients applied.
     """
     # Get process group info
     local_group = mesh.get_group(halo_config.mesh_dim)

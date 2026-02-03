@@ -182,6 +182,14 @@ class DiT(Module):
         self.patch_size = patch_size if isinstance(patch_size, (tuple, list)) else (patch_size, patch_size)
         self.num_heads = num_heads
         self.condition_dim = condition_dim
+        if attention_backend == "natten2d":
+            latent_hw = (
+                self.input_size[0] // self.patch_size[0],
+                self.input_size[1] // self.patch_size[1]
+            )
+            self.attn_kwargs_forward = {"latent_hw": latent_hw}
+        else:
+            self.attn_kwargs_forward = {}
 
         # Input validation
         if attention_backend not in ["timm", "transformer_engine", "natten2d"]:
@@ -318,7 +326,7 @@ class DiT(Module):
             c = t  # (B, D)
         
         for block in self.blocks:
-            x = block(x, c, p_dropout=p_dropout, attn_kwargs=attn_kwargs)  # (B, L, D)
+            x = block(x, c, p_dropout=p_dropout, attn_kwargs={**self.attn_kwargs_forward, **(attn_kwargs or {})})  # (B, L, D)
 
         # De-tokenize: (B, L, D) -> (B, C, H, W)
         if self.force_tokenization_fp32:

@@ -102,6 +102,8 @@ heat transfer during a fill.
 * Global parameters that define the fill scenario (pressure target, inlet
   temperature, duration, and coil position).
 
+![Tank filling simulation snapshot](../../../docs/img/tank_sim.png)
+
 **Global parameters in this example:**
 
 * `pressure_bar`: Final tank pressure target (e.g., 200/250/300 bar).

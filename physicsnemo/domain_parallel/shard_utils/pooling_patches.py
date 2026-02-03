@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import torch
 from torch.distributed.tensor.placement_types import Shard
@@ -29,14 +31,19 @@ aten = torch.ops.aten
 
 
 def compute_output_shape(input_shape, pool_kwargs):
-    """Compute the output shape of a pooling operation.
+    r"""Compute the output shape of a pooling operation.
 
-    Args:
-        input_shape: Shape of the input tensor
-        pool_kwargs: Keyword arguments for the pooling operation
+    Parameters
+    ----------
+    input_shape : tuple
+        Shape of the input tensor.
+    pool_kwargs : dict
+        Keyword arguments for the pooling operation.
 
-    Returns:
-        tuple: Output shape after pooling operation
+    Returns
+    -------
+    tuple
+        Output shape after pooling operation.
     """
     # Extract pooling parameters
     kernel_size = pool_kwargs.get("kernel_size")
@@ -65,37 +72,47 @@ def compute_output_shape(input_shape, pool_kwargs):
 
 
 def repackage_pool_args(
-    input: Union[torch.Tensor, ShardTensor],
-    kernel_size: Union[int, Tuple[int, ...]],
-    stride: Union[int, Tuple[int, ...]] = None,
-    padding: Union[int, Tuple[int, ...]] = 0,
+    input: torch.Tensor | ShardTensor,
+    kernel_size: int | tuple[int, ...],
+    stride: int | tuple[int, ...] = None,
+    padding: int | tuple[int, ...] = 0,
     ceil_mode: bool = False,
     count_include_pad: bool = True,
-    divisor_override: Optional[int] = None,
+    divisor_override: int | None = None,
     *args,
     **kwargs,
-) -> Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]:
-    """Repackages pooling arguments into standard format.
+) -> tuple[torch.Tensor | ShardTensor, dict[str, Any]]:
+    r"""Repackage pooling arguments into standard format.
 
     Takes the full set of arguments that could be passed to an avg_pool operation
     and separates them into the input tensor and configuration parameters
     packaged as a kwargs dict.
 
-    Args:
-        input: Input tensor to pool
-        kernel_size: Size of the pooling window
-        stride: Stride of the pooling window, defaults to kernel_size
-        padding: Padding added to both sides of the input
-        ceil_mode: When True, will use ceil instead of floor to compute the output shape
-        count_include_pad: When True, will include the zero-padding in the averaging calculation
-        divisor_override: If specified, will be used as divisor, otherwise kernel_size is used
-        *args: Additional positional args (unused)
-        **kwargs: Additional keyword args (unused)
+    Parameters
+    ----------
+    input : Union[torch.Tensor, ShardTensor]
+        Input tensor to pool.
+    kernel_size : Union[int, Tuple[int, ...]]
+        Size of the pooling window.
+    stride : Union[int, Tuple[int, ...]], optional
+        Stride of the pooling window, defaults to ``kernel_size``.
+    padding : Union[int, Tuple[int, ...]], default=0
+        Padding added to both sides of the input.
+    ceil_mode : bool, default=False
+        When ``True``, will use ceil instead of floor to compute the output shape.
+    count_include_pad : bool, default=True
+        When ``True``, will include the zero-padding in the averaging calculation.
+    divisor_override : Optional[int], optional
+        If specified, will be used as divisor, otherwise ``kernel_size`` is used.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
 
-    Returns:
-        Tuple containing:
-        - Input tensor
-        - Dict of pooling configuration parameters
+    Returns
+    -------
+    Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]
+        Tuple containing (input tensor, dict of pooling configuration parameters).
     """
     # Handle stride=None case (defaults to kernel_size)
     if stride is None:
@@ -119,25 +136,37 @@ def repackage_pool_args(
 
 def generic_avg_pool_nd_wrapper(
     func: Callable,
-    types: Tuple[Any, ...],
-    args: Tuple[Any, ...],
-    kwargs: Dict[str, Any],
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> ShardTensor:
-    """Generic wrapper for torch N-dimensional pooling operations.
+    r"""Generic wrapper for torch N-dimensional average pooling operations.
 
     For ShardTensor inputs, handles applying distributed pooling.
 
-    Args:
-        func: Original torch pooling function being wrapped
-        types: Types of the arguments
-        args: Positional arguments for pooling
-        kwargs: Keyword arguments for pooling
+    Parameters
+    ----------
+    func : Callable
+        Original torch pooling function being wrapped.
+    types : Tuple[Any, ...]
+        Types of the arguments.
+    args : Tuple[Any, ...]
+        Positional arguments for pooling.
+    kwargs : Dict[str, Any]
+        Keyword arguments for pooling.
 
-    Returns:
-        Pooling result as either torch.Tensor or ShardTensor
+    Returns
+    -------
+    ShardTensor
+        Pooling result as ShardTensor.
 
-    Raises:
-        UndeterminedShardingError: If input tensor types are invalid
+    Raises
+    ------
+    MissingShardPatch
+        If stride does not equal kernel_size.
+    UndeterminedShardingError
+        If input tensor types are invalid or sharded dimensions are not
+        divisible by stride.
     """
 
     # Extract the input tensor and package the remaining arguments
@@ -223,37 +252,47 @@ ShardTensor.register_function_handler(
 
 
 def repackage_max_pool_args(
-    input: Union[torch.Tensor, ShardTensor],
-    kernel_size: Union[int, Tuple[int, ...]],
-    stride: Union[int, Tuple[int, ...]] = None,
-    padding: Union[int, Tuple[int, ...]] = 0,
-    dilation: Union[int, Tuple[int, ...]] = 1,
+    input: torch.Tensor | ShardTensor,
+    kernel_size: int | tuple[int, ...],
+    stride: int | tuple[int, ...] = None,
+    padding: int | tuple[int, ...] = 0,
+    dilation: int | tuple[int, ...] = 1,
     ceil_mode: bool = False,
     return_indices: bool = False,
     *args,
     **kwargs,
-) -> Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]:
-    """Repackages max pooling arguments into standard format.
+) -> tuple[torch.Tensor | ShardTensor, dict[str, Any]]:
+    r"""Repackage max pooling arguments into standard format.
 
     Takes the full set of arguments that could be passed to a max_pool operation
     and separates them into the input tensor and configuration parameters
     packaged as a kwargs dict.
 
-    Args:
-        input: Input tensor to pool
-        kernel_size: Size of the pooling window
-        stride: Stride of the pooling window, defaults to kernel_size
-        padding: Padding added to both sides of the input
-        dilation: Controls the spacing between kernel elements
-        ceil_mode: When True, will use ceil instead of floor to compute the output shape
-        return_indices: When True, returns indices of max locations along with outputs
-        *args: Additional positional args (unused)
-        **kwargs: Additional keyword args (unused)
+    Parameters
+    ----------
+    input : Union[torch.Tensor, ShardTensor]
+        Input tensor to pool.
+    kernel_size : Union[int, Tuple[int, ...]]
+        Size of the pooling window.
+    stride : Union[int, Tuple[int, ...]], optional
+        Stride of the pooling window, defaults to ``kernel_size``.
+    padding : Union[int, Tuple[int, ...]], default=0
+        Padding added to both sides of the input.
+    dilation : Union[int, Tuple[int, ...]], default=1
+        Controls the spacing between kernel elements.
+    ceil_mode : bool, default=False
+        When ``True``, will use ceil instead of floor to compute the output shape.
+    return_indices : bool, default=False
+        When ``True``, returns indices of max locations along with outputs.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
 
-    Returns:
-        Tuple containing:
-        - Input tensor
-        - Dict of pooling configuration parameters
+    Returns
+    -------
+    Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]
+        Tuple containing (input tensor, dict of pooling configuration parameters).
     """
     # Handle stride=None case (defaults to kernel_size)
     if stride is None:
@@ -274,25 +313,38 @@ def repackage_max_pool_args(
 
 def generic_max_pool_nd_wrapper(
     func: Callable,
-    types: Tuple[Any, ...],
-    args: Tuple[Any, ...],
-    kwargs: Dict[str, Any],
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> ShardTensor:
-    """Generic wrapper for torch N-dimensional max pooling operations.
+    r"""Generic wrapper for torch N-dimensional max pooling operations.
 
     Handles distributed ShardTensor inputs.
 
-    Args:
-        func: Original torch pooling function being wrapped
-        types: Types of the arguments
-        args: Positional arguments for pooling
-        kwargs: Keyword arguments for pooling
+    Parameters
+    ----------
+    func : Callable
+        Original torch pooling function being wrapped.
+    types : Tuple[Any, ...]
+        Types of the arguments.
+    args : Tuple[Any, ...]
+        Positional arguments for pooling.
+    kwargs : Dict[str, Any]
+        Keyword arguments for pooling.
 
-    Returns:
-        Pooling result as either torch.Tensor or ShardTensor (and indices if return_indices=True)
+    Returns
+    -------
+    ShardTensor or Tuple[ShardTensor, ShardTensor]
+        Pooling result as ShardTensor, or tuple of (output, indices) if
+        ``return_indices=True``.
 
-    Raises:
-        UndeterminedShardingError: If input tensor types are invalid
+    Raises
+    ------
+    MissingShardPatch
+        If stride does not equal kernel_size.
+    UndeterminedShardingError
+        If input tensor types are invalid or sharded dimensions are not
+        divisible by stride.
     """
 
     # Extract the input tensor and package the remaining arguments
@@ -388,13 +440,3 @@ ShardTensor.register_function_handler(
 ShardTensor.register_function_handler(
     torch.nn.functional.max_pool1d, generic_max_pool_nd_wrapper
 )
-
-
-# Write a function to extract the default args for avg_pool_nd
-
-
-# This will become the future implementation, or similar.
-# Why not today?  Because the backwards pass in DTensor has an explicit (and insufficient)
-# hard coded implementation for the backwards pass.
-# When that switch happens, the order in the arg repackaging will need to be updated.
-# ShardTensor.register_function_handler(aten.convolution.default, generic_conv_nd_wrapper)

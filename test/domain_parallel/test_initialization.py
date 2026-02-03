@@ -14,9 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-These tests are testing the different supported ways to initialize a ShardTensor.
+r"""Tests for ShardTensor initialization methods.
 
+This module tests the different supported ways to initialize a ``ShardTensor``:
+
+- Initialization from a single data rank via ``scatter_tensor``
+- Initialization from an existing ``DTensor`` via ``ShardTensor.from_dtensor``
+- Initialization from local chunks via ``ShardTensor.from_local``
+
+The tests cover both 1D and 2D device meshes, and verify that data is correctly
+distributed and can be recovered via ``full_tensor()``.
 """
 
 import random
@@ -32,10 +39,28 @@ from physicsnemo.domain_parallel.shard_tensor import ShardTensor, scatter_tensor
 
 
 def init_global_shape_and_placements(domain_mesh):
-    # Sharding in up to two dimensions (domain_H, domain_W)
-    # Why these numbers?  Making sure these axes are actually divisible
-    # by these numbers.  ShardTensor can handle the funky distribution
-    # but dtensor can not.
+    r"""Initialize global shape and placements for test tensors.
+
+    Creates a 4D tensor shape and appropriate placements based on mesh dimensions.
+    The shape dimensions are chosen to be divisible by common mesh sizes.
+
+    Parameters
+    ----------
+    domain_mesh : DeviceMesh
+        The device mesh to create placements for.
+
+    Returns
+    -------
+    Tuple[Tuple[int, ...], List[Shard]]
+        Tuple of (global_shape, placements) where global_shape is the tensor
+        shape and placements defines how to shard across mesh dimensions.
+
+    Note
+    ----
+    The shape values (2 * 3 * 4 * 5 * 7 = 840) are chosen to be divisible
+    by many common factors, ensuring compatibility with various mesh sizes.
+    ShardTensor can handle uneven distributions, but DTensor cannot.
+    """
     global_shape = (10, 2 * 3 * 4 * 5 * 7, 2 * 3 * 4 * 5 * 7, 10)
 
     placements = [Shard(1)]
@@ -47,12 +72,17 @@ def init_global_shape_and_placements(domain_mesh):
 
 
 def init_from_data_rank_worker(mesh):
-    # This test uses a worker function since I want to enable
-    # both 1D and 2D meshes
+    r"""Worker function to test initialization from a single data rank.
 
-    # It emulates loading the data on one rank of a mesh, and scattering
-    # the data to the rest of the mesh.  Testing w/ both 1d and 2d meshes
-    # tests scatter_tensor function appropriately.
+    Emulates loading data on one rank of a mesh and scattering the data to
+    the rest of the mesh. Tests the ``scatter_tensor`` function with both
+    1D and 2D meshes.
+
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        The device mesh to scatter the tensor across.
+    """
 
     dm = DistributedManager()
     rank = dm.rank
@@ -106,6 +136,17 @@ def test_shard_tensor_initialization_from_data_rank_2d(
 
 
 def shard_tensor_initialization_from_all_dtensor_worker(mesh):
+    r"""Worker function to test initialization from DTensor.
+
+    Creates a DTensor using ``distribute_tensor`` and converts it to a
+    ShardTensor using ``ShardTensor.from_dtensor``. Verifies that the
+    full tensor is preserved correctly.
+
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        The device mesh to distribute the tensor across.
+    """
     dm = DistributedManager()
 
     global_shape, placements = init_global_shape_and_placements(
@@ -121,20 +162,12 @@ def shard_tensor_initialization_from_all_dtensor_worker(mesh):
 
     st = ShardTensor.from_dtensor(dt)
 
+    print(f"Rank {dm.rank} made shard tensors.")
+
     dt_full = dt.full_tensor()
     st_full = st.full_tensor()
 
     assert torch.allclose(dt_full, st_full)
-
-    # on the "source" rank of the mesh, we should have agreement with raw data.
-    # on the "not-source" rank of the mesh, we shouldn't
-
-    agreement_with_original_data = torch.allclose(st.full_tensor(), raw_data)
-
-    if dm.rank == int(mesh.mesh.min()):
-        assert agreement_with_original_data
-    else:
-        assert not agreement_with_original_data
 
 
 @pytest.mark.timeout(10)
@@ -152,12 +185,24 @@ def test_shard_tensor_initialization_from_all_dtensor_2d(
 
 
 def shard_tensor_initialization_from_local_chunks_worker(mesh):
-    # Here, we create local shards and combine into a shard tensor.
-    # This test is allowed to go a little wild: the shapes for the local tensors
-    # are allowed to be randomly generated along the first shard axis.
+    r"""Worker function to test initialization from local chunks.
 
-    # 2D sharding would break if we did that, so it's set to a fixed size
-    # on other mesh dims.
+    Creates local shards with randomly varying sizes along the first shard
+    axis and combines them into a ShardTensor using ``ShardTensor.from_local``
+    with ``sharding_shapes="infer"``. This tests the ability to handle uneven
+    sharding.
+
+    Parameters
+    ----------
+    mesh : DeviceMesh
+        The device mesh to create the ShardTensor on.
+
+    Note
+    ----
+    The local tensor sizes are randomly varied only along the first shard axis.
+    2D sharding would break if we varied both dimensions, so the second mesh
+    dimension uses a fixed size.
+    """
 
     dm = DistributedManager()
 

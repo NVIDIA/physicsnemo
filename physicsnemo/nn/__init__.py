@@ -14,10 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Expose physicsnemo.core.Module for easy access to the base class
+# Make physicsnemo.nn.Module an available import like torch.nn.Module
 from physicsnemo.core import Module
 
-from .activations import (
+from .healpix import (
+    HEALPixAvgPool,
+    HEALPixFoldFaces,
+    HEALPixLayer,
+    HEALPixMaxPool,
+    HEALPixPadding,
+    HEALPixPaddingv2,
+    HEALPixUnfoldFaces,
+)
+from .module.activations import (
     CappedGELU,
     CappedLeakyReLU,
     Identity,
@@ -25,14 +34,14 @@ from .activations import (
     Stan,
     get_activation,
 )
-from .attention_layers import (
+from .module.attention_layers import (
     AttentionOp,
     EarthAttention2D,
     EarthAttention3D,
     UNetAttention,
 )
-from .ball_query import BQWarp
-from .conv_layers import (
+from .module.ball_query import BQWarp
+from .module.conv_layers import (
     Conv2d,
     ConvBlock,
     ConvGRULayer,
@@ -41,16 +50,16 @@ from .conv_layers import (
     CubeEmbedding,
     TransposeConvLayer,
 )
-from .dgm_layers import DGMLayer
-from .embedding_layers import FourierEmbedding, PositionalEmbedding
-from .fourier_layers import (
+from .module.dgm_layers import DGMLayer
+from .module.embedding_layers import FourierEmbedding, PositionalEmbedding
+from .module.fourier_layers import (
     FourierFilter,
     FourierLayer,
     FourierMLP,
     GaborFilter,
     fourier_encode,
 )
-from .fully_connected_layers import (
+from .module.fully_connected_layers import (
     Conv1dFCLayer,
     Conv2dFCLayer,
     Conv3dFCLayer,
@@ -59,28 +68,28 @@ from .fully_connected_layers import (
     FCLayer,
     Linear,
 )
-from .group_norm import GroupNorm, get_group_norm
-from .kan_layers import KolmogorovArnoldNetwork
-from .mlp_layers import Mlp
-from .resample_layers import (
+from .module.group_norm import GroupNorm, get_group_norm
+from .module.kan_layers import KolmogorovArnoldNetwork
+from .module.mlp_layers import Mlp
+from .module.resample_layers import (
     DownSample2D,
     DownSample3D,
     UpSample2D,
     UpSample3D,
 )
-from .siren_layers import SirenLayer, SirenLayerType
-from .spectral_layers import (
+from .module.siren_layers import SirenLayer, SirenLayerType
+from .module.spectral_layers import (
     SpectralConv1d,
     SpectralConv2d,
     SpectralConv3d,
     SpectralConv4d,
 )
-from .transformer_layers import (
+from .module.transformer_layers import (
     DecoderLayer,
     EncoderLayer,
     FuserLayer,
     SwinTransformer,
 )
-from .unet_layers import UNetBlock
-from .weight_fact import WeightFactLinear
-from .weight_norm import WeightNormLinear
+from .module.unet_layers import UNetBlock
+from .module.weight_fact import WeightFactLinear
+from .module.weight_norm import WeightNormLinear

@@ -59,8 +59,7 @@ from physicsnemo.models.domino.model import DoMINO
 from physicsnemo.models.domino.geometry_rep import scale_sdf
 from physicsnemo.models.domino.utils import *
 from physicsnemo.models.domino.utils.vtk_file_utils import *
-from physicsnemo.nn.sdf import signed_distance_field
-from physicsnemo.nn.neighbors import knn
+from physicsnemo.nn.functional import knn, signed_distance_field
 from utils import ScalingFactors, load_scaling_factors
 
 # AIR_DENSITY = 1.205

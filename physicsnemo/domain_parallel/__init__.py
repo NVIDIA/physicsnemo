@@ -14,10 +14,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Domain parallel utilities for distributed tensor operations.
 
-# There is a minimum version of pytorch required for shard tensor.
-# 2.6.0+ works
-# 2.5.X and lower does not work
+This module provides the ``ShardTensor`` class and related utilities for
+domain-parallel computation across multiple devices. Unlike PyTorch's native
+``DTensor``, ``ShardTensor`` supports uneven sharding where different ranks
+can have different local tensor sizes.
+
+Key components:
+
+- ``ShardTensor``: A distributed tensor class supporting uneven sharding
+- ``ShardTensorSpec``: Specification class tracking sharding metadata
+- ``scatter_tensor``: Utility to distribute tensors from a source rank
+
+Note
+----
+This module requires PyTorch >= 2.6.0. Earlier versions are not supported.
+"""
+
+# Minimum PyTorch version requirement for ShardTensor:
+# - 2.6.0+ is supported
+# - 2.5.x and earlier are not supported
 
 import torch
 

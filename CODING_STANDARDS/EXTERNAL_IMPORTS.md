@@ -138,7 +138,7 @@ else:
         """
 
         raise ImportError(
-            "physicsnemo.nn.neighbors: cuML>=24.0.0 and CuPy>=13.0.0 are required "
+            "physicsnemo.nn.functional.knn: cuML>=24.0.0 and CuPy>=13.0.0 are required "
             "for the accelerated kNN backend. Install both packages; see "
             "https://docs.rapids.ai/install for instructions."
         )
@@ -155,7 +155,7 @@ are acceptable:
    implementation. Provide an entry-point that selects among backends
    (`"auto"` should try accelerated paths first while falling back to the
    reference path). Each backend implementation must live in its own module and
-   independently guard its imports. Example: `physicsnemo.nn.neighbors`.
+   independently guard its imports. Example: `physicsnemo.nn.functional`.
 2. **File-level runtime dispatch.** The dependency affects a small portion of
    the implementation. Keep reference and accelerated code in the same module.
    Use `check_version_spec` to pick the execution path automatically or to

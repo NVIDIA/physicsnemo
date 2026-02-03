@@ -26,7 +26,7 @@ from .losses import (
 )
 from .mhd_pde import MHD_PDE
 from .loss_mhd import LossMHD
-from physicsnemo.nn.spectral_layers import fourier_derivatives
+from physicsnemo.nn.module.spectral_layers import fourier_derivatives
 
 
 class LossMHDVecPot_PhysicsNeMo(LossMHD):

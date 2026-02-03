@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -37,20 +39,28 @@ from .patch_core import promote_to_iterable
 def conv_output_shape(
     L_in: int, padding: int, stride: int, kernel_size: int, dilation: int
 ) -> int:
-    """Calculate the output length of a 1D convolution operation.
+    r"""Calculate the output length of a 1D convolution operation.
 
     This function computes the resulting length of a 1D tensor after applying
     a convolution with the given parameters.
 
-    Args:
-        L_in: Input length
-        padding: Padding size (on each side)
-        stride: Convolution stride
-        kernel_size: Size of the convolution kernel
-        dilation: Dilation factor for the kernel
+    Parameters
+    ----------
+    L_in : int
+        Input length.
+    padding : int
+        Padding size (on each side).
+    stride : int
+        Convolution stride.
+    kernel_size : int
+        Size of the convolution kernel.
+    dilation : int
+        Dilation factor for the kernel.
 
-    Returns:
-        The length of the output tensor after convolution
+    Returns
+    -------
+    int
+        The length of the output tensor after convolution.
     """
     L_out = (L_in + 2 * padding - dilation * (kernel_size - 1) - 1) / stride + 1
     return int(L_out)
@@ -61,26 +71,38 @@ def compute_halo_from_kernel_stride_and_dilation(
     kernel_size: int,
     stride: int,
     dilation: int,
-    padding: Union[int, str],
+    padding: int | str,
     transposed: bool,
 ) -> int:
-    """Compute the halo size needed for a convolution kernel along a single dimension.
+    r"""Compute the halo size needed for a convolution kernel along a single dimension.
 
     At a high level, the halo is equal to half the receptive field of the kernel.
     There are some subtleties with even vs odd kernel sizes and the conventions of
     where a kernel starts getting applied.
 
-    Args:
-        kernel_size: Size of convolution kernel along this dimension
-        stride: Convolution stride along this dimension
-        dilation: Convolution dilation parameter
+    Parameters
+    ----------
+    kernel_size : int
+        Size of convolution kernel along this dimension.
+    stride : int
+        Convolution stride along this dimension.
+    dilation : int
+        Convolution dilation parameter.
+    padding : Union[int, str]
+        Padding specification for the convolution.
+    transposed : bool
+        Whether this is a transposed convolution.
 
-    Returns:
-        Required halo size on each side of a data chunk
+    Returns
+    -------
+    int
+        Required halo size on each side of a data chunk.
 
-    Raises:
-        MissingShardPatch: If kernel configuration is not supported for sharding,
-                          specifically for even kernels without matching stride
+    Raises
+    ------
+    MissingShardPatch
+        If kernel configuration is not supported for sharding,
+        specifically for even kernels without matching stride.
     """
     # Special case: even kernel with matching stride and no dilation needs no halo
     if kernel_size % 2 == 0:
@@ -114,17 +136,35 @@ def compute_halo_from_kernel_stride_and_dilation(
 @profile
 def padding_from_str_and_params(
     padding: str,
-    input_shape: Tuple[int, ...],
+    input_shape: tuple[int, ...],
     kernel_size: int,
     stride: int,
     dilation: int,
 ) -> int:
-    """Convert a string padding specification to a numerical value.
+    r"""Convert a string padding specification to a numerical value.
 
-    Args:
-        padding: String padding specification
-        conv_kwargs: Dictionary of convolution arguments
-        dim: Dimension index
+    Parameters
+    ----------
+    padding : str
+        String padding specification (``"same"``, ``"valid"``, or ``"none"``).
+    input_shape : Tuple[int, ...]
+        Shape of the input tensor.
+    kernel_size : int
+        Size of the convolution kernel.
+    stride : int
+        Convolution stride.
+    dilation : int
+        Convolution dilation factor.
+
+    Returns
+    -------
+    int
+        Numerical padding value.
+
+    Raises
+    ------
+    ValueError
+        If an invalid padding specification is provided.
     """
 
     if padding == "same":
@@ -149,23 +189,33 @@ def padding_from_str_and_params(
 @profile
 def compute_halo_configs_from_conv_args(
     input: ShardTensor,
-    kernel_size: Tuple[int, ...],
-    conv_kwargs: Dict[str, Any],
+    kernel_size: tuple[int, ...],
+    conv_kwargs: dict[str, Any],
     transposed: bool = False,
-) -> List[HaloConfig]:
-    """Compute halo configurations for a sharded tensor based on convolution arguments.
+) -> list[HaloConfig]:
+    r"""Compute halo configurations for a sharded tensor based on convolution arguments.
 
-    Args:
-        input: The sharded tensor that will be used in convolution
-        kernel_size: Tuple of kernel dimensions for the convolution
-        conv_kwargs: Dictionary of convolution arguments including stride,
-                    padding, dilation, and groups
+    Parameters
+    ----------
+    input : ShardTensor
+        The sharded tensor that will be used in convolution.
+    kernel_size : Tuple[int, ...]
+        Tuple of kernel dimensions for the convolution.
+    conv_kwargs : Dict[str, Any]
+        Dictionary of convolution arguments including stride, padding,
+        dilation, and groups.
+    transposed : bool, default=False
+        Whether this is a transposed convolution.
 
-    Returns:
-        List of HaloConfig objects for each sharded dimension
+    Returns
+    -------
+    List[HaloConfig]
+        List of HaloConfig objects for each sharded dimension.
 
-    Note:
-        This function updates conv_kwargs in place, setting padding to 0 for sharded dimensions.
+    Notes
+    -----
+    This function updates ``conv_kwargs`` in place, setting padding to 0
+    for sharded dimensions.
     """
 
     placements = input._spec.placements
@@ -237,14 +287,30 @@ def compute_halo_configs_from_conv_args(
 
 @profile
 def compute_output_shape(
-    sharding_shape: Tuple[int, ...],
-    conv_kwargs: Dict[str, Any],
-    kernel_size: Tuple[int, ...],
+    sharding_shape: tuple[int, ...],
+    conv_kwargs: dict[str, Any],
+    kernel_size: tuple[int, ...],
     transposed: bool = False,
-) -> Tuple[int, ...]:
-    """
-    For a specified input shape, determine the output shape after a convolution.
+) -> tuple[int, ...]:
+    r"""Determine the output shape after a convolution for a specified input shape.
+
     Handles both regular and transposed convolutions.
+
+    Parameters
+    ----------
+    sharding_shape : Tuple[int, ...]
+        Input tensor shape.
+    conv_kwargs : Dict[str, Any]
+        Dictionary of convolution parameters (stride, padding, dilation, etc.).
+    kernel_size : Tuple[int, ...]
+        Tuple of kernel dimensions for the convolution.
+    transposed : bool, default=False
+        Whether this is a transposed convolution.
+
+    Returns
+    -------
+    Tuple[int, ...]
+        Output shape after the convolution operation.
     """
     output_shape = []
     tensor_rank = len(sharding_shape[2:])
@@ -274,27 +340,35 @@ def compute_output_shape(
 
 
 def compute_haloed_and_padded_input_shape(
-    input_shape: Tuple[int, ...],
+    input_shape: tuple[int, ...],
     target_mesh_dim: int,
-    mesh_coords: Tuple[int, ...],
-    mesh_sizes: Tuple[int, ...],
-    halo_config_map: Dict[int, HaloConfig],
-) -> Dict[int, Tuple[int, ...]]:
-    """
+    mesh_coords: tuple[int, ...],
+    mesh_sizes: tuple[int, ...],
+    halo_config_map: dict[int, HaloConfig],
+) -> tuple[int, ...]:
+    r"""Determine the output shape after halo and edge padding is applied.
+
     Given an input shape, a list of halo configs, and the rank of this
     input in the input tensor, determine the output shape for this input
     after the halo and edge padding is applied.
 
-    Args:
-        input_shape: The shape of the input tensor
-        target_mesh_dim: The dimension of the mesh that this input is along
-        mesh_coords: The coordinates of this input in the mesh
-        mesh_sizes: The sizes of the mesh
-        mesh_rank: The rank of this input in the mesh
-        halo_config_map: A map from halo mesh dim to HaloConfig
+    Parameters
+    ----------
+    input_shape : Tuple[int, ...]
+        The shape of the input tensor.
+    target_mesh_dim : int
+        The dimension of the mesh that this input is along.
+    mesh_coords : Tuple[int, ...]
+        The coordinates of this input in the mesh.
+    mesh_sizes : Tuple[int, ...]
+        The sizes of the mesh.
+    halo_config_map : Dict[int, HaloConfig]
+        A map from halo mesh dim to HaloConfig.
 
-    Returns:
-        The shape of the input tensor after the halo and edge padding is applied
+    Returns
+    -------
+    Tuple[int, ...]
+        The shape of the input tensor after the halo and edge padding is applied.
     """
     output_shape = list(input_shape)
     # Loop over the halo configs:
@@ -326,12 +400,10 @@ def compute_haloed_and_padded_input_shape(
 
 
 class ConvGradReducer(torch.autograd.Function):
-    """
-    A custom autograd function that performs an allreduce on the gradients in
-    the backward pass.  This makes defining a forward-only shard patch easier.
+    r"""Custom autograd function that performs an allreduce on gradients in backward pass.
 
-    If you need to allreduce weight grads in the backward pass, call this on the
-    weight in the forward pass.
+    This makes defining a forward-only shard patch easier. If you need to allreduce
+    weight grads in the backward pass, call this on the weight in the forward pass.
     """
 
     @staticmethod
@@ -340,8 +412,22 @@ class ConvGradReducer(torch.autograd.Function):
         weight_or_bias: torch.Tensor,
         spec: ShardTensorSpec,
     ) -> torch.Tensor:
-        # Input represents the weight or bias.  Spec is the shard spec
-        # of the convolutional input (not the _input here!)
+        r"""Forward pass that saves the spec for backward.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving variables for backward.
+        weight_or_bias : torch.Tensor
+            The weight or bias tensor to pass through.
+        spec : ShardTensorSpec
+            Shard spec of the convolutional input (not the weight_or_bias).
+
+        Returns
+        -------
+        torch.Tensor
+            The input tensor unchanged.
+        """
         ctx.spec = spec
         return weight_or_bias
 
@@ -349,8 +435,21 @@ class ConvGradReducer(torch.autograd.Function):
     def backward(
         ctx: torch.autograd.function.FunctionCtx,
         grad_weight_or_bias: torch.Tensor,
-    ) -> torch.Tensor:
-        # Now, loop over the mesh dims and make sure we sync gradients
+    ) -> tuple[torch.Tensor, None]:
+        r"""Backward pass that performs allreduce on gradients.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context containing saved variables from forward.
+        grad_weight_or_bias : torch.Tensor
+            Gradient of the loss with respect to weight or bias.
+
+        Returns
+        -------
+        Tuple[torch.Tensor, None]
+            Tuple of (reduced gradient, ``None`` for spec).
+        """
         for mesh_dim in range(ctx.spec.mesh.ndim):
             if ctx.spec.placements[mesh_dim].is_shard():
                 group = ctx.spec.mesh.get_group(mesh_dim)
@@ -364,28 +463,39 @@ def partial_conv_nd(
     func: callable,
     conv_input: ShardTensor,
     weight: torch.nn.Parameter,
-    bias: Optional[torch.nn.Parameter],
-    conv_kwargs: Dict[str, Any],
+    bias: torch.nn.Parameter | None,
+    conv_kwargs: dict[str, Any],
     transposed: bool = False,
 ) -> ShardTensor:
-    """Perform a convolution on a sharded tensor with halo exchange.
+    r"""Perform a convolution on a sharded tensor with halo exchange.
 
     This high-level, differentiable function computes a convolution on a sharded tensor
     by performing these steps:
+
     1. Calculate the size of halos needed
     2. Apply halo padding (differentiable)
     3. Perform convolution on the padded tensor with padding=0 on sharded dimensions
     4. Return the result as a ShardTensor
 
-    Args:
-        func: The function to be called (conv1d, conv2d, etc.)
-        conv_input: The sharded conv_input tensor
-        weight: Convolution filter weights
-        bias: Optional bias parameter
-        conv_kwargs: Dictionary of convolution parameters (stride, padding, etc.)
+    Parameters
+    ----------
+    func : callable
+        The function to be called (``conv1d``, ``conv2d``, etc.).
+    conv_input : ShardTensor
+        The sharded input tensor.
+    weight : torch.nn.Parameter
+        Convolution filter weights.
+    bias : Optional[torch.nn.Parameter]
+        Optional bias parameter.
+    conv_kwargs : Dict[str, Any]
+        Dictionary of convolution parameters (stride, padding, etc.).
+    transposed : bool, default=False
+        Whether this is a transposed convolution.
 
-    Returns:
-        Resulting ShardTensor after convolution operation
+    Returns
+    -------
+    ShardTensor
+        Resulting ShardTensor after convolution operation.
     """
 
     input_spec = conv_input._spec
@@ -498,21 +608,32 @@ def partial_conv_nd(
     return output
 
 
-def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: dict):
-    """Wrapper function for N-dimensional convolution operations supporting shardtensors.
+def generic_conv_nd_wrapper(
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ShardTensor:
+    r"""Wrapper function for N-dimensional convolution operations supporting ShardTensors.
 
-    This function dispatches convolution operations to appropriate implementations based on input types.
-    It handles both regular and transposed convolutions, and supports both torch.Tensor and ShardTensor inputs.
+    This function dispatches convolution operations to appropriate implementations
+    based on input types. It handles both regular and transposed convolutions.
 
-    Args:
-        func: The convolution function to be wrapped (conv1d, conv2d, etc.)
-        types: Tuple of input types (unused)
-        args: Positional arguments to the convolution function
-        kwargs: Keyword arguments to the convolution function
+    Parameters
+    ----------
+    func : callable
+        The convolution function to be wrapped (``conv1d``, ``conv2d``, etc.).
+    types : tuple
+        Tuple of input types (unused).
+    args : tuple
+        Positional arguments to the convolution function.
+    kwargs : dict
+        Keyword arguments to the convolution function.
 
-    Returns:
-        The result of the convolution operation
-
+    Returns
+    -------
+    ShardTensor
+        The result of the convolution operation.
     """
 
     if "transpose" in func.__name__:
@@ -546,47 +667,56 @@ def generic_conv_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: d
 
 @profile
 def repackage_conv_args(
-    input: Union[torch.Tensor, ShardTensor],
-    weight: Union[torch.Tensor, DTensor],
-    bias: Union[torch.Tensor, DTensor, None] = None,
-    stride: Union[int, Tuple[int, ...]] = 1,
-    padding: Union[int, Tuple[int, ...]] = 0,
-    dilation: Union[int, Tuple[int, ...]] = 1,
+    input: torch.Tensor | ShardTensor,
+    weight: torch.Tensor | DTensor,
+    bias: torch.Tensor | DTensor | None = None,
+    stride: int | tuple[int, ...] = 1,
+    padding: int | tuple[int, ...] = 0,
+    dilation: int | tuple[int, ...] = 1,
     groups: int = 1,
-    output_padding: Union[int, Tuple[int, ...]] = 0,
+    output_padding: int | tuple[int, ...] = 0,
     *args,
     **kwargs,
-) -> Tuple[
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, DTensor],
-    Union[torch.Tensor, DTensor, None],
+) -> tuple[
+    torch.Tensor | ShardTensor,
+    torch.Tensor | DTensor,
+    torch.Tensor | DTensor | None,
     dict,
 ]:
-    """Repackages convolution arguments into standard format.
+    r"""Repackage convolution arguments into standard format.
 
     Takes the full set of arguments that could be passed to a convolution operation
     and separates them into core tensor inputs (input, weight, bias) and
     configuration parameters packaged as a kwargs dict.
 
-    Args:
-        input: Input tensor to convolve
-        weight: Convolution kernel weights
-        bias: Optional bias tensor
-        stride: Convolution stride length(s)
-        padding: Input padding size(s)
-        dilation: Kernel dilation factor(s)
-        groups: Number of convolution groups
-        transposed: Whether this is a transposed convolution
-        output_padding: Additional output padding for transposed convs
-        *args: Additional positional args (unused)
-        **kwargs: Additional keyword args (unused)
+    Parameters
+    ----------
+    input : Union[torch.Tensor, ShardTensor]
+        Input tensor to convolve.
+    weight : Union[torch.Tensor, DTensor]
+        Convolution kernel weights.
+    bias : Union[torch.Tensor, DTensor, None], optional
+        Optional bias tensor.
+    stride : Union[int, Tuple[int, ...]], default=1
+        Convolution stride length(s).
+    padding : Union[int, Tuple[int, ...]], default=0
+        Input padding size(s).
+    dilation : Union[int, Tuple[int, ...]], default=1
+        Kernel dilation factor(s).
+    groups : int, default=1
+        Number of convolution groups.
+    output_padding : Union[int, Tuple[int, ...]], default=0
+        Additional output padding for transposed convolutions.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
 
-    Returns:
-        Tuple containing:
-        - Input tensor
-        - Weight tensor
-        - Bias tensor (or None)
-        - Dict of convolution configuration parameters
+    Returns
+    -------
+    Tuple[Union[torch.Tensor, ShardTensor], Union[torch.Tensor, DTensor], Union[torch.Tensor, DTensor, None], dict]
+        Tuple containing (input tensor, weight tensor, bias tensor or ``None``,
+        dict of convolution configuration parameters).
     """
     # Package all non-tensor parameters into a kwargs dictionary
     return_kwargs = {
@@ -603,47 +733,56 @@ def repackage_conv_args(
 
 @profile
 def repackage_conv_transposed_args(
-    input: Union[torch.Tensor, ShardTensor],
-    weight: Union[torch.Tensor, DTensor],
-    bias: Union[torch.Tensor, DTensor, None] = None,
-    stride: Union[int, Tuple[int, ...]] = 1,
-    padding: Union[int, Tuple[int, ...]] = 0,
-    output_padding: Union[int, Tuple[int, ...]] = 0,
+    input: torch.Tensor | ShardTensor,
+    weight: torch.Tensor | DTensor,
+    bias: torch.Tensor | DTensor | None = None,
+    stride: int | tuple[int, ...] = 1,
+    padding: int | tuple[int, ...] = 0,
+    output_padding: int | tuple[int, ...] = 0,
     groups: int = 1,
-    dilation: Union[int, Tuple[int, ...]] = 1,
+    dilation: int | tuple[int, ...] = 1,
     *args,
     **kwargs,
-) -> Tuple[
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, DTensor],
-    Union[torch.Tensor, DTensor, None],
+) -> tuple[
+    torch.Tensor | ShardTensor,
+    torch.Tensor | DTensor,
+    torch.Tensor | DTensor | None,
     dict,
 ]:
-    """Repackages convolution arguments into standard format.
+    r"""Repackage transposed convolution arguments into standard format.
 
-    Takes the full set of arguments that could be passed to a convolution operation
-    and separates them into core tensor inputs (input, weight, bias) and
+    Takes the full set of arguments that could be passed to a transposed convolution
+    operation and separates them into core tensor inputs (input, weight, bias) and
     configuration parameters packaged as a kwargs dict.
 
-    Args:
-        input: Input tensor to convolve
-        weight: Convolution kernel weights
-        bias: Optional bias tensor
-        stride: Convolution stride length(s)
-        padding: Input padding size(s)
-        dilation: Kernel dilation factor(s)
-        groups: Number of convolution groups
-        transposed: Whether this is a transposed convolution
-        output_padding: Additional output padding for transposed convs
-        *args: Additional positional args (unused)
-        **kwargs: Additional keyword args (unused)
+    Parameters
+    ----------
+    input : Union[torch.Tensor, ShardTensor]
+        Input tensor to convolve.
+    weight : Union[torch.Tensor, DTensor]
+        Convolution kernel weights.
+    bias : Union[torch.Tensor, DTensor, None], optional
+        Optional bias tensor.
+    stride : Union[int, Tuple[int, ...]], default=1
+        Convolution stride length(s).
+    padding : Union[int, Tuple[int, ...]], default=0
+        Input padding size(s).
+    output_padding : Union[int, Tuple[int, ...]], default=0
+        Additional output padding for transposed convolutions.
+    groups : int, default=1
+        Number of convolution groups.
+    dilation : Union[int, Tuple[int, ...]], default=1
+        Kernel dilation factor(s).
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
 
-    Returns:
-        Tuple containing:
-        - Input tensor
-        - Weight tensor
-        - Bias tensor (or None)
-        - Dict of convolution configuration parameters
+    Returns
+    -------
+    Tuple[Union[torch.Tensor, ShardTensor], Union[torch.Tensor, DTensor], Union[torch.Tensor, DTensor, None], dict]
+        Tuple containing (input tensor, weight tensor, bias tensor or ``None``,
+        dict of convolution configuration parameters).
     """
     # Package all non-tensor parameters into a kwargs dictionary
     return_kwargs = {

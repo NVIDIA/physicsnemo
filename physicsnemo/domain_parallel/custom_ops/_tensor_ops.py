@@ -14,6 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Custom tensor operations for ShardTensor dispatch.
+
+This module provides propagation rules for tensor operations that need
+special handling when applied to ``ShardTensor`` objects. These rules
+are registered with PyTorch's DTensor operation dispatch system.
+"""
 
 import torch
 from torch.distributed.tensor._dtensor_spec import DTensorSpec, TensorMeta
@@ -31,7 +37,6 @@ from torch.distributed.tensor.placement_types import (
     Shard,
 )
 
-# noqa: E402
 from physicsnemo.domain_parallel._shard_tensor_spec import (
     _stride_from_contiguous_shape_C_style,
 )
@@ -41,8 +46,37 @@ aten = torch.ops.aten
 
 @register_prop_rule(aten.unbind.int, schema_info=RuntimeSchemaInfo(1))
 def unbind_rules(op_schema: OpSchema) -> OutputSharding:
-    """
-    Need to add rules for unbinding for stormcast and attention in general
+    r"""Propagation rule for ``torch.unbind`` on ShardTensor.
+
+    Computes the output sharding specification when unbinding a sharded tensor
+    along a specified dimension. The unbind operation removes one dimension
+    from the tensor and returns a tuple of tensors.
+
+    Parameters
+    ----------
+    op_schema : OpSchema
+        The operation schema containing input specifications and arguments.
+        Expected to contain:
+
+        - ``args_schema[0]``: Input tensor specification (DTensorSpec)
+        - ``args_schema[1]``: Dimension to unbind along (int), defaults to 0
+
+    Returns
+    -------
+    OutputSharding
+        Output sharding specification containing a list of DTensorSpec objects,
+        one for each tensor in the unbind result.
+
+    Raises
+    ------
+    Exception
+        If attempting to unbind along a sharded dimension (not yet implemented).
+        If attempting to unbind with Partial placement (not yet supported).
+
+    Note
+    ----
+    This rule is needed for operations like attention in Stormcast and other
+    models that unbind tensors along non-sharded dimensions.
     """
 
     # We need to get the dimension of the slice.  0 is default.

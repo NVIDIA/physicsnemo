@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Tuple
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import torch
 from torch.distributed.tensor.placement_types import (
@@ -36,8 +38,7 @@ aten = torch.ops.aten
 
 
 class ShardedIndexSelect(torch.autograd.Function):
-    """
-    Autograd function implementing a differentiable index_select operation for ShardTensors.
+    r"""Autograd function implementing a differentiable index_select operation for ShardTensors.
 
     This class provides both forward and backward pass implementations to enable
     gradient computation through the index_select operation when working with
@@ -51,8 +52,7 @@ class ShardedIndexSelect(torch.autograd.Function):
         dim: int,
         index: ShardTensor,
     ) -> ShardTensor:
-        """
-        Implementation of a differentiable index select operation on ShardTensors.
+        r"""Implement a differentiable index select operation on ShardTensors.
 
         This requires collectives and temporarily utilizing the full shape.
         It could be optimized, for large tensors, to use a ring and smarter indexing.
@@ -60,23 +60,23 @@ class ShardedIndexSelect(torch.autograd.Function):
         Parameters
         ----------
         ctx : torch.autograd.function.FunctionCtx
-            Context object to store information for backward pass
+            Context object to store information for backward pass.
         tensor : ShardTensor
-            Input tensor to select from
+            Input tensor to select from.
         dim : int
-            Dimension along which to index
+            Dimension along which to index.
         index : ShardTensor
-            Indices to select
+            Indices to select.
 
         Returns
         -------
         ShardTensor
-            Output tensor containing the selected elements
+            Output tensor containing the selected elements.
 
         Raises
         ------
         MissingShardPatch
-            If the index sharding strategy is not implemented
+            If the index sharding strategy is not implemented.
         """
         # This is the simplest implementation, to enable functionality.
         # It could be optimized for very large tensors to ensure performace.
@@ -159,9 +159,8 @@ class ShardedIndexSelect(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx: torch.autograd.function.FunctionCtx, grad_output: ShardTensor
-    ) -> Tuple[ShardTensor, None, None]:
-        """
-        Backward pass for the index_select operation on ShardTensors.
+    ) -> tuple[ShardTensor, None, None]:
+        r"""Backward pass for the index_select operation on ShardTensors.
 
         The backward pass sends gradients appropriately to the input tensor.
         Therefore, its sharding should match the input tensor's sharding.
@@ -169,17 +168,18 @@ class ShardedIndexSelect(torch.autograd.Function):
         Parameters
         ----------
         ctx : torch.autograd.function.FunctionCtx
-            Context object containing saved tensors and attributes from forward pass
+            Context object containing saved tensors and attributes from forward pass.
         grad_output : ShardTensor
-            Gradient of the loss with respect to the output of forward pass
+            Gradient of the loss with respect to the output of forward pass.
 
         Returns
         -------
         Tuple[ShardTensor, None, None]
             Tuple containing:
+
             - Gradient with respect to input tensor
-            - None for dim parameter (not differentiable)
-            - None for index parameter (not differentiable)
+            - ``None`` for dim parameter (not differentiable)
+            - ``None`` for index parameter (not differentiable)
         """
         (index,) = ctx.saved_tensors
         spec = ctx.spec
@@ -216,8 +216,7 @@ def sharded_index_select(
     dim: int,
     index: ShardTensor,
 ) -> ShardTensor:
-    """
-    Performs an index_select operation on ShardTensors with autograd support.
+    r"""Perform an index_select operation on ShardTensors with autograd support.
 
     This is a thin wrapper around the ShardedIndexSelect autograd function
     to make the operation differentiable.
@@ -225,31 +224,43 @@ def sharded_index_select(
     Parameters
     ----------
     tensor : ShardTensor
-        Input tensor to select from
+        Input tensor to select from.
     dim : int
-        Dimension along which to index
+        Dimension along which to index.
     index : ShardTensor
-        Indices to select
+        Indices to select.
 
     Returns
     -------
     ShardTensor
-        Output tensor containing the selected elements
+        Output tensor containing the selected elements.
     """
     return ShardedIndexSelect.apply(tensor, dim, index)
 
 
 def index_select_wrapper(
-    func: Any, instance: Any, args: tuple, kwargs: dict
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> ShardTensor:
-    """
-    Wrapper for index_select operation that handles ShardTensors
+    r"""Wrapper for index_select operation that handles ShardTensors.
+
+    Parameters
+    ----------
+    func : Callable
+        The original function being wrapped.
+    types : tuple[Any, ...]
+        Types of the input arguments (unused).
+    args : tuple[Any, ...]
+        Positional arguments containing (tensor, dim, index).
+    kwargs : dict[str, Any]
+        Keyword arguments (unused).
 
     Returns
     -------
     ShardTensor
-        Output tensor containing the selected elements
-
+        Output tensor containing the selected elements.
     """
 
     # Extract the tensor and index from the arguments
@@ -262,8 +273,26 @@ ShardTensor.register_function_handler(torch.index_select, index_select_wrapper)
 
 
 def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTensor:
-    """
-    This function contains the logic for performing a select operation on a ShardTensor.
+    r"""Perform a select operation on a ShardTensor.
+
+    Parameters
+    ----------
+    tensor : ShardTensor
+        Input tensor to select from.
+    dim : int
+        Dimension along which to select.
+    index : int
+        Index to select.
+
+    Returns
+    -------
+    ShardTensor
+        Output tensor with the selected slice.
+
+    Raises
+    ------
+    MissingShardPatch
+        If selection is along a sharded axis or partial placement is used.
     """
 
     # if the chunking dimension is along a dimension that is sharded, we have to handle that.
@@ -342,11 +371,30 @@ def sharded_select_helper(tensor: ShardTensor, dim: int, index: int) -> ShardTen
 def sharded_select_backward_helper(
     grad_output: ShardTensor, input_sizes: torch.Size, dim: int, index: int
 ) -> ShardTensor:
-    """
-    This function contains the logic for performing a gradient of a select operation on a ShardTensor.
+    r"""Perform gradient computation for a select operation on a ShardTensor.
 
     We shard the gradients analogously to the output gradients.
 
+    Parameters
+    ----------
+    grad_output : ShardTensor
+        Gradient of the loss with respect to the output of the select operation.
+    input_sizes : torch.Size
+        Original input tensor sizes.
+    dim : int
+        Dimension along which the select was performed.
+    index : int
+        Index that was selected.
+
+    Returns
+    -------
+    ShardTensor
+        Gradient with respect to the input tensor.
+
+    Raises
+    ------
+    Exception
+        If partial placement is used (not supported).
     """
 
     # if the chunking dimension is along a dimension that is sharded, we have to handle that.
