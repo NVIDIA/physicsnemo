@@ -28,8 +28,8 @@ from tensordict import TensorDict
 from physicsnemo.mesh.sampling.sample_data import (
     compute_barycentric_coordinates_pairwise,
 )
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
 from physicsnemo.mesh.spatial import BVH
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

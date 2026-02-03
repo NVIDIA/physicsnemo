@@ -170,9 +170,7 @@ class TestBarycentricOptimizations:
         # Barycentric coordinates should sum to 1
         torch.testing.assert_close(bary.sum(dim=1), torch.ones(3), rtol=1e-5, atol=1e-7)
         # Reconstruction error should be 0 for codimension-0 (2D in 2D)
-        torch.testing.assert_close(
-            recon_error, torch.zeros(3), rtol=1e-5, atol=1e-7
-        )
+        torch.testing.assert_close(recon_error, torch.zeros(3), rtol=1e-5, atol=1e-7)
 
     def test_pairwise_memory_efficiency(self):
         """Verify pairwise uses O(n) not O(n²) memory."""

@@ -29,10 +29,10 @@ The pure PyTorch implementation here is highly optimized and performs excellentl
 
 from typing import TYPE_CHECKING, Literal
 
-from physicsnemo.mesh.utilities._cache import CACHE_KEY
-
 import torch
 from tensordict import TensorDict
+
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

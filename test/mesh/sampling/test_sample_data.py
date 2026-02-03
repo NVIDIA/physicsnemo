@@ -486,9 +486,7 @@ class TestCodimensionNonZero:
     def test_triangle_in_3d_on_plane(self):
         """Test barycentric coordinates for 2D triangle in 3D, query on the plane."""
         ### Triangle in the z=0 plane
-        vertices = torch.tensor(
-            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
-        )
+        vertices = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
 
         ### Query point at centroid, on the plane
         query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, 0.0]])
@@ -507,9 +505,7 @@ class TestCodimensionNonZero:
     def test_triangle_in_3d_slightly_off_plane(self):
         """Test barycentric coordinates for 2D triangle in 3D, query slightly off plane."""
         ### Triangle in the z=0 plane
-        vertices = torch.tensor(
-            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
-        )
+        vertices = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
 
         ### Query point at centroid but slightly above the plane
         small_offset = 1e-7
@@ -527,9 +523,7 @@ class TestCodimensionNonZero:
     def test_triangle_in_3d_far_from_plane(self):
         """Test barycentric coordinates for 2D triangle in 3D, query far from plane."""
         ### Triangle in the z=0 plane
-        vertices = torch.tensor(
-            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
-        )
+        vertices = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
 
         ### Query point at centroid projection but 1000 units above the plane
         large_offset = 1000.0
@@ -543,9 +537,7 @@ class TestCodimensionNonZero:
             bary, torch.tensor([[[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]]]), atol=1e-5
         )
         ### Reconstruction error should be large (equal to the z-offset)
-        assert torch.allclose(
-            recon_error, torch.tensor([[large_offset]]), atol=1e-3
-        )
+        assert torch.allclose(recon_error, torch.tensor([[large_offset]]), atol=1e-3)
 
     def test_find_containing_cells_triangle_in_3d_rejects_far_points(self):
         """Test that find_containing_cells rejects points far from codim != 0 manifolds.
@@ -555,9 +547,7 @@ class TestCodimensionNonZero:
         manifold would be inside.
         """
         ### Triangle mesh in z=0 plane
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
@@ -573,9 +563,7 @@ class TestCodimensionNonZero:
     def test_find_containing_cells_triangle_in_3d_accepts_near_points(self):
         """Test that find_containing_cells accepts points very close to the manifold."""
         ### Triangle mesh in z=0 plane
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
@@ -592,9 +580,7 @@ class TestCodimensionNonZero:
     def test_find_containing_cells_triangle_in_3d_with_tolerance(self):
         """Test that tolerance controls acceptance of slightly off-plane points."""
         ### Triangle mesh in z=0 plane
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
@@ -602,14 +588,14 @@ class TestCodimensionNonZero:
         query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, offset]])
 
         ### With small tolerance, should reject
-        cell_indices_small_tol, _ = find_containing_cells(
-            mesh, query, tolerance=1e-6
-        )
+        cell_indices_small_tol, _ = find_containing_cells(mesh, query, tolerance=1e-6)
         assert cell_indices_small_tol[0] == -1
 
         ### With larger tolerance, should accept
         cell_indices_large_tol, bary = find_containing_cells(
-            mesh, query, tolerance=0.1  # 10cm tolerance
+            mesh,
+            query,
+            tolerance=0.1,  # 10cm tolerance
         )
         assert cell_indices_large_tol[0] == 0
         assert (bary[0] >= -0.1).all()
@@ -617,9 +603,7 @@ class TestCodimensionNonZero:
     def test_find_all_containing_cells_triangle_in_3d_rejects_far_points(self):
         """Test find_all_containing_cells rejects far points for codim != 0."""
         ### Triangle mesh in z=0 plane
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(points=points, cells=cells)
 
@@ -634,9 +618,7 @@ class TestCodimensionNonZero:
     def test_sample_data_triangle_in_3d_rejects_far_points(self):
         """Test that sample_data_at_points returns NaN for far points on codim != 0."""
         ### Triangle mesh in z=0 plane with cell data
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(
             points=points,
@@ -655,9 +637,7 @@ class TestCodimensionNonZero:
     def test_sample_data_triangle_in_3d_accepts_near_points(self):
         """Test that sample_data_at_points works for points on the manifold."""
         ### Triangle mesh in z=0 plane with cell data
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
         cells = torch.tensor([[0, 1, 2]])
         mesh = Mesh(
             points=points,
