@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -214,12 +216,12 @@ def remove_duplicate_vertices(
 
     from physicsnemo.mesh.mesh import Mesh
 
-    point_data_filtered = mesh.point_data.exclude("_cache")
+    point_data_filtered = mesh.point_data.exclude(CACHE_KEY)
     new_point_data = TensorDict(
         point_data_filtered[unique_canonical], batch_size=[n_unique]
     )
     new_cell_data = TensorDict(
-        mesh.cell_data.exclude("_cache"), batch_size=mesh.cell_data.batch_size
+        mesh.cell_data.exclude(CACHE_KEY), batch_size=mesh.cell_data.batch_size
     )
     new_global_data = TensorDict(
         mesh.global_data, batch_size=mesh.global_data.batch_size

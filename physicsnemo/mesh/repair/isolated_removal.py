@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -82,8 +84,8 @@ def remove_isolated_vertices(
     new_cells = old_to_new[mesh.cells]
 
     ### Transfer data (excluding cache)
-    new_point_data = mesh.point_data.exclude("_cache")[used_vertices]
-    new_cell_data = mesh.cell_data.exclude("_cache").clone()
+    new_point_data = mesh.point_data.exclude(CACHE_KEY)[used_vertices]
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY).clone()
     new_global_data = mesh.global_data.clone()
 
     from physicsnemo.mesh.mesh import Mesh

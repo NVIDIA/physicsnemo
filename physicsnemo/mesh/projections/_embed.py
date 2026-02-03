@@ -19,6 +19,7 @@
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 
 def embed_in_spatial_dims(
@@ -139,8 +140,8 @@ def embed_in_spatial_dims(
 
     ### Preserve user data, but clear cached properties
     # Cached properties depend on spatial embedding and must be recomputed
-    new_point_data = mesh.point_data.exclude("_cache")
-    new_cell_data = mesh.cell_data.exclude("_cache")
+    new_point_data = mesh.point_data.exclude(CACHE_KEY)
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
     new_global_data = mesh.global_data  # Global data is preserved as-is
 
     ### Create new mesh with modified spatial dimensions

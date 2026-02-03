@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -548,8 +550,8 @@ def clean_mesh(
     """
     points = mesh.points
     cells = mesh.cells
-    point_data = mesh.point_data.exclude("_cache")
-    cell_data = mesh.cell_data.exclude("_cache")
+    point_data = mesh.point_data.exclude(CACHE_KEY)
+    cell_data = mesh.cell_data.exclude(CACHE_KEY)
     global_data = mesh.global_data
 
     ### Step 1: Merge duplicate points

@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -148,7 +150,7 @@ def fill_holes(
             return torch.cat([tensor, centroid_value.unsqueeze(0)], dim=0)
         return tensor
 
-    new_point_data = mesh.point_data.exclude("_cache").apply(extend_point_data)
+    new_point_data = mesh.point_data.exclude(CACHE_KEY).apply(extend_point_data)
 
     # For cell data: need to extend by n_boundary_edges with NaN/zeros
     def extend_cell_data(tensor):
@@ -174,7 +176,7 @@ def fill_holes(
             return torch.cat([tensor, new_data], dim=0)
         return tensor
 
-    new_cell_data = mesh.cell_data.exclude("_cache").apply(extend_cell_data)
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY).apply(extend_cell_data)
 
     from physicsnemo.mesh.mesh import Mesh
 

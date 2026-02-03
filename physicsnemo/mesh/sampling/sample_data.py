@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -563,7 +565,7 @@ def sample_data_at_points(
     )
 
     ### Sample each field in the source_data
-    for key, values in source_data.exclude("_cache").items():
+    for key, values in source_data.exclude(CACHE_KEY).items():
         # Determine output shape
         if values.ndim == 1:
             output_shape = (n_queries,)

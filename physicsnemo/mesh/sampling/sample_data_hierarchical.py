@@ -28,6 +28,7 @@ from tensordict import TensorDict
 from physicsnemo.mesh.sampling.sample_data import (
     compute_barycentric_coordinates_pairwise,
 )
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
 from physicsnemo.mesh.spatial import BVH
 
 if TYPE_CHECKING:
@@ -202,7 +203,7 @@ def sample_data_at_points(
     )
 
     ### Sample each field in the source_data (vectorized with scatter operations)
-    for key, values in source_data.exclude("_cache").items():
+    for key, values in source_data.exclude(CACHE_KEY).items():
         # Determine output shape
         if values.ndim == 1:
             output_shape = (n_queries,)

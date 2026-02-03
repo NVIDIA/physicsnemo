@@ -64,9 +64,9 @@ class TestBarycentricOptimizations:
         cell_vertices = points[cells]  # (2, 3, 2)
 
         # Full computation (O(n²))
-        bary_full = compute_barycentric_coordinates(
+        bary_full, recon_error_full = compute_barycentric_coordinates(
             query_points, cell_vertices
-        )  # (n_queries, 2, 3)
+        )  # (n_queries, 2, 3) and (n_queries, 2)
 
         # Pairwise computation (O(n))
         # For each query, pair it with the first cell
@@ -74,16 +74,20 @@ class TestBarycentricOptimizations:
         pairwise_cell_vertices = cell_vertices[[0]].expand(
             n_queries, -1, -1
         )  # (n_queries, 3, 2)
-        bary_pairwise = compute_barycentric_coordinates_pairwise(
+        bary_pairwise, recon_error_pairwise = compute_barycentric_coordinates_pairwise(
             pairwise_query_points, pairwise_cell_vertices
-        )  # (n_queries, 3)
+        )  # (n_queries, 3) and (n_queries,)
 
         # Extract diagonal from full computation (what pairwise should match)
         bary_full_diagonal = bary_full[:, 0, :]  # (n_queries, 3)
+        recon_error_full_diagonal = recon_error_full[:, 0]  # (n_queries,)
 
         # Verify they match
         torch.testing.assert_close(
             bary_pairwise, bary_full_diagonal, rtol=1e-5, atol=1e-7
+        )
+        torch.testing.assert_close(
+            recon_error_pairwise, recon_error_full_diagonal, rtol=1e-5, atol=1e-7
         )
 
     def test_pairwise_vs_full_3d(self):
@@ -108,23 +112,27 @@ class TestBarycentricOptimizations:
         cell_vertices = points[cells]  # (1, 4, 3)
 
         # Full computation
-        bary_full = compute_barycentric_coordinates(
+        bary_full, recon_error_full = compute_barycentric_coordinates(
             query_points, cell_vertices
-        )  # (n_queries, 1, 4)
+        )  # (n_queries, 1, 4) and (n_queries, 1)
 
         # Pairwise computation
         pairwise_cell_vertices = cell_vertices.expand(
             n_queries, -1, -1
         )  # (n_queries, 4, 3)
-        bary_pairwise = compute_barycentric_coordinates_pairwise(
+        bary_pairwise, recon_error_pairwise = compute_barycentric_coordinates_pairwise(
             query_points, pairwise_cell_vertices
-        )  # (n_queries, 4)
+        )  # (n_queries, 4) and (n_queries,)
 
         # Extract diagonal
         bary_full_diagonal = bary_full[:, 0, :]
+        recon_error_full_diagonal = recon_error_full[:, 0]
 
         torch.testing.assert_close(
             bary_pairwise, bary_full_diagonal, rtol=1e-5, atol=1e-7
+        )
+        torch.testing.assert_close(
+            recon_error_pairwise, recon_error_full_diagonal, rtol=1e-5, atol=1e-7
         )
 
     def test_pairwise_different_cells_per_query(self):
@@ -152,12 +160,19 @@ class TestBarycentricOptimizations:
         cell_vertices = points[cells[paired_cell_indices]]  # (3, 3, 2)
 
         # Compute pairwise
-        bary = compute_barycentric_coordinates_pairwise(query_points, cell_vertices)
+        bary, recon_error = compute_barycentric_coordinates_pairwise(
+            query_points, cell_vertices
+        )
 
         # Verify properties
         assert bary.shape == (3, 3)
+        assert recon_error.shape == (3,)
         # Barycentric coordinates should sum to 1
         torch.testing.assert_close(bary.sum(dim=1), torch.ones(3), rtol=1e-5, atol=1e-7)
+        # Reconstruction error should be 0 for codimension-0 (2D in 2D)
+        torch.testing.assert_close(
+            recon_error, torch.zeros(3), rtol=1e-5, atol=1e-7
+        )
 
     def test_pairwise_memory_efficiency(self):
         """Verify pairwise uses O(n) not O(n²) memory."""
@@ -167,11 +182,12 @@ class TestBarycentricOptimizations:
         query_points = torch.rand(n_pairs, 3)
         cell_vertices = torch.rand(n_pairs, 4, 3)  # Tets
 
-        # Pairwise should return (n_pairs, 4)
-        bary_pairwise = compute_barycentric_coordinates_pairwise(
+        # Pairwise should return (n_pairs, 4) and (n_pairs,)
+        bary_pairwise, recon_error = compute_barycentric_coordinates_pairwise(
             query_points, cell_vertices
         )
         assert bary_pairwise.shape == (n_pairs, 4)
+        assert recon_error.shape == (n_pairs,)
 
         # Full would return (n_pairs, n_pairs, 4) if we computed it
         # We don't compute it here to avoid memory issues, but the shapes tell the story
@@ -493,17 +509,26 @@ class TestOptimizationsParametrized:
         )
 
         # Compute pairwise
-        bary = compute_barycentric_coordinates_pairwise(query_points, cell_vertices)
+        bary, recon_error = compute_barycentric_coordinates_pairwise(
+            query_points, cell_vertices
+        )
 
         # Verify shape
         assert bary.shape == (n_queries, n_spatial_dims + 1)
+        assert recon_error.shape == (n_queries,)
 
         # Verify device
         assert_on_device(bary, device)
+        assert_on_device(recon_error, device)
 
         # Verify barycentric coords sum to 1
         sums = bary.sum(dim=1)
         assert torch.allclose(sums, torch.ones(n_queries, device=device), rtol=1e-4)
+
+        # For codimension-0 (n_spatial_dims == n_manifold_dims), recon error should be 0
+        assert torch.allclose(
+            recon_error, torch.zeros(n_queries, device=device), rtol=1e-5, atol=1e-6
+        )
 
     @pytest.mark.parametrize("n_manifold_dims", [2, 3])
     def test_cell_areas_computation_parametrized(self, n_manifold_dims, device):

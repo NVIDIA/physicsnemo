@@ -29,6 +29,8 @@ The pure PyTorch implementation here is highly optimized and performs excellentl
 
 from typing import TYPE_CHECKING, Literal
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 import torch
 from tensordict import TensorDict
 
@@ -435,7 +437,7 @@ def extract_facet_mesh_data(
         ### Aggregate data from parent cells
         if len(parent_mesh.cell_data.keys()) > 0:
             ### Filter out cached properties
-            filtered_cell_data = parent_mesh.cell_data.exclude("_cache")
+            filtered_cell_data = parent_mesh.cell_data.exclude(CACHE_KEY)
 
             if len(filtered_cell_data.keys()) > 0:
                 ### Prepare parent cell areas and centroids if needed

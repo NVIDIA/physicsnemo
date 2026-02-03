@@ -26,7 +26,11 @@ from physicsnemo.mesh.transformations.geometric import (
     transform,
     translate,
 )
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
+from physicsnemo.mesh.utilities._cache import (
+    CACHE_KEY,
+    get_cached,
+    set_cached,
+)
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
@@ -948,8 +952,10 @@ class Mesh:
                         f"All meshes must have the same {name}. Got:\n{values=}"
                     )
             # Check that all cell_data dicts have the same keys across all meshes
+            # (ignoring internal cache keys stored under CACHE_KEY)
+            ref_keys = set(meshes[0].cell_data.exclude(CACHE_KEY).keys())
             if not all(
-                m.cell_data.keys() == meshes[0].cell_data.keys() for m in meshes
+                set(m.cell_data.exclude(CACHE_KEY).keys()) == ref_keys for m in meshes
             ):
                 raise ValueError("All meshes must have the same cell_data keys.")
 
@@ -976,8 +982,13 @@ class Mesh:
                 [m.cells + offset for m, offset in zip(meshes, cell_index_offsets)],
                 dim=0,
             ),
-            point_data=TensorDict.cat([m.point_data for m in meshes], dim=0),
-            cell_data=TensorDict.cat([m.cell_data for m in meshes], dim=0),
+            # Strip cached values before concatenating (caches are mesh-specific)
+            point_data=TensorDict.cat(
+                [m.point_data.exclude(CACHE_KEY) for m in meshes], dim=0
+            ),
+            cell_data=TensorDict.cat(
+                [m.cell_data.exclude(CACHE_KEY) for m in meshes], dim=0
+            ),
             global_data=global_data,
         )
 
@@ -1237,7 +1248,7 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            for key in self.cell_data.exclude("_cache").keys():
+            for key in self.cell_data.exclude(CACHE_KEY).keys():
                 if key in self.point_data.keys():
                     raise ValueError(
                         f"Key {key!r} already exists in point_data. "
@@ -1261,7 +1272,7 @@ class Mesh:
             self.n_cells, device=self.points.device
         ).repeat_interleave(n_vertices_per_cell)
 
-        for key, cell_values in self.cell_data.exclude("_cache").items():
+        for key, cell_values in self.cell_data.exclude(CACHE_KEY).items():
             ### Use scatter aggregation utility to average cell values to points
             # Expand cell values to one entry per vertex
             src_data = cell_values[cell_indices]
@@ -1317,7 +1328,7 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            for key in self.point_data.exclude("_cache").keys():
+            for key in self.point_data.exclude(CACHE_KEY).keys():
                 if key in self.cell_data.keys():
                     raise ValueError(
                         f"Key {key!r} already exists in cell_data. "
@@ -1327,7 +1338,7 @@ class Mesh:
         ### Convert each point data field to cell data
         new_cell_data = self.cell_data.clone()
 
-        for key, point_values in self.point_data.exclude("_cache").items():
+        for key, point_values in self.point_data.exclude(CACHE_KEY).items():
             # Get point values for each cell and average
             # cell_point_values shape: (n_cells, n_vertices_per_cell, ...)
             cell_point_values = point_values[self.cells]
@@ -1427,7 +1438,7 @@ class Mesh:
         ### Create and return new Mesh
         # Filter out cached properties from point_data
         # Cached geometric properties depend on cell connectivity and would be invalid
-        filtered_point_data = self.point_data.exclude("_cache")
+        filtered_point_data = self.point_data.exclude(CACHE_KEY)
 
         return Mesh(
             points=self.points,  # Share the same points
@@ -1494,7 +1505,7 @@ class Mesh:
         )
 
         ### Filter out cached properties from point_data
-        filtered_point_data = self.point_data.exclude("_cache")
+        filtered_point_data = self.point_data.exclude(CACHE_KEY)
 
         return Mesh(
             points=self.points,  # Share the same points

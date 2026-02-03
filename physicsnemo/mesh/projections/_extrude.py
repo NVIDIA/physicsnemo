@@ -20,6 +20,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh.mesh import Mesh
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 
 def extrude(
@@ -253,7 +254,7 @@ def extrude(
     # Point data: concatenate original and copy for extruded points
     if mesh.point_data is not None and len(mesh.point_data.keys()) > 0:
         # Exclude cached data before concatenation
-        filtered_point_data = mesh.point_data.exclude("_cache")
+        filtered_point_data = mesh.point_data.exclude(CACHE_KEY)
         extruded_point_data = TensorDict.cat(
             [filtered_point_data, filtered_point_data.clone()],
             dim=0,
@@ -268,7 +269,7 @@ def extrude(
     # Cell data: replicate each parent cell's data (N+1) times
     if mesh.cell_data is not None and len(mesh.cell_data.keys()) > 0:
         # Exclude cached data before replication
-        filtered_cell_data = mesh.cell_data.exclude("_cache")
+        filtered_cell_data = mesh.cell_data.exclude(CACHE_KEY)
 
         # Replicate: each cell's data appears n_children_per_parent times
         # Use repeat_interleave to maintain parent-child grouping

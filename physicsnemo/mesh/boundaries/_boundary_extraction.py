@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -110,7 +112,7 @@ def extract_boundary_mesh_data(
         ### Aggregate data from parent cells
         if len(parent_mesh.cell_data.keys()) > 0:
             ### Filter out cached properties
-            filtered_cell_data = parent_mesh.cell_data.exclude("_cache")
+            filtered_cell_data = parent_mesh.cell_data.exclude(CACHE_KEY)
 
             if len(filtered_cell_data.keys()) > 0:
                 ### Compute facet centroids if needed for inverse_distance

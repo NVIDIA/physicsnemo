@@ -32,28 +32,10 @@ import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
-from physicsnemo.mesh.utilities._cache import get_cached, set_cached
+from physicsnemo.mesh.utilities._cache import CACHE_KEY, get_cached, set_cached
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-
-
-### Cache Handling ###
-
-
-def _strip_all_caches(mesh: "Mesh") -> tuple[TensorDict, TensorDict, TensorDict]:
-    """Strip _cache from all data containers. Safe default for transformations.
-
-    Returns
-    -------
-    tuple[TensorDict, TensorDict, TensorDict]
-        Tuple of (point_data, cell_data, global_data) with _cache excluded from each.
-    """
-    return (
-        mesh.point_data.exclude("_cache"),
-        mesh.cell_data.exclude("_cache"),
-        mesh.global_data.exclude("_cache"),
-    )
 
 
 ### User Data Transformation ###
@@ -143,7 +125,7 @@ def _transform_tensordict(
             f"Expected all spatial dimensions to be {n_spatial_dims}, but got {shape}"
         )
 
-    transformed = data.exclude("_cache").named_apply(
+    transformed = data.exclude(CACHE_KEY).named_apply(
         transform_field, batch_size=batch_size
     )
     data.update(transformed)
@@ -264,7 +246,8 @@ def transform(
             )
 
     new_points = mesh.points @ matrix.T
-    new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
+    new_point_data = mesh.point_data.exclude(CACHE_KEY)
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
 
     ### Opt-in: areas and normals (only for square invertible matrices)
     if matrix.shape[0] == matrix.shape[1]:
@@ -333,7 +316,10 @@ def transform(
         _transform_tensordict(new_point_data, matrix, mesh.n_spatial_dims, "point_data")
     if transform_cell_data:
         _transform_tensordict(new_cell_data, matrix, mesh.n_spatial_dims, "cell_data")
+    # Transform global_data if requested (note: global_data never has cache)
+    new_global_data = mesh.global_data
     if transform_global_data:
+        new_global_data = mesh.global_data.clone()
         _transform_tensordict(
             new_global_data, matrix, mesh.n_spatial_dims, "global_data"
         )
@@ -386,7 +372,8 @@ def translate(
             )
 
     new_points = mesh.points + offset
-    new_point_data, new_cell_data, new_global_data = _strip_all_caches(mesh)
+    new_point_data = mesh.point_data.exclude(CACHE_KEY)
+    new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
 
     ### Opt-in: areas (unchanged)
     if (v := get_cached(mesh.point_data, "areas")) is not None:
@@ -411,7 +398,7 @@ def translate(
         cells=mesh.cells,
         point_data=new_point_data,
         cell_data=new_cell_data,
-        global_data=new_global_data,
+        global_data=mesh.global_data,
     )
 
 

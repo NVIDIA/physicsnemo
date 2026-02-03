@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.utilities._cache import CACHE_KEY
+
 if TYPE_CHECKING:
     pass
 
@@ -88,7 +90,7 @@ def interpolate_point_data_to_edges(
         # Concatenate original and edge midpoint data
         return torch.cat([tensor, edge_midpoint_values], dim=0)
 
-    return point_data.exclude("_cache").apply(
+    return point_data.exclude(CACHE_KEY).apply(
         interpolate_tensor,
         batch_size=torch.Size([n_total_points]),
     )
@@ -132,7 +134,7 @@ def propagate_cell_data_to_children(
 
     ### Propagate all fields using TensorDict.apply()
     # Each child simply inherits its parent's value via indexing
-    return cell_data.exclude("_cache").apply(
+    return cell_data.exclude(CACHE_KEY).apply(
         lambda tensor: tensor[parent_indices],
         batch_size=torch.Size([n_total_children]),
     )
