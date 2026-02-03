@@ -22,7 +22,7 @@ from torch.nn.functional import interpolate
 
 from physicsnemo.core.version_check import OptionalImport
 
-from .graph_utils import deg2rad
+from physicsnemo.models.graphcast.utils.graph_utils import deg2rad
 
 nc = OptionalImport("netCDF4")
 
