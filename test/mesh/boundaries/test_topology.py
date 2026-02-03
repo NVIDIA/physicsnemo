@@ -20,6 +20,7 @@ Tests validate that topology checking functions correctly identify watertight
 meshes and topological manifolds.
 """
 
+import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
@@ -358,3 +359,65 @@ class TestEmptyMesh:
 
         assert mesh.is_watertight()
         assert mesh.is_manifold()
+
+
+class TestWatertightFaceDeletion:
+    """Test that deleting faces from a watertight mesh makes it non-watertight."""
+
+    def test_lumpy_sphere_is_watertight(self, device):
+        """Verify that lumpy_sphere is watertight before any modifications."""
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+
+        assert mesh.is_watertight(), (
+            "lumpy_sphere should be watertight (closed surface with no boundary)"
+        )
+
+    @pytest.mark.parametrize(
+        "n_faces_to_delete,description",
+        [
+            (1, "single face deleted"),
+            (3, "three faces deleted"),
+            ("half", "half of all faces deleted"),
+        ],
+    )
+    def test_deleted_faces_not_watertight(self, device, n_faces_to_delete, description):
+        """Deleting faces from lumpy_sphere should make it non-watertight.
+
+        Args:
+            device: Test device (CPU or CUDA)
+            n_faces_to_delete: Number of faces to delete, or "half" for half of all faces
+            description: Human-readable description for test output
+        """
+        from physicsnemo.mesh.primitives.procedural import lumpy_sphere
+
+        mesh = lumpy_sphere.load(subdivisions=2, device=device)
+        n_cells = mesh.n_cells
+
+        ### Determine how many faces to delete
+        if n_faces_to_delete == "half":
+            num_to_delete = n_cells // 2
+        else:
+            num_to_delete = n_faces_to_delete
+
+        ### Verify we have enough faces to delete
+        assert num_to_delete <= n_cells, (
+            f"Cannot delete {num_to_delete} faces from mesh with {n_cells} cells"
+        )
+
+        ### Create broken mesh by keeping only cells after the deleted ones
+        # Construct directly to avoid TensorDict indexing issues
+        broken_mesh = Mesh(
+            points=mesh.points,
+            cells=mesh.cells[num_to_delete:],
+        )
+
+        ### Verify the mesh now has fewer cells
+        assert broken_mesh.n_cells == n_cells - num_to_delete
+
+        ### The mesh should no longer be watertight (has boundary edges)
+        assert not broken_mesh.is_watertight(), (
+            f"Mesh with {description} should NOT be watertight "
+            f"(deleted {num_to_delete} of {n_cells} faces)"
+        )
