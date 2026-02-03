@@ -20,12 +20,10 @@ import logging
 import torch
 import torch.nn as nn
 
-try:
-    import onnxruntime as ort
-except ImportError:
-    ort = None
+from physicsnemo.core.version_check import OptionalImport
 
-from typing import Tuple, Union
+# Lazy import for optional dependency
+ort = OptionalImport("onnxruntime")
 
 Tensor = torch.Tensor
 logger = logging.getLogger("__name__")
@@ -35,12 +33,9 @@ def check_ort_install(func):
     """Decorator to check if ONNX runtime is installed"""
 
     def _wrapper_ort_install(*args, **kwargs):
-        if ort is None:
-            raise ModuleNotFoundError(
-                "ONNXRuntime is not installed. 'pip install \
-                onnxruntime onnxruntime_gpu'"
-            )
-        func(*args, **kwargs)
+        if not ort.available:
+            # Accessing any attribute will raise RuntimeError with install hint
+            _ = ort.InferenceSession
         return func(*args, **kwargs)
 
     return _wrapper_ort_install
@@ -48,7 +43,7 @@ def check_ort_install(func):
 
 def export_to_onnx_stream(
     model: nn.Module,
-    invars: Union[Tensor, Tuple[Tensor, ...]],
+    invars: Tensor | tuple[Tensor, ...],
     verbose: bool = False,
 ) -> bytes:
     """Exports PyTorch model to byte stream instead of a file
@@ -106,7 +101,7 @@ def export_to_onnx_stream(
 
 @check_ort_install
 def get_ort_session(
-    model: Union[bytes, str],
+    model: bytes | str,
     device: torch.device = "cuda",
 ):
     """Create a ORT session for performing inference of an onnx model
@@ -134,10 +129,10 @@ def get_ort_session(
 
 @check_ort_install
 def run_onnx_inference(
-    model: Union[bytes, str],
-    invars: Union[Tensor, Tuple[Tensor, ...]],
+    model: bytes | str,
+    invars: Tensor | tuple[Tensor, ...],
     device: torch.device = "cuda",
-) -> Tuple[Tensor]:
+) -> tuple[Tensor, ...]:
     """Runs ONNX model in ORT session
 
     Parameters

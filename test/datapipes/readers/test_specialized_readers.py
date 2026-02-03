@@ -372,19 +372,6 @@ class TestVTKReader:
 
         return tmp_path
 
-    def test_import_error_without_pyvista(self, tmp_path):
-        """Test that ImportError is raised when pyvista not installed."""
-        from physicsnemo.datapipes.readers.vtk import (
-            PYVISTA_AVAILABLE,
-            VTKReader,
-        )
-
-        if PYVISTA_AVAILABLE:
-            pytest.skip("PyVista is installed, cannot test ImportError")
-
-        with pytest.raises(ImportError, match="PyVista is required"):
-            VTKReader(tmp_path)
-
     @requires_module("pyvista")
     def test_basic_loading(self, stl_data_dir):
         """Test basic STL loading."""

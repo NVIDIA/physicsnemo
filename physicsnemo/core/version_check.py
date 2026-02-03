@@ -46,6 +46,7 @@ from importlib import metadata
 from types import ModuleType
 from typing import Dict, Optional
 
+from packaging.utils import canonicalize_name
 from packaging.version import parse
 
 # =============================================================================
@@ -182,11 +183,6 @@ _PACKAGE_HINTS: Dict[str, str] = {
         group="gnns",
         docs_url="https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html",
     ),
-    "dgl": _format_install_hint(
-        "dgl",
-        group="gnns",
-        docs_url="https://www.dgl.ai/pages/start.html",
-    ),
     # Core scientific packages
     "scipy": _format_install_hint(
         "scipy",
@@ -196,7 +192,7 @@ _PACKAGE_HINTS: Dict[str, str] = {
         "scikit-learn",
         direct_install="scikit-learn",
     ),
-    "scikit-image": _format_install_hint(
+    "scikit-image": _format_install_hint(  # To be removed with utils/mesh/
         "scikit-image",
         direct_install="scikit-image",
     ),
@@ -267,11 +263,6 @@ _PACKAGE_HINTS: Dict[str, str] = {
     "apex": _format_install_hint(
         "apex",
         direct_hint="See https://github.com/NVIDIA/apex#installation",
-    ),
-    "tensorrt": _format_install_hint(
-        "tensorrt",
-        direct_hint="pip install tensorrt (requires CUDA toolkit)",
-        docs_url="https://docs.nvidia.com/deeplearning/tensorrt/install-guide/",
     ),
     "onnxruntime": _format_install_hint(
         "onnxruntime",
@@ -383,17 +374,37 @@ def get_installed_version(distribution_name: str) -> Optional[str]:
     -------
     Optional[str]
         The installed version string, or None if not installed.
+
+    Notes
+    -----
+    This function handles variant package names like ``cupy-cuda12x`` when
+    searching for ``cupy``. It uses PEP 503 name normalization and requires
+    an exact match or a hyphen-delimited prefix match to avoid false positives
+    (e.g., searching for "torch" won't match "torchvision").
     """
-    # First, try exact match:
+    # First, try exact match (handles most cases)
     try:
         return metadata.version(distribution_name)
     except metadata.PackageNotFoundError:
         pass
 
-    # Some packages have only partial matches, like `cupy`
+    # Normalize the name per PEP 503 (lowercase, replace ._- with -)
+    normalized_name = canonicalize_name(distribution_name)
+
+    # Try normalized name directly (handles torch_geometric vs torch-geometric)
+    try:
+        return metadata.version(normalized_name)
+    except metadata.PackageNotFoundError:
+        pass
+
+    # Handle variant packages like cupy-cuda12x when searching for cupy.
+    # Require hyphen delimiter to avoid false positives:
+    # - "torch" won't match "torchvision" (no hyphen)
+    # - "cupy" will match "cupy-cuda12x" (has hyphen delimiter)
+    normalized_prefix = normalized_name + "-"
     for dist in metadata.distributions():
-        name = dist.metadata["Name"].lower()
-        if name.startswith(distribution_name):
+        dist_normalized = canonicalize_name(dist.metadata["Name"])
+        if dist_normalized.startswith(normalized_prefix):
             return dist.version
 
     return None
