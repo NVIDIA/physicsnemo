@@ -28,13 +28,17 @@ if TYPE_CHECKING:
 def _solve_barycentric_system(
     relative_vectors: torch.Tensor,  # shape: (..., n_manifold_dims, n_spatial_dims)
     query_relative: torch.Tensor,  # shape: (..., n_spatial_dims)
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Core barycentric coordinate solver (shared by both variants).
 
     Solves the linear system to find barycentric coordinates w_1, ..., w_n such that:
         query_relative = sum(w_i * relative_vectors[i])
 
     Then computes w_0 = 1 - sum(w_i) and returns all coordinates [w_0, w_1, ..., w_n].
+
+    For codimension != 0 manifolds (n_spatial_dims != n_manifold_dims), this uses
+    least squares which projects the query point onto the simplex's affine hull.
+    The reconstruction error measures how far the query point is from this projection.
 
     Args:
         relative_vectors: Edge vectors from first vertex to others,
@@ -43,8 +47,11 @@ def _solve_barycentric_system(
             shape (..., n_spatial_dims)
 
     Returns:
-        Barycentric coordinates, shape (..., n_vertices_per_cell) where
-        n_vertices_per_cell = n_manifold_dims + 1
+        Tuple of (barycentric_coords, reconstruction_error):
+        - barycentric_coords: Barycentric coordinates, shape (..., n_vertices_per_cell)
+            where n_vertices_per_cell = n_manifold_dims + 1
+        - reconstruction_error: L2 distance from query point to its projection onto
+            the simplex's affine hull, shape (...). Zero for codimension-0 manifolds.
 
     Algorithm:
         For square systems (n_spatial_dims == n_manifold_dims): use direct solve
@@ -67,11 +74,30 @@ def _solve_barycentric_system(
             # Singular matrix - use lstsq as fallback
             weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
 
+        ### For square systems, reconstruction error is zero (exact solution)
+        # Shape: (...) - same batch dimensions as weights_1_to_n but without last dim
+        reconstruction_error = torch.zeros(
+            weights_1_to_n.shape[:-1],
+            dtype=query_relative.dtype,
+            device=query_relative.device,
+        )
+
     else:
         ### Over-determined or under-determined system: use least squares
         A = relative_vectors.transpose(-2, -1)
         b = query_relative.unsqueeze(-1)
         weights_1_to_n = torch.linalg.lstsq(A, b).solution.squeeze(-1)
+
+        ### Compute reconstruction error: ||query_relative - reconstructed||
+        # reconstructed = sum(w_i * e_i) where e_i = relative_vectors[i]
+        # Shape: (..., n_spatial_dims)
+        reconstructed = torch.einsum(
+            "...m,...ms->...s", weights_1_to_n, relative_vectors
+        )
+        residual = query_relative - reconstructed  # (..., n_spatial_dims)
+        reconstruction_error = torch.linalg.vector_norm(
+            residual, dim=-1
+        )  # (...) L2 norm
 
     ### Compute w_0 = 1 - sum(w_i for i=1..n)
     w_0 = 1.0 - weights_1_to_n.sum(dim=-1, keepdim=True)
@@ -79,25 +105,29 @@ def _solve_barycentric_system(
     ### Concatenate to get all barycentric coordinates
     barycentric_coords = torch.cat([w_0, weights_1_to_n], dim=-1)
 
-    return barycentric_coords
+    return barycentric_coords, reconstruction_error
 
 
 def compute_barycentric_coordinates(
     query_points: torch.Tensor,
     cell_vertices: torch.Tensor,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute barycentric coordinates of query points with respect to simplices.
 
     For each query point and each simplex, computes the barycentric coordinates.
-    A point is inside a simplex if all barycentric coordinates are non-negative.
+    A point is inside a simplex if all barycentric coordinates are non-negative
+    AND the reconstruction error is within tolerance (for codimension != 0 manifolds).
 
     Args:
         query_points: Query point locations, shape (n_queries, n_spatial_dims)
         cell_vertices: Vertices of cells to test, shape (n_cells, n_vertices_per_cell, n_spatial_dims)
 
     Returns:
-        Barycentric coordinates, shape (n_queries, n_cells, n_vertices_per_cell).
-        For each query-cell pair, the coordinates sum to 1.
+        Tuple of (barycentric_coords, reconstruction_error):
+        - barycentric_coords: Barycentric coordinates, shape (n_queries, n_cells, n_vertices_per_cell).
+            For each query-cell pair, the coordinates sum to 1.
+        - reconstruction_error: L2 distance from query point to its projection onto
+            the simplex's affine hull, shape (n_queries, n_cells). Zero for codimension-0.
 
     Algorithm:
         For a simplex with vertices v0, v1, ..., vn and query point p:
@@ -126,17 +156,17 @@ def compute_barycentric_coordinates(
     relative_vectors_expanded = relative_vectors.unsqueeze(0)
 
     # Use shared solver that handles the linear system
-    barycentric_coords = _solve_barycentric_system(
+    barycentric_coords, reconstruction_error = _solve_barycentric_system(
         relative_vectors_expanded, query_relative
     )
 
-    return barycentric_coords
+    return barycentric_coords, reconstruction_error
 
 
 def compute_barycentric_coordinates_pairwise(
     query_points: torch.Tensor,
     cell_vertices: torch.Tensor,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute barycentric coordinates for paired queries and cells.
 
     Unlike compute_barycentric_coordinates which computes all O(n_queries × n_cells)
@@ -152,8 +182,11 @@ def compute_barycentric_coordinates_pairwise(
             where cell_vertices[i] is paired with query_points[i]
 
     Returns:
-        Barycentric coordinates, shape (n_pairs, n_vertices_per_cell).
-        For each pair, the coordinates sum to 1.
+        Tuple of (barycentric_coords, reconstruction_error):
+        - barycentric_coords: Barycentric coordinates, shape (n_pairs, n_vertices_per_cell).
+            For each pair, the coordinates sum to 1.
+        - reconstruction_error: L2 distance from query point to its projection onto
+            the simplex's affine hull, shape (n_pairs,). Zero for codimension-0.
 
     Example:
         >>> import torch
@@ -161,8 +194,9 @@ def compute_barycentric_coordinates_pairwise(
         >>> n_pairs = 1000
         >>> query_points = torch.randn(n_pairs, 3)
         >>> cell_vertices = torch.randn(n_pairs, 3, 3)  # Triangles in 3D
-        >>> bary = compute_barycentric_coordinates_pairwise(query_points, cell_vertices)
+        >>> bary, recon_err = compute_barycentric_coordinates_pairwise(query_points, cell_vertices)
         >>> assert bary.shape == (1000, 3)  # instead of (1000, 1000, 3) from full version
+        >>> assert recon_err.shape == (1000,)
     """
 
     ### Compute relative vectors from first vertex to all others
@@ -178,9 +212,11 @@ def compute_barycentric_coordinates_pairwise(
     # relative_vectors: (n_pairs, n_manifold_dims, n_spatial_dims)
     # query_relative: (n_pairs, n_spatial_dims)
     # Both are already in the right shape for pairwise solving
-    barycentric_coords = _solve_barycentric_system(relative_vectors, query_relative)
+    barycentric_coords, reconstruction_error = _solve_barycentric_system(
+        relative_vectors, query_relative
+    )
 
-    return barycentric_coords
+    return barycentric_coords, reconstruction_error
 
 
 def find_containing_cells(
@@ -194,7 +230,12 @@ def find_containing_cells(
         mesh: The mesh to query.
         query_points: Query point locations, shape (n_queries, n_spatial_dims)
         tolerance: Tolerance for considering a point inside a cell.
-            A point is inside if all barycentric coordinates >= -tolerance.
+            A point is inside if:
+            - All barycentric coordinates >= -tolerance, AND
+            - Reconstruction error <= tolerance (distance from query point to the
+              simplex's affine hull). This ensures points far from codimension != 0
+              manifolds (e.g., 2D triangles in 3D space) are not incorrectly reported
+              as inside.
 
     Returns:
         Tuple of (cell_indices, barycentric_coords):
@@ -215,13 +256,19 @@ def find_containing_cells(
     cell_vertices = mesh.points[mesh.cells]
 
     ### Compute barycentric coordinates for all query-cell pairs
-    # Shape: (n_queries, n_cells, n_vertices_per_cell)
-    bary_coords = compute_barycentric_coordinates(query_points, cell_vertices)
+    # Shape: (n_queries, n_cells, n_vertices_per_cell) and (n_queries, n_cells)
+    bary_coords, recon_error = compute_barycentric_coordinates(
+        query_points, cell_vertices
+    )
 
     ### Determine which query-cell pairs have the point inside
-    # A point is inside if all barycentric coordinates are >= -tolerance
+    # A point is inside if:
+    # 1. All barycentric coordinates are >= -tolerance
+    # 2. Reconstruction error (distance to affine hull) <= tolerance
     # Shape: (n_queries, n_cells)
-    is_inside = (bary_coords >= -tolerance).all(dim=-1)
+    bary_inside = (bary_coords >= -tolerance).all(dim=-1)
+    recon_inside = recon_error <= tolerance
+    is_inside = bary_inside & recon_inside
 
     ### For each query, find the first containing cell (vectorized)
     # Shape: (n_queries,)
@@ -286,6 +333,10 @@ def find_all_containing_cells(
         mesh: The mesh to query.
         query_points: Query point locations, shape (n_queries, n_spatial_dims)
         tolerance: Tolerance for considering a point inside a cell.
+            A point is inside if:
+            - All barycentric coordinates >= -tolerance, AND
+            - Reconstruction error <= tolerance (distance from query point to the
+              simplex's affine hull).
 
     Returns:
         List of length n_queries, where each element is a tensor of cell indices
@@ -295,10 +346,15 @@ def find_all_containing_cells(
     cell_vertices = mesh.points[mesh.cells]
 
     ### Compute barycentric coordinates for all query-cell pairs
-    bary_coords = compute_barycentric_coordinates(query_points, cell_vertices)
+    bary_coords, recon_error = compute_barycentric_coordinates(
+        query_points, cell_vertices
+    )
 
     ### Determine which query-cell pairs have the point inside
-    is_inside = (bary_coords >= -tolerance).all(dim=-1)
+    # Check both barycentric bounds and reconstruction error
+    bary_inside = (bary_coords >= -tolerance).all(dim=-1)
+    recon_inside = recon_error <= tolerance
+    is_inside = bary_inside & recon_inside
 
     ### For each query, collect all containing cells
     containing_cells = []
@@ -329,15 +385,12 @@ def project_point_onto_cell(
     # 2. If the projection is inside, return it
     # 3. Otherwise, recursively project onto lower-dimensional faces
 
-    # Compute barycentric coordinates
-    bary = (
-        compute_barycentric_coordinates(
-            query_point.unsqueeze(0),
-            cell_vertices.unsqueeze(0),
-        )
-        .squeeze(0)
-        .squeeze(0)
-    )  # (n_vertices,)
+    # Compute barycentric coordinates (ignore reconstruction error for projection)
+    bary, _ = compute_barycentric_coordinates(
+        query_point.unsqueeze(0),
+        cell_vertices.unsqueeze(0),
+    )
+    bary = bary.squeeze(0).squeeze(0)  # (n_vertices,)
 
     ### If all barycentric coords are non-negative, point projects inside the simplex
     if (bary >= 0).all():
@@ -437,7 +490,11 @@ def sample_data_at_points(
             nearest cell before sampling. This is useful for codimension != 0 manifolds
             where picking a point exactly on the manifold is difficult due to
             floating-point precision.
-        tolerance: Tolerance for considering a point inside a cell (for barycentric coords).
+        tolerance: Tolerance for considering a point inside a cell.
+            A point is inside if:
+            - All barycentric coordinates >= -tolerance, AND
+            - Reconstruction error <= tolerance (distance from query point to the
+              simplex's affine hull).
 
     Returns:
         TensorDict containing sampled data for each query point, with the same keys
@@ -475,10 +532,15 @@ def sample_data_at_points(
     ### Find containing cells for each query point
     # Get cell vertices and compute all barycentric coordinates
     cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_vertices, n_spatial_dims)
-    bary_coords_all = compute_barycentric_coordinates(query_points, cell_vertices)
+    bary_coords_all, recon_error_all = compute_barycentric_coordinates(
+        query_points, cell_vertices
+    )
 
     # Determine which query-cell pairs have containment
-    is_inside = (bary_coords_all >= -tolerance).all(dim=-1)  # (n_queries, n_cells)
+    # Check both barycentric bounds and reconstruction error
+    bary_inside = (bary_coords_all >= -tolerance).all(dim=-1)  # (n_queries, n_cells)
+    recon_inside = recon_error_all <= tolerance  # (n_queries, n_cells)
+    is_inside = bary_inside & recon_inside
 
     ### Get flat arrays of query and cell indices for all containments
     query_indices, cell_indices_containing = torch.where(is_inside)

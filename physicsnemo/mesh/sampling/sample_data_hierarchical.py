@@ -66,6 +66,10 @@ def sample_data_at_points(
             nearest cell before sampling. Useful for codimension != 0 manifolds.
             Note: Projection is not yet BVH-accelerated and may be slow.
         tolerance: Tolerance for considering a point inside a cell.
+            A point is inside if:
+            - All barycentric coordinates >= -tolerance, AND
+            - Reconstruction error <= tolerance (distance from query point to the
+              simplex's affine hull).
 
     Returns:
         TensorDict containing sampled data for each query point. Values are NaN
@@ -154,13 +158,18 @@ def sample_data_at_points(
 
         ### Use pairwise barycentric computation (O(n) instead of O(n²))
         # This computes only the diagonal elements we need, avoiding massive memory allocation
-        bary_coords_candidates = compute_barycentric_coordinates_pairwise(
-            candidate_query_points,
-            candidate_cell_vertices,
-        )  # (n_pairs, n_vertices)
+        bary_coords_candidates, recon_error_candidates = (
+            compute_barycentric_coordinates_pairwise(
+                candidate_query_points,
+                candidate_cell_vertices,
+            )
+        )  # (n_pairs, n_vertices) and (n_pairs,)
 
         ### Check which candidates actually contain their query point
-        is_inside = (bary_coords_candidates >= -tolerance).all(dim=-1)  # (n_pairs,)
+        # Check both barycentric bounds and reconstruction error
+        bary_inside = (bary_coords_candidates >= -tolerance).all(dim=-1)  # (n_pairs,)
+        recon_inside = recon_error_candidates <= tolerance  # (n_pairs,)
+        is_inside = bary_inside & recon_inside
 
         ### Filter to only the containing pairs
         query_indices = query_indices_candidates[is_inside]
