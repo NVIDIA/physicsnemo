@@ -15,67 +15,65 @@
 # limitations under the License.
 import torch
 
-from physicsnemo.models.healda import DiT, ModelConfigV1
+from physicsnemo.experimental.models.healda import HealDA
+from config.model_config import ModelConfigV1
+
+
+def _get_condition_dim(config: ModelConfigV1, hidden_size: int) -> int | None:
+    """Determine condition_dim from config.
+
+    Returns None for VIT mode (no diffusion conditioning),
+    or the embedding dimension for diffusion mode.
+    """
+    if config.as_vit:
+        return None
+    # Default to 4 * hidden_size if not specified
+    return config.emb_channels or 4 * hidden_size
 
 
 def get_model(config: ModelConfigV1) -> torch.nn.Module:
-    """Instantiate DiT model from config."""
+    """Instantiate HealDA model from config."""
     if config.architecture == "dit-test":
-        return DiT(
+        hidden_size = 128  # 2 heads * 64 dim
+        return HealDA(
             in_channels=config.condition_channels,
             out_channels=config.out_channels,
-            num_attention_heads=2,
-            num_layers=1,
-            attention_head_dim=64,
-            level_in=6,
-            level_model=5,
-            obs_config=config.obs_config,
-            drop_path=config.drop_path,
-            dropout=config.p_dropout,
-            time_length=config.time_length,
-            label_dim=config.label_dim,
-            label_dropout=config.label_dropout,
-            group_norm_eps=config.group_norm_eps,
-            use_gains=config.pos_emb_gains,
-            temporal_attention=config.dit_temporal_attention,
-            embed_v2=config.embed_v2,
-            compile_dit=config.compile_dit,
-            qk_rms_norm=config.qk_rms_norm,
-            allow_nans_condition=config.allow_nans_condition,
-            embed_v2_meta_dim=28,
             sensor_embedder_config=config.sensor_embedder_config,
             sensors=config.sensors,
-            as_vit=config.as_vit,
+            hidden_size=hidden_size,
+            num_layers=1,
+            num_heads=2,
+            level_in=6,
+            level_model=5,
+            time_length=config.time_length,
+            drop_path=config.drop_path,
+            dropout=config.p_dropout,
+            qk_norm_type="rmsnorm" if config.qk_rms_norm else None,
+            condition_dim=_get_condition_dim(config, hidden_size),
+            noise_channels=config.noise_channels or 1024,
+            label_dim=config.label_dim,
+            label_dropout=config.label_dropout if config.label_dropout > 0 else None,
         )
     elif config.architecture == "dit-l_reg_hpx6_per_sensor":
-        return DiT(
+        hidden_size = 1024  # 16 heads * 64 dim
+        return HealDA(
             in_channels=config.condition_channels,
             out_channels=config.out_channels,
-            num_attention_heads=16,
-            num_layers=24,
-            attention_head_dim=64,
-            level_in=6,
-            level_model=5,
-            label_dim=config.label_dim,
-            label_dropout=config.label_dropout,
-            legacy_label_bias=config.legacy_label_bias,
-            obs_config=config.obs_config,
-            drop_path=config.drop_path,
-            dropout=config.p_dropout,
-            group_norm_eps=config.group_norm_eps,
-            use_gains=config.pos_emb_gains,
-            time_length=config.time_length,
-            temporal_attention=config.dit_temporal_attention,
-            embed_v2=True,
-            embed_v2_meta_dim=28,
             sensor_embedder_config=config.sensor_embedder_config,
             sensors=config.sensors,
-            compile_dit=config.compile_dit,
-            qk_rms_norm=config.qk_rms_norm,
-            allow_nans_condition=config.allow_nans_condition,
-            as_vit=config.as_vit,
-            emb_channels=config.emb_channels,
-            noise_channels=config.noise_channels,
+            hidden_size=hidden_size,
+            num_layers=24,
+            num_heads=16,
+            level_in=6,
+            level_model=5,
+            time_length=config.time_length,
+            drop_path=config.drop_path,
+            dropout=config.p_dropout,
+            qk_norm_type="rmsnorm" if config.qk_rms_norm else None,
+            condition_dim=_get_condition_dim(config, hidden_size),
+            noise_channels=config.noise_channels or 1024,
+            label_dim=config.label_dim,
+            label_dropout=config.label_dropout if config.label_dropout > 0 else None,
         )
     else:
         raise NotImplementedError(config.architecture)

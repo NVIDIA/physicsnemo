@@ -17,49 +17,11 @@ import math
 
 import torch
 
-
-class PositionalEmbedding(torch.nn.Module):
-    """Timestep embedding used in the DDPM++ and ADM architectures.
-
-
-    f = (1/M)^(i / N)
-    [cos(f_i x), sin(f_i x)] for i =0,...,N - 1
-
-    sup wavelength = sup  2 pi / f = 2 pi 1 / inf f = 2 pi / (1 / M) = 2 pi M
-
-    """
-
-    def __init__(self, num_channels, max_positions=10000, endpoint=False):
-        super().__init__()
-        self.num_channels = num_channels
-        self.max_positions = max_positions
-        self.endpoint = endpoint
-
-    def forward(self, x):
-        freqs = torch.arange(
-            start=0, end=self.num_channels // 2, dtype=torch.float32, device=x.device
-        )
-        freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
-        freqs = (1 / self.max_positions) ** freqs
-        x = x.ger(freqs.to(x.dtype))
-        x = torch.cat([x.cos(), x.sin()], dim=1)
-        return x
+from physicsnemo.core.module import Module
+from physicsnemo.nn import PositionalEmbedding  # Reuse from PNM
 
 
-class FourierEmbedding(torch.nn.Module):
-    """Timestep embedding used in the NCSN++ architecture."""
-
-    def __init__(self, num_channels, scale=16):
-        super().__init__()
-        self.register_buffer("freqs", torch.randn(num_channels // 2) * scale)
-
-    def forward(self, x):
-        x = x.ger((2 * math.pi * self.freqs).to(x.dtype))
-        x = torch.cat([x.cos(), x.sin()], dim=1)
-        return x
-
-
-class FrequencyEmbedding(torch.nn.Module):
+class FrequencyEmbedding(Module):
     """Periodic Embedding.
 
     Useful for inputs defined on the circle [0, 2pi)
@@ -79,7 +41,7 @@ class FrequencyEmbedding(torch.nn.Module):
         return x
 
 
-class CalendarEmbedding(torch.nn.Module):
+class CalendarEmbedding(Module):
     """Time embedding assuming 365.25 day years
 
     Args:
@@ -121,7 +83,7 @@ class CalendarEmbedding(torch.nn.Module):
         return torch.concat([a, b], dim=1)  # (n c x)
 
 
-class EmbedNoiseLabels(torch.nn.Module):
+class EmbedNoiseLabels(Module):
     """Embedding layer for noise levels and class labels."""
 
     def __init__(
@@ -165,5 +127,5 @@ class EmbedNoiseLabels(torch.nn.Module):
             emb = emb + self.map_label(tmp * math.sqrt(self.map_label.in_features))
 
         emb = torch.nn.functional.silu(self.map_layer0(emb))
-        emb = torch.nn.functional.silu(self.map_layer1(emb))
+        emb = self.map_layer1(emb)  # No SiLU - consumers (AdaLN) add SiLU before modulation linear
         return emb

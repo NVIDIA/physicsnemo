@@ -18,7 +18,7 @@ from typing import Literal
 
 import torch
 
-from physicsnemo.models.healda import profiling
+from utils import profiling
 
 
 @profiling.nvtx

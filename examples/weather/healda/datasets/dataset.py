@@ -36,7 +36,7 @@ from datasets.filter_times import get_chunk_aligned_times
 from datasets.merged_dataset import TimeMergedDataset, TimeMergedMapStyle
 from datasets.obs_loader import UFSUnifiedLoader
 from datasets.variable_configs import VARIABLE_CONFIGS
-from physicsnemo.models.healda import ObsConfig
+from config.model_config import ObsConfig
 
 OBS_INTERVALS = [[-48, -24], [-24, 0], [-21, 3], [-18, 6], [-15, 9]]
 

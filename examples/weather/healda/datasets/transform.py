@@ -36,7 +36,8 @@ from datasets.base import (
     VariableConfig,
 )
 from datasets.variable_configs import VARIABLE_CONFIGS
-from physicsnemo.models.healda import profiling, types
+from utils import profiling
+from physicsnemo.experimental.models.healda import types
 
 warnings.filterwarnings(
     "ignore",
@@ -168,7 +169,7 @@ class TransformV2:
 
     Sensor grouping: Observations sorted by sensor_id with offsets_3d enabling
     efficient (sensor, batch, time) slicing (see ``split_by_sensor`` in
-    ``physicsnemo.models.healda.types``).
+    ``physicsnemo.experimental.models.healda.types``).
     """
 
     variable_config: VariableConfig = VARIABLE_CONFIGS["era5"]

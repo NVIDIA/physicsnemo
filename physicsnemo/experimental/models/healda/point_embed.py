@@ -13,19 +13,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Multi-sensor observation embedding for HealDA."""
+
 import logging
 import math
 
 import earth2grid
 import torch
 
-from .. import profiling
-from ..config import ModelSensorConfig, SensorEmbedderConfig
-from ..types import (
-    UnifiedObservation,
-    split_by_sensor,
-)
-from .scatter_infill_aggregators import ScatterAggregator
+from physicsnemo.core.module import Module
+
+from .config import ModelSensorConfig, SensorEmbedderConfig
+from .scatter_aggregator import ScatterAggregator
+from .types import UnifiedObservation, split_by_sensor
 
 
 def _prod(shape):
@@ -41,7 +41,7 @@ GLOBAL_MAX_PLATFORM = 1024
 logger = logging.getLogger(__name__)
 
 
-class ObsTokenizer(torch.nn.Module):
+class ObsTokenizer(Module):
     """Tokenizes individual observations using metadata + measurement + embedding tables into feature tokens.
 
     This creates intermediate token representations that will be aggregated and projected to final embeddings.
@@ -136,8 +136,7 @@ class ObsTokenizer(torch.nn.Module):
         return encoded
 
 
-# Sensor fusion module
-class UniformFusion(torch.nn.Module):
+class UniformFusion(Module):
     """
     Uniform weighting across all sensors with normalization for number of sensors.
 
@@ -165,7 +164,7 @@ class UniformFusion(torch.nn.Module):
         return projected.sum(dim=0) / math.sqrt(num_sensors)
 
 
-class SensorEmbedder(torch.nn.Module):
+class SensorEmbedder(Module):
     """Unified sensor embedding for any observation source (satellite, conventional, etc.).
 
     Pipeline:
@@ -273,8 +272,6 @@ class SensorEmbedder(torch.nn.Module):
         obs_pix = obs.int_metadata[:, obs.bucket_index.pix]
         channel = obs.int_metadata[:, obs.bucket_index.local_channel]
         platform_global = obs.int_metadata[:, obs.bucket_index.platform]
-        # TODO remove....just let every sensor use platform_global
-        # there are not many platforms. --would result in very large mlp in the aggregation channel/platform mixing layer
         platform = self.platform_id_map[platform_global]
 
         # Convert observation pixels to aggregator grid resolution
@@ -310,7 +307,6 @@ class SensorEmbedder(torch.nn.Module):
 
         return output
 
-    @profiling.nvtx(enabled=False)
     def forward(self, obs: UnifiedObservation) -> torch.Tensor:
         """
         Embed observations from a single sensor onto a spatial grid.
@@ -332,14 +328,36 @@ class SensorEmbedder(torch.nn.Module):
             return self._forward(obs)
 
 
-class MultiSensorObsEmbedding(torch.nn.Module):
-    """Multi-sensor observation embedding.
+class MultiSensorObsEmbedding(Module):
+    r"""
+    Multi-sensor observation embedding.
 
-    Args:
-        sensor_embedder_config: Config with embedding hyperparameters
-        sensors: Dict mapping sensor names to ModelSensorConfig
-        hpx_level: HEALPix grid level for all sensors
-        use_checkpoint: Apply gradient checkpointing
+    Embeds observations from multiple sensor types into a unified representation on a HEALPix grid.
+
+    Parameters
+    ----------
+    sensor_embedder_config : SensorEmbedderConfig
+        Configuration with embedding hyperparameters.
+    sensors : dict[str, ModelSensorConfig]
+        Dictionary mapping sensor names to their configurations.
+    hpx_level : int
+        HEALPix grid level for all sensors.
+    use_checkpoint : bool, optional, default=False
+        If True, applies gradient checkpointing to reduce memory usage.
+    compile : bool, optional, default=True
+        If True, compiles the embedding function for improved performance.
+
+    Forward
+    -------
+    obs : UnifiedObservation
+        Unified observation data containing measurements from multiple sensors.
+
+    Outputs
+    -------
+    torch.Tensor
+        Embedded observations of shape :math:`(B, T, N_{pix}, D)` where :math:`B` is batch size,
+        :math:`T` is time steps, :math:`N_{pix}` is number of HEALPix pixels, and :math:`D`
+        is embedding dimension.
     """
 
     def __init__(
@@ -403,7 +421,6 @@ class MultiSensorObsEmbedding(torch.nn.Module):
         ).transpose(-1, -2)
         return x
 
-    @profiling.nvtx(enabled=False)
     def forward(self, obs: UnifiedObservation) -> torch.Tensor:
         """
         Args:

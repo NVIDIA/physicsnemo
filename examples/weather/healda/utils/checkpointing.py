@@ -41,7 +41,7 @@ import datasets.base
 import models
 import torch
 
-from physicsnemo.models.healda import ModelConfigV1
+from config.model_config import ModelConfigV1
 
 current_version = 1
 

@@ -17,7 +17,7 @@
 
 import torch
 
-from physicsnemo.models.healda import ModelSensorConfig, UnifiedObservation
+from physicsnemo.experimental.models.healda import ModelSensorConfig, UnifiedObservation
 
 
 def create_unified_observation(

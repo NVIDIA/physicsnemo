@@ -17,7 +17,7 @@
 import models
 from utils.checkpointing import Checkpoint
 
-from physicsnemo.models.healda import ModelConfigV1
+from config.model_config import ModelConfigV1
 
 
 def _assert_state_dict_equal(d1, d2):

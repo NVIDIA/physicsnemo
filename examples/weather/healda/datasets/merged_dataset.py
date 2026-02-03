@@ -23,7 +23,7 @@ import pandas as pd
 import torch
 from zarr.core.sync import sync
 
-from physicsnemo.models.healda import profiling
+from utils import profiling
 
 from . import datetime_utils
 

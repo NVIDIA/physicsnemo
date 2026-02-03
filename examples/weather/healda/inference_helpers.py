@@ -33,7 +33,8 @@ from utils import distributed as dist
 from utils.checkpointing import Checkpoint
 from utils.dataclass_parser import Help, a
 
-from physicsnemo.models.healda import ObsConfig, UnifiedObservation
+from physicsnemo.experimental.models.healda import UnifiedObservation
+from config.model_config import ObsConfig
 
 
 class Rolling(Dataset):

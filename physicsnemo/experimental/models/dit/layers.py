@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import math
 import warnings
 from typing import Any, Dict, Literal, Union, Optional, Tuple
 from abc import ABC, abstractmethod
@@ -34,6 +35,7 @@ if timm_v1_0_16:
     from timm.layers.attention import Attention
 else:
     from timm.models.vision_transformer import Attention
+from timm.layers import RmsNorm
 
 try:
     from transformer_engine.pytorch import MultiheadAttention
@@ -55,9 +57,10 @@ except ImportError:
     NATTEN_AVAILABLE = False
 
 from physicsnemo.core import Module
-from physicsnemo.nn import Mlp
+from physicsnemo.nn import Mlp, PositionalEmbedding, Linear
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
+from physicsnemo.nn.drop import DropPath
 from physicsnemo.nn.utils import PatchEmbed2D
 
 
@@ -175,6 +178,9 @@ class TimmSelfAttention(AttentionModuleBase):
         The dropout rate for the attention operation.
     proj_drop_rate: float
         The dropout rate for the projection operation.
+    qk_norm_type: str, optional
+        QK normalization type. Options: "RMSNorm", "LayerNorm", or None.
+        Translated to timm's ``qk_norm=True`` and ``norm_layer``.
     **kwargs: Any
         Additional keyword arguments for the timm attention module.
 
@@ -191,8 +197,25 @@ class TimmSelfAttention(AttentionModuleBase):
     torch.Tensor
         Output tensor of shape (B, L, D).
     """
-    def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attn_drop_rate: float = 0.0,
+        proj_drop_rate: float = 0.0,
+        qk_norm_type: Optional[Literal["RMSNorm", "LayerNorm"]] = None,
+        **kwargs: Any,
+    ):
         super().__init__()
+        
+        # Translate qk_norm_type to timm's qk_norm and norm_layer
+        if qk_norm_type == "RMSNorm":
+            kwargs["qk_norm"] = True
+            kwargs["norm_layer"] = RmsNorm
+        elif qk_norm_type == "LayerNorm":
+            kwargs["qk_norm"] = True
+            kwargs["norm_layer"] = nn.LayerNorm
+        
         self.attn_op = Attention(dim=hidden_size, num_heads=num_heads, attn_drop=attn_drop_rate, proj_drop=proj_drop_rate, qkv_bias=True, **kwargs)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -246,17 +269,15 @@ class TESelfAttention(AttentionModuleBase):
                 "Transformer Engine is not installed. Please install it with `pip install transformer-engine`."
             )
 
-        if proj_drop_rate > 0:
-            warnings.warn(
-                "Transformer Engine MultiheadAttention does not support projection dropout (proj_drop_rate > 0). "
-                "The specified proj_drop_rate will be ignored."
-            )
         self.attn_op = MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
+        # TE doesn't support proj_drop natively, so we add it manually after the attention output
+        self.proj_drop = nn.Dropout(proj_drop_rate)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, mask_type: Optional[str] = "no_mask") -> torch.Tensor:
         if attn_mask is not None:
             mask_type = "arbitrary"
-        return self.attn_op(x, attention_mask=attn_mask, attn_mask_type=mask_type)
+        out = self.attn_op(x, attention_mask=attn_mask, attn_mask_type=mask_type)
+        return self.proj_drop(out)
 
 
 class Natten2DSelfAttention(AttentionModuleBase):
@@ -512,6 +533,8 @@ class DiTBlock(nn.Module):
         attn_drop_rate: float = 0.0,
         proj_drop_rate: float = 0.0,
         mlp_drop_rate: float = 0.0,
+        drop_path: float = 0.0,
+        condition_dim: Optional[int] = None,
         **attn_kwargs: Any,
     ):
         super().__init__()
@@ -546,14 +569,19 @@ class DiTBlock(nn.Module):
             in_features=hidden_size,
             hidden_features=mlp_hidden_dim,
             act_layer=lambda: nn.GELU(approximate="tanh"),
-            drop=0,
+            drop=mlp_drop_rate,
         )
+        # condition_dim=None uses hidden_size (diffusion mode)
+        # condition_dim=0 creates bias-only layer (VIT mode)
+        modulation_input_dim = hidden_size if condition_dim is None else condition_dim
         self.adaptive_modulation = nn.Sequential(
-            nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.SiLU(), nn.Linear(modulation_input_dim, 6 * hidden_size, bias=True)
         )
         self.modulation = lambda x, scale, shift: x * (
             1 + scale.unsqueeze(1)
         ) + shift.unsqueeze(1)
+
+        self.drop_path = DropPath(drop_path)
 
     def initialize_weights(self):
         # Zero out the adaptive modulation weights
@@ -592,14 +620,14 @@ class DiTBlock(nn.Module):
             modulated_attn_input,
             **(attn_kwargs or {}),
         )
-        x = x + attention_gate.unsqueeze(1) * attention_output
+        x = torch.addcmul(x, self.drop_path(attention_gate.unsqueeze(1)), attention_output)
 
         # Feed-forward block
         modulated_mlp_input = self.modulation(
             self.pre_mlp_norm(x), mlp_scale, mlp_shift
         )
         mlp_output = self.linear(modulated_mlp_input)
-        x = x + mlp_gate.unsqueeze(1) * mlp_output
+        x = torch.addcmul(x, self.drop_path(mlp_gate.unsqueeze(1)), mlp_output)
 
         return x
 
@@ -982,3 +1010,252 @@ def get_detokenizer(
             **detokenizer_kwargs,
         )
     raise ValueError("detokenizer must be 'proj_reshape_2d', no other supported detokenizers are available yet.")
+
+class ConditioningEmbedderBase(Module, ABC):
+    r"""Abstract base class for conditioning embedders used in DiT.
+
+    Computes conditioning embedding from timestep and optional additional inputs.
+    Implementations must define a forward method and specify their output dimension.
+
+    Forward
+    -------
+    t : torch.Tensor
+        Timestep tensor of shape :math:`(B,)`.
+    **kwargs
+        Additional conditioning inputs (e.g., condition, class_labels).
+
+    Returns
+    -------
+    torch.Tensor
+        Conditioning embedding of shape :math:`(B, D)` where D is ``output_dim``.
+    """
+
+    @property
+    @abstractmethod
+    def output_dim(self) -> int:
+        """Output dimension of conditioning embedding (used for block condition_dim)."""
+        pass
+
+    @abstractmethod
+    def forward(self, t: torch.Tensor, **kwargs) -> torch.Tensor:
+        pass
+
+
+class PostMLPConditionEmbedder(ConditioningEmbedderBase):
+    r"""Conditioning embedder that adds condition AFTER the MLP.
+
+    Architecture: ``t → PositionalEmbedding → MLP → output``, then
+    ``condition → Linear → ADD`` (added to output).
+
+    This is the standard approach where timestep and condition are processed
+    independently and combined at the end.
+
+    Parameters
+    ----------
+    hidden_size : int
+        Output embedding dimension.
+    condition_dim : int, optional
+        Input condition dimension. If 0, no condition embedding is used.
+    max_positions : int, optional
+        Maximum positions for positional embedding. Default 10000.
+    learnable : bool, optional
+        Whether to use learnable MLP after positional embedding. Default True.
+    mlp_hidden_dim : int, optional
+        Hidden dimension of learnable MLP. Defaults to 2 * hidden_size.
+    amp_mode : bool, optional
+        Whether mixed-precision (AMP) training is enabled. Default False.
+
+    Forward
+    -------
+    t : torch.Tensor
+        Timestep tensor of shape :math:`(B,)`.
+    condition : torch.Tensor, optional
+        Condition tensor of shape :math:`(B, condition_dim)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Conditioning embedding of shape :math:`(B, hidden_size)`.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
+        condition_dim: int = 0,
+        max_positions: int = 10000,
+        learnable: bool = True,
+        mlp_hidden_dim: int | None = None,
+        amp_mode: bool = False,
+    ):
+        super().__init__()
+        self._output_dim = hidden_size
+
+        self.t_embedder = PositionalEmbedding(
+            num_channels=hidden_size,
+            max_positions=max_positions,
+            learnable=learnable,
+            mlp_hidden_dim=mlp_hidden_dim,
+            amp_mode=amp_mode,
+        )
+
+        self.cond_embedder = (
+            Linear(
+                in_features=condition_dim,
+                out_features=hidden_size,
+                bias=False,
+                amp_mode=amp_mode,
+                init_mode="kaiming_uniform",
+                init_weight=0,
+                init_bias=0,
+            )
+            if condition_dim
+            else None
+        )
+
+    @property
+    def output_dim(self) -> int:
+        return self._output_dim
+
+    def forward(
+        self, t: torch.Tensor, condition: torch.Tensor | None = None, **kwargs
+    ) -> torch.Tensor:
+        c = self.t_embedder(t)
+
+        if self.cond_embedder is not None and condition is not None:
+            c = c + self.cond_embedder(condition)
+
+        return c
+
+
+class PreMLPConditionEmbedder(ConditioningEmbedderBase):
+    r"""Conditioning embedder that adds labels BEFORE the MLP.
+
+    Architecture: ``t → PositionalEmbedding → flip(sin/cos) → ADD → MLP → output``
+    where labels are added before MLP processing.
+
+    This allows the MLP to learn joint representations of timestep and labels.
+    Standard diffusion architecture from DDPM++/ADM/EDM.
+
+    Note: The final SiLU is omitted here - consumers (AdaLN blocks) apply SiLU
+    before their modulation linear layer.
+
+    Parameters
+    ----------
+    emb_channels : int
+        Output embedding dimension (typically 4 * hidden_size).
+    noise_channels : int
+        Dimension of positional embedding (typically hidden_size).
+    label_dim : int, optional
+        Class label dimension. If 0, no label embedding. Default 0.
+    label_dropout : float, optional
+        Dropout probability for labels during training. Default 0.0.
+    max_positions : int, optional
+        Maximum positions for positional embedding. Default 10000.
+
+    Forward
+    -------
+    t : torch.Tensor
+        Timestep/noise_labels tensor of shape :math:`(B,)`.
+    condition : torch.Tensor, optional
+        Condition/class labels of shape :math:`(B, label_dim)`.
+
+    Returns
+    -------
+    torch.Tensor
+        Conditioning embedding of shape :math:`(B, emb_channels)`.
+    """
+
+    def __init__(
+        self,
+        emb_channels: int,
+        noise_channels: int,
+        label_dim: int = 0,
+        label_dropout: float = 0.0,
+        max_positions: int = 10000,
+        **kwargs,  # Accept and ignore extra kwargs (e.g., amp_mode) for compatibility
+    ):
+        super().__init__()
+        self._output_dim = emb_channels
+        self.label_dropout = label_dropout
+
+        self.map_noise = PositionalEmbedding(
+            num_channels=noise_channels,
+            max_positions=max_positions,
+            endpoint=True,
+            learnable=False,  # No MLP here - added below
+        )
+
+        # Label embedding (added before MLP)
+        self.map_label = (
+            nn.Linear(label_dim, noise_channels) if label_dim > 0 else None
+        )
+
+        # MLP: Linear → SiLU → Linear (no final SiLU - moved to AdaLN)
+        self.map_layer0 = nn.Linear(noise_channels, emb_channels)
+        self.map_layer1 = nn.Linear(emb_channels, emb_channels)
+
+    @property
+    def output_dim(self) -> int:
+        return self._output_dim
+
+    def forward(
+        self, t: torch.Tensor, condition: torch.Tensor | None = None, **kwargs
+    ) -> torch.Tensor:
+        # Positional embedding
+        emb = self.map_noise(t)
+
+        # Swap sin/cos order
+        emb = emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)
+
+        # Add label embedding before MLP
+        if self.map_label is not None and condition is not None:
+            tmp = condition
+            if self.training and self.label_dropout:
+                tmp = tmp * (
+                    torch.rand([t.shape[0], 1], device=tmp.device) >= self.label_dropout
+                ).to(tmp.dtype)
+            emb = emb + self.map_label(tmp * math.sqrt(self.map_label.in_features))
+
+        # MLP 
+        emb = torch.nn.functional.silu(self.map_layer0(emb))
+        emb = self.map_layer1(emb)
+
+        return emb
+
+
+def get_conditioning_embedder(
+    hidden_size: int,
+    conditioning_embedder: Literal["post_mlp", "pre_mlp"] = "post_mlp",
+    condition_dim: int = 0,
+    **embedder_kwargs: Any,
+) -> ConditioningEmbedderBase:
+    r"""Factory function to create conditioning embedders.
+
+    Parameters
+    ----------
+    hidden_size : int
+        The hidden size of the DiT model.
+    conditioning_embedder : Literal["post_mlp", "pre_mlp"]
+        The type of conditioning embedder to use.
+        Options:
+            - 'post_mlp': Maps the timestep and condition independently, then adds them together post-MLP.
+            - 'pre_mlp': Adds the timestep and condition together before the MLP.
+    condition_dim : int
+        Condition dimension. For 'post_mlp', this is input condition dim.
+        For 'pre_mlp', this is output emb_channels.
+    **embedder_kwargs
+        Additional keyword arguments for the embedder.
+    """
+    if conditioning_embedder == "post_mlp":
+        return PostMLPConditionEmbedder(
+            hidden_size=hidden_size,
+            condition_dim=condition_dim,
+            **embedder_kwargs,
+        )
+    if conditioning_embedder == "pre_mlp":
+        return PreMLPConditionEmbedder(
+            emb_channels=condition_dim,
+            noise_channels=embedder_kwargs.pop("noise_channels", hidden_size),
+            **embedder_kwargs,
+        )
+    raise ValueError("conditioning_embedder must be 'post_mlp' or 'pre_mlp'.")

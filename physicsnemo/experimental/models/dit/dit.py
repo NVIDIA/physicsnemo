@@ -17,13 +17,18 @@
 from typing import Tuple, Union, Optional, Literal, Dict, Any
 import torch
 import torch.nn as nn
-
-from physicsnemo.nn import PositionalEmbedding, Linear
 from dataclasses import dataclass
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.experimental.models.dit import DiTBlock
-from physicsnemo.experimental.models.dit.layers import get_tokenizer, get_detokenizer, TokenizerModuleBase, DetokenizerModuleBase
+from physicsnemo.experimental.models.dit.layers import (
+    get_tokenizer,
+    get_detokenizer,
+    get_conditioning_embedder,
+    TokenizerModuleBase,
+    DetokenizerModuleBase,
+    ConditioningEmbedderBase,
+)
 
 
 @dataclass
@@ -106,6 +111,8 @@ class DiT(Module):
         Additional keyword arguments to be passed to :class:`physicsnemo.nn.PositionalEmbedding`.
     attn_kwargs (Dict[str, Any], optional):
         Additional keyword arguments for the attention module constructor, if using a custom attention backend.
+    drop_path (float, optional):
+        DropPath rate for stochastic depth. Uses linear schedule from 0 to drop_path across blocks. Defaults to 0.0.
     force_tokenization_fp32 (bool, optional):
         If True, forces the tokenization and de-tokenization operations to be run in fp32. Defaults to False.
     
@@ -121,6 +128,8 @@ class DiT(Module):
         The dropout probability for the intermediate dropout module (pre-attention) in the DiTBlock. If None, no dropout will be applied.
         If a scalar, the same dropout probability will be applied to all samples in the batch.
         Otherwise, it should be a tensor of shape (B,) to apply per-sample dropout to each sample in a batch.
+    tokenizer_kwargs (Optional[Dict[str, Any]]):
+        Additional keyword arguments passed to the tokenizer's forward method.
 
     Returns
     -------
@@ -164,12 +173,14 @@ class DiT(Module):
         attention_backend: Literal["timm", "transformer_engine", "natten2d"] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
+        conditioning_embedder: Union[Literal["post_mlp", "pre_mlp"], Module] = "post_mlp",
         dit_initialization: Optional[int] = True,
+        conditioning_embedder_kwargs: Dict[str, Any] = {},
         tokenizer_kwargs: Dict[str, Any] = {},
         detokenizer_kwargs: Dict[str, Any] = {},
         block_kwargs: Dict[str, Any] = {},
-        timestep_embed_kwargs: Dict[str, Any] = {},
         attn_kwargs: Dict[str, Any] = {},
+        drop_path: float = 0.0,
         force_tokenization_fp32: bool = False,
     ):
         super().__init__(meta=MetaData())
@@ -219,20 +230,19 @@ class DiT(Module):
                 raise TypeError("tokenizer must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.experimental.models.dit.layers.TokenizerModuleBase")
             self.tokenizer = tokenizer
 
-        self.t_embedder = PositionalEmbedding(hidden_size, amp_mode=self.meta.amp_gpu, learnable=True, **timestep_embed_kwargs)
-        self.cond_embedder = (
-            Linear(
-                in_features=condition_dim,
-                out_features=hidden_size,
-                bias=False,
+        # Conditioning embedder: accept string or pre-instantiated Module
+        if isinstance(conditioning_embedder, str):
+            self.conditioning_embedder = get_conditioning_embedder(
+                hidden_size=hidden_size,
+                conditioning_embedder=conditioning_embedder,
+                condition_dim=condition_dim or 0,
                 amp_mode=self.meta.amp_gpu,
-                init_mode="kaiming_uniform",
-                init_weight=0,
-                init_bias=0,
+                **conditioning_embedder_kwargs,
             )
-            if condition_dim
-            else None
-        )
+        else:
+            if not isinstance(conditioning_embedder, ConditioningEmbedderBase):
+                raise TypeError("conditioning_embedder must be a string or a physicsnemo.core.Module instance subclassing physicsnemo.experimental.models.dit.layers.ConditioningEmbedderBase")
+            self.conditioning_embedder = conditioning_embedder
 
         # Detokenizer module: accept string or pre-instantiated PhysicsNeMo Module
         if isinstance(detokenizer, str):
@@ -251,8 +261,11 @@ class DiT(Module):
             self.detokenizer = detokenizer
 
 
+        # Linear drop_path schedule: 0 -> drop_path
+        drop_path_rates = [drop_path * i / max(1, depth - 1) for i in range(depth)]
+
         blocks = []
-        for _ in range(depth):
+        for i in range(depth):
             if isinstance(attention_backend, str):
                 attn_module = attention_backend
             else:
@@ -266,6 +279,8 @@ class DiT(Module):
                     attention_backend=attn_module,
                     layernorm_backend=layernorm_backend,
                     mlp_ratio=mlp_ratio,
+                    drop_path=drop_path_rates[i],
+                    condition_dim=self.conditioning_embedder.output_dim,
                     **block_kwargs,
                     **attn_kwargs,
                 )
@@ -299,31 +314,20 @@ class DiT(Module):
         condition: Optional[torch.Tensor] = None,
         p_dropout: Optional[float | torch.Tensor] = None,
         attn_kwargs: Optional[Dict[str, Any]] = None,
+        tokenizer_kwargs: Optional[Dict[str, Any]] = None,
     ) -> torch.Tensor:
         # Tokenize: (B, C, H, W) -> (B, L, D)
         if self.force_tokenization_fp32:
             dtype = x.dtype
             x = x.to(torch.float32)
             with torch.autocast(device_type="cuda", enabled=False):
-                x = self.tokenizer(x)
+                x = self.tokenizer(x, **(tokenizer_kwargs or {}))
             x = x.to(dtype)
         else:
-            x = self.tokenizer(x)
+            x = self.tokenizer(x, **(tokenizer_kwargs or {}))
 
-        t = self.t_embedder(t)  # (B, D)
-
-        # Handle conditioning
-        if self.cond_embedder is not None:
-            if condition is None:
-                # Fallback to using only timestep embedding if conditioning is not provided
-                c = t
-            else:
-                condition_embedding = self.cond_embedder(condition)  # (B, D)
-                c = t + condition_embedding  # (B, D)
-        else:
-            if condition is not None:
-                raise ValueError("Conditioning was provided but DiT has no conditioning embedding module.")
-            c = t  # (B, D)
+        # Compute conditioning embedding
+        c = self.conditioning_embedder(t, condition=condition)  # (B, D)
         
         for block in self.blocks:
             x = block(x, c, p_dropout=p_dropout, attn_kwargs={**self.attn_kwargs_forward, **(attn_kwargs or {})})  # (B, L, D)

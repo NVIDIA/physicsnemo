@@ -22,7 +22,7 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 
-from physicsnemo.models.healda.domain import Domain
+from physicsnemo.experimental.models.healda import Domain
 
 
 class TimeUnit(Enum):

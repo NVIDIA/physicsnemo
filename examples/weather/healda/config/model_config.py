@@ -13,8 +13,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+Training configuration dataclasses for HealDA.
+
+These are training-specific configs with serialization for checkpointing.
+Model constructor parameter types (SensorEmbedderConfig, ModelSensorConfig)
+are in physicsnemo.experimental.models.healda.config.
+"""
+
 import dataclasses
 import json
+
+from physicsnemo.experimental.models.healda.config import (
+    ModelSensorConfig,
+    SensorEmbedderConfig,
+)
 
 
 def _filter_to_dataclass_fields(d: dict, cls) -> dict:
@@ -25,7 +38,7 @@ def _filter_to_dataclass_fields(d: dict, cls) -> dict:
 
 @dataclasses.dataclass(frozen=True)
 class ObsConfig:
-    """Observation dataset configuration."""
+    """Observation dataset configuration for training."""
 
     use_obs: bool = False
     innovation_type: str = "none"
@@ -41,48 +54,29 @@ class ObsConfig:
     conv_gps_level1_only: bool = False
     dropout: float = 0.0
     # Optional list of global observation channel IDs to drop
-    # (these correspond to GLOBAL_CHANNEL_ID in the unified obs schema).
-    # When None, no channels are explicitly dropped by ID.
     drop_obs_channel_ids: list[int] | None = None
-
-
-@dataclasses.dataclass(frozen=True)
-class ModelSensorConfig:
-    sensor_id: int
-    nchannel: int
-    platform_ids: tuple[int, ...]  # Use tuple since frozen=True
-
-
-@dataclasses.dataclass(frozen=True)
-class SensorEmbedderConfig:
-    """Sensor embedding configuration. Used per sensor."""
-
-    embed_dim: int = 32  # initial tokenization dimension
-    meta_dim: int = 28  # dimension of static metadata features
-    fusion_dim: int = 512  # sensor fusion dimension
-    use_channel_platform_embedding_table: bool = False
 
 
 @dataclasses.dataclass
 class ModelConfigV1:
+    """Training configuration for HealDA."""
+
     architecture: str = "dit-l_reg_hpx6_per_sensor"
     label_dim: int = 0
     out_channels: int = 1
     condition_channels: int = 0
     time_length: int = 1
     label_dropout: float = 0.0
-    legacy_label_bias: bool = (
-        False  # For loading old checkpoints with trained label bias
-    )
+    legacy_label_bias: bool = False
 
-    obs_config: ObsConfig = ObsConfig()
+    obs_config: ObsConfig = dataclasses.field(default_factory=ObsConfig)
 
     p_dropout: float = 0.0
     drop_path: float = 0.0
     group_norm_eps: float = 1e-6
     pos_emb_gains: bool = False
 
-    # dit settings
+    # DiT settings
     dit_temporal_attention: bool = False
     compile_dit: bool = False
     qk_rms_norm: bool = False
@@ -90,22 +84,21 @@ class ModelConfigV1:
     allow_nans_condition: bool = False
     emb_channels: int | None = None
     noise_channels: int | None = None
-    """
-    the number of channels to use for the noise and label embedding, defaults to 4 * inner_dim.
-    """
     as_vit: bool = False  # run DiT without noise/label conditioning
 
-    # obs encoder settings
+    # Obs encoder settings
     sensor_embedder_config: SensorEmbedderConfig | None = dataclasses.field(
         default_factory=SensorEmbedderConfig
     )
     sensors: dict[str, ModelSensorConfig] | None = None
 
-    def dumps(self):
+    def dumps(self) -> str:
+        """Serialize config to JSON string for checkpointing."""
         return json.dumps(dataclasses.asdict(self))
 
     @classmethod
-    def loads(cls, s):
+    def loads(cls, s: str) -> "ModelConfigV1":
+        """Deserialize config from JSON string."""
         d = json.loads(s)
 
         # Filter out fields that aren't in the current model config definition
@@ -118,19 +111,16 @@ class ModelConfigV1:
 
         if isinstance(d.get("sensor_embedder_config"), dict):
             embed_cfg = d["sensor_embedder_config"]
-            # Backwards compat: old checkpoints had sensors/sensor_config nested inside
-            # Move it to top-level ModelConfigV1.sensors
+            # Backwards compat: old checkpoints had sensors nested inside
             nested_sensors = embed_cfg.pop("sensors", None) or embed_cfg.pop(
                 "sensor_config", None
             )
             if nested_sensors and "sensors" not in d:
                 d["sensors"] = nested_sensors
-            # Filter to only known fields
             d["sensor_embedder_config"] = SensorEmbedderConfig(
                 **_filter_to_dataclass_fields(embed_cfg, SensorEmbedderConfig)
             )
 
-        # Handle sensors dict at top level
         if isinstance(d.get("sensors"), dict):
             d["sensors"] = {
                 k: ModelSensorConfig(**v) if isinstance(v, dict) else v

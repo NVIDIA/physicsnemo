@@ -13,14 +13,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Scatter aggregation for observation embedding. Use scatter-reduce to aggregate observations onto spatial grids."""
+"""Scatter aggregation module for observation embedding."""
 
 import torch
 
-from ..scatter_mean import scatter_mean
+from physicsnemo.core.module import Module
+
+from .scatter_mean import scatter_mean
 
 
-class ScatterAggregator(torch.nn.Module):
+class ScatterAggregator(Module):
     """Dense-bucket scatter aggregation (all batches together, all buckets).
 
     Pipeline:

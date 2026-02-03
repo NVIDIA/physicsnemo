@@ -18,13 +18,13 @@
 import pytest
 import torch
 
-from physicsnemo.models.healda import (
+from physicsnemo.experimental.models.healda import (
     ModelSensorConfig,
     MultiSensorObsEmbedding,
     SensorEmbedderConfig,
     UnifiedObservation,
 )
-from physicsnemo.models.healda.obs_embedding import SensorEmbedder
+from physicsnemo.experimental.models.healda.point_embed import SensorEmbedder
 
 from .utils.obs_test_utils import create_unified_observation
 

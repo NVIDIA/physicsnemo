@@ -62,13 +62,12 @@ from utils.dataclass_parser import parse_args, parse_dict
 from utils.signals import finish_before_quitting
 from utils.visualizations import visualize
 
-from physicsnemo.models.healda import (
-    ModelConfigV1,
+from physicsnemo.experimental.models.healda import (
     ModelSensorConfig,
-    ObsConfig,
     SensorEmbedderConfig,
-    profiling,
 )
+from config.model_config import ModelConfigV1, ObsConfig
+from utils import profiling
 
 logger = logging.getLogger(__name__)
 

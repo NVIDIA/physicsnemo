@@ -16,7 +16,10 @@
 import pytest
 import torch
 
-from physicsnemo.models.healda.types import UnifiedObservation, split_by_sensor
+from physicsnemo.experimental.models.healda.types import (
+    UnifiedObservation,
+    split_by_sensor,
+)
 
 
 def make_realistic_obs(

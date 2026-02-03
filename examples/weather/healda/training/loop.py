@@ -42,7 +42,8 @@ from utils import checkpointing
 from utils import distributed as dist
 from utils.signals import QuitEarly, finish_before_quitting, handler
 
-from physicsnemo.models.healda import ModelConfigV1, profiling
+from config.model_config import ModelConfigV1
+from utils import profiling
 
 from . import training_stats
 
