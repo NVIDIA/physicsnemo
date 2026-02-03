@@ -45,7 +45,6 @@ from torch import nn, Tensor
 
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.nn import get_activation, Module
-from physicsnemo.nn import get_activation
 
 __all__ = [
     "GateActivation",
