@@ -15,12 +15,11 @@
 # limitations under the License.
 
 import logging
-import warnings
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Self
+from typing import Any, Literal, Optional, Self, Tuple
 
 import torch
-from torch import Tensor
+from jaxtyping import Float
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
@@ -43,14 +42,21 @@ from .graph_cast_processor import (
 logger = logging.getLogger(__name__)
 
 
-def get_lat_lon_partition_separators(partition_size: int):
-    """Utility Function to get separation intervals for lat-lon
-    grid for partition_sizes of interest.
+def get_lat_lon_partition_separators(
+    partition_size: int,
+) -> Tuple[list[list[float | None]], list[list[float | None]]]:
+    r"""
+    Compute separation intervals for lat-lon grid partitioning.
 
     Parameters
     ----------
     partition_size : int
-        size of graph partition
+        Size of the graph partition.
+
+    Returns
+    -------
+    Tuple[list[list[float | None]], list[list[float | None]]]
+        The ``(min_seps, max_seps)`` coordinate separators for each partition.
     """
 
     def _divide(num_lat_chunks: int, num_lon_chunks: int):
@@ -125,122 +131,119 @@ class MetaData(ModelMetaData):
 
 
 class GraphCastNet(Module):
-    """GraphCast network architecture
+    r"""
+    GraphCast network architecture for global weather forecasting on an icosahedral mesh graph.
 
     Parameters
     ----------
-    multimesh_level: int, optional
-        Level of the latent mesh, by default 6
-    multimesh: bool, optional
-        If the latent mesh is a multimesh, by default True
-        If True, the latent mesh includes the nodes corresponding
-        to the specified `mesh_level`and incorporates the edges from
-        all mesh levels ranging from level 0 up to and including `mesh_level`.
-    input_res: Tuple[int, int]
-        Input resolution of the latitude-longitude grid
-    input_dim_grid_nodes : int, optional
+    mesh_level : int, optional, default=6
+        Level of the latent mesh used to build the graph.
+    multimesh : bool, optional, default=True
+        If ``True``, the latent mesh includes nodes from all mesh levels up to
+        and including ``mesh_level``.
+    input_res : Tuple[int, int], optional, default=(721, 1440)
+        Resolution of the latitude-longitude grid ``(H, W)``.
+    input_dim_grid_nodes : int, optional, default=474
         Input dimensionality of the grid node features, by default 474
-    input_dim_mesh_nodes : int, optional
+    input_dim_mesh_nodes : int, optional, default=3
         Input dimensionality of the mesh node features, by default 3
-    input_dim_edges : int, optional
+    input_dim_edges : int, optional, default=4
         Input dimensionality of the edge features, by default 4
-    output_dim_grid_nodes : int, optional
-        Final output dimensionality of the edge features, by default 227
-    processor_type: str, optional
-        The type of processor used in this model. Available options are
-        'MessagePassing', and 'GraphTransformer', which correspond to the
-        processors in GraphCast and GenCast, respectively.
-        By default 'MessagePassing'.
-    khop_neighbors: int, optional
-        Number of khop neighbors used in the GraphTransformer.
-        This option is ignored if 'MessagePassing' processor is used.
-        By default 0.
-    processor_layers : int, optional
-        Number of processor layers, by default 16
-    hidden_layers : int, optional
-        Number of hiddel layers, by default 1
-    hidden_dim : int, optional
-        Number of neurons in each hidden layer, by default 512
-    aggregation : str, optional
-        Message passing aggregation method ("sum", "mean"), by default "sum"
-    activation_fn : str, optional
-        Type of activation function, by default "silu"
-    norm_type : str, optional
-        Normalization type ["TELayerNorm", "LayerNorm"].
-        Use "TELayerNorm" for optimal performance. By default "LayerNorm".
-    use_cugraphops_encoder : bool, default=False
-        Flag to select cugraphops kernels in encoder
-    use_cugraphops_processor : bool, default=False
-        Flag to select cugraphops kernels in the processor
-    use_cugraphops_decoder : bool, default=False
-        Flag to select cugraphops kernels in the decoder
-    do_concat_trick: bool, default=False
-        Whether to replace concat+MLP with MLP+idx+sum
-    recompute_activation : bool, optional
-        Flag for recomputing activation in backward to save memory, by default False.
-        Currently, only SiLU is supported.
-    partition_size : int, default=1
-        Number of process groups across which graphs are distributed. If equal to 1,
-        the model is run in a normal Single-GPU configuration.
-    partition_group_name : str, default=None
-        Name of process group across which graphs are distributed. If partition_size
-        is set to 1, the model is run in a normal Single-GPU configuration and the
-        specification of a process group is not necessary. If partitition_size > 1,
-        passing no process group name leads to a parallelism across the default
-        process group. Otherwise, the group size of a process group is expected
-        to match partition_size.
-    use_lat_lon_partitioning : bool, default=False
-        flag to specify whether all graphs (grid-to-mesh, mesh, mesh-to-grid)
-        are partitioned based on lat-lon-coordinates of nodes or based on IDs.
-    expect_partitioned_input : bool, default=False
-        Flag indicating whether the model expects the input to be already
-        partitioned. This can be helpful e.g. in multi-step rollouts to avoid
-        aggregating the output just to distribute it in the next step again.
-    global_features_on_rank_0 : bool, default=False
-        Flag indicating whether the model expects the input to be present
-        in its "global" form only on group_rank 0. During the input preparation phase,
-        the model will take care of scattering the input accordingly onto all ranks
-        of the process group across which the graph is partitioned. Note that only either
-        this flag or expect_partitioned_input can be set at a time.
-    produce_aggregated_output : bool, default=True
-        Flag indicating whether the model produces the aggregated output on each
-        rank of the procress group across which the graph is distributed or
-        whether the output is kept distributed. This can be helpful e.g.
-        in multi-step rollouts to avoid aggregating the output just to distribute
-        it in the next step again.
-    produce_aggregated_output_on_all_ranks : bool, default=True
-        Flag indicating - if produce_aggregated_output is True - whether the model
-        produces the aggregated output on each rank of the process group across
-        which the group is distributed or only on group_rank 0. This can be helpful
-        for computing the loss using global targets only on a single rank which can
-        avoid either having to distribute the computation of a loss function.
-    graph_backend : str, default="pyg"
-        Backend to use for the graph. Available options are "dgl" and "pyg".
+    output_dim_grid_nodes : int, optional, default=227
+        Output dimensionality of the grid node features, by default 227
+    processor_type : Literal["MessagePassing", "GraphTransformer"], optional, default="MessagePassing"
+        Processor type used for the latent mesh. ``"GraphTransformer"`` uses
+        :class:`~physicsnemo.models.graphcast.graph_cast_processor.GraphCastProcessorGraphTransformer`.
+    khop_neighbors : int, optional, default=32
+        Number of k-hop neighbors used in the graph transformer processor. Ignored
+        when ``processor_type="MessagePassing"``. Defaults to 32
+    num_attention_heads : int, optional, default=4
+        Number of attention heads for the graph transformer processor. Defaults to 4
+    processor_layers : int, optional, default=16
+        Number of processor layers. Defaults to 16
+    hidden_layers : int, optional, default=1
+        Number of hidden layers in MLP blocks. Defaults to 1
+    hidden_dim : int, optional, default=512
+        Hidden dimension for node and edge embeddings. Defaults to 512
+    aggregation : Literal["sum", "mean"], optional, default="sum"
+        Message passing aggregation method. Defaults to "sum"
+    activation_fn : str, optional, default="silu"
+        Activation function name passed to :func:`~physicsnemo.nn.get_activation`. Defaults to "silu"
+    norm_type : Literal["TELayerNorm", "LayerNorm"], optional, default="LayerNorm"
+        Normalization type. ``"TELayerNorm"`` is recommended when supported. Defaults to "LayerNorm"
+    use_cugraphops_encoder : bool, optional, default=False
+        Deprecated flag for cugraphops encoder kernels (not supported). Defaults to False
+    use_cugraphops_processor : bool, optional, default=False
+        Deprecated flag for cugraphops processor kernels (not supported). Defaults to False
+    use_cugraphops_decoder : bool, optional, default=False
+        Deprecated flag for cugraphops decoder kernels (not supported). Defaults to False
+    do_concat_trick : bool, optional, default=False
+        Whether to replace concat+MLP with MLP+index+sum. Defaults to False
+    recompute_activation : bool, optional, default=False
+        Whether to recompute activations during backward to save memory. Defaults to False
+    partition_size : int, optional, default=1
+        Number of process groups across which graphs are distributed. If ``1``,
+        the model runs in single-GPU mode. Defaults to 1
+    partition_group_name : str | None, optional, default=None
+        Name of the process group across which graphs are distributed. Defaults to None
+    use_lat_lon_partitioning : bool, optional, default=False
+        If ``True``, graph partitions are based on lat-lon coordinates instead of IDs. Defaults to False
+    expect_partitioned_input : bool, optional, default=False
+        If ``True``, the input is already partitioned. Defaults to False
+    global_features_on_rank_0 : bool, optional, default=False
+        If ``True``, global input features are only provided on rank 0 and are scattered. Defaults to False
+    produce_aggregated_output : bool, optional, default=True
+        Whether to gather outputs to a global tensor. Defaults to True
+    produce_aggregated_output_on_all_ranks : bool, optional, default=True
+        If ``produce_aggregated_output`` is ``True``, gather on all ranks or only rank 0. Defaults to True
+    graph_backend : Literal["dgl", "pyg"], optional, default="pyg"
+        Legacy argument to select the backend used to build the graphs.
+        Defaults to "pyg"; "dgl" option is deprecated.
 
-    Note
-    ----
-    Based on these papers:
+    Forward
+    -------
+    grid_nfeat : torch.Tensor
+        Input grid features of shape :math:`(B, C_{in}, H, W)` where
+        :math:`B=1`, :math:`C_{in} =` ``input_dim_grid_nodes``, and
+        :math:`(H, W) =` ``input_res``.
 
-    - "GraphCast: Learning skillful medium-range global weather forecasting"
-        https://arxiv.org/abs/2212.12794
+    Outputs
+    -------
+    torch.Tensor
+        Output grid features of shape :math:`(B, C_{out}, H, W)` where
+        :math:`C_{out} =` ``output_dim_grid_nodes``.
 
-    - "Forecasting Global Weather with Graph Neural Networks"
-        https://arxiv.org/abs/2202.07575
+    Notes
+    -----
+    This implementation follows the GraphCast and GenCast architectures; see
+    `GraphCast <https://arxiv.org/abs/2212.12794>`_ and
+    `GenCast <https://arxiv.org/abs/2312.15796>`_. The graph transformer processor
+    requires ``transformer-engine`` to be installed.
 
-    - "Learning Mesh-Based Simulation with Graph Networks"
-        https://arxiv.org/abs/2010.03409
-
-    - "MultiScale MeshGraphNets"
-        https://arxiv.org/abs/2210.00612
-
-    - "GenCast: Diffusion-based ensemble forecasting for medium-range weather"
-        https://arxiv.org/abs/2312.15796
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
+    >>> model = GraphCastNet(
+    ...     mesh_level=1,
+    ...     input_res=(10, 20),
+    ...     input_dim_grid_nodes=2,
+    ...     input_dim_mesh_nodes=3,
+    ...     input_dim_edges=4,
+    ...     output_dim_grid_nodes=2,
+    ...     processor_layers=3,
+    ...     hidden_dim=4,
+    ...     do_concat_trick=True,
+    ... )
+    >>> x = torch.randn(1, 2, 10, 20)
+    >>> y = model(x)
+    >>> y.shape
+    torch.Size([1, 2, 10, 20])
     """
 
     def __init__(
         self,
         mesh_level: Optional[int] = 6,
-        multimesh_level: Optional[int] = None,
         multimesh: bool = True,
         input_res: tuple = (721, 1440),
         input_dim_grid_nodes: int = 474,
@@ -277,15 +280,6 @@ class GraphCastNet(Module):
             raise ImportError(
                 "cugraphops is deprecated and not supported for GraphCastNet."
             )
-
-        # 'multimesh_level' deprecation handling
-        if multimesh_level is not None:
-            warnings.warn(
-                "'multimesh_level' is deprecated and will be removed in a future version. Use 'mesh_level' instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            mesh_level = multimesh_level
 
         self.processor_type = processor_type
         if self.processor_type == "MessagePassing":
@@ -544,27 +538,79 @@ class GraphCastNet(Module):
             recompute_activation=recompute_activation,
         )
 
-    def set_checkpoint_model(self, checkpoint_flag: bool):
-        """Sets checkpoint function for the entire model.
+    def _validate_grid_input(
+        self,
+        grid_nfeat: (
+            Float[torch.Tensor, "batch grid_features height width"]
+            | Float[torch.Tensor, "grid_nodes grid_features"]
+        ),
+        expect_partitioned_input: bool,
+    ) -> None:
+        if torch.compiler.is_compiling():
+            return
 
-        This function returns the appropriate checkpoint function based on the
-        provided `checkpoint_flag` flag. If `checkpoint_flag` is True, the
-        function returns the checkpoint function from PyTorch's
-        `torch.utils.checkpoint`. In this case, all the other gradient checkpoitings
-        will be disabled. Otherwise, it returns an identity function
-        that simply passes the inputs through the given layer.
+        if expect_partitioned_input and self.is_distributed:
+            if grid_nfeat.ndim != 2 or grid_nfeat.shape[1] != self.input_dim_grid_nodes:
+                raise ValueError(
+                    "Expected tensor of shape (N_grid, C_in) but got tensor of shape "
+                    f"{tuple(grid_nfeat.shape)}"
+                )
+            return
+
+        if grid_nfeat.ndim != 4:
+            raise ValueError(
+                "Expected tensor of shape (B, C_in, H, W) but got tensor of shape "
+                f"{tuple(grid_nfeat.shape)}"
+            )
+
+        expected_shape = (
+            grid_nfeat.shape[0],
+            self.input_dim_grid_nodes,
+            *self.input_res,
+        )
+        if tuple(grid_nfeat.shape) != expected_shape:
+            raise ValueError(
+                "Expected tensor of shape "
+                f"{expected_shape} but got tensor of shape {tuple(grid_nfeat.shape)}"
+            )
+
+    def _validate_grid_features(
+        self, grid_nfeat: Float[torch.Tensor, "grid_nodes grid_features"]
+    ) -> None:
+        if torch.compiler.is_compiling():
+            return
+
+        if grid_nfeat.ndim != 2 or grid_nfeat.shape[1] != self.input_dim_grid_nodes:
+            raise ValueError(
+                "Expected tensor of shape (N_grid, C_in) but got tensor of shape "
+                f"{tuple(grid_nfeat.shape)}"
+            )
+
+    def _validate_grid_outputs(
+        self, outvar: Float[torch.Tensor, "grid_nodes out_features"]
+    ) -> None:
+        if torch.compiler.is_compiling():
+            return
+
+        if outvar.ndim != 2 or outvar.shape[1] != self.output_dim_grid_nodes:
+            raise ValueError(
+                "Expected tensor of shape (N_grid, C_out) but got tensor of shape "
+                f"{tuple(outvar.shape)}"
+            )
+
+    def set_checkpoint_model(self, checkpoint_flag: bool):
+        r"""
+        Set checkpointing for the entire model.
 
         Parameters
         ----------
         checkpoint_flag : bool
-            Whether to use checkpointing for gradient computation. Checkpointing
-            can reduce memory usage during backpropagation at the cost of
-            increased computation time.
+            Whether to enable checkpointing using ``torch.utils.checkpoint``.
 
         Returns
         -------
-        Callable
-            The selected checkpoint function to use for gradient computation.
+        None
+            This method updates internal checkpointing settings in-place.
         """
         # force a single checkpoint for the whole model
         self.model_checkpoint_fn = set_checkpoint_fn(checkpoint_flag)
@@ -574,100 +620,82 @@ class GraphCastNet(Module):
             self.decoder_checkpoint_fn = set_checkpoint_fn(False)
 
     def set_checkpoint_processor(self, checkpoint_segments: int):
-        """Sets checkpoint function for the processor excluding the first and last
-        layers.
-
-        This function returns the appropriate checkpoint function based on the
-        provided `checkpoint_segments` flag. If `checkpoint_segments` is positive,
-        the function returns the checkpoint function from PyTorch's
-        `torch.utils.checkpoint`, with number of checkpointing segments equal to
-        `checkpoint_segments`. Otherwise, it returns an identity function
-        that simply passes the inputs through the given layer.
+        r"""
+        Set checkpointing for the processor interior layers.
 
         Parameters
         ----------
         checkpoint_segments : int
-            Number of checkpointing segments for gradient computation. Checkpointing
-            can reduce memory usage during backpropagation at the cost of
-            increased computation time.
+            Number of checkpoint segments. A positive value enables checkpointing.
 
         Returns
         -------
-        Callable
-            The selected checkpoint function to use for gradient computation.
+        None
+            This method updates processor checkpointing settings in-place.
         """
         self.processor.set_checkpoint_segments(checkpoint_segments)
 
     def set_checkpoint_encoder(self, checkpoint_flag: bool):
-        """Sets checkpoint function for the embedder, encoder, and the first of
-        the processor.
-
-        This function returns the appropriate checkpoint function based on the
-        provided `checkpoint_flag` flag. If `checkpoint_flag` is True, the
-        function returns the checkpoint function from PyTorch's
-        `torch.utils.checkpoint`. Otherwise, it returns an identity function
-        that simply passes the inputs through the given layer.
+        r"""
+        Set checkpointing for the encoder path.
 
         Parameters
         ----------
         checkpoint_flag : bool
-            Whether to use checkpointing for gradient computation. Checkpointing
-            can reduce memory usage during backpropagation at the cost of
-            increased computation time.
+            Whether to enable checkpointing for the encoder path.
 
         Returns
         -------
-        Callable
-            The selected checkpoint function to use for gradient computation.
+        None
+            This method updates encoder checkpointing settings in-place.
         """
         self.encoder_checkpoint_fn = set_checkpoint_fn(checkpoint_flag)
 
     def set_checkpoint_decoder(self, checkpoint_flag: bool):
-        """Sets checkpoint function for the last layer of the processor, the decoder,
-        and the final MLP.
-
-        This function returns the appropriate checkpoint function based on the
-        provided `checkpoint_flag` flag. If `checkpoint_flag` is True, the
-        function returns the checkpoint function from PyTorch's
-        `torch.utils.checkpoint`. Otherwise, it returns an identity function
-        that simply passes the inputs through the given layer.
+        r"""
+        Set checkpointing for the decoder path.
 
         Parameters
         ----------
         checkpoint_flag : bool
-            Whether to use checkpointing for gradient computation. Checkpointing
-            can reduce memory usage during backpropagation at the cost of
-            increased computation time.
+            Whether to enable checkpointing for the decoder path.
 
         Returns
         -------
-        Callable
-            The selected checkpoint function to use for gradient computation.
+        None
+            This method updates decoder checkpointing settings in-place.
         """
         self.decoder_checkpoint_fn = set_checkpoint_fn(checkpoint_flag)
 
     def encoder_forward(
         self,
-        grid_nfeat: Tensor,
-    ) -> Tensor:
-        """Forward method for the embedder, encoder, and the first of the processor.
+        grid_nfeat: Float[torch.Tensor, "grid_nodes grid_features"],
+    ) -> Tuple[
+        Optional[Float[torch.Tensor, "mesh_edges hidden_dim"]],
+        Float[torch.Tensor, "mesh_nodes hidden_dim"],
+        Float[torch.Tensor, "grid_nodes hidden_dim"],
+    ]:
+        r"""
+        Run the embedder, encoder, and the first processor stage.
 
         Parameters
         ----------
-        grid_nfeat : Tensor
-            Node features for the latitude-longitude grid.
+        grid_nfeat : torch.Tensor
+            Grid node features of shape :math:`(N_{grid}, C_{in})`.
 
         Returns
         -------
-        mesh_efeat_processed: Tensor
-            Processed edge features for the multimesh.
-        mesh_nfeat_processed: Tensor
-            Processed node features for the multimesh.
-        grid_nfeat_encoded: Tensor
-            Encoded node features for the latitude-longitude grid.
+        mesh_efeat_processed : torch.Tensor | None
+            Processed mesh edge features of shape :math:`(N_{mesh\_edge}, C_{hid})`,
+            or ``None`` when using the graph transformer processor.
+        mesh_nfeat_processed : torch.Tensor
+            Processed mesh node features of shape :math:`(N_{mesh}, C_{hid})`.
+        grid_nfeat_encoded : torch.Tensor
+            Encoded grid node features of shape :math:`(N_{grid}, C_{hid})`.
         """
+        self._validate_grid_features(grid_nfeat)
 
-        # embedd graph features
+        # Embed grid/mesh/edge features.
         (
             grid_nfeat_embedded,
             mesh_nfeat_embedded,
@@ -679,16 +707,18 @@ class GraphCastNet(Module):
             self.g2m_edata,
             self.mesh_edata,
         )
+        # (N_grid, C_hid), (N_mesh, C_hid), (N_g2m_edge, C_hid), (N_mesh_edge, C_hid)
 
-        # encode lat/lon to multimesh
+        # Encode grid features to the multimesh.
         grid_nfeat_encoded, mesh_nfeat_encoded = self.encoder(
             g2m_efeat_embedded,
             grid_nfeat_embedded,
             mesh_nfeat_embedded,
             self.g2m_graph,
         )
+        # (N_grid, C_hid), (N_mesh, C_hid)
 
-        # process multimesh graph
+        # Process latent mesh features.
         if self.processor_type == "MessagePassing":
             mesh_efeat_processed, mesh_nfeat_processed = self.processor_encoder(
                 mesh_efeat_embedded,
@@ -704,29 +734,52 @@ class GraphCastNet(Module):
 
     def decoder_forward(
         self,
-        mesh_efeat_processed: Tensor,
-        mesh_nfeat_processed: Tensor,
-        grid_nfeat_encoded: Tensor,
-    ) -> Tensor:
-        """Forward method for the last layer of the processor, the decoder,
-        and the final MLP.
+        mesh_efeat_processed: Optional[Float[torch.Tensor, "mesh_edges hidden_dim"]],
+        mesh_nfeat_processed: Float[torch.Tensor, "mesh_nodes hidden_dim"],
+        grid_nfeat_encoded: Float[torch.Tensor, "grid_nodes hidden_dim"],
+    ) -> Float[torch.Tensor, "grid_nodes out_features"]:
+        r"""
+        Run the final processor stage, decoder, and output MLP.
 
         Parameters
         ----------
-        mesh_efeat_processed : Tensor
-            Multimesh edge features processed by the processor.
-        mesh_nfeat_processed : Tensor
-            Multi-mesh node features processed by the processor.
-        grid_nfeat_encoded : Tensor
-            The encoded node features for the latitude-longitude grid.
+        mesh_efeat_processed : torch.Tensor | None
+            Processed mesh edge features of shape :math:`(N_{mesh\_edge}, C_{hid})`,
+            or ``None`` when using the graph transformer processor.
+        mesh_nfeat_processed : torch.Tensor
+            Processed mesh node features of shape :math:`(N_{mesh}, C_{hid})`.
+        grid_nfeat_encoded : torch.Tensor
+            Encoded grid node features of shape :math:`(N_{grid}, C_{hid})`.
 
         Returns
         -------
-        grid_nfeat_finale: Tensor
-            The final node features for the latitude-longitude grid.
+        torch.Tensor
+            Final grid node features of shape :math:`(N_{grid}, C_{out})`.
         """
+        if not torch.compiler.is_compiling():
+            if mesh_nfeat_processed.ndim != 2:
+                raise ValueError(
+                    "Expected tensor of shape (N_mesh, C_hid) but got tensor of shape "
+                    f"{tuple(mesh_nfeat_processed.shape)}"
+                )
+            if grid_nfeat_encoded.ndim != 2:
+                raise ValueError(
+                    "Expected tensor of shape (N_grid, C_hid) but got tensor of shape "
+                    f"{tuple(grid_nfeat_encoded.shape)}"
+                )
+            if self.processor_type == "MessagePassing":
+                if mesh_efeat_processed is None or mesh_efeat_processed.ndim != 2:
+                    shape = (
+                        None
+                        if mesh_efeat_processed is None
+                        else tuple(mesh_efeat_processed.shape)
+                    )
+                    raise ValueError(
+                        "Expected tensor of shape (N_mesh_edge, C_hid) but got tensor of "
+                        f"shape {shape}"
+                    )
 
-        # process multimesh graph
+        # Process latent mesh features.
         if self.processor_type == "MessagePassing":
             _, mesh_nfeat_processed = self.processor_decoder(
                 mesh_efeat_processed,
@@ -739,32 +792,40 @@ class GraphCastNet(Module):
             )
 
         m2g_efeat_embedded = self.decoder_embedder(self.m2g_edata)
+        # (N_m2g_edge, C_hid)
 
-        # decode multimesh to lat/lon
+        # Decode multimesh features back to the grid.
         grid_nfeat_decoded = self.decoder(
             m2g_efeat_embedded, grid_nfeat_encoded, mesh_nfeat_processed, self.m2g_graph
         )
+        # (N_grid, C_hid)
 
-        # map to the target output dimension
+        # Map hidden features to output channels.
         grid_nfeat_finale = self.finale(
             grid_nfeat_decoded,
         )
+        # (N_grid, C_out)
 
         return grid_nfeat_finale
 
-    def custom_forward(self, grid_nfeat: Tensor) -> Tensor:
-        """GraphCast forward method with support for gradient checkpointing.
+    def custom_forward(
+        self,
+        grid_nfeat: Float[torch.Tensor, "grid_nodes grid_features"],
+    ) -> Float[torch.Tensor, "grid_nodes out_features"]:
+        r"""
+        GraphCast forward method with gradient checkpointing support.
 
         Parameters
         ----------
-        grid_nfeat : Tensor
-            Node features of the latitude-longitude graph.
+        grid_nfeat : torch.Tensor
+            Grid node features of shape :math:`(N_{grid}, C_{in})`.
 
         Returns
         -------
-        grid_nfeat_finale: Tensor
-            Predicted node features of the latitude-longitude graph.
+        torch.Tensor
+            Output grid node features of shape :math:`(N_{grid}, C_{out})`.
         """
+        self._validate_grid_features(grid_nfeat)
         (
             mesh_efeat_processed,
             mesh_nfeat_processed,
@@ -776,7 +837,7 @@ class GraphCastNet(Module):
             preserve_rng_state=False,
         )
 
-        # checkpoint of processor done in processor itself
+        # Process latent mesh features (checkpointing handled internally).
         if self.processor_type == "MessagePassing":
             mesh_efeat_processed, mesh_nfeat_processed = self.processor(
                 mesh_efeat_processed,
@@ -802,8 +863,23 @@ class GraphCastNet(Module):
 
     def forward(
         self,
-        grid_nfeat: Tensor,
-    ) -> Tensor:
+        grid_nfeat: Float[torch.Tensor, "batch grid_features height width"],
+    ) -> Float[torch.Tensor, "batch out_features height width"]:
+        r"""
+        Run the GraphCast forward pass.
+
+        Parameters
+        ----------
+        grid_nfeat : torch.Tensor
+            Input grid features of shape :math:`(B, C_{in}, H, W)` with
+            :math:`B=1` when ``expect_partitioned_input`` is ``False``.
+
+        Returns
+        -------
+        torch.Tensor
+            Output grid features of shape :math:`(B, C_{out}, H, W)`.
+        """
+        self._validate_grid_input(grid_nfeat, self.expect_partitioned_input)
         invar = self.prepare_input(
             grid_nfeat, self.expect_partitioned_input, self.global_features_on_rank_0
         )
@@ -822,30 +898,32 @@ class GraphCastNet(Module):
 
     def prepare_input(
         self,
-        invar: Tensor,
+        invar: (
+            Float[torch.Tensor, "batch grid_features height width"]
+            | Float[torch.Tensor, "grid_nodes grid_features"]
+        ),
         expect_partitioned_input: bool,
         global_features_on_rank_0: bool,
-    ) -> Tensor:
-        """Prepares the input to the model in the required shape.
+    ) -> Float[torch.Tensor, "grid_nodes grid_features"]:
+        r"""
+        Prepare model input in the required grid-node layout.
 
         Parameters
         ----------
-        invar : Tensor
-            Input in the shape [N, C, H, W].
-
+        invar : torch.Tensor
+            Input grid features of shape :math:`(B, C_{in}, H, W)` or partitioned
+            features of shape :math:`(N_{grid}, C_{in})`.
         expect_partitioned_input : bool
-            flag indicating whether input is partioned according to graph partitioning scheme
-
+            Whether ``invar`` is already partitioned.
         global_features_on_rank_0 : bool
-            Flag indicating whether input is in its "global" form only on group_rank 0 which
-            requires a scatter operation beforehand. Note that only either this flag or
-            expect_partitioned_input can be set at a time.
+            Whether global features are only provided on rank 0 and should be scattered.
 
         Returns
         -------
-        Tensor
-            Reshaped input.
+        torch.Tensor
+            Grid-node features of shape :math:`(N_{grid}, C_{in})`.
         """
+        self._validate_grid_input(invar, expect_partitioned_input)
         if global_features_on_rank_0 and expect_partitioned_input:
             raise ValueError(
                 "global_features_on_rank_0 and expect_partitioned_input cannot be set at the same time."
@@ -853,7 +931,11 @@ class GraphCastNet(Module):
 
         if not self.is_distributed:
             if invar.size(0) != 1:
-                raise ValueError("GraphCast does not support batch size > 1")
+                raise ValueError(
+                    "GraphCast does not support batch size > 1. Expected tensor of shape (1, C_in, H, W) but got tensor of shape "
+                    f"{tuple(invar.shape)}"
+                )
+            # Flatten grid and place features on the last axis. (N_grid, C_in)
             invar = invar[0].view(self.input_dim_grid_nodes, -1).permute(1, 0)
 
         else:
@@ -861,8 +943,12 @@ class GraphCastNet(Module):
             if not expect_partitioned_input:
                 # global_features_on_rank_0
                 if invar.size(0) != 1:
-                    raise ValueError("GraphCast does not support batch size > 1")
+                    raise ValueError(
+                        "GraphCast does not support batch size > 1. Expected tensor of shape (1, C_in, H, W) but got tensor of shape "
+                        f"{tuple(invar.shape)}"
+                    )
 
+                # Flatten global grid features for distribution. (N_grid, C_in)
                 invar = invar[0].view(self.input_dim_grid_nodes, -1).permute(1, 0)
 
                 # scatter global features
@@ -875,31 +961,33 @@ class GraphCastNet(Module):
 
     def prepare_output(
         self,
-        outvar: Tensor,
+        outvar: Float[torch.Tensor, "grid_nodes out_features"],
         produce_aggregated_output: bool,
         produce_aggregated_output_on_all_ranks: bool = True,
-    ) -> Tensor:
-        """Prepares the output of the model in the shape [N, C, H, W].
+    ) -> (
+        Float[torch.Tensor, "batch out_features height width"]
+        | Float[torch.Tensor, "grid_nodes out_features"]
+    ):
+        r"""
+        Prepare model output in the required layout.
 
         Parameters
         ----------
-        outvar : Tensor
-            Output of the final MLP of the model.
-
+        outvar : torch.Tensor
+            Output node features of shape :math:`(N_{grid}, C_{out})`.
         produce_aggregated_output : bool
-            flag indicating whether output is gathered onto each rank
-            or kept distributed
-
-        produce_aggregated_output_on_all_ranks : bool
-            flag indicating whether output is gatherered on each rank
-            or only gathered at group_rank 0, True by default and
-            only valid if produce_aggregated_output is set.
+            Whether to gather outputs to a global tensor.
+        produce_aggregated_output_on_all_ranks : bool, optional, default=True
+            Whether to gather outputs on all ranks or only rank 0. Defaults to True
 
         Returns
         -------
-        Tensor
-            The reshaped output of the model.
+        torch.Tensor
+            Output features in either global grid format
+            :math:`(B, C_{out}, H, W)` or distributed node format
+            :math:`(N_{grid}, C_{out})`.
         """
+        self._validate_grid_outputs(outvar)
         if produce_aggregated_output or not self.is_distributed:
             # default case: output of shape [N, C, H, W]
             if self.is_distributed:
@@ -908,6 +996,7 @@ class GraphCastNet(Module):
                     get_on_all_ranks=produce_aggregated_output_on_all_ranks,
                 )
 
+            # Reshape global grid features to (B, C_out, H, W).
             outvar = outvar.permute(1, 0)
             outvar = outvar.view(self.output_dim_grid_nodes, *self.input_res)
             outvar = torch.unsqueeze(outvar, dim=0)
@@ -915,21 +1004,20 @@ class GraphCastNet(Module):
         return outvar
 
     def to(self, *args: Any, **kwargs: Any) -> Self:
-        """Moves the object to the specified device, dtype, or format.
-        This method moves the object and its underlying graph and graph features to
-        the specified device, dtype, or format, and returns the updated object.
+        r"""
+        Move the model and its graph buffers to a device or dtype.
 
         Parameters
         ----------
         *args : Any
-            Positional arguments to be passed to the `torch._C._nn._parse_to` function.
+            Positional arguments passed to ``torch._C._nn._parse_to``.
         **kwargs : Any
-            Keyword arguments to be passed to the `torch._C._nn._parse_to` function.
+            Keyword arguments passed to ``torch._C._nn._parse_to``.
 
         Returns
         -------
         GraphCastNet
-            The updated object after moving to the specified device, dtype, or format.
+            The updated model instance.
         """
         self = super(GraphCastNet, self).to(*args, **kwargs)
 
