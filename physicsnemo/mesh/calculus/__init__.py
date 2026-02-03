@@ -33,12 +33,39 @@ Both intrinsic (manifold tangent space) and extrinsic (ambient space) derivative
 are supported for manifolds embedded in higher-dimensional spaces.
 """
 
+from physicsnemo.mesh.calculus.curl import compute_curl_points_lsq
 from physicsnemo.mesh.calculus.derivatives import (
     compute_cell_derivatives,
     compute_point_derivatives,
 )
+from physicsnemo.mesh.calculus.divergence import (
+    compute_divergence_points_dec,
+    compute_divergence_points_lsq,
+)
+from physicsnemo.mesh.calculus.gradient import (
+    compute_gradient_cells_lsq,
+    compute_gradient_points_dec,
+    compute_gradient_points_lsq,
+)
+from physicsnemo.mesh.calculus.laplacian import (
+    compute_laplacian_points,
+    compute_laplacian_points_dec,
+)
 
 __all__ = [
+    # High-level derivatives API
     "compute_point_derivatives",
     "compute_cell_derivatives",
+    # Gradient
+    "compute_gradient_points_lsq",
+    "compute_gradient_points_dec",
+    "compute_gradient_cells_lsq",
+    # Divergence
+    "compute_divergence_points_lsq",
+    "compute_divergence_points_dec",
+    # Curl
+    "compute_curl_points_lsq",
+    # Laplacian
+    "compute_laplacian_points",
+    "compute_laplacian_points_dec",
 ]
