@@ -32,6 +32,12 @@ from physicsnemo.core.module import Module
 from physicsnemo.core.warnings import LegacyFeatureWarning
 
 from ._utils import _wrapped_property
+from .preconditioners import (
+    EDMPreconditioner,
+    IDDPMPreconditioner,
+    VEPreconditioner,
+    VPPreconditioner,
+)
 
 warnings.warn(
     "The preconditioner classes 'VPPrecond', 'VEPrecond', 'iDDPMPrecond', "
@@ -65,7 +71,7 @@ class VPPrecondMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class VPPrecond(Module):
+class VPPrecond(VPPreconditioner):
     """
     Preconditioning corresponding to the variance preserving (VP) formulation.
 
@@ -112,25 +118,34 @@ class VPPrecond(Module):
         model_type: str = "SongUNet",
         **model_kwargs: dict,
     ):
-        super().__init__(meta=VPPrecondMetaData)
-        self.img_resolution = img_resolution
-        self.img_channels = img_channels
-        self.label_dim = label_dim
-        self.use_fp16 = use_fp16
-        self.beta_d = beta_d
-        self.beta_min = beta_min
-        self.M = M
-        self.epsilon_t = epsilon_t
-        self.sigma_min = float(self.sigma(epsilon_t))
-        self.sigma_max = float(self.sigma(1))
+        # Create the underlying model
         model_class = getattr(network_module, model_type)
-        self.model = model_class(
+        model = model_class(
             img_resolution=img_resolution,
             in_channels=img_channels,
             out_channels=img_channels,
             label_dim=label_dim,
             **model_kwargs,
-        )  # TODO needs better handling
+        )
+
+        # Initialize parent class with model and VP parameters
+        super().__init__(
+            model=model,
+            beta_d=beta_d,
+            beta_min=beta_min,
+            M=M,
+        )
+        # Override meta from parent
+        self.meta = VPPrecondMetaData
+
+        # Store legacy-specific attributes
+        self.img_resolution = img_resolution
+        self.img_channels = img_channels
+        self.label_dim = label_dim
+        self.use_fp16 = use_fp16
+        self.epsilon_t = epsilon_t
+        self.sigma_min = float(self.sigma(torch.tensor(epsilon_t)))
+        self.sigma_max = float(self.sigma(torch.tensor(1.0)))
 
     def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
         x = x.to(torch.float32)
@@ -148,10 +163,8 @@ class VPPrecond(Module):
             else torch.float32
         )
 
-        c_skip = 1
-        c_out = -sigma
-        c_in = 1 / (sigma**2 + 1).sqrt()
-        c_noise = (self.M - 1) * self.sigma_inv(sigma)
+        # Use parent's compute_coefficients method
+        c_in, c_noise, c_out, c_skip = self.compute_coefficients(sigma)
 
         F_x = self.model(
             (c_in * x).to(dtype),
@@ -167,7 +180,7 @@ class VPPrecond(Module):
         D_x = c_skip * x + c_out * F_x.to(torch.float32)
         return D_x
 
-    def sigma(self, t: Union[float, torch.Tensor]):
+    def sigma(self, t: Union[float, torch.Tensor]) -> torch.Tensor:
         """
         Compute the sigma(t) value for a given t based on the VP formulation.
 
@@ -185,7 +198,7 @@ class VPPrecond(Module):
             The computed sigma(t) value(s).
         """
         t = torch.as_tensor(t)
-        return ((0.5 * self.beta_d * (t**2) + self.beta_min * t).exp() - 1).sqrt()
+        return super().sigma(t)
 
     def sigma_inv(self, sigma: Union[float, torch.Tensor]):
         """
@@ -247,7 +260,7 @@ class VEPrecondMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class VEPrecond(Module):
+class VEPrecond(VEPreconditioner):
     """
     Preconditioning corresponding to the variance exploding (VE) formulation.
 
@@ -288,21 +301,28 @@ class VEPrecond(Module):
         model_type: str = "SongUNet",
         **model_kwargs: dict,
     ):
-        super().__init__(meta=VEPrecondMetaData)
+        # Create the underlying model
+        model_class = getattr(network_module, model_type)
+        model = model_class(
+            img_resolution=img_resolution,
+            in_channels=img_channels,
+            out_channels=img_channels,
+            label_dim=label_dim,
+            **model_kwargs,
+        )
+
+        # Initialize parent class with model
+        super().__init__(model=model)
+        # Override meta from parent
+        self.meta = VEPrecondMetaData
+
+        # Store legacy-specific attributes
         self.img_resolution = img_resolution
         self.img_channels = img_channels
         self.label_dim = label_dim
         self.use_fp16 = use_fp16
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
-        model_class = getattr(network_module, model_type)
-        self.model = model_class(
-            img_resolution=img_resolution,
-            in_channels=img_channels,
-            out_channels=img_channels,
-            label_dim=label_dim,
-            **model_kwargs,
-        )  # TODO needs better handling
 
     def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
         x = x.to(torch.float32)
@@ -320,10 +340,8 @@ class VEPrecond(Module):
             else torch.float32
         )
 
-        c_skip = 1
-        c_out = sigma
-        c_in = 1
-        c_noise = (0.5 * sigma).log()
+        # Use parent's compute_coefficients method
+        c_in, c_noise, c_out, c_skip = self.compute_coefficients(sigma)
 
         F_x = self.model(
             (c_in * x).to(dtype),
@@ -375,7 +393,7 @@ class iDDPMPrecondMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class iDDPMPrecond(Module):
+class iDDPMPrecond(IDDPMPreconditioner):
     """
     Preconditioning corresponding to the improved DDPM (iDDPM) formulation.
 
@@ -419,33 +437,34 @@ class iDDPMPrecond(Module):
         model_type="DhariwalUNet",
         **model_kwargs,
     ):
-        super().__init__(meta=iDDPMPrecondMetaData)
-        self.img_resolution = img_resolution
-        self.img_channels = img_channels
-        self.label_dim = label_dim
-        self.use_fp16 = use_fp16
-        self.C_1 = C_1
-        self.C_2 = C_2
-        self.M = M
+        # Create the underlying model
         model_class = getattr(network_module, model_type)
-        self.model = model_class(
+        model = model_class(
             img_resolution=img_resolution,
             in_channels=img_channels,
             out_channels=img_channels * 2,
             label_dim=label_dim,
             **model_kwargs,
-        )  # TODO needs better handling
+        )
 
-        u = torch.zeros(M + 1)
-        for j in range(M, 0, -1):  # M, ..., 1
-            u[j - 1] = (
-                (u[j] ** 2 + 1)
-                / (self.alpha_bar(j - 1) / self.alpha_bar(j)).clip(min=C_1)
-                - 1
-            ).sqrt()
-        self.register_buffer("u", u)
-        self.sigma_min = float(u[M - 1])
-        self.sigma_max = float(u[0])
+        # Initialize parent class with model and iDDPM parameters
+        super().__init__(
+            model=model,
+            C_1=C_1,
+            C_2=C_2,
+            M=M,
+        )
+        # Override meta from parent
+        self.meta = iDDPMPrecondMetaData
+
+        # Store legacy-specific attributes
+        self.img_resolution = img_resolution
+        self.img_channels = img_channels
+        self.label_dim = label_dim
+        self.use_fp16 = use_fp16
+        # Use the u buffer from parent to compute sigma_min and sigma_max
+        self.sigma_min = float(self.u[M - 1])
+        self.sigma_max = float(self.u[0])
 
     def forward(self, x, sigma, class_labels=None, force_fp32=False, **model_kwargs):
         x = x.to(torch.float32)
@@ -463,12 +482,8 @@ class iDDPMPrecond(Module):
             else torch.float32
         )
 
-        c_skip = 1
-        c_out = -sigma
-        c_in = 1 / (sigma**2 + 1).sqrt()
-        c_noise = (
-            self.M - 1 - self.round_sigma(sigma, return_index=True).to(torch.float32)
-        )
+        # Compute coefficients using parent's method
+        c_in, c_noise, c_out, c_skip = self.compute_coefficients(sigma)
 
         F_x = self.model(
             (c_in * x).to(dtype),
@@ -548,7 +563,7 @@ class EDMPrecondMetaData(ModelMetaData):
     auto_grad: bool = False
 
 
-class EDMPrecond(Module):
+class EDMPrecond(EDMPreconditioner):
     """
     Improved preconditioning proposed in the paper "Elucidating the Design Space of
     Diffusion-Based Generative Models" (EDM)
@@ -605,33 +620,38 @@ class EDMPrecond(Module):
         img_out_channels=None,
         **model_kwargs,
     ):
-        super().__init__(meta=EDMPrecondMetaData)
-        self.img_resolution = img_resolution
-        if img_in_channels is not None:
-            img_in_channels = img_in_channels
-        else:
+        # Resolve input/output channels
+        if img_in_channels is None:
             img_in_channels = img_channels
-        if img_out_channels is not None:
-            img_out_channels = img_out_channels
-        else:
+        if img_out_channels is None:
             img_out_channels = img_channels
 
-        self.label_dim = label_dim
-        self.use_fp16 = use_fp16
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-        self.sigma_data = sigma_data
-
+        # Create the underlying model
         model_class = getattr(network_module, model_type)
-        self.model = model_class(
+        model = model_class(
             img_resolution=img_resolution,
             in_channels=img_in_channels,
             out_channels=img_out_channels,
             label_dim=label_dim,
             **model_kwargs,
-        )  # TODO needs better handling
+        )
 
-    def forward(
+        # Initialize parent class with model and sigma_data
+        super().__init__(
+            model=model,
+            sigma_data=sigma_data,
+        )
+        # Override meta from parent
+        self.meta = EDMPrecondMetaData
+
+        # Store legacy-specific attributes
+        self.img_resolution = img_resolution
+        self.label_dim = label_dim
+        self.use_fp16 = use_fp16
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+
+    def forward(  # type: ignore[override]
         self,
         x,
         sigma,
@@ -655,10 +675,8 @@ class EDMPrecond(Module):
             else torch.float32
         )
 
-        c_skip = self.sigma_data**2 / (sigma**2 + self.sigma_data**2)
-        c_out = sigma * self.sigma_data / (sigma**2 + self.sigma_data**2).sqrt()
-        c_in = 1 / (self.sigma_data**2 + sigma**2).sqrt()
-        c_noise = sigma.log() / 4
+        # Use parent's compute_coefficients method
+        c_in, c_noise, c_out, c_skip = self.compute_coefficients(sigma)
 
         arg = c_in * x
 
