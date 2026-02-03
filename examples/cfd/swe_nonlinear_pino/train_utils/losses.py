@@ -17,7 +17,7 @@
 import torch
 import torch.nn.functional as F
 import numpy as np
-from physicsnemo.nn.spectral_layers import fourier_derivatives
+from physicsnemo.nn.module.spectral_layers import fourier_derivatives
 
 
 class LpLoss(object):

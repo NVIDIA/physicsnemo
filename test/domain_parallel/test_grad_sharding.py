@@ -14,11 +14,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-The tests in this file are meant to test the gradient sharding of ShardTensor.
+r"""Tests for ShardTensor gradient sharding.
 
-We need to be able to call "backward()" on a ShardTensor, and the gradients
-should agree with the local computations.
+This module tests the gradient computation capabilities of ``ShardTensor``.
+The tests verify that calling ``backward()`` on a ShardTensor produces
+gradients that agree with the equivalent local computations.
+
+Test cases include:
+
+- ``detach()``: Verify that detaching preserves tensor data and spec
+- Full tensor loss: Gradients computed using ``full_tensor()`` in the loss
+- Local tensor loss: Gradients computed using ``to_local()`` in the loss
+
+Both 1D and 2D device meshes are tested, with even and uneven sharding.
 """
 
 import pytest

@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import physicsnemo  # noqa: F401 for docs
-import physicsnemo.nn.fft as fft
+import physicsnemo.nn.module.fft as fft
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.models.afno.afno import AFNO2DLayer, AFNOMlp, PatchEmbed

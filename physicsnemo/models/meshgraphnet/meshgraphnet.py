@@ -29,10 +29,10 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.nn import get_activation
-from physicsnemo.nn.gnn_layers.mesh_edge_block import MeshEdgeBlock
-from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
-from physicsnemo.nn.gnn_layers.mesh_node_block import MeshNodeBlock
-from physicsnemo.nn.gnn_layers.utils import GraphType, set_checkpoint_fn
+from physicsnemo.nn.module.gnn_layers.mesh_edge_block import MeshEdgeBlock
+from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
+from physicsnemo.nn.module.gnn_layers.mesh_node_block import MeshNodeBlock
+from physicsnemo.nn.module.gnn_layers.utils import GraphType, set_checkpoint_fn
 from physicsnemo.utils.profiling import profile
 
 
@@ -106,16 +106,16 @@ class MeshGraphNet(Module):
         Input node features of shape :math:`(N_{nodes}, D_{in}^{node})`.
     edge_features : torch.Tensor
         Input edge features of shape :math:`(N_{edges}, D_{in}^{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------
@@ -149,9 +149,9 @@ class MeshGraphNet(Module):
     ----
     Reference: `Learning Mesh-Based Simulation with Graph Networks <https://arxiv.org/pdf/2010.03409>`.
 
-    See also :class:`~physicsnemo.nn.gnn_layers.mesh_graph_mlp.MeshGraphMLP`,
-    :class:`~physicsnemo.nn.gnn_layers.mesh_edge_block.MeshEdgeBlock`,
-    and :class:`~physicsnemo.nn.gnn_layers.mesh_node_block.MeshNodeBlock`.
+    See also :class:`~physicsnemo.nn.module.gnn_layers.mesh_graph_mlp.MeshGraphMLP`,
+    :class:`~physicsnemo.nn.module.gnn_layers.mesh_edge_block.MeshEdgeBlock`,
+    and :class:`~physicsnemo.nn.module.gnn_layers.mesh_node_block.MeshNodeBlock`.
     """
 
     def __init__(
@@ -303,16 +303,16 @@ class MeshGraphNetProcessor(Module):
         Node features of shape :math:`(N_{nodes}, D_{node})`.
     edge_features : torch.Tensor
         Edge features of shape :math:`(N_{edges}, D_{edge})`.
-    graph : :class:`~physicsnemo.nn.gnn_layers.utils.GraphType`
+    graph : :class:`~physicsnemo.nn.module.gnn_layers.utils.GraphType`
         Graph connectivity/topology container (PyG).
         Connectivity/topology only. Do not duplicate node or edge features on the graph;
         pass them via ``node_features`` and ``edge_features``. If present on
         the graph, they will be ignored by the model.
         ``node_features.shape[0]`` must equal the number of nodes in the graph ``graph.num_nodes``.
         ``edge_features.shape[0]`` must equal the number of edges in the graph ``graph.num_edges``.
-        The current :class:`~physicsnemo.nn.gnn_layers.graph_types.GraphType` resolves to
+        The current :class:`~physicsnemo.nn.module.gnn_layers.graph_types.GraphType` resolves to
         PyTorch Geometric objects (``torch_geometric.data.Data`` or ``torch_geometric.data.HeteroData``). See
-        :mod:`physicsnemo.nn.gnn_layers.graph_types` for the exact alias and requirements.
+        :mod:`physicsnemo.nn.module.gnn_layers.graph_types` for the exact alias and requirements.
 
     Outputs
     -------

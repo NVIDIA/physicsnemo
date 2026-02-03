@@ -20,7 +20,7 @@ import torch
 
 from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.meshgraphnet.meshgraphnet import MeshGraphNet
-from physicsnemo.nn.gnn_layers.graph_types import (
+from physicsnemo.nn.module.gnn_layers.graph_types import (
     PYG_AVAILABLE,
     GraphType,  # noqa
 )

@@ -14,19 +14,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Testing sharded reductions.
+r"""Tests for sharded reduction operations.
 
-There are two challenges with sharded reductions: first, the uneven
-nature of shardtensor requires careful accumulation of partial results. It
-isn't an issue with `max` or `min` or `sum` but it is a big problem with `mean`.
+There are two main challenges with sharded reductions that these tests address:
 
-Second, backwards gradient distribution would suggest that the shape of local
-gradients should match the local tensor shape, on each rank.  However,
-DTensor does not specifically support that and the backwards pass will align
-with torch.chunk syntax.
+1. **Uneven sharding**: The uneven nature of ShardTensor requires careful
+   accumulation of partial results. This isn't an issue with ``max``, ``min``,
+   or ``sum`` operations, but it is a significant problem with ``mean`` where
+   each rank's contribution must be weighted by its local size.
 
-ShardTensor addresses both of these, and these tests are meant to trigger it.
+2. **Gradient distribution**: Backward gradient distribution should ensure
+   that the shape of local gradients matches the local tensor shape on each
+   rank. However, ``DTensor`` does not specifically support this and the
+   backward pass aligns with ``torch.chunk`` syntax. ShardTensor addresses
+   this by properly tracking sharding shapes.
+
+The tests verify:
+
+- Consecutive reductions produce correct results
+- ``sum`` and ``mean`` operations work correctly on sharded tensors
+- Backward passes produce correctly shaped and valued gradients
+- Gradient specs match input tensor specs (same placements and sharding shapes)
 """
 
 import pytest

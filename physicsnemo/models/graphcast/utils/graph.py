@@ -25,7 +25,7 @@ from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.models.graphcast.utils.graph_backend import (
     PyGGraphBackend,
 )
-from physicsnemo.nn.gnn_layers.utils import GraphType
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 from .graph_utils import (
     get_face_centroids,

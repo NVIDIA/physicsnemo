@@ -20,7 +20,7 @@ ASV benchmarks for the knn function.
 
 import torch
 
-from physicsnemo.nn.neighbors import knn
+from physicsnemo.nn.functional import knn
 
 
 class KNNBenchmark:
@@ -30,7 +30,7 @@ class KNNBenchmark:
         "n_points": [10000, 100000],
         "n_queries": [1000, 5000],
         "k": [5, 16],
-        "backend": ["cuml", "scipy", "torch"],
+        "implementation": ["cuml", "scipy", "torch"],
     }
 
     # ASV benchmark attributes.
@@ -41,19 +41,19 @@ class KNNBenchmark:
     # Timeout for each benchmark (seconds).
     timeout = 60
 
-    def setup(self, n_points: int, n_queries: int, k: int, backend: str) -> None:
+    def setup(self, n_points: int, n_queries: int, k: int, implementation: str) -> None:
         """Set up test data for the benchmark."""
-        # CUDA is required for the cuml backend.
+        # CUDA is required for the cuML implementation.
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA not available")
 
-        # Determine device based on backend.
-        if backend in ["cuml", "torch"]:
+        # Determine device based on implementation.
+        if implementation in ["cuml", "torch"]:
             self.device = "cuda"
-        elif backend == "scipy":
+        elif implementation == "scipy":
             self.device = "cpu"
         else:
-            raise ValueError(f"Invalid backend: {backend}")
+            raise ValueError(f"Invalid implementation: {implementation}")
 
         # Generate random point clouds.
         self.points = torch.randn(n_points, 3, device=self.device, dtype=torch.float32)
@@ -61,13 +61,15 @@ class KNNBenchmark:
             n_queries, 3, device=self.device, dtype=torch.float32
         )
         self.k = k
-        self.backend = backend
+        self.implementation = implementation
 
         if self.device == "cuda":
             torch.cuda.synchronize()
 
-    def time_knn(self, n_points: int, n_queries: int, k: int, backend: str) -> None:
+    def time_knn(
+        self, n_points: int, n_queries: int, k: int, implementation: str
+    ) -> None:
         """Benchmark the knn function execution time."""
-        knn(self.points, self.queries, self.k, backend=self.backend)
+        knn(self.points, self.queries, self.k, implementation=self.implementation)
         if self.device == "cuda":
             torch.cuda.synchronize()

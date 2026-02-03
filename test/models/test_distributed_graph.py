@@ -129,7 +129,7 @@ def run_test_distributed_graph(
     from physicsnemo.models.graphcast.graph_cast_net import (
         get_lat_lon_partition_separators,
     )
-    from physicsnemo.nn.gnn_layers import (
+    from physicsnemo.nn.module.gnn_layers import (
         DistributedGraph,
         partition_graph_by_coordinate_bbox,
     )

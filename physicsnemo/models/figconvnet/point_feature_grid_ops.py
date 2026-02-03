@@ -14,6 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Point-grid feature operations for FIGConvNet.
+
+This module provides operations for converting between point-based and
+grid-based feature representations, which are essential for the FIGConvNet
+architecture.
+
+The main classes are:
+
+- :class:`AABBGridFeatures`: Grid features initialized from a bounding box
+- :class:`PointFeatureToGrid`: Convert point features to grid features
+- :class:`GridFeatureToPoint`: Convert grid features to point features
+- :class:`GridFeatureCat`: Concatenate grid features along channel dimension
+"""
+
 # ruff: noqa: S101
 from typing import List, Literal, Optional, Tuple, Union
 
@@ -43,7 +57,27 @@ prof = Profiler()
 
 
 class AABBGridFeatures(GridFeatures):
-    """AABBGridFeatures."""
+    r"""Grid features initialized from an axis-aligned bounding box.
+
+    Creates grid features with vertices spanning the specified bounding box
+    and features initialized using sinusoidal positional encoding.
+
+    Parameters
+    ----------
+    aabb_max : Tuple[float, float, float]
+        Maximum coordinates of the bounding box.
+    aabb_min : Tuple[float, float, float]
+        Minimum coordinates of the bounding box.
+    resolution : Union[torch.Tensor, List[int]]
+        Grid resolution along each axis.
+    pos_encode_dim : int, optional, default=32
+        Dimension of sinusoidal positional encoding.
+
+    Note
+    ----
+    This class is primarily used internally to create query grids for
+    point-to-grid conversion operations.
+    """
 
     def __init__(
         self,
@@ -60,7 +94,70 @@ class AABBGridFeatures(GridFeatures):
 
 
 class PointFeatureToGrid(nn.Module):
-    """PointFeatureToGrid."""
+    r"""Convert point features to grid features.
+
+    This module projects point cloud features onto a regular 3D grid using
+    graph convolution. For each grid cell, features are aggregated from
+    nearby points using the specified neighbor search and reduction operations.
+
+    Parameters
+    ----------
+    in_channels : int
+        Number of input feature channels.
+    out_channels : int
+        Number of output feature channels.
+    aabb_max : Tuple[float, float, float]
+        Maximum coordinates of the bounding box.
+    aabb_min : Tuple[float, float, float]
+        Minimum coordinates of the bounding box.
+    voxel_size : float, optional, default=None
+        Voxel size for grid construction. Either this or ``resolution`` must be provided.
+    resolution : Union[torch.Tensor, List[int]], optional, default=None
+        Grid resolution. Either this or ``voxel_size`` must be provided.
+    use_rel_pos : bool, optional, default=True
+        Whether to use relative positions in convolution.
+    use_rel_pos_encode : bool, optional, default=False
+        Whether to use sinusoidal positional encoding.
+    pos_encode_dim : int, optional, default=32
+        Dimension of positional encoding.
+    reductions : List[REDUCTION_TYPES], optional, default=["mean"]
+        Reduction operations for aggregating features.
+    neighbor_search_type : Literal["radius", "knn"], optional, default="radius"
+        Type of neighbor search.
+    knn_k : int, optional, default=16
+        Number of neighbors for KNN search.
+    radius : float, optional, default=sqrt(3)
+        Search radius (diagonal of a unit cube by default).
+
+    Forward
+    -------
+    point_features : PointFeatures
+        Input point features of shape :math:`(B, N, C_{in})`.
+
+    Outputs
+    -------
+    GridFeatures
+        Grid features of shape :math:`(B, X, Y, Z, C_{out})`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.models.figconvnet.geometries import PointFeatures
+    >>> converter = PointFeatureToGrid(
+    ...     in_channels=32, out_channels=64,
+    ...     aabb_max=(1, 1, 1), aabb_min=(0, 0, 0),
+    ...     resolution=[32, 32, 32]
+    ... )
+    >>> vertices = torch.randn(2, 1000, 3)
+    >>> features = torch.randn(2, 1000, 32)
+    >>> pf = PointFeatures(vertices, features)
+    >>> gf = converter(pf)
+
+    See Also
+    --------
+    :class:`GridFeatureToPoint`
+    :class:`~physicsnemo.models.figconvnet.point_feature_conv.PointFeatureConv`
+    """
 
     def __init__(
         self,
@@ -80,19 +177,24 @@ class PointFeatureToGrid(nn.Module):
     ) -> None:
         super().__init__()
         if resolution is None:
-            assert voxel_size is not None
+            if voxel_size is None:
+                raise ValueError("Either resolution or voxel_size must be provided")
             resolution = (
                 int((aabb_max[0] - aabb_min[0]) / voxel_size),
                 int((aabb_max[1] - aabb_min[1]) / voxel_size),
                 int((aabb_max[2] - aabb_min[2]) / voxel_size),
             )
         if voxel_size is None:
-            assert resolution is not None
+            if resolution is None:
+                raise ValueError("Either resolution or voxel_size must be provided")
         if isinstance(resolution, Tensor):
             resolution = resolution.tolist()
         self.resolution = resolution
         for i in range(3):
-            assert aabb_max[i] > aabb_min[i]
+            if aabb_max[i] <= aabb_min[i]:
+                raise ValueError(
+                    f"aabb_max[{i}] ({aabb_max[i]}) must be greater than aabb_min[{i}] ({aabb_min[i]})"
+                )
         self.grid_features = AABBGridFeatures(
             aabb_max, aabb_min, resolution, pos_encode_dim=pos_encode_dim
         )
@@ -141,7 +243,59 @@ class PointFeatureToGrid(nn.Module):
 
 
 class GridFeatureToPoint(nn.Module):
-    """GridFeatureToPoint."""
+    r"""Convert grid features to point features.
+
+    This module samples grid features at arbitrary point locations using
+    either graph convolution or trilinear interpolation.
+
+    Parameters
+    ----------
+    grid_in_channels : int
+        Number of input channels in grid features.
+    point_in_channels : int
+        Number of input channels in point features.
+    out_channels : int
+        Number of output feature channels.
+    aabb_max : Tuple[float, float, float]
+        Maximum coordinates of the bounding box.
+    aabb_min : Tuple[float, float, float]
+        Minimum coordinates of the bounding box.
+    hidden_dim : int, optional, default=None
+        Hidden dimension for graph convolution.
+    use_rel_pos : bool, optional, default=True
+        Whether to use relative positions.
+    use_rel_pos_embed : bool, optional, default=False
+        Whether to use sinusoidal positional encoding.
+    pos_embed_dim : int, optional, default=32
+        Dimension of positional encoding.
+    sample_method : Literal["graphconv", "interp"], optional, default="graphconv"
+        Sampling method. "graphconv" uses graph convolution, "interp" uses
+        trilinear interpolation.
+    neighbor_search_type : Literal["radius", "knn"], optional, default="radius"
+        Type of neighbor search for graph convolution.
+    knn_k : int, optional, default=16
+        Number of neighbors for KNN search.
+    reductions : List[REDUCTION_TYPES], optional, default=["mean"]
+        Reduction operations for graph convolution.
+
+    Forward
+    -------
+    grid_features : GridFeatures
+        Input grid features.
+    point_features : PointFeatures
+        Point features defining query locations.
+
+    Outputs
+    -------
+    PointFeatures
+        Sampled point features of shape :math:`(B, N, C_{out})`.
+
+    See Also
+    --------
+    :class:`PointFeatureToGrid`
+    :class:`GridFeatureToPointGraphConv`
+    :class:`GridFeatureToPointInterp`
+    """
 
     def __init__(
         self,
@@ -194,6 +348,20 @@ class GridFeatureToPoint(nn.Module):
     def forward(
         self, grid_features: GridFeatures, point_features: PointFeatures
     ) -> PointFeatures:
+        r"""Sample grid features at point locations.
+
+        Parameters
+        ----------
+        grid_features : GridFeatures
+            Input grid features.
+        point_features : PointFeatures
+            Point features defining query locations.
+
+        Returns
+        -------
+        PointFeatures
+            Sampled point features.
+        """
         out_point_features = self.conv(grid_features, point_features)
         if self.sample_method == "interp":
             out_point_features = self.transform(out_point_features)
@@ -201,7 +369,50 @@ class GridFeatureToPoint(nn.Module):
 
 
 class GridFeatureToPointGraphConv(nn.Module):
-    """GridFeatureToPointGraphConv."""
+    r"""Convert grid features to point features using graph convolution.
+
+    Samples grid features at point locations by finding neighboring grid
+    cells and aggregating their features through a graph convolution.
+
+    Parameters
+    ----------
+    grid_in_channels : int
+        Number of input channels in grid features.
+    point_in_channels : int
+        Number of input channels in point features.
+    out_channels : int
+        Number of output feature channels.
+    aabb_max : Tuple[float, float, float]
+        Maximum coordinates of the bounding box.
+    aabb_min : Tuple[float, float, float]
+        Minimum coordinates of the bounding box.
+    hidden_dim : int, optional, default=None
+        Hidden dimension for the convolution MLP.
+    use_rel_pos : bool, optional, default=True
+        Whether to use relative positions.
+    use_rel_pos_embed : bool, optional, default=False
+        Whether to use sinusoidal positional encoding.
+    pos_embed_dim : int, optional, default=32
+        Dimension of positional encoding.
+    neighbor_search_type : Literal["radius", "knn"], optional, default="radius"
+        Type of neighbor search.
+    knn_k : int, optional, default=16
+        Number of neighbors for KNN search.
+    reductions : List[REDUCTION_TYPES], optional, default=["mean"]
+        Reduction operations for aggregation.
+
+    Forward
+    -------
+    grid_features : GridFeatures
+        Input grid features.
+    point_features : PointFeatures
+        Point features defining query locations.
+
+    Outputs
+    -------
+    PointFeatures
+        Sampled point features.
+    """
 
     def __init__(
         self,
@@ -239,6 +450,20 @@ class GridFeatureToPointGraphConv(nn.Module):
     def forward(
         self, grid_features: GridFeatures, point_features: PointFeatures
     ) -> PointFeatures:
+        r"""Sample grid features using graph convolution.
+
+        Parameters
+        ----------
+        grid_features : GridFeatures
+            Input grid features.
+        point_features : PointFeatures
+            Point features defining query locations.
+
+        Returns
+        -------
+        PointFeatures
+            Sampled point features.
+        """
         resolution = grid_features.resolution
         # Find per axis scaler that scales the vertices to [0, resolution[0]] x [0, resolution[1]] x [0, resolution[2]]
         vertices_scaler = torch.FloatTensor(
@@ -257,7 +482,37 @@ class GridFeatureToPointGraphConv(nn.Module):
 
 
 class GridFeatureToPointInterp(nn.Module):
-    """GridFeatureToPointInterp."""
+    r"""Convert grid features to point features using trilinear interpolation.
+
+    Samples grid features at point locations using PyTorch's grid_sample
+    function for efficient trilinear interpolation.
+
+    Parameters
+    ----------
+    aabb_max : Tuple[float, float, float]
+        Maximum coordinates of the bounding box.
+    aabb_min : Tuple[float, float, float]
+        Minimum coordinates of the bounding box.
+    cat_in_point_features : bool, optional, default=True
+        Whether to concatenate input point features with sampled features.
+
+    Forward
+    -------
+    grid_features : GridFeatures
+        Input grid features.
+    point_features : PointFeatures
+        Point features defining query locations.
+
+    Outputs
+    -------
+    PointFeatures
+        Sampled point features (optionally concatenated with input features).
+
+    Note
+    ----
+    This method is faster than graph convolution but may produce smoother
+    interpolated values.
+    """
 
     def __init__(
         self,
@@ -279,7 +534,21 @@ class GridFeatureToPointInterp(nn.Module):
     def forward(
         self, grid_features: GridFeatures, point_features: PointFeatures
     ) -> PointFeatures:
-        # Use F.interpolate to interpolate grid features to point features
+        r"""Sample grid features using trilinear interpolation.
+
+        Parameters
+        ----------
+        grid_features : GridFeatures
+            Input grid features.
+        point_features : PointFeatures
+            Point features defining query locations.
+
+        Returns
+        -------
+        PointFeatures
+            Sampled point features.
+        """
+        # Use F.grid_sample to interpolate grid features to point features
         grid_features.to(memory_format=GridFeaturesMemoryFormat.b_c_x_y_z)
         xyz = point_features.vertices  # N x 3
         self.to(device=xyz.device)
@@ -307,12 +576,50 @@ class GridFeatureToPointInterp(nn.Module):
 
 
 class GridFeatureCat(nn.Module):
-    """GridFeatureCat."""
+    r"""Concatenate two GridFeatures along the channel dimension.
+
+    Parameters
+    ----------
+    None
+
+    Forward
+    -------
+    grid_features : GridFeatures
+        First grid features.
+    other_grid_features : GridFeatures
+        Second grid features.
+
+    Outputs
+    -------
+    GridFeatures
+        Concatenated grid features.
+
+    Note
+    ----
+    Both inputs must have the same memory format and spatial dimensions.
+    """
 
     def forward(
         self, grid_features: GridFeatures, other_grid_features: GridFeatures
     ) -> GridFeatures:
-        assert grid_features.memory_format == other_grid_features.memory_format
+        r"""Concatenate grid features.
+
+        Parameters
+        ----------
+        grid_features : GridFeatures
+            First grid features.
+        other_grid_features : GridFeatures
+            Second grid features.
+
+        Returns
+        -------
+        GridFeatures
+            Concatenated grid features.
+        """
+        if grid_features.memory_format != other_grid_features.memory_format:
+            raise ValueError(
+                f"Memory format mismatch: {grid_features.memory_format} vs {other_grid_features.memory_format}"
+            )
         # assert torch.allclose(grid_features.vertices, other_grid_features.vertices)
 
         orig_memory_format = grid_features.memory_format

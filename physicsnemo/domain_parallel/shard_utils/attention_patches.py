@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -34,22 +36,26 @@ aten = torch.ops.aten
 
 
 def add_log_sumexp(
-    log_a: Optional[torch.Tensor], log_b: Optional[torch.Tensor]
+    log_a: torch.Tensor | None, log_b: torch.Tensor | None
 ) -> torch.Tensor:
-    """
-    Add two log_sumexp values together.
-
-    Args:
-        log_a: First log-space value, can be None
-        log_b: Second log-space value, can be None
-
-    Returns:
-        torch.Tensor: Result of log(exp(log_a) + exp(log_b)) computed in a numerically stable way
+    r"""Add two log_sumexp values together.
 
     Think of this function as taking two values, A and B,
-    passed in via log form: log(A) and log(B).  This function
-    will return log(A+B) in a numerically stable way.
+    passed in via log form: :math:`\log(A)` and :math:`\log(B)`. This function
+    will return :math:`\log(A+B)` in a numerically stable way.
 
+    Parameters
+    ----------
+    log_a : Optional[torch.Tensor]
+        First log-space value, can be ``None``.
+    log_b : Optional[torch.Tensor]
+        Second log-space value, can be ``None``.
+
+    Returns
+    -------
+    torch.Tensor
+        Result of :math:`\log(\exp(\text{log\_a}) + \exp(\text{log\_b}))` computed
+        in a numerically stable way.
     """
     if log_a is None or log_b is None:
         return log_a if log_a is not None else log_b
@@ -59,30 +65,37 @@ def add_log_sumexp(
 
 
 def stable_signed_accumulate(
-    log_abs_global_O: Optional[torch.Tensor],
-    sign_global_O: Optional[torch.Tensor],
+    log_abs_global_O: torch.Tensor | None,
+    sign_global_O: torch.Tensor | None,
     log_O: torch.Tensor,
     sign_O: torch.Tensor,
     log_A: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Accumulate two functions together, keeping track of the sign and log_abs.
-
-    Args:
-        log_abs_global_O: Log of absolute value of accumulated output so far, can be None
-        sign_global_O: Sign of accumulated output so far, can be None
-        log_O: Log of absolute value of current output
-        sign_O: Sign of current output
-        log_A: Log of normalization factor for current output
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Updated (log_abs, sign) pair for accumulated output
+) -> tuple[torch.Tensor, torch.Tensor]:
+    r"""Accumulate two functions together, keeping track of the sign and log_abs.
 
     The block attention algorithm needs to continuously accumulate the output of each block,
-    however, the normalization is done in log space.  This function accommodates that by
-    accumulating the output in log space using log space normalizations.  Note that because
-    the output of an attention block can be negative, we must use both log(|O|) and sign(O)
-    for each term.
+    however, the normalization is done in log space. This function accommodates that by
+    accumulating the output in log space using log space normalizations. Note that because
+    the output of an attention block can be negative, we must use both :math:`\log(|O|)` and
+    :math:`\text{sign}(O)` for each term.
+
+    Parameters
+    ----------
+    log_abs_global_O : Optional[torch.Tensor]
+        Log of absolute value of accumulated output so far, can be ``None``.
+    sign_global_O : Optional[torch.Tensor]
+        Sign of accumulated output so far, can be ``None``.
+    log_O : torch.Tensor
+        Log of absolute value of current output.
+    sign_O : torch.Tensor
+        Sign of current output.
+    log_A : torch.Tensor
+        Log of normalization factor for current output.
+
+    Returns
+    -------
+    Tuple[torch.Tensor, torch.Tensor]
+        Updated (log_abs, sign) pair for accumulated output.
     """
     if log_abs_global_O is None and sign_global_O is None:
         return log_O + log_A, sign_O
@@ -113,20 +126,20 @@ def stable_signed_accumulate(
 
 
 class RingSDPA(torch.autograd.Function):
-    """
-    Performs scaled dot product attention on sharded Q, K, V.
+    r"""Performs scaled dot product attention on sharded Q, K, V.
 
     The ring allreduce happens concurrently and overlapping with the computation,
     for performance improvements.
 
-    For details about the ring attention, see: https://arxiv.org/abs/2310.01889
+    For details about the ring attention, see:
+    `Ring Attention <https://arxiv.org/abs/2310.01889>`_.
     Note that the original implementation is a combination of JAX + flash attention + ring attention.
-    Here, instead, we leverage the underlying and built-in pytorch efficienct attention.
+    Here, instead, we leverage the underlying and built-in PyTorch efficient attention.
 
-    A key difference with this algorithm is how we track the per-block normalizations.  The pytorch
-    function returns log_sumexp, which we use for a running normalization.  But it has to be kept in log
-    space to prevent underflow/overflow as well as precision issues.  See the helper functions
-    `add_log_sumexp` and `stable_signed_accumulate` for more details.
+    A key difference with this algorithm is how we track the per-block normalizations. The PyTorch
+    function returns log_sumexp, which we use for a running normalization. But it has to be kept in log
+    space to prevent underflow/overflow as well as precision issues. See the helper functions
+    ``add_log_sumexp`` and ``stable_signed_accumulate`` for more details.
     """
 
     # comm_stream = torch.cuda.Stream()
@@ -137,16 +150,41 @@ class RingSDPA(torch.autograd.Function):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        attn_mask: Optional[torch.Tensor],
+        attn_mask: torch.Tensor | None,
         mesh: DeviceMesh,
         ring_config: RingPassingConfig,
         attn_args: dict,
     ) -> torch.Tensor:
-        """
-        Forward pass for the ring attention implementation.  This implementation
-        will overlap the communication with the computation.  Note that there is an
-        explicit sync in each iteration to prevent the communication stream from getting
-        ahead of the computation stream, by waiting on the all_to_all operation to complete.
+        r"""Forward pass for the ring attention implementation.
+
+        This implementation will overlap the communication with the computation.
+        Note that there is an explicit sync in each iteration to prevent the
+        communication stream from getting ahead of the computation stream, by
+        waiting on the all_to_all operation to complete.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving tensors/variables for backward.
+        q : torch.Tensor
+            Query tensor of shape :math:`(B, H, S, D)`.
+        k : torch.Tensor
+            Key tensor of shape :math:`(B, H, S, D)`.
+        v : torch.Tensor
+            Value tensor of shape :math:`(B, H, S, D)`.
+        attn_mask : Optional[torch.Tensor]
+            Optional attention mask tensor.
+        mesh : DeviceMesh
+            Device mesh for distributed computation.
+        ring_config : RingPassingConfig
+            Configuration for ring passing communication.
+        attn_args : dict
+            Additional arguments to pass to the attention function.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(B, H, S, D)`.
         """
 
         ctx.attn_args = attn_args
@@ -281,17 +319,28 @@ class RingSDPA(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
-        Optional[torch.Tensor],
+        torch.Tensor | None,
         None,
         None,
         None,
     ]:
-        """
-        Backward pass for the ring SDPA.
+        r"""Backward pass for the ring SDPA.
 
         Currently, this is not overlapping communication with the computation.
         Note that the backward pass has 2x communication: send k, v but also grad_k, grad_v.
 
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context containing saved tensors from forward.
+        grad_output : torch.Tensor
+            Gradient of the loss with respect to the output.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], None, None, None]
+            Gradients for (q, k, v, attn_mask, mesh, ring_config, attn_args).
+            ``None`` values indicate non-differentiable parameters.
         """
         (
             q,
@@ -364,20 +413,20 @@ class RingSDPA(torch.autograd.Function):
 
 
 class RingSDPABlocking(torch.autograd.Function):
-    """
-    Performs scaled dot product attention on sharded Q, K, V.
+    r"""Performs scaled dot product attention on sharded Q, K, V.
 
-    The ring allreduce happens in a blocking manner.  This isn't more efficient, but
+    The ring allreduce happens in a blocking manner. This isn't more efficient, but
     it is useful for understanding the algorithm and debugging.
 
-    For details about the ring attention, see: https://arxiv.org/abs/2310.01889
+    For details about the ring attention, see:
+    `Ring Attention <https://arxiv.org/abs/2310.01889>`_.
     Note that the original implementation is a combination of JAX + flash attention + ring attention.
-    Here, instead, we leverage the underlying and built-in pytorch efficienct attention.
+    Here, instead, we leverage the underlying and built-in PyTorch efficient attention.
 
-    A key difference with this algorithm is how we track the per-block normalizations.  The pytorch
-    function returns log_sumexp, which we use for a running normalization.  But it has to be kept in log
-    space to prevent underflow/overflow as well as precision issues.  See the helper functions
-    `add_log_sumexp` and `stable_signed_accumulate` for more details.
+    A key difference with this algorithm is how we track the per-block normalizations. The PyTorch
+    function returns log_sumexp, which we use for a running normalization. But it has to be kept in log
+    space to prevent underflow/overflow as well as precision issues. See the helper functions
+    ``add_log_sumexp`` and ``stable_signed_accumulate`` for more details.
     """
 
     # comm_stream = torch.cuda.Stream()
@@ -388,14 +437,38 @@ class RingSDPABlocking(torch.autograd.Function):
         q: torch.Tensor,
         k: torch.Tensor,
         v: torch.Tensor,
-        attn_mask: Optional[torch.Tensor],
+        attn_mask: torch.Tensor | None,
         mesh: DeviceMesh,
         ring_config: RingPassingConfig,
         attn_args: dict,
     ) -> torch.Tensor:
-        """
-        Forward pass for the ring attention implementation.  This implementation
-        will NOT overlap the communication with the computation.
+        r"""Forward pass for the ring attention implementation.
+
+        This implementation will NOT overlap the communication with the computation.
+
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving tensors/variables for backward.
+        q : torch.Tensor
+            Query tensor of shape :math:`(B, H, S, D)`.
+        k : torch.Tensor
+            Key tensor of shape :math:`(B, H, S, D)`.
+        v : torch.Tensor
+            Value tensor of shape :math:`(B, H, S, D)`.
+        attn_mask : Optional[torch.Tensor]
+            Optional attention mask tensor.
+        mesh : DeviceMesh
+            Device mesh for distributed computation.
+        ring_config : RingPassingConfig
+            Configuration for ring passing communication.
+        attn_args : dict
+            Additional arguments to pass to the attention function.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(B, H, S, D)`.
         """
 
         ctx.attn_args = attn_args
@@ -471,17 +544,28 @@ class RingSDPABlocking(torch.autograd.Function):
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
-        Optional[torch.Tensor],
+        torch.Tensor | None,
         None,
         None,
         None,
     ]:
-        """
-        Backward pass for the ring SDPA.
+        r"""Backward pass for the ring SDPA.
 
         Currently, this is not overlapping communication with the computation.
         Note that the backward pass has 2x communication: send k, v but also grad_k, grad_v.
 
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context containing saved tensors from forward.
+        grad_output : torch.Tensor
+            Gradient of the loss with respect to the output.
+
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor], None, None, None]
+            Gradients for (q, k, v, attn_mask, mesh, ring_config, attn_args).
+            ``None`` values indicate non-differentiable parameters.
         """
         (
             q,
@@ -557,29 +641,32 @@ def ring_sdpa(
     q: ShardTensor,
     k: ShardTensor,
     v: ShardTensor,
-    attn_mask: Optional[ShardTensor] = None,
+    attn_mask: ShardTensor | None = None,
     **kwargs: dict,
 ) -> ShardTensor:
-    """
-    High Level, differentiable function to compute global attention on a sharded tensor.
+    r"""High-level, differentiable function to compute global attention on a sharded tensor.
 
-    The implementation is a ring communication pattern.  Each rank computes attention
-    locally on it's tensors, and then kv is passed to the next rank while receiving from
+    The implementation is a ring communication pattern. Each rank computes attention
+    locally on its tensors, and then kv is passed to the next rank while receiving from
     the previous rank.
 
-    Parameters:
+    Parameters
     ----------
-        q (physicsnemo.distributed.ShardTensor): The attention queries
-        k (physicsnemo.distributed.ShardTensor): The attention keys
-        v (physicsnemo.distributed.ShardTensor): The attention values
-        attn_mask (physicsnemo.distributed.ShardTensor, optional): The attention mask
-        kwargs (dict): key-word arguments to pass to the attention call
+    q : ShardTensor
+        The attention queries.
+    k : ShardTensor
+        The attention keys.
+    v : ShardTensor
+        The attention values.
+    attn_mask : Optional[ShardTensor], optional
+        The attention mask.
+    **kwargs : dict
+        Keyword arguments to pass to the attention call.
 
-    Returns:
+    Returns
     -------
-        physicsnemo.distributed.ShardTensor: A distributed tensor representing the
-           attention computed on the global context.
-
+    ShardTensor
+        A distributed tensor representing the attention computed on the global context.
     """
 
     mesh = q._spec.mesh
@@ -614,23 +701,34 @@ def ring_sdpa(
     return x
 
 
-def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> ShardTensor:
-    """Wrapper for torch.nn.functional.scaled_dot_product_attention to support sharded tensors.
+def sdpa_wrapper(
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ShardTensor:  # noqa: C901
+    r"""Wrapper for ``torch.nn.functional.scaled_dot_product_attention`` to support sharded tensors.
 
+    Parameters
+    ----------
+    func : Callable
+        Will be ``torch.nn.functional.scaled_dot_product_attention``.
+    types : Any
+        The object types of the inputs.
+    args : tuple
+        Positional arguments containing query, key, value tensors.
+    kwargs : dict
+        Keyword arguments.
 
-    Args:
-        func: Will be torch.nn.functional.scaled_dot_product_attention
-        types: The object types of the inputs
-        args: Positional arguments containing query, key, value tensors
-        kwargs: Keyword arguments
-
-    Returns:
+    Returns
+    -------
+    ShardTensor
         ShardTensor with global attention computed.
 
-    Raises:
-        MissingShardPatch: If Sharding of inputs is not on the same mesh,
-            or is not on a 1D mesh.
-
+    Raises
+    ------
+    MissingShardPatch
+        If sharding of inputs is not on the same mesh, or is not on a 1D mesh.
     """
 
     q, k, v, attn_mask, kwargs = repackage_sdpa_args(*args, **kwargs)
@@ -683,26 +781,52 @@ def sdpa_wrapper(func: Callable, types: Any, args: tuple, kwargs: dict) -> Shard
 
 
 def repackage_sdpa_args(
-    query: Union[torch.Tensor, ShardTensor],
-    key: Union[torch.Tensor, ShardTensor],
-    value: Union[torch.Tensor, ShardTensor],
-    attn_mask: Optional[Union[torch.Tensor, ShardTensor]] = None,
+    query: torch.Tensor | ShardTensor,
+    key: torch.Tensor | ShardTensor,
+    value: torch.Tensor | ShardTensor,
+    attn_mask: torch.Tensor | ShardTensor | None = None,
     dropout_p: float = 0.0,
     is_causal: bool = False,
     scale: float = None,
     enable_gqa: bool = False,
     *args,
     **kwargs,
-) -> Tuple[
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
-    Union[torch.Tensor, ShardTensor],
+) -> tuple[
+    torch.Tensor | ShardTensor,
+    torch.Tensor | ShardTensor,
+    torch.Tensor | ShardTensor,
+    torch.Tensor | ShardTensor | None,
     dict,
 ]:
-    """
-    Repackages scaled dot product attention arguments into standard format.
+    r"""Repackage scaled dot product attention arguments into standard format.
 
+    Parameters
+    ----------
+    query : Union[torch.Tensor, ShardTensor]
+        Query tensor.
+    key : Union[torch.Tensor, ShardTensor]
+        Key tensor.
+    value : Union[torch.Tensor, ShardTensor]
+        Value tensor.
+    attn_mask : Optional[Union[torch.Tensor, ShardTensor]], optional
+        Attention mask tensor.
+    dropout_p : float, default=0.0
+        Dropout probability.
+    is_causal : bool, default=False
+        Whether to apply causal masking.
+    scale : float, optional
+        Scale factor for attention scores.
+    enable_gqa : bool, default=False
+        Whether to enable grouped query attention.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
+
+    Returns
+    -------
+    Tuple[Union[torch.Tensor, ShardTensor], Union[torch.Tensor, ShardTensor], Union[torch.Tensor, ShardTensor], Union[torch.Tensor, ShardTensor], dict]
+        Tuple of (query, key, value, attn_mask, kwargs_dict).
     """
 
     if enable_gqa:

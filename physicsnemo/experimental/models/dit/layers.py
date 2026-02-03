@@ -60,9 +60,8 @@ from physicsnemo.core import Module
 from physicsnemo.nn import Mlp, PositionalEmbedding, Linear
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
-from physicsnemo.nn.drop import DropPath
-from physicsnemo.nn.utils import PatchEmbed2D
-
+from physicsnemo.nn.module.drop import DropPath
+from physicsnemo.nn.module.utils import PatchEmbed2D
 
 def get_layer_norm(
     hidden_size: int,

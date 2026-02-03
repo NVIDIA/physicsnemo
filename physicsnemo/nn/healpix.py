@@ -170,57 +170,6 @@ class HEALPixUnfoldFaces(torch.nn.Module):
         )
 
 
-class HEALPixPaddingv2(torch.nn.Module):
-    r"""
-    Accelerated padding layer for HEALPix data using the optional ``earth2grid`` backend.
-
-    Parameters
-    ----------
-    padding : int
-        Padding size to apply to each face.
-
-    Forward
-    -------
-    x : torch.Tensor
-        Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
-
-    Outputs
-    -------
-    torch.Tensor
-        Padded tensor of shape :math:`(B \cdot F, C, H + 2p, W + 2p)`.
-
-    Examples
-    --------
-    >>> pad = HEALPixPaddingv2(padding=1)
-    >>> x = torch.randn(24, 3, 8, 8)
-    >>> y = pad(x)
-    >>> y.shape
-    torch.Size([24, 3, 10, 10])
-    """
-
-    def __init__(self, padding: int) -> None:  # pragma: no cover
-        super().__init__()
-        self.unfold = HEALPixUnfoldFaces(num_faces=12)
-        self.fold = HEALPixFoldFaces()
-        self.padding = padding
-
-    def forward(
-        self, x: Float[torch.Tensor, "batch_faces channels height width"]
-    ) -> Float[torch.Tensor, "batch_faces channels padded_height padded_width"]:
-        r"""Apply HEALPix-aware padding using the ``earth2grid`` CUDA backend."""
-        if torch.cuda.is_available():
-            torch.cuda.nvtx.range_push("HEALPixPaddingv2:forward")
-
-        unfolded = self.unfold(x)
-        padded = hpx_pad(unfolded, self.padding)
-        result = self.fold(padded)
-
-        if torch.cuda.is_available():
-            torch.cuda.nvtx.range_pop()
-
-        return result
-
-
 class HEALPixPadding(torch.nn.Module):
     r"""
     Reference padding layer for data on a HEALPix sphere.
@@ -470,6 +419,57 @@ class HEALPixPadding(torch.nn.Module):
             ret[..., i, i] = 0.5 * b[..., i, -1] + 0.5 * r[..., -1, i]
 
         return ret
+
+
+class HEALPixPaddingv2(torch.nn.Module):
+    r"""
+    Accelerated padding layer for HEALPix data using the optional ``earth2grid`` backend.
+
+    Parameters
+    ----------
+    padding : int
+        Padding size to apply to each face.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Folded tensor of shape :math:`(B \cdot F, C, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Padded tensor of shape :math:`(B \cdot F, C, H + 2p, W + 2p)`.
+
+    Examples
+    --------
+    >>> pad = HEALPixPaddingv2(padding=1)
+    >>> x = torch.randn(24, 3, 8, 8)
+    >>> y = pad(x)
+    >>> y.shape
+    torch.Size([24, 3, 10, 10])
+    """
+
+    def __init__(self, padding: int) -> None:  # pragma: no cover
+        super().__init__()
+        self.unfold = HEALPixUnfoldFaces(num_faces=12)
+        self.fold = HEALPixFoldFaces()
+        self.padding = padding
+
+    def forward(
+        self, x: Float[torch.Tensor, "batch_faces channels height width"]
+    ) -> Float[torch.Tensor, "batch_faces channels padded_height padded_width"]:
+        r"""Apply HEALPix-aware padding using the ``earth2grid`` CUDA backend."""
+        if torch.cuda.is_available():
+            torch.cuda.nvtx.range_push("HEALPixPaddingv2:forward")
+
+        unfolded = self.unfold(x)
+        padded = hpx_pad(unfolded, self.padding)
+        result = self.fold(padded)
+
+        if torch.cuda.is_available():
+            torch.cuda.nvtx.range_pop()
+
+        return result
 
 
 class HEALPixLayer(torch.nn.Module):

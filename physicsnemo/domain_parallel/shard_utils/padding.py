@@ -14,6 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from typing import Any, Callable
+
 import torch
 from torch.distributed.tensor.placement_types import (
     Shard,
@@ -33,19 +37,25 @@ def compute_local_padding_and_output_shape(
     mesh_sizes: tuple[int, ...],
     tensor_sharding_map: dict[int, int],
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """
-    Compute the local padding and output shape for a given input tensor shape, pad, mode, and value.
+    r"""Compute the local padding and output shape for a given input tensor shape.
 
-    Args:
+    Parameters
+    ----------
+    input_tensor_shape : tuple[int, ...]
+        The shape of the input tensor.
+    pad : tuple[int, ...]
+        The padding size(s).
+    mesh_coords : tuple[int, ...]
+        The coordinates of the tensor in the mesh.
+    mesh_sizes : tuple[int, ...]
+        The sizes of the mesh.
+    tensor_sharding_map : dict[int, int]
+        A map from tensor dimension to mesh dimension.
 
-        input_tensor_shape: The shape of the input tensor
-        pad: The padding size(s)
-        mesh_coords: The coordinates of the tensor in the mesh
-        mesh_sizes: The sizes of the mesh
-        tensor_sharding_map: A map from tensor dimension to mesh dimension
-
-    Returns:
-        tuple of the local padding and output shape
+    Returns
+    -------
+    tuple[tuple[int, ...], tuple[int, ...]]
+        Tuple of (local_output_shape, local_padding).
     """
 
     tensor_rank = len(input_tensor_shape)
@@ -101,18 +111,36 @@ def compute_local_padding_and_output_shape(
     return tuple(local_output_shape), tuple(output_padding)
 
 
-def generic_pad_nd_wrapper(func: callable, types: tuple, args: tuple, kwargs: dict):
-    """Wrapper function for N-dimensional padding operations supporting shardtensors.
+def generic_pad_nd_wrapper(
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ShardTensor:
+    r"""Wrapper function for N-dimensional padding operations supporting ShardTensors.
 
-    Args:
-        func: The padding function to be wrapped
-        types: tuple of input types (unused)
-        args: Positional arguments to the padding function
-        kwargs: Keyword arguments to the padding function
+    Parameters
+    ----------
+    func : callable
+        The padding function to be wrapped.
+    types : tuple
+        Tuple of input types (unused).
+    args : tuple
+        Positional arguments to the padding function.
+    kwargs : dict
+        Keyword arguments to the padding function.
 
-    Returns:
-        The result of the padding operation
+    Returns
+    -------
+    ShardTensor
+        The result of the padding operation.
 
+    Raises
+    ------
+    MissingShardPatch
+        If circular padding is requested (not yet implemented).
+    ValueError
+        If padding specification is invalid.
     """
 
     # Padding is a no-communication operation unless it's circular padding
@@ -213,28 +241,31 @@ def repackage_pad_args(
     tuple[int, ...],
     str,
     float,
-    dict,
 ]:
-    """Repackages pad arguments into standard format.
+    r"""Repackage pad arguments into standard format.
 
     Takes the full set of arguments that could be passed to a pad operation
-    and separates them into core tensor inputs (inputs, pad, mode, value) and
-    configuration parameters packaged as a kwargs dict.
+    and separates them into core tensor inputs (inputs, pad, mode, value).
 
-    Args:
-        inputs: Input tensor to convolve
-        pad: Padding size(s)
-        mode: Padding mode
-        value: Padding value
-        bias: Optional bias tensor
-        *args: Additional positional args (unused)
-        **kwargs: Additional keyword args (unused)
-    Returns:
-        tuple containing:
-        - Input tensor
-        - Padding size(s)
-        - Padding mode
-        - Padding value
+    Parameters
+    ----------
+    inputs : ShardTensor
+        Input tensor to pad.
+    pad : int | tuple[int, ...], default=0
+        Padding size(s).
+    mode : str, default="constant"
+        Padding mode (``"constant"``, ``"reflect"``, ``"replicate"``, or ``"circular"``).
+    value : float | None, optional
+        Padding value for constant padding mode.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
+
+    Returns
+    -------
+    tuple[ShardTensor, tuple[int, ...], str, float]
+        Tuple containing (input tensor, padding size(s), padding mode, padding value).
     """
 
     return inputs, pad, mode, value
