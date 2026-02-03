@@ -246,6 +246,25 @@ class SO2Convolution(Module):
     See Also
     --------
     GateActivation - Module for applying equivariance preserving non-linearities.
+
+    Forward
+    -------
+    x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
+        Input tensor with shape ``[batch, lmax+1, mmax+1, 2, in_channels]``.
+        The dimension of size 2 contains real (index 0) and imaginary
+        (index 1) components.
+    x_edge : Float[torch.Tensor, "batch edge_channels"], optional
+        Edge features for input modulation. Required if ``edge_channels``
+        was specified during initialization. Default: None.
+
+    Outputs
+    -------
+    Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels_with_gates"]
+        Output tensor with shape ``[batch, lmax+1, mmax+1, 2, out_channels + gate_channels]``.
+        When ``produce_gates=False``, ``gate_channels=0`` and the output has
+        ``out_channels`` features. When ``produce_gates=True``, the output has
+        ``out_channels + lmax * out_channels`` features, where gate channels
+        (indices ``[out_channels:]``) are non-zero only at position (l=0, m=0, real).
     """
 
     def __init__(
@@ -386,33 +405,6 @@ class SO2Convolution(Module):
         x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"],
         x_edge: Float[torch.Tensor, "batch edge_channels"] | None = None,
     ) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels_with_gates"]:
-        """Apply SO(2) convolution to grid-layout spherical harmonic coefficients.
-
-        Parameters
-        ----------
-        x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
-            Input tensor with shape ``[batch, lmax+1, mmax+1, 2, in_channels]``.
-            The dimension of size 2 contains real (index 0) and imaginary
-            (index 1) components.
-        x_edge : Float[torch.Tensor, "batch edge_channels"], optional
-            Edge features for input modulation. Required if ``edge_channels``
-            was specified during initialization. Default: None.
-
-        Returns
-        -------
-        Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels_with_gates"]
-            Output tensor with shape ``[batch, lmax+1, mmax+1, 2, out_channels + gate_channels]``.
-            When ``produce_gates=False``, ``gate_channels=0`` and the output has
-            ``out_channels`` features. When ``produce_gates=True``, the output has
-            ``out_channels + lmax * out_channels`` features, where gate channels
-            (indices ``[out_channels:]``) are non-zero only at position (l=0, m=0, real).
-
-        Raises
-        ------
-        ValueError
-            If ``x_edge`` is required but not provided, or if the input tensor
-            ``x`` has an incorrect shape.
-        """
         # Validate inputs
         if not self.internal_weights and x_edge is None:
             raise ValueError(

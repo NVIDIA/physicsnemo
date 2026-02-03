@@ -122,9 +122,30 @@ class GateActivation(Module):
     See Also
     --------
     SO2Convolution - SO2-preserving linear transformation layer.
+
+    Forward
+    -------
+    x : Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels_with_gates"]
+        Input features with shape [batch, lmax+1, mmax+1, 2, channels + gate_channels].
+        The dimension of size 2 contains real (index 0) and imaginary
+        (index 1) components. The last dimension contains both the feature
+        channels (first ``channels`` values) and gate channels (remaining
+        ``lmax * channels`` values).
+
+    Outputs
+    -------
+    Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
+        Activated features with shape [batch, lmax+1, mmax+1, 2, channels].
+        - l=0 positions have a nonlinearity applied
+        - l>0 positions are scaled by sigmoid(gates)
+        - Invalid (l,m) positions (where m > l) are zero
+        - m=0 imaginary components are zero
+        - Gate channels are consumed (not in output)
     """
 
-    def __init__(self, lmax: int, mmax: int, channels: int, activation: str | Callable = "silu") -> None:
+    def __init__(
+        self, lmax: int, mmax: int, channels: int, activation: str | Callable = "silu"
+    ) -> None:
         super().__init__()
 
         if lmax < 1:
@@ -189,35 +210,6 @@ class GateActivation(Module):
         self,
         x: Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels_with_gates"],
     ) -> Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]:
-        r"""Apply gated activation to equivariant features.
-
-        Gates are extracted from the input tensor itself, embedded at the
-        (l=0, m=0, real=0) position in the channel dimension.
-
-        Parameters
-        ----------
-        x : Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels_with_gates"]
-            Input features with shape [batch, lmax+1, mmax+1, 2, channels + gate_channels].
-            The dimension of size 2 contains real (index 0) and imaginary
-            (index 1) components. The last dimension contains both the feature
-            channels (first ``channels`` values) and gate channels (remaining
-            ``lmax * channels`` values).
-
-        Returns
-        -------
-        Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
-            Activated features with shape [batch, lmax+1, mmax+1, 2, channels].
-            - l=0 positions have a nonlinearity applied
-            - l>0 positions are scaled by sigmoid(gates)
-            - Invalid (l,m) positions (where m > l) are zero
-            - m=0 imaginary components are zero
-            - Gate channels are consumed (not in output)
-
-        Raises
-        ------
-        ValueError
-            If input tensor has incorrect number of channels.
-        """
         # Validate input channel dimension (skip during torch.compile for performance)
         if not torch.compiler.is_compiling():
             expected_in_channels = self.total_in_channels
