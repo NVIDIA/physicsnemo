@@ -16,7 +16,7 @@
 
 import torch
 
-from physicsnemo.nn.neighbors import radius_search
+from physicsnemo.nn.functional import radius_search
 
 from utils import Meter
 

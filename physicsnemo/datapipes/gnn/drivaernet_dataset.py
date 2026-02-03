@@ -27,7 +27,7 @@ from torch.utils.data import Dataset
 
 from physicsnemo.datapipes.datapipe import Datapipe
 from physicsnemo.datapipes.meta import DatapipeMetaData
-from physicsnemo.nn.gnn_layers.utils import PyGData
+from physicsnemo.nn.module.gnn_layers.utils import PyGData
 
 try:
     import pyvista as pv

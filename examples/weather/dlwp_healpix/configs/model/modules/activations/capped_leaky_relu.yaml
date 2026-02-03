@@ -14,5 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: physicsnemo.nn.activations.CappedLeakyReLU
+_target_: physicsnemo.nn.CappedLeakyReLU
 cap_value: 10

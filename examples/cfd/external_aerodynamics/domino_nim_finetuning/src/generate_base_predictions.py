@@ -49,7 +49,7 @@ from physicsnemo.distributed import DistributedManager
 from physicsnemo.datapipes.cae.domino_datapipe import DoMINODataPipe
 from model_base_predictor import DoMINO
 from physicsnemo.models.domino.utils import *
-from physicsnemo.nn.sdf import signed_distance_field
+from physicsnemo.nn.functional import signed_distance_field
 
 AIR_DENSITY = 1.205
 STREAM_VELOCITY = 38.89

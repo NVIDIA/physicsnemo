@@ -59,17 +59,17 @@ type = layers
 containers=
    physicsnemo.nn
 layers = 
-   fourier_layers | transformer_layers | unet_layers
-   dgm_layers | mlp_layers | fully_connected_layers | gnn_layers | attention_layers
-   activations | ball_query | conv_layers  | drop | fft  | fused_silu | interpolation | kan_layers  | resample_layers | sdf | siren_layers | spectral_layers | transformer_decoder  | weight_fact | weight_norm | embedding_layers | group_norm
-   neighbors | healpix
-   utils
+   module.fourier_layers | module.transformer_layers | module.unet_layers
+   module.dgm_layers | module.mlp_layers | module.fully_connected_layers | module.gnn_layers | module.attention_layers
+   module.activations | module.ball_query | module.conv_layers  | module.drop | module.fft  | module.fused_silu | module.interpolation | module.kan_layers  | module.resample_layers | module.siren_layers | module.spectral_layers | module.transformer_decoder  | module.weight_fact | module.weight_norm | module.embedding_layers | module.group_norm
+   functional | healpix
+   module.utils
 
 [importlinter:contract:physicsnemo-nn-gnn-layers]
 name = Control Internal Dependencies in PhysicsNeMo nn GNN Layers
 type = layers
 containers=
-   physicsnemo.nn.gnn_layers
+   physicsnemo.nn.module.gnn_layers
 layers = 
    bsms
    mesh_graph_decoder | mesh_graph_encoder

@@ -29,11 +29,9 @@ except ImportError:
     )
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
-
-import pytz
 
 # Assuming these utility files exist in the specified paths
 from physicsnemo.datapipes.climate.utils.invariant import latlon_grid
@@ -603,7 +601,7 @@ class MoWE5DaliExternalSource:
             year = int(year_str)
             # Timestamp corresponds to the ground truth time
             truth_time_idx = target_in_idx + lead_time
-            start_time = datetime(year, 1, 1, tzinfo=pytz.utc) + timedelta(
+            start_time = datetime(year, 1, 1, tzinfo=UTC) + timedelta(
                 hours=int(truth_time_idx) * dt_hours
             )
             timestamp_out = np.array([start_time.timestamp()])

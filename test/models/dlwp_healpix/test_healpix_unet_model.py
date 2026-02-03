@@ -27,7 +27,7 @@ from test.models.graphcast.utils import fix_random_seeds
 @pytest.fixture
 def conv_next_block_dict(in_channels=3, out_channels=1):
     activation_block = {
-        "_target_": "physicsnemo.nn.activations.CappedGELU",
+        "_target_": "physicsnemo.nn.CappedGELU",
         "cap_value": 10,
     }
     conv_block = {
@@ -56,7 +56,7 @@ def down_sampling_block_dict():
 def up_sampling_block_dict(in_channels=3, out_channels=1):
     """Upsampling dict fixture."""
     activation_block = {
-        "_target_": "physicsnemo.nn.activations.CappedGELU",
+        "_target_": "physicsnemo.nn.CappedGELU",
         "cap_value": 10,
     }
     up_sampling_block = {

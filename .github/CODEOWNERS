@@ -15,7 +15,7 @@
 
 # Top level markdown files:
 # Keep CHANGELOG separate - don't require specific people to approve updates to it.
-./CHANGELOG.md 
+./CHANGELOG.md
 ./*.md @ram-cherukuri @megnvidia
 
 .github/workflows @ktangsali @coreyjadams @nickgeneva
@@ -57,17 +57,22 @@ physicsnemo/deploy
 physicsnemo/mesh @peterdsharpe
 
 # DATAPIPES
+physicsnemo/datapipes/core @coreyjadams
 physicsnemo/datapipes/climate @dallasfoster @nickgeneva @pzharrington
 physicsnemo/datapipes/cae/domino_datapipe.py @RishikeshRanade @coreyjadams
 physicsnemo/datapipes/cae/mesh_datapipe.py @mnabian
 physicsnemo/datapipes/cae/readers.py @mnabian
+
 physicsnemo/datapipes/gnn @mnabian
-physicsnemo/datapipes/healpix @pzharrington 
+physicsnemo/datapipes/healpix @pzharrington
+examples/minimal/datapipes @coreyjadams
+test/datapipes/core @coreyjadams
+
 # Distributed tools
 physicsnemo/distributed @coreyjadams
 
 # MODEL SPECIFIC OWNERSHIP.  These are in roughly the same order as the code repo.
-# They are grouped "logically" together, though.  
+# They are grouped "logically" together, though.
 # For example, gnn_layers, graphcast, and meshgraphnet are together.
 
 # AFNO

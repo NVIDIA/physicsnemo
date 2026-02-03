@@ -19,7 +19,7 @@ import torch
 from einops import rearrange, repeat
 
 from test.conftest import requires_module
-from test.nn import validate_utils
+from test.nn.module import validate_utils
 
 
 @requires_module(["cftime"])

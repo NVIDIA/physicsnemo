@@ -26,14 +26,14 @@ from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.models.graphcast.utils.graph import Graph
 from physicsnemo.nn import get_activation
-from physicsnemo.nn.gnn_layers.embedder import (
+from physicsnemo.nn.module.gnn_layers.embedder import (
     GraphCastDecoderEmbedder,
     GraphCastEncoderEmbedder,
 )
-from physicsnemo.nn.gnn_layers.mesh_graph_decoder import MeshGraphDecoder
-from physicsnemo.nn.gnn_layers.mesh_graph_encoder import MeshGraphEncoder
-from physicsnemo.nn.gnn_layers.mesh_graph_mlp import MeshGraphMLP
-from physicsnemo.nn.gnn_layers.utils import set_checkpoint_fn
+from physicsnemo.nn.module.gnn_layers.mesh_graph_decoder import MeshGraphDecoder
+from physicsnemo.nn.module.gnn_layers.mesh_graph_encoder import MeshGraphEncoder
+from physicsnemo.nn.module.gnn_layers.mesh_graph_mlp import MeshGraphMLP
+from physicsnemo.nn.module.gnn_layers.utils import set_checkpoint_fn
 
 from .graph_cast_processor import (
     GraphCastProcessor,

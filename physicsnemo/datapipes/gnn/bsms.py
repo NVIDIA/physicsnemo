@@ -222,7 +222,7 @@ import scipy.sparse
 import torch
 from torch.utils.data import Dataset
 
-from physicsnemo.nn.gnn_layers.utils import GraphType
+from physicsnemo.nn.module.gnn_layers.utils import GraphType
 
 try:
     from sparse_dot_mkl import dot_product_mkl
