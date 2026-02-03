@@ -195,6 +195,8 @@ class HealDA(Module):
         attn_kwargs = {"qk_norm_type": qk_norm_type} if qk_norm_type else {}
         if qk_norm_type and attention_backend == "timm":
             attn_kwargs["qk_norm_affine"] = qk_norm_affine
+        if attention_backend == "transformer_engine":
+            attn_kwargs["qkv_format"] = "bshd"
         
         # HealDA used dropout after attention projection and in MLP, not on attention weights
         block_kwargs = {
@@ -413,17 +415,17 @@ def map_healda_to_pnm_block_keys(
     else:
         mappings.update(
             {
-                # Attention Q/K/V
-                "attn1.to_q.weight": "attention.attn_op.qkv.query_weight",
-                "attn1.to_q.bias": "attention.attn_op.qkv.query_bias",
-                "attn1.to_k.weight": "attention.attn_op.qkv.key_weight",
-                "attn1.to_k.bias": "attention.attn_op.qkv.key_bias",
-                "attn1.to_v.weight": "attention.attn_op.qkv.value_weight",
-                "attn1.to_v.bias": "attention.attn_op.qkv.value_bias",
-                # Attention output projection
-                "attn1.to_out.0.weight": "attention.attn_op.proj.weight",
-                "attn1.to_out.0.bias": "attention.attn_op.proj.bias",
-            }
+        # Attention Q/K/V
+        "attn1.to_q.weight": "attention.attn_op.qkv.query_weight",
+        "attn1.to_q.bias": "attention.attn_op.qkv.query_bias",
+        "attn1.to_k.weight": "attention.attn_op.qkv.key_weight",
+        "attn1.to_k.bias": "attention.attn_op.qkv.key_bias",
+        "attn1.to_v.weight": "attention.attn_op.qkv.value_weight",
+        "attn1.to_v.bias": "attention.attn_op.qkv.value_bias",
+        # Attention output projection
+        "attn1.to_out.0.weight": "attention.attn_op.proj.weight",
+        "attn1.to_out.0.bias": "attention.attn_op.proj.bias",
+    }
         )
     
     if suffix in mappings:
@@ -456,14 +458,14 @@ def convert_healda_state_dict(
     is_unconditional = condition_dim == 0
     
     qkv_buffers: dict[int, dict[str, torch.Tensor]] = {}
-
+    
     for old_key, value in old_state_dict.items():
         # Handle transformer blocks
         if old_key.startswith("transformer_blocks."):
             # Extract block index
             parts = old_key.split(".")
             block_idx = int(parts[1])
-
+            
             if attention_backend == "timm" and parts[2] == "attn1" and parts[3] in {"to_q", "to_k", "to_v"}:
                 qkv_buffers.setdefault(block_idx, {})[f"{parts[3]}.{parts[4]}"] = value
                 continue

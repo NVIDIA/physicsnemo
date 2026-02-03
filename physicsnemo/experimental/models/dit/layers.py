@@ -246,6 +246,9 @@ class TESelfAttention(AttentionModuleBase):
         The dropout rate for the attention operation.
     proj_drop_rate: float
         The dropout rate for the projection operation.
+    qkv_format: str, optional
+        Dimension format for Q/K/V tensors. Default ``"bshd"`` for batch-first layout.
+        Use ``"sbhd"`` for sequence-first layout.
     **kwargs: Any
         Additional keyword arguments for the transformer_engine attention module.
 
@@ -265,7 +268,15 @@ class TESelfAttention(AttentionModuleBase):
     torch.Tensor
         Output tensor of shape (B, L, D).
     """
-    def __init__(self, hidden_size: int, num_heads: int, attn_drop_rate: float = 0.0, proj_drop_rate: float = 0.0, **kwargs: Any):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attn_drop_rate: float = 0.0,
+        proj_drop_rate: float = 0.0,
+        qkv_format: str = "bshd",
+        **kwargs: Any,
+    ):
         super().__init__()
         if not TE_AVAILABLE:
             raise ImportError(
@@ -280,7 +291,13 @@ class TESelfAttention(AttentionModuleBase):
                 stacklevel=2,
             )
         kwargs.pop("qk_norm_affine", None)
-        self.attn_op = MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
+        self.attn_op = MultiheadAttention(
+            hidden_size=hidden_size,
+            num_attention_heads=num_heads,
+            attention_dropout=attn_drop_rate,
+            qkv_format=qkv_format,
+            **kwargs,
+        )
         # TE doesn't support proj_drop natively, so we add it manually after the attention output
         self.proj_drop = nn.Dropout(proj_drop_rate)
 
@@ -1061,8 +1078,7 @@ class PostMLPConditionEmbedder(ConditioningEmbedderBase):
     Architecture: ``t → PositionalEmbedding → MLP → output``, then
     ``condition → Linear → ADD`` (added to output).
 
-    This is the standard approach where timestep and condition are processed
-    independently and combined at the end.
+    Timestep and condition are processed independently and combined at the end.
 
     Parameters
     ----------
@@ -1147,10 +1163,9 @@ class PreMLPConditionEmbedder(ConditioningEmbedderBase):
     Architecture: ``t → PositionalEmbedding → flip(sin/cos) → ADD → MLP → output``
     where labels are added before MLP processing.
 
-    This allows the MLP to learn joint representations of timestep and labels.
-    Standard diffusion architecture from DDPM++/ADM/EDM.
+    Timestep and labels are combined before the MLP.
 
-    Note: The final SiLU is omitted here - consumers (AdaLN blocks) apply SiLU
+    Note: The final SiLU is omitted here; consumers (AdaLN blocks) apply SiLU
     before their modulation linear layer.
 
     Parameters
