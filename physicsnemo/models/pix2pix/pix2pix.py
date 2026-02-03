@@ -55,6 +55,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 from dataclasses import dataclass
+from typing import Union
 
 import torch
 import torch.nn as nn
@@ -164,7 +165,7 @@ class Pix2Pix(Module):
         n_downsampling: int = 3,
         n_upsampling: int = 3,
         n_blocks: int = 3,
-        activation_fn: str = "relu",  # TODO need support for type Activation
+        activation_fn: Union[str, nn.Module] = "relu",
         batch_norm: bool = False,
         padding_type: str = "reflect",
     ):
@@ -173,6 +174,18 @@ class Pix2Pix(Module):
         if padding_type not in ["reflect", "zero", "replicate"]:
             raise ValueError("Invalid padding type")
         super().__init__(meta=MetaData())
+
+        # Store constructor parameters as attributes for introspection
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.dimension = dimension
+        self.conv_layer_size = conv_layer_size
+        self.n_downsampling = n_downsampling
+        self.n_upsampling = n_upsampling
+        self.n_blocks = n_blocks
+        self.activation_fn = activation_fn
+        self.batch_norm = batch_norm
+        self.padding_type = padding_type
 
         # activation function
         if isinstance(activation_fn, str):

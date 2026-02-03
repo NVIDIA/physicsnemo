@@ -53,8 +53,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 import functools
+import warnings
 from dataclasses import dataclass
-from typing import List
+from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -162,6 +163,11 @@ class Pix2PixUnet(Module):
     gpu_ids : List[int], optional, default=[]
         List of GPU IDs for DataParallel.
 
+        .. deprecated::
+            The ``gpu_ids`` parameter is deprecated and will be removed in a future
+            release. Use standard PyTorch device placement instead by calling
+            ``model.to(device)`` after instantiation.
+
     Forward
     -------
     input : torch.Tensor
@@ -209,13 +215,33 @@ class Pix2PixUnet(Module):
         filter_size: int = 64,
         norm_layer=nn.BatchNorm2d,
         use_dropout: bool = False,
-        gpu_ids: List = [],
+        gpu_ids: Optional[List[int]] = None,
     ):
         if not (filter_size > 0 and n_downsampling >= 0):
             raise ValueError("Invalid arch params")
         super().__init__(meta=MetaData())
 
-        # device
+        # Handle deprecated gpu_ids parameter
+        if gpu_ids is None:
+            gpu_ids = []
+        if gpu_ids:
+            warnings.warn(
+                "The 'gpu_ids' parameter is deprecated and will be removed in a "
+                "future release. Use standard PyTorch device placement instead by "
+                "calling 'model.to(device)' after instantiation.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # Store constructor parameters as attributes for introspection
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.n_downsampling = n_downsampling
+        self.filter_size = filter_size
+        self.norm_layer = norm_layer
+        self.use_dropout = use_dropout
+
+        # device (deprecated functionality, kept for backward compatibility)
         self.gpu_ids = gpu_ids
         self.model_device = (
             torch.device("cuda:{}".format(self.gpu_ids[0]))
@@ -239,7 +265,34 @@ class Pix2PixUnet(Module):
 
         self.netG = net
 
-    def __patch_instance_norm_state_dict(self, state_dict, module, keys, i=0) -> None:
+    def __patch_instance_norm_state_dict(
+        self,
+        state_dict: Dict[str, Any],
+        module: nn.Module,
+        keys: List[str],
+        i: int = 0,
+    ) -> None:
+        r"""Patch InstanceNorm state dict for compatibility with older checkpoints.
+
+        Removes ``running_mean``, ``running_var``, and ``num_batches_tracked`` keys
+        from InstanceNorm layers if the module doesn't track running stats.
+
+        Parameters
+        ----------
+        state_dict : Dict[str, Any]
+            The state dictionary to patch (modified in-place).
+        module : nn.Module
+            The current module being checked.
+        keys : List[str]
+            List of keys representing the path to the current parameter.
+        i : int, optional, default=0
+            Current index in the keys list.
+
+        Returns
+        -------
+        None
+            Modifies ``state_dict`` in-place.
+        """
         key = keys[i]
         if i + 1 == len(keys):  # at the end, pointing to a parameter/buffer
             if module.__class__.__name__.startswith("InstanceNorm") and (
@@ -257,6 +310,27 @@ class Pix2PixUnet(Module):
             )
 
     def load_networks(self, model_path: str) -> None:
+        r"""Load network weights from a checkpoint file.
+
+        This method handles loading weights from pix2pix-style checkpoint files,
+        including compatibility patches for older InstanceNorm checkpoints.
+
+        Parameters
+        ----------
+        model_path : str
+            Path to the checkpoint file containing model weights.
+
+        Returns
+        -------
+        None
+            Loads weights into ``self.netG`` in-place.
+
+        Note
+        ----
+        This method is provided for compatibility with pix2pix-style checkpoints.
+        For PhysicsNeMo checkpoints, use :meth:`physicsnemo.Module.from_checkpoint`
+        instead.
+        """
         net = self.netG
         if isinstance(net, torch.nn.DataParallel):
             net = net.module
