@@ -2,3 +2,5 @@ transformer_engine[pytorch]
 hydra-core
 wandb
 termcolor>=2.1.1
+netCDF4>=1.7.0
+physicsnemo[gnns,datapipes-extras]
