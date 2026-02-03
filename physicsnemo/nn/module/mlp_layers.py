@@ -28,6 +28,7 @@ class Mlp(nn.Module):
         out_features: int | None = None,
         act_layer: nn.Module | str = nn.GELU,
         drop: float = 0.0,
+        final_dropout: bool = True,
     ):
         super().__init__()
         out_features = out_features or in_features
@@ -65,7 +66,7 @@ class Mlp(nn.Module):
 
         # Add the last layers:
         layers.append(nn.Linear(input_dim, out_features))
-        if drop != 0:
+        if drop != 0 and final_dropout:
             layers.append(nn.Dropout(drop))
 
         self.layers = nn.Sequential(*layers)

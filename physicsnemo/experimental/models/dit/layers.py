@@ -15,6 +15,7 @@
 # limitations under the License.
 import math
 import warnings
+from functools import partial
 from typing import Any, Dict, Literal, Union, Optional, Tuple
 from abc import ABC, abstractmethod
 import torch
@@ -60,7 +61,7 @@ from physicsnemo.core import Module
 from physicsnemo.nn import Mlp, PositionalEmbedding, Linear
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.natten_patches import partial_na2d
-from physicsnemo.nn.module.drop import DropPath
+from physicsnemo.nn import DropPath
 from physicsnemo.nn.module.utils import PatchEmbed2D
 
 def get_layer_norm(
@@ -180,6 +181,8 @@ class TimmSelfAttention(AttentionModuleBase):
     qk_norm_type: str, optional
         QK normalization type. Options: "RMSNorm", "LayerNorm", or None.
         Translated to timm's ``qk_norm=True`` and ``norm_layer``.
+    qk_norm_affine: bool, optional
+        Whether QK normalization layers should use learnable affine parameters.
     **kwargs: Any
         Additional keyword arguments for the timm attention module.
 
@@ -203,6 +206,7 @@ class TimmSelfAttention(AttentionModuleBase):
         attn_drop_rate: float = 0.0,
         proj_drop_rate: float = 0.0,
         qk_norm_type: Optional[Literal["RMSNorm", "LayerNorm"]] = None,
+        qk_norm_affine: bool = True,
         **kwargs: Any,
     ):
         super().__init__()
@@ -210,7 +214,7 @@ class TimmSelfAttention(AttentionModuleBase):
         # Translate qk_norm_type to timm's qk_norm and norm_layer
         if qk_norm_type == "RMSNorm":
             kwargs["qk_norm"] = True
-            kwargs["norm_layer"] = RmsNorm
+            kwargs["norm_layer"] = partial(RmsNorm, affine=qk_norm_affine)
         elif qk_norm_type == "LayerNorm":
             kwargs["qk_norm"] = True
             kwargs["norm_layer"] = nn.LayerNorm
@@ -268,6 +272,14 @@ class TESelfAttention(AttentionModuleBase):
                 "Transformer Engine is not installed. Please install it with `pip install transformer-engine`."
             )
 
+        if "qk_norm_affine" in kwargs and not kwargs["qk_norm_affine"]:
+            warnings.warn(
+                "Transformer Engine does not support disabling affine parameters for QK norm. "
+                "Ignoring qk_norm_affine=False and using affine parameters.",
+                UserWarning,
+                stacklevel=2,
+            )
+        kwargs.pop("qk_norm_affine", None)
         self.attn_op = MultiheadAttention(hidden_size=hidden_size, num_attention_heads=num_heads, attention_dropout=attn_drop_rate, **kwargs)
         # TE doesn't support proj_drop natively, so we add it manually after the attention output
         self.proj_drop = nn.Dropout(proj_drop_rate)
@@ -277,6 +289,8 @@ class TESelfAttention(AttentionModuleBase):
             mask_type = "arbitrary"
         out = self.attn_op(x, attention_mask=attn_mask, attn_mask_type=mask_type)
         return self.proj_drop(out)
+
+
 
 
 class Natten2DSelfAttention(AttentionModuleBase):
@@ -527,11 +541,13 @@ class DiTBlock(nn.Module):
         num_heads: int,
         attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], Module] = "transformer_engine",
         layernorm_backend: Literal["apex", "torch"] = "torch",
+        norm_eps: float = 1e-6,
         mlp_ratio: float = 4.0,
         intermediate_dropout: bool = False,
         attn_drop_rate: float = 0.0,
         proj_drop_rate: float = 0.0,
         mlp_drop_rate: float = 0.0,
+        final_mlp_dropout: bool = True,
         drop_path: float = 0.0,
         condition_dim: Optional[int] = None,
         **attn_kwargs: Any,
@@ -551,10 +567,10 @@ class DiTBlock(nn.Module):
             )
 
         self.pre_attention_norm = get_layer_norm(
-            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=norm_eps
         )
         self.pre_mlp_norm = get_layer_norm(
-            hidden_size, layernorm_backend, elementwise_affine=False, eps=1e-6
+            hidden_size, layernorm_backend, elementwise_affine=False, eps=norm_eps
         )
         
         # Optional dropout/per-sample dropout module applied before attention
@@ -569,9 +585,8 @@ class DiTBlock(nn.Module):
             hidden_features=mlp_hidden_dim,
             act_layer=lambda: nn.GELU(approximate="tanh"),
             drop=mlp_drop_rate,
+            final_dropout=final_mlp_dropout,
         )
-        # condition_dim=None uses hidden_size (diffusion mode)
-        # condition_dim=0 creates bias-only layer (VIT mode)
         modulation_input_dim = hidden_size if condition_dim is None else condition_dim
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(), nn.Linear(modulation_input_dim, 6 * hidden_size, bias=True)
@@ -1148,6 +1163,9 @@ class PreMLPConditionEmbedder(ConditioningEmbedderBase):
         Class label dimension. If 0, no label embedding. Default 0.
     label_dropout : float, optional
         Dropout probability for labels during training. Default 0.0.
+    legacy_label_bias : bool, optional
+        If ``True`` and ``label_dim`` is 0, add a legacy bias term matching the old
+        ``EmbedNoiseLabels`` behavior. Default ``False``.
     max_positions : int, optional
         Maximum positions for positional embedding. Default 10000.
 
@@ -1170,12 +1188,14 @@ class PreMLPConditionEmbedder(ConditioningEmbedderBase):
         noise_channels: int,
         label_dim: int = 0,
         label_dropout: float = 0.0,
+        legacy_label_bias: bool = False,
         max_positions: int = 10000,
         **kwargs,  # Accept and ignore extra kwargs (e.g., amp_mode) for compatibility
     ):
         super().__init__()
         self._output_dim = emb_channels
         self.label_dropout = label_dropout
+        self.legacy_label_bias = legacy_label_bias
 
         self.map_noise = PositionalEmbedding(
             num_channels=noise_channels,
@@ -1185,9 +1205,13 @@ class PreMLPConditionEmbedder(ConditioningEmbedderBase):
         )
 
         # Label embedding (added before MLP)
-        self.map_label = (
-            nn.Linear(label_dim, noise_channels) if label_dim > 0 else None
-        )
+        if label_dim > 0:
+            self.map_label = nn.Linear(label_dim, noise_channels)
+        elif legacy_label_bias:
+            # Preserve legacy bias-only behavior for label_dim=0.
+            self.map_label = nn.Linear(0, noise_channels, bias=True)
+        else:
+            self.map_label = None
 
         # MLP: Linear → SiLU → Linear (no final SiLU - moved to AdaLN)
         self.map_layer0 = nn.Linear(noise_channels, emb_channels)
@@ -1207,13 +1231,16 @@ class PreMLPConditionEmbedder(ConditioningEmbedderBase):
         emb = emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)
 
         # Add label embedding before MLP
-        if self.map_label is not None and condition is not None:
-            tmp = condition
-            if self.training and self.label_dropout:
-                tmp = tmp * (
-                    torch.rand([t.shape[0], 1], device=tmp.device) >= self.label_dropout
-                ).to(tmp.dtype)
-            emb = emb + self.map_label(tmp * math.sqrt(self.map_label.in_features))
+        if self.map_label is not None:
+            if condition is None and self.legacy_label_bias and self.map_label.in_features == 0:
+                emb = emb + self.map_label.bias
+            elif condition is not None:
+                tmp = condition
+                if self.training and self.label_dropout:
+                    tmp = tmp * (
+                        torch.rand([t.shape[0], 1], device=tmp.device) >= self.label_dropout
+                    ).to(tmp.dtype)
+                emb = emb + self.map_label(tmp * math.sqrt(self.map_label.in_features))
 
         # MLP 
         emb = torch.nn.functional.silu(self.map_layer0(emb))

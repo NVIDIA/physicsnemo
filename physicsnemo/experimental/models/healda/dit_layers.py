@@ -80,6 +80,8 @@ class HealDA(Module):
         Tokenizer input = condition_channels + fusion_dim.
     qk_norm_type : Literal["RMSNorm", "LayerNorm"], optional, default="RMSNorm"
         QK normalization type. None disables QK normalization.
+    qk_norm_affine : bool, optional, default=True
+        Whether QK normalization layers use learnable affine parameters (timm backend only).
     drop_path : float, optional, default=0.0
         DropPath rate for stochastic depth.
     dropout : float, optional, default=0.0
@@ -136,12 +138,14 @@ class HealDA(Module):
         time_length: int = 1,
         condition_channels: int = 2,  # Static input channels (e.g. lat/lon)
         qk_norm_type: Optional[Literal["RMSNorm", "LayerNorm"]] = "RMSNorm",
+        qk_norm_affine: bool = True,
         drop_path: float = 0.0,
         dropout: float = 0.0,
         condition_dim: Optional[int] = None,
         noise_channels: int = 1024,
         label_dim: int = 0,
         label_dropout: Optional[float] = None,
+        norm_eps: float = 1e-5,
         attention_backend: str = "transformer_engine",
         layernorm_backend: str = "apex",
     ):
@@ -155,6 +159,9 @@ class HealDA(Module):
         self.condition_channels = condition_channels
         self.condition_dim = condition_dim
         self.label_dim = label_dim
+        self.qk_norm_type = qk_norm_type
+        self.qk_norm_affine = qk_norm_affine
+        self.attention_backend = attention_backend
 
         # Observation encoder (embeds obs and concatenates with state)
         self.obs_embedder = MultiSensorObsEmbedding(
@@ -186,12 +193,18 @@ class HealDA(Module):
         # Create PNM DiT with custom tokenizer/detokenizer
         npix_coarse = 12 * 4 ** level_model
         attn_kwargs = {"qk_norm_type": qk_norm_type} if qk_norm_type else {}
+        if qk_norm_type and attention_backend == "timm":
+            attn_kwargs["qk_norm_affine"] = qk_norm_affine
         
         # HealDA used dropout after attention projection and in MLP, not on attention weights
         block_kwargs = {
             "proj_drop_rate": dropout,
             "mlp_drop_rate": dropout,
+            "norm_eps": norm_eps,
+            "final_mlp_dropout": False,
         }
+        # if attention_backend == "diffusers":
+        #     block_kwargs["attn_drop_rate"] = dropout
 
         self.dit = DiT(
             input_size=(npix_coarse * time_length,),
@@ -209,13 +222,30 @@ class HealDA(Module):
             condition_dim=condition_dim,
             conditioning_embedder="pre_mlp",
             conditioning_embedder_kwargs={
+                "noise_channels": noise_channels,
                 "label_dim": label_dim,
                 "label_dropout": label_dropout,
+                "legacy_label_bias": True,
             },
             drop_path=drop_path,
             attn_kwargs=attn_kwargs,
             block_kwargs=block_kwargs,
         )
+
+    def _maybe_reset_te_qk_norm_weights(self) -> None:
+        if (
+            self.attention_backend != "transformer_engine"
+            or self.qk_norm_type != "RMSNorm"
+        ):
+            return
+        print("Resetting TE QK RMSNorm weights")
+        with torch.no_grad():
+            for block in self.dit.blocks:
+                attn_op = block.attention.attn_op
+                if hasattr(attn_op, "q_norm") and getattr(attn_op.q_norm, "weight", None) is not None:
+                    attn_op.q_norm.weight.fill_(1.0)
+                if hasattr(attn_op, "k_norm") and getattr(attn_op.k_norm, "weight", None) is not None:
+                    attn_op.k_norm.weight.fill_(1.0)
 
     def forward(
         self,
@@ -258,6 +288,7 @@ class HealDA(Module):
         level_in: int = 6,
         level_model: int = 5,
         device: str = "cuda",
+        attention_backend: str = "transformer_engine",
     ) -> "HealDA":
         """
         Load a HealDA model from an old HealDA checkpoint.
@@ -289,6 +320,7 @@ class HealDA(Module):
         hidden_size = 1024  # Default for dit-l
         num_layers = 24
         num_heads = 16
+        print(f"Checkpoint config: {config}")
 
         # Determine condition_dim from as_vit flag
         # as_vit=True means condition_dim=0 (VIT mode, bias-only adaptive modulation)
@@ -308,9 +340,15 @@ class HealDA(Module):
             time_length=config.get("time_length", 1),
             condition_channels=config.get("condition_channels", 2),
             qk_norm_type="RMSNorm" if config.get("qk_rms_norm", False) else None,
+            qk_norm_affine=False,
             drop_path=config.get("drop_path", 0.0),
             dropout=config.get("p_dropout", 0.0),
             condition_dim=condition_dim,
+            noise_channels=config.get("noise_channels", hidden_size),  # Default to inner_dim
+            label_dim=config.get("label_dim", 0),
+            label_dropout=config.get("label_dropout", 0.0),
+            norm_eps=config.get("norm_eps", 1e-5),
+            attention_backend=attention_backend,
         )
 
         # Convert and load state dict
@@ -319,15 +357,21 @@ class HealDA(Module):
             num_blocks=num_layers,
             hidden_size=hidden_size,
             condition_dim=condition_dim,
+            attention_backend=model.attention_backend,
         )
 
         # With condition_dim=0 (VIT mode), shapes now match [n, 0] directly
         model.load_state_dict(new_state_dict, strict=False)
+        model._maybe_reset_te_qk_norm_weights()
         return model.to(device)
 
 
 # Weight mapping utilities for checkpoint migration
-def map_healda_to_pnm_block_keys(old_key: str, block_idx: int) -> str:
+def map_healda_to_pnm_block_keys(
+    old_key: str,
+    block_idx: int,
+    attention_backend: Literal["transformer_engine", "timm", "natten2d"] = "transformer_engine",
+) -> str:
     """
     Map HealDA DiT block state dict key to PNM DiT block key.
     
@@ -351,22 +395,36 @@ def map_healda_to_pnm_block_keys(old_key: str, block_idx: int) -> str:
         # AdaLN modulation
         "norm1.linear.weight": "adaptive_modulation.1.weight",
         "norm1.linear.bias": "adaptive_modulation.1.bias",
-        # Attention Q/K/V
-        "attn1.to_q.weight": "attention.attn_op.qkv.query_weight",
-        "attn1.to_q.bias": "attention.attn_op.qkv.query_bias",
-        "attn1.to_k.weight": "attention.attn_op.qkv.key_weight",
-        "attn1.to_k.bias": "attention.attn_op.qkv.key_bias",
-        "attn1.to_v.weight": "attention.attn_op.qkv.value_weight",
-        "attn1.to_v.bias": "attention.attn_op.qkv.value_bias",
-        # Attention output projection
-        "attn1.to_out.0.weight": "attention.attn_op.proj.weight",
-        "attn1.to_out.0.bias": "attention.attn_op.proj.bias",
         # MLP
         "ff.net.0.proj.weight": "linear.layers.0.weight",
         "ff.net.0.proj.bias": "linear.layers.0.bias",
-        "ff.net.2.weight": "linear.layers.2.weight",
-        "ff.net.2.bias": "linear.layers.2.bias",
+        "ff.net.2.weight": "linear.layers.3.weight",
+        "ff.net.2.bias": "linear.layers.3.bias",
     }
+
+    if attention_backend == "timm":
+        mappings.update(
+            {
+                # Attention output projection
+                "attn1.to_out.0.weight": "attention.attn_op.proj.weight",
+                "attn1.to_out.0.bias": "attention.attn_op.proj.bias",
+            }
+        )
+    else:
+        mappings.update(
+            {
+                # Attention Q/K/V
+                "attn1.to_q.weight": "attention.attn_op.qkv.query_weight",
+                "attn1.to_q.bias": "attention.attn_op.qkv.query_bias",
+                "attn1.to_k.weight": "attention.attn_op.qkv.key_weight",
+                "attn1.to_k.bias": "attention.attn_op.qkv.key_bias",
+                "attn1.to_v.weight": "attention.attn_op.qkv.value_weight",
+                "attn1.to_v.bias": "attention.attn_op.qkv.value_bias",
+                # Attention output projection
+                "attn1.to_out.0.weight": "attention.attn_op.proj.weight",
+                "attn1.to_out.0.bias": "attention.attn_op.proj.bias",
+            }
+        )
     
     if suffix in mappings:
         return new_prefix + mappings[suffix]
@@ -379,6 +437,7 @@ def convert_healda_state_dict(
     num_blocks: int = 24,
     hidden_size: int = 1024,
     condition_dim: int = 0,
+    attention_backend: Literal["transformer_engine", "timm", "natten2d"] = "transformer_engine",
 ) -> dict:
     """
     Convert HealDA DiT state dict to PNM DiT format.
@@ -396,14 +455,24 @@ def convert_healda_state_dict(
     new_state_dict = {}
     is_unconditional = condition_dim == 0
     
+    qkv_buffers: dict[int, dict[str, torch.Tensor]] = {}
+
     for old_key, value in old_state_dict.items():
         # Handle transformer blocks
         if old_key.startswith("transformer_blocks."):
             # Extract block index
             parts = old_key.split(".")
             block_idx = int(parts[1])
-            
-            new_key = map_healda_to_pnm_block_keys(old_key, block_idx)
+
+            if attention_backend == "timm" and parts[2] == "attn1" and parts[3] in {"to_q", "to_k", "to_v"}:
+                qkv_buffers.setdefault(block_idx, {})[f"{parts[3]}.{parts[4]}"] = value
+                continue
+
+            new_key = map_healda_to_pnm_block_keys(
+                old_key,
+                block_idx,
+                attention_backend=attention_backend,
+            )
             # VIT mode: [n, 0] weights are kept as-is (model now supports condition_dim=0)
             new_state_dict[new_key] = value
             
@@ -446,5 +515,21 @@ def convert_healda_state_dict(
         else:
             # Pass through other keys unchanged  
             new_state_dict[old_key] = value
+
+    if attention_backend == "timm":
+        for block_idx, parts in qkv_buffers.items():
+            q_weight = parts.get("to_q.weight")
+            k_weight = parts.get("to_k.weight")
+            v_weight = parts.get("to_v.weight")
+            q_bias = parts.get("to_q.bias")
+            k_bias = parts.get("to_k.bias")
+            v_bias = parts.get("to_v.bias")
+            if q_weight is None or k_weight is None or v_weight is None:
+                raise ValueError(f"Missing q/k/v weights for block {block_idx} while building timm qkv.")
+            qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
+            new_state_dict[f"dit.blocks.{block_idx}.attention.attn_op.qkv.weight"] = qkv_weight
+            if q_bias is not None and k_bias is not None and v_bias is not None:
+                qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
+                new_state_dict[f"dit.blocks.{block_idx}.attention.attn_op.qkv.bias"] = qkv_bias
     
     return new_state_dict

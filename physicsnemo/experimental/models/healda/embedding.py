@@ -18,7 +18,7 @@ import math
 import torch
 
 from physicsnemo.core.module import Module
-from physicsnemo.nn import PositionalEmbedding  # Reuse from PNM
+from physicsnemo.nn import PositionalEmbedding
 
 
 class FrequencyEmbedding(Module):
