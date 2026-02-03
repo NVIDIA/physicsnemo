@@ -56,13 +56,16 @@ class TestBarycentricCoordinates:
         ### Query point at centroid (1/3, 1/3)
         query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0]])
 
-        bary = compute_barycentric_coordinates(query, vertices)
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
 
         ### All barycentric coordinates should be approximately 1/3
         assert bary.shape == (1, 1, 3)
         assert torch.allclose(
             bary, torch.tensor([[[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]]]), atol=1e-6
         )
+        ### For codimension-0 (2D in 2D), reconstruction error should be 0
+        assert recon_error.shape == (1, 1)
+        assert torch.allclose(recon_error, torch.tensor([[0.0]]), atol=1e-6)
 
     def test_barycentric_coords_at_vertex(self):
         """Test barycentric coordinates when query point is at a vertex."""
@@ -72,10 +75,11 @@ class TestBarycentricCoordinates:
         ### Query point at first vertex
         query = torch.tensor([[0.0, 0.0]])
 
-        bary = compute_barycentric_coordinates(query, vertices)
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
 
         ### Should be (1, 0, 0)
         assert torch.allclose(bary, torch.tensor([[[1.0, 0.0, 0.0]]]), atol=1e-6)
+        assert torch.allclose(recon_error, torch.tensor([[0.0]]), atol=1e-6)
 
     def test_barycentric_coords_outside(self):
         """Test barycentric coordinates for point outside simplex."""
@@ -85,10 +89,12 @@ class TestBarycentricCoordinates:
         ### Query point outside the triangle
         query = torch.tensor([[2.0, 2.0]])
 
-        bary = compute_barycentric_coordinates(query, vertices)
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
 
         ### At least one coordinate should be negative
         assert (bary < 0).any()
+        ### Reconstruction error should still be 0 for codimension-0
+        assert torch.allclose(recon_error, torch.tensor([[0.0]]), atol=1e-6)
 
     def test_barycentric_coords_3d_tetrahedron(self):
         """Test barycentric coordinates for a 3D tetrahedron."""
@@ -100,13 +106,15 @@ class TestBarycentricCoordinates:
         ### Query point at centroid
         query = torch.tensor([[0.25, 0.25, 0.25]])
 
-        bary = compute_barycentric_coordinates(query, vertices)
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
 
         ### All barycentric coordinates should be 0.25
         assert bary.shape == (1, 1, 4)
         assert torch.allclose(
             bary, torch.tensor([[[0.25, 0.25, 0.25, 0.25]]]), atol=1e-6
         )
+        ### Reconstruction error should be 0 for codimension-0
+        assert torch.allclose(recon_error, torch.tensor([[0.0]]), atol=1e-6)
 
     def test_barycentric_coords_batch(self):
         """Test batched barycentric coordinate computation."""
@@ -121,10 +129,11 @@ class TestBarycentricCoordinates:
         ### Two query points
         queries = torch.tensor([[0.5, 0.5], [1.0, 1.0]])
 
-        bary = compute_barycentric_coordinates(queries, vertices)
+        bary, recon_error = compute_barycentric_coordinates(queries, vertices)
 
         ### Should have shape (2 queries, 2 cells, 3 vertices)
         assert bary.shape == (2, 2, 3)
+        assert recon_error.shape == (2, 2)
 
 
 class TestFindContainingCells:
@@ -463,6 +472,208 @@ class TestProjectionOntoNearestCell:
         assert torch.allclose(result["temperature"][0], torch.tensor(100.0))
 
 
+### Tests for Codimension != 0 Manifolds ###
+
+
+class TestCodimensionNonZero:
+    """Tests for barycentric coordinates and containment on codimension != 0 manifolds.
+
+    These tests cover the case where the manifold dimension is less than the spatial
+    dimension, e.g., 2D triangles embedded in 3D space. The key fix ensures that
+    points far from the manifold are not incorrectly reported as "inside" a cell.
+    """
+
+    def test_triangle_in_3d_on_plane(self):
+        """Test barycentric coordinates for 2D triangle in 3D, query on the plane."""
+        ### Triangle in the z=0 plane
+        vertices = torch.tensor(
+            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
+        )
+
+        ### Query point at centroid, on the plane
+        query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, 0.0]])
+
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
+
+        ### Barycentric coordinates should be approximately 1/3 each
+        assert bary.shape == (1, 1, 3)
+        assert torch.allclose(
+            bary, torch.tensor([[[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]]]), atol=1e-6
+        )
+        ### Reconstruction error should be 0 (point is on the plane)
+        assert recon_error.shape == (1, 1)
+        assert torch.allclose(recon_error, torch.tensor([[0.0]]), atol=1e-6)
+
+    def test_triangle_in_3d_slightly_off_plane(self):
+        """Test barycentric coordinates for 2D triangle in 3D, query slightly off plane."""
+        ### Triangle in the z=0 plane
+        vertices = torch.tensor(
+            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
+        )
+
+        ### Query point at centroid but slightly above the plane
+        small_offset = 1e-7
+        query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, small_offset]])
+
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
+
+        ### Barycentric coordinates should still be approximately 1/3 each
+        assert torch.allclose(
+            bary, torch.tensor([[[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]]]), atol=1e-5
+        )
+        ### Reconstruction error should be equal to the z-offset
+        assert torch.allclose(recon_error, torch.tensor([[small_offset]]), atol=1e-10)
+
+    def test_triangle_in_3d_far_from_plane(self):
+        """Test barycentric coordinates for 2D triangle in 3D, query far from plane."""
+        ### Triangle in the z=0 plane
+        vertices = torch.tensor(
+            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
+        )
+
+        ### Query point at centroid projection but 1000 units above the plane
+        large_offset = 1000.0
+        query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, large_offset]])
+
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
+
+        ### Barycentric coordinates should still be approximately 1/3 each
+        # (they represent the projection onto the plane)
+        assert torch.allclose(
+            bary, torch.tensor([[[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]]]), atol=1e-5
+        )
+        ### Reconstruction error should be large (equal to the z-offset)
+        assert torch.allclose(
+            recon_error, torch.tensor([[large_offset]]), atol=1e-3
+        )
+
+    def test_find_containing_cells_triangle_in_3d_rejects_far_points(self):
+        """Test that find_containing_cells rejects points far from codim != 0 manifolds.
+
+        This is the key test for the bug fix: points far from the manifold should
+        not be reported as "inside" any cell, even if their projection onto the
+        manifold would be inside.
+        """
+        ### Triangle mesh in z=0 plane
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Query point at centroid projection but 1000 units above
+        query_far = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, 1000.0]])
+
+        cell_indices, bary = find_containing_cells(mesh, query_far)
+
+        ### Should NOT find a containing cell (point is too far from the plane)
+        assert cell_indices[0] == -1
+        assert torch.isnan(bary[0]).all()
+
+    def test_find_containing_cells_triangle_in_3d_accepts_near_points(self):
+        """Test that find_containing_cells accepts points very close to the manifold."""
+        ### Triangle mesh in z=0 plane
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Query point at centroid, on the plane
+        query_on_plane = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, 0.0]])
+
+        cell_indices, bary = find_containing_cells(mesh, query_on_plane)
+
+        ### Should find the containing cell
+        assert cell_indices[0] == 0
+        assert (bary[0] >= 0).all()
+        assert torch.allclose(bary[0].sum(), torch.tensor(1.0))
+
+    def test_find_containing_cells_triangle_in_3d_with_tolerance(self):
+        """Test that tolerance controls acceptance of slightly off-plane points."""
+        ### Triangle mesh in z=0 plane
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(points=points, cells=cells)
+
+        offset = 0.01  # 1cm offset
+        query = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, offset]])
+
+        ### With small tolerance, should reject
+        cell_indices_small_tol, _ = find_containing_cells(
+            mesh, query, tolerance=1e-6
+        )
+        assert cell_indices_small_tol[0] == -1
+
+        ### With larger tolerance, should accept
+        cell_indices_large_tol, bary = find_containing_cells(
+            mesh, query, tolerance=0.1  # 10cm tolerance
+        )
+        assert cell_indices_large_tol[0] == 0
+        assert (bary[0] >= -0.1).all()
+
+    def test_find_all_containing_cells_triangle_in_3d_rejects_far_points(self):
+        """Test find_all_containing_cells rejects far points for codim != 0."""
+        ### Triangle mesh in z=0 plane
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Query point far above the plane
+        query_far = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, 1000.0]])
+
+        containing = find_all_containing_cells(mesh, query_far)
+
+        ### Should find no containing cells
+        assert len(containing[0]) == 0
+
+    def test_sample_data_triangle_in_3d_rejects_far_points(self):
+        """Test that sample_data_at_points returns NaN for far points on codim != 0."""
+        ### Triangle mesh in z=0 plane with cell data
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            cell_data={"temperature": torch.tensor([100.0])},
+        )
+
+        ### Query point far above the plane
+        query_far = torch.tensor([[1.0 / 3.0, 1.0 / 3.0, 1000.0]])
+
+        result = sample_data_at_points(mesh, query_far, data_source="cells")
+
+        ### Should be NaN (point is outside the mesh tolerance)
+        assert torch.isnan(result["temperature"][0])
+
+    def test_sample_data_triangle_in_3d_accepts_near_points(self):
+        """Test that sample_data_at_points works for points on the manifold."""
+        ### Triangle mesh in z=0 plane with cell data
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        )
+        cells = torch.tensor([[0, 1, 2]])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            cell_data={"temperature": torch.tensor([100.0])},
+        )
+
+        ### Query point on the plane inside the triangle
+        query_on_plane = torch.tensor([[0.25, 0.25, 0.0]])
+
+        result = sample_data_at_points(mesh, query_on_plane, data_source="cells")
+
+        ### Should get the cell data value
+        assert torch.allclose(result["temperature"][0], torch.tensor(100.0))
+
+
 ### Parametrized Tests for Exhaustive Coverage ###
 
 
@@ -480,7 +691,7 @@ class TestSamplingParametrized:
         # Query at centroid
         query = torch.ones(1, n_spatial_dims, device=device) / n_verts
 
-        bary = compute_barycentric_coordinates(query, vertices)
+        bary, recon_error = compute_barycentric_coordinates(query, vertices)
 
         # All coords should be approximately 1/n_verts
         expected = torch.ones(1, 1, n_verts, device=device) / n_verts
@@ -488,6 +699,9 @@ class TestSamplingParametrized:
 
         # Verify device
         assert_on_device(bary, device)
+
+        # Reconstruction error should be 0 for codimension-0
+        assert torch.allclose(recon_error, torch.zeros(1, 1, device=device), atol=1e-6)
 
     @pytest.mark.parametrize("n_spatial_dims", [2, 3])
     def test_data_sampling_parametrized(self, n_spatial_dims, device):
