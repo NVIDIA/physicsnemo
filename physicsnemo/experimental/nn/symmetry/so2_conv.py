@@ -70,6 +70,7 @@ import torch
 from jaxtyping import Float
 from torch import nn
 
+from physicsnemo.nn import Module
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 
 __all__ = [
@@ -123,7 +124,7 @@ def _build_radial_mlp(channels_list: list[int]) -> nn.Sequential:
     return nn.Sequential(*modules)
 
 
-class SO2Convolution(nn.Module):
+class SO2Convolution(Module):
     r"""SO(2) equivariant convolution using regular, padded tensor layout.
 
     This layer performs SO(2) equivariant convolution on spherical harmonic

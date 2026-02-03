@@ -44,14 +44,14 @@ from jaxtyping import Float
 from torch import nn, Tensor
 
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
-from physicsnemo.nn import get_activation
+from physicsnemo.nn import get_activation, Module
 
 __all__ = [
     "GateActivation",
 ]
 
 
-class GateActivation(nn.Module):
+class GateActivation(Module):
     r"""Gated activation for grid-layout equivariant features.
 
     Applies different activations based on spherical harmonic degree:
