@@ -57,9 +57,8 @@ from dataclasses import dataclass
 from typing import List
 
 import torch
-
-torch.manual_seed(0)  # avoid run-to-run variation
 import torch.nn as nn
+from jaxtyping import Float
 from torch.nn import init
 
 import physicsnemo  # noqa: F401 for docs
@@ -69,16 +68,30 @@ from physicsnemo.core.module import Module
 Tensor = torch.Tensor
 
 
-def init_weights(net, init_type="normal", init_gain=0.02):
-    """Initialize network weights.
+def init_weights(
+    net: nn.Module, init_type: str = "normal", init_gain: float = 0.02
+) -> None:
+    r"""Initialize network weights.
 
-    Parameters:
-        net (network)   -- network to be initialized
-        init_type (str) -- the name of an initialization method: normal | xavier | kaiming | orthogonal
-        init_gain (float)    -- scaling factor for normal, xavier and orthogonal.
+    Parameters
+    ----------
+    net : nn.Module
+        Network to be initialized.
+    init_type : str, optional, default="normal"
+        The name of an initialization method: ``'normal'``, ``'xavier'``,
+        ``'kaiming'``, or ``'orthogonal'``.
+    init_gain : float, optional, default=0.02
+        Scaling factor for normal, xavier and orthogonal initialization.
 
-    We use 'normal' in the original pix2pix and CycleGAN paper. But xavier and kaiming might
-    work better for some applications. Feel free to try yourself.
+    Returns
+    -------
+    None
+        Modifies the network weights in-place.
+
+    Note
+    ----
+    We use ``'normal'`` in the original pix2pix and CycleGAN paper. But xavier
+    and kaiming might work better for some applications.
     """
 
     def init_func(m):  # define the initialization function
@@ -126,35 +139,61 @@ class MetaData(ModelMetaData):
 
 
 class Pix2PixUnet(Module):
-    """Convolutional encoder-decoder based on pix2pix generator models using Unet.
+    r"""Convolutional encoder-decoder based on pix2pix generator models using UNet.
 
     Note
     ----
-    The pix2pix with Unet architecture only supports 2D field.
+    The pix2pix with UNet architecture only supports 2D fields.
 
     Parameters
     ----------
     in_channels : int
-        Number of input channels
-    out_channels: Union[int, Any], optional
-        Number of output channels
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
     n_downsampling : int
-        Number of downsampling in UNet
-    filter_size : int, optional
-        Number of filters in last convolution layer, by default 64
-    norm_layer : optional
-        Normalization layer, by default nn.BatchNorm2d
-    use_dropout : bool, optional
-        Use dropout layers, by default False
+        Number of downsampling layers in UNet.
+    filter_size : int, optional, default=64
+        Number of filters in the first convolution layer.
+    norm_layer : type, optional, default=nn.BatchNorm2d
+        Normalization layer class.
+    use_dropout : bool, optional, default=False
+        Whether to use dropout layers.
+    gpu_ids : List[int], optional, default=[]
+        List of GPU IDs for DataParallel.
+
+    Forward
+    -------
+    input : torch.Tensor
+        Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(N, C_{out}, H, W)`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> import physicsnemo
+    >>> model = physicsnemo.models.pix2pix.Pix2PixUnet(
+    ...     in_channels=3,
+    ...     out_channels=3,
+    ...     n_downsampling=8,
+    ...     filter_size=64)
+    >>> input = torch.randn(1, 3, 256, 256)  # (N, C, H, W)
+    >>> output = model(input)
+    >>> output.size()
+    torch.Size([1, 3, 256, 256])
 
     Note
     ----
-    Reference:  Isola, Phillip, et al. “Image-To-Image translation with conditional
-    adversarial networks” Conference on Computer Vision and Pattern Recognition, 2017.
+    Reference: Isola, Phillip, et al. "Image-To-Image translation with conditional
+    adversarial networks" Conference on Computer Vision and Pattern Recognition, 2017.
     https://arxiv.org/abs/1611.07004
 
-    Reference: Wang, Ting-Chun, et al. “High-Resolution image synthesis and semantic
-    manipulation with conditional GANs” Conference on Computer Vision and Pattern
+    Reference: Wang, Ting-Chun, et al. "High-Resolution image synthesis and semantic
+    manipulation with conditional GANs" Conference on Computer Vision and Pattern
     Recognition, 2018. https://arxiv.org/abs/1711.11585
 
     Note
@@ -232,31 +271,77 @@ class Pix2PixUnet(Module):
             self.__patch_instance_norm_state_dict(state_dict, net, key.split("."))
         net.load_state_dict(state_dict)
 
-    def test(self, input: Tensor) -> Tensor:
+    def test(
+        self, input: Float[Tensor, "batch in_channels height width"]
+    ) -> Float[Tensor, "batch out_channels height width"]:
+        r"""Run inference without gradient computation.
+
+        Parameters
+        ----------
+        input : torch.Tensor
+            Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(N, C_{out}, H, W)`.
+        """
         with torch.no_grad():
             return self.forward(input)
 
-    def forward(self, input: Tensor) -> Tensor:
+    def forward(
+        self, input: Float[Tensor, "batch in_channels height width"]
+    ) -> Float[Tensor, "batch out_channels height width"]:
+        r"""Forward pass through the UNet generator.
+
+        Parameters
+        ----------
+        input : torch.Tensor
+            Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(N, C_{out}, H, W)`.
+        """
+        # Input validation
+        if not torch.compiler.is_compiling():
+            if input.ndim != 4:
+                raise ValueError(
+                    f"Expected 4D input tensor (N, C, H, W), "
+                    f"got {input.ndim}D tensor with shape {tuple(input.shape)}"
+                )
+
         return self.netG(input)
 
 
-class UnetGenerator(nn.Module):
-    """Create a Unet-based generator.
+class UnetGenerator(Module):
+    r"""Create a UNet-based generator.
 
     Parameters
     ----------
     in_channels : int
-        Number of input channels
-    out_channels: Union[int, Any], optional
-        Number of output channels
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
     n_downsampling : int
-        Number of downsampling in Unet
-    filter_size : int, optional
-        Number of filters in last convolution layer, by default 64
-    norm_layer : optional
-        Normalization layer, by default nn.BatchNorm2d
-    use_dropout : bool, optional
-        Use dropout layers, by default False
+        Number of downsampling layers in UNet.
+    filter_size : int, optional, default=64
+        Number of filters in the first convolution layer.
+    norm_layer : type, optional, default=nn.BatchNorm2d
+        Normalization layer class.
+    use_dropout : bool, optional, default=False
+        Whether to use dropout layers.
+
+    Forward
+    -------
+    input : torch.Tensor
+        Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(N, C_{out}, H, W)`.
     """
 
     def __init__(
@@ -268,7 +353,7 @@ class UnetGenerator(nn.Module):
         norm_layer=nn.BatchNorm2d,
         use_dropout: bool = False,
     ):
-        super(UnetGenerator, self).__init__()
+        super().__init__(meta=None)
 
         # construct unet structure
         unet_block = UnetSkipConnectionBlock(
@@ -323,12 +408,26 @@ class UnetGenerator(nn.Module):
             norm_layer=norm_layer,
         )  # add the outermost layer
 
-    def forward(self, input):
+    def forward(
+        self, input: Float[Tensor, "batch in_channels height width"]
+    ) -> Float[Tensor, "batch out_channels height width"]:
+        r"""Forward pass through the UNet generator.
+
+        Parameters
+        ----------
+        input : torch.Tensor
+            Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(N, C_{out}, H, W)`.
+        """
         return self.model(input)
 
 
-class UnetSkipConnectionBlock(nn.Module):
-    """A Unet submodule with skip connections block
+class UnetSkipConnectionBlock(Module):
+    r"""A UNet submodule with skip connections.
 
     Parameters
     ----------
@@ -336,18 +435,29 @@ class UnetSkipConnectionBlock(nn.Module):
         Number of filters in the outer conv layer.
     inner_nc : int
         Number of filters in the inner conv layer.
-    input_nc: int, optional
-        Number of channels in input images/features, by default None, meaning same as outer_nc
-    submodule : UnetSkipConnectionBlock, optional
-        Previously defined submodules, by default None
-    outermost : bool, optional
-        if this module is the outermost module, by default False
-    innermost : bool, optional
-        if this module is the innermost module, by default False
-    norm_layer: optional
-        normalization layer, by default nn.BatchNorm2d
-    use_dropout : bool, optional
-        if use dropout layers, by default False
+    input_nc : int, optional, default=None
+        Number of channels in input images/features. If ``None``, uses ``outer_nc``.
+    submodule : nn.Module, optional, default=None
+        Previously defined submodule to nest inside this block.
+    outermost : bool, optional, default=False
+        If ``True``, this module is the outermost layer.
+    innermost : bool, optional, default=False
+        If ``True``, this module is the innermost layer.
+    norm_layer : type, optional, default=nn.BatchNorm2d
+        Normalization layer class.
+    use_dropout : bool, optional, default=False
+        Whether to use dropout layers.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor. For outermost block: :math:`(N, C_{out}, H', W')`.
+        For inner blocks: :math:`(N, C_{in} + C_{inner}, H, W)` due to skip connection.
     """
 
     def __init__(
@@ -361,7 +471,7 @@ class UnetSkipConnectionBlock(nn.Module):
         norm_layer=nn.BatchNorm2d,
         use_dropout: bool = False,
     ):
-        super().__init__()
+        super().__init__(meta=None)
         self.outermost = outermost
         if isinstance(norm_layer, functools.partial):
             use_bias = norm_layer.func == nn.InstanceNorm2d
@@ -410,8 +520,24 @@ class UnetSkipConnectionBlock(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch channels height width"]
+    ) -> Float[Tensor, "batch out_channels height width"]:
+        r"""Forward pass with skip connection.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape :math:`(N, C_{in}, H, W)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor with skip connection concatenated for inner blocks.
+        """
         if self.outermost:
+            # Outermost block: no skip connection
             return self.model(x)
-        else:  # add skip connections
-            return torch.cat([x, self.model(x)], 1)
+        else:
+            # Inner blocks: concatenate input with output for skip connection
+            return torch.cat([x, self.model(x)], 1)  # (N, C_in + C_out, H, W)

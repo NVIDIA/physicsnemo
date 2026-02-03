@@ -58,6 +58,7 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
@@ -83,57 +84,70 @@ class MetaData(ModelMetaData):
 
 
 class Pix2Pix(Module):
-    """Convolutional encoder-decoder based on pix2pix generator models.
+    r"""Convolutional encoder-decoder based on pix2pix generator models.
 
     Note
     ----
     The pix2pix architecture supports options for 1D, 2D and 3D fields which can
-    be constroled using the `dimension` parameter.
+    be controlled using the ``dimension`` parameter.
 
     Parameters
     ----------
     in_channels : int
-        Number of input channels
-    out_channels: Union[int, Any], optional
-        Number of output channels
+        Number of input channels.
+    out_channels : int
+        Number of output channels.
     dimension : int
         Model dimensionality (supports 1, 2, 3).
-    conv_layer_size : int, optional
-        Latent channel size after first convolution, by default 64
-    n_downsampling : int, optional
-        Number of downsampling blocks, by default 3
-    n_upsampling : int, optional
-        Number of upsampling blocks, by default 3
-    n_blocks : int, optional
-        Number of residual blocks in middle of model, by default 3
-    activation_fn : Any, optional
-        Activation function, by default "relu"
-    batch_norm : bool, optional
-        Batch normalization, by default False
-    padding_type : str, optional
-        Padding type ('reflect', 'replicate' or 'zero'), by default "reflect"
+    conv_layer_size : int, optional, default=64
+        Latent channel size after first convolution.
+    n_downsampling : int, optional, default=3
+        Number of downsampling blocks.
+    n_upsampling : int, optional, default=3
+        Number of upsampling blocks.
+    n_blocks : int, optional, default=3
+        Number of residual blocks in middle of model.
+    activation_fn : str, optional, default="relu"
+        Activation function name.
+    batch_norm : bool, optional, default=False
+        Whether to use batch normalization.
+    padding_type : str, optional, default="reflect"
+        Padding type (``'reflect'``, ``'replicate'`` or ``'zero'``).
 
-    Example
+    Forward
     -------
-    >>> #2D convolutional encoder decoder
+    input : torch.Tensor
+        Input tensor of shape :math:`(N, C_{in}, *)` where :math:`*` denotes
+        spatial dimensions (1D, 2D, or 3D depending on ``dimension``).
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(N, C_{out}, *)` with the same spatial
+        dimensions as input (adjusted by upsampling/downsampling ratio).
+
+    Examples
+    --------
+    >>> import torch
+    >>> import physicsnemo
     >>> model = physicsnemo.models.pix2pix.Pix2Pix(
-    ... in_channels=1,
-    ... out_channels=2,
-    ... dimension=2,
-    ... conv_layer_size=4)
-    >>> input = torch.randn(4, 1, 32, 32) #(N, C, H, W)
+    ...     in_channels=1,
+    ...     out_channels=2,
+    ...     dimension=2,
+    ...     conv_layer_size=4)
+    >>> input = torch.randn(4, 1, 32, 32)  # (N, C, H, W)
     >>> output = model(input)
     >>> output.size()
     torch.Size([4, 2, 32, 32])
 
     Note
     ----
-    Reference:  Isola, Phillip, et al. “Image-To-Image translation with conditional
-    adversarial networks” Conference on Computer Vision and Pattern Recognition, 2017.
+    Reference: Isola, Phillip, et al. "Image-To-Image translation with conditional
+    adversarial networks" Conference on Computer Vision and Pattern Recognition, 2017.
     https://arxiv.org/abs/1611.07004
 
-    Reference: Wang, Ting-Chun, et al. “High-Resolution image synthesis and semantic
-    manipulation with conditional GANs” Conference on Computer Vision and Pattern
+    Reference: Wang, Ting-Chun, et al. "High-Resolution image synthesis and semantic
+    manipulation with conditional GANs" Conference on Computer Vision and Pattern
     Recognition, 2018. https://arxiv.org/abs/1711.11585
 
     Note
@@ -263,26 +277,61 @@ class Pix2Pix(Module):
         ]
         self.model = nn.Sequential(*model)
 
-    def forward(self, input: Tensor) -> Tensor:
+    def forward(
+        self, input: Float[Tensor, "batch in_channels *spatial"]
+    ) -> Float[Tensor, "batch out_channels *spatial"]:
+        r"""Forward pass through the encoder-decoder network.
+
+        Parameters
+        ----------
+        input : torch.Tensor
+            Input tensor of shape :math:`(N, C_{in}, *)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(N, C_{out}, *)`.
+        """
+        # Input validation
+        if not torch.compiler.is_compiling():
+            if input.ndim < 2:
+                raise ValueError(
+                    f"Expected input tensor with at least 2 dimensions (N, C, ...), "
+                    f"got {input.ndim}D tensor with shape {tuple(input.shape)}"
+                )
+
         y = self.model(input)
         return y
 
 
-class ResnetBlock(nn.Module):
-    """A simple ResNet block
+class ResnetBlock(Module):
+    r"""A simple ResNet block with skip connection.
 
     Parameters
     ----------
     dimension : int
         Model dimensionality (supports 1, 2, 3).
     channels : int
-        Number of feature channels
-    padding_type : str, optional
-        Padding type ('reflect', 'replicate' or 'zero'), by default "reflect"
-    activation : nn.Module, optional
-        Activation function, by default nn.ReLU()
-    use_batch_norm : bool, optional
-        Batch normalization, by default False
+        Number of feature channels.
+    padding_type : str, optional, default="reflect"
+        Padding type (``'reflect'``, ``'replicate'`` or ``'zero'``).
+    activation : nn.Module, optional, default=nn.ReLU()
+        Activation function module.
+    use_batch_norm : bool, optional, default=False
+        Whether to use batch normalization.
+    use_dropout : bool, optional, default=False
+        Whether to use dropout (currently unused).
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(N, C, *)` where :math:`*` denotes
+        spatial dimensions.
+
+    Outputs
+    -------
+    torch.Tensor
+        Output tensor of shape :math:`(N, C, *)`, same as input.
     """
 
     def __init__(
@@ -294,7 +343,7 @@ class ResnetBlock(nn.Module):
         use_batch_norm: bool = False,
         use_dropout: bool = False,
     ):
-        super().__init__()
+        super().__init__(meta=None)
         if padding_type not in [
             "reflect",
             "zero",
@@ -356,6 +405,21 @@ class ResnetBlock(nn.Module):
 
         self.conv_block = nn.Sequential(*conv_block)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch channels *spatial"]
+    ) -> Float[Tensor, "batch channels *spatial"]:
+        r"""Forward pass with residual connection.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input tensor of shape :math:`(N, C, *)`.
+
+        Returns
+        -------
+        torch.Tensor
+            Output tensor of shape :math:`(N, C, *)`.
+        """
+        # Apply convolutions and add residual connection
         out = x + self.conv_block(x)
         return out
