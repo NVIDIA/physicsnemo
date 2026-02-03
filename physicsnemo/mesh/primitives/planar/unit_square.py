@@ -24,13 +24,14 @@ import torch
 from physicsnemo.mesh.mesh import Mesh
 
 
-def load(n_subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh:
+def load(subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh:
     """Create a triangulated unit square in 2D space.
 
     Parameters
     ----------
-    n_subdivisions : int
-        Number of subdivision levels (0 = 2 triangles).
+    subdivisions : int
+        Number of subdivision levels (0 = 2 triangles). Each level quadruples
+        the number of triangles: 0 → 2, 1 → 8, 2 → 32, etc.
     device : str
         Compute device ('cpu' or 'cuda').
 
@@ -39,10 +40,10 @@ def load(n_subdivisions: int = 1, device: torch.device | str = "cpu") -> Mesh:
     Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=2.
     """
-    if n_subdivisions < 0:
-        raise ValueError(f"n_subdivisions must be non-negative, got {n_subdivisions=}")
+    if subdivisions < 0:
+        raise ValueError(f"subdivisions must be non-negative, got {subdivisions=}")
 
-    n = 2**n_subdivisions + 1
+    n = 2**subdivisions + 1
 
     # Create grid of points
     x = torch.linspace(0.0, 1.0, n, device=device)
