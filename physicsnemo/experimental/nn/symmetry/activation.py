@@ -33,7 +33,7 @@ laid out and thus how computation is performed.
 Classes
 -------
 GateActivation
-    Gated activation applying SiLU to l=0 and learned gating to l>0.
+    Gated activation applying a nonlinearity to l=0 and learned gating to l>0.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ class GateActivation(nn.Module):
     r"""Gated activation for grid-layout equivariant features.
 
     Applies different activations based on spherical harmonic degree:
-    - l=0 (scalars): SiLU activation
+    - l=0 (scalars): Nonlinear activation
     - l>0 (vectors/tensors): Multiplication by learned gates passed through sigmoid
 
     This preserves SO(2) equivariance because:
@@ -207,7 +207,7 @@ class GateActivation(nn.Module):
         -------
         Float[Tensor, "batch lmax_plus_1 mmax_plus_1 2 channels"]
             Activated features with shape [batch, lmax+1, mmax+1, 2, channels].
-            - l=0 positions have SiLU applied
+            - l=0 positions have a nonlinearity applied
             - l>0 positions are scaled by sigmoid(gates)
             - Invalid (l,m) positions (where m > l) are zero
             - m=0 imaginary components are zero
@@ -254,7 +254,7 @@ class GateActivation(nn.Module):
         lgt0_mask = 1.0 - self.l0_mask
 
         # Apply activations using masks (no branching for torch.compile compatibility)
-        # l=0: SiLU activation (scalar features)
+        # l=0: nonlinear activation (scalar features)
         # l>0: gate multiplication (preserves equivariance)
         output = (
             self.scalar_act(x_features) * self.l0_mask  # l=0 contribution
