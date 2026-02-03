@@ -196,3 +196,18 @@ def seed_random_state():
         torch.cuda.manual_seed_all(SEED)
 
     yield
+
+
+@pytest.fixture(autouse=True, scope="function")
+def reset_dynamo_state():
+    """Reset torch._dynamo state after each test.
+
+    This ensures test isolation by cleaning up dynamo's compiled function cache
+    and resetting configuration options like error_on_recompile. Without this,
+    tests that set error_on_recompile=True can cause subsequent tests to fail
+    when they trigger recompilation with different tensor shapes.
+    """
+    yield
+    # Reset after test completes
+    torch._dynamo.reset()
+    torch._dynamo.config.error_on_recompile = False

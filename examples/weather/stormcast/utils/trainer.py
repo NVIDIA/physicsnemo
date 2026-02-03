@@ -24,8 +24,8 @@ import torch
 import psutil
 from physicsnemo.core import Module
 from physicsnemo.distributed import DistributedManager
-from physicsnemo.metrics.diffusion import EDMLoss, EDMLossLogUniform
-from physicsnemo.models.diffusion.training_utils import InfiniteSampler
+from physicsnemo.diffusion.metrics import EDMLoss, EDMLossLogUniform
+from physicsnemo.diffusion.utils import InfiniteSampler
 
 from physicsnemo.utils import save_checkpoint, load_checkpoint
 from physicsnemo.utils.logging import PythonLogger, RankZeroLoggingWrapper

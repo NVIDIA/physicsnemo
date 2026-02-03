@@ -67,6 +67,21 @@ def _load_state_dict_with_logging(
     return missing_keys, unexpected_keys
 
 
+def _ignore_device_buffer_keys(module, incompatible_keys):
+    """Post-hook to ignore device_buffer in missing/unexpected keys.
+
+    The device_buffer is a non-persistent buffer used for device tracking.
+    Old checkpoints (before v2.0.0) may have it saved (when it was persistent), and new
+    checkpoints won't have it. This hook ensures backward compatibility.
+    """
+    incompatible_keys.missing_keys[:] = [
+        k for k in incompatible_keys.missing_keys if not k.endswith("device_buffer")
+    ]
+    incompatible_keys.unexpected_keys[:] = [
+        k for k in incompatible_keys.unexpected_keys if not k.endswith("device_buffer")
+    ]
+
+
 class Module(torch.nn.Module):
     """The base class for all network models in PhysicsNeMo.
 
@@ -209,8 +224,10 @@ class Module(torch.nn.Module):
     def __init__(self, meta: Union[ModelMetaData, None] = None):
         super().__init__()
         self.meta = meta
-        self.register_buffer("device_buffer", torch.empty(0))
+        self.register_buffer("device_buffer", torch.empty(0), persistent=False)
         self._setup_logger()
+        # Register hook to handle device_buffer compatibility with old checkpoints
+        self.register_load_state_dict_post_hook(_ignore_device_buffer_keys)
 
     def __init_subclass__(cls, *, register=False, **kwargs):
         """
@@ -348,7 +365,7 @@ class Module(torch.nn.Module):
                 # Otherwise, try to import the class
                 _mod = importlib.import_module(arg_module)
                 _cls = getattr(_mod, arg_dict["__name__"])
-            except AttributeError:
+            except (AttributeError, ModuleNotFoundError):
                 # Cross fingers and hope for the best (maybe the class name changed)
                 _cls = cls
 
@@ -860,12 +877,12 @@ class Module(torch.nn.Module):
 
         # Define some helper functions
         def _from_checkpoint_process(
-            cls_in,
-            args,
-            metadata,
-            override_args,
-            strict,
-            mod_prefix="",
+            cls_in: type[Module],
+            args: Dict[str, Any],
+            metadata: Dict[str, Any],
+            override_args: Dict[str, Any],
+            strict: bool,
+            mod_prefix: str = "",
         ):
             """Recursively deserialize and instantiate nested physicsnemo.Module instances.
 
@@ -935,7 +952,7 @@ class Module(torch.nn.Module):
             )
 
             # Get the class from args
-            _cls = Module._get_class_from_args(args_ptr)
+            _cls = cls_in._get_class_from_args(args_ptr)
 
             # Check if the checkpoint version is compatible with the current version
             # If not, apply backward compatibility mapping if method exists
@@ -996,7 +1013,7 @@ class Module(torch.nn.Module):
                 _cls._override_args(args_ptr["__args__"], override_args_ptr)
 
             # Instantiate the module
-            model = Module.instantiate(args_ptr)
+            model = cls_in.instantiate(args_ptr)
             return model
 
         # Download and cache the checkpoint file if needed

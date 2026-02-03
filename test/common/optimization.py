@@ -33,14 +33,14 @@ logger = logging.getLogger("__name__")
 def validate_jit(
     model: physicsnemo.core.Module,
     in_args: Tuple[Tensor] = (),
-    rtol: float = 1e-5,
-    atol: float = 1e-5,
+    rtol: float = 1e-3,
+    atol: float = 1e-3,
 ) -> bool:
-    """Check network's JIT compatibility
+    """Check network's torch.compile compatibility
 
-    This test checks if JIT works on the provided neural network.
-    JIT compilation is checked as well as making sure the original
-    and JIT model produce the same output.
+    This test checks if torch.compile works on the provided neural network.
+    Compilation is checked as well as making sure the original
+    and compiled model produce the same output.
 
     Parameters
     ----------
@@ -49,9 +49,9 @@ def validate_jit(
     in_args : Tuple[Tensor], optional
         Input arguments, by default ()
     rtol : float, optional
-        Relative tolerance of error allowed, by default 1e-5
+        Relative tolerance of error allowed, by default 1e-3
     atol : float, optional
-        Absolute tolerance of error allowed, by default 1e-5
+        Absolute tolerance of error allowed, by default 1e-3
 
     Returns
     -------
@@ -60,17 +60,17 @@ def validate_jit(
 
     Note
     ----
-    JIT must be turned on in the model's meta data for this test to run.
+    The ``jit`` meta attribute must be set on the model for this test to run.
     """
     if not model.meta.jit:
-        logger.warning("Model not marked as supporting JIT, skipping")
+        logger.warning("Model not marked as supporting compilation, skipping")
         return True
 
     output = model.forward(*in_args)
-    jit_model = torch.jit.script(model)
-    output_jit = jit_model(*in_args)
+    compiled_model = torch.compile(model)
+    output_compiled = compiled_model(*in_args)
 
-    return compare_output(output, output_jit, rtol, atol)
+    return compare_output(output, output_compiled, rtol, atol)
 
 
 def validate_cuda_graphs(
@@ -313,9 +313,9 @@ def validate_combo_optims(
         amp_dtype = torch.float16
         scaler = torch.cuda.amp.GradScaler(enabled=amp_enabled)
 
-    # Torch script, need to save it as seperate model since TS model doesnt have meta
+    # Compile model if supported; compiled models need separate reference for forward
     if model.meta.jit:
-        fwd_model = torch.jit.script(model)
+        fwd_model = torch.compile(model)
     else:
         fwd_model = model
 

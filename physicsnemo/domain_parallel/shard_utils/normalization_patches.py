@@ -14,7 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, Tuple
+
+r"""Normalization operation patches for ShardTensor.
+
+This module provides custom implementations of normalization operations
+that work correctly with ``ShardTensor`` objects. The key challenge with
+normalization on sharded tensors is that statistics (mean, variance) must
+be computed globally across all ranks, not just locally.
+
+The module provides:
+
+- ``PartialGroupNorm``: Custom autograd function for group normalization
+- ``group_norm_wrapper``: Function handler for ``torch.nn.functional.group_norm``
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
 
 import torch
 import torch.distributed as dist
@@ -32,45 +48,57 @@ aten = torch.ops.aten
 
 
 class PartialGroupNorm(torch.autograd.Function):
-    """Custom autograd function for applying group normalization to sharded tensors.
+    r"""Custom autograd function for applying group normalization to sharded tensors.
 
-    This implementation extends group normalization functionality to work with distributed
-    ShardTensor inputs by:
+    This implementation extends group normalization functionality to work with
+    distributed ShardTensor inputs by:
+
     1. Computing local statistics on each shard
     2. Synchronizing statistics across all shards
     3. Applying the global statistics to normalize each local shard
 
-    The implementation ensures that the result is mathematically equivalent to running
-    group normalization on the full, unsharded tensor, while maintaining the distributed
-    nature of the computation.
+    The implementation ensures that the result is mathematically equivalent to
+    running group normalization on the full, unsharded tensor, while maintaining
+    the distributed nature of the computation.
 
-    This class is used by the group_norm_wrapper function to intercept and handle
-    torch.nn.functional.group_norm calls with ShardTensor inputs.
+    This class is used by the ``group_norm_wrapper`` function to intercept and
+    handle ``torch.nn.functional.group_norm`` calls with ShardTensor inputs.
     """
 
     @staticmethod
     def forward(
-        ctx,
+        ctx: Any,
         input: torch.Tensor,
         spec: ShardTensorSpec,
         num_groups: int,
-        weight: Optional[torch.Tensor],
-        bias: Optional[torch.Tensor],
+        weight: torch.Tensor | None,
+        bias: torch.Tensor | None,
         eps: float,
     ) -> ShardTensor:
-        """Applies group normalization over a sharded tensor.
+        r"""Apply group normalization over a sharded tensor.
 
-        Args:
-            ctx: Autograd context
-            input: Input tensor of shape [N, C, *]
-            spec: Sharding specification for the input tensor
-            num_groups: Number of groups to separate the channels into
-            weight: Optional scale parameter of shape [C]
-            bias: Optional bias parameter of shape [C]
-            eps: Small constant added to denominator for numerical stability
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context for saving tensors/variables for backward.
+        input : torch.Tensor
+            Input tensor of shape :math:`(N, C, *)` where :math:`N` is batch size,
+            :math:`C` is number of channels.
+        spec : ShardTensorSpec
+            Sharding specification for the input tensor.
+        num_groups : int
+            Number of groups to separate the channels into.
+        weight : Optional[torch.Tensor]
+            Optional scale parameter of shape :math:`(C,)`.
+        bias : Optional[torch.Tensor]
+            Optional bias parameter of shape :math:`(C,)`.
+        eps : float
+            Small constant added to denominator for numerical stability.
 
-        Returns:
-            Normalized tensor of same shape as input
+        Returns
+        -------
+        ShardTensor
+            Normalized tensor of same shape as input.
         """
         # Save for backward
         ctx.num_groups = num_groups
@@ -163,18 +191,24 @@ class PartialGroupNorm(torch.autograd.Function):
 
     @staticmethod
     def backward(
-        ctx, grad_output: ShardTensor
-    ) -> Tuple[
-        torch.Tensor, None, None, Optional[torch.Tensor], Optional[torch.Tensor], None
+        ctx: Any, grad_output: ShardTensor
+    ) -> tuple[
+        torch.Tensor, None, None, torch.Tensor | None, torch.Tensor | None, None
     ]:
-        """Backward pass for group normalization.
+        r"""Backward pass for group normalization.
 
-        Args:
-            ctx: Autograd context containing saved variables
-            grad_output: Gradient of the loss with respect to the output
+        Parameters
+        ----------
+        ctx : torch.autograd.function.FunctionCtx
+            Autograd context containing saved variables.
+        grad_output : ShardTensor
+            Gradient of the loss with respect to the output.
 
-        Returns:
-            Tuple containing gradients for inputs, None, None, weights, bias, and None
+        Returns
+        -------
+        Tuple[torch.Tensor, None, None, Optional[torch.Tensor], Optional[torch.Tensor], None]
+            Tuple containing gradients for (input, spec, num_groups, weight, bias, eps).
+            ``None`` values indicate non-differentiable parameters.
         """
         input, weight, _ = ctx.saved_tensors
         num_groups = ctx.num_groups
@@ -209,20 +243,32 @@ class PartialGroupNorm(torch.autograd.Function):
         return grad_input, None, None, grad_weight, grad_bias, None
 
 
-def group_norm_wrapper(func, types, args, kwargs) -> ShardTensor:
-    """Wrapper for torch.nn.functional.group_norm that handles ShardTensor inputs.
+def group_norm_wrapper(
+    func: Callable,
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> ShardTensor:
+    r"""Wrapper for ``torch.nn.functional.group_norm`` that handles ShardTensor inputs.
 
     This function intercepts calls to group_norm and handles ShardTensor inputs
-    with the PartialGroupNorm custom implementation
+    with the ``PartialGroupNorm`` custom implementation.
 
-    Args:
-        func: Original group_norm function
-        types:  (unused)
-        args: Positional arguments to group_norm
-        kwargs: Keyword arguments to group_norm
+    Parameters
+    ----------
+    func : Callable
+        Original group_norm function.
+    types : Any
+        Types of the arguments (unused).
+    args : Tuple
+        Positional arguments to group_norm.
+    kwargs : dict
+        Keyword arguments to group_norm.
 
-    Returns:
-        Normalized tensor ( ShardTensor)
+    Returns
+    -------
+    ShardTensor
+        Normalized tensor with the same sharding as input.
     """
     input, num_groups, weight, bias, eps = repackage_group_norm_args(*args, **kwargs)
 
@@ -243,25 +289,35 @@ def group_norm_wrapper(func, types, args, kwargs) -> ShardTensor:
 def repackage_group_norm_args(
     input: torch.Tensor,
     num_groups: int,
-    weight: Optional[torch.Tensor] = None,
-    bias: Optional[torch.Tensor] = None,
+    weight: torch.Tensor | None = None,
+    bias: torch.Tensor | None = None,
     eps: float = 1e-05,
-    *args,
-    **kwargs,
-) -> Tuple[torch.Tensor, int, Optional[torch.Tensor], Optional[torch.Tensor], float]:
-    """Repackage arguments for group_norm function into a standardized format.
+    *args: Any,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, int, torch.Tensor | None, torch.Tensor | None, float]:
+    r"""Repackage arguments for group_norm function into a standardized format.
 
-    Args:
-        input: Input tensor of shape [N, C, *]
-        num_groups: Number of groups to separate the channels into
-        weight: Optional scale parameter of shape [C]
-        bias: Optional bias parameter of shape [C]
-        eps: Small constant added to denominator for numerical stability
-        *args: Additional positional arguments (unused)
-        **kwargs: Additional keyword arguments (unused)
+    Parameters
+    ----------
+    input : torch.Tensor
+        Input tensor of shape :math:`(N, C, *)`.
+    num_groups : int
+        Number of groups to separate the channels into.
+    weight : Optional[torch.Tensor], optional
+        Scale parameter of shape :math:`(C,)`.
+    bias : Optional[torch.Tensor], optional
+        Bias parameter of shape :math:`(C,)`.
+    eps : float, default=1e-05
+        Small constant added to denominator for numerical stability.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
 
-    Returns:
-        Tuple of (input, num_groups, weight, bias, eps)
+    Returns
+    -------
+    Tuple[torch.Tensor, int, Optional[torch.Tensor], Optional[torch.Tensor], float]
+        Tuple of (input, num_groups, weight, bias, eps).
     """
     return input, num_groups, weight, bias, eps
 

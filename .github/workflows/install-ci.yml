@@ -14,13 +14,13 @@ jobs:
   test-pip:
     name: Test with pip (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Only run pip tests for scheduled and manual dispatch jobs
+    # Only run pip tests for scheduled and manual dispatch jobs, Linux only
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
+        os: [ubuntu-latest]
+        python-version: ["3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -36,8 +36,7 @@ jobs:
         pip install -e . --group dev
 
     - name: Run tests
-      run: |
-        pytest test/
+      run: pytest test/
 
   test-uv:
     name: Test with uv (Python ${{ matrix.python-version }}, OS ${{ matrix.os }})
@@ -45,9 +44,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # For push/PR/merge_group: only ubuntu. For schedule/manual: full matrix
-        os: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","macos-latest"]') }}
-        python-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["3.12"]') || fromJSON('["3.11","3.12","3.13"]') }}
+        # Matrix varies by event type:
+        #   PR/merge_group:  ubuntu × 3.12 only (1 job)
+        #   push:            ubuntu × all Python versions (3 jobs)
+        #   schedule/manual: ubuntu × all versions + ubuntu-arm/mac/win × 3.13 (6 jobs)
+        include: >-
+          ${{
+            (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+              && fromJSON('[
+                {"os": "ubuntu-latest", "python-version": "3.12"}
+              ]')
+            || github.event_name == 'push'
+              && fromJSON('[
+                {"os": "ubuntu-latest", "python-version": "3.11"},
+                {"os": "ubuntu-latest", "python-version": "3.12"},
+                {"os": "ubuntu-latest", "python-version": "3.13"}
+              ]')
+            || fromJSON('[
+                {"os": "ubuntu-latest",    "python-version": "3.11"},
+                {"os": "ubuntu-latest",    "python-version": "3.12"},
+                {"os": "ubuntu-latest",    "python-version": "3.13"},
+                {"os": "ubuntu-24.04-arm", "python-version": "3.13"},
+                {"os": "macos-latest",     "python-version": "3.13"},
+                {"os": "windows-latest",   "python-version": "3.13"}
+              ]')
+          }}
 
     steps:
     - uses: actions/checkout@v4
@@ -56,21 +77,27 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    # Set up MSVC compiler on Windows (does nothing on Linux/macOS)
+    - uses: ilammy/msvc-dev-cmd@v1
+
     - name: Install uv
       uses: nick-fields/retry@v3
-      # uv download can be flaky.  Wrapping in a retry:
+      # uv download can be flaky. Wrapping in a retry.
       with:
         timeout_minutes: 5
         max_attempts: 3
-        command: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        command: >-
+          ${{
+            runner.os == 'Windows'
+              && 'irm https://astral.sh/uv/install.ps1 | iex;
+                  echo "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append'
+              || 'curl -LsSf https://astral.sh/uv/install.sh | sh &&
+                  echo "$HOME/.cargo/bin" >> $GITHUB_PATH'
+          }}
 
     - name: Install package with uv
-      run: |
-        # Install core dependencies and development group
-        UV_PREVIEW=1 uv sync --group dev --preview-features extra-build-dependencies
+      run: uv sync --group dev
 
     - name: Run tests
-      run: |
-        uv run pytest test/
+      run: uv run pytest test/

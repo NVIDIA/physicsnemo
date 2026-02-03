@@ -23,13 +23,13 @@ from test.conftest import requires_module
 
 @requires_module("cftime")
 def test_diffusion_step(device, pytestconfig):
-    from physicsnemo.experimental.models.diffusion.preconditioning import (
-        tEDMPrecondSuperRes,
-    )
-    from physicsnemo.models.diffusion.corrdiff_utils import diffusion_step
-    from physicsnemo.models.diffusion.sampling import (
+    from physicsnemo.diffusion.generate import diffusion_step
+    from physicsnemo.diffusion.samplers import (
         deterministic_sampler,
         stochastic_sampler,
+    )
+    from physicsnemo.experimental.models.diffusion.preconditioning import (
+        tEDMPrecondSuperRes,
     )
 
     torch._dynamo.reset()

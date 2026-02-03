@@ -124,7 +124,7 @@ def run_radius_search_module(model, data_dict, reverse_mapping):
 def test_sharded_radius_search_layer_forward(
     distributed_mesh, shard_points, shard_grid, reverse_mapping
 ):
-    from physicsnemo.nn.ball_query import BQWarp
+    from physicsnemo.nn import BQWarp
 
     dm = DistributedManager()
 

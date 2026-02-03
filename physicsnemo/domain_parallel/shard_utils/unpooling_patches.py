@@ -14,7 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from __future__ import annotations
+
+from typing import Any, Callable, Sequence
 
 import torch
 from torch.autograd.profiler import record_function
@@ -29,36 +31,46 @@ from physicsnemo.domain_parallel.shard_utils.halo import (
 
 
 def repackage_interpolate_args(
-    input: Union[torch.Tensor, ShardTensor],
-    size: Optional[Union[int, Tuple[int, ...]]] = None,
-    scale_factor: Optional[Union[float, Tuple[float, ...]]] = None,
+    input: torch.Tensor | ShardTensor,
+    size: int | tuple[int, ...] | None = None,
+    scale_factor: float | tuple[float, ...] | None = None,
     mode: str = "nearest",
-    align_corners: Optional[bool] = None,
-    recompute_scale_factor: Optional[bool] = None,
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
     antialias: bool = False,
     *args: Any,
     **kwargs: Any,
-) -> Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]:
-    """Repackages interpolation arguments into standard format.
+) -> tuple[torch.Tensor | ShardTensor, dict[str, Any]]:
+    r"""Repackage interpolation arguments into standard format.
 
-    For allowed modes, and details on other arguments, see upstream pytorch documentation:
-    https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.interpolate.html
+    For allowed modes, and details on other arguments, see upstream PyTorch documentation:
+    `torch.nn.functional.interpolate <https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.interpolate.html>`_.
 
-    Args:
-        input: Input tensor to interpolate
-        size: Output spatial size
-        scale_factor: Multiplier for spatial size
-        mode: Algorithm used for upsampling
-        align_corners: Geometrically, whether corners are aligned
-        recompute_scale_factor: Whether to recompute scale_factor
-        antialias: Whether to use anti-aliasing
-        *args: Additional positional args (unused)
-        **kwargs: Additional keyword args (unused)
+    Parameters
+    ----------
+    input : Union[torch.Tensor, ShardTensor]
+        Input tensor to interpolate.
+    size : Optional[Union[int, Tuple[int, ...]]], optional
+        Output spatial size.
+    scale_factor : Optional[Union[float, Tuple[float, ...]]], optional
+        Multiplier for spatial size.
+    mode : str, default="nearest"
+        Algorithm used for upsampling.
+    align_corners : Optional[bool], optional
+        Geometrically, whether corners are aligned.
+    recompute_scale_factor : Optional[bool], optional
+        Whether to recompute scale_factor.
+    antialias : bool, default=False
+        Whether to use anti-aliasing.
+    *args : Any
+        Additional positional arguments (unused).
+    **kwargs : Any
+        Additional keyword arguments (unused).
 
-    Returns:
-        Tuple containing:
-        - Input tensor
-        - Dict of interpolation configuration parameters
+    Returns
+    -------
+    Tuple[Union[torch.Tensor, ShardTensor], Dict[str, Any]]
+        Tuple containing (input tensor, dict of interpolation configuration parameters).
     """
     # Package all non-tensor parameters into a kwargs dictionary
     return_kwargs = {
@@ -74,16 +86,21 @@ def repackage_interpolate_args(
 
 
 def compute_interpolate_output_shape(
-    input_shape: Tuple[int, ...], interp_kwargs: Dict[str, Any]
-) -> Tuple[int, ...]:
-    """Compute the output shape of an interpolation operation.
+    input_shape: tuple[int, ...], interp_kwargs: dict[str, Any]
+) -> tuple[int, ...]:
+    r"""Compute the output shape of an interpolation operation.
 
-    Args:
-        input_shape: Shape of the input tensor
-        interp_kwargs: Keyword arguments for the interpolation operation
+    Parameters
+    ----------
+    input_shape : Tuple[int, ...]
+        Shape of the input tensor.
+    interp_kwargs : Dict[str, Any]
+        Keyword arguments for the interpolation operation.
 
-    Returns:
-        tuple: Output shape after interpolation operation
+    Returns
+    -------
+    Tuple[int, ...]
+        Output shape after interpolation operation.
     """
     size = interp_kwargs.get("size")
     scale_factor = interp_kwargs.get("scale_factor")
@@ -119,19 +136,25 @@ def compute_interpolate_output_shape(
 
 
 def compute_halo_sizes(
-    input_shape: Tuple[int, ...],
+    input_shape: tuple[int, ...],
     placements: Sequence[Any],
-    interp_kwargs: Dict[str, Any],
-) -> Dict[int, Tuple[int, int]]:
-    """Compute the necessary halo sizes for different interpolation modes.
+    interp_kwargs: dict[str, Any],
+) -> dict[int, tuple[int, int]]:
+    r"""Compute the necessary halo sizes for different interpolation modes.
 
-    Args:
-        input_shape: Shape of the input tensor
-        placements: Placements from the ShardTensor spec
-        interp_kwargs: Keyword arguments for the interpolation operation
+    Parameters
+    ----------
+    input_shape : Tuple[int, ...]
+        Shape of the input tensor.
+    placements : Sequence[Any]
+        Placements from the ShardTensor spec.
+    interp_kwargs : Dict[str, Any]
+        Keyword arguments for the interpolation operation.
 
-    Returns:
-        dict: Halo sizes for each sharded dimension
+    Returns
+    -------
+    Dict[int, Tuple[int, int]]
+        Halo sizes for each sharded dimension.
     """
     mode = interp_kwargs.get("mode", "nearest")
 
@@ -164,17 +187,22 @@ def compute_halo_sizes(
 
 def compute_halo_configs_from_interpolate_args(
     input: ShardTensor,
-    interp_kwargs: Dict[str, Any],
-) -> List[HaloConfig]:
-    """Compute halo configurations for a sharded tensor based on interpolation arguments.
+    interp_kwargs: dict[str, Any],
+) -> list[HaloConfig]:
+    r"""Compute halo configurations for a sharded tensor based on interpolation arguments.
 
-    Args:
-        input: The sharded tensor that will be used in interpolation
-        interp_kwargs: Dictionary of interpolation arguments including mode, size,
-                      scale_factor, etc.
+    Parameters
+    ----------
+    input : ShardTensor
+        The sharded tensor that will be used in interpolation.
+    interp_kwargs : Dict[str, Any]
+        Dictionary of interpolation arguments including mode, size,
+        scale_factor, etc.
 
-    Returns:
-        List of HaloConfig objects for each sharded dimension
+    Returns
+    -------
+    List[HaloConfig]
+        List of HaloConfig objects for each sharded dimension.
     """
     # Get the placements from the input tensor's spec
     placements = input._spec.placements
@@ -208,25 +236,30 @@ def compute_halo_configs_from_interpolate_args(
 
 def partial_interpolate_nd(
     input: ShardTensor,
-    interp_kwargs: Dict[str, Any],
+    interp_kwargs: dict[str, Any],
 ) -> ShardTensor:
-    """Perform a convolution on a sharded tensor with halo exchange.
+    r"""Perform interpolation on a sharded tensor with halo exchange.
 
-    This high-level, differentiable function computes a convolution on a sharded tensor
+    This high-level, differentiable function computes interpolation on a sharded tensor
     by performing these steps:
+
     1. Calculate the size of halos needed
     2. Apply halo padding (differentiable)
-    3. Perform convolution on the padded tensor with padding=0 on sharded dimensions
-    4. Return the result as a ShardTensor
+    3. Perform interpolation on the padded tensor
+    4. Remove halos from the output
+    5. Return the result as a ShardTensor
 
-    Args:
-        input: The sharded input tensor
-        weight: Convolution filter weights
-        bias: Optional bias parameter
-        conv_kwargs: Dictionary of convolution parameters (stride, padding, etc.)
+    Parameters
+    ----------
+    input : ShardTensor
+        The sharded input tensor.
+    interp_kwargs : Dict[str, Any]
+        Dictionary of interpolation parameters (size, scale_factor, mode, etc.).
 
-    Returns:
-        Resulting ShardTensor after convolution operation
+    Returns
+    -------
+    ShardTensor
+        Resulting ShardTensor after interpolation operation.
     """
 
     # This will produce one config per sharded dim
@@ -281,26 +314,29 @@ def partial_interpolate_nd(
 
 def generic_interpolate_wrapper(
     func: Callable,
-    types: Tuple[Any, ...],
-    args: Tuple[Any, ...],
-    kwargs: Dict[str, Any],
+    types: tuple[Any, ...],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
 ) -> ShardTensor:
-    """Wrapper for torch.nn.functional.interpolate.
+    r"""Wrapper for ``torch.nn.functional.interpolate``.
 
-    Handles both distributed ShardTensor inputs.
-    For ShardTensor inputs, handles distributed interpolation with halo exchanges.
+    Handles distributed ShardTensor inputs with halo exchanges.
 
-    Args:
-        wrapped: Original interpolation function being wrapped
-        instance: Instance the wrapped function is bound to
-        args: Positional arguments for interpolation
-        kwargs: Keyword arguments for interpolation
+    Parameters
+    ----------
+    func : Callable
+        Original interpolation function being wrapped.
+    types : Tuple[Any, ...]
+        Types of the arguments (unused).
+    args : Tuple[Any, ...]
+        Positional arguments for interpolation.
+    kwargs : Dict[str, Any]
+        Keyword arguments for interpolation.
 
-    Returns:
-        Interpolation result as or ShardTensor
-
-    Raises:
-        UndeterminedShardingError: If input tensor types are invalid
+    Returns
+    -------
+    ShardTensor
+        Interpolation result as ShardTensor.
     """
     # Extract the input tensor and package the remaining arguments
     input, interp_kwargs = repackage_interpolate_args(*args, **kwargs)

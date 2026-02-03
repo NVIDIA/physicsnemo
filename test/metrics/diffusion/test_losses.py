@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import torch
 
-from physicsnemo.metrics.diffusion import (
+from physicsnemo.diffusion.metrics import (
     EDMLoss,
     EDMLossLogUniform,
     RegressionLoss,
@@ -28,11 +28,9 @@ from physicsnemo.metrics.diffusion import (
     VELoss_dfsr,
     VPLoss,
 )
-from physicsnemo.models.diffusion import (
-    CorrDiffRegressionUNet,
-    EDMPrecondSuperResolution,
-)
-from physicsnemo.models.diffusion.patching import RandomPatching2D
+from physicsnemo.diffusion.multi_diffusion import RandomPatching2D
+from physicsnemo.diffusion.preconditioners import EDMPrecondSuperResolution
+from physicsnemo.models.diffusion_unets import CorrDiffRegressionUNet
 
 # VPLoss tests
 

@@ -29,7 +29,7 @@ from physicsnemo.models.graphcast.utils.graph_utils import (
     polar_angle,
     xyz2latlon,
 )
-from physicsnemo.nn.gnn_layers.utils import PYG_AVAILABLE, GraphType
+from physicsnemo.nn.module.gnn_layers.utils import PYG_AVAILABLE, GraphType
 
 TORCH_SPARSE_AVAILABLE = check_version_spec("torch_sparse", hard_fail=False)
 

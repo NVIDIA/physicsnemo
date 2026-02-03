@@ -63,7 +63,7 @@ This document is structured in two main sections:
 
 | Rule ID | Summary | Apply When |
 |---------|---------|------------|
-| [`MOD-000a`](#mod-000a-reusable-layersblocks-belong-in-physicsnemonn) | Reusable layers/blocks belong in physicsnemo.nn | Creating or refactoring reusable layer classes |
+| [`MOD-000a`](#mod-000a-reusable-layersblocks-belong-in-physicsnemonn) | Reusable layers/blocks belong in physicsnemo.nn (stored in physicsnemo/nn/module) | Creating or refactoring reusable layer classes |
 | [`MOD-000b`](#mod-000b-complete-models-belong-in-physicsnemomodels) | Complete models belong in physicsnemo.models | Creating or refactoring complete model classes |
 | [`MOD-001`](#mod-001-use-physicsnemomodule-as-model-base-classes) | Use physicsnemo.Module as model base classes | Creating or refactoring new model classes |
 | [`MOD-002a`](#mod-002a-new-models-and-layers-belong-in-physicsnemoexperimental) | New models and layers belong in physicsnemo.experimental | Creating new model or layer classes |
@@ -102,8 +102,10 @@ This document is structured in two main sections:
 **Description:**
 
 Reusable layers that are the building blocks of more complex architectures
-should go into `physicsnemo/nn`. Those include for instance `FullyConnected`,
-various variants of attention layers, `UNetBlock` (a block of a U-Net), etc.
+should live in `physicsnemo/nn/module` and be re-exported from
+`physicsnemo/nn/__init__.py` so users can still import them from
+`physicsnemo.nn`. Those include, for instance, `FullyConnected`, various variants
+of attention layers, and `UNetBlock` (a block of a U-Net).
 
 All layers that are directly exposed to the user should be imported in
 `physicsnemo/nn/__init__.py`, such that they can be used as follows:
@@ -125,13 +127,13 @@ and promotes code reuse across different models.
 **Example:**
 
 ```python
-# Good: Reusable layer in physicsnemo/nn/attention.py
+# Good: Reusable layer in physicsnemo/nn/module/attention_layers.py
 class MultiHeadAttention(Module):
     """A reusable attention layer that can be used in various architectures."""
     pass
 
 # Good: Import in physicsnemo/nn/__init__.py
-from physicsnemo.nn.attention import MultiHeadAttention
+from physicsnemo.nn import MultiHeadAttention
 
 # Good: Example-specific layer in examples/weather/utils/nn.py
 class WeatherSpecificLayer(Module):
@@ -145,7 +147,7 @@ class WeatherSpecificLayer(Module):
 # WRONG: Reusable layer placed in physicsnemo/models/
 # File: physicsnemo/models/attention.py
 class MultiHeadAttention(Module):
-    """Should be in physicsnemo/nn/ not physicsnemo/models/"""
+    """Should be in physicsnemo/nn/module/ not physicsnemo/models/"""
     pass
 ```
 
@@ -192,10 +194,10 @@ from physicsnemo.models.transformer import TransformerModel
 **Anti-pattern:**
 
 ```python
-# WRONG: Complete model placed in physicsnemo/nn/
-# File: physicsnemo/nn/transformer.py
+# WRONG: Complete model placed in physicsnemo/nn/module/
+# File: physicsnemo/nn/module/transformer_model.py
 class TransformerModel(Module):
-    """Should be in physicsnemo/models/ not physicsnemo/nn/"""
+    """Should be in physicsnemo/models/ not physicsnemo/nn/module/"""
     pass
 ```
 
@@ -247,16 +249,16 @@ class MyModel(nn.Module):
 
 **Description:**
 
-For the vast majority of models, new classes are created either in
-`physicsnemo/experimental/nn` for reusable layers, or in
-`physicsnemo/experimental/models` for more complete models. The `experimental`
-folder is used to store models that are still under development (beta or alpha
-releases), where backward compatibility is not guaranteed.
+For the vast majority of models, new classes are created in
+`physicsnemo/experimental/models` (including reusable layers). The
+`experimental` folder is used to store models that are still under development
+(beta or alpha releases), where backward compatibility is not guaranteed.
 
 One exception is when the developer is highly confident that the model is
 sufficiently mature and applicable to many domains or use cases. In this case
-the model class can be created in the `physicsnemo/nn` or `physicsnemo/models`
-folders directly, and backward compatibility is guaranteed.
+the model class can be created in `physicsnemo/nn/module` or
+`physicsnemo/models` directly (and re-exported from `physicsnemo/nn`), and
+backward compatibility is guaranteed.
 
 Another exception is when the model class is highly specific to a single
 example. In this case, it may be acceptable to place it in a module specific to
@@ -264,9 +266,9 @@ the example code, such as `examples/<example_name>/utils/nn.py`.
 
 After staying in experimental for a sufficient amount of time (typically at
 least 1 release cycle), the model class can be promoted to production. It is
-then moved to the `physicsnemo/nn` or `physicsnemo/models` folders, based on
-whether it's a reusable layer (MOD-000a) or complete model (MOD-000b). During
-the production stage, backward compatibility is guaranteed.
+then moved to `physicsnemo/nn/module` or `physicsnemo/models`, based on whether
+it's a reusable layer (MOD-000a) or complete model (MOD-000b). During the
+production stage, backward compatibility is guaranteed.
 
 **Note:** Per MOD-008a, MOD-008b, and MOD-008c, it is forbidden to move a model
 out of the experimental stage/directory without the required CI tests.
@@ -309,8 +311,9 @@ class BrandNewModel(Module):
 
 **Description:**
 
-For a model class being deprecated in `physicsnemo/nn` or `physicsnemo/models`,
-the developer must add warning messages indicating that the model class is
+For a model class being deprecated in `physicsnemo/nn/module` or
+`physicsnemo/models`, the developer must add warning messages indicating that
+the model class is
 deprecated and will be removed in a future release.
 
 The warning message should be clear and concise, explaining why the model class
@@ -1306,9 +1309,9 @@ def forward(
 
 **Description:**
 
-For any model in `physicsnemo/nn` or `physicsnemo/models`, adding new required
-parameters (parameters without default values) to `__init__` or any public
-method is strictly forbidden. This breaks backward compatibility.
+For any model in `physicsnemo/nn/module` or `physicsnemo/models`, adding new
+required parameters (parameters without default values) to `__init__` or any
+public method is strictly forbidden. This breaks backward compatibility.
 
 New parameters must have default values to ensure existing code and checkpoints
 continue to work. If a new parameter is truly required, increment the model
@@ -1363,8 +1366,9 @@ class MyModel(Module):
 
 **Description:**
 
-For any model in `physicsnemo/nn` or `physicsnemo/models`, removing or renaming
-parameters is strictly forbidden without proper backward compatibility support.
+For any model in `physicsnemo/nn/module` or `physicsnemo/models`, removing or
+renaming parameters is strictly forbidden without proper backward compatibility
+support.
 
 If a parameter must be renamed or removed, the developer must:
 1. Increment `__model_checkpoint_version__`
@@ -1447,7 +1451,7 @@ class MyModel(Module):
 
 **Description:**
 
-For any model in `physicsnemo/nn` or `physicsnemo/models`, changing the return
+For any model in `physicsnemo/nn/module` or `physicsnemo/models`, changing the return
 type of any public method (including `forward`) is strictly forbidden. This
 includes:
 - Changing from returning a single value to returning a tuple
@@ -1504,7 +1508,7 @@ class MyModel(Module):
 
 **Description:**
 
-Every model in `physicsnemo/nn` or `physicsnemo/models` must have tests that
+Every model in `physicsnemo/nn/module` or `physicsnemo/models` must have tests that
 verify model instantiation and all public attributes (excluding buffers and
 parameters).
 

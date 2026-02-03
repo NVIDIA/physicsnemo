@@ -14,18 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-The tests here validate the correctness of the convolution operator over
-sharded inputs.  We check conv1d, conv2d, conv3d, and the transposed
-operations as well.  For 2d and 3d, we test on both 1D and 2D sharding.
+r"""Tests for convolution operations on sharded tensors.
 
-Sharding must always be over spatial dimensions (H, W, D) so the sharded
-axes are always Shard(2), Shard(3), or Shard(4).
+This module validates the correctness of convolution operators over sharded
+inputs. Tests cover ``conv1d``, ``conv2d``, ``conv3d``, and the corresponding
+transposed operations. For 2D and 3D convolutions, both 1D and 2D mesh
+sharding are tested.
 
-The channels dimension is largely irrelevant, we have a couple parameters
-for it but it just has to be non-zero.
+Sharding is always over spatial dimensions (H, W, D), so the sharded axes
+are ``Shard(2)``, ``Shard(3)``, or ``Shard(4)`` depending on the operation.
 
-Some sharded convolutions aren't well supported: these ones are xfail'd.
+Note
+----
+The channels dimension is largely irrelevant to sharding; tests include
+a couple of channel parameters but only require non-zero values.
+
+Some sharded convolution configurations are not well supported:
+
+- Even kernels require ``stride == kernel_size`` and ``padding == 0``
+- Transposed convolutions with odd kernels are not yet supported
+- Non-matching stride and kernel size combinations are not supported
+
+These unsupported cases are marked with ``pytest.xfail``.
 """
 
 import pytest

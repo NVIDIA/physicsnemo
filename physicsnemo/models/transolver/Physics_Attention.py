@@ -558,7 +558,7 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
             input_projected_fx = self.in_project_fx(x)
             input_projected_fx = rearrange(
                 input_projected_fx,
-                "b (n_heads head_dim) h w -> b (h w d) n_heads head_dim",
+                "b (n_heads head_dim) h w d -> b (h w d) n_heads head_dim",
                 head_dim=self.dim_head,
                 n_heads=self.heads,
             )

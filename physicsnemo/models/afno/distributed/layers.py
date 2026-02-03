@@ -90,7 +90,7 @@ def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0):
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
 
-@torch.jit.script
+@torch.compile
 def drop_path(
     x: torch.Tensor, drop_prob: float = 0.0, training: bool = False
 ) -> torch.Tensor:
@@ -275,7 +275,7 @@ class DistributedPatchEmbed(nn.Module):
         return x
 
 
-@torch.jit.script
+@torch.compile
 def compl_mul_add_fwd(
     a: torch.Tensor, b: torch.Tensor, c: torch.Tensor
 ) -> torch.Tensor:
@@ -289,7 +289,7 @@ def compl_mul_add_fwd(
     return res
 
 
-@torch.jit.script
+@torch.compile
 def compl_mul_add_fwd_c(
     a: torch.Tensor, b: torch.Tensor, c: torch.Tensor
 ) -> torch.Tensor:

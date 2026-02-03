@@ -27,6 +27,9 @@ from .ensemble_metrics import EnsembleMetrics
 Tensor = torch.Tensor
 
 
+# Note: Use @torch.jit.script (not @torch.compile) for functions with data-dependent
+# loops like `for i in range(num)`. torch.compile recompiles for each unique loop
+# bound, causing massive CI slowdowns when tests use varying shapes/bin counts.
 @torch.jit.script
 def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cover
     """Element-wise multi-dimensional linspace
@@ -51,10 +54,7 @@ def linspace(start: Tensor, stop: Tensor, num: int) -> Tensor:  # pragma: no cov
     # create a tensor of 'num' steps from 0 to 1
     steps = torch.arange(num + 1, dtype=torch.float32, device=start.device) / (num)
 
-    # reshape the 'steps' tensor to [-1, *([1]*start.ndim)] to allow for broadcastings
-    # - using 'steps.reshape([-1, *([1]*start.ndim)])' would be nice here but
-    #  torchscript "cannot statically infer the expected size of a list in this contex",
-    #  hence the code below
+    # reshape the 'steps' tensor to [-1, *([1]*start.ndim)] to allow for broadcasting
     for i in range(start.ndim):
         steps = steps.unsqueeze(-1)
 

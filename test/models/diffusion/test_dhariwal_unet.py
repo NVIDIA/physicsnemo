@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.diffusion import DhariwalUNet as UNet
+from physicsnemo.models.diffusion_unets import DhariwalUNet as UNet
 from test import common
 
 

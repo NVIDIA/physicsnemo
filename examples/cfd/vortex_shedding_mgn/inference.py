@@ -71,7 +71,7 @@ class MGNRollout:
             recompute_activation=cfg.recompute_activation,
         )
         if cfg.jit:
-            self.model = torch.jit.script(self.model).to(self.device)
+            self.model = torch.compile(self.model).to(self.device)
         else:
             self.model = self.model.to(self.device)
 

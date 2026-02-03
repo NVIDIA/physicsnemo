@@ -27,7 +27,7 @@ from typing import Any, Sequence
 
 import torch
 
-from physicsnemo.nn.neighbors import knn
+from physicsnemo.nn.functional import knn
 
 
 def calculate_center_of_mass(
@@ -762,7 +762,8 @@ def dict_to_device(
     Examples:
         >>> import torch
         >>> data = {"weights": torch.randn(10, 10), "filename": "model.pt"}
-        >>> gpu_data = dict_to_device(data, torch.device('cuda:0'))
+        >>> device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+        >>> gpu_data = dict_to_device(data, device)
     """
     if exclude_keys is None:
         exclude_keys = ["filename"]

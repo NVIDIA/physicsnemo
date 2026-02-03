@@ -18,7 +18,7 @@
 import pytest
 import torch
 
-from physicsnemo.models.diffusion import SongUNet as UNet
+from physicsnemo.models.diffusion_unets import SongUNet as UNet
 from test import common
 
 

@@ -21,9 +21,9 @@ import torch.nn as nn
 from torch import Tensor
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.nn.gnn_layers.mesh_edge_block import MeshEdgeBlock
-from physicsnemo.nn.gnn_layers.mesh_node_block import MeshNodeBlock
-from physicsnemo.nn.gnn_layers.utils import GraphType, set_checkpoint_fn
+from physicsnemo.nn.module.gnn_layers.mesh_edge_block import MeshEdgeBlock
+from physicsnemo.nn.module.gnn_layers.mesh_node_block import MeshNodeBlock
+from physicsnemo.nn.module.gnn_layers.utils import GraphType, set_checkpoint_fn
 
 TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 
