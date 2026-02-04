@@ -3436,21 +3436,9 @@ dependencies = [
 
 [package.optional-dependencies]
 datapipes-extras = [
-    { name = "cuml-cu13" },
-    { name = "cupy-cuda13x" },
     { name = "dask" },
-    { name = "line-profiler" },
-    { name = "mlflow" },
-    { name = "natten" },
     { name = "netcdf4" },
-    { name = "pylibraft-cu13" },
-    { name = "pyvista" },
-    { name = "scipy" },
-    { name = "stl" },
     { name = "tfrecord" },
-    { name = "transformer-engine", extra = ["pytorch"] },
-    { name = "vtk" },
-    { name = "wandb" },
 ]
 gnns = [
     { name = "cuml-cu13" },
@@ -3458,7 +3446,6 @@ gnns = [
     { name = "line-profiler" },
     { name = "mlflow" },
     { name = "natten" },
-    { name = "netcdf4" },
     { name = "pylibraft-cu13" },
     { name = "pyvista" },
     { name = "scipy" },
@@ -3467,7 +3454,6 @@ gnns = [
     { name = "torch-geometric" },
     { name = "torch-scatter" },
     { name = "torch-sparse" },
-    { name = "transformer-engine", extra = ["pytorch"] },
     { name = "vtk" },
     { name = "wandb" },
 ]
@@ -3481,12 +3467,10 @@ model-extras = [
     { name = "line-profiler" },
     { name = "mlflow" },
     { name = "natten" },
-    { name = "netcdf4" },
     { name = "pylibraft-cu13" },
     { name = "pyvista" },
     { name = "scipy" },
     { name = "stl" },
-    { name = "transformer-engine", extra = ["pytorch"] },
     { name = "vtk" },
     { name = "wandb" },
 ]
@@ -3499,7 +3483,6 @@ nn-extras = [
     { name = "pylibraft-cu13" },
     { name = "scipy" },
     { name = "stl" },
-    { name = "transformer-engine", extra = ["pytorch"] },
     { name = "vtk" },
     { name = "wandb" },
 ]
@@ -3533,11 +3516,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cftime", specifier = ">=1.6.5" },
-    { name = "cuml-cu13", marker = "extra == 'datapipes-extras'", index = "https://pypi.nvidia.com/" },
     { name = "cuml-cu13", marker = "extra == 'gnns'", index = "https://pypi.nvidia.com/" },
     { name = "cuml-cu13", marker = "extra == 'model-extras'", index = "https://pypi.nvidia.com/" },
     { name = "cuml-cu13", marker = "extra == 'nn-extras'", index = "https://pypi.nvidia.com/" },
-    { name = "cupy-cuda13x", marker = "extra == 'datapipes-extras'" },
     { name = "cupy-cuda13x", marker = "extra == 'gnns'" },
     { name = "cupy-cuda13x", marker = "extra == 'model-extras'" },
     { name = "cupy-cuda13x", marker = "extra == 'nn-extras'" },
@@ -3548,46 +3529,37 @@ requires-dist = [
     { name = "h5py", specifier = ">=3.15.1" },
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "jaxtyping", specifier = ">=0.3.3" },
-    { name = "line-profiler", marker = "extra == 'datapipes-extras'" },
     { name = "line-profiler", marker = "extra == 'gnns'" },
     { name = "line-profiler", marker = "extra == 'model-extras'" },
     { name = "line-profiler", marker = "extra == 'nn-extras'" },
     { name = "line-profiler", marker = "extra == 'utils-extras'" },
     { name = "matplotlib", marker = "extra == 'mesh-extras'", specifier = ">=3.10.7" },
-    { name = "mlflow", marker = "extra == 'datapipes-extras'" },
     { name = "mlflow", marker = "extra == 'gnns'" },
     { name = "mlflow", marker = "extra == 'model-extras'" },
     { name = "mlflow", marker = "extra == 'nn-extras'" },
     { name = "mlflow", marker = "extra == 'utils-extras'" },
-    { name = "natten", marker = "extra == 'datapipes-extras'" },
     { name = "natten", marker = "extra == 'gnns'" },
     { name = "natten", marker = "extra == 'model-extras'" },
     { name = "natten", marker = "extra == 'nn-extras'" },
     { name = "netcdf4", marker = "extra == 'datapipes-extras'" },
-    { name = "netcdf4", marker = "extra == 'gnns'" },
-    { name = "netcdf4", marker = "extra == 'model-extras'" },
     { name = "numpy", specifier = ">=1.22.4" },
     { name = "nvtx", specifier = ">=0.2.10" },
     { name = "omegaconf", specifier = ">=2.3.0" },
     { name = "onnx", specifier = ">=1.14.0" },
     { name = "packaging", specifier = ">=24.2" },
     { name = "pandas", specifier = ">=2.2.0" },
-    { name = "pylibraft-cu13", marker = "extra == 'datapipes-extras'", index = "https://pypi.nvidia.com/" },
     { name = "pylibraft-cu13", marker = "extra == 'gnns'", index = "https://pypi.nvidia.com/" },
     { name = "pylibraft-cu13", marker = "extra == 'model-extras'", index = "https://pypi.nvidia.com/" },
     { name = "pylibraft-cu13", marker = "extra == 'nn-extras'", index = "https://pypi.nvidia.com/" },
     { name = "pylibraft-cu13", marker = "extra == 'utils-extras'", index = "https://pypi.nvidia.com/" },
-    { name = "pyvista", marker = "extra == 'datapipes-extras'" },
     { name = "pyvista", marker = "extra == 'gnns'" },
     { name = "pyvista", marker = "extra == 'mesh-extras'", specifier = ">=0.46.4" },
     { name = "pyvista", marker = "extra == 'model-extras'" },
     { name = "requests", specifier = ">=2.32.2" },
     { name = "s3fs", specifier = ">=2023.5.0" },
-    { name = "scipy", marker = "extra == 'datapipes-extras'" },
     { name = "scipy", marker = "extra == 'gnns'" },
     { name = "scipy", marker = "extra == 'model-extras'" },
     { name = "scipy", marker = "extra == 'nn-extras'" },
-    { name = "stl", marker = "extra == 'datapipes-extras'" },
     { name = "stl", marker = "extra == 'gnns'" },
     { name = "stl", marker = "extra == 'model-extras'" },
     { name = "stl", marker = "extra == 'nn-extras'" },
@@ -3605,17 +3577,11 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform != 'darwin'", specifier = ">=0.19.0", index = "https://download.pytorch.org/whl/cu130" },
     { name = "torchvision", marker = "sys_platform == 'darwin'", specifier = ">=0.19.0" },
     { name = "tqdm", specifier = ">=4.60.0" },
-    { name = "transformer-engine", extras = ["pytorch"], marker = "extra == 'datapipes-extras'" },
-    { name = "transformer-engine", extras = ["pytorch"], marker = "extra == 'gnns'" },
-    { name = "transformer-engine", extras = ["pytorch"], marker = "extra == 'model-extras'" },
-    { name = "transformer-engine", extras = ["pytorch"], marker = "extra == 'nn-extras'" },
     { name = "treelib", specifier = ">=1.2.5" },
-    { name = "vtk", marker = "extra == 'datapipes-extras'" },
     { name = "vtk", marker = "extra == 'gnns'" },
     { name = "vtk", marker = "extra == 'model-extras'" },
     { name = "vtk", marker = "extra == 'nn-extras'" },
     { name = "vtk", marker = "extra == 'utils-extras'" },
-    { name = "wandb", marker = "extra == 'datapipes-extras'" },
     { name = "wandb", marker = "extra == 'gnns'" },
     { name = "wandb", marker = "extra == 'model-extras'" },
     { name = "wandb", marker = "extra == 'nn-extras'" },
@@ -5382,49 +5348,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/eb/79/72064e6a701c21830
 wheels = [
     { url = "https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl", hash = "sha256:b74e89e397b1ed28cc831db7aea759ba6640cb3de13090ca145426688ff1ac4f", size = 85359, upload-time = "2024-04-19T11:11:46.763Z" },
 ]
-
-[[package]]
-name = "transformer-engine"
-version = "2.11.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/33/44571ec584c88e1715f4c2afefc0ddd45064c7065ac1c6ffc8e832bc3ba3/transformer_engine-2.11.0-py3-none-any.whl", hash = "sha256:7ee1eae8fa6b0cb471c6066aa3555304fda8537174e5019929dc0c8655071df3", size = 723110, upload-time = "2026-01-02T09:58:23.245Z" },
-]
-
-[package.optional-dependencies]
-pytorch = [
-    { name = "transformer-engine-torch" },
-]
-
-[[package]]
-name = "transformer-engine-cu12"
-version = "2.11.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "importlib-metadata" },
-    { name = "packaging" },
-    { name = "pydantic" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/27/5c4c27cb245a3513e5ad7ccef50e2e9688996e2cc558edbbb575dfcca276/transformer_engine_cu12-2.11.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:ed5fda0925cb304d6864b451d8d012c579d5bd097bfefefca769b2704b06381a", size = 287630565, upload-time = "2026-01-02T09:56:43.645Z" },
-    { url = "https://files.pythonhosted.org/packages/fa/a2/1439bbb6bc7d4d6045bad7d213884f7be92301c0982f009e3bbafa40e4ff/transformer_engine_cu12-2.11.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:6e5c0707583b2a90b2570da6f57409c6802653e069dfec38cf07a3b77ba9b12d", size = 288159349, upload-time = "2026-01-02T09:57:56.435Z" },
-]
-
-[[package]]
-name = "transformer-engine-torch"
-version = "2.11.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "onnx" },
-    { name = "onnxscript" },
-    { name = "packaging" },
-    { name = "pydantic" },
-    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
-    { name = "torch", version = "2.10.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "sys_platform != 'darwin'" },
-    { name = "transformer-engine-cu12" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/09/42/068a40f5b213a3a8899e3885eb178776662897abed03cd725953d1106c39/transformer_engine_torch-2.11.0.tar.gz", hash = "sha256:b58d6322bdf885dfab0646da572aff9cf090b332ad470559aa58883c231e1816", size = 242065, upload-time = "2026-01-02T09:58:58.423Z" }
 
 [[package]]
 name = "treelib"
