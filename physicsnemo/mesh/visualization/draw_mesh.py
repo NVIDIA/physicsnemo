@@ -142,7 +142,7 @@ def draw_mesh(
         validate_and_process_scalars,
     )
 
-    point_scalar_values, cell_scalar_values, active_scalar_source = (
+    point_scalar_values, cell_scalar_values, active_scalar_source, scalar_label = (
         validate_and_process_scalars(
             point_scalars=point_scalars,
             cell_scalars=cell_scalars,
@@ -200,6 +200,7 @@ def draw_mesh(
             point_scalar_values=point_scalar_values,
             cell_scalar_values=cell_scalar_values,
             active_scalar_source=active_scalar_source,
+            scalar_label=scalar_label,
             show=show,
             cmap=cmap,
             vmin=vmin,
@@ -226,6 +227,7 @@ def draw_mesh(
             point_scalar_values=point_scalar_values,
             cell_scalar_values=cell_scalar_values,
             active_scalar_source=active_scalar_source,
+            scalar_label=scalar_label,
             show=show,
             cmap=cmap,
             vmin=vmin,

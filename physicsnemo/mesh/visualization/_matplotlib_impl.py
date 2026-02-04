@@ -41,6 +41,7 @@ def draw_mesh_matplotlib(
     point_scalar_values: torch.Tensor | None,
     cell_scalar_values: torch.Tensor | None,
     active_scalar_source: Literal["points", "cells", None],
+    scalar_label: str | None,
     show: bool,
     cmap: str,
     vmin: float | None,
@@ -65,6 +66,8 @@ def draw_mesh_matplotlib(
         Processed cell scalar values (1D tensor or None).
     active_scalar_source : {"points", "cells", None}
         Which scalar source is active ("points", "cells", or None).
+    scalar_label : str or None
+        Human-readable label for the colorbar.
     show : bool
         Whether to call plt.show().
     cmap : str
@@ -90,8 +93,8 @@ def draw_mesh_matplotlib(
         Matplotlib axes object.
     """
     ### Convert mesh data to numpy
-    points_np = mesh.points.cpu().numpy()
-    cells_np = mesh.cells.cpu().numpy()
+    points_np = mesh.points.cpu().detach().numpy()
+    cells_np = mesh.cells.cpu().detach().numpy()
 
     ### Determine neutral colors based on active_scalar_source
     point_neutral_color = "black"
@@ -195,7 +198,7 @@ def draw_mesh_matplotlib(
 
     ### Add colorbar if we have active scalars
     if scalar_mapper is not None:
-        plt.colorbar(scalar_mapper, ax=ax, label="Scalar Value")
+        plt.colorbar(scalar_mapper, ax=ax, label=scalar_label or "")
 
     ### Set labels and make axes equal
     if mesh.n_spatial_dims == 1:
