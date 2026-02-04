@@ -102,7 +102,7 @@ class SO3ConvolutionBlock(nn.Module):
 
     Examples
     --------
-    >>> atomwise = SO3AtomwiseBlock(
+    >>> block = SO3ConvolutionBlock(
     ...     in_channels=64,
     ...     hidden_channels=128,
     ...     lmax=4,
@@ -110,7 +110,7 @@ class SO3ConvolutionBlock(nn.Module):
     ... )
     >>> # Input: [num_atoms, lmax+1, mmax+1, 2, in_channels]
     >>> x = torch.randn(100, 5, 3, 2, 64)
-    >>> out = atomwise(x)
+    >>> out = block(x)
     >>> out.shape
     torch.Size([100, 5, 3, 2, 64])
 
@@ -118,6 +118,18 @@ class SO3ConvolutionBlock(nn.Module):
     --------
     SO3LinearGrid : SO(3) equivariant linear layer.
     GateActivation : Gated activation for equivariant features.
+
+    Forward
+    -------
+    x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
+        Input tensor with shape ``[batch, lmax+1, mmax+1, 2, in_channels]``.
+
+    Outputs
+    -------
+    Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
+        Transformed tensor with same shape as input. The transformation applies
+        SO3Linear -> GateActivation -> SO3Linear, where gates are computed from
+        scalar (l=0, m=0, real) features via a small MLP.
     """
 
     def __init__(
@@ -185,18 +197,6 @@ class SO3ConvolutionBlock(nn.Module):
         self,
         x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"],
     ) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]:
-        r"""Apply SO(3) node-wise transformation.
-
-        Parameters
-        ----------
-        x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
-            Input tensor with shape ``[batch, lmax+1, mmax+1, 2, in_channels]``.
-
-        Returns
-        -------
-        Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
-            Transformed tensor with same shape as input.
-        """
         batch = x.shape[0]
 
         # Extract scalar features (l=0, m=0, real component)
