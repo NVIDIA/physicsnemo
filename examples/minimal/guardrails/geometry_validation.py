@@ -7,11 +7,7 @@
 Geometry Guardrail Example
 
 This example demonstrates how to use geometry guardrails for validating
-CAD/STL files in a production workflow. It covers:
-- Training a guardrail from a directory of known-good geometries
-- Saving and loading models
-- Batch validation of new geometries
-- Performance optimization with GPU and multiprocessing
+CAD/STL files in a production workflow.
 """
 
 import multiprocessing as mp
@@ -64,9 +60,8 @@ def train_guardrail(train_dir: Path, model_path: Path, device: str = "cpu"):
     # Create guardrail
     guardrail = GeometryGuardrail(
         n_components=1,  # Single Gaussian (unimodal assumption)
-        warn_pct=95.0,  # Flag top 5% as warnings
-        reject_pct=99.0,  # Flag top 1% as rejections
-        covariance_type="full",  # Full covariance matrix
+        warn_pct=99.0,  # Flag top 1% as warnings
+        reject_pct=99.9,  # Flag top 0.1% as rejections
         device=device,
         random_state=42,
     )
