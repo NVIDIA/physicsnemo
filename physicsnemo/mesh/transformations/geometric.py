@@ -26,7 +26,7 @@ Cached fields handled:
 - centroids: cell_data only
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 import torch.nn.functional as F
@@ -405,7 +405,7 @@ def translate(
 def rotate(
     mesh: "Mesh",
     angle: float,
-    axis: torch.Tensor | list | tuple | None = None,
+    axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
     center: torch.Tensor | list | tuple | None = None,
     transform_point_data: bool = False,
     transform_cell_data: bool = False,
@@ -419,8 +419,10 @@ def rotate(
         Input mesh to rotate.
     angle : float
         Rotation angle in radians (counterclockwise, right-hand rule).
-    axis : torch.Tensor or list or tuple or None
+    axis : torch.Tensor or list or tuple or {"x", "y", "z"} or None
         Rotation axis vector. None for 2D, shape (3,) for 3D.
+        String literals "x", "y", "z" are converted to unit vectors
+        (1,0,0), (0,1,0), (0,0,1) respectively.
     center : torch.Tensor or list or tuple or None
         Center point for rotation. If None, rotates about the origin.
     transform_point_data : bool
@@ -442,6 +444,20 @@ def rotate(
         - centroids: Rotated
         - normals: Rotated
     """
+    ### Convert string axis to one-hot tensor
+    if isinstance(axis, str):
+        axis_map = {"x": 0, "y": 1, "z": 2}
+        if axis not in axis_map:
+            raise ValueError(f"axis must be 'x', 'y', or 'z', got {axis!r}")
+        idx = axis_map[axis]
+        if idx >= mesh.n_spatial_dims:
+            raise ValueError(
+                f"axis={axis!r} is invalid for mesh with "
+                f"n_spatial_dims={mesh.n_spatial_dims}"
+            )
+        axis = torch.zeros(mesh.n_spatial_dims, device=mesh.points.device)
+        axis[idx] = 1.0
+
     if axis is not None:
         axis = torch.as_tensor(axis, device=mesh.points.device, dtype=torch.float32)
 

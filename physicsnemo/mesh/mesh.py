@@ -1953,7 +1953,7 @@ class Mesh:
     def rotate(
         self,
         angle: float,
-        axis: torch.Tensor | list | tuple | None = None,
+        axis: torch.Tensor | list | tuple | Literal["x", "y", "z"] | None = None,
         center: torch.Tensor | list | tuple | None = None,
         transform_point_data: bool = False,
         transform_cell_data: bool = False,
@@ -1967,8 +1967,10 @@ class Mesh:
         ----------
         angle : float
             Rotation angle in radians.
-        axis : torch.Tensor or list or tuple, optional
+        axis : torch.Tensor or list or tuple or {"x", "y", "z"}, optional
             Rotation axis vector. None for 2D, shape (3,) for 3D.
+            String literals "x", "y", "z" are converted to unit vectors
+            (1,0,0), (0,1,0), (0,0,1) respectively.
         center : torch.Tensor or list or tuple, optional
             Center point for rotation.
         transform_point_data : bool
