@@ -87,6 +87,95 @@ class TestVolumePrimitives:
         assert mesh.n_cells > 10
 
 
+class TestCubeVolumeBoundary:
+    """Test that cube_volume boundary extraction produces correct axis-aligned faces.
+
+    A cube's boundary should consist only of triangular faces that lie on the
+    six axis-aligned faces of the cube. This validates that the tetrahedral
+    decomposition correctly shares internal faces between adjacent cells.
+    """
+
+    @pytest.mark.parametrize("subdivisions", [1, 2, 3, 4])
+    def test_boundary_vertices_on_cube_faces(self, subdivisions):
+        """All boundary vertices should lie on cube faces (have coord at ±0.5)."""
+        size = 1.0
+        half = size / 2
+
+        cube = primitives.volumes.cube_volume.load(
+            size=size, subdivisions=subdivisions
+        ).clean()
+        boundary = cube.get_boundary_mesh().clean()
+
+        # Get unique vertices used by boundary cells
+        boundary_vertex_indices = boundary.cells.unique()
+        boundary_vertices = boundary.points[boundary_vertex_indices]
+
+        # Each boundary vertex must have at least one coordinate at ±half
+        at_boundary = torch.abs(boundary_vertices.abs() - half) < 1e-6
+        has_boundary_coord = at_boundary.any(dim=1)
+
+        n_invalid = (~has_boundary_coord).sum().item()
+        assert n_invalid == 0, (
+            f"Found {n_invalid} boundary vertices not on cube faces. "
+            f"Example: {boundary_vertices[~has_boundary_coord][0].tolist()}"
+        )
+
+    @pytest.mark.parametrize("subdivisions", [1, 2, 3, 4])
+    def test_boundary_normals_axis_aligned(self, subdivisions):
+        """All boundary normals should be axis-aligned (1-hot vectors)."""
+        cube = primitives.volumes.cube_volume.load(subdivisions=subdivisions).clean()
+        boundary = cube.get_boundary_mesh().clean()
+
+        normals = boundary.cell_normals
+
+        # For axis-aligned normals, exactly one component should be ±1
+        # and the others should be 0
+        abs_normals = normals.abs()
+        max_component = abs_normals.max(dim=1).values
+        is_axis_aligned = (max_component - 1.0).abs() < 1e-6
+
+        n_diagonal = (~is_axis_aligned).sum().item()
+        assert n_diagonal == 0, (
+            f"Found {n_diagonal} non-axis-aligned normals out of {boundary.n_cells}. "
+            f"Example: {normals[~is_axis_aligned][0].tolist()}"
+        )
+
+    @pytest.mark.parametrize("subdivisions", [1, 2, 3, 4])
+    def test_boundary_triangle_count(self, subdivisions):
+        """Boundary should have exactly 6 × subdivisions² × 2 triangles."""
+        cube = primitives.volumes.cube_volume.load(subdivisions=subdivisions).clean()
+        boundary = cube.get_boundary_mesh().clean()
+
+        # Each face of the cube has subdivisions² small squares,
+        # each split into 2 triangles. 6 faces total.
+        expected_triangles = 6 * (subdivisions**2) * 2
+
+        assert boundary.n_cells == expected_triangles, (
+            f"Expected {expected_triangles} boundary triangles for "
+            f"{subdivisions=}, got {boundary.n_cells}"
+        )
+
+    def test_boundary_is_watertight(self):
+        """Boundary surface of cube should be watertight."""
+        cube = primitives.volumes.cube_volume.load(subdivisions=3).clean()
+        boundary = cube.get_boundary_mesh().clean()
+
+        assert boundary.is_watertight(), (
+            "Boundary surface should be watertight "
+            "(every edge shared by exactly 2 faces)"
+        )
+
+    def test_boundary_is_manifold(self):
+        """Boundary surface of cube should be a valid 2D manifold."""
+        cube = primitives.volumes.cube_volume.load(subdivisions=3).clean()
+        boundary = cube.get_boundary_mesh().clean()
+
+        assert boundary.is_manifold(), (
+            "Boundary surface should be manifold "
+            "(no T-junctions or non-manifold edges)"
+        )
+
+
 class TestLumpyBall:
     """Tests for the lumpy_ball procedural volume primitive."""
 
