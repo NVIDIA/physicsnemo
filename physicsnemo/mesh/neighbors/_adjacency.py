@@ -133,6 +133,27 @@ class Adjacency:
         """Total number of neighbor relationships across all sources."""
         return len(self.indices)
 
+    @property
+    def counts(self) -> torch.Tensor:
+        """Number of neighbors for each source element.
+
+        Returns
+        -------
+        torch.Tensor
+            Shape (n_sources,), dtype int64. counts[i] is the number of
+            neighbors for source i.
+
+        Example
+        -------
+        >>> adj = Adjacency(
+        ...     offsets=torch.tensor([0, 3, 3, 5]),
+        ...     indices=torch.tensor([1, 2, 0, 4, 3]),
+        ... )
+        >>> adj.counts.tolist()
+        [3, 0, 2]
+        """
+        return self.offsets[1:] - self.offsets[:-1]
+
     def expand_to_pairs(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Expand offset-indices encoding to (source_idx, target_idx) pairs.
 
