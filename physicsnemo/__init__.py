@@ -19,4 +19,9 @@
 from .core.meta import ModelMetaData  # noqa E402
 from .core.module import Module  # noqa E402
 
+# This is to ensure warp is quiet at startup:
+import warp as wp
+
+wp.config.quiet = True
+
 __version__ = "1.4.0a0"

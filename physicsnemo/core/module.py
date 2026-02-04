@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import inspect
 import io
 import json
@@ -398,7 +399,9 @@ class Module(torch.nn.Module):
 
         Examples
         --------
-        >>> from physicsnemo.core.module import Module  # doctest: +SKIP
+        >>> import warnings
+        >>> warnings.filterwarnings("ignore")
+        >>> from physicsnemo.core.module import Module
         >>> # Define the argument dictionary with the three required keys
         >>> arg_dict = {
         ...     '__name__': 'FullyConnected',
