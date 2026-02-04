@@ -173,13 +173,21 @@ def remove_duplicate_vertices(
     )
 
     # Path compression: iteratively follow parent pointers until convergence
-    # Each iteration halves the tree depth (expected O(log log n) iterations)
-    max_iterations = 20  # Conservative upper bound
-    for _ in range(max_iterations):
-        old_parent = parent
+    # Each iteration halves the tree depth, so convergence is O(log n) iterations.
+    # For n points: 1K->10, 1M->20, 1B->30 iterations. Limit of 100 is very safe.
+    max_iterations = 100
+    for iteration in range(max_iterations):
+        old_parent = parent.clone()  # Must clone, not reference
         parent = parent[parent]  # Follow parent pointers (vectorized)
         if torch.equal(parent, old_parent):
             break
+    else:
+        import warnings
+
+        warnings.warn(
+            f"Union-find path compression did not converge in {max_iterations} iterations. "
+            "This should never happen for valid meshes (expected O(log n) iterations)."
+        )
 
     canonical_indices = parent
 
