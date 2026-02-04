@@ -204,7 +204,7 @@ class PhysicsAttentionBase(nn.Module, ABC):
             For standard Transolver: tuple of (x_mid, fx_mid) both of shape
             :math:`(B, N, H, D_h)`.
         """
-        raise NotImplementedError("Subclasses must implement this method")
+        ...
 
     def compute_slices_from_projections(
         self,
