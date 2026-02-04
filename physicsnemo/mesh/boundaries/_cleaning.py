@@ -28,6 +28,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
+from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -191,26 +192,26 @@ def _merge_points_pairwise(
     ### Compute duplicate mask using shared tolerance computation
     is_duplicate = _compute_duplicate_mask(points, rtol, atol)
 
-    ### Build connected components using union-find
+    ### Build connected components using vectorized union-find
     # Start with each point mapping to itself
     point_mapping = torch.arange(n_points, device=device, dtype=torch.int64)
 
-    ### Process each point and merge with lower-indexed duplicates only
-    for i in range(n_points):
-        if point_mapping[i] != i:
-            # Already merged to a lower index
-            continue
+    ### Extract duplicate pairs from upper triangle
+    # torch.triu with diagonal=1 gives entries where col > row
+    # So (row_indices, col_indices) has row < col, meaning row is the smaller index
+    row_indices, col_indices = torch.where(torch.triu(is_duplicate, diagonal=1))
 
-        # Find all points that should merge with i
-        # Only consider j < i to avoid double-processing
-        for j in range(i):
-            if point_mapping[j] != j:
-                # j already merged elsewhere
-                continue
-            if is_duplicate[i, j]:
-                # Merge i into j (j has lower index)
-                point_mapping[i] = j
-                break
+    if len(row_indices) > 0:
+        ### Map higher-indexed points (col) to lower-indexed points (row)
+        # For each col_index, find the minimum row_index it should merge to
+        # Use scatter_reduce with 'amin' to find minimum target per source
+        point_mapping.scatter_reduce_(
+            dim=0,
+            index=col_indices,  # Higher indices (sources to remap)
+            src=row_indices,  # Lower indices (targets to merge into)
+            reduce="amin",
+            include_self=True,
+        )
 
     ### Apply transitive closure via path compression
     # This ensures that if A~B and B~C, then C is also mapped to A's representative.
@@ -347,8 +348,6 @@ def _merge_point_data(
     Returns:
         Merged point data
     """
-    from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
-
     if len(point_data.keys()) == 0:
         return TensorDict(
             {},
@@ -416,40 +415,37 @@ def remove_duplicate_cells(
     ### Sort vertices within each cell to canonical form
     sorted_cells = torch.sort(cells, dim=-1)[0]
 
-    ### Use a different strategy: mark duplicates and filter
+    ### Find unique cells using vectorized first-occurrence detection
     n_cells = len(cells)
-    keep_mask = torch.ones(n_cells, dtype=torch.bool, device=cells.device)
+    device = cells.device
 
-    ### For each pair of cells, check if they're duplicates
-    # This is O(n^2) but correct. For large meshes, we'd want a hash-based approach.
+    ### Use torch.unique to identify duplicate groups
+    # inverse_indices maps each cell to its unique group
+    _, inverse_indices = torch.unique(
+        sorted_cells,
+        dim=0,
+        return_inverse=True,
+    )
 
-    if n_cells < 10000:
-        ### Small mesh: pairwise comparison
-        for i in range(n_cells):
-            if not keep_mask[i]:
-                continue
-            for j in range(i + 1, n_cells):
-                if not keep_mask[j]:
-                    continue
-                if torch.all(sorted_cells[i] == sorted_cells[j]):
-                    keep_mask[j] = False
-    else:
-        ### Large mesh: use torch.unique properly
-        # torch.unique returns unique rows, but we need indices
-        # Use return_inverse to track which cells are duplicates
-        _, inverse_indices = torch.unique(
-            sorted_cells,
-            dim=0,
-            return_inverse=True,
-        )
+    ### Vectorized first-occurrence detection
+    # Sort cell indices by their inverse_indices to group duplicates together
+    # Then mark only the first cell in each group
+    sorted_order = torch.argsort(inverse_indices, stable=True)
+    sorted_inverse = inverse_indices[sorted_order]
 
-        ### Keep only first occurrence of each unique cell
-        # For each unique cell, find its first occurrence
-        unique_cell_ids = torch.unique(inverse_indices)
-        for cell_id in unique_cell_ids:
-            occurrences = torch.where(inverse_indices == cell_id)[0]
-            if len(occurrences) > 1:
-                keep_mask[occurrences[1:]] = False
+    # Find group boundaries: where the group ID changes
+    # First element is always a boundary (first occurrence)
+    is_first_in_group = torch.cat([
+        torch.tensor([True], device=device),
+        sorted_inverse[1:] != sorted_inverse[:-1],
+    ])
+
+    # Map back to original indices: first_occurrence_indices are the cells to keep
+    first_occurrence_indices = sorted_order[is_first_in_group]
+
+    # Build keep_mask from first occurrences
+    keep_mask = torch.zeros(n_cells, dtype=torch.bool, device=device)
+    keep_mask[first_occurrence_indices] = True
 
     ### Filter cells and data
     unique_cells = cells[keep_mask]

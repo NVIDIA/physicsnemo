@@ -142,18 +142,38 @@ def compute_edge_support_volume_cell_fractions(
     matches = edge_hash_sorted[positions] == candidate_hash
     edge_indices = sort_idx[positions]  # Map candidate → edge index
 
-    ### Count how many cells we've seen for each edge
-    edge_cell_counts = torch.zeros(n_edges, dtype=torch.long, device=device)
+    ### Vectorized fill of edge_to_cells matrix
+    # Filter to only matched candidates
+    matched_edge_indices = edge_indices[matches]
+    matched_cell_indices = parent_cells[matches]
 
-    ### Fill in edge_to_cells matrix
-    for i in range(len(candidate_edges)):
-        if matches[i]:
-            edge_idx = edge_indices[i]
-            cell_idx = parent_cells[i]
-            slot = edge_cell_counts[edge_idx]
-            if slot < 2:
-                edge_to_cells[edge_idx, slot] = cell_idx
-                edge_cell_counts[edge_idx] += 1
+    if len(matched_edge_indices) > 0:
+        ### Sort by edge index to group edges together
+        sort_order = torch.argsort(matched_edge_indices, stable=True)
+        sorted_edges_idx = matched_edge_indices[sort_order]
+        sorted_cells_idx = matched_cell_indices[sort_order]
+
+        ### Compute within-group position (0, 1, 2, ...) for each entry
+        # Find group boundaries where edge index changes
+        group_starts = torch.cat([
+            torch.tensor([0], device=device, dtype=torch.long),
+            torch.where(sorted_edges_idx[1:] != sorted_edges_idx[:-1])[0] + 1,
+        ])
+
+        # Compute cumulative position within each group
+        # positions[i] = i - group_start for entry i
+        positions = torch.arange(len(sorted_edges_idx), device=device)
+        group_ids = torch.searchsorted(group_starts, positions, right=True) - 1
+        within_group_positions = positions - group_starts[group_ids]
+
+        ### Keep only first 2 entries per edge (slot 0 and slot 1)
+        valid_mask = within_group_positions < 2
+        final_edge_indices = sorted_edges_idx[valid_mask]
+        final_cell_indices = sorted_cells_idx[valid_mask]
+        final_slots = within_group_positions[valid_mask]
+
+        ### Fill matrix using advanced indexing
+        edge_to_cells[final_edge_indices, final_slots] = final_cell_indices
 
     ### Compute circumcenters of all cells
     cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)

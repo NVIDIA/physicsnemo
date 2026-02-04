@@ -358,11 +358,41 @@ def find_all_containing_cells(
     recon_inside = recon_error <= tolerance
     is_inside = bary_inside & recon_inside
 
-    ### For each query, collect all containing cells
-    containing_cells = []
-    for i in range(len(query_points)):
-        containing = torch.where(is_inside[i])[0]
-        containing_cells.append(containing)
+    ### For each query, collect all containing cells (vectorized)
+    # Get all (query_idx, cell_idx) pairs where containment is True
+    query_indices, cell_indices = torch.where(is_inside)
+
+    # Group cell indices by query index using split
+    if len(query_indices) == 0:
+        # No containments - return empty tensors for all queries
+        return [
+            torch.tensor([], dtype=torch.long, device=mesh.points.device)
+            for _ in range(len(query_points))
+        ]
+
+    # Count containments per query for splitting
+    unique_queries, counts = torch.unique(query_indices, return_counts=True)
+    counts_list = counts.tolist()
+
+    # Split cell_indices by counts to get variable-length groups
+    cell_groups = torch.split(cell_indices, counts_list)
+
+    # Build result list with empty tensors for queries with no containments
+    # Use tensor boolean lookup instead of Python set for efficiency
+    n_queries = len(query_points)
+    has_containment = torch.zeros(n_queries, dtype=torch.bool, device=mesh.points.device)
+    has_containment[unique_queries] = True
+
+    containing_cells: list[torch.Tensor] = []
+    group_idx = 0
+    empty_tensor = torch.tensor([], dtype=torch.long, device=mesh.points.device)
+
+    for i in range(n_queries):
+        if has_containment[i]:
+            containing_cells.append(cell_groups[group_idx])
+            group_idx += 1
+        else:
+            containing_cells.append(empty_tensor)
 
     return containing_cells
 
@@ -370,8 +400,11 @@ def find_all_containing_cells(
 def project_point_onto_cell(
     query_point: torch.Tensor,
     cell_vertices: torch.Tensor,
-) -> tuple[torch.Tensor, float | torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Project a query point onto a simplex (cell).
+
+    Uses iterative barycentric clipping to find the closest point on the simplex.
+    This is more efficient than recursive face enumeration.
 
     Args:
         query_point: Point to project, shape (n_spatial_dims,)
@@ -380,63 +413,95 @@ def project_point_onto_cell(
     Returns:
         Tuple of (projected_point, squared_distance):
         - projected_point: Closest point on the simplex, shape (n_spatial_dims,)
-        - squared_distance: Squared distance from query to projection, scalar
+        - squared_distance: Squared distance from query to projection, scalar tensor
     """
-    ### This is a complex optimization problem. For now, use a simple approach:
-    # 1. Project onto the affine hull of the simplex
-    # 2. If the projection is inside, return it
-    # 3. Otherwise, recursively project onto lower-dimensional faces
+    n_vertices = cell_vertices.shape[0]
 
-    # Compute barycentric coordinates (ignore reconstruction error for projection)
+    # Handle degenerate cases
+    if n_vertices == 1:
+        # Single vertex - project to that vertex
+        projected = cell_vertices[0]
+        dist_sq = ((query_point - projected) ** 2).sum()
+        return projected, dist_sq
+
+    # Compute barycentric coordinates on the full simplex
     bary, _ = compute_barycentric_coordinates(
         query_point.unsqueeze(0),
         cell_vertices.unsqueeze(0),
     )
     bary = bary.squeeze(0).squeeze(0)  # (n_vertices,)
 
-    ### If all barycentric coords are non-negative, point projects inside the simplex
+    # If all barycentric coords are non-negative, projection is inside the simplex
     if (bary >= 0).all():
         projected = (bary.unsqueeze(-1) * cell_vertices).sum(dim=0)
         dist_sq = ((query_point - projected) ** 2).sum()
         return projected, dist_sq
 
-    ### Otherwise, find the closest face
-    # For simplicity, check all faces (subsets of vertices)
-    n_vertices = cell_vertices.shape[0]
-    best_projected = None
-    best_dist_sq = float("inf")
+    # Otherwise, iteratively project onto the active face (vertices with bary > 0)
+    # Use clipping algorithm: keep only vertices with positive barycentric coords
+    max_iterations = n_vertices  # At most n-1 iterations needed
 
-    # Try all (n-1)-dimensional faces
-    for i in range(n_vertices):
-        # Face is all vertices except vertex i
-        face_vertices = torch.cat([cell_vertices[:i], cell_vertices[i + 1 :]], dim=0)
-        if len(face_vertices) == 1:
-            # Single vertex
-            projected = face_vertices[0]
+    for _ in range(max_iterations):
+        # Find vertices with positive barycentric coordinates
+        active_mask = bary > 0
+
+        # If no positive coords (shouldn't happen), fall back to nearest vertex
+        if not active_mask.any():
+            dists = ((cell_vertices - query_point.unsqueeze(0)) ** 2).sum(dim=-1)
+            nearest_idx = dists.argmin()
+            projected = cell_vertices[nearest_idx]
+            dist_sq = dists[nearest_idx]
+            return projected, dist_sq
+
+        # Keep only active vertices
+        active_vertices = cell_vertices[active_mask]
+
+        if active_vertices.shape[0] == 1:
+            # Single active vertex
+            projected = active_vertices[0]
             dist_sq = ((query_point - projected) ** 2).sum()
-        else:
-            # Recursively project onto face
-            projected, dist_sq = project_point_onto_cell(query_point, face_vertices)
+            return projected, dist_sq
 
-        if dist_sq < best_dist_sq:
-            best_dist_sq = dist_sq
-            best_projected = projected
+        # Re-compute barycentric coords on the active face
+        bary_active, _ = compute_barycentric_coordinates(
+            query_point.unsqueeze(0),
+            active_vertices.unsqueeze(0),
+        )
+        bary_active = bary_active.squeeze(0).squeeze(0)
 
-    return best_projected, best_dist_sq
+        # If all non-negative, we found the projection
+        if (bary_active >= 0).all():
+            projected = (bary_active.unsqueeze(-1) * active_vertices).sum(dim=0)
+            dist_sq = ((query_point - projected) ** 2).sum()
+            return projected, dist_sq
+
+        # Update for next iteration: map bary_active back to full bary
+        bary = torch.zeros_like(bary)
+        bary[active_mask] = bary_active
+
+    # Fallback: nearest vertex (shouldn't reach here for valid input)
+    dists = ((cell_vertices - query_point.unsqueeze(0)) ** 2).sum(dim=-1)
+    nearest_idx = dists.argmin()
+    projected = cell_vertices[nearest_idx]
+    dist_sq = dists[nearest_idx]
+    return projected, dist_sq
 
 
 def find_nearest_cells(
     mesh: "Mesh",
     query_points: torch.Tensor,
+    chunk_size: int = 10000,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Find the nearest cell for each query point.
 
-    This is a simplified implementation that finds the cell whose centroid is nearest.
-    A more accurate projection onto cell surfaces would require complex optimization.
+    This implementation finds the cell whose centroid is nearest. For large numbers
+    of queries or cells, the computation is chunked to avoid memory issues.
 
     Args:
         mesh: The mesh to query.
         query_points: Query point locations, shape (n_queries, n_spatial_dims)
+        chunk_size: Number of queries to process at once. Larger values use more
+            memory but may be faster. Default: 10000
 
     Returns:
         Tuple of (cell_indices, projected_points):
@@ -445,21 +510,40 @@ def find_nearest_cells(
             shape (n_queries, n_spatial_dims)
 
     Note:
-        This is a simplified version using centroid distances. Full projection onto
-        simplices would require iterative optimization and is complex to vectorize.
+        - Uses centroid distances as approximation. Full projection onto simplices
+          would require iterative optimization.
+        - Complexity is O(n_queries * n_cells). For very large meshes (>100k cells),
+          a BVH-based nearest neighbor search could provide O(n_queries * log(n_cells))
+          but is not yet implemented.
     """
+    n_queries = query_points.shape[0]
+    device = mesh.points.device
+
     ### Compute all cell centroids
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
 
-    ### Compute distances from all queries to all cell centroids
-    # query_points: (n_queries, n_spatial_dims)
-    # cell_centroids: (n_cells, n_spatial_dims)
-    # Broadcast to (n_queries, n_cells, n_spatial_dims)
-    diffs = query_points.unsqueeze(1) - cell_centroids.unsqueeze(0)
-    distances_sq = (diffs**2).sum(dim=-1)  # (n_queries, n_cells)
+    ### For small problems, use fully vectorized approach
+    if n_queries * mesh.n_cells <= chunk_size * chunk_size:
+        # Compute distances from all queries to all cell centroids
+        diffs = query_points.unsqueeze(1) - cell_centroids.unsqueeze(0)
+        distances_sq = (diffs**2).sum(dim=-1)  # (n_queries, n_cells)
 
-    ### Find nearest cell for each query
-    cell_indices = distances_sq.argmin(dim=1)  # (n_queries,)
+        # Find nearest cell for each query
+        cell_indices = distances_sq.argmin(dim=1)  # (n_queries,)
+    else:
+        ### For large problems, chunk to avoid memory explosion
+        cell_indices = torch.empty(n_queries, dtype=torch.long, device=device)
+
+        for start in range(0, n_queries, chunk_size):
+            end = min(start + chunk_size, n_queries)
+            query_chunk = query_points[start:end]
+
+            # Compute distances for this chunk
+            diffs = query_chunk.unsqueeze(1) - cell_centroids.unsqueeze(0)
+            distances_sq = (diffs**2).sum(dim=-1)
+
+            # Find nearest cell for each query in chunk
+            cell_indices[start:end] = distances_sq.argmin(dim=1)
 
     ### Return centroids of nearest cells as approximation of projection
     projected_points = cell_centroids[cell_indices]  # (n_queries, n_spatial_dims)
@@ -475,14 +559,21 @@ def sample_data_at_points(
     project_onto_nearest_cell: bool = False,
     tolerance: float = 1e-6,
 ) -> TensorDict:
-    """Sample mesh data at query points in space.
+    """Extract or interpolate mesh data at specified query points.
 
-    For each query point, finds the containing cell and returns interpolated data.
+    This function retrieves mesh data at arbitrary spatial locations. Note that
+    "sample" here means "extract/query at specific points" - NOT random sampling.
+    For random point sampling, see ``sample_random_points_on_cells``.
+
+    For each query point, the function:
+    1. Finds which cell(s) contain the point using barycentric coordinates
+    2. Extracts cell data directly (data_source="cells") or interpolates point
+       data using barycentric coordinates (data_source="points")
 
     Args:
-        mesh: The mesh to sample from.
+        mesh: The mesh to extract data from.
         query_points: Query point locations, shape (n_queries, n_spatial_dims)
-        data_source: How to sample data:
+        data_source: How to retrieve data:
             - "cells": Use cell data directly (no interpolation)
             - "points": Interpolate point data using barycentric coordinates
         multiple_cells_strategy: How to handle query points contained in multiple cells:
