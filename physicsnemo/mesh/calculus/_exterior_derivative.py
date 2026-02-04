@@ -173,35 +173,12 @@ def exterior_derivative_1(
     # Flatten to (n_faces*3, 2) for easier processing
     boundary_edges_flat = boundary_edges.reshape(-1, 2)  # (n_faces*3, 2)
 
-    ### Create canonical edge representations (sorted vertices) for fast matching
-    # Sort vertices within each edge to get canonical form (lower vertex first)
-    boundary_edges_sorted, _ = boundary_edges_flat.sort(dim=1)
-    edges_sorted, _ = edges.sort(dim=1)
+    ### Find each boundary edge in the reference edge list
+    from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
-    # Convert each edge to a unique integer ID for efficient lookup
-    # Formula: edge_id = min_vertex * (max_vertex + 1) + max_vertex
-    # This creates a unique mapping assuming vertices are non-negative integers
-    max_vertex_id = max(edges.max().item(), faces.max().item()) + 1
-    boundary_edge_ids = (
-        boundary_edges_sorted[:, 0] * max_vertex_id + boundary_edges_sorted[:, 1]
-    )
-    edge_ids = edges_sorted[:, 0] * max_vertex_id + edges_sorted[:, 1]
-
-    ### Use searchsorted for efficient vectorized lookup
-    # Sort edge_ids and keep track of original indices
-    edge_ids_sorted, sort_indices = torch.sort(edge_ids)
-
-    # Find where each boundary edge ID would fit in the sorted edge list
-    positions = torch.searchsorted(edge_ids_sorted, boundary_edge_ids)
-
-    # Clamp positions to valid range to avoid index errors
-    positions = positions.clamp(max=len(edge_ids_sorted) - 1)
-
-    # Check if the found positions are exact matches
-    matches = edge_ids_sorted[positions] == boundary_edge_ids  # (n_faces*3,)
-
-    # Get the original edge indices
-    edge_indices = sort_indices[positions]  # (n_faces*3,)
+    edge_indices, matches = find_edges_in_reference(
+        edges, boundary_edges_flat
+    )  # edge_indices: (n_faces*3,), matches: (n_faces*3,)
 
     ### Determine orientation of each boundary edge
     # If edge is [v_i, v_j] with v_i < v_j, orientation is +1

@@ -114,33 +114,16 @@ def compute_edge_support_volume_cell_fractions(
         manifold_codimension=1,  # Extract 1-simplices (edges) from 2-simplices (triangles)
     )
 
-    ### Sort edges canonically for matching
-    sorted_candidate_edges, _ = torch.sort(candidate_edges, dim=-1)
-    sorted_edges, _ = torch.sort(edges, dim=-1)
-
     ### Build mapping from edges to their parent cells
     # Each edge maps to a list of cell indices
-    # Use hash for efficient lookup
-    max_vertex = max(edges.max(), candidate_edges.max()) + 1
-    edge_hash = sorted_edges[:, 0] * max_vertex + sorted_edges[:, 1]
-    candidate_hash = (
-        sorted_candidate_edges[:, 0] * max_vertex + sorted_candidate_edges[:, 1]
-    )
-
-    ### For each edge, find all cells containing it
     # Most edges have 1 (boundary) or 2 (interior) adjacent cells
     # Store as (n_edges, 2) with -1 for missing second cell
+    from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
+
+    edge_indices, matches = find_edges_in_reference(edges, candidate_edges)
     edge_to_cells = torch.full(
         (n_edges, 2), -1, dtype=torch.long, device=device
     )  # (n_edges, 2)
-
-    ### Build reverse mapping: for each candidate edge, which slot in edges array?
-    edge_hash_sorted, sort_idx = torch.sort(edge_hash)
-    positions = torch.searchsorted(edge_hash_sorted, candidate_hash)
-    positions = positions.clamp(max=len(edge_hash_sorted) - 1)
-
-    matches = edge_hash_sorted[positions] == candidate_hash
-    edge_indices = sort_idx[positions]  # Map candidate → edge index
 
     ### Vectorized fill of edge_to_cells matrix
     # Filter to only matched candidates
@@ -419,25 +402,16 @@ def compute_dual_edge_volumes_in_cells(
         manifold_codimension=1,
     )
 
-    ### Match candidates to sorted edges
-    sorted_candidates, _ = torch.sort(candidate_edges, dim=-1)
-    sorted_edges_input, _ = torch.sort(edges, dim=-1)
+    ### Match candidates to input edges
+    from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
-    max_vertex = max(edges.max(), candidate_edges.max()) + 1
-    candidate_hash = sorted_candidates[:, 0] * max_vertex + sorted_candidates[:, 1]
-    edge_hash = sorted_edges_input[:, 0] * max_vertex + sorted_edges_input[:, 1]
-
-    edge_hash_sorted, sort_idx = torch.sort(edge_hash)
-    positions = torch.searchsorted(edge_hash_sorted, candidate_hash)
-    positions = positions.clamp(max=len(edge_hash_sorted) - 1)
-
-    matches = edge_hash_sorted[positions] == candidate_hash
-    edge_indices_for_candidates = sort_idx[positions]
+    edge_indices_for_candidates, matches = find_edges_in_reference(
+        edges, candidate_edges
+    )
 
     ### Filter to only matched pairs
-    matched_mask = matches
-    edge_indices = edge_indices_for_candidates[matched_mask]
-    cell_indices = parent_cells[matched_mask]
+    edge_indices = edge_indices_for_candidates[matches]
+    cell_indices = parent_cells[matches]
 
     ### Compute circumcenters
     cell_vertices = mesh.points[mesh.cells]

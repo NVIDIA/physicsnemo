@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
@@ -328,7 +329,7 @@ def find_all_containing_cells(
     mesh: "Mesh",
     query_points: torch.Tensor,
     tolerance: float = 1e-6,
-) -> list[torch.Tensor]:
+) -> Adjacency:
     """Find all cells that contain each query point.
 
     Args:
@@ -341,8 +342,9 @@ def find_all_containing_cells(
               simplex's affine hull).
 
     Returns:
-        List of length n_queries, where each element is a tensor of cell indices
-        that contain that query point. Empty tensor if no cells contain the point.
+        Adjacency object where containing cells for query i are at
+        ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
+        Use ``result.to_list()`` for a list-of-tensors representation.
     """
     ### Get cell vertices: (n_cells, n_vertices_per_cell, n_spatial_dims)
     cell_vertices = mesh.points[mesh.cells]
@@ -362,39 +364,12 @@ def find_all_containing_cells(
     # Get all (query_idx, cell_idx) pairs where containment is True
     query_indices, cell_indices = torch.where(is_inside)
 
-    # Group cell indices by query index using split
-    if len(query_indices) == 0:
-        # No containments - return empty tensors for all queries
-        return [
-            torch.tensor([], dtype=torch.long, device=mesh.points.device)
-            for _ in range(len(query_points))
-        ]
-
-    # Count containments per query for splitting
-    unique_queries, counts = torch.unique(query_indices, return_counts=True)
-    counts_list = counts.tolist()
-
-    # Split cell_indices by counts to get variable-length groups
-    cell_groups = torch.split(cell_indices, counts_list)
-
-    # Build result list with empty tensors for queries with no containments
-    # Use tensor boolean lookup instead of Python set for efficiency
-    n_queries = len(query_points)
-    has_containment = torch.zeros(n_queries, dtype=torch.bool, device=mesh.points.device)
-    has_containment[unique_queries] = True
-
-    containing_cells: list[torch.Tensor] = []
-    group_idx = 0
-    empty_tensor = torch.tensor([], dtype=torch.long, device=mesh.points.device)
-
-    for i in range(n_queries):
-        if has_containment[i]:
-            containing_cells.append(cell_groups[group_idx])
-            group_idx += 1
-        else:
-            containing_cells.append(empty_tensor)
-
-    return containing_cells
+    ### Build Adjacency from (query_idx, cell_idx) pairs
+    return build_adjacency_from_pairs(
+        source_indices=query_indices,
+        target_indices=cell_indices,
+        n_sources=len(query_points),
+    )
 
 
 def project_point_onto_cell(

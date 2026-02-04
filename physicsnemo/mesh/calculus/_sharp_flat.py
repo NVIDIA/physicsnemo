@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -114,31 +116,14 @@ def sharp(
         manifold_codimension=1,
     )
 
-    ### Match edges to candidates
-    sorted_candidates, _ = torch.sort(candidate_edges, dim=-1)
-    sorted_edges, _ = torch.sort(edges, dim=-1)
-
-    max_vertex = max(edges.max(), candidate_edges.max()) + 1
-    candidate_hash = sorted_candidates[:, 0] * max_vertex + sorted_candidates[:, 1]
-    edge_hash = sorted_edges[:, 0] * max_vertex + sorted_edges[:, 1]
-
-    ### Implement Hirani Eq. 5.8.1 (FULLY VECTORIZED)
+    ### Match candidates to input edges to get 1-form values
+    # Implements Hirani Eq. 5.8.1 (FULLY VECTORIZED)
     # Challenge: This is complex to vectorize due to variable vertex valence
     # Strategy: Process all (edge, cell) pairs, then scatter to vertices
 
-    ### Build all (edge, cell, vertex_in_edge) triples that contribute
-    # For each candidate edge, we have:
-    # - edge vertices (2 per edge)
-    # - parent cell
-    # - contribution to each of the 2 vertices
-
-    ### Match candidates to input edges to get 1-form values
-    # Find edge index for each candidate
-    edge_hash_sorted, sort_idx = torch.sort(edge_hash)
-    positions = torch.searchsorted(edge_hash_sorted, candidate_hash)
-    positions = positions.clamp(max=len(edge_hash_sorted) - 1)
-    matches = edge_hash_sorted[positions] == candidate_hash
-    edge_indices_for_candidates = sort_idx[positions]
+    edge_indices_for_candidates, matches = find_edges_in_reference(
+        edges, candidate_edges
+    )
 
     ### Filter to only matched candidates
     matched_mask = matches

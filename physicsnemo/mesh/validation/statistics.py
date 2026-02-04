@@ -88,18 +88,20 @@ def compute_mesh_statistics(
     n_used = len(used_vertices)
     stats["n_isolated_vertices"] = mesh.n_points - n_used
 
-    ### Compute edge length statistics
+    ### Compute edge length statistics (vectorized)
     cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
     n_verts_per_cell = mesh.n_manifold_dims + 1
 
-    edge_lengths_list = []
-    for i in range(n_verts_per_cell):
-        for j in range(i + 1, n_verts_per_cell):
-            edge = cell_vertices[:, j] - cell_vertices[:, i]
-            length = torch.norm(edge, dim=-1)
-            edge_lengths_list.append(length)
+    # Generate all (i, j) pairs with i < j using upper triangular indices
+    i_indices, j_indices = torch.triu_indices(
+        n_verts_per_cell, n_verts_per_cell, offset=1, device=mesh.points.device
+    )
+    # Compute all edge vectors at once: (n_cells, n_edges, n_dims)
+    edges = cell_vertices[:, j_indices] - cell_vertices[:, i_indices]
+    edge_lengths = torch.linalg.vector_norm(edges, dim=-1)  # (n_cells, n_edges)
 
-    all_edge_lengths = torch.cat(edge_lengths_list, dim=0)
+    # Flatten to get all edge lengths across all cells
+    all_edge_lengths = edge_lengths.flatten()
 
     stats["edge_length_stats"] = (
         all_edge_lengths.min().item(),

@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.curvature._utils import compute_triangle_angles
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -66,15 +68,14 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     n_cells = mesh.n_cells
     n_verts_per_cell = mesh.n_manifold_dims + 1
 
-    # Compute all pairwise edge lengths within each cell
-    edge_lengths_list = []
-    for i in range(n_verts_per_cell):
-        for j in range(i + 1, n_verts_per_cell):
-            edge = cell_vertices[:, j] - cell_vertices[:, i]
-            length = torch.norm(edge, dim=-1)
-            edge_lengths_list.append(length)
-
-    edge_lengths = torch.stack(edge_lengths_list, dim=1)  # (n_cells, n_edges)
+    # Compute all pairwise edge lengths within each cell (vectorized)
+    # Generate all (i, j) pairs with i < j using upper triangular indices
+    i_indices, j_indices = torch.triu_indices(
+        n_verts_per_cell, n_verts_per_cell, offset=1, device=device
+    )
+    # Compute all edge vectors at once: (n_cells, n_edges, n_dims)
+    edges = cell_vertices[:, j_indices] - cell_vertices[:, i_indices]
+    edge_lengths = torch.linalg.vector_norm(edges, dim=-1)  # (n_cells, n_edges)
 
     max_edge = edge_lengths.max(dim=1).values
     min_edge = edge_lengths.min(dim=1).values
@@ -92,8 +93,6 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
 
     ### Compute angles (for 2D manifolds - triangles)
     if mesh.n_manifold_dims == 2:
-        from physicsnemo.mesh.curvature._utils import compute_triangle_angles
-
         # Compute all three angles per triangle
         angle0 = compute_triangle_angles(
             cell_vertices[:, 0],

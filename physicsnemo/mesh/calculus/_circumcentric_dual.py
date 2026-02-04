@@ -248,28 +248,30 @@ def compute_cotan_weights_triangle_mesh(
             cross_vec = torch.linalg.cross(vec_to_v0, vec_to_v1)
             cross_mag = torch.norm(cross_vec, dim=-1)
 
-        cotans = dot_products / cross_mag.clamp(min=1e-10)
+        # Compute cotangent = dot / |cross|
+        # For near-degenerate triangles (collinear vertices), cross_mag ~ 0
+        # Use a relative tolerance based on edge lengths to handle this robustly
+        edge_scale = torch.norm(vec_to_v0, dim=-1) * torch.norm(vec_to_v1, dim=-1)
+        min_cross = edge_scale * 1e-6  # Relative tolerance for degeneracy detection
+        min_cross = torch.clamp(min_cross, min=1e-10)  # Absolute minimum
+
+        # For degenerate triangles (cross_mag < min_cross), set cotangent to 0
+        # This effectively excludes degenerate triangles from contributing
+        is_degenerate = cross_mag < min_cross
+        safe_cross_mag = torch.where(is_degenerate, torch.ones_like(cross_mag), cross_mag)
+        cotans = dot_products / safe_cross_mag
+        cotans = torch.where(is_degenerate, torch.zeros_like(cotans), cotans)
 
         ### Map candidate edges to sorted_edges and accumulate (vectorized)
-        # Build hash for quick lookup
-        edge_hash = candidate_edges[:, 0] * (mesh.n_points + 1) + candidate_edges[:, 1]
-        sorted_hash = sorted_edges[:, 0] * (mesh.n_points + 1) + sorted_edges[:, 1]
+        from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
-        # Sort sorted_hash to enable binary search via searchsorted
-        sorted_hash_argsort = torch.argsort(sorted_hash)
-        sorted_hash_sorted = sorted_hash[sorted_hash_argsort]
+        indices_in_original, valid_matches = find_edges_in_reference(
+            sorted_edges, candidate_edges
+        )
 
-        # Find index of each edge_hash in the sorted sorted_hash
-        indices_in_sorted = torch.searchsorted(sorted_hash_sorted, edge_hash)
-
-        # Clamp indices to valid range (handles any edge_hash not found)
-        indices_in_sorted = torch.clamp(indices_in_sorted, 0, n_edges - 1)
-
-        # Map back to original sorted_edges indices
-        indices_in_original = sorted_hash_argsort[indices_in_sorted]
-
-        # Accumulate cotans using scatter_add (vectorized)
-        cotan_weights.scatter_add_(0, indices_in_original, cotans)
+        # Only accumulate cotangents for edges that actually matched
+        valid_cotans = torch.where(valid_matches, cotans, torch.zeros_like(cotans))
+        cotan_weights.scatter_add_(0, indices_in_original, valid_cotans)
 
         ### Apply the REQUIRED factor of 1/2 from the geometric derivation
         # |⋆e|/|e| = (1/2) × Σ cot(opposite angles)
@@ -306,11 +308,18 @@ def compute_dual_volumes_1(mesh: "Mesh") -> torch.Tensor:
         |⋆e| = (|e|/2)(cot α + cot β) = |e| × w_ij
     where w_ij are the cotangent weights.
 
+    For boundary edges (shared by only one triangle), the dual volume is half
+    of an interior edge with the same geometry, since only one triangle contributes.
+
     Args:
         mesh: Input simplicial mesh
 
     Returns:
         Dual 1-cell volumes for each edge, shape (n_edges,)
+
+    Note:
+        Dual volumes are guaranteed to be non-negative. For degenerate or
+        near-degenerate triangles, volumes may be zero or very small.
     """
     if mesh.n_manifold_dims == 2:
         ### Use cotangent weights for triangles
@@ -325,6 +334,11 @@ def compute_dual_volumes_1(mesh: "Mesh") -> torch.Tensor:
         # |⋆e| = |e| × (|⋆e|/|e|) = |e| × w_ij
         # where w_ij = (1/2)(cot α + cot β) is the cotangent weight
         dual_volumes_1 = cotan_weights * edge_lengths
+
+        # Ensure non-negative values (cotangent can be negative for obtuse angles,
+        # but the sum over adjacent triangles should be positive for valid meshes)
+        # Clamp to zero as a safety measure for numerical edge cases
+        dual_volumes_1 = torch.clamp(dual_volumes_1, min=0.0)
 
     else:
         ### For other dimensions, use simplified approximation
