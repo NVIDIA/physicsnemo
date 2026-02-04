@@ -98,22 +98,14 @@ def remove_duplicate_vertices(
 
     ### Find candidate duplicates using BVH
     # For each point, find all points within tolerance (using L∞ distance with tolerance)
-    candidate_lists = bvh.find_candidate_cells(
+    candidate_adjacency = bvh.find_candidate_cells(
         query_points=mesh.points,
         max_candidates_per_point=100,  # Conservative upper bound
         aabb_tolerance=tolerance,
     )
 
-    ### Extract candidate pairs and compute exact distances
-    # Build list of (query_idx, candidate_idx) pairs
-    pair_queries = []
-    pair_candidates = []
-    for query_idx, candidates in enumerate(candidate_lists):
-        if len(candidates) > 0:
-            pair_queries.append(torch.full_like(candidates, query_idx))
-            pair_candidates.append(candidates)
-
-    if len(pair_queries) == 0:
+    ### Extract candidate pairs from Adjacency using expand_to_pairs()
+    if candidate_adjacency.n_total_neighbors == 0:
         # No candidates found
         return mesh, {
             "n_duplicates_merged": 0,
@@ -121,8 +113,7 @@ def remove_duplicate_vertices(
             "n_points_final": n_original,
         }
 
-    pair_queries = torch.cat(pair_queries)  # (n_pairs,)
-    pair_candidates = torch.cat(pair_candidates)  # (n_pairs,)
+    pair_queries, pair_candidates = candidate_adjacency.expand_to_pairs()
 
     # Remove self-pairs and ensure query < candidate to avoid duplicate counting
     valid_pairs = pair_queries < pair_candidates

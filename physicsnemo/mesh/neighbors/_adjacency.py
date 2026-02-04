@@ -133,6 +133,46 @@ class Adjacency:
         """Total number of neighbor relationships across all sources."""
         return len(self.indices)
 
+    def expand_to_pairs(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Expand offset-indices encoding to (source_idx, target_idx) pairs.
+
+        This is the inverse of build_adjacency_from_pairs. It produces a pair
+        of tensors where (source_indices[i], target_indices[i]) represents the
+        i-th edge in the adjacency.
+
+        Returns:
+            Tuple of (source_indices, target_indices), both shape (n_total_neighbors,).
+            source_indices[i] is the source entity for the i-th pair.
+            target_indices[i] is the target entity for the i-th pair.
+
+        Example:
+            >>> adj = Adjacency(
+            ...     offsets=torch.tensor([0, 2, 4, 5]),
+            ...     indices=torch.tensor([10, 11, 20, 21, 30]),
+            ... )
+            >>> sources, targets = adj.expand_to_pairs()
+            >>> sources.tolist()
+            [0, 0, 1, 1, 2]
+            >>> targets.tolist()
+            [10, 11, 20, 21, 30]
+        """
+        device = self.offsets.device
+
+        ### Handle empty adjacency
+        if self.n_total_neighbors == 0:
+            return (
+                torch.tensor([], dtype=torch.int64, device=device),
+                self.indices,
+            )
+
+        ### For each position in indices, find which source it belongs to
+        # offsets[i] <= position < offsets[i+1] means position belongs to source i
+        # searchsorted(offsets, position, right=True) - 1 gives source index
+        positions = torch.arange(self.n_total_neighbors, dtype=torch.int64, device=device)
+        source_indices = torch.searchsorted(self.offsets, positions, right=True) - 1
+
+        return source_indices, self.indices
+
     def truncate_per_source(self, max_count: int | None = None) -> "Adjacency":
         """Limit each source to at most max_count neighbors.
 
@@ -173,19 +213,14 @@ class Adjacency:
         new_offsets[1:] = torch.cumsum(clamped_counts, dim=0)
 
         ### Build mask for which indices to keep
-        # For each index position, determine which source it belongs to
-        # and its position within that source
-        n_indices = len(self.indices)
-        if n_indices == 0:
+        if self.n_total_neighbors == 0:
             return Adjacency(offsets=new_offsets, indices=self.indices)
 
-        positions = torch.arange(n_indices, device=device)
-
-        # Find source ID for each position using searchsorted
-        # offsets[1:] gives the exclusive end of each source's range
-        source_ids = torch.searchsorted(self.offsets[1:], positions, right=False)
+        ### Use expand_to_pairs to get source ID for each position
+        source_ids, _ = self.expand_to_pairs()
 
         # Compute position within source: position - offsets[source_id]
+        positions = torch.arange(self.n_total_neighbors, device=device)
         within_source_pos = positions - self.offsets[source_ids]
 
         # Keep only positions where within_source_pos < max_count

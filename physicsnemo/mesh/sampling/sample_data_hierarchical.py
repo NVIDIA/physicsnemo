@@ -115,37 +115,21 @@ def sample_data_at_points(
 
     ### Find candidate cells for each query point using BVH
     # Use same tolerance for AABB checks as for barycentric coordinate checks
-    candidate_cells_list = bvh.find_candidate_cells(
+    candidate_adjacency = bvh.find_candidate_cells(
         query_points, aabb_tolerance=tolerance
     )
 
-    ### Flatten all query-candidate pairs for batch processing (vectorized)
-    # Convert list of tensors to a format suitable for batching
-    # Each element in candidate_cells_list has variable length
-    query_indices_list = []
-    cell_indices_list = []
+    ### Extract (query_idx, cell_idx) pairs directly from Adjacency using expand_to_pairs()
+    device = mesh.points.device
 
-    for i, candidates in enumerate(candidate_cells_list):
-        if len(candidates) > 0:
-            query_indices_list.append(
-                torch.full(
-                    (len(candidates),), i, dtype=torch.long, device=mesh.points.device
-                )
-            )
-            cell_indices_list.append(candidates)
-
-    if len(query_indices_list) == 0:
+    if candidate_adjacency.n_total_neighbors == 0:
         # No candidates at all
-        query_indices_candidates = torch.tensor(
-            [], dtype=torch.long, device=mesh.points.device
-        )
-        cell_indices_candidates = torch.tensor(
-            [], dtype=torch.long, device=mesh.points.device
-        )
+        query_indices_candidates = torch.tensor([], dtype=torch.long, device=device)
+        cell_indices_candidates = torch.tensor([], dtype=torch.long, device=device)
     else:
-        # Concatenate all pairs
-        query_indices_candidates = torch.cat(query_indices_list)
-        cell_indices_candidates = torch.cat(cell_indices_list)
+        query_indices_candidates, cell_indices_candidates = (
+            candidate_adjacency.expand_to_pairs()
+        )
 
     if len(query_indices_candidates) > 0:
         ### Batch compute barycentric coordinates for all candidates
