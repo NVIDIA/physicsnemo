@@ -113,7 +113,7 @@ def test_graphcast_constructor(
             "graph_backend": backend,
         },
         {
-            "multimesh_level": 1,
+            "mesh_level": 1,
             "input_res": (res_h, res_w),
             "input_dim_grid_nodes": num_channels_2,
             "input_dim_mesh_nodes": 3,
@@ -172,7 +172,7 @@ def test_graphcast_te_constructor(
             "graph_backend": backend,
         },
         {
-            "multimesh_level": 1,
+            "mesh_level": 1,
             "input_res": (res_h, res_w),
             "input_dim_grid_nodes": num_channels_2,
             "input_dim_mesh_nodes": 3,
@@ -201,39 +201,6 @@ def test_graphcast_te_constructor(
             kw_args["output_dim_grid_nodes"],
             *kw_args["input_res"],
         )
-
-
-@requires_module(["torch_geometric", "torch_sparse"])
-@pytest.mark.parametrize("backend", ["pyg"])
-def test_graphcast_constructor_backward_compatibility(
-    device,
-    backend,
-    pytestconfig,
-    set_physicsnemo_force_te,
-    disable_flash_attention,
-):
-    """Test graphcast constructor for backward compatibility for multimesh_level -> mesh_level"""
-
-    from physicsnemo.models.graphcast.graph_cast_net import GraphCastNet
-
-    # Define dictionary of constructor args
-    kw_args = {
-        "input_res": (10, 20),
-        "input_dim_grid_nodes": 2,
-        "input_dim_mesh_nodes": 3,
-        "input_dim_edges": 4,
-        "output_dim_grid_nodes": 2,
-        "processor_layers": 3,
-        "hidden_dim": 4,
-        "do_concat_trick": True,
-        "graph_backend": backend,
-    }
-    # Construct GraphCast model
-    model_1 = GraphCastNet(**kw_args, mesh_level=1).to(device)
-    model_2 = GraphCastNet(**kw_args, multimesh_level=1).to(device)
-    model_1_params = sum(p.numel() for p in model_1.parameters())
-    model_2_params = sum(p.numel() for p in model_2.parameters())
-    assert model_1_params == model_2_params
 
 
 @requires_module(["torch_geometric", "torch_sparse"])

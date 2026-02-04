@@ -165,22 +165,19 @@ mesh-extras = [
 ]
 nn-extras = [
     "cuml-cu13",
-    "transformer_engine[pytorch]",
     "scipy",
     "natten",
     "nvidia-physicsnemo[utils-extras]",
 ]
 model-extras = [
     "nvidia-physicsnemo[nn-extras]",
-    "transformer_engine[pytorch]",
-    "netCDF4",
     "pyvista",
     "vtk",
 ]
 datapipes-extras = [
     "dask",
     "tfrecord",
-    "nvidia-physicsnemo[model-extras]",
+    "netCDF4",
 ]
 
 # Use case specific dependency groups.
