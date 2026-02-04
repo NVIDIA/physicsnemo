@@ -31,8 +31,10 @@ SO2Convolution
 GateActivation
     Gated activation applying SiLU to l=0 and learned gating to l>0.
 EdgeRotation
-    Compute Wigner D-matrices for edge rotations in equivariant networks.
-SO3AtomwiseBlock
+    Apply Wigner D-matrix rotations to spherical harmonic embeddings.
+    Use ``get_wigner_matrices()`` to compute and cache D-matrices, then
+    call the module to apply rotations.
+SO3ConvolutionBlock
     SO(3) atom-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
 
 Functions

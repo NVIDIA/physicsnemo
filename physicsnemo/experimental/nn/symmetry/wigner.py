@@ -25,8 +25,7 @@ This module provides the :class:`EdgeRotation` module for computing Wigner D-mat
 that rotate spherical harmonic coefficients between the global frame and edge-aligned
 local frames. This enables SO(3) equivariance using only SO(2) convolutions.
 
-The implementation computes J matrices on-the-fly at initialization (no precomputed
-``Jd.pt`` files required) and uses the factored formula:
+The implementation computes J matrices on-the-fly at initialization and uses the factored formula:
 
 .. math::
 
@@ -911,6 +910,13 @@ class EdgeRotation(nn.Module):
 
     where Z is the z-rotation matrix and J is a precomputed involution matrix.
 
+    The module caches computed D-matrices for efficient reuse when the same
+    rotation is applied to multiple tensors (e.g., in multi-layer networks).
+    Call :meth:`get_wigner_matrices` to compute and cache D-matrices, then
+    use :meth:`forward` to apply rotations. Use :meth:`clear_cache` to free
+    the cached memory; this should be called after gradients are computed
+    to free up the graph.
+
     Parameters
     ----------
     lmax : int
@@ -930,47 +936,62 @@ class EdgeRotation(nn.Module):
     ------
     ValueError
         If mmax > lmax.
+    RuntimeError
+        If :meth:`forward` is called before :meth:`get_wigner_matrices`
+        (no cached D-matrices available).
 
     Forward
     -------
-    edge_vecs : Float[torch.Tensor, "num_nodes max_neighbors 3"]
-        Edge direction vectors from nodes to their neighbors.
-    mask : Bool[torch.Tensor, "num_nodes max_neighbors"], optional
-        Boolean mask indicating valid edges. Invalid edges get identity matrices.
+    x : Float[torch.Tensor, "... full_dim channels"]
+        Spherical harmonic coefficients to rotate. Requires D-matrices to be
+        cached via :meth:`get_wigner_matrices` first.
+    inverse : bool, default=False
+        If True, apply inverse rotation (from edge frame to global frame).
 
     Outputs
     -------
-    Float[torch.Tensor, "num_nodes max_neighbors reduced_dim full_dim"]
-        Wigner D-matrices in the reduced representation.
+    Float[torch.Tensor, "... reduced_dim channels"]
+        Rotated coefficients. If inverse=True, output has full_dim instead.
 
     Examples
     --------
-    Computing D-matrices:
+    Basic usage with caching:
 
     >>> import torch
     >>> edge_rot = EdgeRotation(lmax=2, mmax=1)
     >>> edge_vecs = torch.randn(4, 5, 3)  # 4 nodes, 5 neighbors each
-    >>> D = edge_rot(edge_vecs)  # or edge_rot.get_wigner_matrices(edge_vecs)
+    >>> x = torch.randn(4, 5, 9, 64)  # [nodes, neighbors, (lmax+1)^2, channels]
+    >>>
+    >>> # Compute and cache D-matrices
+    >>> D = edge_rot.get_wigner_matrices(edge_vecs)
     >>> D.shape
     torch.Size([4, 5, 7, 9])
-
-    Applying rotations to embeddings:
-
-    >>> x = torch.randn(4, 5, 9, 64)  # [nodes, neighbors, (lmax+1)^2, channels]
-    >>> x_rotated = edge_rot.apply_rotation(x, edge_vecs=edge_vecs)
+    >>>
+    >>> # Apply rotation (uses cached D-matrices)
+    >>> x_rotated = edge_rot(x)
     >>> x_rotated.shape
-    torch.Size([4, 5, 7, 64])  # reduced_dim = 7
-
-    Using pre-computed D-matrices:
-
-    >>> D = edge_rot(edge_vecs)
-    >>> x_rotated = edge_rot.apply_rotation(x, wigner=D)
-    >>> x_back = edge_rot.apply_rotation(x_rotated, wigner=D, inverse=True)
+    torch.Size([4, 5, 7, 64])
+    >>>
+    >>> # Apply inverse rotation
+    >>> x_back = edge_rot(x_rotated, inverse=True)
+    >>> x_back.shape
+    torch.Size([4, 5, 9, 64])
+    >>>
+    >>> # Reuse cached D-matrices for another tensor
+    >>> y = torch.randn(4, 5, 9, 32)
+    >>> y_rotated = edge_rot(y)  # No recomputation needed
+    >>>
+    >>> # Clear cache when done
+    >>> edge_rot.clear_cache()
 
     Notes
     -----
     The inverse rotation is simply the transpose: ``D_inv = D.transpose(-2, -1)``
     since Wigner D-matrices are orthogonal.
+
+    When mmax < lmax, the forward rotation reduces dimensionality from full_dim
+    to reduced_dim. The inverse rotation reconstructs full_dim but cannot recover
+    the discarded high-order components - this is inherently lossy.
     """
 
     def __init__(
@@ -1150,6 +1171,14 @@ class EdgeRotation(nn.Module):
             reduced_offset += reduced_dim_l
             full_offset += full_dim_l
 
+        # Cache for Wigner D-matrices (allocated lazily on first use)
+        # Shape will be (num_nodes, max_neighbors, reduced_dim, full_dim)
+        # The last two dimensions are fixed; batch dims resize as needed
+        self._cached_wigner: torch.Tensor | None = None
+        self._cache_batch_shape: tuple[int, ...] | None = (
+            None  # (num_nodes, max_neighbors)
+        )
+
     def _get_J_matrix(self, ell: int) -> torch.Tensor:
         """Get the J matrix for angular momentum l."""
         return getattr(self, f"_J_{ell}")
@@ -1279,12 +1308,12 @@ class EdgeRotation(nn.Module):
             identity,
         )
 
-    def forward(
+    def _compute_wigner_matrices(
         self,
         edge_vecs: Float[torch.Tensor, "num_nodes max_neighbors 3"],
         mask: Bool[torch.Tensor, "num_nodes max_neighbors"] | None = None,
     ) -> Float[torch.Tensor, "num_nodes max_neighbors reduced_dim full_dim"]:
-        """Compute Wigner D-matrices for edge rotations.
+        """Compute Wigner D-matrices for edge rotations (internal method).
 
         Parameters
         ----------
@@ -1331,95 +1360,18 @@ class EdgeRotation(nn.Module):
 
         return wigner
 
-    def get_wigner_matrices(
+    def forward(
         self,
-        edge_vecs: Float[torch.Tensor, "... 3"],
-        mask: Bool[torch.Tensor, "..."] | None = None,
-    ) -> Float[torch.Tensor, "... reduced_dim full_dim"]:
-        """Compute Wigner D-matrices for edge rotations.
-
-        This is an alias for forward() with a more descriptive name.
-
-        Parameters
-        ----------
-        edge_vecs : Float[torch.Tensor, "... 3"]
-            Edge direction vectors.
-        mask : Bool[torch.Tensor, "..."], optional
-            Mask for valid edges.
-
-        Returns
-        -------
-        Float[torch.Tensor, "... reduced_dim full_dim"]
-            Wigner D-matrices for rotating to edge-aligned frames.
-        """
-        return self.forward(edge_vecs, mask)
-
-    def apply_rotation(
-        self,
-        x: Float[torch.Tensor, "... full_dim channels"],
-        edge_vecs: Float[torch.Tensor, "... 3"] | None = None,
-        wigner: Float[torch.Tensor, "... reduced_dim full_dim"] | None = None,
+        x: Float[torch.Tensor, "... dim channels"],
         inverse: bool = False,
-    ) -> Float[torch.Tensor, "..."]:
-        """Apply Wigner D-matrix rotation to spherical harmonic coefficients.
+    ) -> Float[torch.Tensor, "... out_dim channels"]:
+        # Check cache is populated
+        if self._cached_wigner is None:
+            raise RuntimeError(
+                "No cached Wigner D-matrices. Call get_wigner_matrices(edge_vecs) first."
+            )
 
-        This method rotates embeddings to/from edge-aligned local frames.
-        Either edge_vecs or wigner must be provided.
-
-        TODO: Refactor this to be the behavior for `forward`
-
-        Parameters
-        ----------
-        x : Float[torch.Tensor, "... full_dim channels"]
-            Spherical harmonic coefficients to rotate. The full_dim should be
-            (lmax+1)^2 for the full representation.
-        edge_vecs : Float[torch.Tensor, "... 3"], optional
-            Edge direction vectors. If provided, computes Wigner D-matrices.
-            Cannot be used together with `wigner`.
-        wigner : Float[torch.Tensor, "... reduced_dim full_dim"], optional
-            Pre-computed Wigner D-matrices. If provided, uses these directly.
-            Cannot be used together with `edge_vecs`.
-        inverse : bool, default=False
-            If True, apply inverse rotation (transpose of D-matrix).
-            Use inverse=True to rotate from edge frame back to global frame.
-
-        Returns
-        -------
-        Float[torch.Tensor, "... reduced_dim channels"] or Float[torch.Tensor, "... full_dim channels"]
-            Rotated coefficients. If inverse=False, output has reduced_dim.
-            If inverse=True, output has full_dim.
-
-        Examples
-        --------
-        >>> edge_rot = EdgeRotation(lmax=4, mmax=2)
-        >>> x = torch.randn(10, 5, 25, 64)  # [nodes, neighbors, (lmax+1)^2, channels]
-        >>> edge_vecs = torch.randn(10, 5, 3)  # Edge directions
-        >>>
-        >>> # Rotate to edge frame
-        >>> x_edge = edge_rot.apply_rotation(x, edge_vecs=edge_vecs)
-        >>> # x_edge shape: [10, 5, reduced_dim, 64]
-        >>>
-        >>> # Later, rotate back to global frame (reuse computed D-matrices)
-        >>> wigner = edge_rot(edge_vecs)  # Get D-matrices
-        >>> x_global = edge_rot.apply_rotation(x_edge, wigner=wigner, inverse=True)
-
-        Notes
-        -----
-        The rotation is applied via batch matrix multiplication:
-        - Forward: y = D @ x (rotate to edge frame)
-        - Inverse: y = D^T @ x (rotate back to global frame)
-
-        Since Wigner D-matrices are orthogonal, D^{-1} = D^T.
-        """
-        # Validate inputs
-        if edge_vecs is None and wigner is None:
-            raise ValueError("Either edge_vecs or wigner must be provided")
-        if edge_vecs is not None and wigner is not None:
-            raise ValueError("Cannot provide both edge_vecs and wigner")
-
-        # Compute wigner if needed
-        if wigner is None:
-            wigner = self.forward(edge_vecs)  # type: ignore[arg-type]
+        wigner = self._cached_wigner
 
         # Get shapes
         *batch_dims, dim_in, channels = x.shape
@@ -1468,3 +1420,63 @@ class EdgeRotation(nn.Module):
 
         # Reshape back to original batch dims
         return y_flat.reshape(*batch_dims, out_dim, channels)
+
+    def get_wigner_matrices(
+        self,
+        edge_vecs: Float[torch.Tensor, "... 3"],
+        mask: Bool[torch.Tensor, "..."] | None = None,
+    ) -> Float[torch.Tensor, "... reduced_dim full_dim"]:
+        """Compute Wigner D-matrices and cache for subsequent rotations.
+
+        This method computes D-matrices from edge vectors and stores them
+        in an internal cache. The cached matrices are used by :meth:`forward`
+        to apply rotations without recomputation.
+
+        Parameters
+        ----------
+        edge_vecs : Float[torch.Tensor, "... 3"]
+            Edge direction vectors. The last dimension must be 3 (x, y, z).
+            Typical shape: (num_nodes, max_neighbors, 3).
+        mask : Bool[torch.Tensor, "..."], optional
+            Boolean mask for valid edges. Shape should match edge_vecs
+            without the last dimension. Invalid edges get identity matrices.
+
+        Returns
+        -------
+        Float[torch.Tensor, "... reduced_dim full_dim"]
+            Computed Wigner D-matrices, also stored in cache.
+
+        Examples
+        --------
+        >>> edge_rot = EdgeRotation(lmax=2, mmax=1)
+        >>> edge_vecs = torch.randn(4, 5, 3)
+        >>> D = edge_rot.get_wigner_matrices(edge_vecs)
+        >>> D.shape
+        torch.Size([4, 5, 7, 9])
+        """
+        # Compute D-matrices
+        wigner = self._compute_wigner_matrices(edge_vecs, mask)
+
+        # Cache the result
+        self._cached_wigner = wigner
+        self._cache_batch_shape = wigner.shape[
+            :-2
+        ]  # All dims except (reduced_dim, full_dim)
+
+        return wigner
+
+    def clear_cache(self) -> None:
+        """Clear cached Wigner D-matrices to free memory.
+
+        Call this method when the cached D-matrices are no longer needed,
+        such as between training batches with different graph structures.
+
+        Examples
+        --------
+        >>> edge_rot = EdgeRotation(lmax=2)
+        >>> edge_vecs = torch.randn(4, 5, 3)
+        >>> _ = edge_rot.get_wigner_matrices(edge_vecs)
+        >>> edge_rot.clear_cache()
+        """
+        self._cached_wigner = None
+        self._cache_batch_shape = None

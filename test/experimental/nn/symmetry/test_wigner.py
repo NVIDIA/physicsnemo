@@ -423,7 +423,7 @@ class TestEdgeRotationRegression:
         edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # For y-axis (beta=0, alpha=0, gamma=0), the rotation should be identity
         expected = torch.eye(9, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
@@ -444,7 +444,7 @@ class TestEdgeRotationRegression:
         edge_vecs = torch.tensor([[[1.0, 0.0, 0.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # For x-axis: alpha=pi/2, beta=pi/2, gamma=0
         # The D matrix should be orthogonal
@@ -473,7 +473,7 @@ class TestEdgeRotationRegression:
         edge_vecs = torch.tensor([[[0.0, 0.0, 1.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # For z-axis: alpha=0, beta=pi/2, gamma=0
         D_squeezed = D[0, 0]
@@ -501,7 +501,7 @@ class TestEdgeRotationRegression:
             device=device,
         )
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # D should be orthogonal
         D_squeezed = D[0, 0]
@@ -534,7 +534,7 @@ class TestEdgeRotationRegression:
         edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # Should be identity for y-axis
         expected = torch.eye(16, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
@@ -556,7 +556,7 @@ class TestEdgeRotationRegression:
         edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # Check shape: reduced_dim = 1 + 3 + 3 + 3 = 10, full_dim = 16
         assert D.shape == (1, 1, 10, 16), (
@@ -580,7 +580,7 @@ class TestEdgeRotationParameterized:
         num_nodes, max_neighbors = 3, 4
         edge_vecs = torch.randn(num_nodes, max_neighbors, 3)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         full_dim, reduced_dim = compute_expected_dims(lmax, mmax)
         expected_shape = (num_nodes, max_neighbors, reduced_dim, full_dim)
@@ -617,7 +617,7 @@ class TestEdgeRotationParameterized:
         num_edges = 5
         edge_vecs = torch.randn(num_edges, 1, 3, dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         full_dim = (lmax + 1) ** 2
         identity = torch.eye(full_dim, dtype=torch.float64)
@@ -645,7 +645,7 @@ class TestEdgeRotationParameterized:
         # Y-axis edge (identity direction in this convention)
         edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         full_dim = (lmax + 1) ** 2
         expected = torch.eye(full_dim, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
@@ -680,7 +680,7 @@ class TestEdgeRotationParameterized:
 
         edge_vecs = torch.randn(2, 3, 3, dtype=torch.float64, requires_grad=True)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
         loss = D.sum()
         loss.backward()
 
@@ -699,7 +699,7 @@ class TestEdgeRotationParameterized:
 
         edge_vecs = torch.randn(2, 2, 3, dtype=dtype, device=device)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         assert D.dtype == dtype, (
             f"lmax={lmax}, mmax={mmax}: expected dtype {dtype}, got {D.dtype}"
@@ -720,7 +720,7 @@ class TestEdgeRotationParameterized:
         mask = torch.ones(num_nodes, max_neighbors, dtype=torch.bool)
         mask[0, 0] = False
 
-        D = model(edge_vecs, mask=mask)
+        D = model.get_wigner_matrices(edge_vecs, mask=mask)
 
         # Verify shape is still correct
         full_dim, reduced_dim = compute_expected_dims(lmax, mmax)
@@ -819,7 +819,7 @@ class TestEdgeRotation:
         num_nodes, max_neighbors = 4, 5
         edge_vecs = torch.randn(num_nodes, max_neighbors, 3)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # full_dim = (lmax+1)^2 = 9
         # reduced_dim = 1 + 3 + 5 = 9 (same as full when mmax=lmax)
@@ -834,7 +834,7 @@ class TestEdgeRotation:
         num_nodes, max_neighbors = 4, 5
         edge_vecs = torch.randn(num_nodes, max_neighbors, 3)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # full_dim = (3+1)^2 = 16
         # reduced_dim = 1 + 3 + 3 + 3 = 10
@@ -860,7 +860,7 @@ class TestEdgeRotation:
         edge_vecs = torch.tensor([[[0.0, 1.0, 0.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # For y-axis (beta=0, alpha=0, gamma=0), the rotation should be identity
         expected = torch.eye(9, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
@@ -880,7 +880,7 @@ class TestEdgeRotation:
         num_nodes, max_neighbors = 2, 3
         edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         identity = torch.eye(model._reduced_dim, dtype=dtype, device=device)
         # rescale tolerance
@@ -920,7 +920,7 @@ class TestEdgeRotation:
         edge_vecs = torch.tensor([[[0.0, -1.0, 0.0]]], dtype=torch.float64)
         model = model.to(dtype=torch.float64)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         # Verify it's still orthogonal
         D_squeezed = D[0, 0]
@@ -956,7 +956,7 @@ class TestEdgeRotation:
         mask[0, 0] = False
         mask[1, 2] = False
 
-        D = model(edge_vecs, mask=mask)
+        D = model.get_wigner_matrices(edge_vecs, mask=mask)
 
         # Get expected identity in reduced form
         identity = model._get_identity_reduced(1, D.dtype, D.device)
@@ -987,11 +987,11 @@ class TestEdgeRotation:
         model = model.to(dtype=torch.float64)
 
         # Without mask
-        D_no_mask = model(edge_vecs, mask=None)
+        D_no_mask = model.get_wigner_matrices(edge_vecs, mask=None)
 
         # With all-True mask
         mask = torch.ones(num_nodes, max_neighbors, dtype=torch.bool)
-        D_all_true = model(edge_vecs, mask=mask)
+        D_all_true = model.get_wigner_matrices(edge_vecs, mask=mask)
 
         torch.testing.assert_close(
             D_no_mask,
@@ -1013,7 +1013,7 @@ class TestEdgeRotation:
         mask = torch.ones(num_nodes, max_neighbors, dtype=torch.bool, device=device)
         mask[0, 0] = False
 
-        D = model(edge_vecs, mask=mask)
+        D = model.get_wigner_matrices(edge_vecs, mask=mask)
 
         identity = model._get_identity_reduced(1, dtype, device)
 
@@ -1062,8 +1062,8 @@ class TestEdgeRotation:
         # Test with same input
         edge_vecs = torch.randn(3, 4, 3)
 
-        D1 = model1(edge_vecs)
-        D2 = model2(edge_vecs)
+        D1 = model1.get_wigner_matrices(edge_vecs)
+        D2 = model2.get_wigner_matrices(edge_vecs)
 
         torch.testing.assert_close(
             D1,
@@ -1079,7 +1079,7 @@ class TestEdgeRotation:
         model = model.to(dtype=dtype, device=device)
 
         edge_vecs = torch.randn(2, 3, 3, dtype=dtype, device=device)
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         assert D.dtype == dtype, f"Expected {dtype} output, got {D.dtype}"
         assert D.device.type == device.type, (
@@ -1097,7 +1097,7 @@ class TestEdgeRotation:
 
         edge_vecs = torch.randn(2, 3, 3, dtype=dtype, device=device, requires_grad=True)
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         loss = D.sum()
         loss.backward()
@@ -1125,7 +1125,8 @@ class TestEdgeRotation:
         x = torch.randn(num_nodes, max_neighbors, 9, channels)  # full_dim = 9
 
         # Forward rotation
-        x_rotated = model.apply_rotation(x, edge_vecs=edge_vecs)
+        model.get_wigner_matrices(edge_vecs)
+        x_rotated = model(x)
 
         # Should have reduced_dim = 7
         assert x_rotated.shape == (num_nodes, max_neighbors, 7, channels), (
@@ -1143,10 +1144,10 @@ class TestEdgeRotation:
         x = torch.randn(num_nodes, max_neighbors, 9, channels)
 
         # Compute Wigner matrices separately
-        D = model(edge_vecs)
+        _ = model.get_wigner_matrices(edge_vecs)
 
         # Apply rotation using pre-computed matrices
-        x_rotated = model.apply_rotation(x, wigner=D)
+        x_rotated = model(x)
 
         assert x_rotated.shape == (num_nodes, max_neighbors, 9, channels)
 
@@ -1162,11 +1163,11 @@ class TestEdgeRotation:
         x = torch.randn(num_nodes, max_neighbors, 9, channels, dtype=torch.float64)
 
         # Forward rotation
-        D = model(edge_vecs)
-        x_rotated = model.apply_rotation(x, wigner=D)
+        _ = model.get_wigner_matrices(edge_vecs)
+        x_rotated = model(x)
 
         # Inverse rotation
-        x_back = model.apply_rotation(x_rotated, wigner=D, inverse=True)
+        x_back = model(x_rotated, inverse=True)
 
         # Should recover original
         torch.testing.assert_close(
@@ -1195,44 +1196,28 @@ class TestEdgeRotation:
         x = torch.randn(num_nodes, max_neighbors, 16, channels, dtype=torch.float64)
 
         # Forward rotation
-        D = model(edge_vecs)
-        x_rotated = model.apply_rotation(x, wigner=D)
+        _ = model.get_wigner_matrices(edge_vecs)
+        x_rotated = model(x)
 
         assert x_rotated.shape == (num_nodes, max_neighbors, 10, channels)
 
         # Inverse rotation
-        x_back = model.apply_rotation(x_rotated, wigner=D, inverse=True)
+        x_back = model(x_rotated, inverse=True)
 
         assert x_back.shape == (num_nodes, max_neighbors, 16, channels)
 
         # Note: We cannot expect x == x_back because information was lost
         # in the forward rotation (reduced representation discards high-order modes)
 
-    def test_apply_rotation_error_both_inputs(self) -> None:
-        r"""Test that providing both edge_vecs and wigner raises error."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
-
-        edge_vecs = torch.randn(2, 3, 3)
-        x = torch.randn(2, 3, 9, 4)
-        D = model(edge_vecs)
-
-        with pytest.raises(
-            ValueError, match="Cannot provide both edge_vecs and wigner"
-        ):
-            model.apply_rotation(x, edge_vecs=edge_vecs, wigner=D)
-
-    def test_apply_rotation_error_no_inputs(self) -> None:
-        r"""Test that providing neither edge_vecs nor wigner raises error."""
+    def test_forward_requires_cache(self) -> None:
+        r"""Test that forward() raises error when cache is empty."""
         lmax = 2
         model = EdgeRotation(lmax=lmax)
 
         x = torch.randn(2, 3, 9, 4)
 
-        with pytest.raises(
-            ValueError, match="Either edge_vecs or wigner must be provided"
-        ):
-            model.apply_rotation(x)
+        with pytest.raises(RuntimeError, match="No cached Wigner D-matrices"):
+            model(x)
 
     def test_apply_rotation_dtype_device(self, dtype, device) -> None:
         r"""Test apply_rotation with parameterized dtype and device."""
@@ -1247,27 +1232,30 @@ class TestEdgeRotation:
             num_nodes, max_neighbors, 9, channels, dtype=dtype, device=device
         )
 
-        x_rotated = model.apply_rotation(x, edge_vecs=edge_vecs)
+        model.get_wigner_matrices(edge_vecs)
+        x_rotated = model(x)
 
         assert x_rotated.dtype == dtype
         assert x_rotated.device.type == device.type
 
-    def test_get_wigner_matrices_alias(self) -> None:
-        r"""Test that get_wigner_matrices is an alias for forward."""
+    def test_get_wigner_matrices_caching(self) -> None:
+        r"""Test that get_wigner_matrices caches D-matrices for forward()."""
         lmax = 2
         model = EdgeRotation(lmax=lmax)
 
         edge_vecs = torch.randn(3, 4, 3)
 
-        D1 = model(edge_vecs)
-        D2 = model.get_wigner_matrices(edge_vecs)
+        # Compute and cache D-matrices
+        D = model.get_wigner_matrices(edge_vecs)
 
+        # Verify cache is populated
+        assert model._cached_wigner is not None
         torch.testing.assert_close(
-            D1,
-            D2,
+            D,
+            model._cached_wigner,
             rtol=1e-10,
             atol=1e-10,
-            msg="get_wigner_matrices should be identical to forward",
+            msg="get_wigner_matrices should cache the computed D-matrices",
         )
 
     def test_apply_rotation_gradient_flow(self, dtype, device) -> None:
@@ -1282,7 +1270,8 @@ class TestEdgeRotation:
         edge_vecs = torch.randn(2, 3, 3, dtype=dtype, device=device, requires_grad=True)
         x = torch.randn(2, 3, 9, 4, dtype=dtype, device=device, requires_grad=True)
 
-        x_rotated = model.apply_rotation(x, edge_vecs=edge_vecs)
+        model.get_wigner_matrices(edge_vecs)
+        x_rotated = model(x)
         loss = x_rotated.sum()
         loss.backward()
 
@@ -1290,6 +1279,42 @@ class TestEdgeRotation:
         assert x.grad is not None
         assert torch.isfinite(edge_vecs.grad).all()
         assert torch.isfinite(x.grad).all()
+
+    # =========================================================================
+    # Cache Management Tests
+    # =========================================================================
+
+    def test_clear_cache(self, dtype, device) -> None:
+        r"""Verify clear_cache() removes cached D-matrices."""
+        model = EdgeRotation(lmax=2).to(device=device, dtype=dtype)
+        edge_vecs = torch.randn(4, 5, 3, device=device, dtype=dtype)
+
+        # Populate cache
+        model.get_wigner_matrices(edge_vecs)
+        assert model._cached_wigner is not None
+
+        # Clear cache
+        model.clear_cache()
+        assert model._cached_wigner is None
+        assert model._cache_batch_shape is None
+
+    def test_cache_reuse(self, dtype, device) -> None:
+        r"""Verify cached D-matrices are reused for multiple forward calls."""
+        model = EdgeRotation(lmax=2).to(device=device, dtype=dtype)
+        edge_vecs = torch.randn(4, 5, 3, device=device, dtype=dtype)
+        x1 = torch.randn(4, 5, 9, 64, device=device, dtype=dtype)
+        x2 = torch.randn(4, 5, 9, 32, device=device, dtype=dtype)
+
+        # Compute D-matrices once
+        D = model.get_wigner_matrices(edge_vecs)
+
+        # Apply to multiple tensors (should reuse cached D)
+        _ = model(x1)
+        _ = model(x2)
+
+        # Verify cache wasn't cleared
+        assert model._cached_wigner is not None
+        torch.testing.assert_close(model._cached_wigner, D)
 
     # =========================================================================
     # Batch Consistency Tests
@@ -1306,7 +1331,7 @@ class TestEdgeRotation:
         edge_vecs[0, 1] = single_edge
         edge_vecs[2, 3] = single_edge
 
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
 
         rtol, atol = get_rtol_atol(
             dtype, scale=10.0 if is_half_precision(dtype) else 1.0
@@ -1363,8 +1388,8 @@ class TestEdgeRotationComputationDtype:
         num_edges = 10
         edge_vecs = torch.randn(num_edges, 1, 3, dtype=torch.float16)
 
-        D_no_promotion = model_no_promotion(edge_vecs)
-        D_with_promotion = model_with_promotion(edge_vecs)
+        D_no_promotion = model_no_promotion.get_wigner_matrices(edge_vecs)
+        D_with_promotion = model_with_promotion.get_wigner_matrices(edge_vecs)
 
         # Both should be float16
         assert D_no_promotion.dtype == torch.float16
@@ -1414,7 +1439,7 @@ class TestEdgeRotationComputationDtype:
         edge_vecs = torch.rand(3, 4, 3, dtype=second_dtype)
         # computation should be done with first_dtype, but result is
         # in second_dtype
-        D = model(edge_vecs)
+        D = model.get_wigner_matrices(edge_vecs)
         assert D.dtype == second_dtype
 
         # Verify computation completes without error (no NaN/Inf)
@@ -1435,8 +1460,8 @@ class TestEdgeRotationComputationDtype:
         edge_vecs_1x1 = single_edge.reshape(1, 1, 3)
         edge_vecs_2x1 = torch.stack([single_edge, single_edge]).unsqueeze(1)
 
-        D_1x1 = model(edge_vecs_1x1)
-        D_2x1 = model(edge_vecs_2x1)
+        D_1x1 = model.get_wigner_matrices(edge_vecs_1x1)
+        D_2x1 = model.get_wigner_matrices(edge_vecs_2x1)
 
         # Both batch entries in 2x1 should match the 1x1 result
         rtol, atol = get_rtol_atol(torch.float16, scale=2.0)
