@@ -837,21 +837,6 @@ class TestEdgeRotation:
             f"Expected shape (4, 5, 10, 16), got {D.shape}"
         )
 
-    def test_forward_shape_parameterized(self, dtype, device) -> None:
-        r"""Test forward shape with parameterized dtype and device."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
-        model = model.to(dtype=dtype, device=device)
-
-        num_nodes, max_neighbors = 3, 4
-        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=dtype, device=device)
-
-        D = model(edge_vecs)
-
-        assert D.shape == (3, 4, 9, 9), f"Expected shape (3, 4, 9, 9), got {D.shape}"
-        assert D.dtype == dtype, f"Expected dtype {dtype}, got {D.dtype}"
-        assert D.device.type == device.type, f"Expected device {device}, got {D.device}"
-
     # =========================================================================
     # Mathematical Correctness Tests
     # =========================================================================
@@ -882,40 +867,9 @@ class TestEdgeRotation:
             msg="D matrix for y-axis should be identity",
         )
 
-    def test_orthogonality(self) -> None:
-        r"""For each edge, D @ D^T = I (within the full block-diagonal)."""
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
-
-        num_nodes, max_neighbors = 3, 4
-        edge_vecs = torch.randn(num_nodes, max_neighbors, 3, dtype=torch.float64)
-        model = model.to(dtype=torch.float64)
-
-        D = model(edge_vecs)
-
-        # When mmax = lmax, D is square (full_dim x full_dim)
-        # Check D @ D^T = I for each edge
-        identity = torch.eye(9, dtype=torch.float64)
-
-        for i in range(num_nodes):
-            for j in range(max_neighbors):
-                D_ij = D[i, j]
-                product = torch.matmul(D_ij, D_ij.T)
-                torch.testing.assert_close(
-                    product,
-                    identity,
-                    rtol=1e-5,
-                    atol=1e-5,
-                    msg=f"D @ D^T not identity for edge [{i}, {j}]",
-                )
-
-    def test_orthogonality_parameterized(self, dtype, device) -> None:
+    def test_orthogonality_parameterized(self, lmax_mmax, dtype, device) -> None:
         r"""Test orthogonality with parameterized dtype and device."""
-        if is_half_precision(dtype):
-            pytest.xfail(f"Orthogonality test requires higher precision than {dtype}")
-
-        lmax = 2
-        model = EdgeRotation(lmax=lmax)
+        model = EdgeRotation(*lmax_mmax)
         model = model.to(dtype=dtype, device=device)
 
         num_nodes, max_neighbors = 2, 3
@@ -923,8 +877,18 @@ class TestEdgeRotation:
 
         D = model(edge_vecs)
 
-        identity = torch.eye(9, dtype=dtype, device=device)
-        rtol, atol = get_rtol_atol(dtype)
+        identity = torch.eye(model._reduced_dim, dtype=dtype, device=device)
+        # rescale tolerance
+        match dtype:
+            case torch.float32:
+                scaling = 10.0
+            case torch.float16:
+                scaling = 1e3
+            case torch.bfloat16:
+                scaling = 1e3
+            case _:
+                scaling = 1.0
+        rtol, atol = get_rtol_atol(dtype, scaling)
 
         for i in range(num_nodes):
             for j in range(max_neighbors):

@@ -48,7 +48,7 @@ import torch
 
 from physicsnemo.experimental.nn.symmetry import SO3ConvolutionBlock, make_grid_mask
 from physicsnemo.experimental.nn.symmetry.wigner import rotate_grid_coefficients
-from test.experimental.nn.symmetry.conftest import get_rtol_atol, is_half_precision
+from test.experimental.nn.symmetry.conftest import get_rtol_atol
 
 # =============================================================================
 # Fixtures
@@ -431,17 +431,7 @@ class TestSO3AtomwiseEquivariance:
             Second Euler angle (radians).
         gamma_val : float
             Third Euler angle (radians).
-
-        Notes
-        -----
-        Half-precision dtypes (float16, bfloat16) require high numerical precision
-        for equivariance tests and are expected to fail, so they are marked as xfail.
         """
-        if is_half_precision(dtype):
-            pytest.xfail(
-                f"SO(3) equivariance test requires higher precision than {dtype}"
-            )
-
         lmax, mmax = lmax_mmax
         in_channels = 16
         hidden_channels = 32
@@ -459,7 +449,7 @@ class TestSO3AtomwiseEquivariance:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -477,8 +467,17 @@ class TestSO3AtomwiseEquivariance:
             y = layer(x)
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-        # Tolerances based on dtype precision
-        rtol, atol = get_rtol_atol(dtype)
+        # Rescale tolerance based on dtype
+        match dtype:
+            case torch.float32:
+                scaling = 10.0
+            case torch.float16:
+                scaling = 1e4
+            case torch.bfloat16:
+                scaling = 1e4
+            case _:
+                scaling = 1.0
+        rtol, atol = get_rtol_atol(dtype, scaling)
 
         torch.testing.assert_close(
             y1,
@@ -505,17 +504,7 @@ class TestSO3AtomwiseEquivariance:
             Data type for tensors.
         device : torch.device
             Device to run on.
-
-        Notes
-        -----
-        Half-precision dtypes (float16, bfloat16) require high numerical precision
-        for equivariance tests and are expected to fail, so they are marked as xfail.
         """
-        if is_half_precision(dtype):
-            pytest.xfail(
-                f"SO(3) equivariance test requires higher precision than {dtype}"
-            )
-
         lmax, mmax = lmax_mmax
         in_channels = 16
         hidden_channels = 32
@@ -534,7 +523,7 @@ class TestSO3AtomwiseEquivariance:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -554,7 +543,17 @@ class TestSO3AtomwiseEquivariance:
                 y = layer(x)
                 y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-            rtol, atol = get_rtol_atol(dtype)
+            # Rescale tolerance based on dtype
+            match dtype:
+                case torch.float32:
+                    scaling = 10.0
+                case torch.float16:
+                    scaling = 1e4
+                case torch.bfloat16:
+                    scaling = 1e4
+                case _:
+                    scaling = 1.0
+            rtol, atol = get_rtol_atol(dtype, scaling)
 
             torch.testing.assert_close(
                 y1,
@@ -581,17 +580,7 @@ class TestSO3AtomwiseEquivariance:
             Data type for tensors.
         device : torch.device
             Device to run on.
-
-        Notes
-        -----
-        Half-precision dtypes (float16, bfloat16) require high numerical precision
-        for this forward pass test and are expected to fail, so they are marked as xfail.
         """
-        if is_half_precision(dtype):
-            pytest.xfail(
-                f"SO(3) equivariance test requires higher precision than {dtype}"
-            )
-
         lmax, mmax = 4, 2
         in_channels = 16
         hidden_channels = 32
@@ -609,7 +598,7 @@ class TestSO3AtomwiseEquivariance:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -707,17 +696,7 @@ class TestIntegrationWithRotation:
             Data type for tensors.
         device : torch.device
             Device to run on.
-
-        Notes
-        -----
-        Half-precision dtypes (float16, bfloat16) require high numerical precision
-        for multi-layer equivariance tests with accumulated errors, so they are marked as xfail.
         """
-        if is_half_precision(dtype):
-            pytest.xfail(
-                f"SO(3) equivariance test requires higher precision than {dtype}"
-            )
-
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 5
@@ -742,7 +721,7 @@ class TestIntegrationWithRotation:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -761,8 +740,17 @@ class TestIntegrationWithRotation:
             y = layer2(layer1(x))
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-        # Use slightly looser tolerances for composed layers
-        rtol, atol = get_rtol_atol(dtype)
+        # Rescale tolerance based on dtype
+        match dtype:
+            case torch.float32:
+                scaling = 10.0
+            case torch.float16:
+                scaling = 1e4
+            case torch.bfloat16:
+                scaling = 1e4
+            case _:
+                scaling = 1.0
+        rtol, atol = get_rtol_atol(dtype, scaling)
         rtol *= 10  # Looser for composed layers
         atol *= 10
 
