@@ -672,8 +672,8 @@ class TestStatisticsVariations:
 class TestValidationCodePaths:
     """Tests for specific validation code paths."""
 
-    def test_large_mesh_duplicate_check_skipped(self, device):
-        """Test that duplicate check is skipped for large meshes."""
+    def test_large_mesh_duplicate_check_works(self, device):
+        """Test that duplicate check works efficiently for large meshes."""
         # Create mesh with >10K points
         n = 101
         x = torch.linspace(0, 1, n, device=device)
@@ -687,11 +687,11 @@ class TestValidationCodePaths:
 
         mesh = Mesh(points=points, cells=cells)
 
-        # Should skip duplicate check (>10K points)
+        # Duplicate check now works for all mesh sizes using vectorized spatial hashing
         report = validate_mesh(mesh, check_duplicate_vertices=True)
 
-        # Returns -1 for skipped check
-        assert report.get("n_duplicate_vertices", -1) == -1
+        # Should return actual count (0 since grid points are well-spaced)
+        assert report["n_duplicate_vertices"] == 0
 
     def test_inverted_cells_3d(self, device):
         """Test detection of inverted cells in 3D."""

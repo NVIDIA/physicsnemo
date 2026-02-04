@@ -25,8 +25,219 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.boundaries import extract_candidate_facets
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+
+
+def _find_duplicate_vertices_spatial_hash(
+    points: torch.Tensor,
+    tolerance: float,
+) -> torch.Tensor:
+    """Find duplicate vertex pairs using spatial hashing for O(N) average complexity.
+
+    Uses fully vectorized PyTorch operations for GPU compatibility. Each point is
+    expanded to its 2^d neighboring cells to correctly handle pairs that span
+    cell boundaries.
+
+    Args:
+        points: Vertex positions, shape (n_points, n_spatial_dims)
+        tolerance: Distance threshold for considering vertices as duplicates
+
+    Returns:
+        Tensor of duplicate pairs, shape (n_duplicates, 2), with i < j for each pair
+    """
+    n_points = points.shape[0]
+    n_dims = points.shape[1]
+    device = points.device
+
+    if n_points == 0:
+        return torch.empty((0, 2), dtype=torch.long, device=device)
+
+    ### Step 1: Assign each point to grid cells
+    # Use cell_size = tolerance so that any pair within tolerance spans at most
+    # 2 cells in each dimension. By expanding each point to its 2^d neighboring
+    # cells, we guarantee that any duplicate pair shares at least one cell.
+    cell_size = tolerance if tolerance > 0 else 1.0
+
+    # Shift points to have non-negative coordinates
+    min_coords = points.min(dim=0).values
+    shifted_points = points - min_coords
+
+    # Compute integer cell indices for each point
+    cell_indices = (shifted_points / cell_size).long()  # (n_points, n_dims)
+
+    ### Step 2: Expand each point to 2^d neighboring cells
+    # Generate all 2^d offset combinations: {0, 1}^n_dims
+    # For 2D: [[0,0], [0,1], [1,0], [1,1]]
+    # For 3D: [[0,0,0], [0,0,1], ..., [1,1,1]]
+    n_neighbors = 2**n_dims
+    neighbor_offsets = torch.zeros((n_neighbors, n_dims), dtype=torch.long, device=device)
+    for i in range(n_neighbors):
+        for d in range(n_dims):
+            neighbor_offsets[i, d] = (i >> d) & 1
+
+    # Expand cell_indices to include all neighboring cells
+    # cell_indices: (n_points, n_dims)
+    # neighbor_offsets: (2^d, n_dims)
+    # Result: expanded_cells of shape (n_points * 2^d, n_dims)
+    expanded_cells = cell_indices.unsqueeze(1) + neighbor_offsets.unsqueeze(
+        0
+    )  # (n_points, 2^d, n_dims)
+    expanded_cells = expanded_cells.reshape(-1, n_dims)  # (n_points * 2^d, n_dims)
+
+    # Create corresponding point indices for each expanded cell entry
+    # Each point appears 2^d times
+    expanded_point_indices = torch.arange(n_points, device=device).repeat_interleave(
+        n_neighbors
+    )  # (n_points * 2^d,)
+
+    ### Step 3: Group points by cell using torch.unique
+    # torch.unique with return_inverse assigns each unique cell a sequential ID
+    # and inverse_indices tells us which ID each expanded point belongs to
+    _, inverse_indices, counts = torch.unique(
+        expanded_cells, dim=0, return_inverse=True, return_counts=True
+    )
+
+    # Sort by cell ID to group points in the same cell together
+    sorted_order = torch.argsort(inverse_indices)
+    sorted_point_indices = expanded_point_indices[sorted_order]
+
+    # Compute bucket boundaries from counts
+    # counts[i] = number of points in cell i
+    bucket_ends = torch.cumsum(counts, dim=0)
+    bucket_starts = torch.cat([torch.tensor([0], device=device), bucket_ends[:-1]])
+
+    ### Step 4: Filter to buckets with 2+ points
+    # counts from torch.unique is already the bucket sizes
+    bucket_sizes = counts
+    multi_point_mask = bucket_sizes >= 2
+
+    if not multi_point_mask.any():
+        return torch.empty((0, 2), dtype=torch.long, device=device)
+
+    valid_bucket_sizes = bucket_sizes[multi_point_mask]
+    valid_bucket_starts = bucket_starts[multi_point_mask]
+    n_valid_buckets = len(valid_bucket_sizes)
+
+    ### Step 5: Generate all pairs within each bucket (vectorized)
+    # Following the pattern from _cell_neighbors.py
+    # For each bucket, we generate C(n,2) = n*(n-1)/2 pairs
+
+    # Total points across all valid buckets
+    total_points_in_valid_buckets = int(valid_bucket_sizes.sum().item())
+
+    # Generate cumulative offsets for indexing into sorted_point_indices
+    bucket_cumulative_starts = torch.cat(
+        [
+            torch.tensor([0], dtype=torch.long, device=device),
+            torch.cumsum(valid_bucket_sizes[:-1], dim=0),
+        ]
+    )
+
+    # Create position index within concatenated valid bucket points
+    cumulative_idx = torch.arange(
+        total_points_in_valid_buckets, dtype=torch.long, device=device
+    )
+
+    # For each position, compute which bucket it belongs to and its local index
+    bucket_ids = torch.repeat_interleave(
+        torch.arange(n_valid_buckets, dtype=torch.long, device=device),
+        valid_bucket_sizes,
+    )
+    local_indices = cumulative_idx - bucket_cumulative_starts[bucket_ids]
+
+    # Get the actual point indices from sorted_point_indices
+    global_positions = valid_bucket_starts[bucket_ids] + local_indices
+    point_ids_in_buckets = sorted_point_indices[global_positions]
+
+    ### Step 6: Generate all (i, j) pairs where i < j within each bucket
+    # For each point at local index k in a bucket of size n, it pairs with
+    # points at local indices k+1, k+2, ..., n-1. That's (n-1-k) pairs.
+    # Total pairs per bucket: sum_{k=0}^{n-1} (n-1-k) = n*(n-1)/2
+
+    # Number of pairs each point contributes (points at end of bucket contribute fewer)
+    bucket_sizes_per_point = valid_bucket_sizes[bucket_ids]
+    pairs_per_point = bucket_sizes_per_point - 1 - local_indices  # (n-1-k) for point at position k
+
+    # Only points that contribute at least 1 pair
+    contributing_mask = pairs_per_point > 0
+    if not contributing_mask.any():
+        return torch.empty((0, 2), dtype=torch.long, device=device)
+
+    contributing_point_ids = point_ids_in_buckets[contributing_mask]
+    contributing_bucket_ids = bucket_ids[contributing_mask]
+    contributing_local_indices = local_indices[contributing_mask]
+    contributing_pairs_count = pairs_per_point[contributing_mask]
+
+    # Repeat each contributing point by its number of pairs
+    pair_source_points = torch.repeat_interleave(
+        contributing_point_ids, contributing_pairs_count
+    )
+
+    # Generate target local indices for each pair
+    # For point at local index k, targets are k+1, k+2, ..., n-1
+    total_pairs = contributing_pairs_count.sum()
+    pair_cumulative_starts = torch.cat(
+        [
+            torch.tensor([0], dtype=torch.long, device=device),
+            torch.cumsum(contributing_pairs_count[:-1], dim=0),
+        ]
+    )
+
+    pair_idx = torch.arange(total_pairs, dtype=torch.long, device=device)
+    pair_source_idx = torch.repeat_interleave(
+        torch.arange(len(contributing_pairs_count), dtype=torch.long, device=device),
+        contributing_pairs_count,
+    )
+
+    # Within-source offset: 0, 1, 2, ... for each source point
+    within_source_offset = pair_idx - pair_cumulative_starts[pair_source_idx]
+
+    # Target local index = source_local_index + 1 + offset
+    source_local_indices_expanded = contributing_local_indices[pair_source_idx]
+    target_local_indices = source_local_indices_expanded + 1 + within_source_offset
+
+    # Convert target local indices back to point IDs
+    target_bucket_ids = contributing_bucket_ids[pair_source_idx]
+    target_global_positions = (
+        valid_bucket_starts[target_bucket_ids]
+        + target_local_indices
+    )
+    pair_target_points = sorted_point_indices[target_global_positions]
+
+    ### Step 7: Compute distances for all candidate pairs (vectorized)
+    pair_distances = torch.linalg.vector_norm(
+        points[pair_source_points] - points[pair_target_points], dim=1
+    )
+
+    # Filter pairs within tolerance
+    within_tolerance_mask = pair_distances < tolerance
+    if not within_tolerance_mask.any():
+        return torch.empty((0, 2), dtype=torch.long, device=device)
+
+    filtered_sources = pair_source_points[within_tolerance_mask]
+    filtered_targets = pair_target_points[within_tolerance_mask]
+
+    ### Step 8: Canonicalize pairs (i < j) and deduplicate
+    # Due to cell expansion, the same pair may appear in multiple buckets
+    pair_min = torch.minimum(filtered_sources, filtered_targets)
+    pair_max = torch.maximum(filtered_sources, filtered_targets)
+
+    # Remove self-pairs (can happen if same point appears in multiple expanded cells)
+    non_self_mask = pair_min != pair_max
+    pair_min = pair_min[non_self_mask]
+    pair_max = pair_max[non_self_mask]
+
+    if len(pair_min) == 0:
+        return torch.empty((0, 2), dtype=torch.long, device=device)
+
+    # Stack and deduplicate
+    candidate_pairs = torch.stack([pair_min, pair_max], dim=1)  # (n_candidates, 2)
+    unique_pairs = torch.unique(candidate_pairs, dim=0)
+
+    return unique_pairs
 
 
 def validate_mesh(
@@ -123,46 +334,39 @@ def validate_mesh(
 
     ### Check for duplicate vertices
     if check_duplicate_vertices:
-        # Compute pairwise distances between all points (expensive for large meshes)
-        # For efficiency, only check if mesh is small or use approximate method
-        if mesh.n_points < 10000:  # Exact check for small meshes
-            # Compute all pairwise distances
-            diff = mesh.points.unsqueeze(0) - mesh.points.unsqueeze(1)  # (n, n, d)
-            distances = torch.norm(diff, dim=-1)  # (n, n)
+        # Use vectorized spatial hashing for O(N) average complexity
+        # Works efficiently for all mesh sizes
+        duplicate_pairs = _find_duplicate_vertices_spatial_hash(
+            mesh.points, tolerance
+        )
+        n_duplicates = len(duplicate_pairs)
 
-            # Find pairs with distance < tolerance (excluding diagonal)
-            mask = distances < tolerance
-            mask.fill_diagonal_(False)  # Exclude self-pairs
+        results["n_duplicate_vertices"] = n_duplicates
 
-            duplicate_indices = torch.where(torch.triu(mask, diagonal=1))
-            n_duplicates = len(duplicate_indices[0])
+        if n_duplicates > 0:
+            results["valid"] = False
+            results["duplicate_vertex_pairs"] = duplicate_pairs
 
-            results["n_duplicate_vertices"] = n_duplicates
-
-            if n_duplicates > 0:
-                results["valid"] = False
-                results["duplicate_vertex_pairs"] = torch.stack(
-                    duplicate_indices, dim=1
+            if raise_on_error:
+                raise ValueError(
+                    f"Found {n_duplicates} pairs of duplicate vertices "
+                    f"(within tolerance={tolerance}).\n"
+                    f"First few pairs: {duplicate_pairs[:5].tolist()}"
                 )
-
-                if raise_on_error:
-                    raise ValueError(
-                        f"Found {n_duplicates} pairs of duplicate vertices "
-                        f"(within tolerance={tolerance}).\n"
-                        f"First few pairs: {results['duplicate_vertex_pairs'][:5].tolist()}"
-                    )
-        else:
-            # For large meshes, skip exact check (too expensive)
-            # Could implement approximate duplicate detection with spatial hashing
-            results["n_duplicate_vertices"] = -1  # Not checked
 
     ### Check for degenerate cells
     if check_degenerate_cells and mesh.n_cells > 0:
         # Compute cell areas
         areas = mesh.cell_areas
 
+        # Scale tolerance for area comparison:
+        # - tolerance is in distance units
+        # - areas have units of length^n_manifold_dims
+        # So use tolerance^n_manifold_dims for a consistent comparison
+        area_tolerance = tolerance ** mesh.n_manifold_dims
+
         # Find cells with area below tolerance
-        degenerate_mask = areas < tolerance
+        degenerate_mask = areas < area_tolerance
         n_degenerate = degenerate_mask.sum().item()
 
         results["n_degenerate_cells"] = n_degenerate
@@ -174,7 +378,7 @@ def validate_mesh(
 
             if raise_on_error:
                 raise ValueError(
-                    f"Found {n_degenerate} degenerate cells with area < {tolerance}.\n"
+                    f"Found {n_degenerate} degenerate cells with area < {area_tolerance}.\n"
                     f"Problem cells: {results['degenerate_cell_indices'].tolist()[:10]}\n"
                     f"Areas: {results['degenerate_cell_areas'].tolist()[:10]}"
                 )
@@ -226,8 +430,6 @@ def validate_mesh(
     if check_manifoldness:
         if mesh.n_manifold_dims == 2 and mesh.n_spatial_dims >= 2:
             # Check that each edge is shared by at most 2 triangles
-            from physicsnemo.mesh.boundaries import extract_candidate_facets
-
             # Extract all edges (with duplicates)
             edges_with_dupes, parent_cells = extract_candidate_facets(
                 mesh.cells, manifold_codimension=1
@@ -300,20 +502,19 @@ def check_duplicate_cell_vertices(mesh: "Mesh") -> tuple[int, torch.Tensor]:
     if mesh.n_cells == 0:
         return 0, torch.tensor([], dtype=torch.long, device=mesh.cells.device)
 
-    # For each cell, check if all vertices are unique
-    invalid_cells = []
+    # Vectorized approach: sort vertices within each cell, then check for
+    # consecutive duplicates. A cell has duplicates if any adjacent pair
+    # in the sorted order is equal.
+    sorted_cells = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts)
 
-    for i in range(mesh.n_cells):
-        cell_verts = mesh.cells[i]
-        unique_verts = torch.unique(cell_verts)
+    # Check for consecutive duplicates: sorted_cells[:, i] == sorted_cells[:, i+1]
+    has_duplicate = (sorted_cells[:, 1:] == sorted_cells[:, :-1]).any(dim=1)
 
-        if len(unique_verts) < len(cell_verts):
-            invalid_cells.append(i)
+    # Get indices of cells with duplicates
+    invalid_indices = torch.where(has_duplicate)[0]
+    n_invalid = len(invalid_indices)
 
-    if len(invalid_cells) == 0:
+    if n_invalid == 0:
         return 0, torch.tensor([], dtype=torch.long, device=mesh.cells.device)
 
-    invalid_indices = torch.tensor(
-        invalid_cells, dtype=torch.long, device=mesh.cells.device
-    )
-    return len(invalid_cells), invalid_indices
+    return n_invalid, invalid_indices
