@@ -1350,3 +1350,138 @@ class TestEdgeRotation:
             atol=atol,
             msg=f"Same edge vector should produce same D matrix (dtype={dtype}, device={device})",
         )
+
+
+class TestEdgeRotationComputationDtype:
+    r"""Test suite for EdgeRotation.computation_dtype type promotion.
+
+    Tests the `computation_dtype` parameter that allows users to specify a
+    higher-precision dtype for internal Wigner D-matrix computations to
+    improve numerical accuracy for half-precision inputs.
+    """
+
+    # =========================================================================
+    # Basic Functionality Tests
+    # =========================================================================
+
+    def test_computation_dtype_stored(self) -> None:
+        r"""Verify that computation_dtype is stored correctly."""
+        model = EdgeRotation(lmax=2, computation_dtype=torch.float32)
+        assert model.computation_dtype == torch.float32, (
+            "computation_dtype should be stored as torch.float32"
+        )
+
+        model = EdgeRotation(lmax=2, computation_dtype=torch.float64)
+        assert model.computation_dtype == torch.float64, (
+            "computation_dtype should be stored as torch.float64"
+        )
+
+    # =========================================================================
+    # Numerical Precision Tests
+    # =========================================================================
+
+    def test_computation_dtype_improves_precision(self) -> None:
+        r"""Verify that using computation_dtype improves numerical precision.
+
+        Compare orthogonality error (||D @ D^T - I||) between models with and
+        without computation_dtype promotion for half-precision inputs.
+        """
+        lmax = 2
+        model_no_promotion = EdgeRotation(lmax=lmax, computation_dtype=None)
+        model_with_promotion = EdgeRotation(lmax=lmax, computation_dtype=torch.float32)
+
+        # Use float16 input where precision issues are noticeable
+        num_edges = 10
+        edge_vecs = torch.randn(num_edges, 1, 3, dtype=torch.float16)
+
+        D_no_promotion = model_no_promotion(edge_vecs)
+        D_with_promotion = model_with_promotion(edge_vecs)
+
+        # Both should be float16
+        assert D_no_promotion.dtype == torch.float16
+        assert D_with_promotion.dtype == torch.float16
+
+        # Compute orthogonality errors: ||D @ D^T - I||_F
+        full_dim = (lmax + 1) ** 2
+        identity = torch.eye(full_dim, dtype=torch.float16)
+
+        errors_no_promotion = []
+        errors_with_promotion = []
+
+        for i in range(num_edges):
+            D_i_no = D_no_promotion[i, 0]
+            D_i_with = D_with_promotion[i, 0]
+
+            error_no = torch.norm(torch.matmul(D_i_no, D_i_no.T) - identity)
+            error_with = torch.norm(torch.matmul(D_i_with, D_i_with.T) - identity)
+
+            errors_no_promotion.append(error_no.item())
+            errors_with_promotion.append(error_with.item())
+
+        avg_error_no = sum(errors_no_promotion) / len(errors_no_promotion)
+        avg_error_with = sum(errors_with_promotion) / len(errors_with_promotion)
+
+        # The model with computation_dtype should have better (lower) error
+        assert avg_error_with < avg_error_no, (
+            f"computation_dtype should improve precision: "
+            f"avg_error_no_promotion={avg_error_no:.6f}, "
+            f"avg_error_with_promotion={avg_error_with:.6f}"
+        )
+
+    # =========================================================================
+    # Type Promotion Tests
+    # =========================================================================
+
+    @pytest.mark.parametrize(
+        "first_dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+    )
+    @pytest.mark.parametrize(
+        "second_dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64]
+    )
+    def test_computation_with_casting(self, first_dtype, second_dtype) -> None:
+        r"""Test different data type casting"""
+        model = EdgeRotation(lmax=2, computation_dtype=first_dtype)
+
+        edge_vecs = torch.rand(3, 4, 3, dtype=second_dtype)
+        # computation should be done with first_dtype, but result is
+        # in second_dtype
+        D = model(edge_vecs)
+        assert D.dtype == second_dtype
+
+        # Verify computation completes without error (no NaN/Inf)
+        assert torch.isfinite(D).all(), "Output should not contain NaN or Inf"
+
+    # =========================================================================
+    # Edge Cases
+    # =========================================================================
+
+    def test_computation_dtype_consistency_across_batches(self) -> None:
+        r"""Verify that computation_dtype produces consistent results across different batch sizes."""
+        model = EdgeRotation(lmax=2, computation_dtype=torch.float32)
+
+        # Create a single edge vector
+        single_edge = torch.randn(3, dtype=torch.float16)
+
+        # Test with different batch arrangements
+        edge_vecs_1x1 = single_edge.reshape(1, 1, 3)
+        edge_vecs_2x1 = torch.stack([single_edge, single_edge]).unsqueeze(1)
+
+        D_1x1 = model(edge_vecs_1x1)
+        D_2x1 = model(edge_vecs_2x1)
+
+        # Both batch entries in 2x1 should match the 1x1 result
+        rtol, atol = get_rtol_atol(torch.float16, scale=2.0)
+        torch.testing.assert_close(
+            D_1x1[0, 0],
+            D_2x1[0, 0],
+            rtol=rtol,
+            atol=atol,
+            msg="computation_dtype should produce consistent results across batches",
+        )
+        torch.testing.assert_close(
+            D_1x1[0, 0],
+            D_2x1[1, 0],
+            rtol=rtol,
+            atol=atol,
+            msg="computation_dtype should produce consistent results across batches",
+        )
