@@ -42,13 +42,14 @@ from jaxtyping import Float
 from torch import nn
 
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
+from physicsnemo.nn import Module
 
 __all__ = [
     "SO3LinearGrid",
 ]
 
 
-class SO3LinearGrid(nn.Module):
+class SO3LinearGrid(Module):
     r"""SO(3) equivariant linear layer using grid layout.
 
     Applies separate linear transformations per spherical harmonic degree l,

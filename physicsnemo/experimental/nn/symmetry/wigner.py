@@ -56,6 +56,8 @@ import torch
 from torch import nn
 from jaxtyping import Bool, Float
 
+from physicsnemo.nn import Module
+
 __all__ = [
     "EdgeRotation",
     "edge_vectors_to_euler_angles",
@@ -892,7 +894,7 @@ def compute_wigner_d_matrices(
 # =============================================================================
 
 
-class EdgeRotation(nn.Module):
+class EdgeRotation(Module):
     r"""Compute and apply Wigner D-matrices for edge rotations in equivariant networks.
 
     This module computes rotation matrices needed to transform spherical

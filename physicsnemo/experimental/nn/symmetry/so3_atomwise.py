@@ -42,13 +42,14 @@ from torch import nn
 
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.so3_linear import SO3LinearGrid
+from physicsnemo.nn import Module
 
 __all__ = [
     "SO3ConvolutionBlock",
 ]
 
 
-class SO3ConvolutionBlock(nn.Module):
+class SO3ConvolutionBlock(Module):
     r"""SO(3) node-wise transformation layer using grid layout.
 
     This module applies node-wise transformations in the spectral
