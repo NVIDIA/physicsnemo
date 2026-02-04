@@ -175,7 +175,7 @@ class TransolverBlock(nn.Module):
     Outputs
     -------
     torch.Tensor
-        Output tensor of shape :math:`(B, N, C)` or :math:`(B, N, D_{out})`
+        Output tensor of shape :math:`(B, N, C)`, or :math:`(B, N, C_{out})`
         if ``last_layer=True``.
     """
 
@@ -280,8 +280,8 @@ class TransolverBlock(nn.Module):
                 )
 
     def forward(
-        self, fx: Float[torch.Tensor, "batch tokens hidden"]
-    ) -> Float[torch.Tensor, "batch tokens out"]:
+        self, fx: Float[torch.Tensor, "B N C"]
+    ) -> Float[torch.Tensor, "B N C_out"]:
         r"""
         Forward pass of the Transolver block.
 
@@ -293,7 +293,8 @@ class TransolverBlock(nn.Module):
         Returns
         -------
         torch.Tensor
-            Output tensor of shape :math:`(B, N, C)` or :math:`(B, N, D_{out})`.
+            Output tensor of shape :math:`(B, N, C)`, or :math:`(B, N, C_{out})`
+            if ``last_layer=True``.
         """
         # Apply physics attention with residual connection
         fx = self.Attn(self.ln_1(fx)) + fx
@@ -383,9 +384,11 @@ class Transolver(Module):
     Forward
     -------
     fx : torch.Tensor
-        Functional input tensor of shape :math:`(B, N, D_{func})` for flattened
-        data or :math:`(B, H, W, D_{func})` / :math:`(B, H, W, D, D_{func})`
-        for structured data.
+        Functional input tensor of shape :math:`(B, N, C_{in})` for flattened
+        data where :math:`B` is batch size, :math:`N` is number of tokens, and
+        :math:`C_{in}` is functional dimension. For structured data, shape is
+        :math:`(B, H_s, W_s, C_{in})` for 2D or :math:`(B, H_s, W_s, D_s, C_{in})`
+        for 3D, where :math:`H_s, W_s, D_s` are spatial dimensions.
     embedding : torch.Tensor | None, optional
         Embedding tensor. Required if ``unified_pos=False``. Shape should
         match ``fx`` spatial dimensions.
@@ -395,7 +398,8 @@ class Transolver(Module):
     Outputs
     -------
     torch.Tensor
-        Output tensor with same spatial shape as input and ``out_dim`` features.
+        Output tensor with same spatial shape as input and :math:`C_{out}`
+        features (equal to ``out_dim``).
 
     Examples
     --------
@@ -638,18 +642,20 @@ class Transolver(Module):
 
     def forward(
         self,
-        fx: Float[torch.Tensor, "batch *spatial functional_dim"],
-        embedding: Float[torch.Tensor, "batch *spatial embedding_dim"] | None = None,
-        time: Float[torch.Tensor, " batch"] | None = None,
-    ) -> Float[torch.Tensor, "batch *spatial out_dim"]:
+        fx: Float[torch.Tensor, "B *spatial C_in"],
+        embedding: Float[torch.Tensor, "B *spatial C_emb"] | None = None,
+        time: Float[torch.Tensor, " B"] | None = None,
+    ) -> Float[torch.Tensor, "B *spatial C_out"]:
         r"""
         Forward pass of the Transolver model.
 
         Parameters
         ----------
         fx : torch.Tensor
-            Functional input tensor. Shape :math:`(B, N, D_{func})` for
-            flattened data or :math:`(B, H, W, D_{func})` for structured 2D.
+            Functional input tensor. Shape :math:`(B, N, C_{in})` for flattened
+            data or :math:`(B, H_s, W_s, C_{in})` for structured 2D, where
+            :math:`B` is batch size, :math:`N` is number of tokens, and
+            :math:`C_{in}` is functional dimension.
         embedding : torch.Tensor | None, optional
             Embedding tensor. Required if ``unified_pos=False``.
         time : torch.Tensor | None, optional
@@ -658,7 +664,8 @@ class Transolver(Module):
         Returns
         -------
         torch.Tensor
-            Output tensor with same spatial shape as input.
+            Output tensor with same spatial shape as input and :math:`C_{out}`
+            features.
         """
         # Input validation (skip during torch.compile for performance)
         if not torch.compiler.is_compiling():

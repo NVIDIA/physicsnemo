@@ -97,15 +97,15 @@ class PhysicsAttentionBase(nn.Module, ABC):
     -------
     x : torch.Tensor
         Input tensor of shape :math:`(B, N, C)` where :math:`B` is batch size,
-        :math:`N` is number of tokens, :math:`C` is feature dimension.
+        :math:`N` is number of tokens, and :math:`C` is feature dimension.
 
     Outputs
     -------
     torch.Tensor
         Output tensor of shape :math:`(B, N, C)`.
 
-    Note
-    ----
+    See Also
+    --------
     This is an abstract base class. Use one of the concrete implementations:
 
     - :class:`PhysicsAttentionIrregularMesh` for unstructured mesh data
@@ -125,6 +125,7 @@ class PhysicsAttentionBase(nn.Module, ABC):
     ):
         super().__init__()
         inner_dim = dim_head * heads
+        self.dim = dim
         self.dim_head = dim_head
         self.heads = heads
         self.plus = plus
@@ -180,12 +181,12 @@ class PhysicsAttentionBase(nn.Module, ABC):
 
     @abstractmethod
     def project_input_onto_slices(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
+        self, x: Float[torch.Tensor, "B N C"]
     ) -> (
-        Float[torch.Tensor, "batch tokens heads head_dim"]
+        Float[torch.Tensor, "B N H D"]
         | tuple[
-            Float[torch.Tensor, "batch tokens heads head_dim"],
-            Float[torch.Tensor, "batch tokens heads head_dim"],
+            Float[torch.Tensor, "B N H D"],
+            Float[torch.Tensor, "B N H D"],
         ]
     ):
         r"""
@@ -200,19 +201,20 @@ class PhysicsAttentionBase(nn.Module, ABC):
         -------
         torch.Tensor | tuple[torch.Tensor, torch.Tensor]
             For Transolver++: single projected tensor of shape
-            :math:`(B, N, H, D_h)`.
+            :math:`(B, N, H, D)` where :math:`H` is number of attention heads
+            and :math:`D` is dimension per head.
             For standard Transolver: tuple of (x_mid, fx_mid) both of shape
-            :math:`(B, N, H, D_h)`.
+            :math:`(B, N, H, D)`.
         """
         ...
 
-    def compute_slices_from_projections(
+    def _compute_slices_from_projections(
         self,
-        slice_projections: Float[torch.Tensor, "batch tokens heads slice_num"],
-        fx: Float[torch.Tensor, "batch tokens heads head_dim"],
+        slice_projections: Float[torch.Tensor, "B N H S"],
+        fx: Float[torch.Tensor, "B N H D"],
     ) -> tuple[
-        Float[torch.Tensor, "batch tokens heads slice_num"],
-        Float[torch.Tensor, "batch heads slice_num head_dim"],
+        Float[torch.Tensor, "B N H S"],
+        Float[torch.Tensor, "B H S D"],
     ]:
         r"""
         Compute slice weights and slice tokens from input projections.
@@ -226,17 +228,18 @@ class PhysicsAttentionBase(nn.Module, ABC):
         Parameters
         ----------
         slice_projections : torch.Tensor
-            Projected input of shape :math:`(B, N, H, S)` where :math:`S` is
-            the number of slices.
+            Projected input of shape :math:`(B, N, H, S)` where :math:`H` is
+            number of attention heads and :math:`S` is number of physics slices.
         fx : torch.Tensor
-            Latent features of shape :math:`(B, N, H, D_h)`.
+            Latent features of shape :math:`(B, N, H, D)` where :math:`D` is
+            dimension per head.
 
         Returns
         -------
         tuple[torch.Tensor, torch.Tensor]
             - ``slice_weights``: Shape :math:`(B, N, H, S)`, normalized weights
               for each slice per token.
-            - ``slice_token``: Shape :math:`(B, H, S, D_h)`, aggregated features
+            - ``slice_token``: Shape :math:`(B, H, S, D)`, aggregated features
               per slice.
         """
         # Compute temperature-scaled softmax over slices
@@ -265,24 +268,22 @@ class PhysicsAttentionBase(nn.Module, ABC):
 
         # Computing the slice tokens is a matmul followed by a normalization.
         # It can, unfortunately, overflow in reduced precision, so normalize first:
-        slice_norm = slice_weights.sum(1) + 1e-2  # [Batch, N_heads, Slice_num]
+        slice_norm = slice_weights.sum(1) + 1e-2  # (B, H, S)
         # Sharded note: slice_norm will be a partial sum at this point.
         # That's because the we're summing over the tokens, which are distributed
         normed_weights = slice_weights / (slice_norm[:, None, :, :])
-        # Normed weights has shape
-        # (batch, n_tokens, n_heads, slice_num)
+        # Normed weights has shape (B, N, H, S)
 
         # Sharded note: normed_weights will resolve the partial slice_norm
         # and the output normed_weights will be sharded.
-        # fx has shape (Batch, n_tokens, n_heads, head_dim)
+        # fx has shape (B, N, H, D)
         # This matmul needs to contract over the tokens
-        # This should produce an output with shape
-        # [Batch, N_heads, Slice_num, Head_dim]
+        # This should produce an output with shape (B, H, S, D)
 
         # Like the weight norm, this sum is a **partial** sum since we are summing
         # over the tokens
 
-        # Aggregate features: (B, N, H, S)^T @ (B, N, H, D_h) -> (B, H, S, D_h)
+        # Aggregate features: (B, N, H, S)^T @ (B, N, H, D) -> (B, H, S, D)
         slice_token = torch.matmul(
             normed_weights.permute(0, 2, 3, 1), fx.permute(0, 2, 1, 3)
         )
@@ -291,21 +292,21 @@ class PhysicsAttentionBase(nn.Module, ABC):
 
         return slice_weights, slice_token
 
-    def compute_slice_attention_te(
-        self, slice_tokens: Float[torch.Tensor, "batch heads slice_num head_dim"]
-    ) -> Float[torch.Tensor, "batch heads slice_num head_dim"]:
+    def _compute_slice_attention_te(
+        self, slice_tokens: Float[torch.Tensor, "B H S D"]
+    ) -> Float[torch.Tensor, "B H S D"]:
         r"""
         Compute attention among slices using Transformer Engine.
 
         Parameters
         ----------
         slice_tokens : torch.Tensor
-            Slice features of shape :math:`(B, H, S, D_h)`.
+            Slice features of shape :math:`(B, H, S, D)`.
 
         Returns
         -------
         torch.Tensor
-            Attended slice features of shape :math:`(B, H, S, D_h)`.
+            Attended slice features of shape :math:`(B, H, S, D)`.
         """
         # Project to Q, K, V
         qkv = self.qkv_project(slice_tokens)
@@ -320,23 +321,23 @@ class PhysicsAttentionBase(nn.Module, ABC):
 
         return out_slice_token
 
-    def compute_slice_attention_sdpa(
-        self, slice_tokens: Float[torch.Tensor, "batch heads slice_num head_dim"]
-    ) -> Float[torch.Tensor, "batch heads slice_num head_dim"]:
+    def _compute_slice_attention_sdpa(
+        self, slice_tokens: Float[torch.Tensor, "B H S D"]
+    ) -> Float[torch.Tensor, "B H S D"]:
         r"""
         Compute attention among slices using PyTorch SDPA.
 
         Parameters
         ----------
         slice_tokens : torch.Tensor
-            Slice features of shape :math:`(B, H, S, D_h)`.
+            Slice features of shape :math:`(B, H, S, D)`.
 
         Returns
         -------
         torch.Tensor
-            Attended slice features of shape :math:`(B, H, S, D_h)`.
+            Attended slice features of shape :math:`(B, H, S, D)`.
         """
-        with record_function("compute_slice_attention_sdpa"):
+        with record_function("_compute_slice_attention_sdpa"):
             # In this case we're using ShardTensor, ensure slice_token is *replicated*
 
             qkv = self.qkv_project(slice_tokens)
@@ -358,11 +359,11 @@ class PhysicsAttentionBase(nn.Module, ABC):
 
             return out_slice_token
 
-    def project_attention_outputs(
+    def _project_attention_outputs(
         self,
-        out_slice_token: Float[torch.Tensor, "batch heads slice_num head_dim"],
-        slice_weights: Float[torch.Tensor, "batch tokens heads slice_num"],
-    ) -> Float[torch.Tensor, "batch tokens channels"]:
+        out_slice_token: Float[torch.Tensor, "B H S D"],
+        slice_weights: Float[torch.Tensor, "B N H S"],
+    ) -> Float[torch.Tensor, "B N C"]:
         r"""
         Project attended slice features back to token space.
 
@@ -372,29 +373,27 @@ class PhysicsAttentionBase(nn.Module, ABC):
         Parameters
         ----------
         out_slice_token : torch.Tensor
-            Attended slice features of shape :math:`(B, H, S, D_h)`.
+            Attended slice features of shape :math:`(B, H, S, D)`.
         slice_weights : torch.Tensor
             Slice weights of shape :math:`(B, N, H, S)`.
 
         Returns
         -------
         torch.Tensor
-            Output features of shape :math:`(B, N, H \cdot D_h)`.
+            Output features of shape :math:`(B, N, C)` where :math:`C = H \cdot D`.
         """
-        with record_function("project_attention_outputs"):
-            # Weighted combination: (B, N, H, S) @ (B, H, S, D_h) -> (B, N, H, D_h)
+        with record_function("_project_attention_outputs"):
+            # Weighted combination: (B, N, H, S) @ (B, H, S, D) -> (B, N, H, D)
             out_x = torch.einsum("bths,bhsd->bthd", slice_weights, out_slice_token)
 
-            # Concatenate heads: (B, N, H, D_h) -> (B, N, H*D_h)
+            # Concatenate heads: (B, N, H, D) -> (B, N, C) where C = H*D
             out_x = rearrange(out_x, "b t h d -> b t (h d)")
 
             # Output projection with dropout
             out_x = self.out_linear(out_x)
             return self.out_dropout(out_x)
 
-    def forward(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
-    ) -> Float[torch.Tensor, "batch tokens channels"]:
+    def forward(self, x: Float[torch.Tensor, "B N C"]) -> Float[torch.Tensor, "B N C"]:
         r"""
         Forward pass of physics attention.
 
@@ -416,6 +415,11 @@ class PhysicsAttentionBase(nn.Module, ABC):
                     f"got {x.ndim}D tensor with shape {tuple(x.shape)}"
                 )
 
+            if x.shape[-1] != self.dim:
+                raise ValueError(
+                    f"Expected input feature dimension {self.dim}, got {x.shape[-1]}"
+                )
+
         # Project inputs onto learned spaces
         projected = self.project_input_onto_slices(x)
         if self.plus:
@@ -429,21 +433,21 @@ class PhysicsAttentionBase(nn.Module, ABC):
         # slice_projections: (B, N, H, S)
 
         # Compute slice weights and aggregate features per slice
-        slice_weights, slice_tokens = self.compute_slices_from_projections(
+        slice_weights, slice_tokens = self._compute_slices_from_projections(
             slice_projections, fx_mid
         )
         # slice_weights: (B, N, H, S)
-        # slice_tokens: (B, H, S, D_h)
+        # slice_tokens: (B, H, S, D)
 
         # Apply attention among slices
         if self.use_te:
-            out_slice_token = self.compute_slice_attention_te(slice_tokens)
+            out_slice_token = self._compute_slice_attention_te(slice_tokens)
         else:
-            out_slice_token = self.compute_slice_attention_sdpa(slice_tokens)
-        # out_slice_token: (B, H, S, D_h)
+            out_slice_token = self._compute_slice_attention_sdpa(slice_tokens)
+        # out_slice_token: (B, H, S, D)
 
         # Project back to token space
-        outputs = self.project_attention_outputs(out_slice_token, slice_weights)
+        outputs = self._project_attention_outputs(out_slice_token, slice_weights)
         # outputs: (B, N, C)
 
         return outputs
@@ -476,7 +480,8 @@ class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape :math:`(B, N, C)`.
+        Input tensor of shape :math:`(B, N, C)` where :math:`B` is batch size,
+        :math:`N` is number of tokens, and :math:`C` is feature dimension.
 
     Outputs
     -------
@@ -517,12 +522,12 @@ class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
                 self.in_project_fx = nn.Linear(dim, inner_dim)
 
     def project_input_onto_slices(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
+        self, x: Float[torch.Tensor, "B N C"]
     ) -> (
-        Float[torch.Tensor, "batch tokens heads head_dim"]
+        Float[torch.Tensor, "B N H D"]
         | tuple[
-            Float[torch.Tensor, "batch tokens heads head_dim"],
-            Float[torch.Tensor, "batch tokens heads head_dim"],
+            Float[torch.Tensor, "B N H D"],
+            Float[torch.Tensor, "B N H D"],
         ]
     ):
         r"""
@@ -536,11 +541,12 @@ class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
         Returns
         -------
         torch.Tensor | tuple[torch.Tensor, torch.Tensor]
-            Projected tensors of shape :math:`(B, N, H, D_h)`.
+            Projected tensors of shape :math:`(B, N, H, D)` where :math:`H` is
+            number of attention heads and :math:`D` is dimension per head.
         """
         # Project and reshape to multi-head format
         x_mid = rearrange(
-            self.in_project_x(x), "B N (h d) -> B N h d", h=self.heads, d=self.dim_head
+            self.in_project_x(x), "B N (H D) -> B N H D", H=self.heads, D=self.dim_head
         )
 
         if self.plus:
@@ -548,9 +554,9 @@ class PhysicsAttentionIrregularMesh(PhysicsAttentionBase):
         else:
             fx_mid = rearrange(
                 self.in_project_fx(x),
-                "B N (h d) -> B N h d",
-                h=self.heads,
-                d=self.dim_head,
+                "B N (H D) -> B N H D",
+                H=self.heads,
+                D=self.dim_head,
             )
             return x_mid, fx_mid
 
@@ -586,12 +592,14 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape :math:`(B, H \times W, C)` (flattened spatial).
+        Input tensor of shape :math:`(B, N, C)` where :math:`B` is batch size,
+        :math:`N` is number of tokens (flattened spatial: height times width),
+        and :math:`C` is feature dimension.
 
     Outputs
     -------
     torch.Tensor
-        Output tensor of shape :math:`(B, H \times W, C)`.
+        Output tensor of shape :math:`(B, N, C)`.
 
     Examples
     --------
@@ -635,12 +643,12 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
             self.in_project_fx = nn.Conv2d(dim, inner_dim, kernel, 1, kernel // 2)
 
     def project_input_onto_slices(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
+        self, x: Float[torch.Tensor, "B N C"]
     ) -> (
-        Float[torch.Tensor, "batch tokens heads head_dim"]
+        Float[torch.Tensor, "B N H D"]
         | tuple[
-            Float[torch.Tensor, "batch tokens heads head_dim"],
-            Float[torch.Tensor, "batch tokens heads head_dim"],
+            Float[torch.Tensor, "B N H D"],
+            Float[torch.Tensor, "B N H D"],
         ]
     ):
         r"""
@@ -649,27 +657,29 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
         Parameters
         ----------
         x : torch.Tensor
-            Input tensor of shape :math:`(B, H \times W, C)`.
+            Input tensor of shape :math:`(B, N, C)` where :math:`N` is the
+            flattened spatial dimension (height times width).
 
         Returns
         -------
         torch.Tensor | tuple[torch.Tensor, torch.Tensor]
-            Projected tensors of shape :math:`(B, H \times W, H_{heads}, D_h)`.
+            Projected tensors of shape :math:`(B, N, H, D)` where :math:`H` is
+            number of attention heads and :math:`D` is dimension per head.
         """
-        b = x.shape[0]
-        c = x.shape[-1]
+        B = x.shape[0]
+        C = x.shape[-1]
 
-        # Reshape from flattened to 2D spatial format
-        x = x.view(b, self.H, self.W, c)
-        x = x.permute(0, 3, 1, 2)  # (B, C, H, W)
+        # Reshape from flattened to 2D spatial format: (B, N, C) -> (B, C, H_s, W_s)
+        x = x.view(B, self.H, self.W, C)
+        x = x.permute(0, 3, 1, 2)
 
         # Apply 2D convolution and reshape to multi-head format
         input_projected_x = self.in_project_x(x)
         input_projected_x = rearrange(
             input_projected_x,
-            "b (n_heads head_dim) h w -> b (h w) n_heads head_dim",
-            head_dim=self.dim_head,
-            n_heads=self.heads,
+            "B (H D) h w -> B (h w) H D",
+            D=self.dim_head,
+            H=self.heads,
         )
 
         if self.plus:
@@ -678,9 +688,9 @@ class PhysicsAttentionStructuredMesh2D(PhysicsAttentionBase):
             input_projected_fx = self.in_project_fx(x)
             input_projected_fx = rearrange(
                 input_projected_fx,
-                "b (n_heads head_dim) h w -> b (h w) n_heads head_dim",
-                head_dim=self.dim_head,
-                n_heads=self.heads,
+                "B (H D) h w -> B (h w) H D",
+                D=self.dim_head,
+                H=self.heads,
             )
             return input_projected_x, input_projected_fx
 
@@ -716,12 +726,14 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape :math:`(B, H \times W \times D, C)` (flattened).
+        Input tensor of shape :math:`(B, N, C)` where :math:`B` is batch size,
+        :math:`N` is number of tokens (flattened spatial: height times width
+        times depth), and :math:`C` is feature dimension.
 
     Outputs
     -------
     torch.Tensor
-        Output tensor of shape :math:`(B, H \times W \times D, C)`.
+        Output tensor of shape :math:`(B, N, C)`.
 
     Examples
     --------
@@ -766,12 +778,12 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
             self.in_project_fx = nn.Conv3d(dim, inner_dim, kernel, 1, kernel // 2)
 
     def project_input_onto_slices(
-        self, x: Float[torch.Tensor, "batch tokens channels"]
+        self, x: Float[torch.Tensor, "B N C"]
     ) -> (
-        Float[torch.Tensor, "batch tokens heads head_dim"]
+        Float[torch.Tensor, "B N H D"]
         | tuple[
-            Float[torch.Tensor, "batch tokens heads head_dim"],
-            Float[torch.Tensor, "batch tokens heads head_dim"],
+            Float[torch.Tensor, "B N H D"],
+            Float[torch.Tensor, "B N H D"],
         ]
     ):
         r"""
@@ -780,27 +792,29 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
         Parameters
         ----------
         x : torch.Tensor
-            Input tensor of shape :math:`(B, H \times W \times D, C)`.
+            Input tensor of shape :math:`(B, N, C)` where :math:`N` is the
+            flattened spatial dimension (height times width times depth).
 
         Returns
         -------
         torch.Tensor | tuple[torch.Tensor, torch.Tensor]
-            Projected tensors of shape :math:`(B, H \times W \times D, H_{heads}, D_h)`.
+            Projected tensors of shape :math:`(B, N, H, D)` where :math:`H` is
+            number of attention heads and :math:`D` is dimension per head.
         """
-        b = x.shape[0]
-        c = x.shape[-1]
+        B = x.shape[0]
+        C = x.shape[-1]
 
-        # Reshape from flattened to 3D spatial format
-        x = x.view(b, self.H, self.W, self.D, c)
-        x = x.permute(0, 4, 1, 2, 3)  # (B, C, H, W, D)
+        # Reshape from flattened to 3D spatial format: (B, N, C) -> (B, C, H_s, W_s, D_s)
+        x = x.view(B, self.H, self.W, self.D, C)
+        x = x.permute(0, 4, 1, 2, 3)
 
         # Apply 3D convolution and reshape to multi-head format
         input_projected_x = self.in_project_x(x)
         input_projected_x = rearrange(
             input_projected_x,
-            "b (n_heads head_dim) h w d -> b (h w d) n_heads head_dim",
-            head_dim=self.dim_head,
-            n_heads=self.heads,
+            "B (H D) height width depth -> B (height width depth) H D",
+            D=self.dim_head,
+            H=self.heads,
         )
 
         if self.plus:
@@ -809,8 +823,8 @@ class PhysicsAttentionStructuredMesh3D(PhysicsAttentionBase):
             input_projected_fx = self.in_project_fx(x)
             input_projected_fx = rearrange(
                 input_projected_fx,
-                "b (n_heads head_dim) h w d -> b (h w d) n_heads head_dim",
-                head_dim=self.dim_head,
-                n_heads=self.heads,
+                "B (H D) height width depth -> B (height width depth) H D",
+                D=self.dim_head,
+                H=self.heads,
             )
             return input_projected_x, input_projected_fx

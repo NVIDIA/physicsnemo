@@ -37,8 +37,7 @@ def gumbel_softmax(
         Input logits tensor of shape :math:`(*, K)` where :math:`K` is the
         number of categories.
     tau : torch.Tensor | float, optional, default=1.0
-        Temperature parameter. Can be a scalar float or a tensor for
-        per-element temperature. Lower values make the distribution more
+        Temperature parameter. Lower values make the distribution more
         concentrated.
 
     Returns
