@@ -1176,26 +1176,26 @@ class Mesh:
         project_onto_nearest_cell: bool = False,
         tolerance: float = 1e-6,
     ) -> "TensorDict":
-        """Sample mesh data at query points in space.
+        """Extract or interpolate mesh data at specified query points.
 
-        For each query point, finds the containing cell and returns interpolated data.
-
-        This is a convenience method that delegates to physicsnemo.mesh.sampling.sample_data_at_points.
+        This method retrieves mesh data at arbitrary spatial locations. Note that
+        "sample" here means "extract/query at specific points" - NOT random sampling.
+        For random point sampling, see :meth:`sample_random_points_on_cells`.
 
         Args:
             query_points: Query point locations, shape (n_queries, n_spatial_dims)
-            data_source: How to sample data:
+            data_source: How to retrieve data:
                 - "cells": Use cell data directly (no interpolation)
                 - "points": Interpolate point data using barycentric coordinates
             multiple_cells_strategy: How to handle query points in multiple cells:
                 - "mean": Return arithmetic mean of values from all containing cells
                 - "nan": Return NaN for ambiguous points
             project_onto_nearest_cell: If True, projects each query point onto the
-                nearest cell before sampling. Useful for codimension != 0 manifolds.
+                nearest cell before querying. Useful for codimension != 0 manifolds.
             tolerance: Tolerance for considering a point inside a cell.
 
         Returns:
-            TensorDict containing sampled data for each query point. Values are NaN
+            TensorDict containing data for each query point. Values are NaN
             for query points outside the mesh (unless project_onto_nearest_cell=True).
 
         Example:
@@ -1204,7 +1204,7 @@ class Mesh:
             >>> mesh = two_triangles_2d.load()
             >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
             >>> query_pts = torch.tensor([[0.3, 0.3], [0.8, 0.5]])
-            >>> sampled_data = mesh.sample_data_at_points(query_pts, data_source="cells")
+            >>> data = mesh.sample_data_at_points(query_pts, data_source="cells")
         """
         from physicsnemo.mesh.sampling import sample_data_at_points
 
@@ -1481,6 +1481,13 @@ class Mesh:
             New Mesh with n_manifold_dims = self.n_manifold_dims - 1, containing
             only the boundary facets. The mesh shares the same points array but has
             new cells connectivity representing the boundary.
+
+        Note:
+            For meshes with internal cavities (like volume meshes with voids or
+            drivaerML-style automotive meshes), this returns BOTH the exterior
+            surface and any interior cavity surfaces. All facets that appear in
+            exactly one parent cell are included, regardless of whether they face
+            "outward" or "inward".
 
         Example:
             >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
