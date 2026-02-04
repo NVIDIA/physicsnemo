@@ -237,8 +237,9 @@ class TestFindAllContainingCells:
 
         containing = find_all_containing_cells(mesh, queries)
 
-        ### Should find at least one cell
-        assert len(containing[0]) >= 1
+        ### Should find at least one cell (use to_list() for list-like access)
+        containing_list = containing.to_list()
+        assert len(containing_list[0]) >= 1
 
 
 class TestSampleAtPoints:
@@ -612,8 +613,9 @@ class TestCodimensionNonZero:
 
         containing = find_all_containing_cells(mesh, query_far)
 
-        ### Should find no containing cells
-        assert len(containing[0]) == 0
+        ### Should find no containing cells (use to_list() for list-like access)
+        containing_list = containing.to_list()
+        assert len(containing_list[0]) == 0
 
     def test_sample_data_triangle_in_3d_rejects_far_points(self):
         """Test that sample_data_at_points returns NaN for far points on codim != 0."""

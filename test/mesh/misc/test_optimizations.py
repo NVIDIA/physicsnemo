@@ -423,14 +423,15 @@ class TestBVHPerformance:
         # Find candidates
         candidates = bvh.find_candidate_cells(query_points)
 
-        # Should return candidates for all queries
-        assert len(candidates) == 3
+        # Should return Adjacency for all queries
+        candidates_list = candidates.to_list()
+        assert len(candidates_list) == 3
 
         # Point inside first tet should find at least that cell
-        assert len(candidates[0]) > 0
+        assert len(candidates_list[0]) > 0
 
         # Point outside should find no candidates
-        assert len(candidates[2]) == 0
+        assert len(candidates_list[2]) == 0
 
     @pytest.mark.cuda
     def test_bvh_on_gpu(self):
@@ -449,7 +450,7 @@ class TestBVHPerformance:
 
         # Should not raise
         candidates = bvh.find_candidate_cells(query_points)
-        assert len(candidates) == 20
+        assert candidates.n_sources == 20
 
 
 class TestHierarchicalSampling:
