@@ -30,10 +30,10 @@ from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.transolver.Physics_Attention import (
+from physicsnemo.models.transolver.transolver import _TransolverMlp
+from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
 )
-from physicsnemo.models.transolver.transolver import MLP
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
@@ -407,13 +407,11 @@ class GALE_block(nn.Module):
         else:
             self.ln_mlp1 = nn.Sequential(
                 nn.LayerNorm(hidden_dim),
-                MLP(
-                    hidden_dim,
-                    hidden_dim * mlp_ratio,
-                    hidden_dim,
-                    n_layers=0,
-                    res=False,
-                    act=act,
+                _TransolverMlp(
+                    in_features=hidden_dim,
+                    hidden_features=hidden_dim * mlp_ratio,
+                    out_features=hidden_dim,
+                    act_layer=act,
                     use_te=False,
                 ),
             )

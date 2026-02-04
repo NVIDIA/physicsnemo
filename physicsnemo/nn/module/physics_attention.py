@@ -46,7 +46,11 @@ from torch.autograd.profiler import record_function
 from torch.distributed.tensor.placement_types import Replicate
 
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.domain_parallel import ShardTensor
+from physicsnemo.nn import gumbel_softmax
+
+# Note: We use duck typing to check for ShardTensor instead of importing it
+# directly to avoid circular imports (domain_parallel imports from nn).
+# ShardTensor has a `redistribute` method that we check for.
 
 TE_AVAILABLE = check_version_spec("transformer_engine", hard_fail=False)
 
@@ -54,45 +58,6 @@ if TE_AVAILABLE:
     te = importlib.import_module("transformer_engine.pytorch")
 else:
     te = None
-
-
-def gumbel_softmax(
-    logits: Float[torch.Tensor, "... num_categories"],
-    tau: torch.Tensor | float = 1.0,
-) -> Float[torch.Tensor, "... num_categories"]:
-    r"""
-    Implementation of Gumbel Softmax from Transolver++.
-
-    Applies a differentiable approximation to sampling from a categorical
-    distribution using the Gumbel-Softmax trick.
-
-    Original code: https://github.com/thuml/Transolver_plus/blob/main/models/Transolver_plus.py#L69
-
-    Parameters
-    ----------
-    logits : torch.Tensor
-        Input logits tensor of shape :math:`(*, K)` where :math:`K` is the
-        number of categories.
-    tau : torch.Tensor | float, optional, default=1.0
-        Temperature parameter. Can be a scalar float or a tensor for
-        per-element temperature. Lower values make the distribution more
-        concentrated.
-
-    Returns
-    -------
-    torch.Tensor
-        Gumbel-Softmax output of the same shape as ``logits``.
-    """
-    # Sample Gumbel noise
-    u = torch.rand_like(logits)
-    gumbel_noise = -torch.log(-torch.log(u + 1e-8) + 1e-8)
-
-    # Add noise and apply temperature-scaled softmax
-    y = logits + gumbel_noise
-    y = y / tau
-    y = torch.nn.functional.softmax(y, dim=-1)
-
-    return y
 
 
 class PhysicsAttentionBase(nn.Module, ABC):
@@ -378,7 +343,9 @@ class PhysicsAttentionBase(nn.Module, ABC):
 
             qkv = rearrange(qkv, " b h s (t d) -> b h s t d", t=3, d=self.dim_head)
 
-            if isinstance(qkv, ShardTensor):
+            # Use duck typing to check for ShardTensor to avoid circular import
+            # (domain_parallel imports from nn, so nn cannot import from domain_parallel)
+            if hasattr(qkv, "redistribute"):
                 # This will be a differentiable allreduce
                 qkv = qkv.redistribute(placements=[Replicate()])
 

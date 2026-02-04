@@ -36,7 +36,9 @@ SOFTWARE.
 """
 
 import importlib
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import torch
@@ -47,9 +49,8 @@ import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
 from physicsnemo.core.version_check import check_version_spec
-
-from .Embedding import timestep_embedding
-from .Physics_Attention import (
+from physicsnemo.nn import Mlp, PositionalEmbedding
+from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
     PhysicsAttentionStructuredMesh2D,
     PhysicsAttentionStructuredMesh3D,
@@ -74,121 +75,66 @@ ACTIVATION = {
 }
 
 
-class MLP(nn.Module):
-    r"""
-    Multi-layer perceptron with optional residual connections.
+class _TransolverMlp(Mlp):
+    """Mlp subclass with state dict compatibility for legacy Transolver checkpoints.
 
-    This MLP supports transformer engine linear layers for optimized performance
-    and optional residual connections in hidden layers.
+    This class provides backward compatibility for loading checkpoints saved with
+    the old Transolver MLP class, which used different attribute names:
+    - Old: `linear_pre`, `linear_post`, `linears`
+    - New: `layers` (Sequential)
 
-    Parameters
-    ----------
-    n_input : int
-        Number of input features.
-    n_hidden : int
-        Number of hidden features in each layer.
-    n_output : int
-        Number of output features.
-    n_layers : int, optional, default=1
-        Number of hidden layers with residual connections.
-    act : str, optional, default="gelu"
-        Activation function name. Must be one of: ``"gelu"``, ``"tanh"``,
-        ``"sigmoid"``, ``"relu"``, ``"leaky_relu"``, ``"softplus"``,
-        ``"ELU"``, ``"silu"``.
-    res : bool, optional, default=True
-        Whether to use residual connections in hidden layers.
-    use_te : bool, optional, default=True
-        Whether to use transformer engine linear layers.
-
-    Forward
-    -------
-    x : torch.Tensor
-        Input tensor of shape :math:`(*, D_{in})` where :math:`*` denotes
-        any number of batch dimensions.
-
-    Outputs
-    -------
-    torch.Tensor
-        Output tensor of shape :math:`(*, D_{out})`.
-
-    Note
-    ----
-    This MLP differs from :class:`~physicsnemo.nn.Mlp` by supporting:
-
-    - Transformer engine linear layers via ``use_te``
-    - Residual connections via ``res``
-    - Fixed hidden dimension across all layers
+    The mapping handles the common case where `n_layers=0` (no hidden layers with
+    residual connections), which was the typical usage pattern in Transolver.
     """
 
-    def __init__(
-        self,
-        n_input: int,
-        n_hidden: int,
-        n_output: int,
-        n_layers: int = 1,
-        act: str = "gelu",
-        res: bool = True,
-        use_te: bool = True,
-    ):
-        super(MLP, self).__init__()
+    # Mapping from old checkpoint keys to new Mlp keys
+    # This assumes the typical usage: n_layers=0, which means just linear_pre -> act -> linear_post
+    # Old structure: linear_pre (input->hidden), linear_post (hidden->output)
+    # New structure: layers.0 (input->hidden), layers.1 (activation), layers.2 (hidden->output)
+    _OLD_TO_NEW_KEYS = {
+        "linear_pre.weight": "layers.0.weight",
+        "linear_pre.bias": "layers.0.bias",
+        "linear_post.weight": "layers.2.weight",
+        "linear_post.bias": "layers.2.bias",
+    }
 
-        if act in ACTIVATION.keys():
-            act_fn = ACTIVATION[act]
-        else:
-            raise NotImplementedError(
-                f"Activation '{act}' not supported. Choose from: {list(ACTIVATION.keys())}"
-            )
-        self.n_input = n_input
-        self.n_hidden = n_hidden
-        self.n_output = n_output
-        self.n_layers = n_layers
-        self.res = res
+    _NEW_TO_OLD_KEYS = {v: k for k, v in _OLD_TO_NEW_KEYS.items()}
 
-        self.act = act_fn()
-
-        linear_layer = nn.Linear if not use_te else te.Linear
-
-        self.linear_pre = linear_layer(n_input, n_hidden)
-        self.linear_post = linear_layer(n_hidden, n_output)
-        self.linears = nn.ModuleList(
-            [
-                nn.Sequential(linear_layer(n_hidden, n_hidden), act_fn())
-                for _ in range(n_layers)
-            ]
-        )
-
-    def forward(
-        self, x: Float[torch.Tensor, "... d_in"]
-    ) -> Float[torch.Tensor, "... d_out"]:
-        r"""
-        Forward pass of the MLP.
-
-        Parameters
-        ----------
-        x : torch.Tensor
-            Input tensor of shape :math:`(*, D_{in})`.
-
-        Returns
-        -------
-        torch.Tensor
-            Output tensor of shape :math:`(*, D_{out})`.
-        """
-        # Project input to hidden dimension
-        x = self.act(self.linear_pre(x))
-
-        # Apply hidden layers with optional residual connections
-        for i in range(self.n_layers):
-            if self.res:
-                x = self.linears[i](x) + x
+    def _remap_state_dict_keys(
+        self, state_dict: dict, key_map: dict, prefix: str = ""
+    ) -> dict:
+        """Remap state dict keys using the provided mapping."""
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            if prefix and key.startswith(prefix):
+                # Remove prefix, remap, then add prefix back
+                suffix = key[len(prefix) :]
+                new_suffix = key_map.get(suffix, suffix)
+                new_key = prefix + new_suffix
             else:
-                x = self.linears[i](x)
+                new_key = key_map.get(key, key)
+            new_state_dict[new_key] = value
+        return new_state_dict
 
-        # Project to output dimension
-        x = self.linear_post(x)
-        return x
+    def load_state_dict(
+        self,
+        state_dict: "Mapping[str, Any]",
+        strict: bool = True,
+        assign: bool = False,
+    ):
+        """Load state dict with automatic key remapping for legacy checkpoints."""
+        # Check if this looks like an old-style checkpoint
+        has_old_keys = any(k in state_dict for k in self._OLD_TO_NEW_KEYS)
+        has_new_keys = any(k in state_dict for k in self._NEW_TO_OLD_KEYS)
+
+        if has_old_keys and not has_new_keys:
+            # Remap old keys to new keys
+            state_dict = self._remap_state_dict_keys(state_dict, self._OLD_TO_NEW_KEYS)
+
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
 
 
-class Transolver_block(nn.Module):
+class TransolverBlock(nn.Module):
     r"""
     Transformer encoder block with physics attention mechanism.
 
@@ -312,13 +258,11 @@ class Transolver_block(nn.Module):
         else:
             self.ln_mlp1 = nn.Sequential(
                 nn.LayerNorm(hidden_dim),
-                MLP(
-                    hidden_dim,
-                    hidden_dim * mlp_ratio,
-                    hidden_dim,
-                    n_layers=0,
-                    res=False,
-                    act=act,
+                _TransolverMlp(
+                    in_features=hidden_dim,
+                    hidden_features=hidden_dim * mlp_ratio,
+                    out_features=hidden_dim,
+                    act_layer=act,
                     use_te=False,
                 ),
             )
@@ -512,7 +456,6 @@ class Transolver(Module):
         plus: bool = False,
     ) -> None:
         super().__init__(meta=MetaData())
-        self.__name__ = "Transolver"
 
         self.use_te = use_te
 
@@ -565,13 +508,11 @@ class Transolver(Module):
             mlp_input_dimension = functional_dim + embedding_dim
 
         # Initial projection MLP
-        self.preprocess = MLP(
-            mlp_input_dimension,
-            n_hidden * 2,
-            n_hidden,
-            n_layers=0,
-            res=False,
-            act=act,
+        self.preprocess = _TransolverMlp(
+            in_features=mlp_input_dimension,
+            hidden_features=n_hidden * 2,
+            out_features=n_hidden,
+            act_layer=act,
             use_te=use_te,
         )
 
@@ -580,6 +521,13 @@ class Transolver(Module):
 
         # Time embedding projection
         if time_input:
+            self.time_embed = PositionalEmbedding(
+                num_channels=n_hidden,
+                max_positions=10000,
+                endpoint=False,
+                learnable=False,
+                embed_fn="cos_sin",
+            )
             self.time_fc = nn.Sequential(
                 nn.Linear(n_hidden, n_hidden),
                 nn.SiLU(),
@@ -589,7 +537,7 @@ class Transolver(Module):
         # Build transformer blocks
         self.blocks = nn.ModuleList(
             [
-                Transolver_block(
+                TransolverBlock(
                     num_heads=n_head,
                     hidden_dim=n_hidden,
                     dropout=dropout,
@@ -757,7 +705,7 @@ class Transolver(Module):
 
         # Add time embedding if provided
         if time is not None:
-            time_emb = timestep_embedding(time, self.n_hidden).repeat(1, n_tokens, 1)
+            time_emb = self.time_embed(time).unsqueeze(1).repeat(1, n_tokens, 1)
             time_emb = self.time_fc(time_emb)
             fx = fx + time_emb
 

@@ -36,49 +36,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-References
-----------
-- `Transolver paper <https://arxiv.org/pdf/2402.02366>`_
-- `Transolver++ paper <https://arxiv.org/pdf/2502.02414>`_
-
-Examples
---------
-Structured 2D data with unified position:
-
->>> import torch
->>> from physicsnemo.models.transolver import Transolver
->>> model = Transolver(
-...     functional_dim=3,
-...     out_dim=1,
-...     structured_shape=(64, 64),
-...     unified_pos=True,
-...     n_hidden=128,
-...     n_head=4,
-...     use_te=False,
-... )
->>> x = torch.randn(2, 64, 64, 3)
->>> out = model(x)
->>> out.shape
-torch.Size([2, 64, 64, 1])
-
-Unstructured mesh data:
-
->>> model = Transolver(
-...     functional_dim=2,
-...     embedding_dim=3,
-...     out_dim=1,
-...     structured_shape=None,
-...     unified_pos=False,
-...     n_hidden=128,
-...     n_head=4,
-...     use_te=False,
-... )
->>> fx = torch.randn(2, 1000, 2)
->>> emb = torch.randn(2, 1000, 3)
->>> out = model(fx, embedding=emb)
->>> out.shape
-torch.Size([2, 1000, 1])
 """
 
 from .transolver import Transolver
