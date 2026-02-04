@@ -196,7 +196,6 @@ def _merge_points_pairwise(
     point_mapping = torch.arange(n_points, device=device, dtype=torch.int64)
 
     ### Process each point and merge with lower-indexed duplicates only
-    # This avoids unintended transitive closures
     for i in range(n_points):
         if point_mapping[i] != i:
             # Already merged to a lower index
@@ -212,6 +211,23 @@ def _merge_points_pairwise(
                 # Merge i into j (j has lower index)
                 point_mapping[i] = j
                 break
+
+    ### Apply transitive closure via path compression
+    # This ensures that if A~B and B~C, then C is also mapped to A's representative.
+    # Each iteration halves the tree depth, so convergence is O(log n) iterations.
+    max_iterations = 100
+    for iteration in range(max_iterations):
+        old_mapping = point_mapping.clone()
+        point_mapping = point_mapping[point_mapping]
+        if torch.equal(point_mapping, old_mapping):
+            break
+    else:
+        import warnings
+
+        warnings.warn(
+            f"Transitive closure in pairwise merge did not converge in {max_iterations} "
+            "iterations. This should never happen for valid meshes (expected O(log n) iterations)."
+        )
 
     return point_mapping
 
@@ -294,12 +310,22 @@ def _merge_points_spatial_hash(
                 min_idx = torch.min(duplicates_global)
                 point_mapping[duplicates_global] = min_idx
 
-    ### Apply transitive closure
-    for _ in range(10):
+    ### Apply transitive closure via path compression
+    # Each iteration halves the tree depth, so convergence is O(log n) iterations.
+    # For n points: 1K->10, 1M->20, 1B->30 iterations. Limit of 100 is very safe.
+    max_iterations = 100
+    for iteration in range(max_iterations):
         old_mapping = point_mapping.clone()
         point_mapping = point_mapping[point_mapping]
-        if torch.all(point_mapping == old_mapping):
+        if torch.equal(point_mapping, old_mapping):
             break
+    else:
+        import warnings
+
+        warnings.warn(
+            f"Transitive closure in spatial hash merge did not converge in {max_iterations} "
+            "iterations. This should never happen for valid meshes (expected O(log n) iterations)."
+        )
 
     return point_mapping
 
