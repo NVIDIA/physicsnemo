@@ -117,6 +117,24 @@ class SO3LinearGrid(nn.Module):
     >>> out = linear(x)
     >>> out.shape
     torch.Size([10, 5, 3, 2, 128])
+
+    See Also
+    --------
+    SO3ConvolutionBlock : SO(3) node-wise transformation layer using SO3LinearGrid.
+
+    Forward
+    -------
+    x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
+        Input tensor with spherical harmonic features in grid layout.
+        Shape: ``[batch, lmax+1, mmax+1, 2, in_channels]``.
+
+    Outputs
+    -------
+    Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels"]
+        Transformed features with shape ``[batch, lmax+1, mmax+1, 2, out_channels]``.
+        The transformation applies degree-wise linear transforms where each
+        degree l has its own weight matrix. Positions where m > l are masked
+        to zero after the transformation.
     """
 
     def __init__(
@@ -176,32 +194,6 @@ class SO3LinearGrid(nn.Module):
         self,
         x: Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"],
     ) -> Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels"]:
-        r"""Apply SO(3) equivariant linear transformation.
-
-        Parameters
-        ----------
-        x : Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 in_channels"]
-            Input tensor with spherical harmonic features in grid layout.
-            Shape: ``[batch, lmax+1, mmax+1, 2, in_channels]``.
-
-        Returns
-        -------
-        Float[torch.Tensor, "batch lmax_plus_1 mmax_plus_1 2 out_channels"]
-            Transformed features with shape ``[batch, lmax+1, mmax+1, 2, out_channels]``.
-
-        Notes
-        -----
-        The transformation applies degree-wise linear transforms:
-
-        .. math::
-
-            \text{out}[b, l, m, r, :] = W_l \cdot x[b, l, m, r, :]
-
-        where :math:`W_l` is the weight matrix for degree l, and the same
-        weights are applied across all m orders and real/imaginary components.
-
-        Positions where m > l are masked to zero after the transformation.
-        """
         # Apply linear transformation via einsum
         # x: [batch, lmax+1, mmax+1, 2, in_channels]
         # weight: [lmax+1, out_channels, in_channels]
