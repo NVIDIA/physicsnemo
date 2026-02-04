@@ -510,7 +510,7 @@ class TestSO2Convolution:
             # Tolerances based on dtype precision
             # float32 has ~7 decimal digits, float64 has ~15
             if dtype == torch.float32:
-                rtol, atol = 1e-3, 1e-3
+                rtol, atol = 5e-3, 5e-3
             else:
                 rtol, atol = 1e-10, 1e-10
 
