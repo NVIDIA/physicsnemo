@@ -25,7 +25,7 @@ from physicsnemo.mesh.mesh import Mesh
 
 
 def load(
-    size: float = 1.0, n_subdivisions: int = 5, device: torch.device | str = "cpu"
+    size: float = 1.0, subdivisions: int = 5, device: torch.device | str = "cpu"
 ) -> Mesh:
     """Create a tetrahedral volume mesh of a cube.
 
@@ -46,10 +46,10 @@ def load(
     Mesh
         Mesh with n_manifold_dims=3, n_spatial_dims=3.
     """
-    if n_subdivisions < 1:
-        raise ValueError(f"n_subdivisions must be at least 1, got {n_subdivisions=}")
+    if subdivisions < 1:
+        raise ValueError(f"n_subdivisions must be at least 1, got {subdivisions=}")
 
-    n = n_subdivisions + 1  # Number of points per edge
+    n = subdivisions + 1  # Number of points per edge
 
     ### Generate grid points
     coords_1d = torch.linspace(-size / 2, size / 2, n, device=device)
@@ -61,9 +61,9 @@ def load(
     # "5-tetrahedra" decomposition with consistent diagonal orientation.
     cells_list = []
 
-    for i in range(n_subdivisions):
-        for j in range(n_subdivisions):
-            for k in range(n_subdivisions):
+    for i in range(subdivisions):
+        for j in range(subdivisions):
+            for k in range(subdivisions):
                 # 8 vertices of the cube cell (indexed in the flattened grid)
                 # Vertex ordering: v0=(i,j,k), v1=(i+1,j,k), v2=(i,j+1,k), etc.
                 v0 = i * n * n + j * n + k
