@@ -204,8 +204,9 @@ class TestBVHTraversal:
         candidates = bvh.find_candidate_cells(query)
 
         ### Should find at least one candidate (cell 0)
-        assert len(candidates[0]) > 0
-        assert 0 in candidates[0]
+        candidates_list = candidates.to_list()
+        assert len(candidates_list[0]) > 0
+        assert 0 in candidates_list[0]
 
     def test_find_candidates_point_outside(self):
         """Test that point outside mesh returns no candidates."""
@@ -220,7 +221,8 @@ class TestBVHTraversal:
         candidates = bvh.find_candidate_cells(query)
 
         ### Should find no candidates
-        assert len(candidates[0]) == 0
+        candidates_list = candidates.to_list()
+        assert len(candidates_list[0]) == 0
 
     def test_find_candidates_multiple_points(self):
         """Test finding candidates for multiple query points."""
@@ -253,10 +255,11 @@ class TestBVHTraversal:
         candidates = bvh.find_candidate_cells(queries)
 
         ### Verify results
-        assert len(candidates) == 3
-        assert len(candidates[0]) > 0  # First query has candidates
-        assert len(candidates[1]) > 0  # Second query has candidates
-        assert len(candidates[2]) == 0  # Third query has no candidates
+        candidates_list = candidates.to_list()
+        assert len(candidates_list) == 3
+        assert len(candidates_list[0]) > 0  # First query has candidates
+        assert len(candidates_list[1]) > 0  # Second query has candidates
+        assert len(candidates_list[2]) == 0  # Third query has no candidates
 
 
 class TestBVHDeviceHandling:
@@ -323,7 +326,8 @@ class TestBVHCorrectness:
 
         ### Should include cells that overlap this region
         # Candidates should be a superset of actual containing cells
-        assert len(candidates[0]) >= 1  # At least one candidate
+        candidates_list = candidates.to_list()
+        assert len(candidates_list[0]) >= 1  # At least one candidate
 
 
 ### Parametrized Tests for Exhaustive Dimensional Coverage ###
@@ -386,11 +390,11 @@ class TestBVHParametrized:
 
         candidates = bvh.find_candidate_cells(query)
 
-        # Should return a list with one entry (for one query point)
-        assert len(candidates) == 1
+        # Should return Adjacency with one source (for one query point)
+        assert candidates.n_sources == 1
 
-        # Should find at least one candidate
-        assert len(candidates[0]) >= 0  # May be 0 if query is outside all cells
+        # Should find at least zero candidates (may be 0 if query is outside all cells)
+        assert candidates.n_total_neighbors >= 0
 
     @pytest.mark.parametrize(
         "n_spatial_dims,n_manifold_dims",
@@ -443,14 +447,13 @@ class TestBVHParametrized:
 
         candidates = bvh.find_candidate_cells(queries)
 
-        # Should return list with n_queries entries
-        assert len(candidates) == n_queries
+        # Should return Adjacency with n_queries sources
+        assert candidates.n_sources == n_queries
 
-        # Each entry should be a tensor of candidate cell indices
-        for i, cands in enumerate(candidates):
-            assert isinstance(cands, torch.Tensor), (
-                f"Candidates[{i}] should be a tensor"
-            )
+        # Indices should be a tensor of candidate cell indices
+        assert isinstance(candidates.indices, torch.Tensor), (
+            "Candidates.indices should be a tensor"
+        )
 
     @pytest.mark.parametrize(
         "n_spatial_dims,n_manifold_dims",

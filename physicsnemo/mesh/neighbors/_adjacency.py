@@ -133,6 +133,69 @@ class Adjacency:
         """Total number of neighbor relationships across all sources."""
         return len(self.indices)
 
+    def truncate_per_source(self, max_count: int | None = None) -> "Adjacency":
+        """Limit each source to at most max_count neighbors.
+
+        This is useful for capping the number of candidates in spatial queries
+        (e.g., BVH candidate cells) to prevent memory explosion.
+
+        Args:
+            max_count: Maximum neighbors per source. If None (default),
+                returns self unchanged (no limit applied).
+
+        Returns:
+            New Adjacency with at most max_count neighbors per source.
+            If max_count is None, returns self.
+
+        Example:
+            >>> adj = Adjacency(
+            ...     offsets=torch.tensor([0, 5, 8, 10]),
+            ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ... )
+            >>> adj.to_list()
+            [[0, 1, 2, 3, 4], [5, 6, 7], [8, 9]]
+            >>> adj.truncate_per_source(2).to_list()
+            [[0, 1], [5, 6], [8, 9]]
+        """
+        if max_count is None:
+            return self
+
+        device = self.offsets.device
+
+        ### Compute counts per source
+        counts = self.offsets[1:] - self.offsets[:-1]
+
+        ### Clamp counts to max_count
+        clamped_counts = torch.clamp(counts, max=max_count)
+
+        ### Build new offsets from clamped counts
+        new_offsets = torch.zeros_like(self.offsets)
+        new_offsets[1:] = torch.cumsum(clamped_counts, dim=0)
+
+        ### Build mask for which indices to keep
+        # For each index position, determine which source it belongs to
+        # and its position within that source
+        n_indices = len(self.indices)
+        if n_indices == 0:
+            return Adjacency(offsets=new_offsets, indices=self.indices)
+
+        positions = torch.arange(n_indices, device=device)
+
+        # Find source ID for each position using searchsorted
+        # offsets[1:] gives the exclusive end of each source's range
+        source_ids = torch.searchsorted(self.offsets[1:], positions, right=False)
+
+        # Compute position within source: position - offsets[source_id]
+        within_source_pos = positions - self.offsets[source_ids]
+
+        # Keep only positions where within_source_pos < max_count
+        keep_mask = within_source_pos < max_count
+
+        return Adjacency(
+            offsets=new_offsets,
+            indices=self.indices[keep_mask],
+        )
+
 
 def build_adjacency_from_pairs(
     source_indices: torch.Tensor,  # shape: (n_pairs,)

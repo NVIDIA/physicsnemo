@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING
 import torch
 from tensordict import tensorclass
 
+from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -36,6 +38,13 @@ class BVH:
 
     The BVH is stored as flat tensors for GPU compatibility, avoiding pointer-based
     tree structures. Each internal node has exactly two children (binary tree).
+
+    This is a pure PyTorch implementation that works on both CPU and GPU without
+    additional dependencies. For extremely performance-critical applications with
+    large meshes, consider NVIDIA Warp's BVH implementation
+    (https://nvidia.github.io/warp/api_reference/_generated/warp.Bvh.html) which
+    provides GPU-accelerated BVH with SAH, median, and LBVH construction algorithms,
+    as well as native support for closest-point and ray-cast queries.
 
     Attributes:
         node_aabb_min: Minimum corner of axis-aligned bounding box for each node,
@@ -223,9 +232,9 @@ class BVH:
     def find_candidate_cells(
         self,
         query_points: torch.Tensor,
-        max_candidates_per_point: int = 32,
+        max_candidates_per_point: int | None = 32,
         aabb_tolerance: float = 1e-6,
-    ) -> list[torch.Tensor]:
+    ) -> Adjacency:
         """Find candidate cells that might contain each query point.
 
         Uses batched iterative BVH traversal where all queries are processed
@@ -235,17 +244,20 @@ class BVH:
             query_points: Points to query, shape (n_queries, n_spatial_dims)
             max_candidates_per_point: Maximum number of candidate cells to return
                 per query point. Prevents memory explosion for degenerate cases.
+                If None, no limit is applied.
             aabb_tolerance: Tolerance for AABB intersection test. Important for
                 degenerate cells (e.g., cells with duplicate vertices).
 
         Returns:
-            List of length n_queries, where each element is a tensor of candidate
-            cell indices that might contain that query point.
+            Adjacency object where candidates for query i are at
+            ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
+            Use ``result.to_list()`` for a list-of-tensors representation.
 
         Performance:
             - Complexity: O(M log N) where M = queries, N = cells
             - All AABB tests and tree operations are fully vectorized across queries
             - No Python-level loops over query points
+            - Returns GPU-native Adjacency - no CPU sync required
 
         Note:
             BVH traversal could potentially be accelerated with custom CUDA kernels,
@@ -354,27 +366,18 @@ class BVH:
             else:
                 break
 
-        ### Group candidates by query index
+        ### Build Adjacency from (query_idx, cell_idx) pairs
         if len(all_query_indices_list) > 0:
             all_query_indices = torch.cat(all_query_indices_list)
             all_cell_indices = torch.cat(all_cell_indices_list)
-
-            # Build result list by filtering for each query
-            candidates = []
-            for i in range(n_queries):
-                mask = all_query_indices == i
-                query_candidates = all_cell_indices[mask]
-
-                # Respect max_candidates_per_point limit
-                if len(query_candidates) > max_candidates_per_point:
-                    query_candidates = query_candidates[:max_candidates_per_point]
-
-                candidates.append(query_candidates)
         else:
-            # No candidates found for any query
-            candidates = [
-                torch.tensor([], dtype=torch.long, device=self.device)
-                for _ in range(n_queries)
-            ]
+            all_query_indices = torch.tensor([], dtype=torch.long, device=self.device)
+            all_cell_indices = torch.tensor([], dtype=torch.long, device=self.device)
 
-        return candidates
+        adjacency = build_adjacency_from_pairs(
+            source_indices=all_query_indices,
+            target_indices=all_cell_indices,
+            n_sources=n_queries,
+        )
+
+        return adjacency.truncate_per_source(max_candidates_per_point)
