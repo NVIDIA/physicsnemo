@@ -59,5 +59,4 @@ from .healpix_layers import (
 
 # Obs embedding
 from .point_embed import MultiSensorObsEmbedding
-from .scatter_aggregator import ScatterAggregator
-from .scatter_mean import scatter_mean
+from .scatter_aggregator import ScatterAggregator, scatter_mean

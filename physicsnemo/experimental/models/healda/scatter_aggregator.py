@@ -13,29 +13,103 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Scatter aggregation module for observation embedding."""
-
+import math
 import torch
-
 from physicsnemo.core.module import Module
 
-from .scatter_mean import scatter_mean
+def _compute_row_major_strides(shape: tuple[int, ...]) -> list[int]:
+    strides = []
+    stride = 1
+    for size in reversed(shape):
+        strides.insert(0, stride)
+        stride *= size
+    return strides
+
+
+def scatter_mean(
+    tensor: torch.Tensor,
+    index: torch.Tensor,
+    shape: tuple[int, ...],
+    fill_value: float = float("nan"),
+) -> torch.Tensor:
+    r"""
+    Scatter-mean values onto a multi-dimensional grid.
+
+    Parameters
+    ----------
+    tensor : torch.Tensor
+        Observation features of shape :math:`(N, C)`.
+    index : torch.Tensor
+        Integer indices of shape :math:`(N, D)`; each row gives the :math:`D`
+        grid coordinates for one observation.
+    shape : tuple[int, ...]
+        :math:`D`-tuple specifying the output grid shape for the indexed dimensions.
+    fill_value : float, optional
+        Value to fill unobserved grid cells with. Defaults to NaN.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        - ``aggregated``: mean-aggregated values of shape :math:`(*shape, C)`.
+        - ``present``: boolean mask of shape :math:`(*shape)` indicating which cells have values.
+    """
+    strides = _compute_row_major_strides(shape)
+    # manually implement the dot product since matmul doesn't support long tensors on cuda
+    # avoids RuntimeError: "addmv_impl_cuda" not implemented for 'Long'
+    grid_indices_flat = (index * torch.tensor(strides, device=index.device)).sum(dim=-1)
+    grid_size = math.prod(shape)
+
+    device = tensor.device
+    dtype = tensor.dtype
+    embedding_dim = tensor.shape[1]
+
+    # Initialize with fill_value (typically NaN)
+    values_mean = torch.full(
+        (grid_size, embedding_dim), fill_value, device=device, dtype=dtype
+    )
+
+    # Use scatter_reduce with mean, expanding indices to match tensor dimensions
+    grid_indices_flat_expanded = grid_indices_flat.unsqueeze(-1).expand(
+        -1, embedding_dim
+    )
+    values_mean.scatter_reduce_(
+        0, grid_indices_flat_expanded, tensor, reduce="mean", include_self=False
+    )
+
+    # Compute present mask (cells that are not fill_value)
+    if math.isnan(fill_value):
+        present = ~torch.isnan(values_mean[:, 0])
+    else:
+        present = values_mean[:, 0] != fill_value
+
+    # Reshape
+    aggregated = values_mean.view(*shape, embedding_dim)
+    present = present.view(shape)
+
+    return aggregated, present
+
 
 
 class ScatterAggregator(Module):
-    """Dense-bucket scatter aggregation (all batches together, all buckets).
+    r"""
+    Scatter-aggregate sparse observations onto a dense grid with a learned projection.
 
-    Pipeline:
-        1. Aggregate observations onto spatial grid using scatter_mean
-        2. Fill unobserved values with zeros
-        3. Mix across all buckets using MLP
+    Aggregates sparse observations into a :math:`(B, N_{pix}, N_{bucket}, C_{in})` grid
+    using scatter-mean, fills unobserved cells with zeros, then applies a pointwise MLP
+    to project all bucket features into a single per-pixel output vector.
 
-    Args:
-        in_dim: Input token dimension
-        out_dim: Output dimension after projection
-        nchannel: Max number of channels
-        nplatform: Max number of platforms
-        npix: Number of spatial pixels in output grid
+    Parameters
+    ----------
+    in_dim : int
+        Input feature dimension per observation.
+    out_dim : int
+        Output feature dimension per pixel.
+    nchannel : int
+        Number of channels per platform.
+    nplatform : int
+        Number of platforms.
+    npix : int
+        Number of spatial pixels in the target grid.
     """
 
     def __init__(
@@ -71,19 +145,6 @@ class ScatterAggregator(Module):
         bucket_id: torch.Tensor,
         nbatch: int,
     ) -> torch.Tensor:
-        """
-        Aggregate observations to spatial grid.
-
-        Args:
-            obs_features: (nobs, in_dim) tokenized observations
-            batch_idx: (nobs,) batch index for each observation
-            pix: (nobs,) spatial pixel index for each observation
-            bucket_id: (nobs,) bucket ID (platform * nchannel + channel) for each observation
-            nbatch: Number of batch elements
-
-        Returns:
-            (nbatch, npix, out_dim) aggregated and projected spatial grid
-        """
         grid_indices = torch.stack([batch_idx, pix, bucket_id], dim=-1)
 
         aggregated, has_obs = scatter_mean(

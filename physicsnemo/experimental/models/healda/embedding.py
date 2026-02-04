@@ -22,18 +22,33 @@ from physicsnemo.nn import PositionalEmbedding
 
 
 class FrequencyEmbedding(Module):
-    """Periodic Embedding.
+    r"""
+    Periodic embedding using sinusoidal features. Useful for inputs defined on the circle [0, 2π).
 
-    Useful for inputs defined on the circle [0, 2pi)
+    Parameters
+    ----------
+    num_channels : int
+        Number of frequency bands to use.
+
+    Forward
+    -------
+    x : torch.Tensor
+        Input tensor of shape :math:`(B, T, X)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Embedded tensor of shape :math:`(B, 2C, T, X)` where
+        :math:`C = \\mathrm{num\\_channels}`.
     """
 
-    def __init__(self, num_channels):
+    def __init__(self, num_channels: int):
         super().__init__()
         self.register_buffer(
             "freqs", torch.arange(1, num_channels + 1), persistent=False
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         freqs = self.freqs[None, :, None, None]
         x = x[:, None, :, :]
         x = x * (2 * math.pi * freqs).to(x.dtype)
@@ -42,23 +57,38 @@ class FrequencyEmbedding(Module):
 
 
 class CalendarEmbedding(Module):
-    """Time embedding assuming 365.25 day years
+    r"""
+    Calendar embedding using day-of-year and local solar time. Assumes 365.25 day years.
 
-    Args:
-        day_of_year: (n, t)
-        second_of_day: (n, t)
-    Returns:
-        (n, embed_channels * 4, t, x)
+    Parameters
+    ----------
+    lon : torch.Tensor
+        Longitude values in degrees of shape :math:`(X,)`.
+    embed_channels : int
+        Number of frequency channels for each component.
+    include_legacy_bug : bool, optional, default=False
+        If True, uses the legacy local-time formula (``hour - lon``).
 
+    Forward
+    -------
+    day_of_year : torch.Tensor
+        Day-of-year tensor of shape :math:`(B, T)`.
+    second_of_day : torch.Tensor
+        Second-of-day tensor of shape :math:`(B, T)`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Calendar embedding of shape :math:`(B, 4C, T, X)` where
+        :math:`C = \\mathrm{embed\\_channels}`.
     """
 
-    def __init__(self, lon, embed_channels: int, include_legacy_bug: bool = False):
-        """
-        Args:
-            include_legacy_bug: Provided for backwards compatibility
-                with existing checkpoints. If True, use the incorrect formula
-                for local_time (hour - lon) instead of the correct formula (hour + lon)
-        """
+    def __init__(
+        self,
+        lon: torch.Tensor,
+        embed_channels: int,
+        include_legacy_bug: bool = False,
+    ) -> None:
         super().__init__()
         self.register_buffer("lon", lon, persistent=False)
         self.embed_channels = embed_channels
@@ -67,7 +97,11 @@ class CalendarEmbedding(Module):
         self.out_channels = embed_channels * 4
         self.include_legacy_bug = include_legacy_bug
 
-    def forward(self, day_of_year, second_of_day):
+    def forward(
+        self,
+        day_of_year: torch.Tensor,
+        second_of_day: torch.Tensor,
+    ) -> torch.Tensor:
         if second_of_day.shape != day_of_year.shape:
             raise ValueError()
 
@@ -80,18 +114,45 @@ class CalendarEmbedding(Module):
         doy = day_of_year.unsqueeze(2)
         b = self.embed_day((doy / 365.25) % 1)
         a, b = torch.broadcast_tensors(a, b)
-        return torch.concat([a, b], dim=1)  # (n c x)
+        return torch.concat([a, b], dim=1)  # (b c x)
 
 
 class EmbedNoiseLabels(Module):
-    """Embedding layer for noise levels and class labels."""
+    r"""
+    Embedding layer for diffusion noise levels and optional class labels.
+
+    Parameters
+    ----------
+    emb_channels : int
+        Output embedding dimension.
+    label_dim : int
+        Dimension of class labels.
+    noise_channels : int
+        Number of channels for the noise positional embedding.
+    label_dropout : float, optional, default=0.0
+        Dropout probability for class labels during training.
+    legacy_label_bias : bool, optional, default=False
+        If True, adds a label projection bias for backward compatibility.
+
+    Forward
+    -------
+    noise_labels : torch.Tensor
+        Noise labels of shape :math:`(B,)` or :math:`(B, 1)`.
+    class_labels : torch.Tensor
+        Class labels of shape :math:`(B, D_{label})`.
+
+    Outputs
+    -------
+    torch.Tensor
+        Embedding tensor of shape :math:`(B, C)` where :math:`C=\\mathrm{emb\\_channels}`.
+    """
 
     def __init__(
         self,
-        emb_channels,
-        label_dim,
-        noise_channels,
-        label_dropout=None,
+        emb_channels: int,
+        label_dim: int,
+        noise_channels: int,
+        label_dropout: float = 0.0,
         legacy_label_bias: bool = False,
     ):
         super().__init__()
@@ -111,7 +172,11 @@ class EmbedNoiseLabels(Module):
             in_features=emb_channels, out_features=emb_channels
         )
 
-    def forward(self, noise_labels, class_labels):
+    def forward(
+        self,
+        noise_labels: torch.Tensor,
+        class_labels: torch.Tensor,
+    ) -> torch.Tensor:
         emb = self.map_noise(noise_labels)
         emb = (
             emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape)

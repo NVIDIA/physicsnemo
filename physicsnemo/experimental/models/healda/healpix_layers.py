@@ -33,16 +33,17 @@ from .embedding import CalendarEmbedding
 
 class HPXPatchTokenizer(TokenizerModuleBase):
     r"""
-    HEALPix patch tokenizer for DiT integration.
+    ViT-style tokenizer for HEALPix data.
 
-    Folds 12 HEALPix faces into batch, applies conv, unfolds, adds global pos_embed + calendar_embed.
+    Tokenizes each HEALPix face into a patch sequence with a learnable positional
+    embedding and a calendar embedding. Requires input to have HEALPIX_PAD_XY pixel order.
 
     Parameters
     ----------
     in_channels : int
         Number of input channels.
     hidden_size : int
-        Number of output embedding channels.
+        Number of output embedding channels (token dimension).
     level_fine : int
         HEALPix resolution level of input data.
     level_coarse : int
@@ -51,16 +52,19 @@ class HPXPatchTokenizer(TokenizerModuleBase):
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape :math:`(B, C, T, N_{pix})` where :math:`N_{pix} = 12 \\times 4^{level\\_fine}`.
-    second_of_day : torch.Tensor, optional
-        Second of day for calendar embedding.
-    day_of_year : torch.Tensor, optional
-        Day of year for calendar embedding.
+        Input tensor of shape :math:`(B, C, T, N_{pix})` where
+        :math:`N_{pix} = 12 \\times 4^{\\mathrm{level}_{fine}}`.
+    second_of_day : torch.Tensor
+        Second-of-day tensor of shape :math:`(B, T)` for calendar embedding.
+    day_of_year : torch.Tensor
+        Day-of-year tensor of shape :math:`(B, T)` for calendar embedding.
 
     Outputs
     -------
     torch.Tensor
-        Output tensor of shape :math:`(B, L, D)` where :math:`L = T \\times 12 \\times patches\\_per\\_face`.
+        Token tensor of shape :math:`(B, L, D)` where
+        :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}` and
+        :math:`D=\\mathrm{hidden\\_size}`.
     """
 
     pixel_order = earth2grid.healpix.HEALPIX_PAD_XY
@@ -79,19 +83,19 @@ class HPXPatchTokenizer(TokenizerModuleBase):
         self.level_fine = level_fine
         self.level_coarse = level_coarse
         self.nside = 2**level_fine
+        self.nside_coarse = 2**level_coarse
         self.patch_size = 2 ** (level_fine - level_coarse)
 
-        # Patch embedding conv
         self.conv = nn.Conv2d(
             in_channels, hidden_size,
             kernel_size=self.patch_size, stride=self.patch_size,
         )
 
-        # Global positional embedding across all 12 faces
+        # Global positional embedding
         npix_coarse = 12 * 4**level_coarse
         self.pos_embed = nn.Parameter(torch.randn(npix_coarse, hidden_size))
 
-        # Calendar embedding (HEALPix-specific: incorporates longitude)
+        # Calendar embedding
         grid = earth2grid.healpix.Grid(level=level_coarse, pixel_order=self.pixel_order)
         lon = torch.as_tensor(grid.lon)
         if hidden_size % 4 != 0:
@@ -99,36 +103,51 @@ class HPXPatchTokenizer(TokenizerModuleBase):
         self.calendar_embed = CalendarEmbedding(lon, hidden_size // 4).float()
 
     def initialize_weights(self) -> None:
-        w = self.conv.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.conv.bias, 0)
-        nn.init.normal_(self.pos_embed, std=0.02)
+        pass
 
     def forward(
         self,
         x: torch.Tensor,
-        second_of_day: Optional[torch.Tensor] = None,
-        day_of_year: Optional[torch.Tensor] = None,
+        second_of_day: torch.Tensor,
+        day_of_year: torch.Tensor,
     ) -> torch.Tensor:
+
         b, c, t, npix = x.shape
 
-        # 1. Fold faces into batch: (B, C, T, 12*nside²) -> (B*T*12, C, nside, nside)
-        x = einops.rearrange(x, "b c t (f x y) -> (b t f) c x y", f=12, x=self.nside, y=self.nside)
+        # Fold faces into batch for per-face convolution.
+        x = einops.rearrange(
+            x,
+            "b c t (f x y) -> (b t f) c x y",
+            f=12,
+            x=self.nside,
+            y=self.nside,
+        )
 
-        # 2. Conv: (B*T*12, C, nside, nside) -> (B*T*12, D, nside_c, nside_c)
         x = self.conv(x)
+        x = einops.rearrange(
+            x,
+            "(b t f) c x y -> b t (f x y) c",
+            b=b,
+            t=t,
+            f=12,
+        )
 
-        # 3. Flatten + unfold: (B*T*12, D, n_c, n_c) -> (B, T*12*n_c*n_c, D)
-        x = einops.rearrange(x, "(b t f) d x y -> b (t f x y) d", b=b, t=t, f=12)
+        calendar_emb = self.calendar_embed(
+            second_of_day=second_of_day, day_of_year=day_of_year
+        ) # (b, c, t, x)
+        calendar_emb = einops.rearrange(calendar_emb, "b c t x -> b t x c")
 
-        # 4. Add global positional embedding
-        x = x + self.pos_embed
+        x = x + calendar_emb + self.pos_embed
 
-        # 5. Add calendar embedding
-        if second_of_day is not None and day_of_year is not None:
-            calendar_emb = self.calendar_embed(second_of_day=second_of_day, day_of_year=day_of_year)
-            calendar_emb = einops.rearrange(calendar_emb, "b d t x -> b (t x) d")
-            x = x + calendar_emb
+        # Unfold into a token sequence.
+        x = einops.rearrange(
+            x,
+            "b t (f x y) c -> b (t f x y) c",
+            t=t,
+            f=12,
+            x=self.nside_coarse,
+            y=self.nside_coarse,
+        )
 
         return x
 
@@ -137,7 +156,7 @@ class HPXPatchDetokenizer(DetokenizerModuleBase):
     r"""
     HEALPix patch detokenizer for DiT integration.
 
-    Applies final AdaLN modulation and conv transpose to upsample patches.
+    Upsamples HEALPix patch tokens back to the full-resolution grid using a transpose convolution.
 
     Parameters
     ----------
@@ -151,18 +170,24 @@ class HPXPatchDetokenizer(DetokenizerModuleBase):
         HEALPix resolution level of output data.
     time_length : int, optional, default=1
         Number of time steps.
+    condition_dim : int, optional, default=None
+        Conditioning dimension for AdaLN modulation. If None, uses ``hidden_size``.
 
     Forward
     -------
     x : torch.Tensor
-        Input tensor of shape :math:`(B, L, D)`.
+        Input tensor of shape :math:`(B, L, D)` where
+        :math:`L = T \\times 12 \\times 4^{\\mathrm{level}_{coarse}}`.
     c : torch.Tensor
-        Conditioning tensor of shape :math:`(B, D)`. Pass zeros for VIT mode.
+        Conditioning tensor of shape :math:`(B, D_c)` where :math:`D_c` is
+        ``condition_dim`` if provided, otherwise ``hidden_size``.
 
     Outputs
     -------
     torch.Tensor
-        Output tensor of shape :math:`(B, C_{out}, T, N_{pix})`.
+        Output tensor of shape :math:`(B, C_{out}, T, N_{pix})` where
+        :math:`N_{pix} = 12 \\times 4^{\\mathrm{level}_{fine}}`.
+
     """
 
     def __init__(
@@ -184,7 +209,6 @@ class HPXPatchDetokenizer(DetokenizerModuleBase):
         self.nside_coarse = 2**level_coarse
         self.patch_size = 2 ** (level_fine - level_coarse)
 
-        # AdaLN: c -> (shift, scale)
         modulation_input_dim = hidden_size if condition_dim is None else condition_dim
         self.adaptive_modulation = nn.Sequential(
             nn.SiLU(),
@@ -192,7 +216,6 @@ class HPXPatchDetokenizer(DetokenizerModuleBase):
         )
         self.norm_out = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
 
-        # Conv transpose for upsampling
         self.conv_t = nn.ConvTranspose2d(
             hidden_size, out_channels,
             kernel_size=self.patch_size, stride=self.patch_size,
@@ -207,19 +230,14 @@ class HPXPatchDetokenizer(DetokenizerModuleBase):
         t = self.time_length
         n = self.nside_coarse
 
-        # 1. Unflatten: (B, L, D) -> (B, T, 12*n*n, D)
         x = einops.rearrange(x, "b (t f x y) d -> b t (f x y) d", t=t, f=12, x=n, y=n)
 
-        # 2. AdaLN: norm(x) * (1 + scale) + shift
         shift, scale = self.adaptive_modulation(c).chunk(2, dim=-1)
         x = self.norm_out(x) * (1 + scale[:, None, None, :]) + shift[:, None, None, :]
 
-        # 3. Fold faces: (B, T, 12*n*n, D) -> (B*T*12, D, n, n)
         x = einops.rearrange(x, "b t (f x y) d -> (b t f) d x y", f=12, x=n, y=n)
 
-        # 4. Conv transpose
         x = self.conv_t(x)
 
-        # 5. Unfold: (B*T*12, C, nside_fine, nside_fine) -> (B, C, T, npix)
         x = einops.rearrange(x, "(b t f) c x y -> b c t (f x y)", f=12, b=b, t=t)
         return x

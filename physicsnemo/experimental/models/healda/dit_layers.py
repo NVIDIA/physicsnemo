@@ -49,7 +49,7 @@ class HealDAMetaData(ModelMetaData):
 
 class HealDA(Module):
     r"""
-    HealDA DiT model that composes preprocessor + PNM experimental DiT.
+    HealDA model that combines HEALPix tokenizers, observation embedders, and a DiT backbone.
     
     Parameters
     ----------
@@ -57,6 +57,10 @@ class HealDA(Module):
         Number of input state channels.
     out_channels : int
         Number of output channels.
+    sensor_embedder_config : :class:`~physicsnemo.experimental.models.healda.config.SensorEmbedderConfig`
+        Configuration for observation embedding.
+    sensors : dict[str, :class:`~physicsnemo.experimental.models.healda.config.ModelSensorConfig`]
+        Sensor configurations for observation embedding.
     hidden_size : int, optional, default=1024
         Transformer hidden dimension.
     num_layers : int, optional, default=24
@@ -71,15 +75,10 @@ class HealDA(Module):
         HEALPix model resolution level after patching.
     time_length : int, optional, default=1
         Number of time steps.
-    sensor_embedder_config : SensorEmbedderConfig
-        Config for observation embedding.
-    sensors : dict[str, ModelSensorConfig]
-        Sensor configurations for obs embedding.
     condition_channels : int, optional, default=2
-        Number of static input channels that go into tokenizer.
-        Tokenizer input = condition_channels + fusion_dim.
+        Number of static input channels.
     qk_norm_type : Literal["RMSNorm", "LayerNorm"], optional, default="RMSNorm"
-        QK normalization type. None disables QK normalization.
+        QK normalization type. ``None`` disables QK normalization.
     qk_norm_affine : bool, optional, default=True
         Whether QK normalization layers use learnable affine parameters (timm backend only).
     drop_path : float, optional, default=0.0
@@ -103,19 +102,20 @@ class HealDA(Module):
     Forward
     -------
     x : torch.Tensor
-        Input state tensor of shape :math:`(B, C, T, N_{pix})`.
+        Input state tensor of shape :math:`(B, C, T, N_{pix})` where
+        :math:`N_{pix} = 12 \\times 4^{\\mathrm{level}_{in}}`.
     t : torch.Tensor
         Timestep tensor of shape :math:`(B,)`.
-    unified_obs : UnifiedObservation
-        Observation data (required for obs-to-state DA).
+    unified_obs : :class:`~physicsnemo.experimental.models.healda.types.UnifiedObservation`
+        Observation data for obs-to-state data assimilation.
     second_of_day : torch.Tensor, optional
-        Second of day for calendar embedding.
+        Second-of-day tensor of shape :math:`(B, T)` for calendar embedding.
     day_of_year : torch.Tensor, optional
-        Day of year for calendar embedding.
+        Day-of-year tensor of shape :math:`(B, T)` for calendar embedding.
     noise_labels : torch.Tensor, optional
-        Noise levels for diffusion conditioning. Required when condition_dim is set.
+        Noise levels for diffusion conditioning. Required when ``condition_dim`` is set.
     class_labels : torch.Tensor, optional
-        Class labels for conditioning. Only used when condition_dim is set.
+        Class labels for conditioning. Only used when ``condition_dim`` is set.
     
     Outputs
     -------
@@ -170,10 +170,8 @@ class HealDA(Module):
             hpx_level=level_in,
         )
         self.fusion_dim = sensor_embedder_config.fusion_dim
-        # Tokenizer input: static condition channels + obs embedding (NOT full in_channels)
         tokenizer_in_channels = condition_channels + self.fusion_dim
 
-        # Create tokenizer and detokenizer
         tokenizer = HPXPatchTokenizer(
             in_channels=tokenizer_in_channels,
             hidden_size=hidden_size,
@@ -190,7 +188,6 @@ class HealDA(Module):
             condition_dim=condition_dim,
         )
 
-        # Create PNM DiT with custom tokenizer/detokenizer
         npix_coarse = 12 * 4 ** level_model
         attn_kwargs = {"qk_norm_type": qk_norm_type} if qk_norm_type else {}
         if qk_norm_type and attention_backend == "timm":
@@ -205,8 +202,6 @@ class HealDA(Module):
             "norm_eps": norm_eps,
             "final_mlp_dropout": False,
         }
-        # if attention_backend == "diffusers":
-        #     block_kwargs["attn_drop_rate"] = dropout
 
         self.dit = DiT(
             input_size=(npix_coarse * time_length,),
@@ -258,27 +253,15 @@ class HealDA(Module):
         day_of_year: Optional[torch.Tensor] = None,
         class_labels: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Forward pass.
-        
-        Args:
-            x: Input state (B, C, T, npix)
-            t: Timestep/noise_labels (B,) - used for conditioning
-            unified_obs: Observation data (required)
-            second_of_day: Calendar info
-            day_of_year: Calendar info
-            class_labels: Class labels for conditioning (only used when label_dim > 0)
-            
-        Returns:
-            Output (B, C_out, T, npix)
-        """
-        # Embed observations and concatenate with state
-        obs_emb = self.obs_embedder(unified_obs)  # (B, fusion_dim, T, npix)
-        x = torch.cat([x, obs_emb], dim=1)  # (B, C + fusion_dim, T, npix)
+        obs_emb = self.obs_embedder(unified_obs)  # (B, C, T, npix)
+        x = torch.cat([x, obs_emb], dim=1)
 
         return self.dit(
             x, t, condition=class_labels,
-            tokenizer_kwargs={"second_of_day": second_of_day, "day_of_year": day_of_year},
+            tokenizer_kwargs={
+                "second_of_day": second_of_day,
+                "day_of_year": day_of_year,
+            },
         )
 
     @classmethod
