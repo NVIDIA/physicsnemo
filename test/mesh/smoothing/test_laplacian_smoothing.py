@@ -179,7 +179,7 @@ def test_inplace_vs_copy():
 
 
 def test_boundary_fixed_when_enabled():
-    """Boundary vertices should not move when boundary_smoothing=True."""
+    """Boundary vertices should not move when preserve_boundaries=True."""
     from physicsnemo.mesh.primitives.surfaces import cylinder_open
 
     mesh = cylinder_open.load(radius=1.0, height=2.0, n_circ=16, n_height=8)
@@ -196,7 +196,7 @@ def test_boundary_fixed_when_enabled():
         mesh,
         n_iter=50,
         relaxation_factor=0.1,
-        boundary_smoothing=True,
+        preserve_boundaries=True,
         inplace=False,
     )
 
@@ -204,11 +204,11 @@ def test_boundary_fixed_when_enabled():
     smoothed_boundary_points = smoothed.points[boundary_verts]
     assert torch.allclose(
         smoothed_boundary_points, original_boundary_points, atol=1e-6
-    ), "Boundary vertices should not move when boundary_smoothing=True"
+    ), "Boundary vertices should not move when preserve_boundaries=True"
 
 
 def test_boundary_moves_when_disabled():
-    """Boundary vertices should move when boundary_smoothing=False."""
+    """Boundary vertices should move when preserve_boundaries=False."""
     from physicsnemo.mesh.primitives.surfaces import cylinder_open
 
     mesh = cylinder_open.load(radius=1.0, height=2.0, n_circ=16, n_height=8)
@@ -225,7 +225,7 @@ def test_boundary_moves_when_disabled():
         mesh,
         n_iter=50,
         relaxation_factor=0.1,
-        boundary_smoothing=False,
+        preserve_boundaries=False,
         inplace=False,
     )
 
@@ -235,7 +235,7 @@ def test_boundary_moves_when_disabled():
         smoothed_boundary_points - original_boundary_points, dim=-1
     ).max()
     assert max_displacement > 1e-3, (
-        f"Boundary vertices should move when boundary_smoothing=False: {max_displacement=}"
+        f"Boundary vertices should move when preserve_boundaries=False: {max_displacement=}"
     )
 
 
@@ -257,7 +257,7 @@ def test_boundary_on_closed_surface():
 
 
 def test_sharp_edges_preserved():
-    """Sharp edges should be preserved when feature_smoothing=True."""
+    """Sharp edges should be preserved when preserve_features=True."""
     from physicsnemo.mesh.primitives.surfaces import cube_surface
 
     mesh = cube_surface.load(size=2.0)
@@ -272,7 +272,7 @@ def test_sharp_edges_preserved():
         n_iter=50,
         relaxation_factor=0.1,
         feature_angle=45.0,
-        feature_smoothing=True,
+        preserve_features=True,
         inplace=False,
     )
 
@@ -281,12 +281,12 @@ def test_sharp_edges_preserved():
 
     # Allow small tolerance for numerical precision
     assert max_displacement < 1e-4, (
-        f"Sharp feature vertices should not move when feature_smoothing=True: {max_displacement=}"
+        f"Sharp feature vertices should not move when preserve_features=True: {max_displacement=}"
     )
 
 
 def test_sharp_edges_smoothed():
-    """Sharp edges should be smoothed when feature_smoothing=False."""
+    """Sharp edges should be smoothed when preserve_features=False."""
     from physicsnemo.mesh.primitives.surfaces import cube_surface
 
     mesh = cube_surface.load(size=2.0)
@@ -298,7 +298,7 @@ def test_sharp_edges_smoothed():
         n_iter=50,
         relaxation_factor=0.1,
         feature_angle=45.0,
-        feature_smoothing=False,
+        preserve_features=False,
         inplace=False,
     )
 
@@ -306,7 +306,7 @@ def test_sharp_edges_smoothed():
     max_displacement = torch.norm(smoothed.points - original_points, dim=-1).max()
 
     assert max_displacement > 1e-3, (
-        f"Vertices should move when feature_smoothing=False: {max_displacement=}"
+        f"Vertices should move when preserve_features=False: {max_displacement=}"
     )
 
 
@@ -327,15 +327,15 @@ def test_feature_detection_higher_codimension():
         n_iter=10,
         relaxation_factor=0.1,
         feature_angle=45.0,
-        feature_smoothing=True,
-        boundary_smoothing=False,
+        preserve_features=True,
+        preserve_boundaries=False,
         inplace=False,
     )
 
     # All points should move (no features constrained)
     max_displacement = torch.norm(smoothed.points - original_points, dim=-1).max()
     assert max_displacement > 1e-6, (
-        "Points should move in higher codimension mesh even with feature_smoothing=True"
+        "Points should move in higher codimension mesh even with preserve_features=True"
     )
 
 
@@ -364,8 +364,8 @@ def test_feature_detection_no_sharp_edges():
         n_iter=10,
         relaxation_factor=0.1,
         feature_angle=170.0,  # Nearly 180 degrees
-        feature_smoothing=True,
-        boundary_smoothing=False,
+        preserve_features=True,
+        preserve_boundaries=False,
         inplace=False,
     )
 
@@ -391,8 +391,8 @@ def test_feature_detection_no_interior_edges():
         n_iter=10,
         relaxation_factor=0.1,
         feature_angle=45.0,
-        feature_smoothing=True,
-        boundary_smoothing=False,
+        preserve_features=True,
+        preserve_boundaries=False,
         inplace=False,
     )
 
@@ -423,7 +423,7 @@ def test_convergence_early_exit():
 
     # Pre-smooth to make it nearly converged
     mesh = smooth_laplacian(
-        mesh, n_iter=50, relaxation_factor=0.05, boundary_smoothing=False, inplace=True
+        mesh, n_iter=50, relaxation_factor=0.05, preserve_boundaries=False, inplace=True
     )
 
     original_points = mesh.points.clone()
@@ -434,7 +434,7 @@ def test_convergence_early_exit():
         n_iter=1000,  # Set high, but should exit early
         relaxation_factor=0.001,  # Small factor
         convergence=0.01,  # 1% of bbox diagonal
-        boundary_smoothing=False,
+        preserve_boundaries=False,
         inplace=False,
     )
 
@@ -471,7 +471,7 @@ def test_no_convergence_when_zero():
         n_iter=5,
         relaxation_factor=0.1,
         convergence=0.0,
-        boundary_smoothing=False,
+        preserve_boundaries=False,
         inplace=False,
     )
     smoothed_10 = smooth_laplacian(
@@ -479,7 +479,7 @@ def test_no_convergence_when_zero():
         n_iter=10,
         relaxation_factor=0.1,
         convergence=0.0,
-        boundary_smoothing=False,
+        preserve_boundaries=False,
         inplace=False,
     )
 

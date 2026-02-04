@@ -39,8 +39,8 @@ def smooth_laplacian(
     relaxation_factor: float = 0.01,
     convergence: float = 0.0,
     feature_angle: float = 45.0,
-    boundary_smoothing: bool = True,
-    feature_smoothing: bool = False,
+    preserve_boundaries: bool = True,
+    preserve_features: bool = False,
     inplace: bool = False,
 ) -> "Mesh":
     """Smooth mesh using Laplacian smoothing with cotangent weights.
@@ -61,10 +61,12 @@ def smooth_laplacian(
         feature_angle: Angle threshold (degrees) for sharp edge detection.
             Edges with dihedral angle > feature_angle are considered sharp features.
             Only used for codimension-1 manifolds. Default: 45.0
-        boundary_smoothing: If True, boundary vertices remain fixed during smoothing.
-            If False, boundary vertices are smoothed like interior vertices. Default: True
-        feature_smoothing: If True, vertices on sharp features remain fixed.
-            If False, feature vertices are smoothed. Default: False
+        preserve_boundaries: If True (default), boundary vertices are fixed and
+            will not move during smoothing, preserving the original boundary shape.
+            If False, boundary vertices are smoothed like interior vertices.
+        preserve_features: If True, vertices on sharp feature edges (with dihedral
+            angle > feature_angle) are fixed and will not move. If False (default),
+            feature vertices are smoothed normally.
         inplace: If True, modifies mesh in place. If False, creates a copy. Default: False
 
     Returns:
@@ -84,8 +86,8 @@ def smooth_laplacian(
         ...     mesh,
         ...     n_iter=50,
         ...     feature_angle=45.0,
-        ...     boundary_smoothing=True,
-        ...     feature_smoothing=True,
+        ...     preserve_boundaries=True,
+        ...     preserve_features=True,
         ... )
         >>>
         >>> # With convergence criterion
@@ -137,12 +139,12 @@ def smooth_laplacian(
     ### Identify constrained vertices (boundaries and features)
     constrained_vertices = torch.zeros(n_points, dtype=torch.bool, device=device)
 
-    if boundary_smoothing:
+    if preserve_boundaries:
         # Boundary vertices should not move
         boundary_vertex_mask = _get_boundary_vertices(mesh, edges)
         constrained_vertices |= boundary_vertex_mask
 
-    if feature_smoothing:
+    if preserve_features:
         # Feature vertices should not move
         feature_vertex_mask = _get_feature_vertices(mesh, edges, feature_angle)
         constrained_vertices |= feature_vertex_mask
