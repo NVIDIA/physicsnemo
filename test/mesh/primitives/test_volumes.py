@@ -63,8 +63,8 @@ class TestVolumePrimitives:
 
     def test_cube_volume_subdivision(self):
         """Test cube volume subdivision."""
-        cube_coarse = primitives.volumes.cube_volume.load(n_subdivisions=2)
-        cube_fine = primitives.volumes.cube_volume.load(n_subdivisions=4)
+        cube_coarse = primitives.volumes.cube_volume.load(subdivisions=2)
+        cube_fine = primitives.volumes.cube_volume.load(subdivisions=4)
 
         assert cube_fine.n_cells > cube_coarse.n_cells
 
