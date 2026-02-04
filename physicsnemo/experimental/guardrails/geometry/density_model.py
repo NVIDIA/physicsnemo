@@ -232,7 +232,6 @@ class GeometryDensityModel:
 
             self.model = TorchGMM(
                 n_components=self.n_components,
-                covariance_type=self.covariance_type,
                 device=self.device,
                 random_state=self.random_state,
             )
@@ -508,7 +507,6 @@ class GeometryDensityModel:
             
             self.model = TorchGMM(
                 n_components=self.n_components,
-                covariance_type=self.covariance_type,
                 device=self.device,
                 random_state=self.random_state,
             )

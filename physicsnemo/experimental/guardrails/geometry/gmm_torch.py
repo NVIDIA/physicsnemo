@@ -14,14 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-GPU-accelerated Gaussian Mixture Model using PyTorch.
-
-This module provides a PyTorch-based GMM implementation for GPU acceleration
-of density estimation. It is API-compatible with the scikit-learn GMM but
-operates on GPU tensors for improved performance on large datasets.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -41,9 +33,6 @@ class TorchGMM(nn.Module):
     ----------
     n_components : int
         Number of Gaussian components in the mixture.
-    covariance_type : str, optional
-        Type of covariance matrix. Currently only ``"full"`` is supported.
-        Default is ``"full"``.
     reg_covar : float, optional
         Regularization term added to covariance diagonal for numerical stability.
         Default is 1e-6.
@@ -89,7 +78,6 @@ class TorchGMM(nn.Module):
     -----
     **Performance Considerations**:
 
-    - GPU acceleration provides 2-10x speedup for datasets with N > 1000 samples
     - For small datasets (N < 100), CPU may be faster due to transfer overhead
     - Batch scoring is highly efficient on GPU for inference
 
@@ -110,7 +98,6 @@ class TorchGMM(nn.Module):
     def __init__(
         self,
         n_components: int,
-        covariance_type: str = "full",
         reg_covar: float = 1e-6,
         max_iter: int = 100,
         tol: float = 1e-3,
@@ -119,14 +106,7 @@ class TorchGMM(nn.Module):
     ):
         super().__init__()
         
-        if covariance_type != "full":
-            raise NotImplementedError(
-                f"TorchGMM currently only supports covariance_type='full', "
-                f"got '{covariance_type}'"
-            )
-        
         self.n_components = n_components
-        self.covariance_type = covariance_type
         self.reg_covar = reg_covar
         self.max_iter = max_iter
         self.tol = tol
@@ -456,7 +436,7 @@ class TorchGMM(nn.Module):
         Parameters
         ----------
         sklearn_gmm : sklearn.mixture.GaussianMixture
-            Fitted scikit-learn GMM.
+            Fitted scikit-learn GMM. Must have ``covariance_type='full'``.
         device : str or torch.device, optional
             Device to place parameters on.
 
@@ -464,7 +444,18 @@ class TorchGMM(nn.Module):
         -------
         TorchGMM
             TorchGMM with parameters copied from sklearn model.
+        
+        Raises
+        ------
+        ValueError
+            If sklearn_gmm does not use full covariance matrices.
         """
+        if sklearn_gmm.covariance_type != "full":
+            raise ValueError(
+                f"TorchGMM only supports full covariance matrices, "
+                f"but sklearn GMM has covariance_type='{sklearn_gmm.covariance_type}'"
+            )
+        
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
@@ -473,7 +464,6 @@ class TorchGMM(nn.Module):
         # Create instance
         model = cls(
             n_components=sklearn_gmm.n_components,
-            covariance_type=sklearn_gmm.covariance_type,
             device=device,
         )
         

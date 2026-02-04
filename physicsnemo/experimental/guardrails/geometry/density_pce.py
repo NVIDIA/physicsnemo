@@ -14,18 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Polynomial Chaos Expansion (PCE) based density estimation.
-
-This module provides an alternative to GMM-based density estimation using
-Polynomial Chaos Expansion with **Hermite polynomials**, which are orthogonal
-with respect to the Gaussian distribution. This is particularly well-suited for
-physics-based applications and high-dimensional data with Gaussian-like statistics.
-
-The implementation uses NumPy's Hermite polynomial basis (probabilist's Hermite)
-which are orthogonal with respect to the standard normal distribution.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -50,13 +38,6 @@ class PCEDensityModel:
         
         **CPU-only implementation**: This method currently supports CPU computation only.
         For GPU acceleration, use GMM (``method="gmm"``) instead.
-
-    The approach is particularly effective for:
-    
-    - High-dimensional data with correlations
-    - Physics-based features with smooth, Gaussian-like distributions
-    - Cases where interpretability is important (Hermite coefficients → sensitivity indices)
-    - When you want orthogonal basis functions (no redundant information)
 
     Parameters
     ----------
@@ -124,34 +105,11 @@ class PCEDensityModel:
     3. **Mahalanobis Distance**: Computes anomaly scores as the Mahalanobis distance
        in the Hermite polynomial feature space, which accounts for correlations.
 
-    **Why Hermite Polynomials?**
-
-    Hermite polynomials are the natural choice because:
-    
-    - Orthogonal with respect to Gaussian measure (our PCA components are Gaussian)
-    - Coefficients represent sensitivity indices in uncertainty quantification
-    - Numerically stable and well-conditioned
-    - Used in classical Polynomial Chaos Expansion theory
-
     The probabilist's Hermite polynomials satisfy:
 
     .. math::
 
         \int_{-\infty}^{\infty} H_m(x) H_n(x) \frac{1}{\sqrt{2\pi}} e^{-x^2/2} dx = n! \delta_{mn}
-
-    **Advantages over GMM**:
-
-    - Better for high-dimensional data with strong correlations
-    - Orthogonal basis (no redundant polynomial terms)
-    - Hermite coefficients have physical interpretation
-    - Fewer hyperparameters to tune
-    - Naturally handles multicollinearity through PCA
-
-    **Disadvantages**:
-
-    - Assumes unimodal Gaussian-like distribution (GMM better for multi-modal data)
-    - Can be sensitive to outliers in training data
-    - Computational cost grows with dimension and degree
 
     **Choosing Polynomial Degree**:
 
@@ -169,18 +127,6 @@ class PCEDensityModel:
         N = \binom{d + p}{p} = \frac{(d + p)!}{d! \, p!}
 
     Examples: d=10, p=2 → 66 terms; d=10, p=3 → 286 terms
-
-    See Also
-    --------
-    :class:`GeometryDensityModel` : GMM-based density estimation (default).
-    :class:`GeometryGuardrail` : Main API that uses density models.
-
-    References
-    ----------
-    - Xiu, D., & Karniadakis, G. E. (2002). "The Wiener-Askey polynomial chaos for
-      stochastic differential equations." SIAM J. Sci. Comput.
-    - Sudret, B. (2008). "Global sensitivity analysis using polynomial chaos expansions."
-      Reliability Engineering & System Safety.
     """
 
     def __init__(
@@ -220,20 +166,6 @@ class PCEDensityModel:
         -------
         self : PCEDensityModel
             Fitted model instance (for method chaining).
-
-        Notes
-        -----
-        The fitting procedure:
-
-        1. Standardize features (zero mean, unit variance)
-        2. Apply PCA to reduce dimensionality
-        3. Generate Hermite polynomial features from principal components
-        4. Compute mean and covariance of Hermite polynomial features
-        5. Store training scores for percentile computation
-
-        The Hermite polynomials are evaluated on the standardized PCA components,
-        which are approximately Gaussian-distributed, making Hermite the natural
-        orthogonal basis.
 
         Raises
         ------
@@ -377,15 +309,6 @@ class PCEDensityModel:
         -------
         np.ndarray
             Hermite polynomial evaluated at x.
-
-        Notes
-        -----
-        The probabilist's Hermite polynomials (He_n) are orthogonal with respect
-        to the standard normal distribution and satisfy the recurrence:
-
-        .. math::
-
-            He_0(x) = 1, \quad He_1(x) = x, \quad He_{n+1}(x) = x He_n(x) - n He_{n-1}(x)
         """
         from numpy.polynomial.hermite_e import hermeval
 
@@ -472,12 +395,6 @@ class PCEDensityModel:
         -------
         percentiles : np.ndarray
             Percentiles in range [0, 100].
-
-        Examples
-        --------
-        >>> scores = model.score(X_test)
-        >>> pcts = model.percentiles(scores)
-        >>> anomalies = X_test[pcts > 99.0]  # Top 1% most anomalous
         """
         if self.training_scores_ is None:
             raise RuntimeError("Model must be fitted before computing percentiles")

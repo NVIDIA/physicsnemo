@@ -14,17 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Fast STL loading using Rust-based reader.
-
-This module provides an optional high-performance STL reader implemented in Rust.
-It is significantly faster than trimesh for large batches of STL files, especially
-when combined with multiprocessing.
-
-The Rust reader is optional and requires the ``stlreader`` package to be installed.
-If not available, the module gracefully falls back to trimesh.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -144,34 +133,6 @@ def load_stl_fast(path: Path) -> FastMesh:
     ValueError
         If the STL file is invalid or cannot be parsed.
 
-    Examples
-    --------
-    >>> from pathlib import Path
-    >>> from physicsnemo.experimental.guardrails.geometry import load_stl_fast
-    >>> 
-    >>> # Load STL file (fast)
-    >>> mesh = load_stl_fast(Path("part.stl"))
-    >>> print(mesh)
-    FastMesh(vertices=1523, faces=3042, area=45.23)
-    >>> 
-    >>> # Use with feature extraction
-    >>> from physicsnemo.experimental.guardrails.geometry import extract_features
-    >>> features = extract_features(mesh)
-    >>> print(features.shape)
-    (22,)
-
-    Notes
-    -----
-    **Performance Comparison**:
-
-    For a typical CAD part STL file (~5MB, 10K faces):
-
-    - ``trimesh.load()``: ~50ms
-    - ``load_stl_fast()``: ~5ms (10x faster)
-
-    Speedup increases with file size and is especially beneficial when
-    loading hundreds of files in parallel.
-
     **Installation**:
 
     The Rust reader requires building from source:
@@ -228,15 +189,6 @@ def is_fast_reader_available() -> bool:
     -------
     bool
         True if ``stlreader`` package is installed and functional.
-
-    Examples
-    --------
-    >>> from physicsnemo.experimental.guardrails.geometry import is_fast_reader_available
-    >>> 
-    >>> if is_fast_reader_available():
-    ...     print("Using fast Rust reader")
-    ... else:
-    ...     print("Using trimesh (install stlreader for faster loading)")
     """
     try:
         import stlreader  # noqa: F401

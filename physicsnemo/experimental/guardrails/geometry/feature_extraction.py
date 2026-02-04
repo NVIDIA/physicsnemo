@@ -14,15 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Feature extraction for geometry guardrails.
-
-This module defines the feature schema and extracts non-invariant geometric
-descriptors from triangular surface meshes. Features are designed to capture
-spatial orientation, scale, and shape characteristics that distinguish different
-geometric configurations.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -156,12 +147,6 @@ def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
     **Important**: Features are intentionally **not** invariant to transformations.
     This allows the guardrail to detect geometric configurations based on their
     absolute position and orientation in space.
-
-    See Also
-    --------
-    :data:`FEATURE_NAMES` : Complete list of feature names in order.
-    :data:`FEATURE_VERSION` : Current feature schema version.
-    :func:`validate_mesh` : Mesh validation checks.
     """
     # Validate mesh integrity
     validate_mesh(mesh)

@@ -14,14 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Mesh validation utilities for geometry guardrails.
-
-These checks aim to reject corrupted or degenerate geometries before
-feature extraction. Validation is intentionally conservative to prevent
-downstream numerical issues.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -54,36 +46,6 @@ def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 50) -> None:
         If any vertex coordinates are non-finite (NaN or Inf).
     ValueError
         If the mesh surface area is non-positive.
-
-    Examples
-    --------
-    >>> import trimesh
-    >>> import numpy as np
-    >>> from physicsnemo.experimental.guardrails.geometry import validate_mesh
-    >>> 
-    >>> # Create a simple valid mesh (cube)
-    >>> mesh = trimesh.creation.box()
-    >>> validate_mesh(mesh)  # Should pass without error
-    >>> 
-    >>> # Create invalid mesh with too few vertices
-    >>> vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    >>> faces = np.array([[0, 1, 2]])
-    >>> invalid_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    >>> try:
-    ...     validate_mesh(invalid_mesh)
-    ... except ValueError as e:
-    ...     print(f"Validation failed: {e}")
-    Validation failed: Too few vertices
-
-    Notes
-    -----
-    The validation checks are intentionally strict to prevent subtle issues
-    during feature extraction and density modeling. Meshes that fail validation
-    should be inspected and potentially repaired before use.
-
-    See Also
-    --------
-    :func:`extract_features` : Extract geometric features from validated meshes.
     """
     if not isinstance(mesh, trimesh.Trimesh):
         raise ValueError("Object is not a Trimesh")

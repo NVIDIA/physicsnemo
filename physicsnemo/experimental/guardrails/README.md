@@ -22,19 +22,11 @@ This module requires optional dependencies:
 pip install trimesh scikit-learn
 ```
 
-**For GPU acceleration** (optional):
-
-```bash
-pip install trimesh scikit-learn torch
-```
-
-GPU acceleration requires NVIDIA CUDA and provides 2-10x speedup for large datasets (1000+ samples).
-
 **For fast STL loading** (optional, experimental):
 
-The geometry guardrails include an adapter for optional Rust-based STL readers that can provide 5-10x faster file I/O. The code will automatically detect and use any compatible reader installed in your environment, with graceful fallback to `trimesh`.
+The geometry guardrails include an adapter for optional Rust-based STL readers that can provide faster file I/O. The code will automatically detect and use any compatible reader installed in your environment, with graceful fallback to `trimesh`.
 
-This is recommended for processing large batches of STL files (100+ files), but **not required**. See [Fast I/O](#fast-io-optional) below for implementation details if you want to build your own accelerator.
+This is recommended for processing large batches of STL files, but **not required**. See [Fast I/O](#fast-io-optional) below for implementation details if you want to build your own accelerator.
 
 ## Quick Start
 
@@ -54,10 +46,8 @@ train_meshes = [
 # Create and fit guardrail
 guardrail = GeometryGuardrail(
     n_components=1,      # Number of Gaussian components (1 = single Gaussian)
-    warn_pct=95.0,       # Flag geometries above 95th percentile as WARN
-    reject_pct=99.0,     # Flag geometries above 99th percentile as REJECT
-    covariance_type="full",
-    random_state=42,
+    warn_pct=99.0,       # Flag geometries above 99th percentile as WARN
+    reject_pct=99.9,     # Flag geometries above 99.9th percentile as REJECT
 )
 guardrail.fit(train_meshes)
 
@@ -99,7 +89,7 @@ for r in flagged:
     print(f"  {r['name']}: {r['status']} (p={r['percentile']:.1f}%)")
 ```
 
-**Fast STL Loading** (5-10x speedup):
+**Fast STL Loading**:
 
 If you've installed the optional Rust STL reader:
 
@@ -157,16 +147,7 @@ guardrail_gpu.fit(train_meshes)
 results = guardrail_gpu.query(test_meshes)
 ```
 
-**When to use GPU:**
-- ✅ Dataset size > 1000 samples
-- ✅ Batch inference on 100+ geometries
-- ✅ Latency-critical applications (<100ms queries)
-- ✅ Iterative refinement workflows
-
-**When to use CPU:**
-- ✅ Dataset size < 100 samples (CPU may be faster)
-- ✅ No GPU available
-- ✅ Simplicity preferred over speed
+GPU acceleration is most beneficial for large datasetscand batch inference. For small datasets and batches, CPU may be faster due to transfer overhead.
 
 **Device Options:**
 ```python
@@ -237,122 +218,16 @@ Anomaly scores are converted to **empirical percentiles** relative to the traini
 - **WARN**: \( \text{warn\_pct} \leq p < \text{reject\_pct} \) — Unusual geometry (investigate)
 - **REJECT**: \( p \geq \text{reject\_pct} \) — Highly anomalous (likely OOD)
 
-## API Reference
-
-### Main Classes
-
-#### `GeometryGuardrail`
-
-Main user-facing API for geometry OOD detection.
-
-**Constructor:**
-```python
-GeometryGuardrail(
-    n_components=1,          # Number of GMM components
-    warn_pct=95.0,          # Warning threshold percentile
-    reject_pct=99.0,        # Rejection threshold percentile
-    covariance_type="full", # GMM covariance type
-    random_state=0,         # Random seed for reproducibility
-)
-```
-
-**Methods:**
-- `fit(meshes: list[trimesh.Trimesh])` — Fit from mesh objects
-- `fit_from_dir(stl_dir: Path, **kwargs)` — Fit from STL directory
-- `query(meshes: list[trimesh.Trimesh])` — Query mesh objects
-- `query_from_dir(stl_dir: Path, **kwargs)` — Query STL directory
-- `save(path: Path)` — Save fitted model
-- `load(path: Path)` — Load fitted model (class method)
-
-#### `GeometryDensityModel`
-
-Low-level density estimation using GMM.
-
-**Methods:**
-- `fit(X: np.ndarray)` — Fit density model
-- `score(X: np.ndarray)` — Compute anomaly scores
-- `percentiles(scores: np.ndarray)` — Convert scores to percentiles
-
-### Utility Functions
-
-#### `extract_features(mesh: trimesh.Trimesh) -> np.ndarray`
-
-Extract 22-dimensional feature vector from a mesh.
-
-#### `validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 50)`
-
-Validate mesh integrity before feature extraction.
-
-#### `load_features_from_dir(stl_dir: Path, n_workers=None, chunksize=8)`
-
-Parallel feature extraction from STL directory.
-
-## Configuration Guidelines
-
-### GPU vs. CPU Performance
-
-Choose the appropriate backend based on your dataset size and hardware:
-
-| Dataset Size | CPU Time | GPU Time | Speedup | Recommendation |
-|--------------|----------|----------|---------|----------------|
-| < 100 samples | ~1s | ~2s | 0.5x | **Use CPU** (GPU overhead) |
-| 100-1000 samples | 5-30s | 3-10s | 2-3x | **Either** (marginal benefit) |
-| 1000-10000 samples | 1-5min | 15-60s | 3-5x | **Use GPU** |
-| > 10000 samples | 10+ min | 1-3min | 5-10x | **Use GPU** |
-
-**Performance Tips:**
-- GPU shines for batch inference, not necessarily fitting
-- Transfer overhead dominates for small datasets
-- Use CPU for interactive single-query workflows
-- Use GPU for production batch processing
-
-### Choosing `n_components`
-
-- **n_components=1**: Single Gaussian, fastest, assumes unimodal distribution
-- **n_components=2-5**: Captures multimodal distributions (e.g., multiple part families)
-- **n_components > 5**: Risk of overfitting on small datasets
-
-**Recommendation**: Start with 1, increase if training data has distinct subgroups.
-
-### Setting Thresholds
-
-- **warn_pct=95.0, reject_pct=99.0**: Conservative (fewer false alarms)
-- **warn_pct=90.0, reject_pct=95.0**: Balanced
-- **warn_pct=80.0, reject_pct=90.0**: Aggressive (catches more anomalies, more false positives)
-
-**Recommendation**: Tune thresholds based on your application's tolerance for false positives vs. missed anomalies.
-
-### Covariance Types
-
-- **"full"**: Each component has its own covariance matrix (most flexible, slowest)
-- **"tied"**: All components share one covariance matrix (faster, less flexible)
-- **"diag"**: Diagonal covariance (assumes feature independence)
-- **"spherical"**: Isotropic covariance (fastest, least flexible)
-
-**Recommendation**: Use "full" unless you have a very large dataset or need faster inference.
-
-## Limitations
-
-1. **Feature Design**: Features are hand-crafted and may not capture all relevant geometric properties for your application.
-
-2. **Non-Invariance**: The guardrail is sensitive to absolute position, orientation, and scale. If you need invariance, consider pre-processing meshes (centering, alignment, normalization).
-
-3. **Mesh Quality**: Requires valid, non-degenerate meshes with sufficient vertices (≥50 by default).
-
-4. **Training Data**: Performance depends on having representative training data covering the expected distribution.
-
-5. **Interpretability**: Anomaly scores don't explain *why* a geometry is flagged. Further analysis is needed to diagnose issues.
-
 ## Examples
 
-### Example 1: Additive Manufacturing Quality Control
+### Additive Manufacturing Quality Control
 
 ```python
 from pathlib import Path
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 
 # Fit on known-good parts from production
-guardrail = GeometryGuardrail(n_components=1, warn_pct=95.0, reject_pct=99.0)
+guardrail = GeometryGuardrail(n_components=1, warn_pct=99.0, reject_pct=99.9)
 guardrail.fit_from_dir(Path("production_parts/good/"), n_workers=16)
 
 # Monitor new parts
@@ -366,61 +241,14 @@ for r in results:
         print(f"WARN: {r['name']} (p={r['percentile']:.1f}%) - may need review")
 ```
 
-### Example 2: Simulation Mesh Validation
-
-```python
-import trimesh
-from physicsnemo.experimental.guardrails import GeometryGuardrail
-
-# Fit on validated simulation meshes
-train_meshes = [trimesh.load(f"validated_mesh_{i:03d}.stl") for i in range(100)]
-guardrail = GeometryGuardrail(n_components=2)  # Two mesh families
-guardrail.fit(train_meshes)
-
-# Check automatically generated meshes
-generated_meshes = [trimesh.load(f"generated_mesh_{i:03d}.stl") for i in range(20)]
-results = guardrail.query(generated_meshes)
-
-# Statistics
-ok_count = sum(1 for r in results if r["status"] == "OK")
-print(f"Mesh quality: {ok_count}/{len(results)} passed validation")
-```
-
 ## Fast I/O (Optional)
 
-The geometry guardrails include an adapter (`fast_stl.py`) that can utilize optional Rust-based STL readers for 5-10x faster file I/O. This is useful for large-scale batch processing (1000+ files).
-
-### Implementation Details
-
-If you want to implement your own fast reader, it should provide a module with:
-
-```python
-def load_stl(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Load STL file and return (vertices, faces, normals, areas).
-    
-    Returns
-    -------
-    vertices : np.ndarray, shape (N, 3)
-        Vertex coordinates
-    faces : np.ndarray, shape (M, 3)
-        Face indices (int64)
-    normals : np.ndarray, shape (M, 3)
-        Face normal vectors (unit vectors)
-    areas : np.ndarray, shape (M,)
-        Face areas (float64)
-    """
-```
-
-The adapter will automatically detect and use any module named `stlreader` with this interface, falling back to `trimesh` if not found.
-
-### Reference Implementation
+The geometry guardrails include an adapter (`fast_stl.py`) that can utilize optional Rust-based STL readers faster file I/O. This is useful for large-scale batch processing or large STL files.
 
 A reference Rust implementation is available in the repository at `stlreader/` (not built by default). Key features:
 - Uses `stl_io` crate for fast binary/ASCII parsing
 - Precomputes normals and areas during load
 - Integrates with NumPy via PyO3
-- 5-10x faster than pure Python readers
 
 To build (requires Rust toolchain):
 ```bash
@@ -431,34 +259,36 @@ maturin develop --release
 
 This is **entirely optional** and intended for users with high-performance requirements.
 
-## See Also
 
-- **Mesh I/O**: `physicsnemo.mesh` for advanced mesh operations
-- **Data Validation**: Other guardrails in `physicsnemo.experimental.guardrails`
-- **Trimesh Docs**: https://trimsh.org/ for mesh manipulation
+## TODO: Future Enhancements (Contributions Welcome!)
 
-## Citation
+We welcome contributions to advance the geometry guardrails module. Key areas for future work:
 
-If you use this module in your research, please cite the PhysicsNemo framework:
+### 1. **Advanced Shape Descriptors**
+Expand beyond basic geometric features to include spectral descriptors (Laplacian eigenfunctions), topological features, curvature statistics, and graph-based representations. Support configurable feature sets and custom extractors.
 
-```bibtex
-@software{physicsnemo,
-  title = {PhysicsNemo: Physics-Informed Machine Learning Framework},
-  author = {{NVIDIA Corporation}},
-  year = {2026},
-  url = {https://github.com/NVIDIA/physicsnemo}
-}
-```
+### 2. **Optional Invariance**
+Add user-configurable invariance to rotation, scale, and translation. Currently all features are non-invariant.
+
+### 3. **Expanded GPU Support**
+Extend GPU acceleration beyond GMM to cover feature extraction, PCE density estimation, and batch STL loading.
+
+### 4. **Advanced Anomaly Detection Methods**
+Implement additional density estimation methods: Kernel Density Estimation, Variational Autoencoders, Normalizing Flows, and deep learning approaches.
+
+### 5. **Interpretability & Explainability**
+Provide feature importance analysis and visual diagnostics to help users understand why specific geometries were flagged as anomalous.
+
+### 7. **Multi-Modal & Multi-Physics**
+Extend guardrails to jointly model geometry, material properties, boundary conditions, simulation results, and manufacturing metadata for comprehensive anomaly detection.
+
+---
+
+**How to Contribute:** Fork the repository, implement enhancements with tests and documentation following PhysicsNemo coding standards (`.cursor/rules/`), and submit a pull request. For questions, open an issue on GitHub.
+
 
 ## Support
 
 For issues, questions, or contributions:
 - File issues on the PhysicsNemo GitHub repository
 - Consult the full documentation at https://docs.nvidia.com/physicsnemo
-- Join the NVIDIA Developer Forums
-
-## License
-
-Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-
-Licensed under the Apache License, Version 2.0.

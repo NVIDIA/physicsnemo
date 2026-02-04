@@ -14,15 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Geometry out-of-distribution detection guardrail.
-
-This module provides the main user-facing API for detecting anomalous
-geometric configurations using density-based methods. The guardrail learns
-the distribution of in-distribution geometries and flags novel or unusual
-shapes at inference time.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -57,15 +48,15 @@ class GeometryGuardrail:
     probabilistic density model, and classifies new geometries as OK, WARN,
     or REJECT based on configurable percentile thresholds.
 
-    Supports multiple density estimation methods (GMM, PCE) and both CPU and
-    GPU acceleration for improved performance on large datasets.
+    Supports multiple density estimation methods: Gaussian Mixture Model (GMM, CPU and GPU)
+    and Polynomial Chaos Expansion (PCE, CPU only) for improved performance on large datasets.
 
     Parameters
     ----------
     method : str, optional
         Density estimation method. Options:
-        - ``"gmm"``: Gaussian Mixture Model (default, flexible, multi-modal)
-        - ``"pce"``: Polynomial Chaos Expansion (physics-informed, correlated features)
+        - ``"gmm"``: Gaussian Mixture Model
+        - ``"pce"``: Polynomial Chaos Expansion
         Default is ``"gmm"``.
     n_components : int, optional
         For GMM: Number of Gaussian components (1=unimodal, >1=multimodal).
@@ -79,9 +70,6 @@ class GeometryGuardrail:
         Percentile threshold for rejection. Geometries with anomaly scores above
         this percentile will be flagged as REJECT. Must be in range [0, 100] and
         should be >= ``warn_pct``. Default is 99.0.
-    covariance_type : str, optional
-        For GMM only: Type of covariance matrix. Options: ``"full"``, ``"tied"``,
-        ``"diag"``, ``"spherical"``. Default is ``"full"``.
     poly_degree : int, optional
         For PCE only: Polynomial degree for expansion (1=linear, 2=quadratic, etc.).
         Default is 2.
@@ -141,7 +129,7 @@ class GeometryGuardrail:
     ...     n_components=2,
     ...     warn_pct=95.0,
     ...     reject_pct=99.0,
-    ...     device="cuda"  # Requires PyTorch and CUDA
+    ...     device="cuda" 
     ... )
     >>> guardrail_gpu.fit(train_meshes)
     >>> 
@@ -195,22 +183,17 @@ class GeometryGuardrail:
 
     **GPU Acceleration**:
 
-    GPU acceleration is most beneficial for:
-
-    - Batch inference on 100+ geometries
-    - Latency-critical applications
-    - Iterative refinement workflows
-
-    For small batches (<100 geometries), CPU may be faster due to transfer overhead.
+    GPU acceleration is most beneficial for large datasetscand batch inference. 
+    For small datasets and batches, CPU may be faster due to transfer overhead.
 
     .. important::
 
         This guardrail requires the optional dependencies ``trimesh`` and
-        ``scikit-learn``. For GPU support, ``torch`` is also required. Install with:
+        ``scikit-learn``
 
         .. code-block:: bash
 
-            pip install trimesh scikit-learn torch
+            pip install trimesh scikit-learn
 
     See Also
     --------
@@ -225,7 +208,6 @@ class GeometryGuardrail:
         n_components: int = 1,
         warn_pct: float = 95.0,
         reject_pct: float = 99.0,
-        covariance_type: str = "full",
         poly_degree: int = 2,
         interaction_only: bool = False,
         random_state: int | None = 0,
@@ -248,7 +230,6 @@ class GeometryGuardrail:
         # Store method parameters for serialization
         self.method = method
         self.n_components = n_components
-        self.covariance_type = covariance_type
         self.poly_degree = poly_degree
         self.interaction_only = interaction_only
         self.random_state = random_state
@@ -256,7 +237,6 @@ class GeometryGuardrail:
         self.density = GeometryDensityModel(
             method=method,
             n_components=n_components,
-            covariance_type=covariance_type,
             poly_degree=poly_degree,
             interaction_only=interaction_only,
             random_state=random_state,
@@ -290,22 +270,6 @@ class GeometryGuardrail:
             If any mesh fails validation (see :func:`validate_mesh`).
         ValueError
             If feature extraction fails for any mesh.
-
-        Examples
-        --------
-        >>> import trimesh
-        >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
-        >>> 
-        >>> # Generate training data
-        >>> train_meshes = [
-        ...     trimesh.creation.box(extents=[1, 1, 1]),
-        ...     trimesh.creation.box(extents=[2, 2, 2]),
-        ...     trimesh.creation.box(extents=[0.5, 0.5, 0.5]),
-        ... ]
-        >>> 
-        >>> # Fit guardrail
-        >>> guardrail = GeometryGuardrail(n_components=1)
-        >>> guardrail.fit(train_meshes)
 
         Notes
         -----
@@ -347,16 +311,6 @@ class GeometryGuardrail:
         ------
         RuntimeError
             If no valid STL files are found in the directory.
-
-        Examples
-        --------
-        >>> from pathlib import Path
-        >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
-        >>> 
-        >>> # Fit from directory with parallel processing
-        >>> stl_dir = Path("/path/to/training/stl/files")
-        >>> guardrail = GeometryGuardrail(n_components=2)
-        >>> guardrail.fit_from_dir(stl_dir, n_workers=8, chunksize=16)
 
         Notes
         -----
@@ -406,26 +360,6 @@ class GeometryGuardrail:
             If any mesh fails validation (see :func:`validate_mesh`).
         RuntimeError
             If the guardrail has not been fitted yet.
-
-        Examples
-        --------
-        >>> import trimesh
-        >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
-        >>> 
-        >>> # Fit guardrail (assumes training data is available)
-        >>> guardrail = GeometryGuardrail()
-        >>> guardrail.fit(train_meshes)  # doctest: +SKIP
-        >>> 
-        >>> # Query new geometries
-        >>> test_meshes = [
-        ...     trimesh.creation.box(),
-        ...     trimesh.creation.sphere(radius=100),  # Very different
-        ... ]
-        >>> results = guardrail.query(test_meshes)
-        >>> for i, res in enumerate(results):
-        ...     print(f"Mesh {i}: {res['status']} (p={res['percentile']:.1f})")
-        Mesh 0: OK (p=45.2)
-        Mesh 1: REJECT (p=99.8)
 
         Notes
         -----
@@ -489,22 +423,6 @@ class GeometryGuardrail:
             If no valid STL files are found in the directory.
         RuntimeError
             If the guardrail has not been fitted yet.
-
-        Examples
-        --------
-        >>> from pathlib import Path
-        >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
-        >>> 
-        >>> # Query directory
-        >>> guardrail = GeometryGuardrail.load(Path("guardrail.npz"))
-        >>> results = guardrail.query_from_dir(
-        ...     Path("/path/to/test/stl/files"),
-        ...     n_workers=8
-        ... )
-        >>> 
-        >>> # Filter for warnings and rejections
-        >>> flagged = [r for r in results if r["status"] != "OK"]
-        >>> print(f"Flagged {len(flagged)} / {len(results)} geometries")
 
         Notes
         -----
@@ -575,15 +493,6 @@ class GeometryGuardrail:
         RuntimeError
             If the guardrail has not been fitted yet.
 
-        Examples
-        --------
-        >>> from pathlib import Path
-        >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
-        >>> 
-        >>> guardrail = GeometryGuardrail()
-        >>> guardrail.fit(train_meshes)  # doctest: +SKIP
-        >>> guardrail.save(Path("my_guardrail.npz"))
-
         Notes
         -----
         The saved file contains:
@@ -620,7 +529,6 @@ class GeometryGuardrail:
             feature_hash=self.feature_hash,
             method=self.method,
             n_components=self.n_components,
-            covariance_type=self.covariance_type,
             poly_degree=self.poly_degree,
             interaction_only=self.interaction_only,
             random_state=self.random_state,
@@ -659,19 +567,6 @@ class GeometryGuardrail:
         RuntimeError
             If the feature hash does not match (indicates schema modification).
 
-        Examples
-        --------
-        >>> from pathlib import Path
-        >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
-        >>> 
-        >>> # Load on CPU
-        >>> guardrail_cpu = GeometryGuardrail.load(Path("guardrail.npz"), device="cpu")
-        >>> results = guardrail_cpu.query(test_meshes)
-        >>> 
-        >>> # Load on GPU for faster inference
-        >>> guardrail_gpu = GeometryGuardrail.load(Path("guardrail.npz"), device="cuda")
-        >>> results = guardrail_gpu.query(test_meshes)  # Faster on large batches
-
         Notes
         -----
         **Compatibility Checking**:
@@ -690,7 +585,7 @@ class GeometryGuardrail:
         The saved model does not store device information. You can load the same
         model on different devices as needed. This is useful for:
 
-        - Training on CPU, deploying on GPU
+        - Training on GPU, deploying on CPU
         - Sharing models across different hardware configurations
 
         See Also
@@ -722,8 +617,19 @@ class GeometryGuardrail:
         # Reconstruct guardrail
         # Extract all parameters (with defaults for backward compatibility)
         method = str(data.get("method", "gmm"))
-        n_components = int(data.get("n_components", 1))
-        covariance_type = str(data.get("covariance_type", "full"))
+        n_components_raw = data.get("n_components", 1)
+        # Handle None values (numpy may store as 0-d array or special object)
+        try:
+            # Try to extract scalar from numpy array
+            if hasattr(n_components_raw, 'item'):
+                n_components_raw = n_components_raw.item()
+        except (ValueError, AttributeError):
+            pass
+        # Now check if it's None or convert to int
+        if n_components_raw is None:
+            n_components = None
+        else:
+            n_components = int(n_components_raw)
         poly_degree = int(data.get("poly_degree", 2))
         interaction_only = bool(data.get("interaction_only", False))
         random_state = data.get("random_state", 0)
@@ -735,7 +641,6 @@ class GeometryGuardrail:
             n_components=n_components,
             warn_pct=float(data["warn_pct"]),
             reject_pct=float(data["reject_pct"]),
-            covariance_type=covariance_type,
             poly_degree=poly_degree,
             interaction_only=interaction_only,
             random_state=random_state,

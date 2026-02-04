@@ -9,5 +9,4 @@ Welcome to the PhysicsNeMo documentation. This section contains the API referenc
    :name: Contents
 
    api_index
-   user_guide_guardrails
    examples_index

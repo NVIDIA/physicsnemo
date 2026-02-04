@@ -14,14 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Feature schema validation for geometry guardrails.
-
-This module provides immutable schema definitions and validation utilities
-for ensuring feature array compatibility across different versions of the
-guardrail system.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -48,41 +40,6 @@ class FeatureSchema:
         SHA-256 hash of the feature names for compatibility checking.
     dim : int
         Feature vector dimensionality (number of features).
-
-    Examples
-    --------
-    >>> from physicsnemo.experimental.guardrails.geometry import FeatureSchema
-    >>> 
-    >>> # Access schema properties
-    >>> print(f"Feature dimension: {FeatureSchema.dim}")
-    Feature dimension: 22
-    >>> print(f"Schema version: {FeatureSchema.version}")
-    Schema version: v1.0
-    >>> 
-    >>> # Validate a feature array
-    >>> import numpy as np
-    >>> features = np.random.randn(10, 22)
-    >>> FeatureSchema.validate_array(features)  # Should pass
-    >>> 
-    >>> # Invalid array will raise error
-    >>> invalid_features = np.random.randn(10, 20)
-    >>> try:
-    ...     FeatureSchema.validate_array(invalid_features)
-    ... except ValueError as e:
-    ...     print(f"Validation failed: {e}")
-    Validation failed: Feature dimension mismatch: expected 22, got 20
-
-    Notes
-    -----
-    This class uses class-level attributes and methods to enforce immutability
-    and provide a single source of truth for the feature schema across the
-    entire guardrail system.
-
-    See Also
-    --------
-    :data:`FEATURE_NAMES` : Feature name definitions.
-    :data:`FEATURE_VERSION` : Current schema version.
-    :func:`feature_hash` : Hash computation function.
     """
 
     #: Ordered list of feature names
@@ -104,45 +61,6 @@ class FeatureSchema:
 
         This method checks that the input array has the correct shape
         (2D with the expected number of features per sample).
-
-        Parameters
-        ----------
-        X : np.ndarray
-            Feature array to validate. Expected shape is :math:`(N, D)` where
-            :math:`N` is the number of samples and :math:`D` is the feature
-            dimensionality defined by :attr:`dim`.
-
-        Raises
-        ------
-        ValueError
-            If ``X`` is not a 2D array.
-        ValueError
-            If the feature dimension (second axis) does not match :attr:`dim`.
-
-        Examples
-        --------
-        >>> import numpy as np
-        >>> from physicsnemo.experimental.guardrails.geometry import FeatureSchema
-        >>> 
-        >>> # Valid array
-        >>> X = np.random.randn(100, FeatureSchema.dim)
-        >>> FeatureSchema.validate_array(X)  # Should pass
-        >>> 
-        >>> # Invalid: wrong number of features
-        >>> X_bad = np.random.randn(100, 10)
-        >>> try:
-        ...     FeatureSchema.validate_array(X_bad)
-        ... except ValueError as e:
-        ...     print(f"Error: {e}")
-        Error: Feature dimension mismatch: expected 22, got 10
-        >>> 
-        >>> # Invalid: not 2D
-        >>> X_1d = np.random.randn(22)
-        >>> try:
-        ...     FeatureSchema.validate_array(X_1d)
-        ... except ValueError as e:
-        ...     print(f"Error: {e}")
-        Error: Feature array must be 2D
         """
         if X.ndim != 2:
             raise ValueError(
