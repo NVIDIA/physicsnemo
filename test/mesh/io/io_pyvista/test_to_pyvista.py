@@ -142,3 +142,130 @@ class TestToPyvista:
         assert np.allclose(
             pv_mesh.cell_data["pressure"], mesh.cell_data["pressure"].numpy()
         )
+
+
+class TestHighRankTensorFlattening:
+    """Tests for high-rank tensor flattening in to_pyvista conversion.
+
+    VTK only supports arrays with dimensionality <= 2. Higher-rank tensors
+    (e.g., stress tensors with shape (n, 3, 3)) must be flattened to
+    (n, 9) for VTK compatibility.
+    """
+
+    def test_rank2_tensor_flattened(self):
+        """Test that rank-2 tensors are flattened correctly."""
+        points = torch.rand(10, 3)
+        cells = torch.tensor([[0, 1, 2], [2, 3, 4]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Add rank-2 tensor (3x3 stress tensor per cell)
+        stress_data = torch.rand(2, 3, 3)
+        mesh.cell_data["stress"] = stress_data
+
+        pv_mesh = to_pyvista(mesh)
+
+        # Verify key is preserved
+        assert "stress" in pv_mesh.cell_data
+
+        # Verify shape is flattened correctly
+        assert pv_mesh.cell_data["stress"].shape == (2, 9)
+
+        # Verify values are preserved (raveled)
+        expected = stress_data.numpy().reshape(2, 9)
+        assert np.allclose(pv_mesh.cell_data["stress"], expected)
+
+    def test_rank3_tensor_flattened(self):
+        """Test that rank-3 tensors are flattened correctly."""
+        points = torch.rand(10, 3)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Add rank-3 tensor (2x3x4 tensor per cell)
+        tensor_data = torch.rand(1, 2, 3, 4)
+        mesh.cell_data["elasticity"] = tensor_data
+
+        pv_mesh = to_pyvista(mesh)
+
+        # Verify key and shape
+        assert "elasticity" in pv_mesh.cell_data
+        assert pv_mesh.cell_data["elasticity"].shape == (1, 24)
+
+        # Verify values
+        expected = tensor_data.numpy().reshape(1, 24)
+        assert np.allclose(pv_mesh.cell_data["elasticity"], expected)
+
+    def test_point_data_high_rank_flattened(self):
+        """Test that high-rank point_data is also flattened."""
+        points = torch.rand(5, 3)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Add rank-2 tensor to point_data
+        jacobian_data = torch.rand(5, 2, 2)
+        mesh.point_data["jacobian"] = jacobian_data
+
+        pv_mesh = to_pyvista(mesh)
+
+        assert "jacobian" in pv_mesh.point_data
+        assert pv_mesh.point_data["jacobian"].shape == (5, 4)
+
+    def test_global_data_high_rank_flattened(self):
+        """Test that high-rank global_data is also flattened."""
+        points = torch.rand(5, 3)
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Add rank-2 tensor to global_data (single 3x3 matrix)
+        transform_data = torch.rand(1, 3, 3)
+        mesh.global_data["transform"] = transform_data
+
+        pv_mesh = to_pyvista(mesh)
+
+        assert "transform" in pv_mesh.field_data
+        assert pv_mesh.field_data["transform"].shape == (1, 9)
+
+    def test_low_rank_tensors_unchanged(self):
+        """Test that scalars and vectors are not modified."""
+        points = torch.rand(10, 3)
+        cells = torch.tensor([[0, 1, 2], [2, 3, 4]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Add scalar and vector data (should not be flattened)
+        mesh.point_data["temperature"] = torch.rand(10)
+        mesh.point_data["velocity"] = torch.rand(10, 3)
+        mesh.cell_data["pressure"] = torch.rand(2)
+
+        pv_mesh = to_pyvista(mesh)
+
+        # Keys should be unchanged (no shape suffix)
+        assert "temperature" in pv_mesh.point_data
+        assert "velocity" in pv_mesh.point_data
+        assert "pressure" in pv_mesh.cell_data
+
+        # Shapes should be unchanged
+        assert pv_mesh.point_data["temperature"].shape == (10,)
+        assert pv_mesh.point_data["velocity"].shape == (10, 3)
+        assert pv_mesh.cell_data["pressure"].shape == (2,)
+
+    def test_mixed_rank_tensors(self):
+        """Test mesh with both low-rank and high-rank tensors."""
+        points = torch.rand(10, 3)
+        cells = torch.tensor([[0, 1, 2], [2, 3, 4]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Mix of ranks
+        mesh.point_data["scalar"] = torch.rand(10)
+        mesh.point_data["vector"] = torch.rand(10, 3)
+        mesh.point_data["matrix"] = torch.rand(10, 3, 3)  # High-rank
+
+        pv_mesh = to_pyvista(mesh)
+
+        # Low-rank unchanged
+        assert "scalar" in pv_mesh.point_data
+        assert "vector" in pv_mesh.point_data
+        assert pv_mesh.point_data["scalar"].shape == (10,)
+        assert pv_mesh.point_data["vector"].shape == (10, 3)
+
+        # High-rank flattened (key unchanged)
+        assert "matrix" in pv_mesh.point_data
+        assert pv_mesh.point_data["matrix"].shape == (10, 9)
