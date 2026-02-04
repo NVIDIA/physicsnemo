@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -43,7 +43,6 @@ from torch import nn
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.so3_linear import SO3LinearGrid
 from physicsnemo.nn import Module
-from physicsnemo.models.mlp import FullyConnected
 
 __all__ = [
     "SO3ConvolutionBlock",
@@ -72,12 +71,6 @@ class SO3ConvolutionBlock(Module):
         Maximum spherical harmonic degree. Must be >= 1.
     mmax : int
         Maximum spherical harmonic order. Must satisfy 0 <= mmax <= lmax.
-    num_hidden_layers : int
-        Number of hidden layers in then fully connected scalar
-        transformation.
-    **fc_kwargs
-        Extra arguments are unpacked into the creation of
-        :class:FullyConnected
 
     Attributes
     ----------
@@ -126,7 +119,6 @@ class SO3ConvolutionBlock(Module):
     --------
     SO3LinearGrid : SO(3) equivariant linear layer.
     GateActivation : Gated activation for equivariant features.
-    physicsnemo.models.mlp.FullyConnected : MLP Block used for scalar transforms.
 
     Forward
     -------
@@ -147,10 +139,7 @@ class SO3ConvolutionBlock(Module):
         hidden_channels: int,
         lmax: int,
         mmax: int,
-        num_hidden_layers: int = 3,
-        **fc_kwargs,
     ) -> None:
-        fc_kwargs.setdefault("activation_fn", "silu")
         super().__init__()
 
         # Validate parameters
@@ -176,12 +165,9 @@ class SO3ConvolutionBlock(Module):
         # Scalar MLP to compute gates from l=0 scalar features
         # Input: in_channels (from x[:, 0, 0, 0, :])
         # Output: lmax * hidden_channels (gates for degrees l=1..lmax)
-        self.scalar_mlp = FullyConnected(
-            in_features=in_channels,
-            layer_size=hidden_channels,
-            out_features=self.num_gates,
-            num_layers=num_hidden_layers,
-            **fc_kwargs,
+        self.scalar_mlp = nn.Sequential(
+            nn.Linear(in_channels, self.num_gates, bias=True),
+            nn.SiLU(),
         )
 
         # SO3 linear layers
