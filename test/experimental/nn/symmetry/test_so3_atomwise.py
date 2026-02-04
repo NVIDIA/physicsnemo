@@ -48,46 +48,14 @@ import torch
 
 from physicsnemo.experimental.nn.symmetry import SO3ConvolutionBlock, make_grid_mask
 from physicsnemo.experimental.nn.symmetry.wigner import rotate_grid_coefficients
+from test.experimental.nn.symmetry.conftest import get_rtol_atol, is_half_precision
 
 # =============================================================================
 # Fixtures
 # =============================================================================
 
-
-@pytest.fixture(params=[torch.float32, torch.float64])
-def dtype(request: pytest.FixtureRequest) -> torch.dtype:
-    """Parameterized fixture for testing with different floating-point precisions.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Pytest fixture request object.
-
-    Returns
-    -------
-    torch.dtype
-        The dtype to use for tensor operations (float32 or float64).
-    """
-    return request.param
-
-
-@pytest.fixture(params=["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"])
-def device(request: pytest.FixtureRequest) -> str:
-    """Parameterized fixture for testing on CPU and GPU if available.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Pytest fixture request object.
-
-    Returns
-    -------
-    str
-        Device string ("cpu" or "cuda").
-    """
-    if request.param == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    return request.param
+# Note: `dtype` and `device` fixtures are provided by conftest.py
+# Note: `is_half_precision` helper is provided by conftest.py
 
 
 @pytest.fixture(params=[(2, 2), (4, 2), (4, 4)])
@@ -122,7 +90,7 @@ class TestSO3ConvolutionBlock:
     """
 
     def test_output_shape(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify output dimensions match input (residual-friendly).
 
@@ -132,7 +100,7 @@ class TestSO3ConvolutionBlock:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = lmax_mmax
@@ -156,7 +124,7 @@ class TestSO3ConvolutionBlock:
         assert y.shape == expected_shape, f"Expected {expected_shape}, got {y.shape}"
 
     def test_masked_positions_zero(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify invalid positions remain zero in output.
 
@@ -169,7 +137,7 @@ class TestSO3ConvolutionBlock:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = lmax_mmax
@@ -206,7 +174,7 @@ class TestSO3ConvolutionBlock:
                     )
 
     def test_backward_pass(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify gradients are computed correctly.
 
@@ -216,7 +184,7 @@ class TestSO3ConvolutionBlock:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = lmax_mmax
@@ -260,14 +228,14 @@ class TestSO3ConvolutionBlock:
             "scalar_mlp weight gradients not computed"
         )
 
-    def test_deterministic(self, dtype: torch.dtype, device: str) -> None:
+    def test_deterministic(self, dtype: torch.dtype, device: torch.device) -> None:
         """Verify same input gives same output.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -295,14 +263,14 @@ class TestSO3ConvolutionBlock:
             y1, y2, atol=1e-6, rtol=0, msg="Output should be deterministic"
         )
 
-    def test_extra_repr(self, dtype: torch.dtype, device: str) -> None:
+    def test_extra_repr(self, dtype: torch.dtype, device: torch.device) -> None:
         """Verify extra_repr contains expected parameters.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         layer = SO3ConvolutionBlock(
@@ -325,12 +293,18 @@ class TestSO3ConvolutionBlock:
     def test_torch_compile_nograd(
         self,
         dtype: torch.dtype,
-        device: str,
+        device: torch.device,
         lmax_mmax: tuple[int, int],
         compile_backend: str,
         compile_mode: str,
     ):
-        """Ensure that compilation of the block is functional"""
+        """Ensure that compilation of the block is functional.
+
+        Notes
+        -----
+        Half-precision dtypes may have larger numerical differences between
+        compiled and eager execution due to operation reordering and fusion.
+        """
         lmax, mmax = lmax_mmax
         batch_size = 16
         in_channels = 32
@@ -352,7 +326,8 @@ class TestSO3ConvolutionBlock:
         with torch.no_grad():
             ref_output = layer(x)
             output = compiled(x)
-            torch.testing.assert_close(ref_output, output)
+            rtol, atol = get_rtol_atol(dtype)
+            torch.testing.assert_close(ref_output, output, rtol=rtol, atol=atol)
 
     @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
     @pytest.mark.parametrize(
@@ -361,7 +336,7 @@ class TestSO3ConvolutionBlock:
     def test_torch_compile_withgrad(
         self,
         dtype: torch.dtype,
-        device: str,
+        device: torch.device,
         lmax_mmax: tuple[int, int],
         compile_backend: str,
         compile_mode: str,
@@ -430,7 +405,7 @@ class TestSO3AtomwiseEquivariance:
         self,
         lmax_mmax: tuple[int, int],
         dtype: torch.dtype,
-        device: str,
+        device: torch.device,
         alpha_val: float,
         beta_val: float,
         gamma_val: float,
@@ -448,7 +423,7 @@ class TestSO3AtomwiseEquivariance:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         alpha_val : float
             First Euler angle (radians).
@@ -456,7 +431,17 @@ class TestSO3AtomwiseEquivariance:
             Second Euler angle (radians).
         gamma_val : float
             Third Euler angle (radians).
+
+        Notes
+        -----
+        Half-precision dtypes (float16, bfloat16) require high numerical precision
+        for equivariance tests and are expected to fail, so they are marked as xfail.
         """
+        if is_half_precision(dtype):
+            pytest.xfail(
+                f"SO(3) equivariance test requires higher precision than {dtype}"
+            )
+
         lmax, mmax = lmax_mmax
         in_channels = 16
         hidden_channels = 32
@@ -493,10 +478,7 @@ class TestSO3AtomwiseEquivariance:
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
         # Tolerances based on dtype precision
-        if dtype == torch.float32:
-            rtol, atol = 1e-4, 1e-4
-        else:
-            rtol, atol = 1e-8, 1e-10
+        rtol, atol = get_rtol_atol(dtype)
 
         torch.testing.assert_close(
             y1,
@@ -511,7 +493,7 @@ class TestSO3AtomwiseEquivariance:
         )
 
     def test_so3_atomwise_equivariance_random_rotations(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Test SO(3) equivariance with random rotations.
 
@@ -521,9 +503,19 @@ class TestSO3AtomwiseEquivariance:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
+
+        Notes
+        -----
+        Half-precision dtypes (float16, bfloat16) require high numerical precision
+        for equivariance tests and are expected to fail, so they are marked as xfail.
         """
+        if is_half_precision(dtype):
+            pytest.xfail(
+                f"SO(3) equivariance test requires higher precision than {dtype}"
+            )
+
         lmax, mmax = lmax_mmax
         in_channels = 16
         hidden_channels = 32
@@ -562,10 +554,7 @@ class TestSO3AtomwiseEquivariance:
                 y = layer(x)
                 y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-            if dtype == torch.float32:
-                rtol, atol = 1e-4, 1e-4
-            else:
-                rtol, atol = 1e-8, 1e-10
+            rtol, atol = get_rtol_atol(dtype)
 
             torch.testing.assert_close(
                 y1,
@@ -579,7 +568,7 @@ class TestSO3AtomwiseEquivariance:
             )
 
     def test_scalar_features_pass_through_gates(
-        self, dtype: torch.dtype, device: str
+        self, dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify scalar features (l=0) influence gates but remain independent of rotation.
 
@@ -590,9 +579,19 @@ class TestSO3AtomwiseEquivariance:
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
+
+        Notes
+        -----
+        Half-precision dtypes (float16, bfloat16) require high numerical precision
+        for this forward pass test and are expected to fail, so they are marked as xfail.
         """
+        if is_half_precision(dtype):
+            pytest.xfail(
+                f"SO(3) equivariance test requires higher precision than {dtype}"
+            )
+
         lmax, mmax = 4, 2
         in_channels = 16
         hidden_channels = 32
@@ -697,16 +696,28 @@ class TestValidation:
 class TestIntegrationWithRotation:
     """Integration tests combining SO3ConvolutionBlock with rotation utilities."""
 
-    def test_composition_of_layers(self, dtype: torch.dtype, device: str) -> None:
+    def test_composition_of_layers(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Test stacking multiple SO3ConvolutionBlock layers preserves equivariance.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
+
+        Notes
+        -----
+        Half-precision dtypes (float16, bfloat16) require high numerical precision
+        for multi-layer equivariance tests with accumulated errors, so they are marked as xfail.
         """
+        if is_half_precision(dtype):
+            pytest.xfail(
+                f"SO(3) equivariance test requires higher precision than {dtype}"
+            )
+
         lmax, mmax = 4, 2
         channels = 16
         batch_size = 5
@@ -750,10 +761,10 @@ class TestIntegrationWithRotation:
             y = layer2(layer1(x))
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-        if dtype == torch.float32:
-            rtol, atol = 1e-3, 1e-3  # Slightly looser for composed layers
-        else:
-            rtol, atol = 1e-7, 1e-9
+        # Use slightly looser tolerances for composed layers
+        rtol, atol = get_rtol_atol(dtype)
+        rtol *= 10  # Looser for composed layers
+        atol *= 10
 
         torch.testing.assert_close(
             y1,
