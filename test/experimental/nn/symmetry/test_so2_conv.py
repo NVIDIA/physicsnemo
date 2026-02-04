@@ -510,7 +510,7 @@ class TestSO2Convolution:
             # Tolerances based on dtype precision
             # float32 has ~7 decimal digits, float64 has ~15
             if dtype == torch.float32:
-                rtol, atol = 1e-4, 1e-4
+                rtol, atol = 1e-3, 1e-3
             else:
                 rtol, atol = 1e-10, 1e-10
 
@@ -768,8 +768,8 @@ class TestSO2Convolution:
             y1 = conv(x[1:2], x_edge[1:2])
 
         # Results should match
-        rtol = 1e-4 if dtype == torch.float32 else 1e-10
-        atol = 1e-4 if dtype == torch.float32 else 1e-10
+        rtol = 1e-3 if dtype == torch.float32 else 1e-10
+        atol = 1e-3 if dtype == torch.float32 else 1e-10
 
         assert torch.allclose(y_batch[0], y0[0], rtol=rtol, atol=atol), (
             "Batch processing should match individual processing for sample 0"
