@@ -29,6 +29,13 @@ from typing import TYPE_CHECKING, Literal
 import torch
 from tensordict import TensorDict
 
+from physicsnemo.mesh.boundaries._facet_extraction import (
+    _aggregate_point_data_to_facets,
+    _aggregate_tensor_data,
+    categorize_facets_by_count,
+    compute_aggregation_weights,
+    extract_candidate_facets,
+)
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
@@ -66,13 +73,6 @@ def extract_boundary_mesh_data(
         >>> boundary_mesh = Mesh(points=vol_mesh.points, cells=boundary_cells, cell_data=boundary_data)
         >>> assert boundary_mesh.n_manifold_dims == 2  # Surface triangles
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import (
-        _aggregate_point_data_to_facets,
-        categorize_facets_by_count,
-        compute_aggregation_weights,
-        extract_candidate_facets,
-    )
-
     ### Extract all candidate codimension-1 facets
     candidate_facets, parent_cell_indices = extract_candidate_facets(
         parent_mesh.cells,
@@ -142,10 +142,6 @@ def extract_boundary_mesh_data(
 
                 ### Aggregate data from parent cells to boundary facets
                 # Since boundary facets appear in exactly 1 cell, aggregation is simpler
-                from physicsnemo.mesh.boundaries._facet_extraction import (
-                    _aggregate_tensor_data,
-                )
-
                 boundary_cell_data = filtered_cell_data.apply(
                     lambda tensor: _aggregate_tensor_data(
                         tensor,
