@@ -24,6 +24,11 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.boundaries import get_boundary_edges
+from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+from physicsnemo.mesh.curvature._laplacian import compute_cotangent_weights
+from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -121,8 +126,6 @@ def smooth_laplacian(
     n_spatial_dims = mesh.n_spatial_dims
 
     ### Extract unique edges and compute weights
-    from physicsnemo.mesh.subdivision._topology import extract_unique_edges
-
     edges, _ = extract_unique_edges(mesh)  # (n_edges, 2)
 
     # Compute cotangent weights for edges
@@ -193,7 +196,10 @@ def smooth_laplacian(
 
         ### Normalize by total weight per vertex
         # Avoid division by zero for isolated vertices
-        weight_sum = weight_sum.clamp(min=1e-10)
+        # Use dtype-appropriate minimum: 1e-10 for fp32+, 1e-4 for fp16
+        # (fp16 smallest normal is ~6e-5, so 1e-10 would round to 0)
+        min_clamp = 1e-4 if dtype == torch.float16 else 1e-10
+        weight_sum = weight_sum.clamp(min=min_clamp)
         laplacian = laplacian / weight_sum.unsqueeze(-1)
 
         ### Apply relaxation
@@ -231,8 +237,6 @@ def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
 
     if mesh.codimension == 1 and mesh.n_manifold_dims >= 2:
         ### Use cotangent weights (geometry-aware)
-        from physicsnemo.mesh.curvature._laplacian import compute_cotangent_weights
-
         weights = compute_cotangent_weights(mesh, edges)
 
         ### Clamp weights for numerical stability
@@ -279,8 +283,6 @@ def _get_boundary_vertices(
         return boundary_mask
 
     # For higher dimensional manifolds, use boundary edge detection
-    from physicsnemo.mesh.boundaries import get_boundary_edges
-
     boundary_edges = get_boundary_edges(mesh)  # (n_boundary_edges, 2)
 
     if len(boundary_edges) == 0:
@@ -350,8 +352,6 @@ def _detect_sharp_edges(
     Returns:
         Sharp edges, shape (n_sharp_edges, 2)
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
-
     device = mesh.points.device
     n_manifold_dims = mesh.n_manifold_dims
 
