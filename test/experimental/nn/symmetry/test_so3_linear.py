@@ -53,46 +53,15 @@ from physicsnemo.experimental.nn.symmetry.wigner import (
     edge_vectors_to_euler_angles,
     rotate_grid_coefficients,
 )
+from test.experimental.nn.symmetry.conftest import get_rtol_atol
 
 # =============================================================================
 # Fixtures
 # =============================================================================
 
-
-@pytest.fixture(params=[torch.float32, torch.float64])
-def dtype(request: pytest.FixtureRequest) -> torch.dtype:
-    """Parameterized fixture for testing with different floating-point precisions.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Pytest fixture request object.
-
-    Returns
-    -------
-    torch.dtype
-        The dtype to use for tensor operations (float32 or float64).
-    """
-    return request.param
-
-
-@pytest.fixture(params=["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"])
-def device(request: pytest.FixtureRequest) -> str:
-    """Parameterized fixture for testing on CPU and GPU if available.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Pytest fixture request object.
-
-    Returns
-    -------
-    str
-        Device string ("cpu" or "cuda").
-    """
-    if request.param == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    return request.param
+# Note: `dtype` and `device` fixtures are provided by conftest.py
+# The dtype fixture includes: float16, bfloat16, float32, float64
+# The device fixture includes: cpu, cuda (with automatic skip if unavailable)
 
 
 @pytest.fixture(params=[(2, 2), (4, 2), (6, 2), (4, 4)])
@@ -125,7 +94,7 @@ class TestSO3LinearGrid:
     """
 
     def test_output_shape(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify correct output dimensions.
 
@@ -159,7 +128,7 @@ class TestSO3LinearGrid:
         assert y.shape == expected_shape, f"Expected {expected_shape}, got {y.shape}"
 
     def test_masked_positions_zero(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify invalid positions remain zero in output.
 
@@ -211,7 +180,7 @@ class TestSO3LinearGrid:
                     )
 
     def test_backward_pass(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify gradients are computed correctly.
 
@@ -255,7 +224,7 @@ class TestSO3LinearGrid:
         assert layer.weight.grad is not None, "Weight gradients not computed"
         assert torch.isfinite(x.grad).all(), "Input gradients contain non-finite values"
 
-    def test_deterministic(self, dtype: torch.dtype, device: str) -> None:
+    def test_deterministic(self, dtype: torch.dtype, device: torch.device) -> None:
         """Verify same input gives same output.
 
         Parameters
@@ -290,7 +259,9 @@ class TestSO3LinearGrid:
             y1, y2, atol=1e-6, rtol=0, msg="Output should be deterministic"
         )
 
-    def test_bias_only_on_scalar(self, dtype: torch.dtype, device: str) -> None:
+    def test_bias_only_on_scalar(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Verify bias is only applied to l=0, m=0, real component.
 
         Parameters
@@ -360,7 +331,7 @@ class TestRotateGridCoefficients:
     """
 
     def test_identity_rotation(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Zero rotation should return the input unchanged.
 
@@ -382,7 +353,7 @@ class TestRotateGridCoefficients:
         )
 
         # Apply mask to ensure valid input
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -394,8 +365,7 @@ class TestRotateGridCoefficients:
 
         x_rotated = rotate_grid_coefficients(x, (alpha, beta, gamma))
 
-        rtol = 1e-4 if dtype == torch.float32 else 1e-4
-        atol = 1e-5 if dtype == torch.float32 else 1e-5
+        rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(
             x,
             x_rotated,
@@ -408,7 +378,7 @@ class TestRotateGridCoefficients:
         )
 
     def test_scalar_invariance(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """l=0 coefficients should be invariant under any rotation.
 
@@ -430,7 +400,7 @@ class TestRotateGridCoefficients:
         )
 
         # Apply mask
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -443,8 +413,7 @@ class TestRotateGridCoefficients:
         x_rotated = rotate_grid_coefficients(x, (alpha, beta, gamma))
 
         # l=0 coefficients should be unchanged
-        rtol = 1e-4 if dtype == torch.float32 else 1e-5
-        atol = 1e-5 if dtype == torch.float32 else 1e-6
+        rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(
             x[:, 0, :, :, :],
             x_rotated[:, 0, :, :, :],
@@ -456,7 +425,7 @@ class TestRotateGridCoefficients:
             ),
         )
 
-    def test_scalar_angle_input(self, dtype: torch.dtype, device: str) -> None:
+    def test_scalar_angle_input(self, dtype: torch.dtype, device: torch.device) -> None:
         """Verify that scalar angle inputs work correctly.
 
         Parameters
@@ -486,7 +455,7 @@ class TestRotateGridCoefficients:
         assert torch.isfinite(x_rotated).all(), "Output should be finite"
 
     def test_both_rotation_modes(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify Euler angle mode and D-matrix mode produce the same result.
 
@@ -512,7 +481,7 @@ class TestRotateGridCoefficients:
         )
 
         # Apply mask to ensure valid input
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
         # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
         x[:, :, 0, 1, :] = 0.0
@@ -530,8 +499,7 @@ class TestRotateGridCoefficients:
         x_rot2 = rotate_grid_coefficients(x, D)
 
         # Both modes should produce identical results
-        rtol = 1e-4 if dtype == torch.float32 else 1e-5
-        atol = 1e-5 if dtype == torch.float32 else 1e-6
+        rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(
             x_rot1,
             x_rot2,
@@ -573,7 +541,7 @@ class TestSO3Equivariance:
         self,
         lmax_mmax: tuple[int, int],
         dtype: torch.dtype,
-        device: str,
+        device: torch.device,
         alpha_val: float,
         beta_val: float,
         gamma_val: float,
@@ -617,7 +585,7 @@ class TestSO3Equivariance:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
 
         alpha = torch.full((batch_size,), alpha_val, device=device, dtype=dtype)
@@ -634,10 +602,7 @@ class TestSO3Equivariance:
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
         # Tolerances based on dtype precision
-        if dtype == torch.float32:
-            rtol, atol = 1e-4, 1e-4
-        else:
-            rtol, atol = 1e-8, 1e-10
+        rtol, atol = get_rtol_atol(dtype)
 
         torch.testing.assert_close(
             y1,
@@ -652,7 +617,7 @@ class TestSO3Equivariance:
         )
 
     def test_so3_linear_equivariance_random_rotations(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Test SO(3) equivariance with random rotations.
 
@@ -683,7 +648,7 @@ class TestSO3Equivariance:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
 
         for _ in range(num_rotations):
@@ -701,10 +666,7 @@ class TestSO3Equivariance:
                 y = layer(x)
                 y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-            if dtype == torch.float32:
-                rtol, atol = 1e-4, 1e-4
-            else:
-                rtol, atol = 1e-8, 1e-10
+            rtol, atol = get_rtol_atol(dtype)
 
             torch.testing.assert_close(
                 y1,
@@ -718,7 +680,7 @@ class TestSO3Equivariance:
             )
 
     def test_non_equivariant_layer_fails(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify that a non-equivariant layer fails the equivariance test.
 
@@ -763,7 +725,7 @@ class TestSO3Equivariance:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
 
         # Test with a non-trivial rotation
@@ -802,7 +764,7 @@ class TestIntegrationWithEdgeRotation:
     """
 
     def test_edge_rotation_produces_valid_angles(
-        self, dtype: torch.dtype, device: str
+        self, dtype: torch.dtype, device: torch.device
     ) -> None:
         """Verify EdgeRotation produces valid Euler angles from edge vectors.
 
@@ -847,7 +809,7 @@ class TestIntegrationWithEdgeRotation:
         )
 
     def test_so3linear_with_edge_derived_rotation(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Test SO3LinearGrid equivariance with edge-derived rotations.
 
@@ -880,7 +842,7 @@ class TestIntegrationWithEdgeRotation:
         x = torch.randn(
             batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
         )
-        mask = make_grid_mask(lmax, mmax).to(device=device).float()
+        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
         x = x * mask[None, :, :, None, None]
 
         # Derive rotation from random edge vectors
@@ -896,10 +858,7 @@ class TestIntegrationWithEdgeRotation:
             y = layer(x)
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-        if dtype == torch.float32:
-            rtol, atol = 1e-4, 1e-4
-        else:
-            rtol, atol = 1e-8, 1e-10
+        rtol, atol = get_rtol_atol(dtype)
 
         torch.testing.assert_close(
             y1,

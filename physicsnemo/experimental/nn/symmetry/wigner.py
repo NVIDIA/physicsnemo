@@ -755,7 +755,7 @@ def compute_wigner_d_matrices(
     if J_matrices is None:
         J_matrices = []
         for ell in range(lmax + 1):
-            J_l = _compute_J_matrix(ell, dtype=torch.float32, device=device)
+            J_l = _compute_J_matrix(ell, dtype=dtype, device=device)
             J_matrices.append(J_l)
 
     # Prepare padded J matrices for vectorized computation
@@ -763,12 +763,10 @@ def compute_wigner_d_matrices(
     num_blocks = lmax + 1
 
     # Pad J matrices to max_dim x max_dim
-    J_padded = torch.zeros(
-        num_blocks, max_dim, max_dim, dtype=torch.float32, device=device
-    )
+    J_padded = torch.zeros(num_blocks, max_dim, max_dim, dtype=dtype, device=device)
     for ell in range(num_blocks):
         dim_l = 2 * ell + 1
-        J_l = J_matrices[ell].to(dtype=torch.float32, device=device)
+        J_l = J_matrices[ell].to(dtype=dtype, device=device)
         J_padded[ell, :dim_l, :dim_l] = J_l
 
     # Prepare m-values for each block
@@ -785,9 +783,6 @@ def compute_wigner_d_matrices(
     for ell in range(num_blocks):
         dim_l = 2 * ell + 1
         flip_indices[ell, :dim_l] = torch.arange(dim_l - 1, -1, -1, device=device)
-
-    # Convert J_padded to target dtype
-    J_padded = J_padded.to(dtype=dtype)
 
     # Compute trigonometric values
     # alpha: (B,) -> (B, 1, 1) for broadcasting with m_vals: (num_blocks, max_dim)
@@ -919,6 +914,12 @@ class EdgeRotation(nn.Module):
     mmax : int, optional
         Maximum order for the reduced representation. Orders |m| > mmax are
         excluded. If None, defaults to lmax (no reduction). Must satisfy mmax <= lmax.
+    computation_dtype : torch.dtype, optional
+        Optional dtype for internal Wigner D-matrix computations. If provided,
+        angles and intermediate matrices will be promoted to this dtype during
+        computation, then cast back to the input dtype. Useful for maintaining
+        numerical precision with half-precision inputs. If None (default), uses
+        the input tensor's dtype directly.
 
     Raises
     ------
@@ -971,11 +972,13 @@ class EdgeRotation(nn.Module):
         self,
         lmax: int,
         mmax: int | None = None,
+        computation_dtype: torch.dtype | None = None,
     ) -> None:
         super().__init__()
 
         self.lmax = lmax
         self.mmax = mmax if mmax is not None else lmax
+        self.computation_dtype = computation_dtype
 
         if self.mmax > self.lmax:
             raise ValueError(
@@ -1158,19 +1161,38 @@ class EdgeRotation(nn.Module):
         function for code reuse. It passes the precomputed J matrices to avoid
         recomputing them on every call.
         """
+        # Store original dtype for casting back
+        original_dtype = alpha.dtype
+
+        # Promote to computation dtype if specified
+        if self.computation_dtype is not None:
+            alpha = alpha.to(self.computation_dtype)
+            beta = beta.to(self.computation_dtype)
+            gamma = gamma.to(self.computation_dtype)
+
         # Collect J matrices from registered buffers
         J_matrices = []
         for ell in range(self.lmax + 1):
-            J_matrices.append(self._get_J_matrix(ell))
+            J_l = self._get_J_matrix(ell)
+            # Cast J matrices to match angle dtype
+            if J_l.dtype != alpha.dtype:
+                J_l = J_l.to(alpha.dtype)
+            J_matrices.append(J_l)
 
         # Call the standalone function
-        return compute_wigner_d_matrices(
+        result = compute_wigner_d_matrices(
             alpha=alpha,
             beta=beta,
             gamma=gamma,
             lmax=self.lmax,
             J_matrices=J_matrices,
         )
+
+        # Cast back to original dtype if we promoted
+        if self.computation_dtype is not None and result.dtype != original_dtype:
+            result = result.to(original_dtype)
+
+        return result
 
     def _extract_reduced(
         self,

@@ -42,46 +42,15 @@ from torch import nn
 
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
+from test.experimental.nn.symmetry.conftest import get_rtol_atol
 
 # =============================================================================
 # Fixtures
 # =============================================================================
 
-
-@pytest.fixture(params=[torch.float32, torch.float64])
-def dtype(request: pytest.FixtureRequest) -> torch.dtype:
-    """Parameterized fixture for testing with different floating-point precisions.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Pytest fixture request object.
-
-    Returns
-    -------
-    torch.dtype
-        The dtype to use for tensor operations (float32 or float64).
-    """
-    return request.param
-
-
-@pytest.fixture(params=["cpu", "cuda"])
-def device(request: pytest.FixtureRequest) -> str:
-    """Parameterized fixture for testing on CPU and GPU if available.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Pytest fixture request object.
-
-    Returns
-    -------
-    str
-        Device string ("cpu" or "cuda").
-    """
-    if request.param == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA not available")
-    return request.param
+# Note: `dtype` and `device` fixtures are provided by conftest.py
+# - dtype: parameterized over float16, bfloat16, float32, float64
+# - device: parameterized over cpu and cuda (returns torch.device)
 
 
 @pytest.fixture(params=[(2, 2), (4, 2), (6, 2), (4, 4)])
@@ -110,7 +79,7 @@ class TestGateActivationBasic:
     """Basic functionality tests for GateActivation."""
 
     def test_output_shape(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Output shape should be [batch, lmax+1, mmax+1, 2, channels] (gates consumed).
 
@@ -120,7 +89,7 @@ class TestGateActivationBasic:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = lmax_mmax
@@ -151,14 +120,14 @@ class TestGateActivationBasic:
             f"Expected {expected_shape}, got {out.shape}"
         )
 
-    def test_l0_gets_silu(self, dtype: torch.dtype, device: str) -> None:
+    def test_l0_gets_silu(self, dtype: torch.dtype, device: torch.device) -> None:
         """l=0 positions should have SiLU applied, independent of gates.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -222,14 +191,14 @@ class TestGateActivationBasic:
         with torch.no_grad():
             _ = act(x)
 
-    def test_l_gt_0_gets_gating(self, dtype: torch.dtype, device: str) -> None:
+    def test_l_gt_0_gets_gating(self, dtype: torch.dtype, device: torch.device) -> None:
         """l>0 positions should be scaled by sigmoid(gates).
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -275,7 +244,7 @@ class TestGateActivationBasic:
         )
 
     def test_invalid_positions_zero(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Invalid (l, m) positions where m > l should be zero.
 
@@ -285,7 +254,7 @@ class TestGateActivationBasic:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = lmax_mmax
@@ -326,7 +295,7 @@ class TestGateActivationBasic:
                     )
 
     def test_m0_imaginary_zero(
-        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: str
+        self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """m=0 imaginary component should always be zero.
 
@@ -336,7 +305,7 @@ class TestGateActivationBasic:
             Tuple of (lmax, mmax) values.
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = lmax_mmax
@@ -376,14 +345,14 @@ class TestGateActivationBasic:
 class TestGateActivationGradients:
     """Gradient flow tests for GateActivation."""
 
-    def test_backward_pass(self, dtype: torch.dtype, device: str) -> None:
+    def test_backward_pass(self, dtype: torch.dtype, device: torch.device) -> None:
         """Gradients should flow to input tensor (including embedded gates).
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -414,14 +383,16 @@ class TestGateActivationGradients:
         assert x.grad is not None, "x gradients not computed"
         assert torch.isfinite(x.grad).all(), "x gradients contain non-finite values"
 
-    def test_gates_gradients_nonzero(self, dtype: torch.dtype, device: str) -> None:
+    def test_gates_gradients_nonzero(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Gates (embedded in input) should receive non-zero gradients.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -458,7 +429,9 @@ class TestGateActivationGradients:
 class TestGateActivationEquivariance:
     """SO(2) equivariance tests for GateActivation."""
 
-    def test_equivariance_preserved(self, dtype: torch.dtype, device: str) -> None:
+    def test_equivariance_preserved(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Gated activation should preserve SO(2) equivariance.
 
         Since gates are scalars (invariant), the gating operation commutes
@@ -468,7 +441,7 @@ class TestGateActivationEquivariance:
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -524,8 +497,7 @@ class TestGateActivationEquivariance:
             y2 = rotate_grid(y, phi)
 
         # Should be equal (gates are invariant)
-        rtol = 1e-4 if dtype == torch.float32 else 1e-10
-        atol = 1e-4 if dtype == torch.float32 else 1e-10
+        rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(
             y1,
             y2,
@@ -538,14 +510,14 @@ class TestGateActivationEquivariance:
 class TestGateActivationCompile:
     """torch.compile compatibility tests."""
 
-    def test_compile_forward(self, dtype: torch.dtype, device: str) -> None:
+    def test_compile_forward(self, dtype: torch.dtype, device: torch.device) -> None:
         """Forward pass should work with torch.compile.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -575,14 +547,16 @@ class TestGateActivationCompile:
         assert out.shape == expected_shape
         assert torch.isfinite(out).all()
 
-    def test_compile_matches_eager(self, dtype: torch.dtype, device: str) -> None:
+    def test_compile_matches_eager(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Compiled output should match eager output.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -611,18 +585,17 @@ class TestGateActivationCompile:
             out_eager = act(x)
             out_compiled = compiled_act(x)
 
-        rtol = 1e-4 if dtype == torch.float32 else 1e-10
-        atol = 1e-4 if dtype == torch.float32 else 1e-10
+        rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(out_eager, out_compiled, rtol=rtol, atol=atol)
 
-    def test_compile_backward(self, dtype: torch.dtype, device: str) -> None:
+    def test_compile_backward(self, dtype: torch.dtype, device: torch.device) -> None:
         """Backward pass should work with torch.compile.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -730,14 +703,14 @@ class TestGateActivationHardcoded:
         expected_l0 = torch.nn.functional.silu(x[:, 0, 0, 0, :channels])
         torch.testing.assert_close(y[:, 0, 0, 0, :], expected_l0, rtol=1e-5, atol=1e-5)
 
-    def test_zero_gates(self, dtype: torch.dtype, device: str) -> None:
+    def test_zero_gates(self, dtype: torch.dtype, device: torch.device) -> None:
         """Test behavior with zero gates (sigmoid(0) = 0.5).
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 2, 2
@@ -776,14 +749,16 @@ class TestGateActivationHardcoded:
             msg="With zero gates, l>0 should be scaled by 0.5",
         )
 
-    def test_large_positive_gates(self, dtype: torch.dtype, device: str) -> None:
+    def test_large_positive_gates(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Test behavior with large positive gates (sigmoid approaches 1).
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 2, 2
@@ -821,14 +796,16 @@ class TestGateActivationHardcoded:
             msg="With large positive gates, l>0 should be approximately unchanged",
         )
 
-    def test_large_negative_gates(self, dtype: torch.dtype, device: str) -> None:
+    def test_large_negative_gates(
+        self, dtype: torch.dtype, device: torch.device
+    ) -> None:
         """Test behavior with large negative gates (sigmoid approaches 0).
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 2, 2
@@ -870,14 +847,14 @@ class TestGateActivationHardcoded:
 class TestGateActivationBatchIndependence:
     """Tests for batch independence in GateActivation."""
 
-    def test_batch_independence(self, dtype: torch.dtype, device: str) -> None:
+    def test_batch_independence(self, dtype: torch.dtype, device: torch.device) -> None:
         """Each batch element should be processed independently.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -904,8 +881,7 @@ class TestGateActivationBatchIndependence:
             y1 = act(x[1:2])
 
         # Results should match
-        rtol = 1e-5 if dtype == torch.float32 else 1e-10
-        atol = 1e-5 if dtype == torch.float32 else 1e-10
+        rtol, atol = get_rtol_atol(dtype)
 
         torch.testing.assert_close(
             y_batch[0],
@@ -926,14 +902,14 @@ class TestGateActivationBatchIndependence:
 class TestGateActivationEdgeCases:
     """Edge case tests for GateActivation."""
 
-    def test_lmax1_mmax0(self, dtype: torch.dtype, device: str) -> None:
+    def test_lmax1_mmax0(self, dtype: torch.dtype, device: torch.device) -> None:
         """Test with minimal lmax=1, mmax=0 configuration.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 1, 0
@@ -962,14 +938,14 @@ class TestGateActivationEdgeCases:
         assert out.shape == expected_shape
         assert torch.isfinite(out).all()
 
-    def test_lmax1_mmax1(self, dtype: torch.dtype, device: str) -> None:
+    def test_lmax1_mmax1(self, dtype: torch.dtype, device: torch.device) -> None:
         """Test with lmax=1, mmax=1 configuration.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 1, 1
@@ -998,14 +974,14 @@ class TestGateActivationEdgeCases:
         assert out.shape == expected_shape
         assert torch.isfinite(out).all()
 
-    def test_large_lmax_mmax(self, dtype: torch.dtype, device: str) -> None:
+    def test_large_lmax_mmax(self, dtype: torch.dtype, device: torch.device) -> None:
         """Test with larger lmax and mmax values.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 8, 4
@@ -1034,14 +1010,14 @@ class TestGateActivationEdgeCases:
         assert out.shape == expected_shape
         assert torch.isfinite(out).all()
 
-    def test_batch_size_one(self, dtype: torch.dtype, device: str) -> None:
+    def test_batch_size_one(self, dtype: torch.dtype, device: torch.device) -> None:
         """Test with batch size of 1.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
@@ -1070,14 +1046,14 @@ class TestGateActivationEdgeCases:
         assert out.shape == expected_shape
         assert torch.isfinite(out).all()
 
-    def test_single_channel(self, dtype: torch.dtype, device: str) -> None:
+    def test_single_channel(self, dtype: torch.dtype, device: torch.device) -> None:
         """Test with single channel.
 
         Parameters
         ----------
         dtype : torch.dtype
             Data type for tensors.
-        device : str
+        device : torch.device
             Device to run on.
         """
         lmax, mmax = 4, 2
