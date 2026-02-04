@@ -19,19 +19,19 @@
 # Copyright (c) [2025] Meta, Inc. and its affiliates.
 # Licensed under MIT License.
 
-r"""SO(3) node-wise transformation layer using grid layout.
+r"""SO(3) block-wise transformation layer using grid layout.
 
-This module provides a feed-forward block for atom/node features in the
+This module provides a feed-forward block for features in the
 spectral (spherical harmonic) domain, using the unified grid layout.
 
 The architecture applies a sequence of SO(3)-equivariant linear transformations
-with gated activations, enabling expressive node-wise transformations while
+with gated activations, enabling expressive block-wise transformations while
 preserving rotational equivariance.
 
 Classes
 -------
-SO3AtomwiseBlock
-    SO(3) node-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
+SO3ConvolutionBlock
+    SO(3) block-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
 """
 
 from __future__ import annotations
@@ -50,9 +50,9 @@ __all__ = [
 
 
 class SO3ConvolutionBlock(Module):
-    r"""SO(3) node-wise transformation layer using grid layout.
+    r"""SO(3) block-wise transformation layer using grid layout.
 
-    This module applies node-wise transformations in the spectral
+    This module applies block-wise transformations in the spectral
     domain using SO(3) linear layers with gated activations. It serves as a
     feed-forward block in equivariant architectures.
 
@@ -88,7 +88,7 @@ class SO3ConvolutionBlock(Module):
     Notes
     -----
     Input tensor layout: ``[batch, lmax+1, mmax+1, 2, in_channels]``
-        - batch: number of atoms/nodes
+        - batch: number of elements
         - lmax+1: degrees from l=0 to l=lmax
         - mmax+1: orders from m=0 to m=mmax
         - 2: real (index 0) and imaginary (index 1) components
@@ -109,7 +109,7 @@ class SO3ConvolutionBlock(Module):
     ...     lmax=4,
     ...     mmax=2,
     ... )
-    >>> # Input: [num_atoms, lmax+1, mmax+1, 2, in_channels]
+    >>> # Input: [num_elements, lmax+1, mmax+1, 2, in_channels]
     >>> x = torch.randn(100, 5, 3, 2, 64)
     >>> out = block(x)
     >>> out.shape

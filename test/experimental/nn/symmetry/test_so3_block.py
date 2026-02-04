@@ -22,7 +22,7 @@
 """Comprehensive unit tests for SO3ConvolutionBlock implementation.
 
 This module provides tests for:
-- SO3ConvolutionBlock: SO(3) equivariant feed-forward block for node features
+- SO3ConvolutionBlock: SO(3) equivariant feed-forward block for features
 - Shape preservation
 - Gradient flow
 - SO(3) equivariance verification
@@ -31,7 +31,7 @@ Test Structure
 --------------
 TestSO3ConvolutionBlock
     Tests for the SO3ConvolutionBlock layer (shapes, backward pass, determinism).
-TestSO3ConvolutionEquivariance
+TestSO3BlockEquivariance
     Key equivariance tests verifying SO(3) symmetry preservation.
 TestValidation
     Tests for input validation and error handling.
@@ -90,7 +90,7 @@ def lmax_mmax(request: pytest.FixtureRequest) -> tuple[int, int]:
 class TestSO3ConvolutionBlock:
     """Tests for the SO3ConvolutionBlock layer.
 
-    This layer applies node-wise feed-forward transformations in the spherical
+    This layer applies block-wise feed-forward transformations in the spherical
     harmonic domain while preserving SO(3) equivariance.
     """
 
@@ -378,11 +378,11 @@ class TestSO3ConvolutionBlock:
 
 
 # =============================================================================
-# TestSO3AtomwiseEquivariance
+# TestSO3BlockEquivariance
 # =============================================================================
 
 
-class TestSO3AtomwiseEquivariance:
+class TestSO3BlockEquivariance:
     """Key symmetry tests: SO(3) equivariance of SO3ConvolutionBlock.
 
     For any rotation R:
@@ -406,7 +406,7 @@ class TestSO3AtomwiseEquivariance:
         ],
         ids=["small", "medium", "large", "y-inversion", "arbitrary"],
     )
-    def test_so3_atomwise_equivariance(
+    def test_so3_block_equivariance(
         self,
         lmax_mmax: tuple[int, int],
         dtype: torch.dtype,
@@ -496,7 +496,7 @@ class TestSO3AtomwiseEquivariance:
             ),
         )
 
-    def test_so3_atomwise_equivariance_random_rotations(
+    def test_so3_block_equivariance_random_rotations(
         self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
         """Test SO(3) equivariance with random rotations.
