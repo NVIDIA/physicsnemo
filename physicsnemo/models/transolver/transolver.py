@@ -36,9 +36,7 @@ SOFTWARE.
 """
 
 import importlib
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import torch
@@ -100,38 +98,40 @@ class _TransolverMlp(Mlp):
 
     _NEW_TO_OLD_KEYS = {v: k for k, v in _OLD_TO_NEW_KEYS.items()}
 
-    def _remap_state_dict_keys(
-        self, state_dict: dict, key_map: dict, prefix: str = ""
-    ) -> dict:
-        """Remap state dict keys using the provided mapping."""
-        new_state_dict = {}
-        for key, value in state_dict.items():
-            if prefix and key.startswith(prefix):
-                # Remove prefix, remap, then add prefix back
-                suffix = key[len(prefix) :]
-                new_suffix = key_map.get(suffix, suffix)
-                new_key = prefix + new_suffix
-            else:
-                new_key = key_map.get(key, key)
-            new_state_dict[new_key] = value
-        return new_state_dict
-
-    def load_state_dict(
+    def _load_from_state_dict(
         self,
-        state_dict: "Mapping[str, Any]",
-        strict: bool = True,
+        state_dict: dict,
+        prefix: str,
+        local_metadata: dict,
+        strict: bool,
+        missing_keys: list,
+        unexpected_keys: list,
         assign: bool = False,
     ):
-        """Load state dict with automatic key remapping for legacy checkpoints."""
-        # Check if this looks like an old-style checkpoint
-        has_old_keys = any(k in state_dict for k in self._OLD_TO_NEW_KEYS)
-        has_new_keys = any(k in state_dict for k in self._NEW_TO_OLD_KEYS)
+        """Load state dict with automatic key remapping for legacy checkpoints.
 
-        if has_old_keys and not has_new_keys:
-            # Remap old keys to new keys
-            state_dict = self._remap_state_dict_keys(state_dict, self._OLD_TO_NEW_KEYS)
+        This hook is called by PyTorch for each module during load_state_dict().
+        We intercept it to remap old-style keys (linear_pre, linear_post) to
+        new-style keys (layers.0, layers.2) before the actual loading.
+        """
+        # Check for old-style keys with this module's prefix
+        # e.g., prefix="preprocess." -> look for "preprocess.linear_pre.weight"
+        for old_suffix, new_suffix in self._OLD_TO_NEW_KEYS.items():
+            old_key = prefix + old_suffix
+            new_key = prefix + new_suffix
+            if old_key in state_dict and new_key not in state_dict:
+                # Remap old key to new key
+                state_dict[new_key] = state_dict.pop(old_key)
 
-        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+        return super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            assign,
+        )
 
 
 class TransolverBlock(nn.Module):
