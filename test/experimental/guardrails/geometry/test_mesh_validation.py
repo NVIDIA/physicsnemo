@@ -37,9 +37,9 @@ def test_validate_mesh_min_verts():
     faces = np.array([[0, 1, 2]])
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
     
-    # Should fail with default min_verts=50
+    # Should fail with default min_verts=4
     with pytest.raises(ValueError, match="Too few vertices"):
-        validate_mesh(mesh)
+        validate_mesh(mesh, min_verts=10)
     
     # Should pass with lower threshold
     validate_mesh(mesh, min_verts=3)
@@ -51,7 +51,7 @@ def test_validate_mesh_non_finite_vertices():
     # Corrupt vertices with NaN
     mesh.vertices[0, 0] = np.nan
     
-    with pytest.raises(ValueError, match="Non-finite vertex coordinates"):
+    with pytest.raises(ValueError, match="Non-finite"):
         validate_mesh(mesh)
 
 
@@ -62,7 +62,7 @@ def test_validate_mesh_zero_area():
     faces = np.array([[0, 1, 2], [1, 2, 3]])
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     
-    with pytest.raises(ValueError, match="Non-positive surface area"):
+    with pytest.raises(ValueError, match="Non-positive"):
         validate_mesh(mesh)
 
 

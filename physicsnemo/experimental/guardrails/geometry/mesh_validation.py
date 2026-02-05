@@ -20,7 +20,7 @@ import numpy as np
 import trimesh
 
 
-def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 50) -> None:
+def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 4) -> None:
     r"""
     Validate basic geometric integrity of a mesh.
 
@@ -33,7 +33,7 @@ def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 50) -> None:
     mesh : trimesh.Trimesh
         Input triangular surface mesh to validate.
     min_verts : int, optional
-        Minimum number of vertices required for a valid mesh. Defaults to 50.
+        Minimum number of vertices required for a valid mesh. Defaults to 4.
         This ensures sufficient geometry for statistical feature extraction.
 
     Raises

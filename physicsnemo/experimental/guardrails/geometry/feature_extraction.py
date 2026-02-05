@@ -155,8 +155,8 @@ def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
     centroid = verts.mean(axis=0)  # Shape: (3,)
     X = verts - centroid  # Center vertices
 
-    if X.shape[0] < 10:
-        raise ValueError("Insufficient points for PCA (need at least 10)")
+    if X.shape[0] < 4:
+        raise ValueError("Insufficient points for PCA (need at least 4)")
 
     # Compute PCA via singular value decomposition
     # U: left singular vectors, S: singular values, Vt: right singular vectors transposed

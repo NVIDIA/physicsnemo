@@ -26,12 +26,10 @@ def test_density_model_constructor():
     """Test GeometryDensityModel constructor."""
     model = GeometryDensityModel(
         n_components=2,
-        covariance_type="full",
         random_state=42,
     )
     
-    assert model.gmm.n_components == 2
-    assert model.gmm.covariance_type == "full"
+    assert model.n_components == 2
     assert model.ref_scores is None
 
 
@@ -44,7 +42,7 @@ def test_density_model_fit():
     model.fit(X)
     
     # Check that model is fitted
-    assert hasattr(model.gmm, "means_")
+    assert model.model is not None
     assert model.ref_scores is not None
     assert model.ref_scores.shape == (100,)
     assert np.isfinite(model.ref_scores).all()
@@ -138,18 +136,3 @@ def test_density_model_various_components(n_components):
     assert pcts.shape == (100,)
     assert np.isfinite(scores).all()
     assert np.all((pcts >= 0) & (pcts <= 100))
-
-
-@pytest.mark.parametrize("cov_type", ["full", "tied", "diag", "spherical"])
-def test_density_model_covariance_types(cov_type):
-    """Test density model with various covariance types."""
-    rng = np.random.RandomState(42)
-    X = rng.randn(100, 22)
-    
-    model = GeometryDensityModel(covariance_type=cov_type, random_state=42)
-    model.fit(X)
-    
-    scores = model.score(X)
-    
-    assert scores.shape == (100,)
-    assert np.isfinite(scores).all()

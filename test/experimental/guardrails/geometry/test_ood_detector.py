@@ -33,7 +33,6 @@ def test_guardrail_constructor():
         n_components=2,
         warn_pct=95.0,
         reject_pct=99.0,
-        covariance_type="full",
         random_state=42,
     )
     
@@ -89,7 +88,7 @@ def test_guardrail_query():
     # Query similar and dissimilar meshes
     test_meshes = [
         trimesh.creation.box(extents=[1, 1, 1]),  # Similar
-        trimesh.creation.sphere(radius=100.0),  # Very different
+        trimesh.creation.icosphere(radius=100.0, subdivisions=2),  # Very different
     ]
     
     results = guardrail.query(test_meshes)
@@ -213,12 +212,11 @@ def test_guardrail_various_configs(n_components, cov_type):
     
     guardrail = GeometryGuardrail(
         n_components=n_components,
-        covariance_type=cov_type,
         random_state=42,
     )
     guardrail.fit(train_meshes)
     
-    test_meshes = [trimesh.creation.sphere()]
+    test_meshes = [trimesh.creation.icosphere(subdivisions=2)]
     results = guardrail.query(test_meshes)
     
     assert len(results) == 1
@@ -242,7 +240,7 @@ def test_guardrail_outlier_detection():
     
     # Test with inlier and outlier
     inlier = trimesh.creation.box(extents=[1.5, 1.5, 1.5])
-    outlier = trimesh.creation.sphere(radius=100.0)  # Very different
+    outlier = trimesh.creation.icosphere(radius=100.0, subdivisions=2)  # Very different
     
     results = guardrail.query([inlier, outlier])
     
