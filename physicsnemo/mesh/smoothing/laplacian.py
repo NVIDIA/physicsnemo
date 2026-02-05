@@ -26,8 +26,10 @@ import torch
 
 from physicsnemo.mesh.boundaries import get_boundary_edges
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
-from physicsnemo.mesh.curvature._laplacian import compute_cotangent_weights
-from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+from physicsnemo.mesh.calculus._circumcentric_dual import (
+    compute_cotan_weights_triangle_mesh,
+)
+from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -259,7 +261,9 @@ def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
 
     if mesh.codimension == 1 and mesh.n_manifold_dims >= 2:
         ### Use cotangent weights (geometry-aware)
-        weights = compute_cotangent_weights(mesh, edges)
+        weights = compute_cotan_weights_triangle_mesh(
+            mesh, edges=edges, return_edges=False
+        )
 
         ### Clamp weights for numerical stability
         # Negative cotangents occur for obtuse angles - treat as zero (no contribution)
