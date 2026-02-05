@@ -305,6 +305,98 @@ class TestManifold3D:
 
         assert not mesh.is_manifold()
 
+    def test_pinch_point_non_manifold_vertex(self, device):
+        """Two tets sharing only a single vertex create a non-manifold pinch point.
+
+        Vertex 0 is shared by both tets, but they share no face containing vertex 0.
+        The link of vertex 0 consists of two disconnected triangles: {1,2,3} and
+        {4,5,6}. This passes facet and edge checks but fails the vertex check.
+        """
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],  # vertex 0: pinch point
+                [1.0, 0.0, 0.0],  # tet 1 only
+                [0.0, 1.0, 0.0],  # tet 1 only
+                [0.0, 0.0, 1.0],  # tet 1 only
+                [-1.0, 0.0, 0.0],  # tet 2 only
+                [0.0, -1.0, 0.0],  # tet 2 only
+                [0.0, 0.0, -1.0],  # tet 2 only
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 4, 5, 6]],
+            device=device,
+            dtype=torch.int64,
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Facet and edge checks pass (no shared faces or edges between the two tets)
+        assert mesh.is_manifold(check_level="facets") is True
+        assert mesh.is_manifold(check_level="edges") is True
+
+        ### Full check catches the pinch point
+        assert mesh.is_manifold(check_level="full") is False
+
+    def test_shared_edge_but_no_shared_face_non_manifold(self, device):
+        """Two tets sharing a vertex and an edge but no face containing that vertex.
+
+        Tets share edge {0,1}, but at vertex 0 the link faces {1,2,3} and {1,4,5}
+        share only vertex 1 (not an edge), so vertex 0's link is disconnected.
+        """
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 1, 4, 5]],
+            device=device,
+            dtype=torch.int64,
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Vertex 0's link has two triangles sharing only a vertex, not an edge
+        assert mesh.is_manifold(check_level="full") is False
+
+    def test_three_tets_ring_manifold(self, device):
+        """Three tets forming a ring around a shared edge are manifold.
+
+        Tets share edge {0,1}. At vertex 0, the link faces all share edges
+        through vertex 1, forming a connected fan.
+        """
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, -1.0, 0.0],
+            ],
+            device=device,
+        )
+        ### Three tets: each pair shares a face containing both v0 and v1
+        cells = torch.tensor(
+            [
+                [0, 1, 2, 3],
+                [0, 1, 3, 4],
+                [0, 1, 4, 2],
+            ],
+            device=device,
+            dtype=torch.int64,
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Link of vertex 0: {1,2,3}, {1,3,4}, {1,4,2}
+        ### These share edges {1,3}, {1,4}, {1,2} respectively → connected
+        assert mesh.is_manifold(check_level="full") is True
+
 
 class TestManifold1D:
     """Test manifold checking for 1D meshes."""

@@ -199,11 +199,15 @@ class TestCotangentWeightsCorrectness:
         cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=device)
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.curvature._laplacian import compute_cotangent_weights
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+        from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_triangle_mesh,
+        )
 
         unique_edges, _ = extract_unique_edges(mesh)
-        weights = compute_cotangent_weights(mesh, unique_edges)
+        weights = compute_cotan_weights_triangle_mesh(
+            mesh, edges=unique_edges, return_edges=False
+        )
 
         ### For equilateral triangle, all angles are 60 degrees
         # cot(60°) = 1/sqrt(3) ≈ 0.5774
@@ -231,11 +235,15 @@ class TestCotangentWeightsCorrectness:
         cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=device)
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.curvature._laplacian import compute_cotangent_weights
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+        from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_triangle_mesh,
+        )
 
         unique_edges, _ = extract_unique_edges(mesh)
-        weights = compute_cotangent_weights(mesh, unique_edges)
+        weights = compute_cotan_weights_triangle_mesh(
+            mesh, edges=unique_edges, return_edges=False
+        )
 
         ### Find each edge and verify its weight
         # Edge [0,1]: opposite angle at vertex 2 = 45°, cot(45°) = 1.0
@@ -282,11 +290,15 @@ class TestCotangentWeightsCorrectness:
         )
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.curvature._laplacian import compute_cotangent_weights
-        from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+        from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_triangle_mesh,
+        )
 
         unique_edges, _ = extract_unique_edges(mesh)
-        weights = compute_cotangent_weights(mesh, unique_edges)
+        weights = compute_cotan_weights_triangle_mesh(
+            mesh, edges=unique_edges, return_edges=False
+        )
 
         ### Find the shared interior edge [1, 2]
         shared_edge_idx = None

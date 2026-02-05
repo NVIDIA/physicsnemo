@@ -1253,11 +1253,11 @@ class TestLaplacianNumericalProperties:
 class TestLaplacianManifoldDimensions:
     """Tests for Laplacian on different manifold dimensions."""
 
-    def test_laplacian_not_implemented_for_1d(self):
-        """Test that 1D manifolds raise NotImplementedError."""
+    def test_laplacian_works_for_1d(self):
+        """Test that DEC Laplacian works on 1D edge meshes."""
         from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
-        # Create 1D mesh (edges)
+        # Create 1D mesh (edges in 2D ambient space)
         points = torch.tensor(
             [
                 [0.0, 0.0],
@@ -1276,17 +1276,15 @@ class TestLaplacianManifoldDimensions:
         )
 
         mesh = Mesh(points=points, cells=cells)
-
-        # Should raise NotImplementedError
         scalar_values = torch.randn(mesh.n_points)
 
-        with pytest.raises(
-            NotImplementedError, match="only implemented for triangle meshes"
-        ):
-            compute_laplacian_points_dec(mesh, scalar_values)
+        # Should run without error and return correct shape
+        laplacian = compute_laplacian_points_dec(mesh, scalar_values)
+        assert laplacian.shape == scalar_values.shape
+        assert torch.isfinite(laplacian).all()
 
-    def test_laplacian_not_implemented_for_3d(self):
-        """Test that 3D manifolds raise NotImplementedError."""
+    def test_laplacian_works_for_3d(self):
+        """Test that DEC Laplacian works on 3D tetrahedral meshes."""
         from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
         # Create single tetrahedron
@@ -1303,14 +1301,12 @@ class TestLaplacianManifoldDimensions:
         cells = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
 
         mesh = Mesh(points=points, cells=cells)
-
-        # Should raise NotImplementedError
         scalar_values = torch.randn(mesh.n_points)
 
-        with pytest.raises(
-            NotImplementedError, match="only implemented for triangle meshes"
-        ):
-            compute_laplacian_points_dec(mesh, scalar_values)
+        # Should run without error and return correct shape
+        laplacian = compute_laplacian_points_dec(mesh, scalar_values)
+        assert laplacian.shape == scalar_values.shape
+        assert torch.isfinite(laplacian).all()
 
     def test_laplacian_flat_mesh_quadratic(self):
         r"""Verify \Delta(x^2+y^2) = 4 on flat 2D mesh.
@@ -1705,17 +1701,15 @@ class TestEdgeCases:
         with pytest.raises(ValueError, match="Invalid gradient_type"):
             mesh.compute_point_derivatives(keys="test", gradient_type="invalid")
 
-    def test_laplacian_on_3d_mesh_raises(self, simple_tet_mesh):
-        """Test that DEC Laplacian on 3D mesh raises NotImplementedError."""
+    def test_laplacian_on_3d_mesh_constant(self, simple_tet_mesh):
+        """Test that DEC Laplacian of constant on 3D mesh is zero."""
         from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
         mesh = simple_tet_mesh  # 3D manifold
         phi = torch.ones(mesh.n_points)
 
-        with pytest.raises(
-            NotImplementedError, match="only implemented for triangle meshes"
-        ):
-            compute_laplacian_points_dec(mesh, phi)
+        laplacian = compute_laplacian_points_dec(mesh, phi)
+        assert torch.allclose(laplacian, torch.zeros_like(laplacian), atol=1e-5)
 
     def test_curl_on_2d_raises(self):
         """Test that curl on 2D data raises ValueError."""
@@ -2118,6 +2112,392 @@ class TestCellDerivativesGradientTypes:
 
         assert "test_gradient_extrinsic" in mesh_grad.cell_data.keys()
         assert "test_gradient_intrinsic" in mesh_grad.cell_data.keys()
+
+
+###############################################################################
+# n-Dimensional DEC Laplacian Tests
+###############################################################################
+
+
+class TestLaplacian1D:
+    """Test DEC Laplacian on 1D edge meshes.
+
+    For 1D manifolds, the Laplace-Beltrami operator reduces to the second
+    arc-length derivative: Delta f = d^2 f / ds^2.
+
+    The FEM stiffness cotangent weights give w_ij = 1/|edge| for 1D edges,
+    which produces the standard finite-difference second derivative when
+    combined with the dual volume normalization (half the sum of adjacent
+    edge lengths).
+    """
+
+    def test_laplacian_x_squared_uniform_1d(self):
+        """Delta(x^2) = 2 on a uniform 1D grid in 1D ambient space."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        n = 21
+        x = torch.linspace(0.0, 1.0, n, dtype=torch.float64)
+        points = x.unsqueeze(-1)  # (n, 1)
+        cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
+        mesh = Mesh(points=points, cells=cells)
+
+        f = x**2
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        # Interior points (not boundary) should give exactly 2
+        interior = slice(1, -1)
+        assert torch.allclose(
+            lap[interior], torch.full_like(lap[interior], 2.0), atol=1e-8
+        ), f"Interior Laplacian: {lap[interior]}"
+
+    def test_laplacian_x_squared_nonuniform_1d(self):
+        """Delta(x^2) = 2 on a non-uniform 1D grid."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        # Non-uniform spacing
+        x = torch.tensor(
+            [0.0, 0.1, 0.25, 0.5, 0.6, 0.85, 1.0], dtype=torch.float64
+        )
+        points = x.unsqueeze(-1)  # (7, 1)
+        n = len(x)
+        cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
+        mesh = Mesh(points=points, cells=cells)
+
+        f = x**2
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        # Interior points should give exactly 2 (FEM cotangent weights are
+        # exact for quadratics on 1D meshes, regardless of spacing)
+        interior = slice(1, -1)
+        assert torch.allclose(
+            lap[interior], torch.full_like(lap[interior], 2.0), atol=1e-8
+        ), f"Interior Laplacian: {lap[interior]}"
+
+    def test_laplacian_1d_in_2d_ambient(self):
+        """Delta(x^2) = 2 on a 1D line segment embedded in 2D."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        n = 15
+        t = torch.linspace(0.0, 1.0, n, dtype=torch.float64)
+        # Line along x-axis in 2D
+        points = torch.stack([t, torch.zeros_like(t)], dim=1)  # (n, 2)
+        cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
+        mesh = Mesh(points=points, cells=cells)
+
+        f = points[:, 0] ** 2  # x^2
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        interior = slice(1, -1)
+        assert torch.allclose(
+            lap[interior], torch.full_like(lap[interior], 2.0), atol=1e-8
+        ), f"Interior Laplacian: {lap[interior]}"
+
+    def test_laplacian_1d_in_3d_ambient(self):
+        """Delta(s^2) = 2 on a 1D line segment embedded in 3D."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        n = 15
+        t = torch.linspace(0.0, 1.0, n, dtype=torch.float64)
+        # Line along (1,1,1) direction in 3D
+        direction = torch.tensor([1.0, 1.0, 1.0], dtype=torch.float64)
+        direction = direction / direction.norm()
+        points = t.unsqueeze(-1) * direction.unsqueeze(0)  # (n, 3)
+        cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Arc-length parameter is t (since |direction| = 1 and spacing is uniform)
+        f = t**2
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        interior = slice(1, -1)
+        assert torch.allclose(
+            lap[interior], torch.full_like(lap[interior], 2.0), atol=1e-8
+        ), f"Interior Laplacian: {lap[interior]}"
+
+    def test_laplacian_linear_zero_1d(self):
+        """Delta(linear) = 0 on a 1D mesh."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        n = 10
+        x = torch.linspace(0.0, 2.0, n, dtype=torch.float64)
+        points = x.unsqueeze(-1)
+        cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
+        mesh = Mesh(points=points, cells=cells)
+
+        f = 3.0 * x + 7.0  # Linear function
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        # Interior points: Laplacian of linear function = 0
+        interior = slice(1, -1)
+        assert torch.allclose(
+            lap[interior], torch.zeros_like(lap[interior]), atol=1e-8
+        ), f"Interior Laplacian of linear: {lap[interior]}"
+
+    def test_laplacian_constant_zero_1d(self):
+        """Delta(constant) = 0 on a 1D mesh."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+
+        n = 8
+        x = torch.linspace(0.0, 1.0, n, dtype=torch.float64)
+        points = x.unsqueeze(-1)
+        cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
+        mesh = Mesh(points=points, cells=cells)
+
+        f = torch.full((n,), 42.0, dtype=torch.float64)
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        assert torch.allclose(lap, torch.zeros_like(lap), atol=1e-10)
+
+
+class TestLaplacian3D:
+    """Test DEC Laplacian on 3D tetrahedral meshes.
+
+    Uses the FEM stiffness matrix cotangent weights, which give exact
+    dihedral-angle-based weights for tetrahedra. The Kuhn triangulation
+    of a uniform grid has sufficient symmetry for the discrete Laplacian
+    to be exact for quadratic functions at interior vertices.
+    """
+
+    def test_laplacian_constant_zero_3d(self):
+        """Delta(constant) = 0 on a tetrahedral mesh."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.volumes.cube_volume import load
+
+        mesh = load(size=1.0, subdivisions=3)
+        f = torch.ones(mesh.n_points, dtype=mesh.points.dtype)
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        assert torch.allclose(lap, torch.zeros_like(lap), atol=1e-5), (
+            f"Laplacian of constant: max abs = {lap.abs().max():.2e}"
+        )
+
+    def test_laplacian_linear_zero_3d(self):
+        """Delta(linear) = 0 at interior points of a tetrahedral mesh."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.volumes.cube_volume import load
+
+        mesh = load(size=2.0, subdivisions=4)
+        # Linear function: f = 2x + 3y - z + 5
+        f = (
+            2.0 * mesh.points[:, 0]
+            + 3.0 * mesh.points[:, 1]
+            - mesh.points[:, 2]
+            + 5.0
+        )
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        # Interior points: far from the cube boundary
+        half_size = 1.0  # cube has size 2, so boundary is at ±1
+        is_interior = (mesh.points.abs() < half_size * 0.8).all(dim=-1)
+        assert is_interior.sum() > 10, "Need enough interior points for a meaningful test"
+
+        interior_lap = lap[is_interior]
+        assert torch.allclose(
+            interior_lap, torch.zeros_like(interior_lap), atol=1e-4
+        ), (
+            f"Laplacian of linear at interior: "
+            f"max abs = {interior_lap.abs().max():.2e}, "
+            f"mean abs = {interior_lap.abs().mean():.2e}"
+        )
+
+    def test_laplacian_r_squared_3d(self):
+        """Delta(x^2 + y^2 + z^2) = 6 at interior points of a tetrahedral mesh.
+
+        On the Kuhn triangulation of a uniform grid, the FEM cotangent
+        Laplacian is exact for quadratics at interior vertices due to
+        the stencil symmetry.
+        """
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.volumes.cube_volume import load
+
+        mesh = load(size=2.0, subdivisions=5)
+        f = (mesh.points**2).sum(dim=-1)  # x^2 + y^2 + z^2
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        # Interior points only (boundary vertices have incomplete stencils)
+        half_size = 1.0
+        is_interior = (mesh.points.abs() < half_size * 0.8).all(dim=-1)
+        assert is_interior.sum() > 20, "Need enough interior points"
+
+        interior_lap = lap[is_interior]
+        expected = torch.full_like(interior_lap, 6.0)
+
+        # The Kuhn triangulation gives exact results for this quadratic
+        assert torch.allclose(interior_lap, expected, atol=0.1), (
+            f"Laplacian of r^2 at interior: "
+            f"mean = {interior_lap.mean():.4f}, "
+            f"max deviation = {(interior_lap - 6.0).abs().max():.4f}"
+        )
+
+    def test_laplacian_single_component_3d(self):
+        """Delta(x^2) = 2 at interior points of a tetrahedral mesh."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.volumes.cube_volume import load
+
+        mesh = load(size=2.0, subdivisions=5)
+        f = mesh.points[:, 0] ** 2  # x^2 only
+        lap = compute_laplacian_points_dec(mesh, f)
+
+        # Interior points
+        half_size = 1.0
+        is_interior = (mesh.points.abs() < half_size * 0.8).all(dim=-1)
+
+        interior_lap = lap[is_interior]
+        expected = torch.full_like(interior_lap, 2.0)
+
+        assert torch.allclose(interior_lap, expected, atol=0.1), (
+            f"Laplacian of x^2 at interior: "
+            f"mean = {interior_lap.mean():.4f}, "
+            f"max deviation = {(interior_lap - 2.0).abs().max():.4f}"
+        )
+
+    def test_laplacian_vector_field_3d(self):
+        """DEC Laplacian works on vector fields over tetrahedral meshes."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
+        from physicsnemo.mesh.primitives.volumes.cube_volume import load
+
+        mesh = load(size=1.0, subdivisions=3)
+
+        # Linear vector field: Laplacian should be zero
+        vector_field = mesh.points.clone()  # (n_points, 3)
+        lap = compute_laplacian_points_dec(mesh, vector_field)
+
+        assert lap.shape == vector_field.shape
+
+        # Interior points should have near-zero Laplacian
+        half_size = 0.5
+        is_interior = (mesh.points.abs() < half_size * 0.8).all(dim=-1)
+        interior_lap = lap[is_interior]
+        assert torch.allclose(
+            interior_lap, torch.zeros_like(interior_lap), atol=1e-4
+        )
+
+
+class TestCotanWeightsCrossValidation:
+    """Cross-validate FEM cotangent weights against the 2D-specific implementation.
+
+    On triangle meshes, the FEM stiffness approach must produce identical
+    cotangent weights to the classical (1/2)(cot alpha + cot beta) formula.
+    """
+
+    def test_weights_match_on_flat_mesh(self):
+        """FEM weights match 2D cotangent weights on a flat triangular mesh."""
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_fem,
+            compute_cotan_weights_triangle_mesh,
+        )
+
+        # Create a flat 2D mesh with mixed acute/obtuse triangles
+        points = torch.tensor(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.5, 0.5],
+            ],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor(
+            [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+            dtype=torch.long,
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        old_weights, old_edges = compute_cotan_weights_triangle_mesh(
+            mesh, return_edges=True
+        )
+        new_weights, new_edges = compute_cotan_weights_fem(mesh)
+
+        # Edges should be the same set (both sorted)
+        assert torch.equal(old_edges, new_edges), (
+            f"Edge sets differ:\nold: {old_edges}\nnew: {new_edges}"
+        )
+
+        # Weights should match closely
+        assert torch.allclose(old_weights, new_weights, atol=1e-10), (
+            f"Weight mismatch:\n"
+            f"  max diff = {(old_weights - new_weights).abs().max():.2e}\n"
+            f"  old = {old_weights}\n"
+            f"  new = {new_weights}"
+        )
+
+    def test_weights_match_on_3d_surface(self):
+        """FEM weights match 2D cotangent weights on a surface mesh in 3D."""
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_fem,
+            compute_cotan_weights_triangle_mesh,
+        )
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        mesh = sphere_icosahedral.load(subdivisions=2)
+        # Use float64 for tighter comparison
+        mesh = Mesh(
+            points=mesh.points.to(torch.float64),
+            cells=mesh.cells,
+        )
+
+        old_weights, old_edges = compute_cotan_weights_triangle_mesh(
+            mesh, return_edges=True
+        )
+        new_weights, new_edges = compute_cotan_weights_fem(mesh)
+
+        assert torch.equal(old_edges, new_edges)
+        assert torch.allclose(old_weights, new_weights, atol=1e-8), (
+            f"Weight mismatch on icosahedral sphere:\n"
+            f"  max diff = {(old_weights - new_weights).abs().max():.2e}\n"
+            f"  mean diff = {(old_weights - new_weights).abs().mean():.2e}"
+        )
+
+    def test_laplacian_results_match_on_2d_mesh(self):
+        """DEC Laplacian results are unchanged for triangle meshes.
+
+        Verifies that the refactoring from the 2D-specific code path to the
+        general FEM code path does not change the numerical output for the
+        existing 2D case.
+        """
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_fem,
+            compute_cotan_weights_triangle_mesh,
+            get_or_compute_dual_volumes_0,
+        )
+        from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
+
+        # Build mesh with a non-trivial scalar field
+        points = torch.tensor(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.5, 0.5],
+                [0.25, 0.75],
+            ],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor(
+            [[0, 1, 4], [1, 2, 4], [2, 3, 5], [3, 0, 5], [4, 5, 3], [4, 5, 0]],
+            dtype=torch.long,
+        )
+        mesh = Mesh(points=points, cells=cells)
+        f = points[:, 0] ** 2 + points[:, 1] ** 2
+
+        # Compute via old path
+        old_w, old_e = compute_cotan_weights_triangle_mesh(mesh, return_edges=True)
+        old_lap = _apply_cotan_laplacian_operator(
+            mesh.n_points, old_e, old_w, f, mesh.points.device
+        )
+
+        # Compute via new path
+        new_w, new_e = compute_cotan_weights_fem(mesh)
+        new_lap = _apply_cotan_laplacian_operator(
+            mesh.n_points, new_e, new_w, f, mesh.points.device
+        )
+
+        assert torch.allclose(old_lap, new_lap, atol=1e-10), (
+            f"Laplacian output differs:\n"
+            f"  max diff = {(old_lap - new_lap).abs().max():.2e}"
+        )
 
 
 if __name__ == "__main__":

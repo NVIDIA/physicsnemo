@@ -73,7 +73,7 @@ class TestMergeDuplicatePoints:
         assert cleaned.n_points == 3
 
         ### With looser tolerance, should also merge
-        cleaned_loose = mesh.clean(atol=1e-10, rtol=1e-10)
+        cleaned_loose = mesh.clean(tolerance=1e-10)
         assert cleaned_loose.n_points == 3
 
     def test_no_merge_outside_tolerance(self, device):
@@ -434,13 +434,13 @@ class TestToleranceSettings:
         mesh = Mesh(points=points, cells=cells)
 
         ### Very tight tolerance: merge only 0 and 1
-        cleaned_tight = mesh.clean(atol=1e-12, rtol=1e-12)
+        cleaned_tight = mesh.clean(tolerance=1e-12)
         assert cleaned_tight.n_points == 3
 
         ### Medium tolerance: merge 0, 1, and 2
-        cleaned_medium = mesh.clean(atol=1e-7, rtol=1e-7)
+        cleaned_medium = mesh.clean(tolerance=1e-7)
         assert cleaned_medium.n_points == 2
 
         ### Loose tolerance: merge all
-        cleaned_loose = mesh.clean(atol=1e-2, rtol=1e-2)
+        cleaned_loose = mesh.clean(tolerance=1e-2)
         assert cleaned_loose.n_points == 1

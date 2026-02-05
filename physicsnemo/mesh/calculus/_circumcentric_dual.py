@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from physicsnemo.mesh.utilities._cache import get_cached, set_cached
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -41,13 +42,19 @@ def compute_circumcenters(
     The circumcenter is the unique point equidistant from all vertices of the simplex.
     It lies at the intersection of perpendicular bisector hyperplanes.
 
-    Args:
-        vertices: Vertex positions for each simplex.
-            Shape: (n_simplices, n_vertices_per_simplex, n_spatial_dims)
+    Parameters
+    ----------
+    vertices : torch.Tensor
+        Vertex positions for each simplex.
+        Shape: (n_simplices, n_vertices_per_simplex, n_spatial_dims)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Circumcenters, shape (n_simplices, n_spatial_dims)
 
+    Notes
+    -----
     Algorithm:
         For simplex with vertices v₀, v₁, ..., vₙ, the circumcenter c satisfies:
             ||c - v₀||² = ||c - v₁||² = ... = ||c - vₙ||²
@@ -152,16 +159,24 @@ def compute_cotan_weights_triangle_mesh(
     For 1D manifolds (edges):
         Uses uniform weights
 
-    Args:
-        mesh: Input mesh
-        edges: Edge connectivity, shape (n_edges, 2). If None, extracts edges from mesh.
-        return_edges: If True, returns (weights, edges). If False, returns weights only.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    edges : torch.Tensor | None
+        Edge connectivity, shape (n_edges, 2). If None, extracts edges from mesh.
+    return_edges : bool
+        If True, returns (weights, edges). If False, returns weights only.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor | tuple[torch.Tensor, torch.Tensor]
         If return_edges=True: Tuple of (cotan_weights, edges)
         If return_edges=False: Just cotan_weights
         where cotan_weights has shape (n_edges,) and edges has shape (n_edges, 2)
 
+    Notes
+    -----
     Mathematical Background:
         The cotangent weight formula comes from the circumcentric dual construction in DEC.
         For an edge e shared by triangles with opposite angles α and β, the dual 1-cell
@@ -171,27 +186,23 @@ def compute_cotan_weights_triangle_mesh(
         to triangle circumcenters. This is rigorously derived in Desbrun et al. (2005)
         "Discrete Exterior Calculus" and Meyer et al. (2003).
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> # Standard usage
-        >>> weights, edges = compute_cotan_weights_triangle_mesh(mesh)
-        >>> # Get weights only
-        >>> weights = compute_cotan_weights_triangle_mesh(mesh, return_edges=False)
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> # Standard usage
+    >>> weights, edges = compute_cotan_weights_triangle_mesh(mesh)
+    >>> # Get weights only
+    >>> weights = compute_cotan_weights_triangle_mesh(mesh, return_edges=False)
     """
     n_manifold_dims = mesh.n_manifold_dims
     device = mesh.points.device
 
     ### Extract edges if not provided
     if edges is None:
-        if n_manifold_dims == 1:
-            # For 1D manifolds, cells ARE edges
-            sorted_cells = torch.sort(mesh.cells, dim=1)[0]
-            sorted_edges = torch.unique(sorted_cells, dim=0)
-        else:
-            # For higher dimensions, extract edges from facets
-            edge_mesh = mesh.get_facet_mesh(manifold_codimension=1, data_source="cells")
-            sorted_edges, _ = torch.sort(edge_mesh.cells, dim=-1)
+        from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+
+        sorted_edges, _ = extract_unique_edges(mesh)
     else:
         sorted_edges, _ = torch.sort(edges, dim=-1)
 
@@ -253,7 +264,7 @@ def compute_cotan_weights_triangle_mesh(
         # Use a relative tolerance based on edge lengths to handle this robustly
         edge_scale = torch.norm(vec_to_v0, dim=-1) * torch.norm(vec_to_v1, dim=-1)
         min_cross = edge_scale * 1e-6  # Relative tolerance for degeneracy detection
-        min_cross = torch.clamp(min_cross, min=1e-10)  # Absolute minimum
+        min_cross = torch.clamp(min_cross, min=safe_eps(min_cross.dtype))  # Absolute minimum
 
         # For degenerate triangles (cross_mag < min_cross), set cotangent to 0
         # This effectively excludes degenerate triangles from contributing
@@ -283,7 +294,7 @@ def compute_cotan_weights_triangle_mesh(
         # For now use simplified formula (divide by 2 for consistency with 2D case)
         edge_vectors = mesh.points[sorted_edges[:, 1]] - mesh.points[sorted_edges[:, 0]]
         edge_lengths = torch.norm(edge_vectors, dim=-1)
-        cotan_weights = (1.0 / edge_lengths.clamp(min=1e-10)) / 2.0
+        cotan_weights = (1.0 / edge_lengths.clamp(min=safe_eps(edge_lengths.dtype))) / 2.0
 
     else:
         raise NotImplementedError(
@@ -295,6 +306,141 @@ def compute_cotan_weights_triangle_mesh(
         return cotan_weights, sorted_edges
     else:
         return cotan_weights
+
+
+def compute_cotan_weights_fem(
+    mesh: "Mesh",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    r"""Compute cotangent weights for all edges using the FEM stiffness matrix.
+
+    This is the dimension-general approach that works for simplicial meshes of
+    any manifold dimension (1D edges, 2D triangles, 3D tetrahedra, etc.). It
+    derives the cotangent weights from the Finite Element Method (FEM) stiffness
+    matrix with piecewise-linear basis functions.
+
+    For an n-simplex with vertices v_0, ..., v_n and barycentric coordinate
+    functions lambda_i, the stiffness matrix entry for edge (i, j) is:
+
+        K_ij = |sigma| * (grad lambda_i . grad lambda_j)
+
+    The cotangent weight is w_ij = -K_ij, accumulated over all cells sharing
+    the edge. This is mathematically equivalent to the classical cotangent
+    formula in 2D: w_ij = (1/2)(cot alpha + cot beta).
+
+    The gradient dot products are computed efficiently via the Gram matrix:
+
+        E = [v_1 - v_0, ..., v_n - v_0]  (n x d edge matrix)
+        G = E @ E^T                        (n x n Gram matrix)
+        grad lambda_k . grad lambda_l = (G^{-1})_{k-1, l-1}   for k, l >= 1
+
+    For pairs involving vertex 0, the constraint sum(grad lambda_i) = 0 is used.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh of any manifold dimension.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        Tuple of (cotan_weights, unique_edges):
+        - cotan_weights: Cotangent weight for each unique edge, shape (n_edges,)
+        - unique_edges: Sorted edge vertex indices, shape (n_edges, 2)
+
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> weights, edges = compute_cotan_weights_fem(mesh)
+    >>> # weights[i] is the cotangent weight for edges[i]
+    """
+    from itertools import combinations
+
+    from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+
+    device = mesh.points.device
+    dtype = mesh.points.dtype
+    n_cells = mesh.n_cells
+    n_manifold_dims = mesh.n_manifold_dims
+    n_verts_per_cell = n_manifold_dims + 1  # n+1 vertices in an n-simplex
+
+    ### Extract unique edges and the inverse mapping from candidate edges
+    unique_edges, inverse_indices = extract_unique_edges(mesh)
+    n_unique_edges = len(unique_edges)
+
+    ### Handle empty mesh
+    if n_cells == 0:
+        return (
+            torch.zeros(n_unique_edges, dtype=dtype, device=device),
+            unique_edges,
+        )
+
+    ### Compute edge vectors from reference vertex (vertex 0 of each cell)
+    # cell_vertices: (n_cells, n_verts_per_cell, n_spatial_dims)
+    cell_vertices = mesh.points[mesh.cells]
+    # E: (n_cells, n_manifold_dims, n_spatial_dims) - rows are e_k = v_k - v_0
+    E = cell_vertices[:, 1:, :] - cell_vertices[:, [0], :]
+
+    ### Compute Gram matrix G = E @ E^T
+    # G: (n_cells, n_manifold_dims, n_manifold_dims)
+    G = E @ E.transpose(-1, -2)
+
+    ### Handle degenerate cells by regularizing singular Gram matrices
+    # Degenerate cells (collinear/coplanar vertices) have det(G) ~ 0.
+    # We regularize these so that torch.linalg.inv doesn't produce NaN,
+    # then zero out their contributions via the cell volume (which is also ~0).
+    det_G = torch.linalg.det(G)  # (n_cells,)
+    # Scale-aware degeneracy threshold: compare det against typical edge length
+    # raised to the 2n power (since det(G) has units of length^{2n})
+    edge_length_scale = E.norm(dim=-1).mean(dim=-1).clamp(min=1e-30)  # (n_cells,)
+    det_threshold = (edge_length_scale ** (2 * n_manifold_dims)) * 1e-12
+    is_degenerate = det_G.abs() < det_threshold  # (n_cells,)
+
+    if is_degenerate.any():
+        # Add identity to make degenerate Gram matrices invertible.
+        # The contribution from these cells will be zeroed by cell_volumes ~ 0.
+        eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
+        G = G.clone()
+        G[is_degenerate] += eye
+
+    ### Invert Gram matrix
+    # G_inv: (n_cells, n_manifold_dims, n_manifold_dims)
+    G_inv = torch.linalg.inv(G)
+
+    ### Build the gradient dot product matrix C = H @ G_inv @ H^T
+    # H: (n_verts_per_cell, n_manifold_dims) = [[-1,...,-1]; I_n]
+    # This encodes the relationship: grad lambda_0 = -sum(grad lambda_k for k>=1)
+    H = torch.zeros(n_verts_per_cell, n_manifold_dims, dtype=dtype, device=device)
+    H[0, :] = -1.0
+    H[1:, :] = torch.eye(n_manifold_dims, dtype=dtype, device=device)
+
+    # C: (n_cells, n_verts_per_cell, n_verts_per_cell)
+    # C[c, i, j] = grad lambda_i . grad lambda_j in cell c
+    C = H.unsqueeze(0) @ G_inv @ H.T.unsqueeze(0)
+
+    ### Extract gradient dot products for each local edge pair
+    # Local edge pairs in combinations order (matches extract_candidate_facets)
+    local_pairs = list(combinations(range(n_verts_per_cell), 2))
+    pair_i = torch.tensor([p[0] for p in local_pairs], device=device)
+    pair_j = torch.tensor([p[1] for p in local_pairs], device=device)
+    n_pairs = len(local_pairs)
+
+    # grad_dots: (n_cells, n_pairs) - one value per cell per local edge
+    grad_dots = C[:, pair_i, pair_j]
+
+    ### Compute cotangent weight contributions per cell per edge
+    # w = -|sigma| * (grad lambda_i . grad lambda_j)
+    cell_volumes = mesh.cell_areas  # (n_cells,)
+    weights_per_cell = -cell_volumes[:, None] * grad_dots  # (n_cells, n_pairs)
+
+    ### Accumulate contributions to unique edges via scatter_add
+    cotan_weights = torch.zeros(n_unique_edges, dtype=dtype, device=device)
+    # inverse_indices maps each candidate edge to its unique edge index.
+    # For 1D: shape (n_cells,); for nD>1: shape (n_cells * n_pairs,)
+    # weights_per_cell.reshape(-1) aligns with inverse_indices in both cases.
+    cotan_weights.scatter_add_(0, inverse_indices, weights_per_cell.reshape(-1))
+
+    return cotan_weights, unique_edges
 
 
 def compute_dual_volumes_1(mesh: "Mesh") -> torch.Tensor:
@@ -311,15 +457,20 @@ def compute_dual_volumes_1(mesh: "Mesh") -> torch.Tensor:
     For boundary edges (shared by only one triangle), the dual volume is half
     of an interior edge with the same geometry, since only one triangle contributes.
 
-    Args:
-        mesh: Input simplicial mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Dual 1-cell volumes for each edge, shape (n_edges,)
 
-    Note:
-        Dual volumes are guaranteed to be non-negative. For degenerate or
-        near-degenerate triangles, volumes may be zero or very small.
+    Notes
+    -----
+    Dual volumes are guaranteed to be non-negative. For degenerate or
+    near-degenerate triangles, volumes may be zero or very small.
     """
     if mesh.n_manifold_dims == 2:
         ### Use cotangent weights for triangles
@@ -358,10 +509,14 @@ def compute_dual_volumes_1(mesh: "Mesh") -> torch.Tensor:
 def get_or_compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
     """Get cached dual 0-cell volumes or compute if not present.
 
-    Args:
-        mesh: Input mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Dual volumes for vertices, shape (n_points,)
     """
     from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
@@ -376,10 +531,14 @@ def get_or_compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
 def get_or_compute_circumcenters(mesh: "Mesh") -> torch.Tensor:
     """Get cached circumcenters or compute if not present.
 
-    Args:
-        mesh: Input mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Circumcenters for all cells, shape (n_cells, n_spatial_dims)
     """
     cached = get_cached(mesh.cell_data, "circumcenters")

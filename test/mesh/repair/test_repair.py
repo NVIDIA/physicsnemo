@@ -23,7 +23,6 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.repair import (
     fill_holes,
     remove_degenerate_cells,
-    remove_duplicate_vertices,
     remove_isolated_vertices,
     repair_mesh,
 )
@@ -55,9 +54,8 @@ class TestDuplicateRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_duplicate_vertices(mesh, tolerance=1e-10)
+        mesh_clean = mesh.clean(tolerance=1e-10)
 
-        assert stats["n_duplicates_merged"] == 1
         assert mesh_clean.n_points == 3
         assert mesh_clean.n_cells == 1
 
@@ -78,9 +76,8 @@ class TestDuplicateRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_duplicate_vertices(mesh, tolerance=1e-6)
+        mesh_clean = mesh.clean(tolerance=1e-6)
 
-        assert stats["n_duplicates_merged"] == 1
         assert mesh_clean.n_points == 3
 
     def test_no_duplicates(self, device):
@@ -99,9 +96,8 @@ class TestDuplicateRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_duplicate_vertices(mesh)
+        mesh_clean = mesh.clean()
 
-        assert stats["n_duplicates_merged"] == 0
         assert mesh_clean.n_points == 3
         assert torch.equal(mesh_clean.points, mesh.points)
 
@@ -123,9 +119,8 @@ class TestDuplicateRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_duplicate_vertices(mesh)
+        mesh_clean = mesh.clean()
 
-        assert stats["n_duplicates_merged"] == 2
         assert mesh_clean.n_points == 3
 
     def test_preserves_cell_connectivity(self, device):
@@ -146,7 +141,7 @@ class TestDuplicateRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_duplicate_vertices(mesh)
+        mesh_clean = mesh.clean()
 
         # Verify cell still forms valid triangle
         assert mesh_clean.n_cells == 1
@@ -454,7 +449,7 @@ class TestRepairIntegration:
         mesh1, _ = remove_degenerate_cells(mesh)
         assert mesh1.n_cells == 1  # Removed degenerate
 
-        mesh2, _ = remove_duplicate_vertices(mesh1)
+        mesh2 = mesh1.clean()
         assert mesh2.n_points == 4  # Merged duplicates
 
         mesh3, _ = remove_isolated_vertices(mesh2)
@@ -486,7 +481,7 @@ class TestRepairIntegration:
         mesh2, stats2 = repair_mesh(mesh1)
 
         # Second application should find no problems
-        assert stats2["duplicates"]["n_duplicates_merged"] == 0
+        assert stats2["merge_points"]["n_duplicates_merged"] == 0
         assert stats2["degenerates"]["n_zero_area_cells"] == 0
         assert stats2["isolated"]["n_isolated_removed"] == 0
 
