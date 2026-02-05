@@ -321,6 +321,33 @@ class BaseAffinePreconditioner(Module, ABC):
     >>> out = wrapped_dit(x, t, condition)
     >>> out.shape
     torch.Size([1, 2, 8, 8])
+
+    **Example: Using ConcatConditionWrapper with a preconditioner**
+
+    The pattern in the previous example, where (spatially-varying) conditioning
+    is concatenated to the noised latent state (and possibly vector conditioning
+    is also passed as a separate argument) is common across several diffusion
+    use-cases.
+    Thus for convenience, we provide the wrapper class :class:`~physicsnemo.diffusion.utils.ConcatConditionWrapper`
+    to save you the trouble of writing your own wrapper for this common pattern:
+
+    >>> from physicsnemo.diffusion.preconditioners import EDMPreconditioner
+    >>> from physicsnemo.diffusion.utils import ConcatConditionWrapper
+    >>> base_model = SongUNet(img_resolution=8, in_channels=4, out_channels=3, label_dim=4)
+    >>> wrapped_model = ConcatConditionWrapper(base_model)
+    >>> precond = EDMPreconditioner(wrapped_model, sigma_data=0.5)
+    >>> x = torch.rand(1, 3, 8, 8)
+    >>> t = torch.rand(1)
+    >>> condition = TensorDict({
+    ...     "cond_concat": torch.rand(1, 1, 8, 8),  # image condition
+    ...     "cond_vec": torch.rand(1, 4),           # vector condition
+    ... }, batch_size=[1])
+    >>> out = precond(x, t, condition)
+    >>> out.shape
+    torch.Size([1, 3, 8, 8])
+
+    The same wrapper can be used with :class:`~physicsnemo.experimental.models.dit.DiT`
+    backbones as well, with ``cond_vec`` passed to the model's ``condition`` argument.
     """
 
     def __init__(
