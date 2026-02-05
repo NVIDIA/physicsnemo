@@ -44,7 +44,7 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
     Parameters
     ----------
     mesh : Mesh
-        Input mesh (must be codimension-1 for mean curvature)
+        Input mesh (must be codimension-1 for mean curvature).
 
     Returns
     -------
@@ -55,14 +55,14 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
     Raises
     ------
     ValueError
-        If codimension != 1 (mean curvature requires normals)
+        If codimension != 1 (mean curvature requires normals).
 
     Examples
     --------
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> laplacian_coords = compute_laplacian_at_points(mesh)
-        >>> # Use for mean curvature: H = ||laplacian_coords|| / (2 * voronoi_area)
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> laplacian_coords = compute_laplacian_at_points(mesh)
+    >>> # Use for mean curvature: H = ||laplacian_coords|| / (2 * voronoi_area)
     """
     ### Validate codimension
     if mesh.codimension != 1:
@@ -84,70 +84,26 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
         )
 
     ### Extract unique edges
-    from physicsnemo.mesh.subdivision._topology import extract_unique_edges
+    from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
 
     unique_edges, _ = extract_unique_edges(mesh)  # (n_edges, 2)
 
     ### Compute cotangent weights for each edge
-    cotangent_weights = compute_cotangent_weights(mesh, unique_edges)  # (n_edges,)
+    from physicsnemo.mesh.calculus._circumcentric_dual import (
+        compute_cotan_weights_triangle_mesh,
+    )
+
+    cotangent_weights = compute_cotan_weights_triangle_mesh(
+        mesh, edges=unique_edges, return_edges=False
+    )
 
     ### Apply cotangent Laplacian operator to point coordinates using shared utility
     from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
 
-    laplacian_coords = _apply_cotan_laplacian_operator(
+    return _apply_cotan_laplacian_operator(
         n_vertices=n_points,
         edges=unique_edges,
         cotan_weights=cotangent_weights,
         data=mesh.points,
         device=device,
-    )
-
-    return laplacian_coords
-
-
-def compute_cotangent_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
-    """Compute cotangent weights for edges in the mesh.
-
-    For 2D manifolds (triangles):
-        w_ij = (1/2) × (cot α + cot β)
-    where α, β are opposite angles in the two adjacent triangles.
-
-    For 3D manifolds (tets):
-        w_ij = (1/2) × (cot θ_1 + cot θ_2 + ...)
-    where θ_k are dihedral angles at the edge in adjacent tets.
-
-    For boundary edges (only one adjacent cell):
-        w_ij = (1/2) × cot α
-    where α is the angle in the single adjacent triangle.
-
-    Parameters
-    ----------
-    mesh : Mesh
-        Input mesh
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
-
-    Returns
-    -------
-    torch.Tensor
-        Tensor of shape (n_edges,) containing cotangent weights
-
-    Examples
-    --------
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 3], [2, 3]])
-        >>> weights = compute_cotangent_weights(mesh, edges)
-        >>> # Use in Laplacian: L_ij = w_ij if connected, else 0
-    """
-    from physicsnemo.mesh.calculus._circumcentric_dual import (
-        compute_cotan_weights_triangle_mesh,
-    )
-
-    # Use the merged implementation (now uses correct formula by default)
-    return compute_cotan_weights_triangle_mesh(
-        mesh,
-        edges=edges,
-        return_edges=False,
     )
