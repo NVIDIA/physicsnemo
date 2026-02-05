@@ -61,9 +61,9 @@ def train_guardrail(train_dir: Path, model_path: Path, device: str = "cpu"):
     device : str, optional
         Device for computation ('cpu' or 'cuda'). Default is 'cpu'.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Training Geometry Guardrail")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Training data: {train_dir}")
     print(f"Device: {device}")
     print(f"Workers: {mp.cpu_count() - 1}")
@@ -107,9 +107,9 @@ def validate_geometries(test_dir: Path, model_path: Path, device: str = "cpu"):
     dict
         Validation statistics and results.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Validating Geometries")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Test data: {test_dir}")
     print(f"Model: {model_path}")
     print(f"Device: {device}")
@@ -130,20 +130,18 @@ def validate_geometries(test_dir: Path, model_path: Path, device: str = "cpu"):
     reject_count = sum(1 for r in results if r["status"] == "REJECT")
 
     # Print summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Results: {len(results)} geometries validated")
-    print(f"  OK:     {ok_count:3d} ({100*ok_count/len(results):.1f}%)")
-    print(f"  WARN:   {warn_count:3d} ({100*warn_count/len(results):.1f}%)")
-    print(f"  REJECT: {reject_count:3d} ({100*reject_count/len(results):.1f}%)")
-    print(f"{'='*60}\n")
+    print(f"  OK:     {ok_count:3d} ({100 * ok_count / len(results):.1f}%)")
+    print(f"  WARN:   {warn_count:3d} ({100 * warn_count / len(results):.1f}%)")
+    print(f"  REJECT: {reject_count:3d} ({100 * reject_count / len(results):.1f}%)")
+    print(f"{'=' * 60}\n")
 
     # Show detailed results
     for r in sorted(results, key=lambda x: x["percentile"], reverse=True):
         status_icon = {"OK": "✓", "WARN": "⚠", "REJECT": "✗"}[r["status"]]
         print(
-            f"{status_icon} {r['name']:40s} "
-            f"{r['percentile']:6.2f}% "
-            f"[{r['status']:6s}]"
+            f"{status_icon} {r['name']:40s} {r['percentile']:6.2f}% [{r['status']:6s}]"
         )
 
     # Highlight rejected geometries
@@ -169,9 +167,9 @@ def main():
 
     # Check available optimizations
     opts = check_optimizations()
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Performance Optimizations")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"GPU Available: {'✓' if opts['gpu'] else '✗'}")
     print(f"Fast STL Reader: {'✓' if opts['fast_reader'] else '✗'}")
     print(f"Selected Device: {opts['device']}")
