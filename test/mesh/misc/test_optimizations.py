@@ -472,15 +472,15 @@ class TestHierarchicalSampling:
         cell_data = {"temperature": torch.tensor([100.0])}
         mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
 
-        # Sample using hierarchical method
-        from physicsnemo.mesh.sampling import sample_data_hierarchical
+        # Sample using BVH-accelerated path
+        from physicsnemo.mesh.sampling import sample_data_at_points
 
         query_points = torch.tensor([[0.25, 0.25, 0.25]], dtype=torch.float32)
 
         # Build BVH
         bvh = BVH.from_mesh(mesh)
 
-        result = sample_data_hierarchical.sample_data_at_points(
+        result = sample_data_at_points(
             mesh, query_points, bvh=bvh, data_source="cells"
         )
 

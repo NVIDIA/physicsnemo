@@ -14,14 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests verifying equivalence between hierarchical and non-hierarchical sampling."""
+"""Tests verifying equivalence between brute-force and BVH-accelerated sampling.
+
+Both paths go through the unified ``sample_data_at_points`` function; the BVH
+path is activated by passing a ``BVH`` instance via the ``bvh`` parameter.
+"""
 
 import pytest
 import torch
 
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.sampling import sample_data as non_hierarchical
-from physicsnemo.mesh.sampling import sample_data_hierarchical as hierarchical
+from physicsnemo.mesh.sampling import sample_data_at_points
 from physicsnemo.mesh.spatial import BVH
 
 
@@ -29,7 +32,7 @@ class TestEquivalence2D:
     """Test equivalence for 2D meshes."""
 
     def test_cell_data_sampling_equivalence(self):
-        """Verify hierarchical and non-hierarchical give same results for cell data."""
+        """Verify BVH and brute-force give same results for cell data."""
         ### Create a mesh with cell data
         points = torch.tensor(
             [
@@ -66,18 +69,17 @@ class TestEquivalence2D:
         )
 
         ### Sample with both methods
-        result_brute = non_hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells"
-        )
-        result_hierarchical = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells"
+        result_brute = sample_data_at_points(mesh, queries, data_source="cells")
+        bvh = BVH.from_mesh(mesh)
+        result_bvh = sample_data_at_points(
+            mesh, queries, data_source="cells", bvh=bvh
         )
 
         ### Results should be identical
         for key in result_brute.keys():
             assert torch.allclose(
                 result_brute[key],
-                result_hierarchical[key],
+                result_bvh[key],
                 equal_nan=True,
             ), f"Mismatch for {key=}"
 
@@ -114,18 +116,17 @@ class TestEquivalence2D:
         )
 
         ### Sample with both methods
-        result_brute = non_hierarchical.sample_data_at_points(
-            mesh, queries, data_source="points"
-        )
-        result_hierarchical = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="points"
+        result_brute = sample_data_at_points(mesh, queries, data_source="points")
+        bvh = BVH.from_mesh(mesh)
+        result_bvh = sample_data_at_points(
+            mesh, queries, data_source="points", bvh=bvh
         )
 
         ### Results should be identical
         for key in result_brute.keys():
             assert torch.allclose(
                 result_brute[key],
-                result_hierarchical[key],
+                result_bvh[key],
                 equal_nan=True,
                 atol=1e-6,
             ), f"Mismatch for {key=}"
@@ -148,17 +149,16 @@ class TestEquivalence2D:
         queries = torch.tensor([[0.25, 0.25], [0.75, 0.75]])
 
         ### Sample
-        result_brute = non_hierarchical.sample_data_at_points(
-            mesh, queries, data_source="points"
-        )
-        result_hierarchical = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="points"
+        result_brute = sample_data_at_points(mesh, queries, data_source="points")
+        bvh = BVH.from_mesh(mesh)
+        result_bvh = sample_data_at_points(
+            mesh, queries, data_source="points", bvh=bvh
         )
 
         ### Verify
         assert torch.allclose(
             result_brute["velocity"],
-            result_hierarchical["velocity"],
+            result_bvh["velocity"],
             atol=1e-6,
         )
 
@@ -202,29 +202,29 @@ class TestEquivalence3D:
             ]
         )
 
+        bvh = BVH.from_mesh(mesh)
+
         ### Test cell data
-        result_brute_cells = non_hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells"
-        )
-        result_hier_cells = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells"
+        result_brute_cells = sample_data_at_points(mesh, queries, data_source="cells")
+        result_bvh_cells = sample_data_at_points(
+            mesh, queries, data_source="cells", bvh=bvh
         )
         assert torch.allclose(
             result_brute_cells["pressure"],
-            result_hier_cells["pressure"],
+            result_bvh_cells["pressure"],
             equal_nan=True,
         )
 
         ### Test point data
-        result_brute_points = non_hierarchical.sample_data_at_points(
+        result_brute_points = sample_data_at_points(
             mesh, queries, data_source="points"
         )
-        result_hier_points = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="points"
+        result_bvh_points = sample_data_at_points(
+            mesh, queries, data_source="points", bvh=bvh
         )
         assert torch.allclose(
             result_brute_points["temperature"],
-            result_hier_points["temperature"],
+            result_bvh_points["temperature"],
             equal_nan=True,
             atol=1e-5,
         )
@@ -258,19 +258,24 @@ class TestEquivalenceMultipleCells:
 
         ### Query on shared edge
         queries = torch.tensor([[0.5, 0.0]])
+        bvh = BVH.from_mesh(mesh)
 
         ### Sample with mean strategy
-        result_brute = non_hierarchical.sample_data_at_points(
+        result_brute = sample_data_at_points(
             mesh, queries, data_source="cells", multiple_cells_strategy="mean"
         )
-        result_hierarchical = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells", multiple_cells_strategy="mean"
+        result_bvh = sample_data_at_points(
+            mesh,
+            queries,
+            data_source="cells",
+            multiple_cells_strategy="mean",
+            bvh=bvh,
         )
 
         ### Should be equal
         assert torch.allclose(
             result_brute["value"],
-            result_hierarchical["value"],
+            result_bvh["value"],
             equal_nan=True,
         )
 
@@ -298,19 +303,24 @@ class TestEquivalenceMultipleCells:
         )
 
         queries = torch.tensor([[0.5, 0.0], [0.25, 0.25]])
+        bvh = BVH.from_mesh(mesh)
 
         ### Sample with nan strategy
-        result_brute = non_hierarchical.sample_data_at_points(
+        result_brute = sample_data_at_points(
             mesh, queries, data_source="cells", multiple_cells_strategy="nan"
         )
-        result_hierarchical = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells", multiple_cells_strategy="nan"
+        result_bvh = sample_data_at_points(
+            mesh,
+            queries,
+            data_source="cells",
+            multiple_cells_strategy="nan",
+            bvh=bvh,
         )
 
         ### Should be equal (both NaN or both valid)
         assert torch.allclose(
             result_brute["value"],
-            result_hierarchical["value"],
+            result_bvh["value"],
             equal_nan=True,
         )
 
@@ -360,18 +370,18 @@ class TestEquivalenceLargeMesh:
         n_queries = 20
         queries = torch.rand(n_queries, 2) * 10.0
 
+        bvh = BVH.from_mesh(mesh)
+
         ### Sample both ways
-        result_brute = non_hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells"
-        )
-        result_hierarchical = hierarchical.sample_data_at_points(
-            mesh, queries, data_source="cells"
+        result_brute = sample_data_at_points(mesh, queries, data_source="cells")
+        result_bvh = sample_data_at_points(
+            mesh, queries, data_source="cells", bvh=bvh
         )
 
         ### Results should match
         assert torch.allclose(
             result_brute["scalar"],
-            result_hierarchical["scalar"],
+            result_bvh["scalar"],
             equal_nan=True,
         )
 
@@ -407,9 +417,11 @@ class TestEquivalenceGPU:
         )
         queries_gpu = queries_cpu.cuda()
 
-        ### Sample on both devices
-        result_cpu = hierarchical.sample_data_at_points(mesh_cpu, queries_cpu)
-        result_gpu = hierarchical.sample_data_at_points(mesh_gpu, queries_gpu)
+        ### Sample on both devices using BVH path
+        bvh_cpu = BVH.from_mesh(mesh_cpu)
+        bvh_gpu = BVH.from_mesh(mesh_gpu)
+        result_cpu = sample_data_at_points(mesh_cpu, queries_cpu, bvh=bvh_cpu)
+        result_gpu = sample_data_at_points(mesh_gpu, queries_gpu, bvh=bvh_gpu)
 
         ### Results should match
         assert torch.allclose(
@@ -438,7 +450,7 @@ class TestEquivalenceGPU:
 
         ### Query on GPU
         queries = torch.tensor([[0.25, 0.25]], device="cuda")
-        result = hierarchical.sample_data_at_points(mesh, queries, bvh=bvh)
+        result = sample_data_at_points(mesh, queries, bvh=bvh)
 
         assert result["temp"].device.type == "cuda"
         assert not torch.isnan(result["temp"][0])
