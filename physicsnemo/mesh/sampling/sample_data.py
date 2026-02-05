@@ -14,7 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spatial sampling of data at query points in a mesh."""
+"""Spatial sampling of data at query points in a mesh.
+
+Supports both brute-force O(M*N) containment testing and BVH-accelerated
+O(M*log(N)) queries. The public API is a single ``sample_data_at_points``
+function; pass a ``BVH`` to opt into the accelerated path.
+"""
 
 from typing import TYPE_CHECKING, Literal
 
@@ -26,6 +31,12 @@ from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+    from physicsnemo.mesh.spatial import BVH
+
+
+# ---------------------------------------------------------------------------
+# Barycentric coordinate solvers
+# ---------------------------------------------------------------------------
 
 
 def _solve_barycentric_system(
@@ -184,9 +195,9 @@ def compute_barycentric_coordinates_pairwise(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute barycentric coordinates for paired queries and cells.
 
-    Unlike compute_barycentric_coordinates which computes all O(n_queries × n_cells)
+    Unlike compute_barycentric_coordinates which computes all O(n_queries x n_cells)
     combinations, this computes only n_pairs diagonal elements where each query point
-    is paired with exactly one cell. This uses O(n) memory instead of O(n²).
+    is paired with exactly one cell. This uses O(n) memory instead of O(n^2).
 
     This is critical for performance when processing BVH candidate pairs, where we may
     have thousands of pairs but don't need the full cartesian product.
@@ -238,6 +249,11 @@ def compute_barycentric_coordinates_pairwise(
     )
 
     return barycentric_coords, reconstruction_error
+
+
+# ---------------------------------------------------------------------------
+# Containment queries
+# ---------------------------------------------------------------------------
 
 
 def find_containing_cells(
@@ -569,6 +585,232 @@ def find_nearest_cells(
     return cell_indices, projected_points
 
 
+# ---------------------------------------------------------------------------
+# Containment-pair finders (brute-force vs BVH)
+# ---------------------------------------------------------------------------
+
+
+def _find_containing_pairs_bruteforce(
+    mesh: "Mesh",
+    query_points: torch.Tensor,
+    tolerance: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Find (query_idx, cell_idx, bary_coords) via brute-force O(M*N) search.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]
+        (query_indices, cell_indices, bary_coords_for_containing):
+        - query_indices: shape (n_containing,)
+        - cell_indices: shape (n_containing,)
+        - bary_coords_for_containing: shape (n_containing, n_verts) or None if empty
+    """
+    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_spatial_dims)
+    bary_coords_all, recon_error_all = compute_barycentric_coordinates(
+        query_points, cell_vertices
+    )
+
+    ### Determine containment: barycentric bounds AND reconstruction error
+    bary_inside = (bary_coords_all >= -tolerance).all(dim=-1)  # (n_queries, n_cells)
+    recon_inside = recon_error_all <= tolerance
+    is_inside = bary_inside & recon_inside
+
+    ### Extract flat arrays of containing pairs
+    query_indices, cell_indices = torch.where(is_inside)
+
+    if len(query_indices) > 0:
+        bary_coords = bary_coords_all[query_indices, cell_indices]
+    else:
+        bary_coords = None
+
+    return query_indices, cell_indices, bary_coords
+
+
+def _find_containing_pairs_bvh(
+    mesh: "Mesh",
+    query_points: torch.Tensor,
+    bvh: "BVH",
+    tolerance: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Find (query_idx, cell_idx, bary_coords) via BVH-accelerated O(M*log(N)) search.
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]
+        Same format as _find_containing_pairs_bruteforce.
+    """
+    device = mesh.points.device
+
+    ### Get candidate pairs from BVH (AABB overlap test)
+    candidate_adjacency = bvh.find_candidate_cells(
+        query_points, aabb_tolerance=tolerance
+    )
+
+    if candidate_adjacency.n_total_neighbors == 0:
+        return (
+            torch.tensor([], dtype=torch.long, device=device),
+            torch.tensor([], dtype=torch.long, device=device),
+            None,
+        )
+
+    query_idx_cand, cell_idx_cand = candidate_adjacency.expand_to_pairs()
+
+    ### Refine candidates with exact barycentric test
+    cand_query_pts = query_points[query_idx_cand]
+    cand_cell_verts = mesh.points[mesh.cells[cell_idx_cand]]
+
+    bary_coords_cand, recon_error_cand = compute_barycentric_coordinates_pairwise(
+        cand_query_pts, cand_cell_verts
+    )
+
+    bary_inside = (bary_coords_cand >= -tolerance).all(dim=-1)
+    recon_inside = recon_error_cand <= tolerance
+    is_inside = bary_inside & recon_inside
+
+    ### Filter to confirmed containments
+    query_indices = query_idx_cand[is_inside]
+    cell_indices = cell_idx_cand[is_inside]
+
+    if len(query_indices) > 0:
+        bary_coords = bary_coords_cand[is_inside]
+    else:
+        bary_coords = None
+
+    return query_indices, cell_indices, bary_coords
+
+
+# ---------------------------------------------------------------------------
+# Shared accumulation logic
+# ---------------------------------------------------------------------------
+
+
+def _accumulate_sampled_data(
+    mesh: "Mesh",
+    n_queries: int,
+    query_indices: torch.Tensor,
+    cell_indices: torch.Tensor,
+    bary_coords: torch.Tensor | None,
+    data_source: str,
+    multiple_cells_strategy: str,
+) -> TensorDict:
+    """Accumulate sampled data from containing-pair arrays into a TensorDict.
+
+    This is the shared accumulation kernel used by both the brute-force and
+    BVH-accelerated paths. It handles scalar/multidimensional data, mean/nan
+    strategies, and cell/point data sources.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Source mesh.
+    n_queries : int
+        Total number of query points.
+    query_indices : torch.Tensor
+        Query index for each containing pair, shape (n_containing,).
+    cell_indices : torch.Tensor
+        Cell index for each containing pair, shape (n_containing,).
+    bary_coords : torch.Tensor or None
+        Barycentric coordinates for each pair, shape (n_containing, n_verts).
+        Required when data_source="points". May be None when no containments exist.
+    data_source : str
+        "cells" or "points".
+    multiple_cells_strategy : str
+        "mean" or "nan".
+
+    Returns
+    -------
+    TensorDict
+        Sampled data with shape (n_queries, ...) per field.
+    """
+    device = mesh.points.device
+
+    ### Count how many cells contain each query point
+    query_containment_count = torch.zeros(n_queries, dtype=torch.long, device=device)
+    if len(query_indices) > 0:
+        query_containment_count.scatter_add_(
+            0, query_indices, torch.ones_like(query_indices)
+        )
+
+    ### Select data source
+    source_data = mesh.cell_data if data_source == "cells" else mesh.point_data
+
+    result = TensorDict(
+        {},
+        batch_size=torch.Size([n_queries]),
+        device=device,
+    )
+
+    ### Sample each field
+    for key, values in source_data.exclude(CACHE_KEY).items():
+        output_shape = (n_queries,) + values.shape[1:]
+
+        # Initialize with NaN
+        output = torch.full(
+            output_shape, float("nan"), dtype=values.dtype, device=device
+        )
+
+        if len(query_indices) == 0:
+            result[key] = output
+            continue
+
+        ### Get per-pair values
+        if data_source == "cells":
+            pair_values = values[cell_indices]  # (n_containing, ...)
+        else:
+            # Interpolate point data using barycentric coordinates
+            point_idx = mesh.cells[cell_indices]  # (n_containing, n_verts)
+            point_vals = values[point_idx]  # (n_containing, n_verts, ...)
+
+            if values.ndim == 1:
+                pair_values = (bary_coords * point_vals).sum(dim=1)
+            else:
+                bary_expanded = bary_coords.view(
+                    bary_coords.shape[0],
+                    bary_coords.shape[1],
+                    *([1] * (values.ndim - 1)),
+                )
+                pair_values = (bary_expanded * point_vals).sum(dim=1)
+
+        ### Accumulate into output
+        if multiple_cells_strategy == "mean":
+            if values.ndim == 1:
+                output_sum = torch.zeros(n_queries, dtype=values.dtype, device=device)
+                output_sum.scatter_add_(0, query_indices, pair_values)
+            else:
+                output_sum = torch.zeros(
+                    output_shape, dtype=values.dtype, device=device
+                )
+                idx_expanded = query_indices.view(
+                    -1, *([1] * (values.ndim - 1))
+                ).expand_as(pair_values)
+                output_sum.scatter_add_(0, idx_expanded, pair_values)
+
+            valid = query_containment_count > 0
+            if values.ndim == 1:
+                output[valid] = (
+                    output_sum[valid] / query_containment_count[valid].to(values.dtype)
+                )
+            else:
+                output[valid] = output_sum[valid] / query_containment_count[
+                    valid
+                ].to(values.dtype).view(-1, *([1] * (values.ndim - 1)))
+
+        else:  # "nan" strategy
+            single_cell_mask = query_containment_count == 1
+            if single_cell_mask.any():
+                has_single = single_cell_mask[query_indices]
+                output[query_indices[has_single]] = pair_values[has_single]
+
+        result[key] = output
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
 def sample_data_at_points(
     mesh: "Mesh",
     query_points: torch.Tensor,
@@ -576,6 +818,7 @@ def sample_data_at_points(
     multiple_cells_strategy: Literal["mean", "nan"] = "mean",
     project_onto_nearest_cell: bool = False,
     tolerance: float = 1e-6,
+    bvh: "BVH | None" = None,
 ) -> TensorDict:
     """Extract or interpolate mesh data at specified query points.
 
@@ -588,43 +831,57 @@ def sample_data_at_points(
     2. Extracts cell data directly (data_source="cells") or interpolates point
        data using barycentric coordinates (data_source="points")
 
+    Two containment-search strategies are available:
+
+    - **Brute-force** (default, ``bvh=None``): Tests all cells for each query.
+      Complexity is O(n_queries * n_cells). Supports all features including
+      ``project_onto_nearest_cell``.
+    - **BVH-accelerated** (``bvh`` provided): Uses a Bounding Volume Hierarchy
+      to prune the search space. Complexity is O(n_queries * log(n_cells)).
+      For large meshes (>10k cells) this can be dramatically faster. Build
+      the BVH once with ``BVH.from_mesh(mesh)`` and reuse it across calls.
+
     Parameters
     ----------
     mesh : Mesh
         The mesh to extract data from.
     query_points : torch.Tensor
-        Query point locations, shape (n_queries, n_spatial_dims)
-    data_source : Literal["cells", "points"]
+        Query point locations, shape (n_queries, n_spatial_dims).
+    data_source : {"cells", "points"}, optional
         How to retrieve data:
         - "cells": Use cell data directly (no interpolation)
         - "points": Interpolate point data using barycentric coordinates
-    multiple_cells_strategy : Literal["mean", "nan"]
+    multiple_cells_strategy : {"mean", "nan"}, optional
         How to handle query points contained in multiple cells:
         - "mean": Return arithmetic mean of values from all containing cells
         - "nan": Return NaN for ambiguous points
-    project_onto_nearest_cell : bool
-        If True, projects each query point onto the
-        nearest cell before sampling. This is useful for codimension != 0 manifolds
-        where picking a point exactly on the manifold is difficult due to
-        floating-point precision.
-    tolerance : float
-        Tolerance for considering a point inside a cell.
-        A point is inside if:
-        - All barycentric coordinates >= -tolerance, AND
-        - Reconstruction error <= tolerance (distance from query point to the
-          simplex's affine hull).
+    project_onto_nearest_cell : bool, optional
+        If True, projects each query point onto the nearest cell before
+        sampling. Useful for codimension != 0 manifolds. Only supported
+        with brute-force search (``bvh=None``).
+    tolerance : float, optional
+        Tolerance for considering a point inside a cell. A point is inside if
+        all barycentric coordinates >= -tolerance AND reconstruction error
+        <= tolerance.
+    bvh : BVH or None, optional
+        Pre-built Bounding Volume Hierarchy for accelerated spatial queries.
+        If None (default), uses brute-force O(n_queries * n_cells) search.
+        If provided, uses O(n_queries * log(n_cells)) BVH search.
 
     Returns
     -------
     TensorDict
-        TensorDict containing sampled data for each query point, with the same keys
-        as mesh.cell_data (if data_source="cells") or mesh.point_data (if data_source="points").
-        Values are NaN for query points outside the mesh (unless project_onto_nearest_cell=True).
+        Sampled data for each query point, with the same keys as
+        mesh.cell_data (if data_source="cells") or mesh.point_data
+        (if data_source="points"). Values are NaN for query points
+        outside the mesh (unless project_onto_nearest_cell=True).
 
     Raises
     ------
     ValueError
-        If data_source is invalid.
+        If data_source or multiple_cells_strategy is invalid.
+    NotImplementedError
+        If project_onto_nearest_cell=True with BVH acceleration.
 
     Examples
     --------
@@ -632,187 +889,53 @@ def sample_data_at_points(
     >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
     >>> mesh = two_triangles_2d.load()
     >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
-    >>> # Sample cell data at specific points
     >>> query_pts = torch.tensor([[0.3, 0.3], [0.8, 0.5]])
-    >>> sampled_data = sample_data_at_points(mesh, query_pts, data_source="cells")
-    >>> assert "pressure" in sampled_data.keys()
+    >>> sampled = sample_data_at_points(mesh, query_pts, data_source="cells")
+    >>> assert "pressure" in sampled.keys()
+
+    BVH-accelerated sampling for large meshes:
+
+    >>> from physicsnemo.mesh.spatial import BVH  # doctest: +SKIP
+    >>> bvh = BVH.from_mesh(mesh)  # doctest: +SKIP
+    >>> sampled = sample_data_at_points(mesh, query_pts, bvh=bvh)  # doctest: +SKIP
     """
-    if data_source not in ["cells", "points"]:
+    if data_source not in ("cells", "points"):
         raise ValueError(f"Invalid {data_source=}. Must be 'cells' or 'points'.")
 
-    if multiple_cells_strategy not in ["mean", "nan"]:
+    if multiple_cells_strategy not in ("mean", "nan"):
         raise ValueError(
             f"Invalid {multiple_cells_strategy=}. Must be 'mean' or 'nan'."
         )
 
     n_queries = query_points.shape[0]
 
-    ### Handle projection onto nearest cell if requested
+    ### Handle projection onto nearest cell
     if project_onto_nearest_cell:
+        if bvh is not None:
+            raise NotImplementedError(
+                "project_onto_nearest_cell is not yet supported with BVH acceleration. "
+                "Pass bvh=None to use brute-force search with projection."
+            )
         _, projected_points = find_nearest_cells(mesh, query_points)
         query_points = projected_points
 
-    ### Find containing cells for each query point
-    # Get cell vertices and compute all barycentric coordinates
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_vertices, n_spatial_dims)
-    bary_coords_all, recon_error_all = compute_barycentric_coordinates(
-        query_points, cell_vertices
-    )
-
-    # Determine which query-cell pairs have containment
-    # Check both barycentric bounds and reconstruction error
-    bary_inside = (bary_coords_all >= -tolerance).all(dim=-1)  # (n_queries, n_cells)
-    recon_inside = recon_error_all <= tolerance  # (n_queries, n_cells)
-    is_inside = bary_inside & recon_inside
-
-    ### Get flat arrays of query and cell indices for all containments
-    query_indices, cell_indices_containing = torch.where(is_inside)
-
-    ### Count how many cells contain each query point
-    # Use scatter to count containments per query
-    query_containment_count = torch.zeros(
-        n_queries, dtype=torch.long, device=mesh.points.device
-    )
-    query_containment_count.scatter_add_(
-        0, query_indices, torch.ones_like(query_indices)
-    )
-
-    ### Initialize result TensorDict
-    source_data = mesh.cell_data if data_source == "cells" else mesh.point_data
-    result = TensorDict(
-        {},
-        batch_size=torch.Size([n_queries]),
-        device=mesh.points.device,
-    )
-
-    ### Sample each field in the source_data
-    for key, values in source_data.exclude(CACHE_KEY).items():
-        # Determine output shape
-        if values.ndim == 1:
-            output_shape = (n_queries,)
-        else:
-            output_shape = (n_queries,) + values.shape[1:]
-
-        # Initialize output with NaN
-        output = torch.full(
-            output_shape,
-            float("nan"),
-            dtype=values.dtype,
-            device=mesh.points.device,
+    ### Find containing pairs using the appropriate strategy
+    if bvh is not None:
+        query_indices, cell_indices, bary_coords = _find_containing_pairs_bvh(
+            mesh, query_points, bvh, tolerance
+        )
+    else:
+        query_indices, cell_indices, bary_coords = _find_containing_pairs_bruteforce(
+            mesh, query_points, tolerance
         )
 
-        if data_source == "cells":
-            ### Use cell data directly - vectorized with scatter
-            # Get cell data for all query-cell pairs that have containment
-            cell_data_for_pairs = values[cell_indices_containing]  # (n_pairs, ...)
-
-            if multiple_cells_strategy == "mean":
-                # Sum up contributions using scatter_add
-                if values.ndim == 1:
-                    # Scalar case
-                    output_sum = torch.zeros(
-                        n_queries, dtype=values.dtype, device=mesh.points.device
-                    )
-                    output_sum.scatter_add_(0, query_indices, cell_data_for_pairs)
-                    # Divide by count (avoiding division by zero)
-                    valid_mask = query_containment_count > 0
-                    output[valid_mask] = output_sum[
-                        valid_mask
-                    ] / query_containment_count[valid_mask].to(values.dtype)
-                else:
-                    # Multi-dimensional case
-                    output_sum = torch.zeros(
-                        output_shape, dtype=values.dtype, device=mesh.points.device
-                    )
-                    expanded_indices = query_indices.view(
-                        -1, *([1] * (values.ndim - 1))
-                    ).expand_as(cell_data_for_pairs)
-                    output_sum.scatter_add_(0, expanded_indices, cell_data_for_pairs)
-                    # Divide by count with broadcasting
-                    valid_mask = query_containment_count > 0
-                    output[valid_mask] = output_sum[
-                        valid_mask
-                    ] / query_containment_count[valid_mask].to(values.dtype).view(
-                        -1, *([1] * (values.ndim - 1))
-                    )
-            else:  # "nan" strategy
-                # Only assign for queries with exactly one containing cell
-                single_cell_mask = query_containment_count == 1
-                if single_cell_mask.any():
-                    # Find which pairs correspond to single-cell queries
-                    query_has_single_cell = single_cell_mask[query_indices]
-                    single_cell_query_idx = query_indices[query_has_single_cell]
-                    single_cell_values = cell_data_for_pairs[query_has_single_cell]
-                    output[single_cell_query_idx] = single_cell_values
-
-        else:  # data_source == "points"
-            ### Interpolate point data using barycentric coordinates (vectorized)
-            # Get barycentric coords for all query-cell pairs with containment
-            bary_for_pairs = bary_coords_all[
-                query_indices, cell_indices_containing
-            ]  # (n_pairs, n_vertices)
-
-            # Get point indices for all cells with containment
-            point_indices_for_pairs = mesh.cells[
-                cell_indices_containing
-            ]  # (n_pairs, n_vertices)
-
-            # Get point data values for these vertices
-            point_values_for_pairs = values[
-                point_indices_for_pairs
-            ]  # (n_pairs, n_vertices, ...)
-
-            # Interpolate using barycentric coordinates
-            if values.ndim == 1:
-                # Scalar: (n_pairs, n_vertices) * (n_pairs, n_vertices) -> sum over vertices
-                interpolated = (bary_for_pairs * point_values_for_pairs).sum(
-                    dim=1
-                )  # (n_pairs,)
-            else:
-                # Multi-dimensional: broadcast barycentric coords
-                bary_expanded = bary_for_pairs.view(
-                    bary_for_pairs.shape[0],
-                    bary_for_pairs.shape[1],
-                    *([1] * (values.ndim - 1)),
-                )
-                interpolated = (bary_expanded * point_values_for_pairs).sum(
-                    dim=1
-                )  # (n_pairs, ...)
-
-            if multiple_cells_strategy == "mean":
-                # Average interpolated values using scatter
-                if values.ndim == 1:
-                    output_sum = torch.zeros(
-                        n_queries, dtype=values.dtype, device=mesh.points.device
-                    )
-                    output_sum.scatter_add_(0, query_indices, interpolated)
-                    valid_mask = query_containment_count > 0
-                    output[valid_mask] = output_sum[
-                        valid_mask
-                    ] / query_containment_count[valid_mask].to(values.dtype)
-                else:
-                    output_sum = torch.zeros(
-                        output_shape, dtype=values.dtype, device=mesh.points.device
-                    )
-                    expanded_indices = query_indices.view(
-                        -1, *([1] * (values.ndim - 1))
-                    ).expand_as(interpolated)
-                    output_sum.scatter_add_(0, expanded_indices, interpolated)
-                    valid_mask = query_containment_count > 0
-                    output[valid_mask] = output_sum[
-                        valid_mask
-                    ] / query_containment_count[valid_mask].to(values.dtype).view(
-                        -1, *([1] * (values.ndim - 1))
-                    )
-            else:  # "nan" strategy
-                # Only assign for queries with exactly one containing cell
-                single_cell_mask = query_containment_count == 1
-                if single_cell_mask.any():
-                    query_has_single_cell = single_cell_mask[query_indices]
-                    single_cell_query_idx = query_indices[query_has_single_cell]
-                    single_cell_values = interpolated[query_has_single_cell]
-                    output[single_cell_query_idx] = single_cell_values
-
-        result[key] = output
-
-    return result
+    ### Accumulate sampled data (shared logic for both paths)
+    return _accumulate_sampled_data(
+        mesh=mesh,
+        n_queries=n_queries,
+        query_indices=query_indices,
+        cell_indices=cell_indices,
+        bary_coords=bary_coords,
+        data_source=data_source,
+        multiple_cells_strategy=multiple_cells_strategy,
+    )
