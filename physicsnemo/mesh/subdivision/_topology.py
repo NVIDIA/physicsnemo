@@ -16,83 +16,16 @@
 
 """Topology generation for mesh subdivision.
 
-This module handles the combinatorial aspects of subdivision: extracting edges,
-computing subdivision patterns, and generating child cell connectivity.
-"""
+This module handles the combinatorial aspects of subdivision: computing
+subdivision patterns and generating child cell connectivity.
 
-from typing import TYPE_CHECKING
+Edge extraction is provided by
+:func:`physicsnemo.mesh.boundaries._facet_extraction.extract_unique_edges`,
+re-exported here for backwards compatibility.
+"""
 
 import torch
 
-if TYPE_CHECKING:
-    from physicsnemo.mesh.mesh import Mesh
-
-
-def extract_unique_edges(mesh: "Mesh") -> tuple[torch.Tensor, torch.Tensor]:
-    """Extract all unique edges from the mesh.
-
-    Reuses existing facet extraction infrastructure to get edges efficiently.
-    Special handling for 1D meshes where edges ARE the cells.
-
-    Parameters
-    ----------
-    mesh : Mesh
-        Input mesh to extract edges from.
-
-    Returns
-    -------
-    tuple[torch.Tensor, torch.Tensor]
-        Tuple of (unique_edges, inverse_indices):
-        - unique_edges: Unique edge vertex indices, shape (n_edges, 2), sorted
-        - inverse_indices: Mapping from candidate edges to unique edge indices,
-          shape (n_candidate_edges,). For n-manifolds with n > 1, this has shape
-          (n_cells * n_edges_per_cell,), allowing reshaping to (n_cells, n_edges_per_cell).
-
-    Examples
-    --------
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> triangle_mesh = two_triangles_2d.load()
-        >>> edges, inverse = extract_unique_edges(triangle_mesh)
-        >>> # edges[i] contains the two vertex indices for edge i
-        >>> # inverse[j] gives the unique edge index for candidate edge j
-    """
-    ### Special case: 1D manifolds (edges)
-    # For 1D meshes, the cells ARE edges, so we just return them directly
-    if mesh.n_manifold_dims == 1:
-        # Cells are already edges, just sort each edge and deduplicate
-        # Sort each edge's vertices to canonical form
-        sorted_cells = torch.sort(mesh.cells, dim=1)[0]
-
-        # Deduplicate
-        unique_edges, inverse_indices = torch.unique(
-            sorted_cells,
-            dim=0,
-            return_inverse=True,
-        )
-
-        return unique_edges, inverse_indices
-
-    ### General case: n-manifolds with n > 1
-    from physicsnemo.mesh.boundaries import extract_candidate_facets
-
-    ### Extract all candidate edges (with duplicates for shared edges)
-    # For n-manifold, edges are (n-1)-dimensional facets
-    # manifold_codimension = n_manifold_dims - 1 gives us 1-simplices (edges)
-    candidate_edges, parent_cell_indices = extract_candidate_facets(
-        mesh.cells,
-        manifold_codimension=mesh.n_manifold_dims - 1,
-    )
-
-    ### Deduplicate edges
-    # torch.unique automatically sorts the edges, so [i, j] and [j, i] become [i, j]
-    # (they were already sorted by extract_candidate_facets)
-    unique_edges, inverse_indices = torch.unique(
-        candidate_edges,
-        dim=0,
-        return_inverse=True,
-    )
-
-    return unique_edges, inverse_indices
 
 
 def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
