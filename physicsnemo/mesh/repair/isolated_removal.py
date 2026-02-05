@@ -16,13 +16,13 @@
 
 """Remove isolated vertices from meshes.
 
-Removes vertices that are not referenced by any cell.
+Thin wrapper around :func:`physicsnemo.mesh.boundaries._cleaning.remove_unused_points`
+that accepts and returns :class:`Mesh` objects with statistics.
 """
 
 from typing import TYPE_CHECKING
 
-import torch
-
+from physicsnemo.mesh.boundaries._cleaning import remove_unused_points
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
@@ -35,12 +35,14 @@ def remove_isolated_vertices(
     """Remove vertices not appearing in any cell.
 
     Identifies vertices not referenced by any cell and removes them,
-    updating cell indices accordingly.
+    updating cell indices accordingly. Delegates to
+    :func:`~physicsnemo.mesh.boundaries._cleaning.remove_unused_points`
+    for the core computation.
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh
+        Input mesh.
 
     Returns
     -------
@@ -58,55 +60,38 @@ def remove_isolated_vertices(
     >>> assert stats["n_isolated_removed"] == 0  # no isolated in clean mesh
     """
     n_original = mesh.n_points
-    device = mesh.points.device
 
-    if n_original == 0 or mesh.n_cells == 0:
-        return mesh, {
-            "n_isolated_removed": 0,
-            "n_points_original": n_original,
-            "n_points_final": n_original,
-        }
+    ### Delegate to the tensor-level primitive in _cleaning
+    new_points, new_cells, new_point_data, _ = remove_unused_points(
+        points=mesh.points,
+        cells=mesh.cells,
+        point_data=mesh.point_data.exclude(CACHE_KEY),
+    )
 
-    ### Find vertices that appear in at least one cell
-    used_vertices = torch.unique(mesh.cells.flatten())
-    n_used = len(used_vertices)
-    n_isolated = n_original - n_used
+    n_final = new_points.shape[0]
+    n_isolated = n_original - n_final
 
+    ### Short-circuit if nothing changed
     if n_isolated == 0:
-        # No isolated vertices
         return mesh, {
             "n_isolated_removed": 0,
             "n_points_original": n_original,
             "n_points_final": n_original,
         }
 
-    ### Create mapping from old to new indices
-    old_to_new = torch.full((n_original,), -1, device=device, dtype=torch.long)
-    old_to_new[used_vertices] = torch.arange(n_used, device=device, dtype=torch.long)
-
-    ### Build new mesh
-    new_points = mesh.points[used_vertices]
-    new_cells = old_to_new[mesh.cells]
-
-    ### Transfer data (excluding cache)
-    new_point_data = mesh.point_data.exclude(CACHE_KEY)[used_vertices]
-    new_cell_data = mesh.cell_data.exclude(CACHE_KEY).clone()
-    new_global_data = mesh.global_data.clone()
-
+    ### Build cleaned mesh
     from physicsnemo.mesh.mesh import Mesh
 
     cleaned_mesh = Mesh(
         points=new_points,
         cells=new_cells,
         point_data=new_point_data,
-        cell_data=new_cell_data,
-        global_data=new_global_data,
+        cell_data=mesh.cell_data.exclude(CACHE_KEY).clone(),
+        global_data=mesh.global_data.clone(),
     )
 
-    stats = {
+    return cleaned_mesh, {
         "n_isolated_removed": n_isolated,
         "n_points_original": n_original,
-        "n_points_final": n_used,
+        "n_points_final": n_final,
     }
-
-    return cleaned_mesh, stats
