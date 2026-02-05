@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 def repair_mesh(
     mesh: "Mesh",
-    remove_duplicates: bool = True,
+    merge_points: bool = True,
     remove_degenerates: bool = True,
     remove_isolated: bool = True,
     fix_orientation: bool = False,  # Requires 3D, has loops
@@ -43,8 +43,8 @@ def repair_mesh(
 
     Order of operations:
     1. Remove degenerate cells (zero area)
-    2. Remove duplicate vertices
-    3. Remove isolated vertices
+    2. Merge duplicate points
+    3. Remove isolated points
     4. Fix orientation (if enabled)
     5. Fill holes (if enabled)
     6. Make manifold (if enabled)
@@ -52,36 +52,37 @@ def repair_mesh(
     Parameters
     ----------
     mesh : Mesh
-        Input mesh to repair
-    remove_duplicates : bool
-        Merge coincident vertices
-    remove_degenerates : bool
-        Remove zero-area cells and cells with duplicate vertices
-    remove_isolated : bool
-        Remove vertices not in any cell
-    fix_orientation : bool
-        Ensure consistent face normals (2D in 3D only)
-    fill_holes : bool
-        Close boundary loops (expensive)
-    make_manifold : bool
-        Split non-manifold edges (changes topology)
-    tolerance : float
-        Distance/area tolerance for various checks
-    max_hole_edges : int
-        Maximum hole size to fill
+        Input mesh to repair.
+    merge_points : bool, optional
+        Merge coincident points within *tolerance*.
+    remove_degenerates : bool, optional
+        Remove zero-area cells and cells with duplicate vertices.
+    remove_isolated : bool, optional
+        Remove points not referenced by any cell.
+    fix_orientation : bool, optional
+        Ensure consistent face normals (2D in 3D only).
+    fill_holes : bool, optional
+        Close boundary loops (expensive).
+    make_manifold : bool, optional
+        Split non-manifold edges (changes topology).
+    tolerance : float, optional
+        Absolute L2 distance threshold for merging duplicate points
+        and area tolerance for degenerate cell detection.
+    max_hole_edges : int, optional
+        Maximum hole size to fill.
 
     Returns
     -------
     tuple[Mesh, dict[str, dict]]
-        Tuple of (repaired_mesh, all_stats) where all_stats is a dict mapping
-        operation name to its individual stats dict
+        Tuple of (repaired_mesh, all_stats) where all_stats is a dict
+        mapping operation name to its individual stats dict.
 
     Examples
     --------
     >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
     >>> mesh = two_triangles_2d.load()
-    >>> mesh_clean, stats = repair_mesh(mesh, remove_duplicates=True)
-    >>> assert "duplicates" in stats
+    >>> mesh_clean, stats = repair_mesh(mesh, merge_points=True)
+    >>> assert "merge_points" in stats
     """
     current_mesh = mesh
     all_stats = {}
@@ -95,16 +96,26 @@ def repair_mesh(
         current_mesh, stats = remove_deg(current_mesh, area_tolerance=tolerance)
         all_stats["degenerates"] = stats
 
-    ### Operation 2: Remove duplicate vertices
-    if remove_duplicates:
-        from physicsnemo.mesh.repair.duplicate_removal import (
-            remove_duplicate_vertices as remove_dup,
+    ### Operation 2: Merge duplicate points (via clean_mesh)
+    if merge_points:
+        from physicsnemo.mesh.boundaries._cleaning import clean_mesh
+
+        n_before = current_mesh.n_points
+        current_mesh = clean_mesh(
+            current_mesh,
+            tolerance=tolerance,
+            merge_points=True,
+            remove_duplicate_cells_flag=False,
+            remove_unused_points_flag=False,
         )
+        n_after = current_mesh.n_points
+        all_stats["merge_points"] = {
+            "n_points_original": n_before,
+            "n_points_final": n_after,
+            "n_duplicates_merged": n_before - n_after,
+        }
 
-        current_mesh, stats = remove_dup(current_mesh, tolerance=tolerance)
-        all_stats["duplicates"] = stats
-
-    ### Operation 3: Remove isolated vertices
+    ### Operation 3: Remove isolated points
     if remove_isolated:
         from physicsnemo.mesh.repair.isolated_removal import (
             remove_isolated_vertices as remove_iso,
@@ -137,7 +148,6 @@ def repair_mesh(
 
     ### Operation 6: Make manifold
     if make_manifold:
-        # Non-manifold edge splitting is not yet implemented
         raise NotImplementedError(
             "Manifold repair (split_nonmanifold_edges) is not yet implemented.\n"
             "This operation would duplicate vertices at non-manifold edges to make "

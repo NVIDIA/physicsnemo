@@ -2447,8 +2447,7 @@ class Mesh:
 
     def clean(
         self,
-        rtol: float = 1e-12,
-        atol: float = 1e-12,
+        tolerance: float = 1e-12,
         merge_points: bool = True,
         remove_duplicate_cells: bool = True,
         remove_unused_points: bool = True,
@@ -2465,11 +2464,8 @@ class Mesh:
 
         Parameters
         ----------
-        rtol : float, optional
-            Relative tolerance for merging points (default 1e-12).
-            Points p1 and p2 are merged if ||p1 - p2|| <= atol + rtol * ||p1||.
-        atol : float, optional
-            Absolute tolerance for merging points (default 1e-12).
+        tolerance : float, optional
+            Absolute L2 distance threshold for merging duplicate points.
         merge_points : bool, optional
             Whether to merge duplicate points (default True).
         remove_duplicate_cells : bool, optional
@@ -2494,7 +2490,7 @@ class Mesh:
         >>> assert cleaned.n_points == 3  # points 0 and 2 merged
         >>>
         >>> # Adjust tolerance for coarser merging
-        >>> mesh_loose = mesh.clean(rtol=1e-6, atol=1e-6)
+        >>> mesh_loose = mesh.clean(tolerance=1e-6)
         >>>
         >>> # Only merge points, keep duplicate cells
         >>> mesh_partial = mesh.clean(
@@ -2506,8 +2502,7 @@ class Mesh:
 
         return clean_mesh(
             mesh=self,
-            rtol=rtol,
-            atol=atol,
+            tolerance=tolerance,
             merge_points=merge_points,
             remove_duplicate_cells_flag=remove_duplicate_cells,
             remove_unused_points_flag=remove_unused_points,

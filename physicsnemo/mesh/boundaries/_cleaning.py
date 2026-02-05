@@ -39,42 +39,35 @@ def merge_duplicate_points(
     points: torch.Tensor,  # shape: (n_points, n_spatial_dims)
     cells: torch.Tensor,  # shape: (n_cells, n_vertices_per_cell)
     point_data: TensorDict,
-    rtol: float = 1e-12,
-    atol: float = 1e-12,
+    tolerance: float = 1e-12,
 ) -> tuple[torch.Tensor, torch.Tensor, TensorDict, torch.Tensor]:
     """Merge duplicate points within tolerance.
 
-    Points are considered duplicates if their L2 distance is below a
-    conservative absolute threshold derived from *rtol* and *atol*:
-
-        tolerance = atol + rtol * mesh_diameter
-
-    When duplicates are found, they are merged into a single point, and cell
-    connectivity is updated accordingly.
+    Points whose L2 distance is below *tolerance* are merged into a single
+    representative, and cell connectivity is updated accordingly.
 
     Parameters
     ----------
     points : torch.Tensor
-        Point coordinates, shape (n_points, n_spatial_dims)
+        Point coordinates, shape (n_points, n_spatial_dims).
     cells : torch.Tensor
-        Cell connectivity, shape (n_cells, n_vertices_per_cell)
+        Cell connectivity, shape (n_cells, n_vertices_per_cell).
     point_data : TensorDict
-        Point data to merge
-    rtol : float, optional
-        Relative tolerance for distance comparison
-    atol : float, optional
-        Absolute tolerance for distance comparison
+        Point data to merge (values are averaged across merged groups).
+    tolerance : float, optional
+        Absolute L2 distance threshold for considering two points as
+        duplicates.
 
     Returns
     -------
     merged_points : torch.Tensor
-        Deduplicated points, shape (n_unique_points, n_spatial_dims)
+        Deduplicated points, shape (n_unique_points, n_spatial_dims).
     updated_cells : torch.Tensor
-        Updated cell connectivity, shape (n_cells, n_vertices_per_cell)
+        Updated cell connectivity, shape (n_cells, n_vertices_per_cell).
     merged_point_data : TensorDict
-        Averaged point data for merged points
+        Averaged point data for merged points.
     point_mapping : torch.Tensor
-        Mapping from old to new point indices, shape (n_points,)
+        Mapping from old to new point indices, shape (n_points,).
 
     Examples
     --------
@@ -100,12 +93,6 @@ def merge_duplicate_points(
             point_data,
             torch.arange(0, device=device, dtype=torch.int64),
         )
-
-    ### Convert (rtol, atol) to a single conservative absolute tolerance
-    mesh_diameter = torch.linalg.vector_norm(
-        points.max(dim=0).values - points.min(dim=0).values
-    )
-    tolerance = float(atol + rtol * mesh_diameter)
 
     ### Compute canonical indices via shared BVH-based primitive
     point_mapping = compute_canonical_indices(points, tolerance)
@@ -369,8 +356,7 @@ def remove_unused_points(
 
 def clean_mesh(
     mesh: "Mesh",
-    rtol: float = 1e-12,
-    atol: float = 1e-12,
+    tolerance: float = 1e-12,
     merge_points: bool = True,
     remove_duplicate_cells_flag: bool = True,
     remove_unused_points_flag: bool = True,
@@ -385,22 +371,20 @@ def clean_mesh(
     Parameters
     ----------
     mesh : Mesh
-        Input mesh to clean
-    rtol : float, optional
-        Relative tolerance for merging points (default 1e-12)
-    atol : float, optional
-        Absolute tolerance for merging points (default 1e-12)
+        Input mesh to clean.
+    tolerance : float, optional
+        Absolute L2 distance threshold for merging duplicate points.
     merge_points : bool, optional
-        Whether to merge duplicate points
+        Whether to merge duplicate points.
     remove_duplicate_cells_flag : bool, optional
-        Whether to remove duplicate cells
+        Whether to remove duplicate cells.
     remove_unused_points_flag : bool, optional
-        Whether to remove unused points
+        Whether to remove unused points.
 
     Returns
     -------
     Mesh
-        Cleaned mesh with same structure but repaired topology
+        Cleaned mesh with same structure but repaired topology.
 
     Examples
     --------
@@ -425,8 +409,7 @@ def clean_mesh(
             points=points,
             cells=cells,
             point_data=point_data,
-            rtol=rtol,
-            atol=atol,
+            tolerance=tolerance,
         )
 
     ### Step 2: Remove duplicate cells
