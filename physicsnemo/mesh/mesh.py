@@ -1197,12 +1197,15 @@ class Mesh:
         multiple_cells_strategy: Literal["mean", "nan"] = "mean",
         project_onto_nearest_cell: bool = False,
         tolerance: float = 1e-6,
+        bvh: Any = None,
     ) -> "TensorDict":
         """Extract or interpolate mesh data at specified query points.
 
         This method retrieves mesh data at arbitrary spatial locations. Note that
         "sample" here means "extract/query at specific points" - NOT random sampling.
         For random point sampling, see :meth:`sample_random_points_on_cells`.
+
+        Containment queries are BVH-accelerated (O(n_queries * log(n_cells))).
 
         Parameters
         ----------
@@ -1217,16 +1220,20 @@ class Mesh:
             - "mean": Return arithmetic mean of values from all containing cells
             - "nan": Return NaN for ambiguous points
         project_onto_nearest_cell : bool, optional
-            If True, projects each query point onto the nearest cell before
-            querying. Useful for codimension != 0 manifolds.
+            If True, snaps each query point to the centroid of the nearest cell
+            before containment testing. Useful for codimension != 0 manifolds.
         tolerance : float, optional
             Tolerance for considering a point inside a cell.
+        bvh : BVH or None, optional
+            Pre-built Bounding Volume Hierarchy. If ``None`` (default), one is
+            built automatically. For repeated queries, pre-build with
+            ``BVH.from_mesh(mesh)`` and pass it here to avoid redundant work.
 
         Returns
         -------
         TensorDict
             Data for each query point. Values are NaN for query points outside
-            the mesh (unless project_onto_nearest_cell=True).
+            the mesh.
 
         Examples
         --------
@@ -1246,6 +1253,7 @@ class Mesh:
             multiple_cells_strategy=multiple_cells_strategy,
             project_onto_nearest_cell=project_onto_nearest_cell,
             tolerance=tolerance,
+            bvh=bvh,
         )
 
     def cell_data_to_point_data(self, overwrite_keys: bool = False) -> "Mesh":
