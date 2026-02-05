@@ -266,21 +266,16 @@ def to_pyvista(
 
     elif mesh.n_manifold_dims == 1:
         # Line mesh - create PolyData with lines
-        # Convert line segments to PyVista format: [n_points, id0, id1, ...]
         cells_np = mesh.cells.cpu().numpy()
 
         if mesh.n_cells == 0:
-            # Empty lines
             pv_mesh = pv.PolyData(points_np)
         else:
-            # Each line segment has 2 points
-            # PyVista format: [2, i0, i1, 2, j0, j1, ...]
-            lines_list = []
-            for cell in cells_np:
-                lines_list.append(2)  # Number of points in this line
-                lines_list.extend(cell)
-            lines_array = np.array(lines_list, dtype=np.int64)
-
+            # PyVista padded format: [n_pts, v0, v1, n_pts, v0, v1, ...]
+            # Vectorized: prepend vertex count to each cell row, then flatten
+            lines_array = np.column_stack(
+                [np.full(len(cells_np), cells_np.shape[1], dtype=np.int64), cells_np]
+            ).ravel()
             pv_mesh = pv.PolyData(points_np, lines=lines_array)
 
     elif mesh.n_manifold_dims == 2:
@@ -288,38 +283,28 @@ def to_pyvista(
         cells_np = mesh.cells.cpu().numpy()
 
         if mesh.n_cells == 0:
-            # Empty cells
             pv_mesh = pv.PolyData(points_np)
         else:
-            # PyVista format for cells: [3, i0, i1, i2, 3, j0, j1, j2, ...]
-            cells_list = []
-            for cell in cells_np:
-                cells_list.append(3)  # Number of points in this triangle
-                cells_list.extend(cell)
-            cells_array = np.array(cells_list, dtype=np.int64)
-
-            pv_mesh = pv.PolyData(points_np, faces=cells_array)
+            # PyVista padded format: [n_pts, v0, v1, v2, n_pts, v0, v1, v2, ...]
+            faces_array = np.column_stack(
+                [np.full(len(cells_np), cells_np.shape[1], dtype=np.int64), cells_np]
+            ).ravel()
+            pv_mesh = pv.PolyData(points_np, faces=faces_array)
 
     elif mesh.n_manifold_dims == 3:
         # Volume mesh - create UnstructuredGrid with tetrahedral cells
         cells_np = mesh.cells.cpu().numpy()
 
         if mesh.n_cells == 0:
-            # Empty cells - create UnstructuredGrid with no cells
             cells = np.array([], dtype=np.int64)
             celltypes = np.array([], dtype=np.uint8)
             pv_mesh = pv.UnstructuredGrid(cells, celltypes, points_np)
         else:
-            # PyVista format for cells: [4, i0, i1, i2, i3, 4, j0, j1, j2, j3, ...]
-            cells_list = []
-            for cell in cells_np:
-                cells_list.append(4)  # Number of points in this tetrahedron
-                cells_list.extend(cell)
-            cells_array = np.array(cells_list, dtype=np.int64)
-
-            # All cells are tetrahedra
+            # PyVista padded format: [n_pts, v0..v3, n_pts, v0..v3, ...]
+            cells_array = np.column_stack(
+                [np.full(len(cells_np), cells_np.shape[1], dtype=np.int64), cells_np]
+            ).ravel()
             celltypes = np.full(mesh.n_cells, pv.CellType.TETRA, dtype=np.uint8)
-
             pv_mesh = pv.UnstructuredGrid(cells_array, celltypes, points_np)
 
     else:

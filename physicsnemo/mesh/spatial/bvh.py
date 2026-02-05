@@ -118,95 +118,77 @@ class BVH:
         cell_aabb_min = cell_vertices.min(dim=1).values  # (n_cells, n_spatial_dims)
         cell_aabb_max = cell_vertices.max(dim=1).values  # (n_cells, n_spatial_dims)
 
-        ### Compute cell centroids for Morton code-based ordering
+        ### Compute cell centroids for median-split ordering
         cell_centroids = cell_vertices.mean(dim=1)  # (n_cells, n_spatial_dims)
 
-        ### Build BVH using top-down construction
+        ### Build BVH using iterative top-down construction
         n_cells = mesh.n_cells
+        device = mesh.points.device
 
-        ### Initialize node storage (worst case: 2*n_cells - 1 nodes for binary tree)
+        ### Initialize node storage (exact size: 2*n_cells - 1 for a full binary tree)
         max_nodes = 2 * n_cells - 1
         node_aabb_min = torch.zeros(
             (max_nodes, mesh.n_spatial_dims),
             dtype=mesh.points.dtype,
-            device=mesh.points.device,
+            device=device,
         )
         node_aabb_max = torch.zeros_like(node_aabb_min)
-        node_left_child = torch.full(
-            (max_nodes,), -1, dtype=torch.long, device=mesh.points.device
-        )
+        node_left_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
         node_right_child = torch.full(
-            (max_nodes,), -1, dtype=torch.long, device=mesh.points.device
+            (max_nodes,), -1, dtype=torch.long, device=device
         )
-        node_cell_idx = torch.full(
-            (max_nodes,), -1, dtype=torch.long, device=mesh.points.device
-        )
+        node_cell_idx = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
 
-        ### Build tree recursively (on CPU for now, move to GPU after)
-        # Start with all cells
-        cell_indices = torch.arange(n_cells, device=mesh.points.device)
+        ### Iterative construction using an explicit stack
+        cell_indices = torch.arange(n_cells, device=device)
+        node_count = 0
 
-        node_counter = [0]  # Use list to make it mutable in nested function
+        # Stack entries: (cell_indices, parent_node_idx, is_right_child)
+        # parent_node_idx == -1 means this is the root node.
+        stack: list[tuple[torch.Tensor, int, bool]] = [
+            (cell_indices, -1, False),
+        ]
 
-        def build_node(indices: torch.Tensor) -> int:
-            """Recursively build BVH node.
+        while stack:
+            indices, parent, is_right = stack.pop()
+            node_idx = node_count
+            node_count += 1
 
-            Parameters
-            ----------
-            indices : torch.Tensor
-                Indices of cells to include in this subtree
+            # Link this node to its parent
+            if parent >= 0:
+                if is_right:
+                    node_right_child[parent] = node_idx
+                else:
+                    node_left_child[parent] = node_idx
 
-            Returns
-            -------
-            int
-                Index of the created node
-            """
-            node_idx = node_counter[0]
-            node_counter[0] += 1
-
-            ### Compute bounding box for this node
+            ### Compute AABB for this node
             node_aabb_min[node_idx] = cell_aabb_min[indices].min(dim=0).values
             node_aabb_max[node_idx] = cell_aabb_max[indices].max(dim=0).values
 
-            ### Base case: single cell (leaf node)
+            ### Leaf: single cell
             if len(indices) == 1:
                 node_cell_idx[node_idx] = indices[0]
-                return node_idx
+                continue
 
-            ### Recursive case: split and build children
-            # Choose split axis as the dimension with largest extent
+            ### Split at median along the longest axis
             extent = node_aabb_max[node_idx] - node_aabb_min[node_idx]
             split_axis = extent.argmax().item()
 
-            # Sort cells by centroid along split axis
             centroids_along_axis = cell_centroids[indices, split_axis]
-            sorted_indices_rel = centroids_along_axis.argsort()
-            sorted_indices = indices[sorted_indices_rel]
-
-            # Split at median
+            sorted_rel = centroids_along_axis.argsort()
+            sorted_indices = indices[sorted_rel]
             mid = len(sorted_indices) // 2
-            left_indices = sorted_indices[:mid]
-            right_indices = sorted_indices[mid:]
 
-            ### Build children
-            left_child_idx = build_node(left_indices)
-            right_child_idx = build_node(right_indices)
-
-            node_left_child[node_idx] = left_child_idx
-            node_right_child[node_idx] = right_child_idx
-
-            return node_idx
-
-        ### Build the tree starting from root
-        build_node(cell_indices)
+            # Push right child first so that left child is processed first (LIFO)
+            stack.append((sorted_indices[mid:], node_idx, True))
+            stack.append((sorted_indices[:mid], node_idx, False))
 
         ### Trim unused node storage
-        n_nodes_used = node_counter[0]
-        node_aabb_min = node_aabb_min[:n_nodes_used]
-        node_aabb_max = node_aabb_max[:n_nodes_used]
-        node_left_child = node_left_child[:n_nodes_used]
-        node_right_child = node_right_child[:n_nodes_used]
-        node_cell_idx = node_cell_idx[:n_nodes_used]
+        node_aabb_min = node_aabb_min[:node_count]
+        node_aabb_max = node_aabb_max[:node_count]
+        node_left_child = node_left_child[:node_count]
+        node_right_child = node_right_child[:node_count]
+        node_cell_idx = node_cell_idx[:node_count]
 
         return cls(
             node_aabb_min=node_aabb_min,
@@ -214,7 +196,7 @@ class BVH:
             node_left_child=node_left_child,
             node_right_child=node_right_child,
             node_cell_idx=node_cell_idx,
-            batch_size=torch.Size([n_nodes_used]),
+            batch_size=torch.Size([node_count]),
         )
 
     def point_in_aabb(
