@@ -122,7 +122,7 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
         >>> adj.to_list()
         [[1, 2], [0, 2], [0, 1]]
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+    from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
 
     ### Handle empty mesh
     if mesh.n_cells == 0 or mesh.n_points == 0:
@@ -133,25 +133,8 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
             indices=torch.zeros(0, dtype=torch.int64, device=mesh.points.device),
         )
 
-    ### Extract all edges (1-simplices) from cells
-    # Special case: For 1D meshes, cells ARE edges already
-    if mesh.n_manifold_dims == 1:
-        # For 1D meshes, cells are already edges, just deduplicate them
-        # Sort each edge's vertices to canonical form
-        sorted_cells = torch.sort(mesh.cells, dim=1)[0]
-        unique_edges = torch.unique(sorted_cells, dim=0)
-    else:
-        # For n-simplices with n > 1, edges are (n-1)-dimensional facets
-        # manifold_codimension = n_manifold_dims - 1 gives us 1-simplices (edges)
-        candidate_edges, _ = extract_candidate_facets(
-            mesh.cells,
-            manifold_codimension=mesh.n_manifold_dims - 1,
-        )
-
-        ### Deduplicate edges using torch.unique
-        # Each edge appears only once after deduplication
-        # Shape: (n_unique_edges, 2)
-        unique_edges = torch.unique(candidate_edges, dim=0)
+    ### Extract all unique edges (handles 1D and n-D meshes uniformly)
+    unique_edges, _ = extract_unique_edges(mesh)
 
     from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 
