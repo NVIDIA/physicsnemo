@@ -16,7 +16,7 @@
 
 """Main entry point for mesh visualization with backend selection."""
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 
@@ -45,7 +45,7 @@ def draw_mesh(
     alpha_edges: float = 1.0,
     show_edges: bool = True,
     ax=None,
-    **kwargs,
+    backend_options: dict[str, Any] | None = None,
 ):
     """Draw a mesh using matplotlib or PyVista backend.
 
@@ -99,8 +99,9 @@ def draw_mesh(
     ax : matplotlib.axes.Axes, optional
         (matplotlib only) Existing matplotlib axes to plot on. If None,
         creates new figure and axes.
-    **kwargs : dict
-        Additional backend-specific keyword arguments.
+    backend_options : dict[str, Any], optional
+        Additional keyword arguments forwarded to the underlying
+        visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
 
     Returns
     -------
@@ -210,7 +211,6 @@ def draw_mesh(
             alpha_edges=alpha_edges,
             show_edges=show_edges,
             ax=ax,
-            **kwargs,
         )
 
     elif backend == "pyvista":
@@ -235,7 +235,7 @@ def draw_mesh(
             alpha_points=alpha_points,
             alpha_cells=alpha_cells,
             show_edges=show_edges,
-            **kwargs,
+            **(backend_options or {}),
         )
 
     else:
