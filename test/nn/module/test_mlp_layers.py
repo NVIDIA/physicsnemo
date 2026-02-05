@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
 import torch
 
 from physicsnemo.nn import Mlp
@@ -46,46 +47,59 @@ def test_mlp_forward_accuracy(device):
     )
 
 
-def test_mlp_activation_and_dropout():
-    model = Mlp(in_features=10, hidden_features=20, out_features=5, drop=0.5)
-    input_tensor = torch.randn(2, 10)  # Batch size of 2
+def test_mlp_activation_and_dropout(device):
+    target_device = torch.device(device)
+    model = Mlp(in_features=10, hidden_features=20, out_features=5, drop=0.5).to(
+        target_device
+    )
+    input_tensor = torch.randn(2, 10, device=target_device)  # Batch size of 2
 
     output_tensor = model(input_tensor)
 
     assert output_tensor.shape == torch.Size([2, 5])
 
 
-def test_mlp_different_activation():
+def test_mlp_different_activation(device):
+    target_device = torch.device(device)
     model = Mlp(
         in_features=10, hidden_features=20, out_features=7, act_layer=torch.nn.ReLU
-    )
-    input_tensor = torch.randn(3, 10)  # Batch size of 3
+    ).to(target_device)
+    input_tensor = torch.randn(3, 10, device=target_device)  # Batch size of 3
 
     output_tensor = model(input_tensor)
     assert output_tensor.shape == torch.Size([3, 7])
 
 
-def test_multiple_hidden_layers():
-    model = Mlp(in_features=10, hidden_features=[20, 30], out_features=5)
-    input_tensor = torch.randn(4, 10)  # Batch size of 4
+def test_multiple_hidden_layers(device):
+    target_device = torch.device(device)
+    model = Mlp(in_features=10, hidden_features=[20, 30], out_features=5).to(
+        target_device
+    )
+    input_tensor = torch.randn(4, 10, device=target_device)  # Batch size of 4
 
     output_tensor = model(input_tensor)
     assert output_tensor.shape == torch.Size([4, 5])
 
 
-def test_mlp_string_activation():
+def test_mlp_string_activation(device):
+    target_device = torch.device(device)
     """Test that string activation names work correctly."""
-    model = Mlp(in_features=10, hidden_features=20, out_features=5, act_layer="gelu")
-    input_tensor = torch.randn(2, 10)
+    model = Mlp(
+        in_features=10, hidden_features=20, out_features=5, act_layer="gelu"
+    ).to(target_device)
+    input_tensor = torch.randn(2, 10, device=target_device)
 
     output_tensor = model(input_tensor)
     assert output_tensor.shape == torch.Size([2, 5])
 
 
-def test_mlp_use_te_false():
+def test_mlp_use_te_false(device):
+    target_device = torch.device(device)
     """Test that use_te=False works (default behavior)."""
-    model = Mlp(in_features=10, hidden_features=20, out_features=5, use_te=False)
-    input_tensor = torch.randn(2, 10)
+    model = Mlp(in_features=10, hidden_features=20, out_features=5, use_te=False).to(
+        target_device
+    )
+    input_tensor = torch.randn(2, 10, device=target_device)
 
     output_tensor = model(input_tensor)
     assert output_tensor.shape == torch.Size([2, 5])
@@ -94,30 +108,36 @@ def test_mlp_use_te_false():
     assert isinstance(model.layers[0], torch.nn.Linear)
 
 
-def test_mlp_use_te_unavailable():
+def test_mlp_use_te_unavailable(device):
     """Test that use_te=True raises error when TE is not available."""
     import importlib.util
+
+    if "cuda" not in device:
+        pytest.skip("Transformer Engine is not available on CPU")
 
     te_available = importlib.util.find_spec("transformer_engine") is not None
 
     if te_available:
         # If TE is available, this should work
-        model = Mlp(in_features=10, hidden_features=20, out_features=5, use_te=True)
-        input_tensor = torch.randn(2, 10)
+        target_device = torch.device(device)
+        model = Mlp(in_features=10, hidden_features=20, out_features=5, use_te=True).to(
+            target_device
+        )
+        input_tensor = torch.randn(2, 10, device=target_device)
         output_tensor = model(input_tensor)
         assert output_tensor.shape == torch.Size([2, 5])
     else:
         # If TE is not available, this should raise RuntimeError
-        import pytest
 
         with pytest.raises(RuntimeError, match="Transformer Engine is not available"):
             Mlp(in_features=10, hidden_features=20, out_features=5, use_te=True)
 
 
-def test_mlp_gradient_flow():
+def test_mlp_gradient_flow(device):
     """Test that gradients flow through the MLP."""
-    model = Mlp(in_features=10, hidden_features=20, out_features=5)
-    input_tensor = torch.randn(2, 10, requires_grad=True)
+    target_device = torch.device(device)
+    model = Mlp(in_features=10, hidden_features=20, out_features=5).to(target_device)
+    input_tensor = torch.randn(2, 10, requires_grad=True, device=target_device)
 
     output_tensor = model(input_tensor)
     loss = output_tensor.sum()
