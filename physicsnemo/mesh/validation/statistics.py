@@ -25,7 +25,10 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.validation.quality import compute_quality_metrics
+from physicsnemo.mesh.validation.quality import (
+    compute_cell_edge_lengths,
+    compute_quality_metrics,
+)
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -94,20 +97,8 @@ def compute_mesh_statistics(
     n_used = len(used_vertices)
     stats["n_isolated_vertices"] = mesh.n_points - n_used
 
-    ### Compute edge length statistics (vectorized)
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
-    n_verts_per_cell = mesh.n_manifold_dims + 1
-
-    # Generate all (i, j) pairs with i < j using upper triangular indices
-    i_indices, j_indices = torch.triu_indices(
-        n_verts_per_cell, n_verts_per_cell, offset=1, device=mesh.points.device
-    )
-    # Compute all edge vectors at once: (n_cells, n_edges, n_dims)
-    edges = cell_vertices[:, j_indices] - cell_vertices[:, i_indices]
-    edge_lengths = torch.linalg.vector_norm(edges, dim=-1)  # (n_cells, n_edges)
-
-    # Flatten to get all edge lengths across all cells
-    all_edge_lengths = edge_lengths.flatten()
+    ### Compute edge length statistics
+    all_edge_lengths = compute_cell_edge_lengths(mesh).flatten()
 
     stats["edge_length_stats"] = (
         all_edge_lengths.min().item(),

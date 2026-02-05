@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 from physicsnemo.mesh.subdivision._data import propagate_cell_data_to_children
 from physicsnemo.mesh.subdivision._topology import (
     extract_unique_edges,
@@ -39,58 +40,6 @@ from physicsnemo.mesh.subdivision._topology import (
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
-
-
-def _build_adjacency_from_edges(
-    unique_edges: torch.Tensor,
-    n_points: int,
-    device: torch.device,
-) -> "Adjacency":
-    """Build point-to-point adjacency structure directly from unique edges.
-
-    This is much faster than recomputing from cells when edges are already known.
-    Uses a counting-based approach instead of sorting for better performance.
-
-    Parameters
-    ----------
-    unique_edges : torch.Tensor
-        Unique edges, shape (n_edges, 2)
-    n_points : int
-        Number of points in mesh
-    device : torch.device
-        Device to place tensors on
-
-    Returns
-    -------
-    Adjacency
-        Adjacency structure with bidirectional edges
-    """
-    from physicsnemo.mesh.neighbors._adjacency import Adjacency
-
-    ### Create bidirectional edges
-    # For each edge [a, b], create both [a, b] and [b, a]
-
-    # Extract source and target vertices for both directions
-    # Forward direction: edge[:, 0] -> edge[:, 1]
-    # Backward direction: edge[:, 1] -> edge[:, 0]
-    sources = torch.cat([unique_edges[:, 0], unique_edges[:, 1]])
-    targets = torch.cat([unique_edges[:, 1], unique_edges[:, 0]])
-
-    ### Use argsort to group by source vertex
-    # This is necessary for CSR format, but we can optimize by using stable sort
-    sort_indices = torch.argsort(sources, stable=True)
-    sorted_sources = sources[sort_indices]
-    sorted_targets = targets[sort_indices]
-
-    ### Compute offsets for each source vertex
-    neighbor_counts = torch.bincount(sorted_sources, minlength=n_points)
-    offsets = torch.zeros(n_points + 1, dtype=torch.int64, device=device)
-    offsets[1:] = torch.cumsum(neighbor_counts, dim=0)
-
-    return Adjacency(
-        offsets=offsets,
-        indices=sorted_targets,
-    )
 
 
 def compute_loop_beta(valence: int) -> float:
@@ -158,9 +107,12 @@ def reposition_original_vertices_2d(
     n_points = mesh.n_points
 
     ### Get point-to-point adjacency (vertex neighbors)
-    # If unique_edges provided, build adjacency directly without recomputing
     if unique_edges is not None:
-        adjacency = _build_adjacency_from_edges(unique_edges, n_points, device)
+        # Build adjacency directly from pre-computed edges (avoids re-extracting
+        # edges from cells, which is the expensive part of get_point_to_points_adjacency)
+        sources = torch.cat([unique_edges[:, 0], unique_edges[:, 1]])
+        targets = torch.cat([unique_edges[:, 1], unique_edges[:, 0]])
+        adjacency = build_adjacency_from_pairs(sources, targets, n_sources=n_points)
     else:
         from physicsnemo.mesh.neighbors import get_point_to_points_adjacency
 

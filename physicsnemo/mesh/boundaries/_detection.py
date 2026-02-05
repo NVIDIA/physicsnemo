@@ -17,7 +17,8 @@
 """Boundary detection for simplicial meshes.
 
 Provides functions to identify boundary vertices, edges, and cells in meshes.
-A facet is on the boundary if it appears in only one cell (non-watertight/manifold-with-boundary).
+A facet is on the boundary if it appears in only one cell (non-watertight /
+manifold-with-boundary).
 """
 
 from typing import TYPE_CHECKING
@@ -28,11 +29,57 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
+def _extract_boundary_facets(
+    mesh: "Mesh",
+    manifold_codimension: int = 1,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Extract boundary facets at a given codimension.
+
+    Shared helper that avoids duplicating the extract-then-categorize pattern
+    across the public detection functions.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh (must have n_cells > 0).
+    manifold_codimension : int
+        Codimension of facets to extract and filter to boundary.
+
+    Returns
+    -------
+    boundary_facets : torch.Tensor
+        Unique facets appearing in exactly one cell,
+        shape (n_boundary_facets, n_verts_per_facet).
+    parent_cell_indices : torch.Tensor
+        Parent cell index for every *candidate* facet (before deduplication),
+        shape (n_candidates,).
+    boundary_candidate_mask : torch.Tensor
+        Boolean mask over candidates: True where the candidate maps to a
+        kept boundary facet, shape (n_candidates,).
+    """
+    from physicsnemo.mesh.boundaries._facet_extraction import (
+        categorize_facets_by_count,
+        extract_candidate_facets,
+    )
+
+    candidate_facets, parent_cell_indices = extract_candidate_facets(
+        mesh.cells, manifold_codimension=manifold_codimension,
+    )
+    boundary_facets, inverse_indices, _ = categorize_facets_by_count(
+        candidate_facets, target_counts="boundary",
+    )
+    boundary_candidate_mask = inverse_indices >= 0
+    return boundary_facets, parent_cell_indices, boundary_candidate_mask
+
+
 def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
     """Identify vertices that lie on the mesh boundary.
 
-    A vertex is on the boundary if it is incident to at least one boundary edge
-    (for 2D+ manifolds) or is an endpoint of the chain (for 1D manifolds).
+    A vertex is on the boundary if it belongs to at least one boundary facet
+    (a codimension-1 sub-simplex appearing in exactly one cell).
+
+    For 1D manifolds the boundary facets are vertices (0-simplices), for 2D
+    they are edges, and for 3D they are faces.
 
     Parameters
     ----------
@@ -57,11 +104,6 @@ def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
     -----
     For closed manifolds (watertight meshes), returns all False.
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import (
-        categorize_facets_by_count,
-        extract_candidate_facets,
-    )
-
     device = mesh.cells.device
     n_points = mesh.n_points
 
@@ -69,19 +111,9 @@ def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
     if mesh.n_cells == 0:
         return torch.zeros(n_points, dtype=torch.bool, device=device)
 
-    ### Extract codimension-1 facets (the true boundary facets) that appear in only 1 cell.
-    # For 1D manifolds these are vertices (0-simplices), for 2D they are edges, for 3D faces.
-    candidate_facets, _ = extract_candidate_facets(
-        mesh.cells,
-        manifold_codimension=1,
-    )
+    ### Extract codimension-1 boundary facets and mark their vertices
+    boundary_facets, _, _ = _extract_boundary_facets(mesh, manifold_codimension=1)
 
-    # Boundary facets appear in exactly one cell
-    boundary_facets, _, _ = categorize_facets_by_count(
-        candidate_facets, target_counts="boundary"
-    )
-
-    ### Mark all vertices that belong to boundary facets
     is_boundary_vertex = torch.zeros(n_points, dtype=torch.bool, device=device)
     if len(boundary_facets) > 0:
         is_boundary_vertex.scatter_(0, boundary_facets.flatten(), True)
@@ -104,12 +136,10 @@ def get_boundary_cells(
         Input simplicial mesh
     boundary_codimension : int, optional
         Codimension of facets defining boundary membership.
-        - 1 (default): Cells with at least one codim-1 boundary facet (most restrictive)
-          For 2D: triangles with at least one edge on boundary
-          For 3D: tets with at least one face on boundary
-        - 2: Cells with at least one codim-2 boundary facet (more permissive)
-          For 3D: tets with at least one edge on boundary
-        - k: Cells with at least one codim-k boundary facet
+
+        - 1 (default): cells with at least one codim-1 boundary facet
+        - 2: cells with at least one codim-2 boundary facet (more permissive)
+        - k: cells with at least one codim-k boundary facet
 
     Returns
     -------
@@ -131,11 +161,6 @@ def get_boundary_cells(
     -----
     For closed manifolds (watertight meshes), returns all False.
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import (
-        categorize_facets_by_count,
-        extract_candidate_facets,
-    )
-
     device = mesh.cells.device
     n_cells = mesh.n_cells
 
@@ -150,23 +175,14 @@ def get_boundary_cells(
             f"Must be in range [1, {mesh.n_manifold_dims}] for {mesh.n_manifold_dims=}"
         )
 
-    ### Extract all k-codimension facets from cells
-    candidate_facets, parent_cell_indices = extract_candidate_facets(
-        mesh.cells,
-        manifold_codimension=boundary_codimension,
+    ### Extract boundary facets and determine which parent cells they belong to
+    _, parent_cell_indices, boundary_candidate_mask = _extract_boundary_facets(
+        mesh, manifold_codimension=boundary_codimension,
     )
-
-    ### Find boundary facets (appear exactly once)
-    _, inverse_indices, _ = categorize_facets_by_count(
-        candidate_facets, target_counts="boundary"
-    )
-
-    ### Map back to candidate facets
-    candidate_is_boundary = inverse_indices >= 0
 
     ### Mark cells that contain at least one boundary facet
     is_boundary_cell = torch.zeros(n_cells, dtype=torch.bool, device=device)
-    boundary_parent_cells = parent_cell_indices[candidate_is_boundary]
+    boundary_parent_cells = parent_cell_indices[boundary_candidate_mask]
 
     if len(boundary_parent_cells) > 0:
         is_boundary_cell.scatter_(0, boundary_parent_cells, True)
@@ -207,11 +223,6 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
     -----
     For closed manifolds (watertight meshes), returns empty tensor.
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import (
-        categorize_facets_by_count,
-        extract_candidate_facets,
-    )
-
     device = mesh.cells.device
 
     ### Handle empty mesh or 1D manifolds (whose boundary consists of vertices, not edges)
@@ -222,21 +233,11 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
     ### For 3D+ manifolds, extract edges of boundary faces.
     if mesh.n_manifold_dims == 2:
         # Edges are codim-1 facets; boundary = appear in exactly 1 cell
-        candidate_edges, _ = extract_candidate_facets(
-            mesh.cells, manifold_codimension=1
-        )
-        boundary_edges, _, _ = categorize_facets_by_count(
-            candidate_edges, target_counts="boundary"
-        )
+        boundary_edges, _, _ = _extract_boundary_facets(mesh, manifold_codimension=1)
         return boundary_edges
 
     # For 3D+ manifolds: find boundary faces (codim-1), then extract their edges
-    candidate_faces, _ = extract_candidate_facets(
-        mesh.cells, manifold_codimension=1
-    )
-    boundary_faces, _, _ = categorize_facets_by_count(
-        candidate_faces, target_counts="boundary"
-    )
+    boundary_faces, _, _ = _extract_boundary_facets(mesh, manifold_codimension=1)
 
     if len(boundary_faces) == 0:
         return torch.zeros((0, 2), dtype=torch.int64, device=device)

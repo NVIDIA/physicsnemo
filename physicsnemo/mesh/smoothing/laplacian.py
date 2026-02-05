@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.boundaries import get_boundary_edges
+from physicsnemo.mesh.boundaries import get_boundary_edges, get_boundary_vertices
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
 from physicsnemo.mesh.calculus._circumcentric_dual import (
     compute_cotan_weights_triangle_mesh,
@@ -158,7 +158,7 @@ def smooth_laplacian(
 
     if preserve_boundaries:
         # Boundary vertices should not move
-        boundary_vertex_mask = _get_boundary_vertices(mesh, edges)
+        boundary_vertex_mask = get_boundary_vertices(mesh)
         constrained_vertices |= boundary_vertex_mask
 
     if preserve_features:
@@ -275,57 +275,6 @@ def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
         weights = torch.ones(n_edges, dtype=dtype, device=device)
 
     return weights
-
-
-def _get_boundary_vertices(
-    mesh: "Mesh",
-    edges: torch.Tensor,
-) -> torch.Tensor:
-    """Identify vertices on mesh boundaries.
-
-    Parameters
-    ----------
-    mesh : Mesh
-        Input mesh
-    edges : torch.Tensor
-        All unique edges, shape (n_edges, 2)
-
-    Returns
-    -------
-    torch.Tensor
-        Boolean mask, shape (n_points,), True for boundary vertices
-    """
-    device = mesh.points.device
-    n_points = mesh.n_points
-
-    # For 1D manifolds (edges), boundary detection is different
-    # Boundary vertices are those that appear in only one edge
-    if mesh.n_manifold_dims == 1:
-        # Count edge occurrences per vertex
-        vertex_edge_count = torch.zeros(n_points, dtype=torch.long, device=device)
-        vertex_edge_count.scatter_add_(
-            0, edges[:, 0], torch.ones(len(edges), dtype=torch.long, device=device)
-        )
-        vertex_edge_count.scatter_add_(
-            0, edges[:, 1], torch.ones(len(edges), dtype=torch.long, device=device)
-        )
-        # Boundary vertices appear in only 1 edge
-        boundary_mask = vertex_edge_count == 1
-        return boundary_mask
-
-    # For higher dimensional manifolds, use boundary edge detection
-    boundary_edges = get_boundary_edges(mesh)  # (n_boundary_edges, 2)
-
-    if len(boundary_edges) == 0:
-        # No boundaries
-        return torch.zeros(n_points, dtype=torch.bool, device=device)
-
-    # Mark all vertices in boundary edges
-    boundary_mask = torch.zeros(n_points, dtype=torch.bool, device=device)
-    boundary_mask[boundary_edges[:, 0]] = True
-    boundary_mask[boundary_edges[:, 1]] = True
-
-    return boundary_mask
 
 
 def _get_feature_vertices(

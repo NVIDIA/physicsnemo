@@ -31,6 +31,50 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
+def compute_cell_edge_lengths(mesh: "Mesh") -> torch.Tensor:
+    """Compute all pairwise edge lengths within each cell.
+
+    For an n-simplex with (n+1) vertices, there are C(n+1, 2) edges per cell.
+    Returns a tensor of all edge lengths, vectorized across all cells.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh whose cells to measure.
+
+    Returns
+    -------
+    torch.Tensor
+        Edge lengths, shape ``(n_cells, n_edges_per_cell)`` where
+        ``n_edges_per_cell = C(n_manifold_dims + 1, 2)``.
+        Returns an empty ``(0, 0)`` tensor if the mesh has no cells.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
+    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> lengths = compute_cell_edge_lengths(mesh)
+    >>> lengths.shape
+    torch.Size([1, 3])
+    """
+    if mesh.n_cells == 0:
+        return torch.zeros((0, 0), dtype=mesh.points.dtype, device=mesh.points.device)
+
+    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
+    n_verts_per_cell = mesh.n_manifold_dims + 1
+
+    # All (i, j) pairs with i < j via upper-triangular indices
+    i_indices, j_indices = torch.triu_indices(
+        n_verts_per_cell, n_verts_per_cell, offset=1, device=mesh.points.device,
+    )
+    # Edge vectors and their lengths: (n_cells, n_edges_per_cell)
+    edge_vectors = cell_vertices[:, j_indices] - cell_vertices[:, i_indices]
+    return torch.linalg.vector_norm(edge_vectors, dim=-1)
+
+
 def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     """Compute geometric quality metrics for all cells.
 
@@ -67,20 +111,12 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
 
     device = mesh.points.device
     dtype = mesh.points.dtype
-
-    ### Compute edge lengths for each cell
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
     n_cells = mesh.n_cells
     n_verts_per_cell = mesh.n_manifold_dims + 1
 
-    # Compute all pairwise edge lengths within each cell (vectorized)
-    # Generate all (i, j) pairs with i < j using upper triangular indices
-    i_indices, j_indices = torch.triu_indices(
-        n_verts_per_cell, n_verts_per_cell, offset=1, device=device
-    )
-    # Compute all edge vectors at once: (n_cells, n_edges, n_dims)
-    edges = cell_vertices[:, j_indices] - cell_vertices[:, i_indices]
-    edge_lengths = torch.linalg.vector_norm(edges, dim=-1)  # (n_cells, n_edges)
+    ### Compute edge lengths for each cell
+    edge_lengths = compute_cell_edge_lengths(mesh)  # (n_cells, n_edges_per_cell)
+    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
 
     max_edge = edge_lengths.max(dim=1).values
     min_edge = edge_lengths.min(dim=1).values

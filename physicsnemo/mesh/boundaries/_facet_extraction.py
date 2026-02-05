@@ -435,10 +435,12 @@ def extract_facet_mesh_data(
     manifold_codimension: int = 1,
     data_source: Literal["points", "cells"] = "cells",
     data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
+    target_counts: list[int] | Literal["boundary", "shared", "interior", "all"] = "all",
 ) -> tuple[torch.Tensor, TensorDict]:
     """Extract facet mesh data from parent mesh.
 
-    Main entry point that orchestrates facet extraction, deduplication, and data aggregation.
+    Main entry point that orchestrates facet extraction, deduplication, and data
+    aggregation. Optionally filters facets by occurrence count before aggregation.
 
     Parameters
     ----------
@@ -450,6 +452,14 @@ def extract_facet_mesh_data(
         Whether to inherit data from "cells" or "points"
     data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
         How to aggregate data from multiple sources
+    target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
+        Which facets to keep based on how many parent cells share them:
+
+        - ``"all"`` (default): keep every unique facet
+        - ``"boundary"``: keep facets appearing in exactly 1 cell
+        - ``"interior"``: keep facets appearing in exactly 2 cells
+        - ``"shared"``: keep facets appearing in 2+ cells
+        - ``list[int]``: keep facets whose count is in the list
 
     Returns
     -------
@@ -457,6 +467,18 @@ def extract_facet_mesh_data(
         Connectivity for facet mesh, shape (n_unique_facets, n_vertices_per_facet)
     facet_cell_data : TensorDict
         Aggregated TensorDict for facet mesh cells
+
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
+    >>> vol_mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
+    >>> # Extract ALL codim-1 facets (interior + boundary)
+    >>> all_facets, all_data = extract_facet_mesh_data(vol_mesh)
+    >>> # Extract only the boundary surface
+    >>> bnd_facets, bnd_data = extract_facet_mesh_data(
+    ...     vol_mesh, target_counts="boundary"
+    ... )
+    >>> assert bnd_facets.shape[0] <= all_facets.shape[0]
     """
     ### Extract candidate facets from parent cells
     candidate_facets, parent_cell_indices = extract_candidate_facets(
@@ -464,21 +486,21 @@ def extract_facet_mesh_data(
         manifold_codimension=manifold_codimension,
     )
 
-    ### Compute facet centroids if needed for inverse_distance
-    facet_centroids = None
-    if data_aggregation == "inverse_distance":
-        # Compute centroid of each candidate facet
-        # Shape: (n_candidate_facets, n_vertices_per_facet, n_spatial_dims)
-        facet_points = parent_mesh.points[candidate_facets]
-        # Shape: (n_candidate_facets, n_spatial_dims)
-        facet_centroids = facet_points.mean(dim=1)
+    ### Deduplicate, optionally filtering by occurrence count
+    if target_counts == "all":
+        unique_facets, inverse_indices = torch.unique(
+            candidate_facets, dim=0, return_inverse=True,
+        )
+    else:
+        unique_facets, inverse_indices, _ = categorize_facets_by_count(
+            candidate_facets, target_counts=target_counts,
+        )
+        # Discard candidates that were filtered out (inverse == -1)
+        keep_mask = inverse_indices >= 0
+        candidate_facets = candidate_facets[keep_mask]
+        parent_cell_indices = parent_cell_indices[keep_mask]
+        inverse_indices = inverse_indices[keep_mask]
 
-    ### Find unique facets (no data yet)
-    unique_facets, inverse_indices = torch.unique(
-        candidate_facets,
-        dim=0,
-        return_inverse=True,
-    )
     n_unique_facets = len(unique_facets)
 
     ### Initialize empty output TensorDict
@@ -495,6 +517,12 @@ def extract_facet_mesh_data(
             filtered_cell_data = parent_mesh.cell_data.exclude(CACHE_KEY)
 
             if len(filtered_cell_data.keys()) > 0:
+                ### Compute facet centroids if needed for inverse_distance
+                facet_centroids = None
+                if data_aggregation == "inverse_distance":
+                    facet_points = parent_mesh.points[candidate_facets]
+                    facet_centroids = facet_points.mean(dim=1)
+
                 ### Prepare parent cell areas and centroids if needed
                 parent_cell_areas = None
                 parent_cell_centroids = None
@@ -513,18 +541,21 @@ def extract_facet_mesh_data(
                     parent_cell_indices=parent_cell_indices,
                 )
 
-                ### Aggregate entire TensorDict at once (handles nesting automatically)
-                _, facet_cell_data, _ = deduplicate_and_aggregate_facets(
-                    candidate_facets=candidate_facets,
-                    parent_cell_indices=parent_cell_indices,
-                    parent_cell_data=filtered_cell_data,
-                    aggregation_weights=weights,
+                ### Aggregate data from parent cells to unique facets
+                facet_cell_data = filtered_cell_data.apply(
+                    lambda tensor: _aggregate_tensor_data(
+                        tensor,
+                        parent_cell_indices,
+                        inverse_indices,
+                        n_unique_facets,
+                        weights,
+                    ),
+                    batch_size=torch.Size([n_unique_facets]),
                 )
 
     elif data_source == "points":
-        ### Aggregate data from boundary points of each facet
+        ### Aggregate data from facet vertices
         if len(parent_mesh.point_data.keys()) > 0:
-            ### Average point data over facet vertices to get candidate facet data
             facet_cell_data = _aggregate_point_data_to_facets(
                 point_data=parent_mesh.point_data,
                 candidate_facets=candidate_facets,
