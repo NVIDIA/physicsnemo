@@ -1,9 +1,17 @@
 # ignore_header_test
 # ruff: noqa: E402
-""""""
 
-"""
-Transolver model. This code was modified from, https://github.com/thuml/Transolver
+r"""
+Transolver model for physics-informed neural operator learning.
+
+This module provides the Transolver model, which adapts the transformer
+architecture with a physics-attention mechanism for solving partial
+differential equations on both structured and unstructured meshes.
+
+The Transolver model learns to project inputs onto physics-informed slices
+before applying attention, enabling efficient learning of physical systems.
+
+This code was modified from https://github.com/thuml/Transolver
 
 The following license is provided from their source,
 

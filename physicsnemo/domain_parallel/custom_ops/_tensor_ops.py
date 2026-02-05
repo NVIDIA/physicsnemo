@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -28,18 +28,25 @@ from torch.distributed.tensor._op_schema import (
     OutputSharding,
     RuntimeSchemaInfo,
 )
-from torch.distributed.tensor._ops.utils import (
-    register_prop_rule,
-)
 from torch.distributed.tensor.placement_types import (
     Partial,
     Replicate,
     Shard,
 )
 
+from physicsnemo.core.version_check import check_version_spec
 from physicsnemo.domain_parallel._shard_tensor_spec import (
     _stride_from_contiguous_shape_C_style,
 )
+
+if check_version_spec("torch", "2.10.0"):
+    from torch.distributed.tensor._ops.registration import (
+        register_prop_rule,
+    )
+else:
+    from torch.distributed.tensor._ops.utils import (
+        register_prop_rule,
+    )
 
 aten = torch.ops.aten
 
