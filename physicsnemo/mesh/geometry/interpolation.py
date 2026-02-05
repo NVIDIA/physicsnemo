@@ -136,24 +136,23 @@ def compute_barycentric_gradients(
             twice_signed_area = edge1[:, 0] * edge2[:, 1] - edge1[:, 1] * edge2[:, 0]
             twice_signed_area = twice_signed_area.unsqueeze(-1)  # (n_cells, 1)
         elif n_spatial_dims == 3:
-            # 3D: cross product magnitude (use signed area via normal)
-            cross = torch.linalg.cross(edge1, edge2)
-            twice_signed_area = torch.norm(cross, dim=-1, keepdim=True)  # (n_cells, 1)
-            # Actually we need signed area - use sign from first nonzero component
-            # For simplicity, use magnitude (this gives correct gradients up to orientation)
+            # 3D: cross product encodes both normal direction and twice-area
+            cross = torch.linalg.cross(edge1, edge2)  # (n_cells, 3)
         else:
             # Higher dimensions: use Gram determinant
             raise NotImplementedError(
                 f"Barycentric gradients for n_spatial_dims={n_spatial_dims} not yet implemented"
             )
 
-        ### Compute gradients using perpendicular edge vectors
-        # ∇φ₀ = (v2 - v1)^⊥ / (2A)
-        # ∇φ₁ = (v0 - v2)^⊥ / (2A)
-        # ∇φ₂ = (v1 - v0)^⊥ / (2A)
-        #
-        # In 2D: (x, y)^⊥ = (-y, x) (90° counterclockwise rotation)
-        # In 3D: Use cross product with normal
+        ### Compute gradients of barycentric functions for each vertex
+        # In 2D: ∇φᵢ = perpendicular(opposite_edge) / (2 × signed_area)
+        #   where perpendicular(x, y) = (-y, x) is a fixed 90° CCW rotation,
+        #   and the signed area corrects the direction for CW-oriented cells.
+        # In 3D: ∇φᵢ = cross × opposite_edge / |cross|²
+        #   where cross = (v₁-v₀) × (v₂-v₀). This formula is inherently
+        #   orientation-independent (no signed area needed) because flipping
+        #   two vertices negates both cross and the opposite edge, leaving
+        #   the quotient unchanged.
 
         if n_spatial_dims == 2:
             ### 2D case: direct perpendicular
@@ -171,28 +170,29 @@ def compute_barycentric_gradients(
             gradients[:, 2, :] = perp_v1_v0 / twice_signed_area
 
         elif n_spatial_dims == 3:
-            ### 3D case: Use formula ∇φᵢ = normal × opposite_edge / (2A)
-            # Actually, the correct formula involves the dual basis
-            # For a triangle in 3D: ∇φ₀ = (normal × (v2-v1)) / (2A)
-
-            # Get triangle normal
-            normal = torch.linalg.cross(edge1, edge2)  # (n_cells, 3)
-            normal = normal / torch.norm(normal, dim=-1, keepdim=True).clamp(min=1e-10)
+            ### 3D case: ∇φᵢ = (cross × opposite_edge) / |cross|²
+            # Equivalent to the textbook n̂ × edge / (2A), since
+            # n̂ = cross/|cross| and 2A = |cross|, giving cross×edge / |cross|².
 
             # Opposite edges
             edge_v2_v1 = v2 - v1
             edge_v0_v2 = v0 - v2
             edge_v1_v0 = v1 - v0
 
-            # Gradients via cross product with normal
-            # ∇φ₀ perpendicular to opposite edge and normal
-            grad_v0 = torch.linalg.cross(normal, edge_v2_v1)
-            grad_v1 = torch.linalg.cross(normal, edge_v0_v2)
-            grad_v2 = torch.linalg.cross(normal, edge_v1_v0)
+            # |cross|² = (2A)²; clamp for degenerate triangles (zero area)
+            cross_norm_sq = (cross * cross).sum(dim=-1, keepdim=True).clamp(
+                min=1e-20
+            )
 
-            gradients[:, 0, :] = grad_v0 / twice_signed_area
-            gradients[:, 1, :] = grad_v1 / twice_signed_area
-            gradients[:, 2, :] = grad_v2 / twice_signed_area
+            gradients[:, 0, :] = (
+                torch.linalg.cross(cross, edge_v2_v1) / cross_norm_sq
+            )
+            gradients[:, 1, :] = (
+                torch.linalg.cross(cross, edge_v0_v2) / cross_norm_sq
+            )
+            gradients[:, 2, :] = (
+                torch.linalg.cross(cross, edge_v1_v0) / cross_norm_sq
+            )
 
     elif n_manifold_dims == 3:
         ### 3D tetrahedra: Use dual basis / perpendicular to opposite face
