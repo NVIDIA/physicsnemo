@@ -30,10 +30,10 @@ from jaxtyping import Float
 
 import physicsnemo  # noqa: F401 for docs
 from physicsnemo.core.version_check import check_version_spec
-from physicsnemo.models.transolver.Physics_Attention import (
+from physicsnemo.nn import Mlp
+from physicsnemo.nn.module.physics_attention import (
     PhysicsAttentionIrregularMesh,
 )
-from physicsnemo.models.transolver.transolver import MLP
 
 # Check optional dependency availability
 TE_AVAILABLE = check_version_spec("transformer_engine", "0.1.0", hard_fail=False)
@@ -142,17 +142,17 @@ class GALE(PhysicsAttentionIrregularMesh):
         Parameters
         ----------
         slice_tokens : list[torch.Tensor]
-            List of slice token tensors, each of shape :math:`(B, H, N, D)` where
-            :math:`B` is batch size, :math:`H` is number of heads, :math:`N` is
+            List of slice token tensors, each of shape :math:`(B, H, S, D)` where
+            :math:`B` is batch size, :math:`H` is number of heads, :math:`S` is
             number of slices, and :math:`D` is head dimension.
         context : torch.Tensor
-            Context tensor of shape :math:`(B, H, N_c, D_c)` where :math:`N_c` is
+            Context tensor of shape :math:`(B, H, S_c, D_c)` where :math:`S_c` is
             number of context slices and :math:`D_c` is context dimension.
 
         Returns
         -------
         list[torch.Tensor]
-            List of cross-attention outputs, each of shape :math:`(B, H, N, D)`.
+            List of cross-attention outputs, each of shape :math:`(B, H, S, D)`.
         """
         # Concatenate all slice tokens for batched projection
         q_input = torch.cat(slice_tokens, dim=-2)  # (B, H, total_slices, D)
@@ -161,8 +161,8 @@ class GALE(PhysicsAttentionIrregularMesh):
         q = self.cross_q(q_input)  # (B, H, total_slices, D)
 
         # Project keys and values from context
-        k = self.cross_k(context)  # (B, H, N_c, D)
-        v = self.cross_v(context)  # (B, H, N_c, D)
+        k = self.cross_k(context)  # (B, H, S_c, D)
+        v = self.cross_v(context)  # (B, H, S_c, D)
 
         # Compute cross-attention using appropriate backend
         if self.use_te:
@@ -243,7 +243,7 @@ class GALE(PhysicsAttentionIrregularMesh):
         # Compute slice weights and aggregated slice tokens
         slice_weights, slice_tokens = zip(
             *[
-                self.compute_slices_from_projections(proj, _fx_mid)
+                self._compute_slices_from_projections(proj, _fx_mid)
                 for proj, _fx_mid in zip(slice_projections, fx_mid)
             ]
         )
@@ -251,12 +251,12 @@ class GALE(PhysicsAttentionIrregularMesh):
         # Apply self-attention to slice tokens
         if self.use_te:
             self_slice_token = [
-                self.compute_slice_attention_te(_slice_token)
+                self._compute_slice_attention_te(_slice_token)
                 for _slice_token in slice_tokens
             ]
         else:
             self_slice_token = [
-                self.compute_slice_attention_sdpa(_slice_token)
+                self._compute_slice_attention_sdpa(_slice_token)
                 for _slice_token in slice_tokens
             ]
 
@@ -279,7 +279,7 @@ class GALE(PhysicsAttentionIrregularMesh):
 
         # Project attention outputs back to original space using slice weights
         outputs = [
-            self.project_attention_outputs(ost, sw)
+            self._project_attention_outputs(ost, sw)
             for ost, sw in zip(out_slice_token, slice_weights)
         ]
 
@@ -407,13 +407,11 @@ class GALE_block(nn.Module):
         else:
             self.ln_mlp1 = nn.Sequential(
                 nn.LayerNorm(hidden_dim),
-                MLP(
-                    hidden_dim,
-                    hidden_dim * mlp_ratio,
-                    hidden_dim,
-                    n_layers=0,
-                    res=False,
-                    act=act,
+                Mlp(
+                    in_features=hidden_dim,
+                    hidden_features=hidden_dim * mlp_ratio,
+                    out_features=hidden_dim,
+                    act_layer=act,
                     use_te=False,
                 ),
             )

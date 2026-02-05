@@ -459,7 +459,7 @@ class DiTBlock(nn.Module):
               See physicsnemo.experimental.models.dit.layers.TESelfAttention for more details.
             - 'natten2d' uses an attention module performing 2D neighborhood attention using NATTEN. See physicsnemo.experimental.models.dit.layers.Natten2DSelfAttention for more details.
         The expected interface for the attention module is defined in physicsnemo.experimental.models.dit.layers.AttentionModuleBase.
-        Default is 'transformer_engine'.
+        Default is 'timm'.
     layernorm_backend (str):
         The layer normalization implementation ('apex' or 'torch'). Default is 'torch'.
     mlp_ratio (float):
@@ -505,7 +505,7 @@ class DiTBlock(nn.Module):
         self,
         hidden_size: int,
         num_heads: int,
-        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], Module] = "transformer_engine",
+        attention_backend: Union[Literal["transformer_engine", "timm", "natten2d"], Module] = "timm",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         mlp_ratio: float = 4.0,
         intermediate_dropout: bool = False,
