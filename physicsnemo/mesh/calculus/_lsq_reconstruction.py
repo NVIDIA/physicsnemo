@@ -173,8 +173,14 @@ def _solve_batched_lsq_gradients(
                 gradients[entity_indices] = solution_reshaped.permute(*perm)
 
         except torch.linalg.LinAlgError:
-            # Singular systems: gradients remain zero
-            pass
+            import warnings
+
+            warnings.warn(
+                "Singular linear system in LSQ gradient reconstruction. "
+                "Affected vertices (e.g., isolated or collinear neighborhoods) "
+                "will have zero gradients.",
+                stacklevel=2,
+            )
 
     return gradients
 

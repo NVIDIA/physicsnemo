@@ -154,7 +154,10 @@ def compute_cotan_weights_triangle_mesh(
         (length of segment from edge midpoint through triangle circumcenters).
 
     For 3D manifolds (tets):
-        Uses geometric approximation (inverse edge length weighting)
+        Uses an inverse-edge-length approximation rather than true
+        dihedral-angle cotangent weights. This is acceptable for
+        well-shaped tetrahedra but degrades on slivers. Not
+        implemented for manifold dimensions > 3.
 
     For 1D manifolds (edges):
         Uses uniform weights

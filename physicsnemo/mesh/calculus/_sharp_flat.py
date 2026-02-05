@@ -167,7 +167,7 @@ def sharp(
         local_other_mask = cells_expanded == other_vertex_indices.unsqueeze(1)
         local_other_idx = torch.argmax(local_other_mask.int(), dim=1)  # (n_matched,)
 
-        ### Get weights: |⋆v ∩ cell| / |cell|
+        ### Get weights: |⋆v ∩ cell| / |⋆v|
         pair_indices = matched_cell_indices * (mesh.n_manifold_dims + 1) + local_v_idx
         weights = fractions[pair_indices]  # (n_matched,)
 

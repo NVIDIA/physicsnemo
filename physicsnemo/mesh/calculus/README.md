@@ -418,10 +418,14 @@ assert torch.allclose(div_curl_v, torch.zeros_like(div_curl_v), atol=1e-5)
 | Gradient (DEC) | ✓ | ✓ | ✓ | ✓ |
 | Divergence | ✓ | ✓ | ✓ | ✓ |
 | Curl (LSQ) | - | - | ✓ | - |
-| Laplacian (DEC) | ✓ | ✓ | ✓ | ✓ |
+| Laplacian (DEC) | ✓ | ✓ | ✓† | - |
 | Hodge star | ✓ | ✓ | ✓* | ✓* |
 
 *Uses barycentric approximation for n ≥ 3
+
+†3D Laplacian uses an inverse-edge-length approximation rather than true
+dihedral-angle cotangent weights. Accuracy degrades on poorly-shaped tetrahedra.
+Not implemented for n > 3.
 
 ---
 

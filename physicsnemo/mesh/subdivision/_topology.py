@@ -26,6 +26,10 @@ re-exported here for backwards compatibility.
 
 import torch
 
+from physicsnemo.mesh.boundaries._facet_extraction import (  # noqa: F401
+    extract_unique_edges,
+)
+
 
 
 def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:

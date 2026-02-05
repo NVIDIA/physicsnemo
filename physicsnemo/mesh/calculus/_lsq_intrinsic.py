@@ -225,8 +225,14 @@ def compute_point_gradient_lsq_intrinsic(
                     gradients[point_indices] = grad_ambient_reshaped.permute(*perm)
 
             except torch.linalg.LinAlgError:
-                # Singular systems: gradients remain zero
-                pass
+                import warnings
+
+                warnings.warn(
+                    "Singular linear system in intrinsic LSQ gradient reconstruction. "
+                    "Affected vertices (e.g., isolated or collinear neighborhoods) "
+                    "will have zero gradients.",
+                    stacklevel=2,
+                )
 
     return gradients
 
