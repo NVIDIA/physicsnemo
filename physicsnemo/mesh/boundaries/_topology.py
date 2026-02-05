@@ -23,6 +23,7 @@ This module provides functions to check topological properties of meshes:
 
 from typing import TYPE_CHECKING, Literal
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
@@ -35,21 +36,26 @@ def is_watertight(mesh: "Mesh") -> bool:
     A mesh is watertight if every codimension-1 facet is shared by exactly 2 cells.
     This means the mesh forms a closed surface/volume with no holes or gaps.
 
-    Args:
-        mesh: Input simplicial mesh to check
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh to check
 
-    Returns:
+    Returns
+    -------
+    bool
         True if mesh is watertight (no boundary facets), False otherwise
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
-        >>> # Closed sphere is watertight
-        >>> sphere = sphere_icosahedral.load(subdivisions=3)
-        >>> assert is_watertight(sphere) == True
-        >>>
-        >>> # Open cylinder with holes at ends
-        >>> cylinder = cylinder_open.load()
-        >>> assert is_watertight(cylinder) == False
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
+    >>> # Closed sphere is watertight
+    >>> sphere = sphere_icosahedral.load(subdivisions=3)
+    >>> assert is_watertight(sphere) == True
+    >>>
+    >>> # Open cylinder with holes at ends
+    >>> cylinder = cylinder_open.load()
+    >>> assert is_watertight(cylinder) == False
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
         categorize_facets_by_count,
@@ -83,29 +89,36 @@ def is_manifold(
     A mesh is a manifold if it locally looks like Euclidean space at every point.
     This function checks various topological constraints depending on the check level.
 
-    Args:
-        mesh: Input simplicial mesh to check
-        check_level: Level of checking to perform:
-            - "facets": Only check codimension-1 facets (each appears 1-2 times)
-            - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
-            - "full": Complete manifold validation (default)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh to check
+    check_level : {"facets", "edges", "full"}, optional
+        Level of checking to perform:
+        - "facets": Only check codimension-1 facets (each appears 1-2 times)
+        - "edges": Check facets + edge neighborhoods (for 2D/3D meshes)
+        - "full": Complete manifold validation (default)
 
-    Returns:
+    Returns
+    -------
+    bool
         True if mesh passes the specified manifold checks, False otherwise
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
-        >>> # Valid manifold (sphere)
-        >>> sphere = sphere_icosahedral.load(subdivisions=3)
-        >>> assert is_manifold(sphere) == True
-        >>>
-        >>> # Manifold with boundary (open cylinder)
-        >>> cylinder = cylinder_open.load()
-        >>> assert is_manifold(cylinder) == True  # manifold with boundary is OK
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral, cylinder_open
+    >>> # Valid manifold (sphere)
+    >>> sphere = sphere_icosahedral.load(subdivisions=3)
+    >>> assert is_manifold(sphere) == True
+    >>>
+    >>> # Manifold with boundary (open cylinder)
+    >>> cylinder = cylinder_open.load()
+    >>> assert is_manifold(cylinder) == True  # manifold with boundary is OK
 
-    Note:
-        This function checks topological constraints but does not check for
-        geometric self-intersections (which would require expensive spatial queries).
+    Notes
+    -----
+    This function checks topological constraints but does not check for
+    geometric self-intersections (which would require expensive spatial queries).
     """
     ### Empty mesh is considered a valid manifold
     if mesh.n_cells == 0:
@@ -141,10 +154,14 @@ def _check_facets_manifold(mesh: "Mesh") -> bool:
     in at most 2 cells. Facets appearing once are on the boundary; facets appearing
     twice are interior.
 
-    Args:
-        mesh: Input mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
 
-    Returns:
+    Returns
+    -------
+    bool
         True if facets satisfy manifold constraints
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
@@ -173,10 +190,14 @@ def _check_edges_manifold(mesh: "Mesh") -> bool:
     For 3D manifolds (tetrahedra): Each edge should have a valid "link" - the set of
     facets (triangles) incident to the edge should form a topological disk or circle.
 
-    Args:
-        mesh: Input mesh (must have n_manifold_dims >= 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh (must have n_manifold_dims >= 2)
 
-    Returns:
+    Returns
+    -------
+    bool
         True if edges satisfy manifold constraints
     """
     from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
@@ -241,10 +262,14 @@ def _check_vertices_manifold(mesh: "Mesh") -> bool:
     - For 2D: The edges around each vertex form a single cycle or fan
     - For 3D: The faces around each vertex form a single connected surface
 
-    Args:
-        mesh: Input mesh (must have n_manifold_dims >= 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh (must have n_manifold_dims >= 2)
 
-    Returns:
+    Returns
+    -------
+    bool
         True if vertices satisfy manifold constraints
     """
     ### For 2D meshes, check that edges around each vertex form a valid fan/cycle
@@ -253,7 +278,7 @@ def _check_vertices_manifold(mesh: "Mesh") -> bool:
 
     ### For 3D meshes, check that faces around each vertex form a connected surface
     if mesh.n_manifold_dims == 3:
-        return _check_3d_vertex_manifold()
+        return _check_3d_vertex_manifold(mesh)
 
     ### For other dimensions, no specific check
     return True
@@ -266,10 +291,14 @@ def _check_2d_vertex_manifold(mesh: "Mesh") -> bool:
     vertex must form a single fan (for boundary vertices) or a complete cycle
     (for interior vertices).
 
-    Args:
-        mesh: 2D triangular mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        2D triangular mesh
 
-    Returns:
+    Returns
+    -------
+    bool
         True if all vertices satisfy 2D manifold constraints
     """
     from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
@@ -317,29 +346,106 @@ def _check_2d_vertex_manifold(mesh: "Mesh") -> bool:
     return True
 
 
-def _check_3d_vertex_manifold() -> bool:
-    """Check vertex manifold constraints for 3D meshes.
+def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
+    """Check vertex manifold constraints for 3D tetrahedral meshes.
 
-    For a 3D tetrahedral mesh to be manifold at a vertex, the triangular faces
-    around the vertex must form a single connected surface (topological sphere
-    for interior vertices, or disk for boundary vertices).
+    For a 3D mesh to be manifold at vertex v, the **link** of v must be
+    connected. The link at v consists of one triangular face per incident
+    tetrahedron (the face opposite to v, formed by the tet's other 3
+    vertices). Two link faces are adjacent if their parent tets share a
+    triangular face that contains v - equivalently, if their non-v vertex
+    sets share exactly 2 vertices (an edge).
 
-    Returns:
-        True if all vertices satisfy 3D manifold constraints
+    A disconnected link indicates a **pinch point**: two groups of
+    tetrahedra meeting at a single vertex without sharing any face that
+    contains it. This is the primary non-manifold vertex configuration not
+    caught by the facet and edge checks.
 
-    Note:
-        This is a stub implementation that always returns True. A proper
-        implementation would analyze face connectivity around each vertex.
+    Algorithm:
+        For each vertex v with 2+ incident tetrahedra:
+
+        1. Extract the link face (3 non-v vertices, sorted) from each
+           incident tet.
+        2. For each edge of each link face, record which local tet owns it.
+           When two local tets share a link-face edge, they are adjacent in
+           the link graph.
+        3. Use union-find on the local tets, merging via shared edges.
+        4. Verify that all local tets end up in one connected component.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Input 3D tetrahedral mesh.
+
+    Returns
+    -------
+    bool
+        True if all vertices have connected links (manifold at all vertices).
     """
-    ### This is a complex check that requires analyzing face connectivity
-    ### around each vertex. For now, we rely on the facet and edge checks
-    ### which catch most non-manifold configurations.
+    from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
 
-    ### A proper implementation would:
-    ### 1. For each vertex, extract all incident triangular faces
-    ### 2. Build the face adjacency graph (faces sharing an edge)
-    ### 3. Check that this graph forms a single connected component
-    ### 4. Check that it has the topology of a sphere (for interior) or disk (for boundary)
+    p2c = get_point_to_cells_adjacency(mesh)
 
-    ### This requires significant computation, so we defer to simpler checks for now
+    ### Move to CPU numpy for the per-vertex connectivity check
+    offsets = p2c.offsets.cpu().numpy()
+    p2c_indices = p2c.indices.cpu().numpy()
+    cells_np = mesh.cells.cpu().numpy()
+
+    for v in range(mesh.n_points):
+        start, end = offsets[v], offsets[v + 1]
+        n_incident = end - start
+
+        ### Vertices with 0 or 1 incident tets have trivially connected links
+        if n_incident <= 1:
+            continue
+
+        incident_tet_verts = cells_np[p2c_indices[start:end]]  # (n_incident, 4)
+
+        ### Extract sorted link faces: the 3 non-v vertices of each tet
+        link_faces: list[tuple[int, int, int]] = []
+        for row in incident_tet_verts:
+            non_v = row[row != v]
+            if len(non_v) != 3:
+                continue  # Degenerate tet with duplicate vertex v
+            non_v.sort()
+            link_faces.append((int(non_v[0]), int(non_v[1]), int(non_v[2])))
+
+        n_faces = len(link_faces)
+        if n_faces <= 1:
+            continue
+
+        ### Union-find: merge local tets whose link faces share an edge
+        # For each edge of each link face, the first tet to claim that edge
+        # becomes the representative; subsequent tets are unioned with it.
+        parent = list(range(n_faces))
+        edge_to_first: dict[tuple[int, int], int] = {}
+
+        for face_idx, (a, b, c) in enumerate(link_faces):
+            for edge in ((a, b), (a, c), (b, c)):
+                if edge in edge_to_first:
+                    _uf_union(parent, edge_to_first[edge], face_idx)
+                else:
+                    edge_to_first[edge] = face_idx
+
+        ### Verify single connected component
+        root = _uf_find(parent, 0)
+        for i in range(1, n_faces):
+            if _uf_find(parent, i) != root:
+                return False
+
     return True
+
+
+def _uf_find(parent: list[int], i: int) -> int:
+    """Find root of element *i* with path halving (union-find helper)."""
+    while parent[i] != i:
+        parent[i] = parent[parent[i]]
+        i = parent[i]
+    return i
+
+
+def _uf_union(parent: list[int], i: int, j: int) -> None:
+    """Merge the components containing *i* and *j* (union-find helper)."""
+    ri, rj = _uf_find(parent, i), _uf_find(parent, j)
+    if ri != rj:
+        parent[ri] = rj

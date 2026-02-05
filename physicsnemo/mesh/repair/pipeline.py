@@ -49,26 +49,39 @@ def repair_mesh(
     5. Fill holes (if enabled)
     6. Make manifold (if enabled)
 
-    Args:
-        mesh: Input mesh to repair
-        remove_duplicates: Merge coincident vertices
-        remove_degenerates: Remove zero-area cells and cells with duplicate vertices
-        remove_isolated: Remove vertices not in any cell
-        fix_orientation: Ensure consistent face normals (2D in 3D only)
-        fill_holes: Close boundary loops (expensive)
-        make_manifold: Split non-manifold edges (changes topology)
-        tolerance: Distance/area tolerance for various checks
-        max_hole_edges: Maximum hole size to fill
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to repair
+    remove_duplicates : bool
+        Merge coincident vertices
+    remove_degenerates : bool
+        Remove zero-area cells and cells with duplicate vertices
+    remove_isolated : bool
+        Remove vertices not in any cell
+    fix_orientation : bool
+        Ensure consistent face normals (2D in 3D only)
+    fill_holes : bool
+        Close boundary loops (expensive)
+    make_manifold : bool
+        Split non-manifold edges (changes topology)
+    tolerance : float
+        Distance/area tolerance for various checks
+    max_hole_edges : int
+        Maximum hole size to fill
 
-    Returns:
+    Returns
+    -------
+    tuple[Mesh, dict[str, dict]]
         Tuple of (repaired_mesh, all_stats) where all_stats is a dict mapping
         operation name to its individual stats dict
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh_clean, stats = repair_mesh(mesh, remove_duplicates=True)
-        >>> assert "duplicates" in stats
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> mesh_clean, stats = repair_mesh(mesh, remove_duplicates=True)
+    >>> assert "duplicates" in stats
     """
     current_mesh = mesh
     all_stats = {}

@@ -47,31 +47,40 @@ def remesh(
     This works for arbitrary manifold dimensions (1D curves, 2D surfaces,
     3D volumes, etc.) in arbitrary embedding spaces.
 
-    Args:
-        mesh: Input mesh to remesh
-        n_clusters: Target number of output cells. The actual number may vary
-            slightly depending on mesh topology.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to remesh
+    n_clusters : int
+        Target number of output cells. The actual number may vary
+        slightly depending on mesh topology.
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Remeshed mesh with approximately n_clusters cells. The vertices are
         cluster centroids, and cells connect adjacent clusters.
 
-    Raises:
-        ValueError: If n_clusters <= 0 or weights have wrong shape
+    Raises
+    ------
+    ValueError
+        If n_clusters <= 0 or weights have wrong shape
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> from physicsnemo.mesh.remeshing import remesh
-        >>> mesh = sphere_icosahedral.load(subdivisions=3)
-        >>> # Remesh a triangle mesh to ~100 triangles
-        >>> simplified = remesh(mesh, n_clusters=100)
-        >>> assert simplified.n_cells > 0
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> from physicsnemo.mesh.remeshing import remesh
+    >>> mesh = sphere_icosahedral.load(subdivisions=3)
+    >>> # Remesh a triangle mesh to ~100 triangles
+    >>> simplified = remesh(mesh, n_clusters=100)
+    >>> assert simplified.n_cells > 0
 
-    Note:
-        - Works for 1D, 2D, 3D, and higher-dimensional manifolds
-        - Preserves mesh topology qualitatively but not quantitatively
-        - Point and cell data are not transferred (topology changes fundamentally)
-        - Output cell orientation may differ from input
+    Notes
+    -----
+    - Works for 1D, 2D, 3D, and higher-dimensional manifolds
+    - Preserves mesh topology qualitatively but not quantitatively
+    - Point and cell data are not transferred (topology changes fundamentally)
+    - Output cell orientation may differ from input
     """
     import importlib
 

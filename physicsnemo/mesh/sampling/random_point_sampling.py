@@ -38,35 +38,45 @@ def sample_random_points_on_cells(
     The concentration parameter alpha controls the distribution of samples within
     each cell (simplex).
 
-    Args:
-        mesh: The mesh to sample from.
-        cell_indices: Indices of cells to sample from. Can be a Sequence or tensor.
-            Allows repeated indices to sample multiple points from the same cell.
-            If None, samples one point from each cell (equivalent to arange(n_cells)).
-            Shape: (n_samples,) where n_samples is the number of points to sample.
-        alpha: Concentration parameter for the Dirichlet distribution. Controls how
-            samples are distributed within each cell:
-            - alpha = 1.0: Uniform distribution over the simplex (default)
-            - alpha > 1.0: Concentrates samples toward the center of each cell
-            - alpha < 1.0: Concentrates samples toward vertices and edges
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh to sample from.
+    cell_indices : Sequence[int] | torch.Tensor | None
+        Indices of cells to sample from. Can be a Sequence or tensor.
+        Allows repeated indices to sample multiple points from the same cell.
+        If None, samples one point from each cell (equivalent to arange(n_cells)).
+        Shape: (n_samples,) where n_samples is the number of points to sample.
+    alpha : float
+        Concentration parameter for the Dirichlet distribution. Controls how
+        samples are distributed within each cell:
+        - alpha = 1.0: Uniform distribution over the simplex (default)
+        - alpha > 1.0: Concentrates samples toward the center of each cell
+        - alpha < 1.0: Concentrates samples toward vertices and edges
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Random points on cells, shape (n_samples, n_spatial_dims). Each point lies
         within its corresponding cell. If cell_indices is None, n_samples = n_cells.
 
-    Raises:
-        NotImplementedError: If alpha != 1.0 and torch.compile is being used.
-            This is due to a PyTorch limitation with Gamma distributions under torch.compile.
-        IndexError: If any cell_indices are out of bounds.
+    Raises
+    ------
+    NotImplementedError
+        If alpha != 1.0 and torch.compile is being used.
+        This is due to a PyTorch limitation with Gamma distributions under torch.compile.
+    IndexError
+        If any cell_indices are out of bounds.
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> # Sample one point from each cell uniformly
-        >>> points = sample_random_points_on_cells(mesh)
-        >>> assert points.shape == (mesh.n_cells, mesh.n_spatial_dims)
-        >>> # Sample with concentration toward cell centers
-        >>> points = sample_random_points_on_cells(mesh, alpha=3.0)
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> # Sample one point from each cell uniformly
+    >>> points = sample_random_points_on_cells(mesh)
+    >>> assert points.shape == (mesh.n_cells, mesh.n_spatial_dims)
+    >>> # Sample with concentration toward cell centers
+    >>> points = sample_random_points_on_cells(mesh, alpha=3.0)
     """
     ### Handle default case: sample one point from each cell
     if cell_indices is None:

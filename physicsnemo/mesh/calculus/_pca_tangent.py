@@ -39,18 +39,25 @@ def estimate_tangent_space_pca(
     relative positions. The eigenvectors corresponding to the largest eigenvalues
     span the tangent space, while those with smallest eigenvalues span the normal space.
 
-    Args:
-        mesh: Input mesh
-        k_neighbors: Number of neighbors to use for PCA. If None, uses
-            min(2 * n_manifold_dims + 1, available_neighbors)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    k_neighbors : int | None
+        Number of neighbors to use for PCA. If None, uses
+        min(2 * n_manifold_dims + 1, available_neighbors)
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
         Tuple of (tangent_basis, normal_basis) where:
         - tangent_basis: (n_points, n_manifold_dims, n_spatial_dims)
             Orthonormal basis vectors spanning tangent space at each point
         - normal_basis: (n_points, codimension, n_spatial_dims)
             Orthonormal basis vectors spanning normal space at each point
 
+    Notes
+    -----
     Algorithm:
         1. For each point, gather k nearest neighbors
         2. Center the neighborhood (subtract mean)
@@ -60,12 +67,13 @@ def estimate_tangent_space_pca(
         6. First n_manifold_dims eigenvectors span tangent space
         7. Remaining eigenvectors span normal space
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.curves import helix_3d
-        >>> curve_mesh = helix_3d.load()
-        >>> tangent_basis, normal_basis = estimate_tangent_space_pca(curve_mesh)
-        >>> # tangent_basis: (n_points, 1, 3) - tangent direction
-        >>> # normal_basis: (n_points, 2, 3) - normal plane basis
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.curves import helix_3d
+    >>> curve_mesh = helix_3d.load()
+    >>> tangent_basis, normal_basis = estimate_tangent_space_pca(curve_mesh)
+    >>> # tangent_basis: (n_points, 1, 3) - tangent direction
+    >>> # normal_basis: (n_points, 2, 3) - normal plane basis
     """
     n_points = mesh.n_points
     n_spatial_dims = mesh.n_spatial_dims
@@ -213,21 +221,28 @@ def project_gradient_to_tangent_space_pca(
     For higher codimension manifolds, uses PCA to estimate tangent space
     and projects gradients accordingly.
 
-    Args:
-        mesh: Input mesh
-        gradients: Extrinsic gradients, shape (n_points, n_spatial_dims) or
-            (n_points, n_spatial_dims, ...)
-        k_neighbors: Number of neighbors for PCA estimation
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    gradients : torch.Tensor
+        Extrinsic gradients, shape (n_points, n_spatial_dims) or
+        (n_points, n_spatial_dims, ...)
+    k_neighbors : int | None
+        Number of neighbors for PCA estimation
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Intrinsic gradients projected onto tangent space, same shape as input
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.curves import helix_3d
-        >>> mesh = helix_3d.load()
-        >>> gradients = torch.randn(mesh.n_points, mesh.n_spatial_dims)
-        >>> grad_intrinsic = project_gradient_to_tangent_space_pca(mesh, gradients)
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.curves import helix_3d
+    >>> mesh = helix_3d.load()
+    >>> gradients = torch.randn(mesh.n_points, mesh.n_spatial_dims)
+    >>> grad_intrinsic = project_gradient_to_tangent_space_pca(mesh, gradients)
     """
     ### Estimate tangent space using PCA
     tangent_basis, _ = estimate_tangent_space_pca(mesh, k_neighbors)

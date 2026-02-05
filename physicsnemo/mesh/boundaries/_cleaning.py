@@ -44,12 +44,18 @@ def _compute_duplicate_mask(
     Two points are considered duplicates if:
         ||p1 - p2|| <= atol + rtol * max(||p1||, ||p2||)
 
-    Args:
-        points: Point coordinates
-        rtol: Relative tolerance
-        atol: Absolute tolerance
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point coordinates
+    rtol : float
+        Relative tolerance
+    atol : float
+        Absolute tolerance
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Boolean mask of shape (n_points, n_points) where True indicates duplicates
     """
     ### Compute pairwise distances: ||pi - pj||
@@ -85,31 +91,43 @@ def merge_duplicate_points(
     When duplicates are found, they are merged into a single point, and cell
     connectivity is updated accordingly.
 
-    Args:
-        points: Point coordinates, shape (n_points, n_spatial_dims)
-        cells: Cell connectivity, shape (n_cells, n_vertices_per_cell)
-        point_data: Point data to merge
-        rtol: Relative tolerance for distance comparison
-        atol: Absolute tolerance for distance comparison
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point coordinates, shape (n_points, n_spatial_dims)
+    cells : torch.Tensor
+        Cell connectivity, shape (n_cells, n_vertices_per_cell)
+    point_data : TensorDict
+        Point data to merge
+    rtol : float, optional
+        Relative tolerance for distance comparison
+    atol : float, optional
+        Absolute tolerance for distance comparison
 
-    Returns:
-        merged_points: Deduplicated points, shape (n_unique_points, n_spatial_dims)
-        updated_cells: Updated cell connectivity, shape (n_cells, n_vertices_per_cell)
-        merged_point_data: Averaged point data for merged points
-        point_mapping: Mapping from old to new point indices, shape (n_points,)
+    Returns
+    -------
+    merged_points : torch.Tensor
+        Deduplicated points, shape (n_unique_points, n_spatial_dims)
+    updated_cells : torch.Tensor
+        Updated cell connectivity, shape (n_cells, n_vertices_per_cell)
+    merged_point_data : TensorDict
+        Averaged point data for merged points
+    point_mapping : torch.Tensor
+        Mapping from old to new point indices, shape (n_points,)
 
-    Example:
-        >>> import torch
-        >>> from tensordict import TensorDict
-        >>> # Two points at same location
-        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.]])
-        >>> cells = torch.tensor([[0, 1], [1, 2]])
-        >>> merged_points, updated_cells, _, mapping = merge_duplicate_points(
-        ...     points, cells, TensorDict({}, batch_size=[3])
-        ... )
-        >>> # Points 0 and 2 are merged
-        >>> assert len(merged_points) == 2
-        >>> assert torch.equal(mapping, torch.tensor([0, 1, 0]))
+    Examples
+    --------
+    >>> import torch
+    >>> from tensordict import TensorDict
+    >>> # Two points at same location
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.]])
+    >>> cells = torch.tensor([[0, 1], [1, 2]])
+    >>> merged_points, updated_cells, _, mapping = merge_duplicate_points(
+    ...     points, cells, TensorDict({}, batch_size=[3])
+    ... )
+    >>> # Points 0 and 2 are merged
+    >>> assert len(merged_points) == 2
+    >>> assert torch.equal(mapping, torch.tensor([0, 1, 0]))
     """
     n_points = len(points)
     device = points.device
@@ -178,13 +196,19 @@ def _merge_points_pairwise(
 ) -> torch.Tensor:
     """Merge points using pairwise distance computation.
 
-    Args:
-        points: Point coordinates
-        rtol: Relative tolerance
-        atol: Absolute tolerance
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point coordinates
+    rtol : float
+        Relative tolerance
+    atol : float
+        Absolute tolerance
 
-    Returns:
-        point_mapping: Mapping from each point to its representative
+    Returns
+    -------
+    torch.Tensor
+        Mapping from each point to its representative
     """
     n_points = len(points)
     device = points.device
@@ -243,13 +267,19 @@ def _merge_points_spatial_hash(
     This is more memory-efficient than pairwise distances but requires
     more complex implementation.
 
-    Args:
-        points: Point coordinates
-        rtol: Relative tolerance
-        atol: Absolute tolerance
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point coordinates
+    rtol : float
+        Relative tolerance
+    atol : float
+        Absolute tolerance
 
-    Returns:
-        point_mapping: Mapping from each point to its representative
+    Returns
+    -------
+    torch.Tensor
+        Mapping from each point to its representative
     """
     n_points = len(points)
     device = points.device
@@ -339,13 +369,20 @@ def _merge_point_data(
 ) -> TensorDict:
     """Merge point data by averaging over merged points.
 
-    Args:
-        point_data: Original point data
-        point_mapping: Mapping from original to merged points
-        unique_indices: Indices of unique points in original array
-        n_unique: Number of unique points
+    Parameters
+    ----------
+    point_data : TensorDict
+        Original point data
+    point_mapping : torch.Tensor
+        Mapping from original to merged points
+    unique_indices : torch.Tensor
+        Indices of unique points in original array
+    n_unique : int
+        Number of unique points
 
-    Returns:
+    Returns
+    -------
+    TensorDict
         Merged point data
     """
     if len(point_data.keys()) == 0:
@@ -391,23 +428,30 @@ def remove_duplicate_cells(
     Cells are considered duplicates if they contain the same set of vertex indices
     (regardless of order). When duplicates are found, only the first occurrence is kept.
 
-    Args:
-        cells: Cell connectivity, shape (n_cells, n_vertices_per_cell)
-        cell_data: Cell data
+    Parameters
+    ----------
+    cells : torch.Tensor
+        Cell connectivity, shape (n_cells, n_vertices_per_cell)
+    cell_data : TensorDict
+        Cell data
 
-    Returns:
-        unique_cells: Deduplicated cells, shape (n_unique_cells, n_vertices_per_cell)
-        unique_cell_data: Cell data for unique cells
+    Returns
+    -------
+    unique_cells : torch.Tensor
+        Deduplicated cells, shape (n_unique_cells, n_vertices_per_cell)
+    unique_cell_data : TensorDict
+        Cell data for unique cells
 
-    Example:
-        >>> import torch
-        >>> from tensordict import TensorDict
-        >>> # Two cells with same vertices
-        >>> cells = torch.tensor([[0, 1, 2], [1, 0, 2], [3, 4, 5]])
-        >>> unique_cells, _ = remove_duplicate_cells(
-        ...     cells, TensorDict({}, batch_size=[3])
-        ... )
-        >>> assert len(unique_cells) == 2  # cells 0 and 1 are duplicates
+    Examples
+    --------
+    >>> import torch
+    >>> from tensordict import TensorDict
+    >>> # Two cells with same vertices
+    >>> cells = torch.tensor([[0, 1, 2], [1, 0, 2], [3, 4, 5]])
+    >>> unique_cells, _ = remove_duplicate_cells(
+    ...     cells, TensorDict({}, batch_size=[3])
+    ... )
+    >>> assert len(unique_cells) == 2  # cells 0 and 1 are duplicates
     """
     if len(cells) == 0:
         return cells, cell_data
@@ -469,28 +513,38 @@ def remove_unused_points(
 ) -> tuple[torch.Tensor, torch.Tensor, TensorDict, torch.Tensor]:
     """Remove points that are not referenced by any cell.
 
-    Args:
-        points: Point coordinates, shape (n_points, n_spatial_dims)
-        cells: Cell connectivity, shape (n_cells, n_vertices_per_cell)
-        point_data: Point data
+    Parameters
+    ----------
+    points : torch.Tensor
+        Point coordinates, shape (n_points, n_spatial_dims)
+    cells : torch.Tensor
+        Cell connectivity, shape (n_cells, n_vertices_per_cell)
+    point_data : TensorDict
+        Point data
 
-    Returns:
-        used_points: Points that are used by cells, shape (n_used_points, n_spatial_dims)
-        updated_cells: Updated cell connectivity, shape (n_cells, n_vertices_per_cell)
-        used_point_data: Point data for used points
-        point_mapping: Mapping from old to new point indices, shape (n_points,)
-            Unused points map to -1
+    Returns
+    -------
+    used_points : torch.Tensor
+        Points that are used by cells, shape (n_used_points, n_spatial_dims)
+    updated_cells : torch.Tensor
+        Updated cell connectivity, shape (n_cells, n_vertices_per_cell)
+    used_point_data : TensorDict
+        Point data for used points
+    point_mapping : torch.Tensor
+        Mapping from old to new point indices, shape (n_points,)
+        Unused points map to -1
 
-    Example:
-        >>> import torch
-        >>> from tensordict import TensorDict
-        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [2., 2.]])
-        >>> cells = torch.tensor([[0, 1, 2]])  # Point 3 is unused
-        >>> used_points, updated_cells, _, mapping = remove_unused_points(
-        ...     points, cells, TensorDict({}, batch_size=[4])
-        ... )
-        >>> assert len(used_points) == 3
-        >>> assert torch.equal(mapping, torch.tensor([0, 1, 2, -1]))
+    Examples
+    --------
+    >>> import torch
+    >>> from tensordict import TensorDict
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [2., 2.]])
+    >>> cells = torch.tensor([[0, 1, 2]])  # Point 3 is unused
+    >>> used_points, updated_cells, _, mapping = remove_unused_points(
+    ...     points, cells, TensorDict({}, batch_size=[4])
+    ... )
+    >>> assert len(used_points) == 3
+    >>> assert torch.equal(mapping, torch.tensor([0, 1, 2, -1]))
     """
     n_points = len(points)
     device = points.device
@@ -549,26 +603,36 @@ def clean_mesh(
     2. Remove duplicate cells
     3. Remove unused points
 
-    Args:
-        mesh: Input mesh to clean
-        rtol: Relative tolerance for merging points (default 1e-12)
-        atol: Absolute tolerance for merging points (default 1e-12)
-        merge_points: Whether to merge duplicate points
-        remove_duplicate_cells_flag: Whether to remove duplicate cells
-        remove_unused_points_flag: Whether to remove unused points
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to clean
+    rtol : float, optional
+        Relative tolerance for merging points (default 1e-12)
+    atol : float, optional
+        Absolute tolerance for merging points (default 1e-12)
+    merge_points : bool, optional
+        Whether to merge duplicate points
+    remove_duplicate_cells_flag : bool, optional
+        Whether to remove duplicate cells
+    remove_unused_points_flag : bool, optional
+        Whether to remove unused points
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Cleaned mesh with same structure but repaired topology
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Mesh with duplicate points
-        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.], [1., 1.]])
-        >>> cells = torch.tensor([[0, 1, 3], [2, 1, 3]])
-        >>> mesh = Mesh(points=points, cells=cells)
-        >>> cleaned = clean_mesh(mesh)
-        >>> assert cleaned.n_points == 3  # points 0 and 2 merged
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Mesh with duplicate points
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.], [1., 1.]])
+    >>> cells = torch.tensor([[0, 1, 3], [2, 1, 3]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> cleaned = clean_mesh(mesh)
+    >>> assert cleaned.n_points == 3  # points 0 and 2 merged
     """
     points = mesh.points
     cells = mesh.cells

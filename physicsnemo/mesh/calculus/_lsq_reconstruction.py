@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -45,14 +47,22 @@ def _solve_batched_lsq_gradients(
     For each entity (point or cell), solves a weighted least-squares problem:
         min_{∇φ} Σ_neighbors w_i ||∇φ·(x_i - x_0) - (φ_i - φ_0)||²
 
-    Args:
-        positions: Entity positions (points or cell centroids)
-        values: Values at entities (scalars or tensor fields)
-        adjacency: Adjacency structure (entity-to-entity neighbors)
-        weight_power: Exponent for inverse distance weighting
-        min_neighbors: Minimum neighbors required for gradient computation
+    Parameters
+    ----------
+    positions : torch.Tensor
+        Entity positions (points or cell centroids)
+    values : torch.Tensor
+        Values at entities (scalars or tensor fields)
+    adjacency
+        Adjacency structure (entity-to-entity neighbors)
+    weight_power : float
+        Exponent for inverse distance weighting
+    min_neighbors : int
+        Minimum neighbors required for gradient computation
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradients at entities, shape (n_entities, n_spatial_dims) for scalars,
         or (n_entities, n_spatial_dims, ...) for tensor fields.
         Entities with insufficient neighbors have zero gradients.
@@ -121,7 +131,7 @@ def _solve_batched_lsq_gradients(
 
         ### Compute weights
         distances = torch.norm(A, dim=-1)  # (n_group, n_neighbors)
-        weights = 1.0 / distances.pow(weight_power).clamp(min=1e-10)
+        weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
 
         ### Apply weights to system
         sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
@@ -182,16 +192,25 @@ def compute_point_gradient_lsq(
 
     Where weights w_i = 1/||x_i - x_0||^α (typically α=2).
 
-    Args:
-        mesh: Simplicial mesh
-        point_values: Values at vertices, shape (n_points,) or (n_points, ...)
-        weight_power: Exponent for inverse distance weighting (default: 2.0)
-        min_neighbors: Minimum neighbors required for reliable gradient
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    point_values : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
+    weight_power : float
+        Exponent for inverse distance weighting (default: 2.0)
+    min_neighbors : int
+        Minimum neighbors required for reliable gradient
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradients at vertices, shape (n_points, n_spatial_dims) for scalars,
         or (n_points, n_spatial_dims, ...) for tensor fields
 
+    Notes
+    -----
     Algorithm:
         Solve weighted least-squares: (A^T W A) ∇φ = A^T W b
         where:
@@ -225,15 +244,23 @@ def compute_cell_gradient_lsq(
 
     Uses cell-to-cell adjacency to build LSQ system around each cell centroid.
 
-    Args:
-        mesh: Simplicial mesh
-        cell_values: Values at cells, shape (n_cells,) or (n_cells, ...)
-        weight_power: Exponent for inverse distance weighting (default: 2.0)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    cell_values : torch.Tensor
+        Values at cells, shape (n_cells,) or (n_cells, ...)
+    weight_power : float
+        Exponent for inverse distance weighting (default: 2.0)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradients at cells, shape (n_cells, n_spatial_dims) for scalars,
         or (n_cells, n_spatial_dims, ...) for tensor fields
 
+    Notes
+    -----
     Implementation:
         Fully vectorized using batched operations. Groups cells by neighbor count
         and processes each group in parallel.

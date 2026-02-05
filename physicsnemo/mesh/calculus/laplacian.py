@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -51,23 +53,32 @@ def _apply_cotan_laplacian_operator(
     Used by both compute_laplacian_points_dec() for scalar fields and
     compute_laplacian_at_points() in curvature module for point coordinates.
 
-    Args:
-        n_vertices: Number of vertices
-        edges: Edge connectivity, shape (n_edges, 2)
-        cotan_weights: Cotangent weights for each edge, shape (n_edges,)
-        data: Data at vertices, shape (n_vertices, *data_shape)
-        device: Device for computation
+    Parameters
+    ----------
+    n_vertices : int
+        Number of vertices
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
+    cotan_weights : torch.Tensor
+        Cotangent weights for each edge, shape (n_edges,)
+    data : torch.Tensor
+        Data at vertices, shape (n_vertices, *data_shape)
+    device : torch.device
+        Device for computation
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Laplacian applied to data, shape (n_vertices, *data_shape)
 
-    Example:
-        >>> import torch
-        >>> # For scalar field
-        >>> n_points, edges = 4, torch.tensor([[0, 1], [1, 2], [0, 2]])
-        >>> weights = torch.ones(3)
-        >>> scalar_field = torch.randn(4)
-        >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field, "cpu")
+    Examples
+    --------
+    >>> import torch
+    >>> # For scalar field
+    >>> n_points, edges = 4, torch.tensor([[0, 1], [1, 2], [0, 2]])
+    >>> weights = torch.ones(3)
+    >>> scalar_field = torch.randn(4)
+    >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field, "cpu")
     """
     ### Initialize output with same shape as data
     if data.ndim == 1:
@@ -125,32 +136,28 @@ def compute_laplacian_points_dec(
     - |e| is the edge length
     - The ratio |⋆e|/|e| are the cotangent weights
 
-    Args:
-        mesh: Simplicial mesh
-        point_values: Values at vertices, shape (n_points,) or (n_points, ...)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    point_values : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Laplacian at vertices, same shape as input
     """
     from physicsnemo.mesh.calculus._circumcentric_dual import (
-        compute_cotan_weights_triangle_mesh,
+        compute_cotan_weights_fem,
         get_or_compute_dual_volumes_0,
     )
 
     n_points = mesh.n_points
     device = mesh.points.device
 
-    ### Validate manifold dimension
-    if mesh.n_manifold_dims != 2:
-        raise NotImplementedError(
-            f"DEC Laplace-Beltrami currently only implemented for triangle meshes (2D manifolds). "
-            f"Got {mesh.n_manifold_dims=}. Use LSQ-based Laplacian via div(grad(.)) instead."
-        )
-
-    ### Get cotangent weights and edges (uses standard formula with factor of 1/2)
-    cotan_weights, sorted_edges = compute_cotan_weights_triangle_mesh(
-        mesh, return_edges=True
-    )
+    ### Get cotangent weights and edges via FEM stiffness matrix (works for any dimension)
+    cotan_weights, sorted_edges = compute_cotan_weights_fem(mesh)
 
     ### Apply cotangent Laplacian operator using shared utility
     laplacian = _apply_cotan_laplacian_operator(
@@ -166,11 +173,11 @@ def compute_laplacian_points_dec(
     dual_volumes_0 = get_or_compute_dual_volumes_0(mesh)
 
     if point_values.ndim == 1:
-        laplacian = laplacian / dual_volumes_0.clamp(min=1e-10)
+        laplacian = laplacian / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
     else:
         laplacian = laplacian / dual_volumes_0.view(
             -1, *([1] * (point_values.ndim - 1))
-        ).clamp(min=1e-10)
+        ).clamp(min=safe_eps(dual_volumes_0.dtype))
 
     return laplacian
 
@@ -183,11 +190,16 @@ def compute_laplacian_points(
 
     This is a convenience wrapper for compute_laplacian_points_dec.
 
-    Args:
-        mesh: Simplicial mesh
-        point_values: Values at vertices
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    point_values : torch.Tensor
+        Values at vertices
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Laplacian at vertices
     """
     return compute_laplacian_points_dec(mesh, point_values)

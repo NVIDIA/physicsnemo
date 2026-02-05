@@ -39,22 +39,28 @@ def remove_degenerate_cells(
     1. Area/volume below tolerance (nearly zero or negative)
     2. Duplicate vertex indices (invalid simplices)
 
-    Args:
-        mesh: Input mesh
-        area_tolerance: Minimum acceptable cell area
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    area_tolerance : float
+        Minimum acceptable cell area
 
-    Returns:
+    Returns
+    -------
+    tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
         - "n_zero_area_cells": Number of cells removed for zero area
         - "n_duplicate_vertex_cells": Number of cells with duplicate vertices
         - "n_cells_original": Original number of cells
         - "n_cells_final": Final number of cells
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh_clean, stats = remove_degenerate_cells(mesh)
-        >>> assert stats["n_cells_final"] == mesh.n_cells  # no degenerates in clean mesh
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> mesh_clean, stats = remove_degenerate_cells(mesh)
+    >>> assert stats["n_cells_final"] == mesh.n_cells  # no degenerates in clean mesh
     """
     n_original = mesh.n_cells
     device = mesh.points.device

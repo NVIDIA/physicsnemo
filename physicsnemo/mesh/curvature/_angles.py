@@ -48,12 +48,17 @@ def compute_solid_angle_at_tet_vertex(
         a, b, c are vectors from vertex to the three opposite vertices
         denominator = ||a|| ||b|| ||c|| + (a·b)||c|| + (b·c)||a|| + (c·a)||b||
 
-    Args:
-        vertex_pos: Position of apex vertex, shape (..., n_spatial_dims)
-        opposite_vertices: Positions of three opposite vertices,
-            shape (..., 3, n_spatial_dims)
+    Parameters
+    ----------
+    vertex_pos : torch.Tensor
+        Position of apex vertex, shape (..., n_spatial_dims)
+    opposite_vertices : torch.Tensor
+        Positions of three opposite vertices,
+        shape (..., 3, n_spatial_dims)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Solid angle in steradians, shape (...)
         Range: [0, 2π) for valid tetrahedra
 
@@ -114,14 +119,19 @@ def compute_angles_at_vertices(mesh: "Mesh") -> torch.Tensor:
 
     All formulas use numerically stable atan2-based computation.
 
-    Args:
-        mesh: Input simplicial mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_points,) containing sum of angles at each vertex.
         For isolated vertices, angle is 0.
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> triangle_mesh = two_triangles_2d.load()
         >>> angles = compute_angles_at_vertices(triangle_mesh)

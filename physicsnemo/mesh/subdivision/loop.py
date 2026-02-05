@@ -51,12 +51,18 @@ def _build_adjacency_from_edges(
     This is much faster than recomputing from cells when edges are already known.
     Uses a counting-based approach instead of sorting for better performance.
 
-    Args:
-        unique_edges: Unique edges, shape (n_edges, 2)
-        n_points: Number of points in mesh
-        device: Device to place tensors on
+    Parameters
+    ----------
+    unique_edges : torch.Tensor
+        Unique edges, shape (n_edges, 2)
+    n_points : int
+        Number of points in mesh
+    device : torch.device
+        Device to place tensors on
 
-    Returns:
+    Returns
+    -------
+    Adjacency
         Adjacency structure with bidirectional edges
     """
     from physicsnemo.mesh.neighbors._adjacency import Adjacency
@@ -93,16 +99,21 @@ def compute_loop_beta(valence: int) -> float:
     The beta weight determines how much an original vertex is influenced by
     its neighbors. For regular vertices (valence 6), beta = 1/16.
 
-    Args:
-        valence: Number of edges incident to the vertex
+    Parameters
+    ----------
+    valence : int
+        Number of edges incident to the vertex
 
-    Returns:
+    Returns
+    -------
+    float
         Beta weight for this valence
 
-    Formula:
-        For valence n:
-        - If n == 3: beta = 3/16
-        - Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
+    Formula
+    -------
+    For valence n:
+    - If n == 3: beta = 3/16
+    - Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
 
     This formula ensures smooth limit surfaces.
     """
@@ -130,12 +141,17 @@ def reposition_original_vertices_2d(
     This implementation is fully vectorized using the Adjacency structure directly,
     avoiding any Python loops over mesh elements.
 
-    Args:
-        mesh: Input 2D manifold mesh
-        unique_edges: Pre-computed unique edges (optional). If provided, uses these
-            instead of recomputing them, which saves significant time.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input 2D manifold mesh
+    unique_edges : torch.Tensor | None, optional
+        Pre-computed unique edges (optional). If provided, uses these
+        instead of recomputing them, which saves significant time.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Repositioned vertex positions, shape (n_points, n_spatial_dims)
     """
     device = mesh.points.device
@@ -221,11 +237,16 @@ def compute_loop_edge_positions_2d(
 
     For boundary edges, use simple average: (v0 + v1) / 2
 
-    Args:
-        mesh: Input 2D manifold mesh
-        unique_edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input 2D manifold mesh
+    unique_edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Edge vertex positions, shape (n_edges, n_spatial_dims)
     """
     from physicsnemo.mesh.boundaries import extract_candidate_facets
@@ -355,16 +376,23 @@ def subdivide_loop(mesh: "Mesh") -> "Mesh":
     The result is a smoother mesh that approximates (rather than interpolates)
     the original surface.
 
-    Args:
-        mesh: Input mesh to subdivide (must be 2D manifold)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to subdivide (must be 2D manifold)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Subdivided mesh with Loop-repositioned vertices
 
-    Raises:
-        NotImplementedError: If n_manifold_dims is not 2
+    Raises
+    ------
+    NotImplementedError
+        If n_manifold_dims is not 2
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Smooth a rough triangulated surface
         >>> mesh = sphere_icosahedral.load(subdivisions=2)

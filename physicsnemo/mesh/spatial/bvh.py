@@ -46,25 +46,32 @@ class BVH:
     provides GPU-accelerated BVH with SAH, median, and LBVH construction algorithms,
     as well as native support for closest-point and ray-cast queries.
 
-    Attributes:
-        node_aabb_min: Minimum corner of axis-aligned bounding box for each node,
-            shape (n_nodes, n_spatial_dims)
-        node_aabb_max: Maximum corner of AABB for each node,
-            shape (n_nodes, n_spatial_dims)
-        node_left_child: Index of left child for each internal node,
-            shape (n_nodes,). Value is -1 for leaf nodes.
-        node_right_child: Index of right child for each internal node,
-            shape (n_nodes,). Value is -1 for leaf nodes.
-        node_cell_idx: Cell index for leaf nodes, shape (n_nodes,).
-            Value is -1 for internal nodes.
+    Attributes
+    ----------
+    node_aabb_min : torch.Tensor
+        Minimum corner of axis-aligned bounding box for each node,
+        shape (n_nodes, n_spatial_dims)
+    node_aabb_max : torch.Tensor
+        Maximum corner of AABB for each node,
+        shape (n_nodes, n_spatial_dims)
+    node_left_child : torch.Tensor
+        Index of left child for each internal node,
+        shape (n_nodes,). Value is -1 for leaf nodes.
+    node_right_child : torch.Tensor
+        Index of right child for each internal node,
+        shape (n_nodes,). Value is -1 for leaf nodes.
+    node_cell_idx : torch.Tensor
+        Cell index for leaf nodes, shape (n_nodes,).
+        Value is -1 for internal nodes.
 
-    Example:
-        >>> # Build BVH from mesh
-        >>> bvh = BVH.from_mesh(mesh)
-        >>>
-        >>> # Find candidate cells for query points
-        >>> query_points = torch.tensor([[0.5, 0.5], [1.0, 1.0]])
-        >>> candidates = bvh.find_candidate_cells(query_points)
+    Examples
+    --------
+    >>> # Build BVH from mesh
+    >>> bvh = BVH.from_mesh(mesh)
+    >>>
+    >>> # Find candidate cells for query points
+    >>> query_points = torch.tensor([[0.5, 0.5], [1.0, 1.0]])
+    >>> candidates = bvh.find_candidate_cells(query_points)
     """
 
     node_aabb_min: torch.Tensor  # shape: (n_nodes, n_spatial_dims)
@@ -94,10 +101,14 @@ class BVH:
 
         Uses the Surface Area Heuristic (SAH) for high-quality tree construction.
 
-        Args:
-            mesh: The mesh to build BVH for
+        Parameters
+        ----------
+        mesh : Mesh
+            The mesh to build BVH for
 
-        Returns:
+        Returns
+        -------
+        BVH
             Constructed BVH ready for queries
         """
         ### Compute bounding box for each cell
@@ -138,10 +149,14 @@ class BVH:
         def build_node(indices: torch.Tensor) -> int:
             """Recursively build BVH node.
 
-            Args:
-                indices: Indices of cells to include in this subtree
+            Parameters
+            ----------
+            indices : torch.Tensor
+                Indices of cells to include in this subtree
 
-            Returns:
+            Returns
+            -------
+            int
                 Index of the created node
             """
             node_idx = node_counter[0]
@@ -208,12 +223,18 @@ class BVH:
     ) -> torch.Tensor:
         """Test if points are inside axis-aligned bounding boxes.
 
-        Args:
-            points: Query points, shape (n_points, n_spatial_dims)
-            aabb_min: Minimum corners, shape (n_boxes, n_spatial_dims)
-            aabb_max: Maximum corners, shape (n_boxes, n_spatial_dims)
+        Parameters
+        ----------
+        points : torch.Tensor
+            Query points, shape (n_points, n_spatial_dims)
+        aabb_min : torch.Tensor
+            Minimum corners, shape (n_boxes, n_spatial_dims)
+        aabb_max : torch.Tensor
+            Maximum corners, shape (n_boxes, n_spatial_dims)
 
-        Returns:
+        Returns
+        -------
+        torch.Tensor
             Boolean tensor of shape (n_points, n_boxes) indicating containment
         """
         # Broadcast and compare
@@ -240,29 +261,36 @@ class BVH:
         Uses batched iterative BVH traversal where all queries are processed
         simultaneously in a vectorized manner.
 
-        Args:
-            query_points: Points to query, shape (n_queries, n_spatial_dims)
-            max_candidates_per_point: Maximum number of candidate cells to return
-                per query point. Prevents memory explosion for degenerate cases.
-                If None, no limit is applied.
-            aabb_tolerance: Tolerance for AABB intersection test. Important for
-                degenerate cells (e.g., cells with duplicate vertices).
+        Parameters
+        ----------
+        query_points : torch.Tensor
+            Points to query, shape (n_queries, n_spatial_dims)
+        max_candidates_per_point : int | None, optional
+            Maximum number of candidate cells to return
+            per query point. Prevents memory explosion for degenerate cases.
+            If None, no limit is applied.
+        aabb_tolerance : float, optional
+            Tolerance for AABB intersection test. Important for
+            degenerate cells (e.g., cells with duplicate vertices).
 
-        Returns:
+        Returns
+        -------
+        Adjacency
             Adjacency object where candidates for query i are at
             ``result.indices[result.offsets[i]:result.offsets[i+1]]``.
             Use ``result.to_list()`` for a list-of-tensors representation.
 
+        Notes
+        -----
         Performance:
             - Complexity: O(M log N) where M = queries, N = cells
             - All AABB tests and tree operations are fully vectorized across queries
             - No Python-level loops over query points
             - Returns GPU-native Adjacency - no CPU sync required
 
-        Note:
-            BVH traversal could potentially be accelerated with custom CUDA kernels,
-            but this adds significant complexity. The current implementation provides
-            excellent performance for most use cases.
+        BVH traversal could potentially be accelerated with custom CUDA kernels,
+        but this adds significant complexity. The current implementation provides
+        excellent performance for most use cases.
         """
         ### Batched BVH traversal implementation
         n_queries = query_points.shape[0]

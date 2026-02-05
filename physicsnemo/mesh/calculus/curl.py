@@ -46,15 +46,22 @@ def compute_curl_points_lsq(
 
     Computes Jacobian of vector field, then takes antisymmetric part.
 
-    Args:
-        mesh: Simplicial mesh
-        vector_field: Vectors at vertices, shape (n_points, 3)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    vector_field : torch.Tensor
+        Vectors at vertices, shape (n_points, 3)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Curl at vertices, shape (n_points, 3)
 
-    Raises:
-        ValueError: If n_spatial_dims != 3
+    Raises
+    ------
+    ValueError
+        If n_spatial_dims != 3
     """
     if mesh.n_spatial_dims != 3:
         raise ValueError(

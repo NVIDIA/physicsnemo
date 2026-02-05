@@ -38,6 +38,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -66,11 +68,16 @@ def compute_edge_support_volume_cell_fractions(
     For 2D triangles, |⋆edge ∩ triangle| is the length of the dual edge segment
     from edge midpoint to triangle circumcenter.
 
-    Args:
-        mesh: Simplicial mesh (must be 2D for now)
-        edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh (must be 2D for now)
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Sparse representation of fractions, shape (n_edges, max_cells_per_edge)
         where max_cells_per_edge = 2 for manifold meshes without boundary.
 
@@ -85,7 +92,8 @@ def compute_edge_support_volume_cell_fractions(
         4. Total dual edge length = sum over all triangles
         5. Fraction = (dual length in triangle) / (total dual length)
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> mesh = two_triangles_2d.load()
@@ -193,7 +201,7 @@ def compute_edge_support_volume_cell_fractions(
     total_dual_lengths = dual_edge_segments.sum(dim=1)  # (n_edges,)
 
     ### Compute fractions: |⋆edge ∩ cell| / |⋆edge|
-    fractions = dual_edge_segments / total_dual_lengths.unsqueeze(-1).clamp(min=1e-10)
+    fractions = dual_edge_segments / total_dual_lengths.unsqueeze(-1).clamp(min=safe_eps(total_dual_lengths.dtype))
 
     return fractions  # (n_edges, 2) - fractions for up to 2 adjacent cells
 
@@ -201,168 +209,180 @@ def compute_edge_support_volume_cell_fractions(
 def compute_vertex_support_volume_cell_fractions(
     mesh: "Mesh",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute |⋆vertex ∩ cell| / |cell| for all vertex-cell pairs.
+    r"""Compute |⋆vertex ∩ cell| / |⋆vertex| for all vertex-cell pairs.
 
-    For each vertex and each cell containing it, computes the fraction of the vertex's
-    dual 0-cell volume (Voronoi region) that lies within that cell, divided by the cell volume.
+    For each vertex v and each cell containing it, computes the fraction of v's
+    total dual 0-cell volume (Voronoi region) that lies within that cell. These
+    fractions sum to 1.0 for each vertex by construction, since
+    :math:`|⋆v| = \sum_{\text{cells } c \ni v} |⋆v \cap c|`.
 
-    This is needed for the PP-sharp operator (Hirani Eq. 5.8.1, line 2596):
-        α♯(v) = Σ_{edges from v} ⟨α,edge⟩ × Σ_{cells ⊃ edge} (|⋆v ∩ cell|/|cell|) × ∇φ
+    This normalization is required by the PP-sharp operator so that it exactly
+    reproduces constant gradients:
 
-    For 2D triangles, |⋆v ∩ triangle| is the area of the Voronoi region within
-    the triangle. This was already computed as part of `compute_dual_volumes_0()`.
+    .. math::
 
-    Args:
-        mesh: Simplicial mesh (must be 2D for now)
+        \alpha^\sharp(v) = \sum_{\text{edges } [v,\sigma^0]}
+            \langle \alpha, [v,\sigma^0] \rangle
+            \sum_{\text{cells } \sigma^n \supset \text{edge}}
+            \frac{|⋆v \cap \sigma^n|}{|⋆v|}
+            \nabla\varphi_{\sigma^0, \sigma^n}
 
-    Returns:
-        Tuple of (fractions, cell_vertex_pairs):
-        - fractions: shape (n_pairs,) - the weight |⋆v ∩ cell| / |cell|
-        - cell_vertex_pairs: shape (n_pairs, 2) - [cell_idx, local_vertex_idx]
+    For 2D triangles, :math:`|⋆v \cap \text{cell}|` is the area of the Voronoi
+    region within the triangle, computed using the Meyer mixed area formula
+    (Eq. 7 for acute triangles, Fig. 4 for obtuse).
 
-        For each pair (cell_i, vertex_j in cell_i), gives the geometric weight.
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh.
 
-    Algorithm (2D):
-        Uses the same Meyer mixed area computation as in compute_dual_volumes_0():
-        - Acute triangles: Use Eq. 7 cotangent formula
-        - Obtuse triangles: Use Fig. 4 mixed area subdivision
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        Tuple of ``(fractions, cell_vertex_pairs)``:
 
-        The per-cell contribution is already the |⋆v ∩ cell| value.
-        Divide by cell area to get the required fraction.
+        - ``fractions``: shape ``(n_pairs,)`` - the weight
+          :math:`|⋆v \cap \text{cell}| / |⋆v|`
+        - ``cell_vertex_pairs``: shape ``(n_pairs, 2)`` -
+          ``[cell_idx, local_vertex_idx]``
 
-    Note:
-        This returns a flat array of all (cell, vertex) pairs to avoid dense tensor.
-        The sparse representation is more memory-efficient.
+        Fractions are guaranteed to sum to 1.0 for each vertex.
+
+    Notes
+    -----
+    For non-2D manifolds, uses the barycentric approximation where each
+    vertex's Voronoi region in a cell is ``|cell| / n_vertices_per_cell``.
+
+    Returns a flat array of all (cell, vertex) pairs to avoid a dense tensor.
     """
     device = mesh.points.device
     dtype = mesh.points.dtype
     n_cells = mesh.n_cells
     n_vertices_per_cell = mesh.n_manifold_dims + 1
 
+    ### Initialize storage for raw Voronoi areas |⋆v ∩ cell|
+    n_pairs = n_cells * n_vertices_per_cell
+    voronoi_areas = torch.zeros(n_pairs, dtype=dtype, device=device)
+    cell_indices_out = torch.arange(n_cells, device=device).repeat_interleave(
+        n_vertices_per_cell
+    )
+    local_vertex_indices = torch.arange(n_vertices_per_cell, device=device).repeat(
+        n_cells
+    )
+
     if mesh.n_manifold_dims != 2:
-        ### For non-2D: use uniform weighting (barycentric approximation)
-        # Each vertex gets equal fraction in each incident cell
-        uniform_fraction = 1.0 / n_vertices_per_cell
+        ### Non-2D: barycentric approximation |⋆v ∩ cell| ≈ |cell| / n_verts
+        cell_areas = mesh.cell_areas  # (n_cells,)
+        approx_voronoi = cell_areas / n_vertices_per_cell  # (n_cells,)
+        for local_v_idx in range(n_vertices_per_cell):
+            pair_indices = (
+                torch.arange(n_cells, device=device) * n_vertices_per_cell + local_v_idx
+            )
+            voronoi_areas[pair_indices] = approx_voronoi
+    else:
+        ### 2D manifolds: Meyer mixed area computation for |⋆v ∩ cell|
+        cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
+        cell_areas = mesh.cell_areas  # (n_cells,)
 
-        n_pairs = n_cells * n_vertices_per_cell
-        fractions = torch.full((n_pairs,), uniform_fraction, dtype=dtype, device=device)
+        from physicsnemo.mesh.curvature._utils import compute_triangle_angles
 
-        cell_indices = torch.arange(n_cells, device=device).repeat_interleave(
-            n_vertices_per_cell
+        ### Compute angles at each vertex of each cell
+        angles_0 = compute_triangle_angles(
+            cell_vertices[:, 0, :],
+            cell_vertices[:, 1, :],
+            cell_vertices[:, 2, :],
         )
-        local_vertex_indices = torch.arange(n_vertices_per_cell, device=device).repeat(
-            n_cells
+        angles_1 = compute_triangle_angles(
+            cell_vertices[:, 1, :],
+            cell_vertices[:, 2, :],
+            cell_vertices[:, 0, :],
         )
-        cell_vertex_pairs = torch.stack([cell_indices, local_vertex_indices], dim=1)
+        angles_2 = compute_triangle_angles(
+            cell_vertices[:, 2, :],
+            cell_vertices[:, 0, :],
+            cell_vertices[:, 1, :],
+        )
+        all_angles = torch.stack(
+            [angles_0, angles_1, angles_2], dim=1
+        )  # (n_cells, 3)
 
-        return fractions, cell_vertex_pairs
+        is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
 
-    ### 2D manifolds: Use rigorous Meyer mixed area computation
-    ### We need to recompute the per-cell Voronoi contributions
-    # (These are the |⋆v ∩ cell| values before summing over all incident cells)
+        ### Voronoi areas for acute triangles (Meyer Eq. 7)
+        non_obtuse_mask = ~is_obtuse
+        if non_obtuse_mask.any():
+            non_obtuse_indices = torch.where(non_obtuse_mask)[0]
+            non_obtuse_vertices = cell_vertices[non_obtuse_mask]
+            non_obtuse_angles = all_angles[non_obtuse_mask]
 
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
-    cell_areas = mesh.cell_areas  # (n_cells,)
+            for local_v_idx in range(3):
+                next_idx = (local_v_idx + 1) % 3
+                prev_idx = (local_v_idx + 2) % 3
 
-    from physicsnemo.mesh.curvature._utils import compute_triangle_angles
+                edge_to_next = (
+                    non_obtuse_vertices[:, next_idx, :]
+                    - non_obtuse_vertices[:, local_v_idx, :]
+                )
+                edge_to_prev = (
+                    non_obtuse_vertices[:, prev_idx, :]
+                    - non_obtuse_vertices[:, local_v_idx, :]
+                )
 
-    ### Compute angles
-    angles_0 = compute_triangle_angles(
-        cell_vertices[:, 0, :],
-        cell_vertices[:, 1, :],
-        cell_vertices[:, 2, :],
+                edge_to_next_sq = (edge_to_next**2).sum(dim=-1)
+                edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)
+
+                cot_prev = torch.cos(
+                    non_obtuse_angles[:, prev_idx]
+                ) / torch.sin(non_obtuse_angles[:, prev_idx]).clamp(
+                    min=safe_eps(non_obtuse_angles.dtype)
+                )
+                cot_next = torch.cos(
+                    non_obtuse_angles[:, next_idx]
+                ) / torch.sin(non_obtuse_angles[:, next_idx]).clamp(
+                    min=safe_eps(non_obtuse_angles.dtype)
+                )
+
+                ### Raw Voronoi area |⋆v ∩ cell| (Eq. 7)
+                voronoi_in_cell = (
+                    edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
+                ) / 8.0
+
+                pair_indices = non_obtuse_indices * 3 + local_v_idx
+                voronoi_areas[pair_indices] = voronoi_in_cell
+
+        ### Voronoi areas for obtuse triangles (Meyer Fig. 4)
+        if is_obtuse.any():
+            obtuse_indices = torch.where(is_obtuse)[0]
+            obtuse_areas = cell_areas[is_obtuse]
+            obtuse_angles = all_angles[is_obtuse]
+
+            for local_v_idx in range(3):
+                is_obtuse_at_vertex = obtuse_angles[:, local_v_idx] > torch.pi / 2
+
+                ### Mixed area: obtuse vertex gets half, others get quarter
+                voronoi_in_cell = torch.where(
+                    is_obtuse_at_vertex,
+                    obtuse_areas / 2.0,
+                    obtuse_areas / 4.0,
+                )
+
+                pair_indices = obtuse_indices * 3 + local_v_idx
+                voronoi_areas[pair_indices] = voronoi_in_cell
+
+    ### Normalize per vertex: fraction = |⋆v ∩ cell| / |⋆v|
+    # Map each (cell, local_vertex) pair to its global vertex index
+    global_vertex_indices = mesh.cells[cell_indices_out, local_vertex_indices]
+
+    # Sum Voronoi areas per vertex to get total dual volume |⋆v|
+    dual_volumes = torch.zeros(mesh.n_points, dtype=dtype, device=device)
+    dual_volumes.scatter_add_(0, global_vertex_indices, voronoi_areas)
+
+    # Divide each per-cell area by the vertex total (guaranteed to sum to 1.0)
+    fractions = voronoi_areas / dual_volumes[global_vertex_indices].clamp(
+        min=safe_eps(dtype)
     )
-    angles_1 = compute_triangle_angles(
-        cell_vertices[:, 1, :],
-        cell_vertices[:, 2, :],
-        cell_vertices[:, 0, :],
-    )
-    angles_2 = compute_triangle_angles(
-        cell_vertices[:, 2, :],
-        cell_vertices[:, 0, :],
-        cell_vertices[:, 1, :],
-    )
-    all_angles = torch.stack([angles_0, angles_1, angles_2], dim=1)  # (n_cells, 3)
 
-    is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
-
-    ### Initialize storage for (cell_idx, local_vertex_idx, fraction) tuples
-    # We'll have n_cells × 3 pairs
-    n_pairs = n_cells * 3
-    fractions = torch.zeros(n_pairs, dtype=dtype, device=device)
-    cell_indices_out = torch.arange(n_cells, device=device).repeat_interleave(3)
-    local_vertex_indices = torch.tensor([0, 1, 2], device=device).repeat(n_cells)
-
-    ### Compute fractions for acute triangles
-    non_obtuse_mask = ~is_obtuse
-
-    if non_obtuse_mask.any():
-        non_obtuse_indices = torch.where(non_obtuse_mask)[0]
-        non_obtuse_vertices = cell_vertices[non_obtuse_mask]
-        non_obtuse_angles = all_angles[non_obtuse_mask]
-        non_obtuse_areas = cell_areas[non_obtuse_mask]
-
-        for local_v_idx in range(3):
-            next_idx = (local_v_idx + 1) % 3
-            prev_idx = (local_v_idx + 2) % 3
-
-            edge_to_next = (
-                non_obtuse_vertices[:, next_idx, :]
-                - non_obtuse_vertices[:, local_v_idx, :]
-            )
-            edge_to_prev = (
-                non_obtuse_vertices[:, prev_idx, :]
-                - non_obtuse_vertices[:, local_v_idx, :]
-            )
-
-            edge_to_next_sq = (edge_to_next**2).sum(dim=-1)
-            edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)
-
-            cot_prev = torch.cos(non_obtuse_angles[:, prev_idx]) / torch.sin(
-                non_obtuse_angles[:, prev_idx]
-            ).clamp(min=1e-10)
-            cot_next = torch.cos(non_obtuse_angles[:, next_idx]) / torch.sin(
-                non_obtuse_angles[:, next_idx]
-            ).clamp(min=1e-10)
-
-            ### Voronoi contribution (Eq. 7)
-            voronoi_in_cell = (
-                edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
-            ) / 8.0
-
-            ### Fraction = |⋆v ∩ cell| / |cell|
-            fraction = voronoi_in_cell / non_obtuse_areas
-
-            ### Store in output array
-            pair_indices = non_obtuse_indices * 3 + local_v_idx
-            fractions[pair_indices] = fraction
-
-    ### Compute fractions for obtuse triangles
-    if is_obtuse.any():
-        obtuse_indices = torch.where(is_obtuse)[0]
-        obtuse_areas = cell_areas[is_obtuse]
-        obtuse_angles = all_angles[is_obtuse]
-
-        for local_v_idx in range(3):
-            is_obtuse_at_vertex = obtuse_angles[:, local_v_idx] > torch.pi / 2
-
-            ### Mixed area contribution (Fig. 4)
-            voronoi_in_cell = torch.where(
-                is_obtuse_at_vertex,
-                obtuse_areas / 2.0,
-                obtuse_areas / 4.0,
-            )
-
-            ### Fraction = |⋆v ∩ cell| / |cell|
-            fraction = voronoi_in_cell / obtuse_areas
-
-            ### Store in output array
-            pair_indices = obtuse_indices * 3 + local_v_idx
-            fractions[pair_indices] = fraction
-
-    ### Package output
     cell_vertex_pairs = torch.stack([cell_indices_out, local_vertex_indices], dim=1)
-
     return fractions, cell_vertex_pairs
 
 
@@ -375,11 +395,16 @@ def compute_dual_edge_volumes_in_cells(
     Returns the actual volume (not fraction) of dual 1-cell within each cell.
     This is the |⋆edge ∩ cell| term from Hirani Eq. 5.5.3.
 
-    Args:
-        mesh: Simplicial mesh (2D for now)
-        edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh (2D for now)
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
         Tuple of (dual_volumes_in_cells, edge_cell_mapping):
         - dual_volumes_in_cells: shape (n_edge_cell_pairs,)
         - edge_cell_mapping: shape (n_edge_cell_pairs, 2) - [edge_idx, cell_idx]

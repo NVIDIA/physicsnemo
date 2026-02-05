@@ -39,27 +39,34 @@ def remove_duplicate_vertices(
     Identifies pairs of vertices closer than tolerance and merges them,
     updating all cell references to use the merged vertex indices.
 
-    Args:
-        mesh: Input mesh
-        tolerance: Distance threshold for considering vertices duplicates
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    tolerance : float
+        Distance threshold for considering vertices duplicates
 
-    Returns:
+    Returns
+    -------
+    tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
         - "n_duplicates_merged": Number of duplicate vertices merged
         - "n_points_original": Original number of points
         - "n_points_final": Final number of points
 
-    Algorithm:
-        Uses BVH spatial data structure for O(n log n) complexity.
-        Constructs a BVH from point cloud, queries for nearby points, then
-        checks exact distances only for candidates. All operations are fully
-        vectorized with no Python loops over points.
+    Notes
+    -----
+    Uses BVH spatial data structure for O(n log n) complexity.
+    Constructs a BVH from point cloud, queries for nearby points, then
+    checks exact distances only for candidates. All operations are fully
+    vectorized with no Python loops over points.
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh_clean, stats = remove_duplicate_vertices(mesh, tolerance=1e-6)
-        >>> assert mesh_clean.validate()["valid"]
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> mesh_clean, stats = remove_duplicate_vertices(mesh, tolerance=1e-6)
+    >>> assert mesh_clean.validate()["valid"]
     """
     n_original = mesh.n_points
     device = mesh.points.device

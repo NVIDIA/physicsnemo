@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -38,15 +40,23 @@ def compute_point_gradient_lsq_intrinsic(
     For surfaces in 3D, solves LSQ in the local 2D tangent plane at each vertex.
     This avoids the ill-conditioning that occurs when solving in full ambient space.
 
-    Args:
-        mesh: Simplicial mesh (assumed to be a manifold)
-        point_values: Values at vertices, shape (n_points,) or (n_points, ...)
-        weight_power: Exponent for inverse distance weighting (default: 2.0)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh (assumed to be a manifold)
+    point_values : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
+    weight_power : float
+        Exponent for inverse distance weighting (default: 2.0)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Intrinsic gradients (living in tangent space, represented in ambient coordinates).
         Shape: (n_points, n_spatial_dims) for scalars, or (n_points, n_spatial_dims, ...) for tensor fields
 
+    Notes
+    -----
     Algorithm:
         For each point:
         1. Estimate tangent space using point normals
@@ -159,7 +169,7 @@ def compute_point_gradient_lsq_intrinsic(
 
             ### Compute weights (based on ambient distances)
             distances = torch.norm(A_ambient, dim=-1)  # (n_group, n_neighbors)
-            weights = 1.0 / distances.pow(weight_power).clamp(min=1e-10)
+            weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
 
             ### Apply weights to tangent-space system
             sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
@@ -227,15 +237,22 @@ def _build_tangent_bases_vectorized(
 ) -> torch.Tensor:
     """Build orthonormal tangent space bases from normal vectors (vectorized).
 
-    Args:
-        normals: Unit normal vectors, shape (n_points, n_spatial_dims)
-        n_manifold_dims: Dimension of the manifold
+    Parameters
+    ----------
+    normals : torch.Tensor
+        Unit normal vectors, shape (n_points, n_spatial_dims)
+    n_manifold_dims : int
+        Dimension of the manifold
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tangent bases, shape (n_points, n_spatial_dims, n_manifold_dims)
         where tangent_bases[i, :, :] contains n_manifold_dims orthonormal tangent vectors
         as columns
 
+    Notes
+    -----
     Algorithm:
         Uses Gram-Schmidt to construct orthonormal basis from arbitrary starting vectors.
     """
@@ -260,7 +277,7 @@ def _build_tangent_bases_vectorized(
     ### Project v1 onto tangent plane: v1 = v1 - (v1·n)n
     v1_dot_n = (v1 * normals).sum(dim=-1, keepdim=True)  # (n_points, 1)
     v1 = v1 - v1_dot_n * normals  # (n_points, n_spatial_dims)
-    v1 = v1 / torch.norm(v1, dim=-1, keepdim=True).clamp(min=1e-10)
+    v1 = v1 / torch.norm(v1, dim=-1, keepdim=True).clamp(min=safe_eps(v1.dtype))
 
     if n_manifold_dims == 1:
         # 1D manifold (curves): single tangent vector
@@ -271,7 +288,7 @@ def _build_tangent_bases_vectorized(
         # Second tangent vector: v2 = n × v1
         if n_spatial_dims == 3:
             v2 = torch.linalg.cross(normals, v1)  # (n_points, 3)
-            v2 = v2 / torch.norm(v2, dim=-1, keepdim=True).clamp(min=1e-10)
+            v2 = v2 / torch.norm(v2, dim=-1, keepdim=True).clamp(min=safe_eps(v2.dtype))
             return torch.stack([v1, v2], dim=-1)  # (n_points, 3, 2)
         else:
             raise ValueError(

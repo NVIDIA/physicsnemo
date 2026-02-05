@@ -33,6 +33,7 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -43,21 +44,27 @@ def _generate_combination_indices(n: int, k: int) -> torch.Tensor:
 
     This is a vectorized implementation similar to itertools.combinations(range(n), k).
 
-    Args:
-        n: Total number of elements
-        k: Number of elements to choose
+    Parameters
+    ----------
+    n : int
+        Total number of elements
+    k : int
+        Number of elements to choose
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_choose_k, k) containing all combinations
 
-    Example:
-        >>> _generate_combination_indices(4, 2)
-        tensor([[0, 1],
-                [0, 2],
-                [0, 3],
-                [1, 2],
-                [1, 3],
-                [2, 3]])
+    Examples
+    --------
+    >>> _generate_combination_indices(4, 2)
+    tensor([[0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3]])
     """
     from itertools import combinations
 
@@ -77,16 +84,21 @@ def categorize_facets_by_count(
     This utility consolidates the common pattern of deduplicating facets using
     torch.unique and filtering based on how many times each facet appears.
 
-    Args:
-        candidate_facets: All candidate facets (may contain duplicates), already sorted
-        target_counts: How to filter the results:
-            - "all": Return all unique facets with their counts (no filtering)
-            - "boundary": Return facets appearing exactly once (counts == 1)
-            - "interior": Return facets appearing exactly twice (counts == 2)
-            - "shared": Return facets appearing 2+ times (counts >= 2)
-            - list[int]: Return facets with counts in the specified list
+    Parameters
+    ----------
+    candidate_facets : torch.Tensor
+        All candidate facets (may contain duplicates), already sorted
+    target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
+        How to filter the results:
+        - "all": Return all unique facets with their counts (no filtering)
+        - "boundary": Return facets appearing exactly once (counts == 1)
+        - "interior": Return facets appearing exactly twice (counts == 2)
+        - "shared": Return facets appearing 2+ times (counts >= 2)
+        - list[int]: Return facets with counts in the specified list
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
         Tuple of (unique_facets, inverse_indices, counts):
         - unique_facets: Deduplicated facets, possibly filtered by count
         - inverse_indices: Mapping from candidate facets to unique facet indices
@@ -94,15 +106,16 @@ def categorize_facets_by_count(
 
         If filtering is applied, only the matching facets and their data are returned.
 
-    Example:
-        >>> import torch
-        >>> # Create candidate facets from a simple mesh (edges from 2 triangles)
-        >>> candidate_facets = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 2], [1, 3], [2, 3]])
-        >>> # Find boundary facets (appear exactly once)
-        >>> boundary_facets, _, counts = categorize_facets_by_count(
-        ...     candidate_facets, target_counts="boundary"
-        ... )
-        >>> assert boundary_facets.shape[0] == 4  # 4 boundary edges
+    Examples
+    --------
+    >>> import torch
+    >>> # Create candidate facets from a simple mesh (edges from 2 triangles)
+    >>> candidate_facets = torch.tensor([[0, 1], [1, 2], [0, 2], [1, 2], [1, 3], [2, 3]])
+    >>> # Find boundary facets (appear exactly once)
+    >>> boundary_facets, _, counts = categorize_facets_by_count(
+    ...     candidate_facets, target_counts="boundary"
+    ... )
+    >>> assert boundary_facets.shape[0] == 4  # 4 boundary edges
     """
     ### Deduplicate and count occurrences
     unique_facets, inverse_indices, counts = torch.unique(
@@ -173,32 +186,41 @@ def extract_candidate_facets(
 
     This uses vectorized PyTorch operations for high performance.
 
-    Args:
-        cells: Parent mesh connectivity, shape (n_cells, n_vertices_per_cell)
-        manifold_codimension: Codimension of the extracted mesh relative to parent.
-            - 1: Extract (n-1)-facets (default, e.g., triangular faces from tets)
-            - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
-            - k: Extract (n-k)-facets
+    Parameters
+    ----------
+    cells : torch.Tensor
+        Parent mesh connectivity, shape (n_cells, n_vertices_per_cell)
+    manifold_codimension : int, optional
+        Codimension of the extracted mesh relative to parent.
+        - 1: Extract (n-1)-facets (default, e.g., triangular faces from tets)
+        - 2: Extract (n-2)-facets (e.g., edges from tets, vertices from triangles)
+        - k: Extract (n-k)-facets
 
-    Returns:
-        candidate_facets: All sub-simplices with duplicates,
-            shape (n_cells * n_combinations, n_vertices_per_subsimplex)
-        parent_cell_indices: Parent cell index for each sub-simplex,
-            shape (n_cells * n_combinations,)
+    Returns
+    -------
+    candidate_facets : torch.Tensor
+        All sub-simplices with duplicates,
+        shape (n_cells * n_combinations, n_vertices_per_subsimplex)
+    parent_cell_indices : torch.Tensor
+        Parent cell index for each sub-simplex,
+        shape (n_cells * n_combinations,)
 
-    Raises:
-        ValueError: If manifold_codimension is invalid for the given cells
+    Raises
+    ------
+    ValueError
+        If manifold_codimension is invalid for the given cells
 
-    Example:
-        >>> import torch
-        >>> # Extract edges (codim 1) from triangles
-        >>> cells = torch.tensor([[0, 1, 2]])
-        >>> facets, parents = extract_candidate_facets(cells, manifold_codimension=1)
-        >>> assert facets.shape == (3, 2)  # three edges with 2 vertices each
+    Examples
+    --------
+    >>> import torch
+    >>> # Extract edges (codim 1) from triangles
+    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> facets, parents = extract_candidate_facets(cells, manifold_codimension=1)
+    >>> assert facets.shape == (3, 2)  # three edges with 2 vertices each
 
-        >>> # Extract vertices (codim 2) from triangles
-        >>> facets, parents = extract_candidate_facets(cells, manifold_codimension=2)
-        >>> assert facets.shape == (3, 1)  # three vertices
+    >>> # Extract vertices (codim 2) from triangles
+    >>> facets, parents = extract_candidate_facets(cells, manifold_codimension=2)
+    >>> assert facets.shape == (3, 1)  # three vertices
     """
     n_cells, n_vertices_per_cell = cells.shape
     n_vertices_per_subsimplex = n_vertices_per_cell - manifold_codimension
@@ -261,14 +283,22 @@ def _aggregate_tensor_data(
 ) -> torch.Tensor:
     """Aggregate tensor data from parent cells to unique facets.
 
-    Args:
-        parent_data: Data from parent cells
-        parent_cell_indices: Which parent cell each candidate facet came from
-        inverse_indices: Mapping from candidate facets to unique facets
-        n_unique_facets: Number of unique facets
-        aggregation_weights: Optional weights for aggregation
+    Parameters
+    ----------
+    parent_data : torch.Tensor
+        Data from parent cells
+    parent_cell_indices : torch.Tensor
+        Which parent cell each candidate facet came from
+    inverse_indices : torch.Tensor
+        Mapping from candidate facets to unique facets
+    n_unique_facets : int
+        Number of unique facets
+    aggregation_weights : torch.Tensor | None
+        Optional weights for aggregation
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Aggregated data for unique facets
     """
     from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
@@ -298,16 +328,25 @@ def deduplicate_and_aggregate_facets(
     Finds unique facets (topologically, based on vertex indices) and aggregates
     associated data from all parent cells that share each facet.
 
-    Args:
-        candidate_facets: All candidate facets including duplicates
-        parent_cell_indices: Which parent cell each candidate facet came from
-        parent_cell_data: TensorDict with data to aggregate from parent cells
-        aggregation_weights: Weights for aggregating data (optional, defaults to uniform)
+    Parameters
+    ----------
+    candidate_facets : torch.Tensor
+        All candidate facets including duplicates
+    parent_cell_indices : torch.Tensor
+        Which parent cell each candidate facet came from
+    parent_cell_data : TensorDict
+        TensorDict with data to aggregate from parent cells
+    aggregation_weights : torch.Tensor | None, optional
+        Weights for aggregating data (optional, defaults to uniform)
 
-    Returns:
-        unique_facets: Deduplicated facets, shape (n_unique_facets, n_vertices_per_facet)
-        aggregated_data: Aggregated TensorDict for each unique facet
-        facet_to_parents: Inverse mapping from candidate facets to unique facets, shape (n_candidate_facets,)
+    Returns
+    -------
+    unique_facets : torch.Tensor
+        Deduplicated facets, shape (n_unique_facets, n_vertices_per_facet)
+    aggregated_data : TensorDict
+        Aggregated TensorDict for each unique facet
+    facet_to_parents : torch.Tensor
+        Inverse mapping from candidate facets to unique facets, shape (n_candidate_facets,)
     """
     ### Find unique facets and inverse mapping
     unique_facets, inverse_indices = torch.unique(
@@ -342,15 +381,23 @@ def compute_aggregation_weights(
 ) -> torch.Tensor:
     """Compute weights for aggregating parent cell data to facets.
 
-    Args:
-        aggregation_strategy: How to weight parent contributions
-        parent_cell_areas: Areas of parent cells (required for area_weighted)
-        parent_cell_centroids: Centroids of parent cells (required for inverse_distance)
-        facet_centroids: Centroids of candidate facets (required for inverse_distance)
-        parent_cell_indices: Which parent cell each candidate facet came from
+    Parameters
+    ----------
+    aggregation_strategy : {"mean", "area_weighted", "inverse_distance"}
+        How to weight parent contributions
+    parent_cell_areas : torch.Tensor | None
+        Areas of parent cells (required for area_weighted)
+    parent_cell_centroids : torch.Tensor | None
+        Centroids of parent cells (required for inverse_distance)
+    facet_centroids : torch.Tensor | None
+        Centroids of candidate facets (required for inverse_distance)
+    parent_cell_indices : torch.Tensor
+        Which parent cell each candidate facet came from
 
-    Returns:
-        weights: Aggregation weights, shape (n_candidate_facets,)
+    Returns
+    -------
+    torch.Tensor
+        Aggregation weights, shape (n_candidate_facets,)
     """
     n_candidate_facets = len(parent_cell_indices)
     device = parent_cell_indices.device
@@ -373,7 +420,7 @@ def compute_aggregation_weights(
         parent_centroids_for_facets = parent_cell_centroids[parent_cell_indices]
         distances = torch.norm(facet_centroids - parent_centroids_for_facets, dim=-1)
         # Avoid division by zero (facets exactly at parent centroid get high weight)
-        distances = distances.clamp(min=1e-10)
+        distances = distances.clamp(min=safe_eps(distances.dtype))
         return 1.0 / distances
 
     else:
@@ -393,15 +440,23 @@ def extract_facet_mesh_data(
 
     Main entry point that orchestrates facet extraction, deduplication, and data aggregation.
 
-    Args:
-        parent_mesh: The parent mesh to extract facets from
-        manifold_codimension: Codimension of extracted mesh relative to parent (default 1)
-        data_source: Whether to inherit data from "cells" or "points"
-        data_aggregation: How to aggregate data from multiple sources
+    Parameters
+    ----------
+    parent_mesh : Mesh
+        The parent mesh to extract facets from
+    manifold_codimension : int, optional
+        Codimension of extracted mesh relative to parent (default 1)
+    data_source : {"points", "cells"}, optional
+        Whether to inherit data from "cells" or "points"
+    data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
+        How to aggregate data from multiple sources
 
-    Returns:
-        facet_cells: Connectivity for facet mesh, shape (n_unique_facets, n_vertices_per_facet)
-        facet_cell_data: Aggregated TensorDict for facet mesh cells
+    Returns
+    -------
+    facet_cells : torch.Tensor
+        Connectivity for facet mesh, shape (n_unique_facets, n_vertices_per_facet)
+    facet_cell_data : TensorDict
+        Aggregated TensorDict for facet mesh cells
     """
     ### Extract candidate facets from parent cells
     candidate_facets, parent_cell_indices = extract_candidate_facets(
@@ -491,13 +546,20 @@ def _aggregate_point_data_to_facets(
 ) -> TensorDict:
     """Aggregate point data to facets by averaging over facet vertices.
 
-    Args:
-        point_data: Data at points
-        candidate_facets: Candidate facet connectivity
-        inverse_indices: Mapping from candidate to unique facets
-        n_unique_facets: Number of unique facets
+    Parameters
+    ----------
+    point_data : TensorDict
+        Data at points
+    candidate_facets : torch.Tensor
+        Candidate facet connectivity
+    inverse_indices : torch.Tensor
+        Mapping from candidate to unique facets
+    n_unique_facets : int
+        Number of unique facets
 
-    Returns:
+    Returns
+    -------
+    TensorDict
         Facet cell data (averaged from points)
     """
 

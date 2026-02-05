@@ -48,22 +48,28 @@ def exterior_derivative_0(
 
     This is the discrete gradient, represented as a 1-form on edges.
 
-    Args:
-        mesh: Simplicial mesh
-        vertex_0form: Values at vertices, shape (n_points,) or (n_points, ...)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    vertex_0form : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
         Tuple of (edge_values, edge_connectivity):
         - edge_values: 1-form values on edges, shape (n_edges,) or (n_edges, ...)
         - edge_connectivity: Edge vertex indices, shape (n_edges, 2)
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> f = torch.randn(mesh.n_points)  # scalar field at vertices
-        >>> edge_df, edges = exterior_derivative_0(mesh, f)
-        >>> # edge_df[i] = f[edges[i,1]] - f[edges[i,0]]
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> f = torch.randn(mesh.n_points)  # scalar field at vertices
+    >>> edge_df, edges = exterior_derivative_0(mesh, f)
+    >>> # edge_df[i] = f[edges[i,1]] - f[edges[i,0]]
     """
     ### Extract edges from mesh
     # Get 1-skeleton (edge mesh) from the full mesh
@@ -123,19 +129,26 @@ def exterior_derivative_1(
 
     This implements the discrete curl in 2D, or the circulation around faces.
 
-    Args:
-        mesh: Simplicial mesh
-        edge_1form: Values on edges, shape (n_edges,) or (n_edges, ...)
-        edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    edge_1form : torch.Tensor
+        Values on edges, shape (n_edges,) or (n_edges, ...)
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
         Tuple of (face_values, face_connectivity):
         - face_values: 2-form values on 2-simplices, shape (n_faces,) or (n_faces, ...)
         - face_connectivity: Face vertex indices
 
-    Note:
-        For n_manifold_dims = 2 (triangle mesh), faces are the triangles themselves.
-        For n_manifold_dims = 3 (tet mesh), faces are the triangular facets.
+    Notes
+    -----
+    For n_manifold_dims = 2 (triangle mesh), faces are the triangles themselves.
+    For n_manifold_dims = 3 (tet mesh), faces are the triangular facets.
     """
     if mesh.n_manifold_dims < 2:
         # Cannot compute d₁ for manifolds of dimension < 2

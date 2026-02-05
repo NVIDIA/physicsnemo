@@ -31,10 +31,33 @@ laplacian = compute_laplacian_points_dec(mesh, scalar_field)
 
 **Properties**:
 
-- Uses cotangent weights: `|⋆e|/|e| = (1/2)(cot α + cot β)` (Meyer Eq. 5)
+- Uses cotangent weights derived from the FEM stiffness matrix (see below)
+- In 2D: equivalent to `(1/2)(cot α + cot β)` (Meyer Eq. 5)
+- In 1D: gives `1/|edge|` (standard finite-difference second derivative)
+- In 3D+: gives exact dihedral-angle-based weights via Gram matrix inverse
 - Normalized by circumcentric dual volumes (Voronoi cells)
 - Exact for linear functions at interior vertices
 - Works on manifolds of any dimension embedded in any ambient space
+
+**Cotangent weights via FEM stiffness matrix** (n-dimensional):
+
+For an n-simplex with vertices v₀, ..., vₙ, the cotangent weight for
+edge (i, j) is:
+
+```text
+w_ij = -|σ| × (∇λ_i · ∇λ_j)
+```
+
+where λ_i are barycentric coordinate functions and |σ| is the cell volume.
+The gradient dot products are computed from the inverse Gram matrix:
+
+```text
+E = [v₁-v₀, ..., vₙ-v₀]    (edge matrix, n × d)
+G = E @ E^T                   (Gram matrix, n × n)
+∇λ_k · ∇λ_l = (G⁻¹)_{k-1,l-1}   for k, l ≥ 1
+```
+
+This generalizes the classical 2D cotangent formula to arbitrary dimensions.
 
 **Reference**: Hirani (2003) Eq. 6.4.2, Meyer et al. (2003) Eq. 8
 
@@ -431,9 +454,11 @@ assert torch.allclose(div_curl_v, torch.zeros_like(div_curl_v), atol=1e-5)
 
 ### Current Limitations
 
-1. **3D Dual Volumes**: Uses barycentric approximation (standard practice)
+1. **3D+ Dual Volumes**: Uses barycentric approximation (standard practice)
    - Rigorous circumcentric requires "well-centered" meshes
    - Mixed volume for obtuse tets is an open research problem
+   - The Laplacian cotangent *weights* are exact for all dimensions (via FEM
+     stiffness matrix); only the dual volume *normalization* uses approximation
 
 2. **Sharp/Flat Not Exact Inverses**: `♯ ∘ ♭ ≠ identity` in discrete DEC
    - This is fundamental to discrete theory (Hirani Prop. 5.5.3)

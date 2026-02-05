@@ -52,26 +52,34 @@ def extract_boundary_mesh_data(
     Extracts only the codimension-1 facets that lie on the boundary (appear in
     exactly one parent cell). This produces the watertight boundary surface.
 
-    Args:
-        parent_mesh: The parent mesh to extract boundary from
-        data_source: Whether to inherit data from "cells" or "points"
-        data_aggregation: How to aggregate data (only applies when data_source="cells")
-            Note: For boundary facets, each facet has exactly one parent cell,
-            so aggregation only matters if the same boundary facet appears multiple
-            times (which shouldn't happen in a valid mesh).
+    Parameters
+    ----------
+    parent_mesh : Mesh
+        The parent mesh to extract boundary from
+    data_source : {"points", "cells"}, optional
+        Whether to inherit data from "cells" or "points"
+    data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
+        How to aggregate data (only applies when data_source="cells")
+        Note: For boundary facets, each facet has exactly one parent cell,
+        so aggregation only matters if the same boundary facet appears multiple
+        times (which shouldn't happen in a valid mesh).
 
-    Returns:
-        boundary_cells: Connectivity for boundary mesh, shape (n_boundary_facets, n_vertices_per_facet)
-        boundary_cell_data: Aggregated TensorDict for boundary mesh cells
+    Returns
+    -------
+    boundary_cells : torch.Tensor
+        Connectivity for boundary mesh, shape (n_boundary_facets, n_vertices_per_facet)
+    boundary_cell_data : TensorDict
+        Aggregated TensorDict for boundary mesh cells
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Extract surface of a volume mesh
-        >>> vol_mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
-        >>> boundary_cells, boundary_data = extract_boundary_mesh_data(vol_mesh)
-        >>> boundary_mesh = Mesh(points=vol_mesh.points, cells=boundary_cells, cell_data=boundary_data)
-        >>> assert boundary_mesh.n_manifold_dims == 2  # Surface triangles
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.procedural import lumpy_ball
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Extract surface of a volume mesh
+    >>> vol_mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
+    >>> boundary_cells, boundary_data = extract_boundary_mesh_data(vol_mesh)
+    >>> boundary_mesh = Mesh(points=vol_mesh.points, cells=boundary_cells, cell_data=boundary_data)
+    >>> assert boundary_mesh.n_manifold_dims == 2  # Surface triangles
     """
     ### Extract all candidate codimension-1 facets
     candidate_facets, parent_cell_indices = extract_candidate_facets(

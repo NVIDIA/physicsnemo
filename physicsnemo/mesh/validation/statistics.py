@@ -49,18 +49,24 @@ def compute_mesh_statistics(
     - aspect_ratio_stats: (min, mean, max, std) of aspect ratios
     - quality_score_stats: (min, mean, max, std) of quality scores
 
-    Args:
-        mesh: Mesh to analyze
-        tolerance: Threshold for degenerate cell detection
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh to analyze
+    tolerance : float
+        Threshold for degenerate cell detection
 
-    Returns:
+    Returns
+    -------
+    Mapping[str, int | float | tuple[float, float, float, float]]
         Dictionary with statistics
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> stats = compute_mesh_statistics(mesh)
-        >>> assert "n_points" in stats and "n_cells" in stats
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> stats = compute_mesh_statistics(mesh)
+    >>> assert "n_points" in stats and "n_cells" in stats
     """
     stats = {
         "n_points": mesh.n_points,

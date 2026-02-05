@@ -28,6 +28,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -47,11 +49,16 @@ def compute_divergence_points_dec(
         - |⋆e| is the dual 1-cell volume (dual edge length)
         - X·edge_unit is the flux component along the edge
 
-    Args:
-        mesh: Simplicial mesh
-        vector_field: Vectors at vertices, shape (n_points, n_spatial_dims)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    vector_field : torch.Tensor
+        Vectors at vertices, shape (n_points, n_spatial_dims)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Divergence at vertices, shape (n_points,)
     """
     from physicsnemo.mesh.calculus._circumcentric_dual import (
@@ -77,7 +84,7 @@ def compute_divergence_points_dec(
     ### Get edge vectors
     edge_vectors = mesh.points[sorted_edges[:, 1]] - mesh.points[sorted_edges[:, 0]]
     edge_lengths = torch.norm(edge_vectors, dim=-1)
-    edge_unit = edge_vectors / edge_lengths.unsqueeze(-1).clamp(min=1e-10)
+    edge_unit = edge_vectors / edge_lengths.unsqueeze(-1).clamp(min=safe_eps(edge_lengths.dtype))
 
     ### Compute divergence at each vertex
     divergence = torch.zeros(
@@ -106,7 +113,7 @@ def compute_divergence_points_dec(
     divergence.scatter_add_(0, v1_indices, -weighted_flux)
 
     ### Normalize by dual 0-cell volumes to get divergence per unit area
-    divergence = divergence / dual_volumes_0.clamp(min=1e-10)
+    divergence = divergence / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
 
     return divergence
 
@@ -122,11 +129,16 @@ def compute_divergence_points_lsq(
 
     Computes gradient of each component, then takes trace.
 
-    Args:
-        mesh: Simplicial mesh
-        vector_field: Vectors at vertices, shape (n_points, n_spatial_dims)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    vector_field : torch.Tensor
+        Vectors at vertices, shape (n_points, n_spatial_dims)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Divergence at vertices, shape (n_points,)
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_point_gradient_lsq

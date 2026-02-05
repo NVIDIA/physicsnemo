@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -51,10 +53,14 @@ def compute_barycentric_gradients(
 
     These gradients are needed for the PP-sharp operator (Hirani Eq. 5.8.1).
 
-    Args:
-        mesh: Simplicial mesh (2D or 3D)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh (2D or 3D)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradients of shape (n_cells, n_vertices_per_cell, n_spatial_dims)
 
         gradients[cell_i, local_vertex_j, :] = ∇φ_{v_j, cell_i}
@@ -79,7 +85,8 @@ def compute_barycentric_gradients(
     Reference:
         Hirani Remark 2.7.2 (lines 1260-1288)
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> mesh = two_triangles_2d.load()
         >>> grads = compute_barycentric_gradients(mesh)
@@ -181,7 +188,7 @@ def compute_barycentric_gradients(
 
             # |cross|² = (2A)²; clamp for degenerate triangles (zero area)
             cross_norm_sq = (cross * cross).sum(dim=-1, keepdim=True).clamp(
-                min=1e-20
+                min=safe_eps(cross.dtype)
             )
 
             gradients[:, 0, :] = (
@@ -222,7 +229,7 @@ def compute_barycentric_gradients(
             )  # (n_cells, 1)
 
             ### Normalize face normal
-            face_normal_unit = face_normal / (2.0 * face_area).clamp(min=1e-10)
+            face_normal_unit = face_normal / (2.0 * face_area).clamp(min=safe_eps(face_area.dtype))
 
             ### Height from vertex to opposite face
             vertex_pos = cell_vertices[:, local_v_idx, :]
@@ -236,7 +243,7 @@ def compute_barycentric_gradients(
             sign = torch.sign(
                 (vec_to_face * face_normal_unit).sum(dim=-1, keepdim=True)
             )
-            grad = -sign * face_normal_unit / height.clamp(min=1e-10)
+            grad = -sign * face_normal_unit / height.clamp(min=safe_eps(height.dtype))
 
             gradients[:, local_v_idx, :] = grad.squeeze(-1)
 

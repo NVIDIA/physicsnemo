@@ -49,59 +49,74 @@ def smooth_laplacian(
     better shaped and vertices more evenly distributed. Uses geometry-aware
     cotangent weights that respect the mesh structure.
 
-    Args:
-        mesh: Input mesh to smooth
-        n_iter: Number of smoothing iterations. More iterations produce smoother
-            results but take longer. Default: 20
-        relaxation_factor: Controls displacement per iteration. Lower values are
-            more stable but require more iterations. Range: (0, 1]. Default: 0.01
-        convergence: Convergence criterion relative to bounding box diagonal.
-            Stops early if max vertex displacement < convergence * bbox_diagonal.
-            Set to 0.0 to disable early stopping. Default: 0.0
-        feature_angle: Angle threshold (degrees) for sharp edge detection.
-            Edges with dihedral angle > feature_angle are considered sharp features.
-            Only used for codimension-1 manifolds. Default: 45.0
-        preserve_boundaries: If True (default), boundary vertices are fixed and
-            will not move during smoothing, preserving the original boundary shape.
-            If False, boundary vertices are smoothed like interior vertices.
-        preserve_features: If True, vertices on sharp feature edges (with dihedral
-            angle > feature_angle) are fixed and will not move. If False (default),
-            feature vertices are smoothed normally.
-        inplace: If True, modifies mesh in place. If False, creates a copy. Default: False
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to smooth
+    n_iter : int, optional
+        Number of smoothing iterations. More iterations produce smoother
+        results but take longer. Default: 20
+    relaxation_factor : float, optional
+        Controls displacement per iteration. Lower values are
+        more stable but require more iterations. Range: (0, 1]. Default: 0.01
+    convergence : float, optional
+        Convergence criterion relative to bounding box diagonal.
+        Stops early if max vertex displacement < convergence * bbox_diagonal.
+        Set to 0.0 to disable early stopping. Default: 0.0
+    feature_angle : float, optional
+        Angle threshold (degrees) for sharp edge detection.
+        Edges with dihedral angle > feature_angle are considered sharp features.
+        Only used for codimension-1 manifolds. Default: 45.0
+    preserve_boundaries : bool, optional
+        If True (default), boundary vertices are fixed and
+        will not move during smoothing, preserving the original boundary shape.
+        If False, boundary vertices are smoothed like interior vertices.
+    preserve_features : bool, optional
+        If True, vertices on sharp feature edges (with dihedral
+        angle > feature_angle) are fixed and will not move. If False (default),
+        feature vertices are smoothed normally.
+    inplace : bool, optional
+        If True, modifies mesh in place. If False, creates a copy. Default: False
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Smoothed mesh. Same object as input if inplace=True, otherwise a new mesh.
 
-    Raises:
-        ValueError: If n_iter < 0 or relaxation_factor <= 0
+    Raises
+    ------
+    ValueError
+        If n_iter < 0 or relaxation_factor <= 0
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> # Basic smoothing
-        >>> smoothed = smooth_laplacian(mesh, n_iter=10, relaxation_factor=0.1)
-        >>> assert smoothed.n_points == mesh.n_points
-        >>> # Preserve boundaries and sharp edges
-        >>> smoothed = smooth_laplacian(
-        ...     mesh,
-        ...     n_iter=50,
-        ...     feature_angle=45.0,
-        ...     preserve_boundaries=True,
-        ...     preserve_features=True,
-        ... )
-        >>>
-        >>> # With convergence criterion
-        >>> smoothed = smooth_laplacian(
-        ...     mesh,
-        ...     n_iter=1000,
-        ...     convergence=0.001,  # Stop if change < 0.1% of bbox
-        ... )
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> # Basic smoothing
+    >>> smoothed = smooth_laplacian(mesh, n_iter=10, relaxation_factor=0.1)
+    >>> assert smoothed.n_points == mesh.n_points
+    >>> # Preserve boundaries and sharp edges
+    >>> smoothed = smooth_laplacian(
+    ...     mesh,
+    ...     n_iter=50,
+    ...     feature_angle=45.0,
+    ...     preserve_boundaries=True,
+    ...     preserve_features=True,
+    ... )
+    >>>
+    >>> # With convergence criterion
+    >>> smoothed = smooth_laplacian(
+    ...     mesh,
+    ...     n_iter=1000,
+    ...     convergence=0.001,  # Stop if change < 0.1% of bbox
+    ... )
 
-    Note:
-        - Cotangent weights are used for codimension-1 manifolds (surfaces, curves)
-        - Uniform weights are used for higher codimension or volumetric meshes
-        - Feature detection only works for codimension-1 manifolds where normals exist
-        - Cell connectivity and all data fields are preserved (only points move)
+    Notes
+    -----
+    - Cotangent weights are used for codimension-1 manifolds (surfaces, curves)
+    - Uniform weights are used for higher codimension or volumetric meshes
+    - Feature detection only works for codimension-1 manifolds where normals exist
+    - Cell connectivity and all data fields are preserved (only points move)
     """
     ### Validate parameters
     if n_iter < 0:
@@ -226,11 +241,16 @@ def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
     For codimension-1 manifolds with n_manifold_dims >= 2: uses cotangent weights
     Otherwise: uses uniform weights
 
-    Args:
-        mesh: Input mesh
-        edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Edge weights, shape (n_edges,)
     """
     n_edges = len(edges)
@@ -259,11 +279,16 @@ def _get_boundary_vertices(
 ) -> torch.Tensor:
     """Identify vertices on mesh boundaries.
 
-    Args:
-        mesh: Input mesh
-        edges: All unique edges, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    edges : torch.Tensor
+        All unique edges, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Boolean mask, shape (n_points,), True for boundary vertices
     """
     device = mesh.points.device
@@ -308,12 +333,18 @@ def _get_feature_vertices(
 
     Only applicable for codimension-1 manifolds where normals exist.
 
-    Args:
-        mesh: Input mesh
-        edges: All unique edges, shape (n_edges, 2)
-        feature_angle: Dihedral angle threshold (degrees) for sharp features
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    edges : torch.Tensor
+        All unique edges, shape (n_edges, 2)
+    feature_angle : float
+        Dihedral angle threshold (degrees) for sharp features
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Boolean mask, shape (n_points,), True for feature vertices
     """
     device = mesh.points.device
@@ -346,12 +377,18 @@ def _detect_sharp_edges(
 
     Fully vectorized implementation using scatter operations.
 
-    Args:
-        mesh: Input mesh (must be codimension-1)
-        edges: All unique edges, shape (n_edges, 2)
-        feature_angle: Dihedral angle threshold in degrees
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh (must be codimension-1)
+    edges : torch.Tensor
+        All unique edges, shape (n_edges, 2)
+    feature_angle : float
+        Dihedral angle threshold in degrees
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Sharp edges, shape (n_sharp_edges, 2)
     """
     device = mesh.points.device

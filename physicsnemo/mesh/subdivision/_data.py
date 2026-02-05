@@ -41,16 +41,23 @@ def interpolate_point_data_to_edges(
     For each edge, creates interpolated data at the midpoint by averaging
     the data values at the two endpoint vertices.
 
-    Args:
-        point_data: Original point data, batch_size=(n_original_points,)
-        edges: Edge connectivity, shape (n_edges, 2)
-        n_original_points: Number of original points (for validation)
+    Parameters
+    ----------
+    point_data : TensorDict
+        Original point data, batch_size=(n_original_points,)
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
+    n_original_points : int
+        Number of original points (for validation)
 
-    Returns:
+    Returns
+    -------
+    TensorDict
         New point_data with batch_size=(n_original_points + n_edges,)
         containing both original point data and interpolated edge midpoint data.
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from tensordict import TensorDict
         >>> # Original points: 3, edges: 2
@@ -106,16 +113,23 @@ def propagate_cell_data_to_children(
     Each child cell inherits its parent's data values unchanged.
     Uses scatter operations for efficient vectorized propagation.
 
-    Args:
-        cell_data: Original cell data, batch_size=(n_parent_cells,)
-        parent_indices: Parent cell index for each child, shape (n_total_children,)
-        n_total_children: Total number of child cells
+    Parameters
+    ----------
+    cell_data : TensorDict
+        Original cell data, batch_size=(n_parent_cells,)
+    parent_indices : torch.Tensor
+        Parent cell index for each child, shape (n_total_children,)
+    n_total_children : int
+        Total number of child cells
 
-    Returns:
+    Returns
+    -------
+    TensorDict
         New cell_data with batch_size=(n_total_children,) where each child
         has the same data values as its parent.
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from tensordict import TensorDict
         >>> # 2 parent cells, each splits into 4 children -> 8 total

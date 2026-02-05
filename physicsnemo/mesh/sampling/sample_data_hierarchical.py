@@ -52,46 +52,60 @@ def sample_data_at_points(
     For meshes with many cells (>10,000), this can be significantly faster. For small
     meshes, the overhead of BVH traversal may make it slower than brute-force.
 
-    Args:
-        mesh: The mesh to sample from.
-        query_points: Query point locations, shape (n_queries, n_spatial_dims)
-        bvh: Pre-computed BVH for the mesh. If None, one will be built automatically.
-            For multiple queries on the same mesh, pre-building the BVH is recommended.
-        data_source: How to sample data:
-            - "cells": Use cell data directly (no interpolation)
-            - "points": Interpolate point data using barycentric coordinates
-        multiple_cells_strategy: How to handle query points in multiple cells:
-            - "mean": Return arithmetic mean of values from all containing cells
-            - "nan": Return NaN for ambiguous points
-        project_onto_nearest_cell: If True, projects each query point onto the
-            nearest cell before sampling. Useful for codimension != 0 manifolds.
-            Note: Projection is not yet BVH-accelerated and may be slow.
-        tolerance: Tolerance for considering a point inside a cell.
-            A point is inside if:
-            - All barycentric coordinates >= -tolerance, AND
-            - Reconstruction error <= tolerance (distance from query point to the
-              simplex's affine hull).
+    Parameters
+    ----------
+    mesh : Mesh
+        The mesh to sample from.
+    query_points : torch.Tensor
+        Query point locations, shape (n_queries, n_spatial_dims)
+    bvh : BVH | None
+        Pre-computed BVH for the mesh. If None, one will be built automatically.
+        For multiple queries on the same mesh, pre-building the BVH is recommended.
+    data_source : Literal["cells", "points"]
+        How to sample data:
+        - "cells": Use cell data directly (no interpolation)
+        - "points": Interpolate point data using barycentric coordinates
+    multiple_cells_strategy : Literal["mean", "nan"]
+        How to handle query points in multiple cells:
+        - "mean": Return arithmetic mean of values from all containing cells
+        - "nan": Return NaN for ambiguous points
+    project_onto_nearest_cell : bool
+        If True, projects each query point onto the
+        nearest cell before sampling. Useful for codimension != 0 manifolds.
+        Note: Projection is not yet BVH-accelerated and may be slow.
+    tolerance : float
+        Tolerance for considering a point inside a cell.
+        A point is inside if:
+        - All barycentric coordinates >= -tolerance, AND
+        - Reconstruction error <= tolerance (distance from query point to the
+          simplex's affine hull).
 
-    Returns:
+    Returns
+    -------
+    TensorDict
         TensorDict containing sampled data for each query point. Values are NaN
         for query points outside the mesh (unless project_onto_nearest_cell=True).
 
-    Raises:
-        ValueError: If data_source or multiple_cells_strategy is invalid.
-        NotImplementedError: If project_onto_nearest_cell=True (not yet implemented
-            with BVH acceleration).
+    Raises
+    ------
+    ValueError
+        If data_source or multiple_cells_strategy is invalid.
+    NotImplementedError
+        If project_onto_nearest_cell=True (not yet implemented
+        with BVH acceleration).
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> from physicsnemo.mesh.spatial import BVH
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
-        >>> # Build BVH once, reuse for many queries
-        >>> bvh = BVH.from_mesh(mesh)
-        >>> query_pts = torch.tensor([[0.3, 0.3]])
-        >>> result = sample_data_at_points(mesh, query_pts, bvh=bvh)
-        >>> assert "pressure" in result.keys()
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> from physicsnemo.mesh.spatial import BVH
+    >>> mesh = two_triangles_2d.load()
+    >>> mesh.cell_data["pressure"] = torch.tensor([1.0, 2.0])
+    >>> # Build BVH once, reuse for many queries
+    >>> bvh = BVH.from_mesh(mesh)
+    >>> query_pts = torch.tensor([[0.3, 0.3]])
+    >>> result = sample_data_at_points(mesh, query_pts, bvh=bvh)
+    >>> assert "pressure" in result.keys()
     """
     if data_source not in ["cells", "points"]:
         raise ValueError(f"Invalid {data_source=}. Must be 'cells' or 'points'.")

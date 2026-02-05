@@ -34,17 +34,22 @@ def extract_unique_edges(mesh: "Mesh") -> tuple[torch.Tensor, torch.Tensor]:
     Reuses existing facet extraction infrastructure to get edges efficiently.
     Special handling for 1D meshes where edges ARE the cells.
 
-    Args:
-        mesh: Input mesh to extract edges from.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to extract edges from.
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
         Tuple of (unique_edges, inverse_indices):
         - unique_edges: Unique edge vertex indices, shape (n_edges, 2), sorted
         - inverse_indices: Mapping from candidate edges to unique edge indices,
           shape (n_candidate_edges,). For n-manifolds with n > 1, this has shape
           (n_cells * n_edges_per_cell,), allowing reshaping to (n_cells, n_edges_per_cell).
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> triangle_mesh = two_triangles_2d.load()
         >>> edges, inverse = extract_unique_edges(triangle_mesh)
@@ -105,10 +110,14 @@ def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
     - C(n+1, 2) edges, each gets a midpoint
     - Splits into 2^n child simplices
 
-    Args:
-        n_manifold_dims: Manifold dimension of the mesh.
+    Parameters
+    ----------
+    n_manifold_dims : int
+        Manifold dimension of the mesh.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Pattern tensor of shape (n_children, n_vertices_per_child) where:
         - n_children = 2^n_manifold_dims
         - n_vertices_per_child = n_manifold_dims + 1
@@ -117,7 +126,8 @@ def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
         Indices reference: [v0, v1, ..., vn, e01, e02, ..., e(n-1,n)]
         where v_i are original vertices and e_ij are edge midpoints.
 
-    Example:
+    Examples
+    --------
         For a triangle (n=2):
         - 3 original vertices: v0, v1, v2
         - 3 edge midpoints: e01, e12, e20
@@ -188,27 +198,35 @@ def generate_child_cells(
     This implementation is fully vectorized using torch operations, avoiding Python loops
     and GPU-CPU transfers for optimal performance on both CPU and GPU.
 
-    Args:
-        parent_cells: Parent cell connectivity, shape (n_parent_cells, n_vertices_per_cell)
-        edge_inverse: Mapping from candidate edges to unique edge indices,
-            shape (n_parent_cells * n_edges_per_cell,). This comes from torch.unique()
-            called in extract_unique_edges().
-        n_original_points: Number of points in original mesh (before adding edge midpoints)
-        subdivision_pattern: Pattern from get_subdivision_pattern(),
-            shape (n_children_per_parent, n_vertices_per_child)
+    Parameters
+    ----------
+    parent_cells : torch.Tensor
+        Parent cell connectivity, shape (n_parent_cells, n_vertices_per_cell)
+    edge_inverse : torch.Tensor
+        Mapping from candidate edges to unique edge indices,
+        shape (n_parent_cells * n_edges_per_cell,). This comes from torch.unique()
+        called in extract_unique_edges().
+    n_original_points : int
+        Number of points in original mesh (before adding edge midpoints)
+    subdivision_pattern : torch.Tensor
+        Pattern from get_subdivision_pattern(),
+        shape (n_children_per_parent, n_vertices_per_child)
 
-    Returns:
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
         Tuple of (child_cells, parent_indices):
         - child_cells: Child cell connectivity,
           shape (n_parent_cells * n_children_per_parent, n_vertices_per_child)
         - parent_indices: Parent cell index for each child,
           shape (n_parent_cells * n_children_per_parent,)
 
-    Algorithm:
-        1. Reshape edge_inverse to (n_parent_cells, n_edges_per_cell) for per-cell lookup
-        2. Build local_to_global mapping for ALL cells at once via concatenation
-        3. Apply subdivision pattern using torch.gather to generate all children
-        4. No Python loops, no GPU-CPU transfers - fully vectorized
+    Algorithm
+    ---------
+    1. Reshape edge_inverse to (n_parent_cells, n_edges_per_cell) for per-cell lookup
+    2. Build local_to_global mapping for ALL cells at once via concatenation
+    3. Apply subdivision pattern using torch.gather to generate all children
+    4. No Python loops, no GPU-CPU transfers - fully vectorized
     """
     n_parent_cells, n_vertices_per_cell = parent_cells.shape
     n_children_per_parent = subdivision_pattern.shape[0]

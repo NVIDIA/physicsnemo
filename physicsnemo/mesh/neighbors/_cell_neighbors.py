@@ -44,19 +44,25 @@ def get_cell_to_cells_adjacency(
     - codimension=2: Share an (n-2)-facet (e.g., tetrahedra sharing an edge in 3D)
     - codimension=k: Share any (n-k)-facet
 
-    Args:
-        mesh: Input simplicial mesh.
-        adjacency_codimension: Codimension of shared facets defining adjacency.
-            - 1 (default): Cells must share a codimension-1 facet (most restrictive)
-            - 2: Cells must share a codimension-2 facet (more permissive)
-            - k: Cells must share a codimension-k facet
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh.
+    adjacency_codimension : int, optional
+        Codimension of shared facets defining adjacency.
+        - 1 (default): Cells must share a codimension-1 facet (most restrictive)
+        - 2: Cells must share a codimension-2 facet (more permissive)
+        - k: Cells must share a codimension-k facet
 
-    Returns:
+    Returns
+    -------
+    Adjacency
         Adjacency where adjacency.to_list()[i] contains all cell indices that
         share a k-codimension facet with cell i. Each neighbor appears exactly
         once per source cell.
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from physicsnemo.mesh import Mesh
         >>> # Two triangles sharing an edge
@@ -288,15 +294,20 @@ def get_cells_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     This is a simple wrapper around the cells array that returns it in the
     standard Adjacency format for consistency with other neighbor queries.
 
-    Args:
-        mesh: Input simplicial mesh.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh.
 
-    Returns:
+    Returns
+    -------
+    Adjacency
         Adjacency where adjacency.to_list()[i] contains all point indices that
         are vertices of cell i. For simplicial meshes, all cells have the same
         number of vertices (n_manifold_dims + 1).
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from physicsnemo.mesh import Mesh
         >>> # Triangle mesh with 2 cells

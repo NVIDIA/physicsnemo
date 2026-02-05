@@ -44,69 +44,81 @@ def extrude(
         - [N, M] → [N+1, N+1]: When M < N+1 and allow_new_spatial_dims=True,
           spatial dimensions are extended
 
-    Args:
-        mesh: Input mesh to extrude. Can be any manifold dimension N in any spatial
-            dimension M >= N.
-        vector: Extrusion direction and magnitude, shape (n_spatial_dims,) or broadcastable.
-            If None, defaults to [0, 0, ..., 0, 1] along the last spatial dimension.
-            For meshes where N+1 > M and allow_new_spatial_dims=True, the default
-            vector will have shape (N+1,) with the last component set to 1.
-        capping: If True, cap the top and bottom of the extrusion to create a closed
-            volume. Currently not implemented.
-        allow_new_spatial_dims: If True, allows extrusion to add new spatial dimensions
-            when n_manifold_dims + 1 > n_spatial_dims. This pads the point coordinates
-            with zeros in the new dimensions. If False (default), raises ValueError
-            when insufficient spatial dimensions.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to extrude. Can be any manifold dimension N in any spatial
+        dimension M >= N.
+    vector : torch.Tensor | list | tuple | None, optional
+        Extrusion direction and magnitude, shape (n_spatial_dims,) or broadcastable.
+        If None, defaults to [0, 0, ..., 0, 1] along the last spatial dimension.
+        For meshes where N+1 > M and allow_new_spatial_dims=True, the default
+        vector will have shape (N+1,) with the last component set to 1.
+    capping : bool, optional
+        If True, cap the top and bottom of the extrusion to create a closed
+        volume. Currently not implemented.
+    allow_new_spatial_dims : bool, optional
+        If True, allows extrusion to add new spatial dimensions
+        when n_manifold_dims + 1 > n_spatial_dims. This pads the point coordinates
+        with zeros in the new dimensions. If False (default), raises ValueError
+        when insufficient spatial dimensions.
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Extruded mesh with:
-            - n_manifold_dims = original_n_manifold_dims + 1
-            - n_spatial_dims = max(original_n_spatial_dims, n_manifold_dims) if
-              allow_new_spatial_dims=True, else original_n_spatial_dims
-            - n_points = 2 * original_n_points (original + extruded copies)
-            - n_cells = (original_n_manifold_dims + 1) * original_n_cells
+        - n_manifold_dims = original_n_manifold_dims + 1
+        - n_spatial_dims = max(original_n_spatial_dims, n_manifold_dims) if
+          allow_new_spatial_dims=True, else original_n_spatial_dims
+        - n_points = 2 * original_n_points (original + extruded copies)
+        - n_cells = (original_n_manifold_dims + 1) * original_n_cells
 
-    Raises:
-        ValueError: If n_manifold_dims + 1 > n_spatial_dims and allow_new_spatial_dims=False
-        NotImplementedError: If capping=True (not yet implemented)
+    Raises
+    ------
+    ValueError
+        If n_manifold_dims + 1 > n_spatial_dims and allow_new_spatial_dims=False
+    NotImplementedError
+        If capping=True (not yet implemented)
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Extrude a triangle (2D) in 3D space to create a triangular prism
-        >>> # tessellated into 3 tetrahedra
-        >>> points = torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]])
-        >>> cells = torch.tensor([[0, 1, 2]])
-        >>> mesh = Mesh(points=points, cells=cells)
-        >>> extruded = extrude(mesh, vector=[0., 0., 1.])
-        >>> assert extruded.n_manifold_dims == 3  # tetrahedra
-        >>> assert extruded.n_cells == 3  # one triangle → three tetrahedra
-        >>>
-        >>> # Extrude an edge (1D) in 2D space to create a triangle
-        >>> points = torch.tensor([[0., 0.], [1., 0.]])
-        >>> cells = torch.tensor([[0, 1]])
-        >>> mesh = Mesh(points=points, cells=cells)
-        >>> extruded = extrude(mesh, vector=[0., 1.])
-        >>> assert extruded.n_manifold_dims == 2  # triangles
-        >>> assert extruded.n_cells == 2  # one edge → two triangles
-        >>>
-        >>> # Extrude a 2D surface into higher dimensions
-        >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
-        >>> triangles = torch.tensor([[0, 1, 2]])
-        >>> mesh_2d_in_2d = Mesh(points_2d, triangles)  # [2, 2] mesh
-        >>> # This raises ValueError by default:
-        >>> # extruded = extrude(mesh_2d_in_2d)
-        >>> # But works with allow_new_spatial_dims:
-        >>> extruded = extrude(mesh_2d_in_2d, allow_new_spatial_dims=True)
-        >>> assert extruded.n_spatial_dims == 3  # new dimension added
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Extrude a triangle (2D) in 3D space to create a triangular prism
+    >>> # tessellated into 3 tetrahedra
+    >>> points = torch.tensor([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]])
+    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> extruded = extrude(mesh, vector=[0., 0., 1.])
+    >>> assert extruded.n_manifold_dims == 3  # tetrahedra
+    >>> assert extruded.n_cells == 3  # one triangle → three tetrahedra
+    >>>
+    >>> # Extrude an edge (1D) in 2D space to create a triangle
+    >>> points = torch.tensor([[0., 0.], [1., 0.]])
+    >>> cells = torch.tensor([[0, 1]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> extruded = extrude(mesh, vector=[0., 1.])
+    >>> assert extruded.n_manifold_dims == 2  # triangles
+    >>> assert extruded.n_cells == 2  # one edge → two triangles
+    >>>
+    >>> # Extrude a 2D surface into higher dimensions
+    >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
+    >>> triangles = torch.tensor([[0, 1, 2]])
+    >>> mesh_2d_in_2d = Mesh(points_2d, triangles)  # [2, 2] mesh
+    >>> # This raises ValueError by default:
+    >>> # extruded = extrude(mesh_2d_in_2d)
+    >>> # But works with allow_new_spatial_dims:
+    >>> extruded = extrude(mesh_2d_in_2d, allow_new_spatial_dims=True)
+    >>> assert extruded.n_spatial_dims == 3  # new dimension added
 
-    Note:
-        The tessellation pattern for an N-simplex with vertices [v0, v1, ..., vN]
-        creates (N+1) child (N+1)-simplices:
-            - Child i has vertices: [v0', v1', ..., vi', vi, vi+1, ..., vN]
-        where primed vertices (v') are the extruded copies.
+    Notes
+    -----
+    The tessellation pattern for an N-simplex with vertices [v0, v1, ..., vN]
+    creates (N+1) child (N+1)-simplices:
+        - Child i has vertices: [v0', v1', ..., vi', vi, vi+1, ..., vN]
+    where primed vertices (v') are the extruded copies.
 
-        This tessellation preserves orientation and creates a valid simplicial complex.
+    This tessellation preserves orientation and creates a valid simplicial complex.
     """
     ### Validate inputs
     if capping:

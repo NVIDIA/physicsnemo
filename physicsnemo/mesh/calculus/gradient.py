@@ -42,11 +42,16 @@ def compute_gradient_points_dec(
         1. Apply exterior derivative d₀ to get 1-form on edges
         2. Apply sharp operator ♯ to convert 1-form to vector field
 
-    Args:
-        mesh: Simplicial mesh
-        point_values: Values at vertices, shape (n_points,) or (n_points, ...)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    point_values : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradient vectors at vertices, shape (n_points, n_spatial_dims) or
         (n_points, n_spatial_dims, ...) for tensor fields
     """
@@ -70,13 +75,20 @@ def compute_gradient_points_lsq(
 ) -> torch.Tensor:
     """Compute gradient at vertices using weighted least-squares.
 
-    Args:
-        mesh: Simplicial mesh
-        point_values: Values at vertices, shape (n_points,) or (n_points, ...)
-        weight_power: Exponent for inverse distance weighting
-        intrinsic: If True and mesh is a manifold, solve LSQ in tangent space
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    point_values : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
+    weight_power : float
+        Exponent for inverse distance weighting
+    intrinsic : bool
+        If True and mesh is a manifold, solve LSQ in tangent space
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradient vectors at vertices, shape (n_points, n_spatial_dims) or
         (n_points, n_spatial_dims, ...) for tensor fields
     """
@@ -103,12 +115,18 @@ def compute_gradient_cells_lsq(
 ) -> torch.Tensor:
     """Compute gradient at cells using weighted least-squares.
 
-    Args:
-        mesh: Simplicial mesh
-        cell_values: Values at cells, shape (n_cells,) or (n_cells, ...)
-        weight_power: Exponent for inverse distance weighting
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    cell_values : torch.Tensor
+        Values at cells, shape (n_cells,) or (n_cells, ...)
+    weight_power : float
+        Exponent for inverse distance weighting
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Gradient vectors at cells, shape (n_cells, n_spatial_dims) or
         (n_cells, n_spatial_dims, ...) for tensor fields
     """
@@ -127,15 +145,23 @@ def project_to_tangent_space(
     For manifolds where n_manifold_dims < n_spatial_dims (e.g., surfaces in 3D),
     the intrinsic gradient lies in the tangent space of the manifold.
 
-    Args:
-        mesh: Simplicial mesh
-        gradients: Extrinsic gradients, shape (n, n_spatial_dims, ...)
-        location: Whether gradients are at "points" or "cells"
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    gradients : torch.Tensor
+        Extrinsic gradients, shape (n, n_spatial_dims, ...)
+    location : Literal["points", "cells"]
+        Whether gradients are at "points" or "cells"
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Intrinsic gradients (projected onto tangent space),
         same shape as input
 
+    Notes
+    -----
     Algorithm:
         For codimension-1 manifolds:
         1. Get normal vector at each point/cell

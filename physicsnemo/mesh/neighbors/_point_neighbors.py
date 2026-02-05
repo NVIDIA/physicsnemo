@@ -37,14 +37,19 @@ def get_point_to_cells_adjacency(mesh: "Mesh") -> Adjacency:
     For each point in the mesh, finds all cells that contain that point. This
     is the graph-theoretic "star" operation on vertices.
 
-    Args:
-        mesh: Input simplicial mesh.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh.
 
-    Returns:
+    Returns
+    -------
+    Adjacency
         Adjacency where adjacency.to_list()[i] contains all cell indices that
         contain point i. Isolated points (not in any cells) have empty lists.
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from physicsnemo.mesh import Mesh
         >>> # Triangle mesh with 4 points, 2 triangles
@@ -94,14 +99,19 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     meshes, this is equivalent to finding all points connected by an edge, since
     all vertices in a simplex are pairwise connected.
 
-    Args:
-        mesh: Input simplicial mesh.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh.
 
-    Returns:
+    Returns
+    -------
+    Adjacency
         Adjacency where adjacency.to_list()[i] contains all point indices that
         share a cell (edge) with point i. Isolated points have empty lists.
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from physicsnemo.mesh import Mesh
         >>> # Three points forming a single triangle

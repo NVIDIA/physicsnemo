@@ -41,6 +41,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from physicsnemo.mesh.utilities._tolerances import safe_eps
+
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
@@ -55,12 +57,17 @@ def _scatter_add_cell_contributions_to_vertices(
     This is a common pattern in dual volume computation where each cell
     contributes a fraction of its volume to each of its vertices.
 
-    Args:
-        dual_volumes: Accumulator for dual volumes (modified in place)
-        cells: Cell connectivity for selected cells
-        contributions: Volume contribution from each cell to its vertices
+    Parameters
+    ----------
+    dual_volumes : torch.Tensor
+        Accumulator for dual volumes (modified in place)
+    cells : torch.Tensor
+        Cell connectivity for selected cells
+    contributions : torch.Tensor
+        Volume contribution from each cell to its vertices
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> # Add 1/3 of each triangle area to each vertex
         >>> dual_volumes = torch.zeros(4)
@@ -121,19 +128,26 @@ def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
         meshes where all circumcenters lie inside their simplices (Desbrun 2005).
         Mixed volume formulas for obtuse tetrahedra do not exist in the literature.
 
-    Args:
-        mesh: Input simplicial mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_points,) containing dual 0-cell volume for each vertex.
         For isolated vertices, volume is 0.
 
         Property: Σ dual_volumes = total_mesh_volume (perfect tiling)
 
-    Raises:
-        NotImplementedError: If n_manifold_dims > 3
+    Raises
+    ------
+    NotImplementedError
+        If n_manifold_dims > 3
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> mesh = two_triangles_2d.load()
         >>> dual_vols = compute_dual_volumes_0(mesh)
@@ -248,11 +262,11 @@ def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
                 # Cotangent at prev vertex (opposite to edge_to_next)
                 cot_prev = torch.cos(non_obtuse_angles[:, prev_idx]) / torch.sin(
                     non_obtuse_angles[:, prev_idx]
-                ).clamp(min=1e-10)
+                ).clamp(min=safe_eps(non_obtuse_angles.dtype))
                 # Cotangent at next vertex (opposite to edge_to_prev)
                 cot_next = torch.cos(non_obtuse_angles[:, next_idx]) / torch.sin(
                     non_obtuse_angles[:, next_idx]
-                ).clamp(min=1e-10)
+                ).clamp(min=safe_eps(non_obtuse_angles.dtype))
 
                 ### Compute Voronoi area contribution for this vertex (Equation 7)
                 voronoi_contribution = (

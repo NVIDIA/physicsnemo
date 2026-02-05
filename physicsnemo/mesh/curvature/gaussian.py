@@ -54,24 +54,30 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
     - Zero: Flat/parabolic point (plane-like)
     - Negative: Hyperbolic point (saddle-like)
 
-    Args:
-        mesh: Input simplicial mesh (1D, 2D, or 3D manifold)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh (1D, 2D, or 3D manifold)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_points,) containing signed Gaussian curvature at each vertex.
         For isolated vertices (no incident cells), curvature is NaN.
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Sphere of radius r has K = 1/r² everywhere
         >>> sphere_mesh = sphere_icosahedral.load(radius=2.0, subdivisions=3)
         >>> K = gaussian_curvature_vertices(sphere_mesh)
         >>> # K.mean() ≈ 0.25 (= 1/(2.0)²)
 
-    Note:
-        Satisfies discrete Gauss-Bonnet theorem:
-            Σ_vertices (K_i * A_i) = 2π * χ(M)
-        where χ(M) is the Euler characteristic.
+    Notes
+    -----
+    Satisfies discrete Gauss-Bonnet theorem:
+        Σ_vertices (K_i * A_i) = 2π * χ(M)
+    where χ(M) is the Euler characteristic.
     """
     device = mesh.points.device
     n_manifold_dims = mesh.n_manifold_dims
@@ -116,18 +122,24 @@ def gaussian_curvature_cells(mesh: "Mesh") -> torch.Tensor:
 
     This provides a cell-based curvature measure complementary to vertex curvature.
 
-    Args:
-        mesh: Input simplicial mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_cells,) containing Gaussian curvature at each cell.
 
-    Algorithm:
-        1. Get cell-to-cell adjacency (cells sharing facets)
-        2. Compute "dual angles" between adjacent cell centroids
-        3. Apply angle defect formula on dual mesh
+    Algorithm
+    ---------
+    1. Get cell-to-cell adjacency (cells sharing facets)
+    2. Compute "dual angles" between adjacent cell centroids
+    3. Apply angle defect formula on dual mesh
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> sphere_mesh = sphere_icosahedral.load(subdivisions=2)
         >>> K_cells = gaussian_curvature_cells(sphere_mesh)

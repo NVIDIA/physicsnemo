@@ -37,20 +37,25 @@ def remove_isolated_vertices(
     Identifies vertices not referenced by any cell and removes them,
     updating cell indices accordingly.
 
-    Args:
-        mesh: Input mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
 
-    Returns:
+    Returns
+    -------
+    tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
         - "n_isolated_removed": Number of isolated vertices removed
         - "n_points_original": Original number of points
         - "n_points_final": Final number of points
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh_clean, stats = remove_isolated_vertices(mesh)
-        >>> assert stats["n_isolated_removed"] == 0  # no isolated in clean mesh
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> mesh_clean, stats = remove_isolated_vertices(mesh)
+    >>> assert stats["n_isolated_removed"] == 0  # no isolated in clean mesh
     """
     n_original = mesh.n_points
     device = mesh.points.device

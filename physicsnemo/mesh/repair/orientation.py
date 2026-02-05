@@ -38,23 +38,30 @@ def fix_orientation(
     Uses graph propagation to ensure adjacent faces have consistent orientation.
     Two faces sharing an edge should have opposite vertex ordering along that edge.
 
-    Args:
-        mesh: Input mesh (must be 2D manifold in 3D space)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh (must be 2D manifold in 3D space)
 
-    Returns:
+    Returns
+    -------
+    tuple[Mesh, dict[str, int]]
         Tuple of (oriented_mesh, stats_dict) where stats_dict contains:
         - "n_faces_flipped": Number of faces that were flipped
         - "n_components": Number of connected components found
         - "largest_component_size": Size of largest component
 
-    Raises:
-        ValueError: If mesh is not a 2D manifold in 3D
+    Raises
+    ------
+    ValueError
+        If mesh is not a 2D manifold in 3D
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
-        >>> mesh = sphere_icosahedral.load(subdivisions=2)
-        >>> mesh_oriented, stats = fix_orientation(mesh)
-        >>> assert "n_faces_flipped" in stats
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+    >>> mesh = sphere_icosahedral.load(subdivisions=2)
+    >>> mesh_oriented, stats = fix_orientation(mesh)
+    >>> assert "n_faces_flipped" in stats
     """
     if mesh.n_manifold_dims != 2:
         raise ValueError(

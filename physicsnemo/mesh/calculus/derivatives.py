@@ -28,6 +28,29 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
+def _make_output_key(
+    key: str | tuple[str, ...],
+    suffix: str,
+) -> str | tuple[str, ...]:
+    """Build the output key name for a gradient field.
+
+    Parameters
+    ----------
+    key : str or tuple[str, ...]
+        Original field key (possibly a nested TensorDict path).
+    suffix : str
+        Suffix to append (e.g., ``"_gradient"``).
+
+    Returns
+    -------
+    str or tuple[str, ...]
+        Key with suffix appended to the leaf name.
+    """
+    if isinstance(key, str):
+        return f"{key}{suffix}"
+    return key[:-1] + (key[-1] + suffix,)
+
+
 def compute_point_derivatives(
     mesh: "Mesh",
     keys: str | tuple[str, ...] | Sequence[str | tuple[str, ...]] | None = None,
@@ -39,33 +62,48 @@ def compute_point_derivatives(
     Computes discrete gradients using either DEC or LSQ methods, with support
     for both intrinsic (tangent space) and extrinsic (ambient space) derivatives.
 
-    Args:
-        mesh: Simplicial mesh
-        keys: Fields to compute gradients of. Options:
-            - None: All non-cached fields (excludes "_cache" subdictionary)
-            - str: Single field name (e.g., "pressure")
-            - tuple: Nested path (e.g., ("flow", "temperature"))
-            - Sequence: List of above (e.g., ["pressure", ("flow", "velocity")])
-        method: Discretization method:
-            - "lsq": Weighted least-squares reconstruction (CFD standard)
-            - "dec": Discrete Exterior Calculus (differential geometry)
-        gradient_type: Type of gradient to compute:
-            - "intrinsic": Project onto manifold tangent space
-            - "extrinsic": Full ambient space gradient
-            - "both": Compute and store both
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh with point_data fields to differentiate.
+    keys : str or tuple[str, ...] or Sequence or None
+        Fields to compute gradients of. Options:
 
-    Returns:
-        The input mesh with gradient fields added to point_data (modified in place).
-        Field naming: "{field}_gradient" or "{field}_gradient_intrinsic/extrinsic"
+        - ``None``: All non-cached fields (excludes ``"_cache"`` subdictionary).
+        - ``str``: Single field name (e.g., ``"pressure"``).
+        - ``tuple``: Nested path (e.g., ``("flow", "temperature")``).
+        - ``Sequence``: List of the above.
+    method : {"lsq", "dec"}
+        Discretization method:
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> mesh.point_data["pressure"] = torch.randn(mesh.n_points)
-        >>> # Compute gradient of pressure field
-        >>> mesh_with_grad = compute_point_derivatives(mesh, keys="pressure")
-        >>> grad_p = mesh_with_grad.point_data["pressure_gradient"]
+        - ``"lsq"``: Weighted least-squares reconstruction (CFD standard).
+        - ``"dec"``: Discrete Exterior Calculus (differential geometry).
+    gradient_type : {"intrinsic", "extrinsic", "both"}
+        Type of gradient to compute:
+
+        - ``"intrinsic"``: Project onto manifold tangent space.
+        - ``"extrinsic"``: Full ambient space gradient.
+        - ``"both"``: Compute and store both.
+
+    Returns
+    -------
+    Mesh
+        A new Mesh with gradient fields added to ``point_data``. The original
+        mesh is **not** modified. Field naming convention:
+
+        - ``gradient_type="intrinsic"`` or ``"extrinsic"``:
+          ``"{field}_gradient"``
+        - ``gradient_type="both"``:
+          ``"{field}_gradient_intrinsic"`` and ``"{field}_gradient_extrinsic"``
+
+    Example
+    -------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> mesh.point_data["pressure"] = torch.randn(mesh.n_points)
+    >>> mesh_with_grad = compute_point_derivatives(mesh, keys="pressure")
+    >>> grad_p = mesh_with_grad.point_data["pressure_gradient"]
     """
     from physicsnemo.mesh.calculus.gradient import (
         compute_gradient_points_dec,
@@ -75,7 +113,6 @@ def compute_point_derivatives(
 
     ### Parse keys: normalize to list of key paths
     if keys is None:
-        # All non-cached fields
         key_list = list(
             mesh.point_data.exclude(CACHE_KEY).keys(
                 include_nested=True, leaves_only=True
@@ -88,9 +125,11 @@ def compute_point_derivatives(
     else:
         raise TypeError(f"Invalid keys type: {type(keys)}")
 
-    ### Compute gradients for each key (modify mesh.point_data in place)
+    ### Clone point_data so we don't mutate the original mesh
+    new_point_data = mesh.point_data.clone()
+
+    ### Compute gradients for each key
     for key in key_list:
-        # Get field values using native TensorDict indexing
         field_values = mesh.point_data[key]
 
         ### Compute gradient based on method and gradient_type
@@ -130,42 +169,27 @@ def compute_point_derivatives(
         else:
             raise ValueError(f"Invalid {method=}. Must be 'lsq' or 'dec'.")
 
-        ### Store gradients in mesh.point_data
-        if gradient_type == "extrinsic":
-            out_key = (
-                f"{key}_gradient"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient",)
-            )
-            mesh.point_data[out_key] = grad_extrinsic
-
-        elif gradient_type == "intrinsic":
-            out_key = (
-                f"{key}_gradient"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient",)
-            )
-            mesh.point_data[out_key] = grad_intrinsic
-
+        ### Store gradients in the cloned point_data
+        if gradient_type in ("extrinsic", "intrinsic"):
+            out_key = _make_output_key(key, "_gradient")
+            value = grad_extrinsic if gradient_type == "extrinsic" else grad_intrinsic
+            new_point_data[out_key] = value
         elif gradient_type == "both":
-            out_key_ext = (
-                f"{key}_gradient_extrinsic"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient_extrinsic",)
-            )
-            out_key_int = (
-                f"{key}_gradient_intrinsic"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient_intrinsic",)
-            )
-            mesh.point_data[out_key_ext] = grad_extrinsic
-            mesh.point_data[out_key_int] = grad_intrinsic
-
+            new_point_data[_make_output_key(key, "_gradient_extrinsic")] = grad_extrinsic
+            new_point_data[_make_output_key(key, "_gradient_intrinsic")] = grad_intrinsic
         else:
             raise ValueError(f"Invalid {gradient_type=}")
 
-    ### Return mesh for method chaining
-    return mesh
+    ### Return a new Mesh with the augmented point_data
+    from physicsnemo.mesh.mesh import Mesh
+
+    return Mesh(
+        points=mesh.points,
+        cells=mesh.cells,
+        point_data=new_point_data,
+        cell_data=mesh.cell_data,
+        global_data=mesh.global_data,
+    )
 
 
 def compute_cell_derivatives(
@@ -176,14 +200,24 @@ def compute_cell_derivatives(
 ) -> "Mesh":
     """Compute gradients of cell_data fields.
 
-    Args:
-        mesh: Simplicial mesh
-        keys: Fields to compute gradients of (same format as compute_point_derivatives)
-        method: "lsq" or "dec"
-        gradient_type: "intrinsic", "extrinsic", or "both"
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh with cell_data fields to differentiate.
+    keys : str or tuple[str, ...] or Sequence or None
+        Fields to compute gradients of (same format as
+        :func:`compute_point_derivatives`).
+    method : {"lsq", "dec"}
+        Discretization method. Currently only ``"lsq"`` is supported for
+        cell-centered data.
+    gradient_type : {"intrinsic", "extrinsic", "both"}
+        Type of gradient to compute.
 
-    Returns:
-        The input mesh with gradient fields added to cell_data (modified in place)
+    Returns
+    -------
+    Mesh
+        A new Mesh with gradient fields added to ``cell_data``. The original
+        mesh is **not** modified.
     """
     from physicsnemo.mesh.calculus.gradient import (
         compute_gradient_cells_lsq,
@@ -204,9 +238,11 @@ def compute_cell_derivatives(
     else:
         raise TypeError(f"Invalid keys type: {type(keys)}")
 
-    ### Compute gradients for each key (modify mesh.cell_data in place)
+    ### Clone cell_data so we don't mutate the original mesh
+    new_cell_data = mesh.cell_data.clone()
+
+    ### Compute gradients for each key
     for key in key_list:
-        # Get field values using native TensorDict indexing
         field_values = mesh.cell_data[key]
 
         ### Compute extrinsic gradient
@@ -219,41 +255,29 @@ def compute_cell_derivatives(
         else:
             raise ValueError(f"Invalid {method=}")
 
-        ### Store gradients in mesh.cell_data
+        ### Store gradients in the cloned cell_data
         if gradient_type == "extrinsic":
-            out_key = (
-                f"{key}_gradient"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient",)
-            )
-            mesh.cell_data[out_key] = grad_extrinsic
+            new_cell_data[_make_output_key(key, "_gradient")] = grad_extrinsic
 
         elif gradient_type == "intrinsic":
             grad_intrinsic = project_to_tangent_space(mesh, grad_extrinsic, "cells")
-            out_key = (
-                f"{key}_gradient"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient",)
-            )
-            mesh.cell_data[out_key] = grad_intrinsic
+            new_cell_data[_make_output_key(key, "_gradient")] = grad_intrinsic
 
         elif gradient_type == "both":
             grad_intrinsic = project_to_tangent_space(mesh, grad_extrinsic, "cells")
-            out_key_ext = (
-                f"{key}_gradient_extrinsic"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient_extrinsic",)
-            )
-            out_key_int = (
-                f"{key}_gradient_intrinsic"
-                if isinstance(key, str)
-                else key[:-1] + (key[-1] + "_gradient_intrinsic",)
-            )
-            mesh.cell_data[out_key_ext] = grad_extrinsic
-            mesh.cell_data[out_key_int] = grad_intrinsic
+            new_cell_data[_make_output_key(key, "_gradient_extrinsic")] = grad_extrinsic
+            new_cell_data[_make_output_key(key, "_gradient_intrinsic")] = grad_intrinsic
 
         else:
             raise ValueError(f"Invalid {gradient_type=}")
 
-    ### Return mesh for method chaining
-    return mesh
+    ### Return a new Mesh with the augmented cell_data
+    from physicsnemo.mesh.mesh import Mesh
+
+    return Mesh(
+        points=mesh.points,
+        cells=mesh.cells,
+        point_data=mesh.point_data,
+        cell_data=new_cell_data,
+        global_data=mesh.global_data,
+    )

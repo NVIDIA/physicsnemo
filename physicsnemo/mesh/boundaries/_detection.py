@@ -34,22 +34,28 @@ def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
     A vertex is on the boundary if it is incident to at least one boundary edge
     (for 2D+ manifolds) or is an endpoint of the chain (for 1D manifolds).
 
-    Args:
-        mesh: Input simplicial mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Boolean tensor of shape (n_points,) where True indicates boundary vertices
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
-        >>> # Cylinder with open ends
-        >>> mesh = cylinder_open.load(n_circ=32, n_height=16)
-        >>> is_boundary = get_boundary_vertices(mesh)
-        >>> # Top and bottom circles are boundary vertices
-        >>> assert is_boundary.sum() == 2 * 32  # 64 boundary vertices
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
+    >>> # Cylinder with open ends
+    >>> mesh = cylinder_open.load(n_circ=32, n_height=16)
+    >>> is_boundary = get_boundary_vertices(mesh)
+    >>> # Top and bottom circles are boundary vertices
+    >>> assert is_boundary.sum() == 2 * 32  # 64 boundary vertices
 
-    Note:
-        For closed manifolds (watertight meshes), returns all False.
+    Notes
+    -----
+    For closed manifolds (watertight meshes), returns all False.
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
         categorize_facets_by_count,
@@ -92,31 +98,38 @@ def get_boundary_cells(
     A cell is on the boundary if it contains at least one k-codimension facet
     that appears in no other cell.
 
-    Args:
-        mesh: Input simplicial mesh
-        boundary_codimension: Codimension of facets defining boundary membership.
-            - 1 (default): Cells with at least one codim-1 boundary facet (most restrictive)
-              For 2D: triangles with at least one edge on boundary
-              For 3D: tets with at least one face on boundary
-            - 2: Cells with at least one codim-2 boundary facet (more permissive)
-              For 3D: tets with at least one edge on boundary
-            - k: Cells with at least one codim-k boundary facet
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
+    boundary_codimension : int, optional
+        Codimension of facets defining boundary membership.
+        - 1 (default): Cells with at least one codim-1 boundary facet (most restrictive)
+          For 2D: triangles with at least one edge on boundary
+          For 3D: tets with at least one face on boundary
+        - 2: Cells with at least one codim-2 boundary facet (more permissive)
+          For 3D: tets with at least one edge on boundary
+        - k: Cells with at least one codim-k boundary facet
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Boolean tensor of shape (n_cells,) where True indicates boundary cells
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Two triangles sharing an edge, with 4 boundary edges total
-        >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
-        >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
-        >>> mesh = Mesh(points=points, cells=cells)
-        >>> is_boundary = get_boundary_cells(mesh, boundary_codimension=1)
-        >>> assert is_boundary.all()  # Both triangles touch boundary edges
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Two triangles sharing an edge, with 4 boundary edges total
+    >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
+    >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+    >>> mesh = Mesh(points=points, cells=cells)
+    >>> is_boundary = get_boundary_cells(mesh, boundary_codimension=1)
+    >>> assert is_boundary.all()  # Both triangles touch boundary edges
 
-    Note:
-        For closed manifolds (watertight meshes), returns all False.
+    Notes
+    -----
+    For closed manifolds (watertight meshes), returns all False.
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
         categorize_facets_by_count,
@@ -167,23 +180,29 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
     An edge is on the boundary if it is a codimension-1 facet that appears in
     only one cell.
 
-    Args:
-        mesh: Input simplicial mesh
+    Parameters
+    ----------
+    mesh : Mesh
+        Input simplicial mesh
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_boundary_edges, 2) containing boundary edge connectivity.
         Returns empty tensor of shape (0, 2) for watertight meshes.
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
-        >>> # Cylinder with open ends
-        >>> mesh = cylinder_open.load(n_circ=32, n_height=16)
-        >>> boundary_edges = get_boundary_edges(mesh)
-        >>> # Top and bottom circles each have 32 edges = 64 total
-        >>> assert len(boundary_edges) == 64
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.surfaces import cylinder_open
+    >>> # Cylinder with open ends
+    >>> mesh = cylinder_open.load(n_circ=32, n_height=16)
+    >>> boundary_edges = get_boundary_edges(mesh)
+    >>> # Top and bottom circles each have 32 edges = 64 total
+    >>> assert len(boundary_edges) == 64
 
-    Note:
-        For closed manifolds (watertight meshes), returns empty tensor.
+    Notes
+    -----
+    For closed manifolds (watertight meshes), returns empty tensor.
     """
     from physicsnemo.mesh.boundaries._facet_extraction import (
         categorize_facets_by_count,

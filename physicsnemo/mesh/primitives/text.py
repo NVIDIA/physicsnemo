@@ -79,7 +79,9 @@ def _sample_curve_segment(p0, control_points, pn, num_samples: int):
 def _text_to_path(text: str, font_size: float = 12.0, samples_per_unit: float = 10):
     """Convert text to sampled path with edges.
 
-    Returns:
+    Returns
+    -------
+    tuple
         Tuple of (points, edges, matplotlib Path object)
     """
     import importlib
@@ -412,20 +414,29 @@ def text_1d_2d(
 
     Converts text to a polyline mesh representing the outline of each letter.
 
-    Args:
-        text: Text string to render
-        font_size: Font size in arbitrary units
-        samples_per_unit: Density of curve sampling for Bezier curves
-        max_segment_length: Maximum edge length after subdivision
-        device: Device for mesh tensors ('cpu', 'cuda', or torch.device)
+    Parameters
+    ----------
+    text : str, optional
+        Text string to render
+    font_size : float, optional
+        Font size in arbitrary units
+    samples_per_unit : float, optional
+        Density of curve sampling for Bezier curves
+    max_segment_length : float, optional
+        Maximum edge length after subdivision
+    device : torch.device | str, optional
+        Device for mesh tensors ('cpu', 'cuda', or torch.device)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Mesh with n_manifold_dims=1, n_spatial_dims=2 (polyline in 2D)
 
-    Example:
-        >>> mesh = text_1d_2d("Hello", font_size=10.0)
-        >>> assert mesh.n_manifold_dims == 1
-        >>> assert mesh.n_spatial_dims == 2
+    Examples
+    --------
+    >>> mesh = text_1d_2d("Hello", font_size=10.0)
+    >>> assert mesh.n_manifold_dims == 1
+    >>> assert mesh.n_spatial_dims == 2
     """
     if isinstance(device, str):
         device = torch.device(device)
@@ -453,20 +464,29 @@ def text_2d_2d(
     like 'o', 'e', 'a'. Uses Delaunay triangulation and shoelace formula
     for hole detection.
 
-    Args:
-        text: Text string to render
-        font_size: Font size in arbitrary units
-        samples_per_unit: Density of curve sampling for Bezier curves
-        max_segment_length: Maximum edge length after subdivision
-        device: Device for mesh tensors ('cpu', 'cuda', or torch.device)
+    Parameters
+    ----------
+    text : str, optional
+        Text string to render
+    font_size : float, optional
+        Font size in arbitrary units
+    samples_per_unit : float, optional
+        Density of curve sampling for Bezier curves
+    max_segment_length : float, optional
+        Maximum edge length after subdivision
+    device : torch.device | str, optional
+        Device for mesh tensors ('cpu', 'cuda', or torch.device)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=2 (filled text in 2D plane)
 
-    Example:
-        >>> mesh = text_2d_2d("Hello", font_size=10.0)
-        >>> assert mesh.n_manifold_dims == 2
-        >>> assert mesh.n_spatial_dims == 2
+    Examples
+    --------
+    >>> mesh = text_2d_2d("Hello", font_size=10.0)
+    >>> assert mesh.n_manifold_dims == 2
+    >>> assert mesh.n_spatial_dims == 2
     """
     if isinstance(device, str):
         device = torch.device(device)
@@ -495,21 +515,31 @@ def text_3d_3d(
     Creates solid 3D text by triangulating in 2D, embedding to 3D, and
     extruding along the z-axis.
 
-    Args:
-        text: Text string to render
-        font_size: Font size in arbitrary units
-        samples_per_unit: Density of curve sampling for Bezier curves
-        max_segment_length: Maximum edge length after subdivision
-        extrusion_height: Height to extrude in z-direction
-        device: Device for mesh tensors ('cpu', 'cuda', or torch.device)
+    Parameters
+    ----------
+    text : str, optional
+        Text string to render
+    font_size : float, optional
+        Font size in arbitrary units
+    samples_per_unit : float, optional
+        Density of curve sampling for Bezier curves
+    max_segment_length : float, optional
+        Maximum edge length after subdivision
+    extrusion_height : float, optional
+        Height to extrude in z-direction
+    device : torch.device | str, optional
+        Device for mesh tensors ('cpu', 'cuda', or torch.device)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Mesh with n_manifold_dims=3, n_spatial_dims=3 (solid tetrahedral volume)
 
-    Example:
-        >>> mesh = text_3d_3d("Hello", font_size=10.0, extrusion_height=1.0)
-        >>> assert mesh.n_manifold_dims == 3
-        >>> assert mesh.n_spatial_dims == 3
+    Examples
+    --------
+    >>> mesh = text_3d_3d("Hello", font_size=10.0, extrusion_height=1.0)
+    >>> assert mesh.n_manifold_dims == 3
+    >>> assert mesh.n_spatial_dims == 3
     """
     if isinstance(device, str):
         device = torch.device(device)
@@ -555,21 +585,31 @@ def text_2d_3d(
     Creates the surface of 3D text by extracting the boundary from an
     extruded tetrahedral volume.
 
-    Args:
-        text: Text string to render
-        font_size: Font size in arbitrary units
-        samples_per_unit: Density of curve sampling for Bezier curves
-        max_segment_length: Maximum edge length after subdivision
-        extrusion_height: Height to extrude in z-direction
-        device: Device for mesh tensors ('cpu', 'cuda', or torch.device)
+    Parameters
+    ----------
+    text : str, optional
+        Text string to render
+    font_size : float, optional
+        Font size in arbitrary units
+    samples_per_unit : float, optional
+        Density of curve sampling for Bezier curves
+    max_segment_length : float, optional
+        Maximum edge length after subdivision
+    extrusion_height : float, optional
+        Height to extrude in z-direction
+    device : torch.device | str, optional
+        Device for mesh tensors ('cpu', 'cuda', or torch.device)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Mesh with n_manifold_dims=2, n_spatial_dims=3 (triangulated surface in 3D)
 
-    Example:
-        >>> mesh = text_2d_3d("Hello", font_size=10.0, extrusion_height=1.0)
-        >>> assert mesh.n_manifold_dims == 2
-        >>> assert mesh.n_spatial_dims == 3
+    Examples
+    --------
+    >>> mesh = text_2d_3d("Hello", font_size=10.0, extrusion_height=1.0)
+    >>> assert mesh.n_manifold_dims == 2
+    >>> assert mesh.n_spatial_dims == 3
     """
     volume = text_3d_3d(
         text, font_size, samples_per_unit, max_segment_length, extrusion_height, device

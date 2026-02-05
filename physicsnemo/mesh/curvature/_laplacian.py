@@ -41,17 +41,24 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
 
     where w_ij are cotangent weights that depend on manifold dimension.
 
-    Args:
-        mesh: Input mesh (must be codimension-1 for mean curvature)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh (must be codimension-1 for mean curvature)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_points, n_spatial_dims) representing Laplacian
         applied to point coordinates.
 
-    Raises:
-        ValueError: If codimension != 1 (mean curvature requires normals)
+    Raises
+    ------
+    ValueError
+        If codimension != 1 (mean curvature requires normals)
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> mesh = sphere_icosahedral.load(subdivisions=2)
         >>> laplacian_coords = compute_laplacian_at_points(mesh)
@@ -113,14 +120,20 @@ def compute_cotangent_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor
         w_ij = (1/2) × cot α
     where α is the angle in the single adjacent triangle.
 
-    Args:
-        mesh: Input mesh
-        edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_edges,) containing cotangent weights
 
-    Example:
+    Examples
+    --------
         >>> import torch
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> mesh = two_triangles_2d.load()

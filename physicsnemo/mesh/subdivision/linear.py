@@ -59,15 +59,20 @@ def subdivide_linear(mesh: "Mesh") -> "Mesh":
     - Cell data is propagated to children (each child inherits parent's data)
     - Global data is preserved unchanged
 
-    Args:
-        mesh: Input mesh to subdivide (any manifold/spatial dimension)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to subdivide (any manifold/spatial dimension)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Subdivided mesh with:
         - n_points = original_n_points + n_edges
         - n_cells = original_n_cells * 2^n_manifold_dims
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> # Triangle mesh: 2 triangles -> 8 triangles
         >>> mesh = two_triangles_2d.load()

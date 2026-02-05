@@ -39,7 +39,8 @@ class Adjacency:
         indices: Flattened array of all neighbor indices.
             Shape (total_neighbors,), dtype int64.
 
-    Example:
+    Examples
+    --------
         >>> # Represent [[0,1,2], [3,4], [5], [6,7,8]]
         >>> adj = Adjacency(
         ...     offsets=torch.tensor([0, 3, 5, 6, 9]),
@@ -96,11 +97,14 @@ class Adjacency:
         This is, in general, much less efficient than directly using the sparse encoding
         itself -- all internal library operations use Adjacency objects directly.
 
-        Returns:
+        Returns
+        -------
+        list[list[int]]
             Ragged list where result[i] contains all neighbors of source i.
             Empty sublists represent sources with no neighbors.
 
-        Example:
+        Examples
+        --------
             >>> adj = Adjacency(
             ...     offsets=torch.tensor([0, 3, 3, 5]),
             ...     indices=torch.tensor([1, 2, 0, 4, 3]),
@@ -161,12 +165,15 @@ class Adjacency:
         of tensors where (source_indices[i], target_indices[i]) represents the
         i-th edge in the adjacency.
 
-        Returns:
+        Returns
+        -------
+        tuple[torch.Tensor, torch.Tensor]
             Tuple of (source_indices, target_indices), both shape (n_total_neighbors,).
             source_indices[i] is the source entity for the i-th pair.
             target_indices[i] is the target entity for the i-th pair.
 
-        Example:
+        Examples
+        --------
             >>> adj = Adjacency(
             ...     offsets=torch.tensor([0, 2, 4, 5]),
             ...     indices=torch.tensor([10, 11, 20, 21, 30]),
@@ -200,15 +207,20 @@ class Adjacency:
         This is useful for capping the number of candidates in spatial queries
         (e.g., BVH candidate cells) to prevent memory explosion.
 
-        Args:
-            max_count: Maximum neighbors per source. If None (default),
-                returns self unchanged (no limit applied).
+        Parameters
+        ----------
+        max_count : int | None, optional
+            Maximum neighbors per source. If None (default),
+            returns self unchanged (no limit applied).
 
-        Returns:
+        Returns
+        -------
+        Adjacency
             New Adjacency with at most max_count neighbors per source.
             If max_count is None, returns self.
 
-        Example:
+        Examples
+        --------
             >>> adj = Adjacency(
             ...     offsets=torch.tensor([0, 5, 8, 10]),
             ...     indices=torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
@@ -269,16 +281,23 @@ def build_adjacency_from_pairs(
         3. Use cumsum to compute offsets
         4. Return Adjacency with sorted neighbor lists
 
-    Args:
-        source_indices: Source entity indices, shape (n_pairs,)
-        target_indices: Target entity (neighbor) indices, shape (n_pairs,)
-        n_sources: Total number of source entities (may exceed max(source_indices))
+    Parameters
+    ----------
+    source_indices : torch.Tensor
+        Source entity indices, shape (n_pairs,)
+    target_indices : torch.Tensor
+        Target entity (neighbor) indices, shape (n_pairs,)
+    n_sources : int
+        Total number of source entities (may exceed max(source_indices))
 
-    Returns:
+    Returns
+    -------
+    Adjacency
         Adjacency object where adjacency.to_list()[i] contains all targets
         connected from source i. Sources with no outgoing edges have empty lists.
 
-    Example:
+    Examples
+    --------
         >>> # Create adjacency: 0→[1,2], 1→[3], 2→[], 3→[0]
         >>> sources = torch.tensor([0, 0, 1, 3])
         >>> targets = torch.tensor([1, 2, 3, 0])

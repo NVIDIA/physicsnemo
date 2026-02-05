@@ -47,60 +47,70 @@ def embed_in_spatial_dims(
         - [1, 3] → [1, 2]: Project 3D curve down to 2D plane
         - [2, 3] → [2, 4]: Embed 3D surface into 4D space
 
-    Args:
-        mesh: Input mesh to embed/project
-        target_n_spatial_dims: Target number of spatial dimensions. Must be >= 1.
-            - If target > current: Points are padded with zeros in new dimensions
-            - If target < current: Points are sliced to keep only first 'target' dims
-            - If target == current: Returns mesh unchanged (no-op)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to embed/project
+    target_n_spatial_dims : int
+        Target number of spatial dimensions. Must be >= 1.
+        - If target > current: Points are padded with zeros in new dimensions
+        - If target < current: Points are sliced to keep only first 'target' dims
+        - If target == current: Returns mesh unchanged (no-op)
 
-    Returns:
+    Returns
+    -------
+    Mesh
         New mesh with modified spatial dimensions:
-            - points shape: (n_points, target_n_spatial_dims)
-            - n_manifold_dims: unchanged
-            - cells: unchanged
-            - point_data, cell_data: preserved (non-cached fields only)
-            - Cached geometric properties: cleared (depend on spatial embedding)
+        - points shape: (n_points, target_n_spatial_dims)
+        - n_manifold_dims: unchanged
+        - cells: unchanged
+        - point_data, cell_data: preserved (non-cached fields only)
+        - Cached geometric properties: cleared (depend on spatial embedding)
 
-    Raises:
-        ValueError: If target_n_spatial_dims < 1
-        ValueError: If target_n_spatial_dims < n_manifold_dims (would create
-            impossible configuration where manifold exceeds ambient space)
+    Raises
+    ------
+    ValueError
+        If target_n_spatial_dims < 1
+    ValueError
+        If target_n_spatial_dims < n_manifold_dims (would create
+        impossible configuration where manifold exceeds ambient space)
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh import Mesh
-        >>> # Embed 2D triangle mesh in 2D space into 3D space
-        >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
-        >>> cells = torch.tensor([[0, 1, 2]])
-        >>> mesh_2d = Mesh(points=points_2d, cells=cells)
-        >>> assert mesh_2d.n_spatial_dims == 2
-        >>>
-        >>> # Embed in 3D (points become [x, y, 0])
-        >>> mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
-        >>> assert mesh_3d.n_spatial_dims == 3
-        >>> assert mesh_3d.points.shape == (3, 3)
-        >>> assert torch.allclose(mesh_3d.points[0], torch.tensor([0., 0., 0.]))
-        >>>
-        >>> # Project back to 2D
-        >>> mesh_2d_again = embed_in_spatial_dims(mesh_3d, target_n_spatial_dims=2)
-        >>> assert torch.allclose(mesh_2d_again.points, points_2d)
-        >>>
-        >>> # Codimension changes affect normal computation
-        >>> assert mesh_2d.codimension == 0  # no normals defined
-        >>> assert mesh_3d.codimension == 1  # normals now defined!
-        >>> assert mesh_3d.cell_normals.shape == (1, 3)
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh import Mesh
+    >>> # Embed 2D triangle mesh in 2D space into 3D space
+    >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
+    >>> cells = torch.tensor([[0, 1, 2]])
+    >>> mesh_2d = Mesh(points=points_2d, cells=cells)
+    >>> assert mesh_2d.n_spatial_dims == 2
+    >>>
+    >>> # Embed in 3D (points become [x, y, 0])
+    >>> mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
+    >>> assert mesh_3d.n_spatial_dims == 3
+    >>> assert mesh_3d.points.shape == (3, 3)
+    >>> assert torch.allclose(mesh_3d.points[0], torch.tensor([0., 0., 0.]))
+    >>>
+    >>> # Project back to 2D
+    >>> mesh_2d_again = embed_in_spatial_dims(mesh_3d, target_n_spatial_dims=2)
+    >>> assert torch.allclose(mesh_2d_again.points, points_2d)
+    >>>
+    >>> # Codimension changes affect normal computation
+    >>> assert mesh_2d.codimension == 0  # no normals defined
+    >>> assert mesh_3d.codimension == 1  # normals now defined!
+    >>> assert mesh_3d.cell_normals.shape == (1, 3)
 
-    Note:
-        When spatial dimensions change, all cached geometric properties are cleared
-        because they depend on the spatial embedding. This includes:
-        - Cell/point normals (codimension changes)
-        - Cell centroids (need padding/slicing)
-        - Cell areas (intrinsically unchanged but cache is cleared for consistency)
-        - Curvature values (depend on embedding)
+    Notes
+    -----
+    When spatial dimensions change, all cached geometric properties are cleared
+    because they depend on the spatial embedding. This includes:
+    - Cell/point normals (codimension changes)
+    - Cell centroids (need padding/slicing)
+    - Cell areas (intrinsically unchanged but cache is cleared for consistency)
+    - Curvature values (depend on embedding)
 
-        User data in point_data and cell_data is preserved as-is. If you have
-        vector fields that should be padded/projected, you must handle this manually.
+    User data in point_data and cell_data is preserved as-is. If you have
+    vector fields that should be padded/projected, you must handle this manually.
     """
     ### Validate inputs
     if target_n_spatial_dims < 1:

@@ -40,40 +40,52 @@ def sharp(
     edge_1form: torch.Tensor,
     edges: torch.Tensor,
 ) -> torch.Tensor:
-    """Apply sharp operator to convert 1-form to primal vector field (rigorous DEC).
+    r"""Apply sharp operator to convert 1-form to primal vector field (rigorous DEC).
 
-    Maps ♯: Ω¹(K) → 𝔛(K)
+    Maps :math:`\sharp: \Omega^1(K) \to \mathfrak{X}(K)`
 
-    Converts edge-based 1-form values to vectors at vertices using the rigorous
-    formula from Hirani Eq. 5.8.1 (line 2596):
+    Converts edge-based 1-form values to vectors at vertices:
 
-        α♯(v) = Σ_{edges [v,σ⁰] from v} ⟨α,[v,σ⁰]⟩ × Σ_{cells σⁿ ⊃ edge} (|⋆v ∩ σⁿ|/|σⁿ|) × ∇φ_{σ⁰,σⁿ}
+    .. math::
+
+        \alpha^\sharp(v) = \sum_{\text{edges } [v,\sigma^0]}
+            \langle \alpha, [v,\sigma^0] \rangle
+            \sum_{\sigma^n \supset \text{edge}}
+            \frac{|{\star}v \cap \sigma^n|}{|{\star}v|}
+            \,\nabla\varphi_{\sigma^0, \sigma^n}
 
     Where:
-    - ⟨α,[v,σ⁰]⟩ is the 1-form value on edge [v, σ⁰]
-    - |⋆v ∩ σⁿ| is the portion of vertex v's Voronoi cell within cell σⁿ
-    - |σⁿ| is the volume of cell σⁿ
-    - ∇φ_{σ⁰,σⁿ} is the gradient of barycentric interpolation function
 
-    This formula is proven (Hirani Corollary 6.1.8) to be uniquely determined
-    by requiring the divergence theorem to hold.
+    - :math:`\langle \alpha, [v,\sigma^0] \rangle` is the 1-form value on the
+      oriented edge from *v* to :math:`\sigma^0`
+    - :math:`|{\star}v \cap \sigma^n|` is the portion of vertex *v*'s Voronoi
+      cell within cell :math:`\sigma^n`
+    - :math:`|{\star}v|` is the total dual 0-cell volume of vertex *v*
+    - :math:`\nabla\varphi_{\sigma^0, \sigma^n}` is the gradient of the
+      barycentric interpolation function for :math:`\sigma^0` in cell
+      :math:`\sigma^n`
 
-    Args:
-        mesh: Simplicial mesh (2D or 3D)
-        edge_1form: 1-form values on edges, shape (n_edges,) or (n_edges, ...)
-        edges: Edge connectivity, shape (n_edges, 2)
+    The weights :math:`|{\star}v \cap \sigma^n| / |{\star}v|` sum to 1.0 for
+    each vertex, guaranteeing exact reproduction of constant gradients.
 
-    Returns:
-        Vector field at vertices, shape (n_points, n_spatial_dims) or
-        (n_points, n_spatial_dims, ...) for tensor-valued 1-forms
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh (2D or 3D).
+    edge_1form : torch.Tensor
+        1-form values on edges, shape ``(n_edges,)`` or ``(n_edges, ...)``.
+    edges : torch.Tensor
+        Edge connectivity, shape ``(n_edges, 2)``.
 
-    Reference:
-        Hirani (2003) Definition 5.8.1, Equation 5.8.1 (line 2596)
+    Returns
+    -------
+    torch.Tensor
+        Vector field at vertices, shape ``(n_points, n_spatial_dims)`` or
+        ``(n_points, n_spatial_dims, ...)`` for tensor-valued 1-forms.
 
-    Note:
-        This implementation uses the full rigorous DEC formula, not a simplified
-        approximation. It computes support volume intersections and barycentric
-        gradients as required by the theory.
+    References
+    ----------
+    Hirani (2003) Definition 5.8.1, Corollary 6.1.8.
     """
     n_points = mesh.n_points
     n_spatial_dims = mesh.n_spatial_dims
@@ -99,7 +111,7 @@ def sharp(
         mesh
     )  # (n_cells, n_verts_per_cell, n_spatial_dims)
 
-    ### Get support volume fractions |⋆v ∩ cell| / |cell|
+    ### Get support volume fractions |⋆v ∩ cell| / |⋆v| (sum to 1.0 per vertex)
     from physicsnemo.mesh.geometry.support_volumes import (
         compute_vertex_support_volume_cell_fractions,
     )
@@ -242,6 +254,27 @@ def flat(
     This is the simplest flat operator for primal fields and is exact for
     linearly interpolated vector fields along edges.
 
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    vector_field : torch.Tensor
+        Vectors at vertices, shape (n_points, n_spatial_dims) or
+        (n_points, n_spatial_dims, ...) for tensor fields
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
+
+    Returns
+    -------
+    torch.Tensor
+        1-form values on edges, shape (n_edges,) or (n_edges, ...)
+
+    References
+    ----------
+    Hirani (2003) Section 5.6, PDP-flat (lines 2456-2465)
+
+    Notes
+    -----
     Note on flat operator variants:
         Hirani defines 8 different flat operators depending on:
         - Source: primal vs dual vector field
@@ -250,18 +283,6 @@ def flat(
 
         This implements PDP-flat (Primal-Dual-Primal): primal vectors, constant
         in Voronoi regions, to primal 1-form. This is compatible with PP-sharp.
-
-    Args:
-        mesh: Simplicial mesh
-        vector_field: Vectors at vertices, shape (n_points, n_spatial_dims) or
-            (n_points, n_spatial_dims, ...) for tensor fields
-        edges: Edge connectivity, shape (n_edges, 2)
-
-    Returns:
-        1-form values on edges, shape (n_edges,) or (n_edges, ...)
-
-    Reference:
-        Hirani (2003) Section 5.6, PDP-flat (lines 2456-2465)
 
     Algorithm:
         For edge [v0, v1]:

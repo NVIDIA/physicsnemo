@@ -49,21 +49,27 @@ def hodge_star_0(
     Formula: ⟨⋆f, ⋆v⟩/|⋆v| = ⟨f, v⟩/|v| = f(v) (since |v|=1 for 0-simplex)
     Therefore: ⋆f(⋆v) = f(v) × |⋆v|
 
-    Args:
-        mesh: Simplicial mesh
-        primal_0form: Values at vertices, shape (n_points,) or (n_points, ...)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    primal_0form : torch.Tensor
+        Values at vertices, shape (n_points,) or (n_points, ...)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Dual n-form values (one per cell in dual mesh = one per vertex in primal),
         shape (n_points,) or (n_points, ...)
 
-    Example:
-        >>> import torch
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> f = torch.randn(mesh.n_points)  # function at vertices
-        >>> star_f = hodge_star_0(mesh, f)
-        >>> # star_f[i] = f[i] * dual_volume[i]
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> f = torch.randn(mesh.n_points)  # function at vertices
+    >>> star_f = hodge_star_0(mesh, f)
+    >>> # star_f[i] = f[i] * dual_volume[i]
     """
     from physicsnemo.mesh.calculus._circumcentric_dual import (
         get_or_compute_dual_volumes_0,
@@ -96,12 +102,18 @@ def hodge_star_1(
     Formula: ⟨⋆α, ⋆e⟩/|⋆e| = ⟨α, e⟩/|e|
     Therefore: ⋆α(⋆e) = α(e) × |⋆e|/|e|
 
-    Args:
-        mesh: Simplicial mesh
-        primal_1form: Values on edges, shape (n_edges,) or (n_edges, ...)
-        edges: Edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Simplicial mesh
+    primal_1form : torch.Tensor
+        Values on edges, shape (n_edges,) or (n_edges, ...)
+    edges : torch.Tensor
+        Edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Dual (n-1)-form values, shape (n_edges,) or (n_edges, ...)
     """
     from physicsnemo.mesh.calculus._circumcentric_dual import compute_dual_volumes_1
@@ -139,18 +151,24 @@ def codifferential(
     For k=0 (acting on 1-forms): δ = (-1)^(n×0+1) ⋆₀ d₀ ⋆₁ = -⋆₀ d₀ ⋆₁
     This gives the divergence operator.
 
-    Args:
-        k: Degree of the output form (input is (k+1)-form)
-        **kwargs: Additional arguments needed for specific k values (e.g., 'edges' for k=0)
+    Parameters
+    ----------
+    k : int
+        Degree of the output form (input is (k+1)-form)
+    **kwargs
+        Additional arguments needed for specific k values (e.g., 'edges' for k=0)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         k-form values after applying codifferential
 
-    Example:
-        >>> import torch
-        >>> # Compute divergence of a 1-form on edges
-        >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2]])
-        >>> # div_f = codifferential(k=0, edges=edges)  # requires mesh context
+    Examples
+    --------
+    >>> import torch
+    >>> # Compute divergence of a 1-form on edges
+    >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2]])
+    >>> # div_f = codifferential(k=0, edges=edges)  # requires mesh context
     """
     if k == 0:
         ### δ: Ω¹ → Ω⁰ (divergence)

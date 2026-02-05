@@ -41,17 +41,22 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     - edge_length_ratio: max_edge / min_edge (1.0 is equilateral)
     - quality_score: Combined metric in [0,1] (1.0 is perfect equilateral)
 
-    Args:
-        mesh: Mesh to analyze
+    Parameters
+    ----------
+    mesh : Mesh
+        Mesh to analyze
 
-    Returns:
+    Returns
+    -------
+    TensorDict
         TensorDict of shape (n_cells,) with quality metrics
 
-    Example:
-        >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
-        >>> mesh = two_triangles_2d.load()
-        >>> metrics = compute_quality_metrics(mesh)
-        >>> assert "quality_score" in metrics.keys()
+    Examples
+    --------
+    >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
+    >>> mesh = two_triangles_2d.load()
+    >>> metrics = compute_quality_metrics(mesh)
+    >>> assert "quality_score" in metrics.keys()
     """
     if mesh.n_cells == 0:
         return TensorDict(

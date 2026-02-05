@@ -54,31 +54,40 @@ def mean_curvature_vertices(
     - Negative: Concave (inward curving like sphere interior)
     - Zero: Minimal surface (soap film)
 
-    Args:
-        mesh: Input mesh (must be codimension-1)
-        include_boundary: If False, boundary vertices are set to NaN (default).
-            If True, computes curvature at boundary vertices using available
-            neighbors (Neumann-like boundary condition). This may be less accurate
-            at boundaries but provides complete coverage.
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh (must be codimension-1)
+    include_boundary : bool, optional
+        If False, boundary vertices are set to NaN (default).
+        If True, computes curvature at boundary vertices using available
+        neighbors (Neumann-like boundary condition). This may be less accurate
+        at boundaries but provides complete coverage.
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Tensor of shape (n_points,) containing signed mean curvature at each vertex.
         For isolated vertices, mean curvature is NaN.
         For boundary vertices, NaN if include_boundary=False, otherwise computed.
 
-    Raises:
-        ValueError: If mesh is not codimension-1
+    Raises
+    ------
+    ValueError
+        If mesh is not codimension-1
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Sphere of radius r has H = 1/r everywhere
         >>> sphere = sphere_icosahedral.load(radius=2.0, subdivisions=3)
         >>> H = mean_curvature_vertices(sphere)
         >>> # H.mean() ≈ 0.5 (= 1/2.0)
 
-    Note:
-        For a sphere with outward normals, H > 0.
-        For minimal surfaces (soap films), H = 0.
+    Notes
+    -----
+    For a sphere with outward normals, H > 0.
+    For minimal surfaces (soap films), H = 0.
     """
     ### Validate codimension (done in compute_laplacian_at_points)
 

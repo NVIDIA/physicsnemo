@@ -55,11 +55,16 @@ def compute_butterfly_weights_2d(
     - Two opposite vertices in adjacent triangles (weight 1/8 each)
     - Four "wing" vertices (weight -1/16 each)
 
-    Args:
-        mesh: Input 2D manifold mesh (triangular)
-        unique_edges: Unique edge connectivity, shape (n_edges, 2)
+    Parameters
+    ----------
+    mesh : Mesh
+        Input 2D manifold mesh (triangular)
+    unique_edges : torch.Tensor
+        Unique edge connectivity, shape (n_edges, 2)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Edge midpoint positions using butterfly weights, shape (n_edges, n_spatial_dims)
     """
     n_edges = len(unique_edges)
@@ -187,16 +192,23 @@ def subdivide_butterfly(mesh: "Mesh") -> "Mesh":
     The connectivity pattern is identical to linear subdivision (same topology),
     but the geometric positions of new vertices differ.
 
-    Args:
-        mesh: Input mesh to subdivide
+    Parameters
+    ----------
+    mesh : Mesh
+        Input mesh to subdivide
 
-    Returns:
+    Returns
+    -------
+    Mesh
         Subdivided mesh with butterfly-weighted vertex positions
 
-    Raises:
-        NotImplementedError: If n_manifold_dims is not 2 (may be relaxed in future)
+    Raises
+    ------
+    NotImplementedError
+        If n_manifold_dims is not 2 (may be relaxed in future)
 
-    Example:
+    Examples
+    --------
         >>> from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
         >>> # Smooth a triangular surface
         >>> mesh = sphere_icosahedral.load(subdivisions=2)

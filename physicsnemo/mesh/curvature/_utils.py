@@ -34,17 +34,22 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
     - 3D volumes: Full solid angle is 4π (full sphere around a point)
     - nD: Surface area of unit (n-1)-sphere
 
-    Args:
-        n_manifold_dims: Manifold dimension
+    Parameters
+    ----------
+    n_manifold_dims : int
+        Manifold dimension
 
-    Returns:
+    Returns
+    -------
+    float
         Full angle for n-dimensional manifold:
         - 1D: π
         - 2D: 2π
         - 3D: 4π
         - nD: 2π^(n/2) / Γ(n/2) for n ≥ 2
 
-    Example:
+    Examples
+    --------
         >>> import math
         >>> assert abs(compute_full_angle_n_sphere(1) - math.pi) < 1e-10  # π
         >>> assert abs(compute_full_angle_n_sphere(2) - 2*math.pi) < 1e-5  # 2π
@@ -70,11 +75,16 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
     More stable than using acos(dot product) which suffers from numerical
     issues when vectors are nearly parallel or anti-parallel.
 
-    Args:
-        v1: First vector(s), shape (..., n_dims)
-        v2: Second vector(s), shape (..., n_dims)
+    Parameters
+    ----------
+    v1 : torch.Tensor
+        First vector(s), shape (..., n_dims)
+    v2 : torch.Tensor
+        Second vector(s), shape (..., n_dims)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Angle(s) in radians, shape (...)
         Range: [0, π]
 
@@ -112,15 +122,22 @@ def compute_triangle_angles(
 
     Uses atan2-based computation for numerical stability.
 
-    Args:
-        p0: Vertex at which to compute angle, shape (..., n_spatial_dims)
-        p1: Second vertex, shape (..., n_spatial_dims)
-        p2: Third vertex, shape (..., n_spatial_dims)
+    Parameters
+    ----------
+    p0 : torch.Tensor
+        Vertex at which to compute angle, shape (..., n_spatial_dims)
+    p1 : torch.Tensor
+        Second vertex, shape (..., n_spatial_dims)
+    p2 : torch.Tensor
+        Third vertex, shape (..., n_spatial_dims)
 
-    Returns:
+    Returns
+    -------
+    torch.Tensor
         Angle at p0 in radians, shape (...)
 
-    Example:
+    Examples
+    --------
         >>> # Right angle at origin
         >>> p0 = torch.tensor([0., 0.])
         >>> p1 = torch.tensor([1., 0.])
