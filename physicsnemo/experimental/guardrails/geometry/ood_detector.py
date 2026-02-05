@@ -602,7 +602,9 @@ class GeometryGuardrail:
             )
 
         # Check feature names match
-        if list(data["feature_names"]) != FEATURE_NAMES:
+        # Normalize to str to handle NumPy str_ objects
+        loaded_feature_names = [str(name) for name in data["feature_names"]]
+        if loaded_feature_names != FEATURE_NAMES:
             raise RuntimeError(
                 f"Feature schema mismatch: saved model uses different feature names"
             )

@@ -79,9 +79,9 @@ def test_density_model_torch_backend():
     X_train = rng.randn(50, 22)
     X_test = rng.randn(10, 22)
 
-    # Create model with CPU device (torch backend)
+    # Create model with CPU device (sklearn backend)
     model = GeometryDensityModel(n_components=1, device="cpu")
-    assert model.backend == "cpu" or model.backend == "sklearn"  # cpu uses sklearn
+    assert model.backend == "sklearn"  # CPU always uses sklearn
 
     model.fit(X_train)
     scores = model.score(X_test)
@@ -157,7 +157,7 @@ def test_cpu_gpu_consistency():
 
     model_torch = GeometryDensityModel(n_components=1, device="cpu", random_state=42)
     # Override with TorchGMM manually
-    model_torch.gmm = TorchGMM(n_components=1, device="cpu")
+    model_torch.model = TorchGMM(n_components=1, device="cpu", random_state=42)
     model_torch.backend = "torch"
     model_torch.fit(X_train)
     scores_torch = model_torch.score(X_test)
