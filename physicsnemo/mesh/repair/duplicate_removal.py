@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
+from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -56,10 +57,8 @@ def remove_duplicate_vertices(
 
     Notes
     -----
-    Uses BVH spatial data structure for O(n log n) complexity.
-    Constructs a BVH from point cloud, queries for nearby points, then
-    checks exact distances only for candidates. All operations are fully
-    vectorized with no Python loops over points.
+    Uses BVH spatial data structure (via ``compute_canonical_indices``)
+    for O(n log n) complexity.
 
     Examples
     --------
@@ -71,156 +70,39 @@ def remove_duplicate_vertices(
     n_original = mesh.n_points
     device = mesh.points.device
 
-    if n_original == 0:
-        return mesh, {
-            "n_duplicates_merged": 0,
-            "n_points_original": 0,
-            "n_points_final": 0,
-        }
+    no_change_stats = {
+        "n_duplicates_merged": 0,
+        "n_points_original": n_original,
+        "n_points_final": n_original,
+    }
 
-    if n_original == 1:
-        return mesh, {
-            "n_duplicates_merged": 0,
-            "n_points_original": 1,
-            "n_points_final": 1,
-        }
+    if n_original <= 1:
+        return mesh, no_change_stats
 
-    ### Create 0-manifold mesh for BVH construction
-    # Each point is a 0-cell (single vertex) with degenerate AABB
-    from physicsnemo.mesh.mesh import Mesh as TempMesh
-    from physicsnemo.mesh.spatial.bvh import BVH
+    ### Compute canonical representative for each point
+    canonical = compute_canonical_indices(mesh.points, tolerance)
 
-    point_cells = torch.arange(n_original, device=device, dtype=torch.long).unsqueeze(
-        1
-    )  # (n_points, 1)
-
-    # Create 0-manifold mesh: cells.shape[-1] - 1 = 1 - 1 = 0
-    point_mesh = TempMesh(
-        points=mesh.points,
-        cells=point_cells,
-    )
-
-    ### Build BVH for efficient spatial queries
-    bvh = BVH.from_mesh(point_mesh)
-
-    ### Find candidate duplicates using BVH
-    # For each point, find all points within tolerance (using L∞ distance with tolerance)
-    candidate_adjacency = bvh.find_candidate_cells(
-        query_points=mesh.points,
-        max_candidates_per_point=100,  # Conservative upper bound
-        aabb_tolerance=tolerance,
-    )
-
-    ### Extract candidate pairs from Adjacency using expand_to_pairs()
-    if candidate_adjacency.n_total_neighbors == 0:
-        # No candidates found
-        return mesh, {
-            "n_duplicates_merged": 0,
-            "n_points_original": n_original,
-            "n_points_final": n_original,
-        }
-
-    pair_queries, pair_candidates = candidate_adjacency.expand_to_pairs()
-
-    # Remove self-pairs and ensure query < candidate to avoid duplicate counting
-    valid_pairs = pair_queries < pair_candidates
-    pair_queries = pair_queries[valid_pairs]
-    pair_candidates = pair_candidates[valid_pairs]
-
-    if len(pair_queries) == 0:
-        return mesh, {
-            "n_duplicates_merged": 0,
-            "n_points_original": n_original,
-            "n_points_final": n_original,
-        }
-
-    # Compute exact L2 distances for candidate pairs
-    distances = torch.norm(
-        mesh.points[pair_queries] - mesh.points[pair_candidates],
-        dim=-1,
-    )
-
-    # Filter to actual duplicates (within L2 tolerance)
-    is_duplicate = distances < tolerance
-    v1_orig = pair_queries[is_duplicate]
-    v2_orig = pair_candidates[is_duplicate]
-
-    if len(v1_orig) == 0:
-        return mesh, {
-            "n_duplicates_merged": 0,
-            "n_points_original": n_original,
-            "n_points_final": n_original,
-        }
-
-    ### Build union-find structure (vectorized)
-
-    # Initialize parent array: each vertex is its own parent
-    parent = torch.arange(n_original, device=device, dtype=torch.long)
-
-    # Union operation: merge to smaller index for consistency
-    merge_from = torch.maximum(v1_orig, v2_orig)
-    merge_to = torch.minimum(v1_orig, v2_orig)
-
-    # Apply unions using scatter with reduction to handle multiple merges
-    # Use scatter_reduce with 'amin' to always keep smallest parent
-    parent.scatter_reduce_(
-        dim=0,
-        index=merge_from,
-        src=merge_to,
-        reduce="amin",
-    )
-
-    # Path compression: iteratively follow parent pointers until convergence
-    # Each iteration halves the tree depth, so convergence is O(log n) iterations.
-    # For n points: 1K->10, 1M->20, 1B->30 iterations. Limit of 100 is very safe.
-    max_iterations = 100
-    for iteration in range(max_iterations):
-        old_parent = parent.clone()  # Must clone, not reference
-        parent = parent[parent]  # Follow parent pointers (vectorized)
-        if torch.equal(parent, old_parent):
-            break
-    else:
-        import warnings
-
-        warnings.warn(
-            f"Union-find path compression did not converge in {max_iterations} iterations. "
-            "This should never happen for valid meshes (expected O(log n) iterations)."
-        )
-
-    canonical_indices = parent
-
-    ### Compute unique vertices
-    unique_canonical = torch.unique(canonical_indices)
+    ### Determine unique representatives and build compact remapping
+    unique_canonical = torch.unique(canonical)
     n_unique = len(unique_canonical)
     n_merged = n_original - n_unique
 
     if n_merged == 0:
-        # No duplicates found after union-find
-        return mesh, {
-            "n_duplicates_merged": 0,
-            "n_points_original": n_original,
-            "n_points_final": n_original,
-        }
+        return mesh, no_change_stats
 
-    ### Create mapping from old to new indices (fully vectorized)
-    # Scatter to create old_to_new mapping
     old_to_new = torch.empty(n_original, device=device, dtype=torch.long)
     old_to_new[unique_canonical] = torch.arange(
         n_unique, device=device, dtype=torch.long
     )
+    old_to_new = old_to_new[canonical]
 
-    # Map all vertices through their canonical representative
-    old_to_new = old_to_new[canonical_indices]
-
-    ### Build new mesh
-    new_points = mesh.points[unique_canonical]
-    new_cells = old_to_new[mesh.cells]
-
-    ### Transfer data (excluding cache)
-    # Filter out cache before indexing to avoid transferring cached computations
+    ### Build cleaned mesh
     from tensordict import TensorDict
 
     from physicsnemo.mesh.mesh import Mesh
+
+    new_points = mesh.points[unique_canonical]
+    new_cells = old_to_new[mesh.cells]
 
     point_data_filtered = mesh.point_data.exclude(CACHE_KEY)
     new_point_data = TensorDict(

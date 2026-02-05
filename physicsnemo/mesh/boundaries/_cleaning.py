@@ -28,54 +28,11 @@ import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
+from physicsnemo.mesh.utilities._duplicate_detection import compute_canonical_indices
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-
-
-def _compute_duplicate_mask(
-    points: torch.Tensor,  # shape: (n_points, n_spatial_dims)
-    rtol: float,
-    atol: float,
-) -> torch.Tensor:
-    """Compute pairwise duplicate mask based on distance tolerance.
-
-    Two points are considered duplicates if:
-        ||p1 - p2|| <= atol + rtol * max(||p1||, ||p2||)
-
-    Parameters
-    ----------
-    points : torch.Tensor
-        Point coordinates
-    rtol : float
-        Relative tolerance
-    atol : float
-        Absolute tolerance
-
-    Returns
-    -------
-    torch.Tensor
-        Boolean mask of shape (n_points, n_points) where True indicates duplicates
-    """
-    ### Compute pairwise distances: ||pi - pj||
-    # Shape: (n_points, n_points)
-    diff = points.unsqueeze(0) - points.unsqueeze(1)  # (n_points, n_points, n_dims)
-    distances = torch.norm(diff, dim=-1)  # (n_points, n_points)
-
-    ### Compute threshold for each pair: atol + rtol * max(||pi||, ||pj||)
-    # Shape: (n_points,)
-    point_norms = torch.norm(points, dim=-1)
-
-    ### Threshold matrix: atol + rtol * max(||pi||, ||pj||)
-    # Use max to ensure symmetry
-    threshold_matrix = atol + rtol * torch.maximum(
-        point_norms.unsqueeze(1),
-        point_norms.unsqueeze(0),
-    )
-
-    ### Find duplicate pairs: distance <= threshold
-    return distances <= threshold_matrix
 
 
 def merge_duplicate_points(
@@ -87,7 +44,11 @@ def merge_duplicate_points(
 ) -> tuple[torch.Tensor, torch.Tensor, TensorDict, torch.Tensor]:
     """Merge duplicate points within tolerance.
 
-    Points are considered duplicates if ||p1 - p2|| <= atol + rtol * ||p1||.
+    Points are considered duplicates if their L2 distance is below a
+    conservative absolute threshold derived from *rtol* and *atol*:
+
+        tolerance = atol + rtol * mesh_diameter
+
     When duplicates are found, they are merged into a single point, and cell
     connectivity is updated accordingly.
 
@@ -140,24 +101,14 @@ def merge_duplicate_points(
             torch.arange(0, device=device, dtype=torch.int64),
         )
 
-    ### Use pairwise distance computation for small meshes
-    # For large meshes, we should use spatial hashing or KD-tree, but those
-    # require additional dependencies. For now, we use a vectorized approach
-    # that works well up to ~100k points.
+    ### Convert (rtol, atol) to a single conservative absolute tolerance
+    mesh_diameter = torch.linalg.vector_norm(
+        points.max(dim=0).values - points.min(dim=0).values
+    )
+    tolerance = float(atol + rtol * mesh_diameter)
 
-    ### Compute pairwise distances efficiently using broadcasting
-    # For very large meshes (>100k points), this may run out of memory
-    # In such cases, we process in chunks
-
-    chunk_size = 10000  # Process in chunks to avoid OOM
-    point_mapping = torch.arange(n_points, device=device, dtype=torch.int64)
-
-    if n_points <= chunk_size:
-        ### Small mesh: compute all pairwise distances at once
-        point_mapping = _merge_points_pairwise(points, rtol, atol)
-    else:
-        ### Large mesh: use spatial hashing for efficiency
-        point_mapping = _merge_points_spatial_hash(points, rtol, atol)
+    ### Compute canonical indices via shared BVH-based primitive
+    point_mapping = compute_canonical_indices(points, tolerance)
 
     ### Get unique points and remap connectivity
     unique_indices = torch.unique(point_mapping)
@@ -187,178 +138,6 @@ def merge_duplicate_points(
     )
 
     return merged_points, updated_cells, merged_point_data, final_point_mapping
-
-
-def _merge_points_pairwise(
-    points: torch.Tensor,
-    rtol: float,
-    atol: float,
-) -> torch.Tensor:
-    """Merge points using pairwise distance computation.
-
-    Parameters
-    ----------
-    points : torch.Tensor
-        Point coordinates
-    rtol : float
-        Relative tolerance
-    atol : float
-        Absolute tolerance
-
-    Returns
-    -------
-    torch.Tensor
-        Mapping from each point to its representative
-    """
-    n_points = len(points)
-    device = points.device
-
-    ### Compute duplicate mask using shared tolerance computation
-    is_duplicate = _compute_duplicate_mask(points, rtol, atol)
-
-    ### Build connected components using vectorized union-find
-    # Start with each point mapping to itself
-    point_mapping = torch.arange(n_points, device=device, dtype=torch.int64)
-
-    ### Extract duplicate pairs from upper triangle
-    # torch.triu with diagonal=1 gives entries where col > row
-    # So (row_indices, col_indices) has row < col, meaning row is the smaller index
-    row_indices, col_indices = torch.where(torch.triu(is_duplicate, diagonal=1))
-
-    if len(row_indices) > 0:
-        ### Map higher-indexed points (col) to lower-indexed points (row)
-        # For each col_index, find the minimum row_index it should merge to
-        # Use scatter_reduce with 'amin' to find minimum target per source
-        point_mapping.scatter_reduce_(
-            dim=0,
-            index=col_indices,  # Higher indices (sources to remap)
-            src=row_indices,  # Lower indices (targets to merge into)
-            reduce="amin",
-            include_self=True,
-        )
-
-    ### Apply transitive closure via path compression
-    # This ensures that if A~B and B~C, then C is also mapped to A's representative.
-    # Each iteration halves the tree depth, so convergence is O(log n) iterations.
-    max_iterations = 100
-    for iteration in range(max_iterations):
-        old_mapping = point_mapping.clone()
-        point_mapping = point_mapping[point_mapping]
-        if torch.equal(point_mapping, old_mapping):
-            break
-    else:
-        import warnings
-
-        warnings.warn(
-            f"Transitive closure in pairwise merge did not converge in {max_iterations} "
-            "iterations. This should never happen for valid meshes (expected O(log n) iterations)."
-        )
-
-    return point_mapping
-
-
-def _merge_points_spatial_hash(
-    points: torch.Tensor,
-    rtol: float,
-    atol: float,
-) -> torch.Tensor:
-    """Merge points using spatial hashing for large meshes.
-
-    This is more memory-efficient than pairwise distances but requires
-    more complex implementation.
-
-    Parameters
-    ----------
-    points : torch.Tensor
-        Point coordinates
-    rtol : float
-        Relative tolerance
-    atol : float
-        Absolute tolerance
-
-    Returns
-    -------
-    torch.Tensor
-        Mapping from each point to its representative
-    """
-    n_points = len(points)
-    device = points.device
-
-    ### Compute a conservative grid size based on tolerance
-    # We want cells large enough that duplicates are in same or adjacent cells
-    # Use the larger of atol and rtol * typical_scale
-    typical_scale = torch.norm(points.max(dim=0)[0] - points.min(dim=0)[0])
-    cell_size = atol + rtol * typical_scale
-
-    ### Ensure cell size is positive
-    cell_size = max(cell_size, 1e-20)
-
-    ### Map points to grid cells
-    # Shape: (n_points, n_dims)
-    grid_coords = (points / cell_size).floor().long()
-
-    ### Create a hash for each grid cell
-    # Use a simple hash function that maps n-dimensional grid coords to 1D
-    # Hash = x + y * prime1 + z * prime2 + ...
-    primes = torch.tensor([1, 999983, 999979, 999961, 999959], device=device)[
-        : points.shape[1]
-    ]
-    grid_hashes = (grid_coords * primes).sum(dim=-1)
-
-    ### Sort points by grid hash for efficient processing
-    sorted_indices = torch.argsort(grid_hashes)
-    sorted_points = points[sorted_indices]
-    sorted_hashes = grid_hashes[sorted_indices]
-
-    ### Find groups of points in the same grid cell
-    # Points with same hash are potentially close
-    unique_hashes, hash_inverse = torch.unique(sorted_hashes, return_inverse=True)
-
-    ### Initialize mapping
-    point_mapping = torch.arange(n_points, device=device, dtype=torch.int64)
-
-    ### For each unique hash, check points within that cell and adjacent cells
-    for hash_idx in range(len(unique_hashes)):
-        ### Get points in this hash bucket
-        mask = hash_inverse == hash_idx
-        indices_in_bucket = torch.where(mask)[0]
-
-        if len(indices_in_bucket) <= 1:
-            continue
-
-        ### Extract points in this bucket
-        bucket_points = sorted_points[indices_in_bucket]
-        bucket_original_indices = sorted_indices[indices_in_bucket]
-
-        ### Find duplicates within bucket using shared tolerance computation
-        is_duplicate = _compute_duplicate_mask(bucket_points, rtol, atol)
-
-        ### Update mapping for duplicates
-        for i in range(len(indices_in_bucket)):
-            duplicates_local = torch.where(is_duplicate[i])[0]
-            if len(duplicates_local) > 0:
-                duplicates_global = bucket_original_indices[duplicates_local]
-                min_idx = torch.min(duplicates_global)
-                point_mapping[duplicates_global] = min_idx
-
-    ### Apply transitive closure via path compression
-    # Each iteration halves the tree depth, so convergence is O(log n) iterations.
-    # For n points: 1K->10, 1M->20, 1B->30 iterations. Limit of 100 is very safe.
-    max_iterations = 100
-    for iteration in range(max_iterations):
-        old_mapping = point_mapping.clone()
-        point_mapping = point_mapping[point_mapping]
-        if torch.equal(point_mapping, old_mapping):
-            break
-    else:
-        import warnings
-
-        warnings.warn(
-            f"Transitive closure in spatial hash merge did not converge in {max_iterations} "
-            "iterations. This should never happen for valid meshes (expected O(log n) iterations)."
-        )
-
-    return point_mapping
 
 
 def _merge_point_data(
