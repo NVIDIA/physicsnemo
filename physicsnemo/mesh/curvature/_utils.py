@@ -20,6 +20,8 @@ Provides helper functions for computing angles, full angles in n-dimensions,
 and numerically stable geometric operations.
 """
 
+import math
+
 import torch
 
 
@@ -54,19 +56,15 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
         >>> assert abs(compute_full_angle_n_sphere(1) - math.pi) < 1e-10  # π
         >>> assert abs(compute_full_angle_n_sphere(2) - 2*math.pi) < 1e-5  # 2π
     """
-    n = n_manifold_dims
 
     ### Special case for 1D: turning angle is π
-    if n == 1:
-        return float(torch.pi)
+    if n_manifold_dims == 1:
+        return math.pi
 
     ### General case (n ≥ 2): Surface area of (n-1)-sphere
     # Formula: 2π^(n/2) / Γ(n/2)
-    result = float(
-        (2 * torch.pi) ** (n / 2.0) / torch.exp(torch.lgamma(torch.tensor(n / 2.0)))
-    )
-
-    return result
+    n = n_manifold_dims
+    return (2 * math.pi) ** (n / 2.0) / math.exp(math.lgamma(n / 2.0))
 
 
 def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
