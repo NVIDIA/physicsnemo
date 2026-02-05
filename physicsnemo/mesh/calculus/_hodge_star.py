@@ -100,12 +100,14 @@ def hodge_star_1(
     Takes values at edges (1-simplices) to values at dual (n-1)-cells.
 
     Formula: ⟨⋆α, ⋆e⟩/|⋆e| = ⟨α, e⟩/|e|
-    Therefore: ⋆α(⋆e) = α(e) × |⋆e|/|e|
+    Therefore: ⋆α(⋆e) = α(e) × |⋆e|/|e| = α(e) × w_ij
+
+    where w_ij is the FEM cotangent weight for the edge.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
+        Simplicial mesh of any manifold dimension.
     primal_1form : torch.Tensor
         Values on edges, shape (n_edges,) or (n_edges, ...)
     edges : torch.Tensor
@@ -116,22 +118,20 @@ def hodge_star_1(
     torch.Tensor
         Dual (n-1)-form values, shape (n_edges,) or (n_edges, ...)
     """
-    from physicsnemo.mesh.calculus._circumcentric_dual import compute_dual_volumes_1
+    from physicsnemo.mesh.calculus._circumcentric_dual import compute_cotan_weights_fem
+    from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
-    ### Compute edge lengths (primal 1-cell volumes)
-    edge_vectors = mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]
-    edge_lengths = torch.norm(edge_vectors, dim=-1)  # |e|, shape (n_edges,)
+    ### Get FEM cotangent weights w_ij = |⋆e|/|e| in canonical edge order
+    canonical_weights, canonical_edges = compute_cotan_weights_fem(mesh)
 
-    ### Get dual volumes
-    dual_volumes = compute_dual_volumes_1(mesh)  # |⋆e|, shape (n_edges,)
+    ### Map the caller's edges to the canonical ordering
+    indices, matched = find_edges_in_reference(canonical_edges, edges)
+    cotan_weights = canonical_weights[indices]  # (n_edges,)
 
-    ### Apply Hodge star: multiply by ratio of dual to primal volumes
-    volume_ratio = dual_volumes / edge_lengths  # |⋆e|/|e|
-
+    ### Apply Hodge star: ⋆α(⋆e) = α(e) × w_ij
     if primal_1form.ndim == 1:
-        return primal_1form * volume_ratio
+        return primal_1form * cotan_weights
     else:
-        # Tensor case
-        return primal_1form * volume_ratio.view(-1, *([1] * (primal_1form.ndim - 1)))
+        return primal_1form * cotan_weights.view(-1, *([1] * (primal_1form.ndim - 1)))
 
 

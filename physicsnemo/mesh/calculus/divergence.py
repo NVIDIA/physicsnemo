@@ -18,10 +18,19 @@
 
 Implements divergence using both DEC and LSQ methods.
 
-DEC formula (from paper lines 1610-1654):
-    div(X)(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} |⋆edge∩cell| × (X·edge_unit)
+The DEC divergence is the composition ⋆₀⁻¹ d* ⋆₁ ♭(X), where ♭ is the
+PDP-flat operator (Hirani 2003, Section 5.6) that converts a vertex vector
+field to a primal 1-form via midpoint averaging along edges. The composition
+reduces to a weighted sum over edges:
 
-Physical interpretation: Net flux through dual cell boundary per unit volume.
+    div(X)(v) = (1/|⋆v|) Σ_{edges [v,w]} w_ij × (X(v) + X(w))/2 · (w - v)
+
+where w_ij are the FEM cotangent weights (= |⋆e|/|e|) and |⋆v| is the dual
+0-cell (Voronoi) volume. This is exact for linear vector fields at interior
+vertices and first-order convergent on smooth fields.
+
+Physical interpretation: net flux through the dual cell boundary per unit
+volume, with the PDP-flat providing the edge flux estimate.
 """
 
 from typing import TYPE_CHECKING
@@ -38,81 +47,70 @@ def compute_divergence_points_dec(
     mesh: "Mesh",
     vector_field: torch.Tensor,
 ) -> torch.Tensor:
-    """Compute divergence at vertices using DEC: div = -δ♭.
+    r"""Compute divergence at vertices using DEC: div = ⋆₀⁻¹ d* ⋆₁ ♭(X).
 
-    Uses the explicit formula from DEC paper for divergence of a dual vector field:
+    For a vertex vector field X, the DEC divergence at vertex v is:
 
-        div(X)(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} |⋆e| × (X·edge_unit)
+    .. math::
 
-    where:
-        - |⋆v₀| is the dual 0-cell volume (Voronoi area at vertex v₀)
-        - |⋆e| is the dual 1-cell volume (dual edge length)
-        - X·edge_unit is the flux component along the edge
+        \operatorname{div}(X)(v) = \frac{1}{|{\star}v|}
+        \sum_{\text{edges } [v,w]} w_{vw}\;
+        \frac{X(v) + X(w)}{2} \cdot (w - v)
+
+    where :math:`w_{vw} = |{\star}e|/|e|` is the FEM cotangent weight and
+    :math:`|{\star}v|` is the dual 0-cell volume (Voronoi area).
+
+    The edge-length factors from the Hodge star and the PDP-flat cancel
+    algebraically: :math:`|{\star}e| \times (X \cdot \hat{e})
+    = w \times |e| \times (X \cdot \vec{e}/|e|) = w \times (X \cdot \vec{e})`,
+    so only cotangent weights and full edge vectors are needed.
 
     Parameters
     ----------
     mesh : Mesh
-        Simplicial mesh
+        Simplicial mesh of any manifold dimension.
     vector_field : torch.Tensor
-        Vectors at vertices, shape (n_points, n_spatial_dims)
+        Vectors at vertices, shape ``(n_points, n_spatial_dims)``.
 
     Returns
     -------
     torch.Tensor
-        Divergence at vertices, shape (n_points,)
+        Divergence at vertices, shape ``(n_points,)``.
     """
     from physicsnemo.mesh.calculus._circumcentric_dual import (
-        compute_dual_volumes_1,
+        compute_cotan_weights_fem,
         get_or_compute_dual_volumes_0,
     )
 
     n_points = mesh.n_points
 
-    ### Get dual volumes
-    dual_volumes_0 = get_or_compute_dual_volumes_0(mesh)  # |⋆v₀| at vertices
-    dual_volumes_1 = compute_dual_volumes_1(mesh)  # |⋆e| at edges
+    ### Get FEM cotangent weights and canonical edges (one consistent source)
+    cotan_weights, edges = compute_cotan_weights_fem(mesh)  # (n_edges,), (n_edges, 2)
 
-    ### Extract edges
-    # Use facet extraction to get all edges
-    codim_to_edges = mesh.n_manifold_dims - 1
-    edge_mesh = mesh.get_facet_mesh(manifold_codimension=codim_to_edges)
-    edges = edge_mesh.cells  # (n_edges, 2)
+    ### Get dual 0-cell volumes |⋆v| at vertices
+    dual_volumes_0 = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
 
-    # Sort edges for canonical ordering
-    sorted_edges, _ = torch.sort(edges, dim=-1)
+    ### Edge vectors: (w - v) for each canonical edge [v, w] with v < w
+    edge_vectors = mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]  # (n_edges, n_spatial_dims)
 
-    ### Get edge vectors
-    edge_vectors = mesh.points[sorted_edges[:, 1]] - mesh.points[sorted_edges[:, 0]]
-    edge_lengths = torch.norm(edge_vectors, dim=-1)
-    edge_unit = edge_vectors / edge_lengths.unsqueeze(-1).clamp(min=safe_eps(edge_lengths.dtype))
+    v0_indices = edges[:, 0]  # (n_edges,)
+    v1_indices = edges[:, 1]  # (n_edges,)
 
-    ### Compute divergence at each vertex
-    divergence = torch.zeros(
-        n_points, dtype=vector_field.dtype, device=mesh.points.device
-    )
+    ### PDP-flat 1-form value: <X_flat, e> = (X(v) + X(w))/2 . (w - v)
+    v_edge = (vector_field[v0_indices] + vector_field[v1_indices]) / 2  # (n_edges, n_spatial_dims)
+    flat_1form = (v_edge * edge_vectors).sum(dim=-1)  # (n_edges,)
 
-    ### Vectorized edge contributions
-    v0_indices = sorted_edges[:, 0]  # (n_edges,)
-    v1_indices = sorted_edges[:, 1]  # (n_edges,)
+    ### Weighted flux: w_ij × <X_flat, e>
+    weighted_flux = cotan_weights * flat_1form  # (n_edges,)
 
-    # Vector field at edges (average of endpoints): (n_edges, n_spatial_dims)
-    v_edge = (vector_field[v0_indices] + vector_field[v1_indices]) / 2
-
-    # Flux through all edges: v·edge_direction (n_edges,)
-    # This is the component of velocity along the edge direction
-    flux_component = (v_edge * edge_unit).sum(dim=-1)
-
-    # Weight by dual 1-cell volumes |⋆e| to get the actual flux through dual edge
-    # Physically: flux = velocity_component × dual_edge_length
-    weighted_flux = flux_component * dual_volumes_1
-
-    # Scatter-add contributions with appropriate signs
-    # v0: positive flux (outward from v0's dual cell)
-    # v1: negative flux (inward to v1's dual cell)
+    ### Scatter-add to vertices with orientation signs
+    # v0 (smaller index): edge points outward from v0's dual cell → positive
+    # v1 (larger index):  edge points inward to v1's dual cell   → negative
+    divergence = torch.zeros(n_points, dtype=vector_field.dtype, device=mesh.points.device)
     divergence.scatter_add_(0, v0_indices, weighted_flux)
     divergence.scatter_add_(0, v1_indices, -weighted_flux)
 
-    ### Normalize by dual 0-cell volumes to get divergence per unit area
+    ### Normalize by dual 0-cell volumes
     divergence = divergence / dual_volumes_0.clamp(min=safe_eps(dual_volumes_0.dtype))
 
     return divergence
@@ -124,10 +122,10 @@ def compute_divergence_points_lsq(
 ) -> torch.Tensor:
     """Compute divergence at vertices using LSQ gradient of each component.
 
-    For vector field v = [vₓ, vᵧ, vᵧ]:
-        div(v) = ∂vₓ/∂x + ∂vᵧ/∂y + ∂vᵧ/∂z
+    For vector field v = [vₓ, vᵧ, v_z]:
+        div(v) = ∂vₓ/∂x + ∂vᵧ/∂y + ∂v_z/∂z
 
-    Computes gradient of each component, then takes trace.
+    Computes gradient of each component, then takes the trace.
 
     Parameters
     ----------
@@ -147,7 +145,7 @@ def compute_divergence_points_lsq(
     n_spatial_dims = mesh.n_spatial_dims
 
     ### Compute gradient of each component
-    # For 3D: ∇vₓ, ∇vᵧ, ∇vᵧ
+    # For 3D: ∇vₓ, ∇vᵧ, ∇v_z
     # Each is (n_points, n_spatial_dims)
 
     divergence = torch.zeros(

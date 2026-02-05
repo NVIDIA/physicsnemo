@@ -2001,42 +2001,126 @@ class TestIntrinsicLSQEdgeCases:
 
 
 class TestDivergenceDEC:
-    """Test DEC divergence code path."""
+    """Test DEC divergence for 2D and 3D meshes.
 
-    @pytest.mark.skip(
-        reason="DEC divergence not fully implemented - uses placeholder formula"
-    )
-    def test_dec_divergence_linear_field(self, simple_tet_mesh):
-        """Test DEC divergence on linear field."""
+    The DEC divergence is exact for linear vector fields at interior vertices
+    (where the Voronoi cell is complete). Boundary vertices have truncated dual
+    cells, so accuracy there is not tested.
+    """
+
+    ### Helpers ##############################################################
+
+    @staticmethod
+    def _interior_mask_2d(mesh):
+        """Boolean mask that is True for interior (non-boundary) vertices."""
+        from physicsnemo.mesh.boundaries._detection import get_boundary_vertices
+
+        return ~get_boundary_vertices(mesh)
+
+    ### 2D correctness tests (structured grid) ###############################
+
+    def test_2d_div_identity(self):
+        """div(position) = 2 at interior vertices of a flat 2D mesh."""
+        from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
+        from physicsnemo.mesh.primitives.planar import structured_grid
+
+        mesh = structured_grid.load(n_x=8, n_y=8)
+        mesh = Mesh(points=mesh.points.to(torch.float64), cells=mesh.cells)
+
+        div_v = compute_divergence_points_dec(mesh, mesh.points.clone())
+        interior = self._interior_mask_2d(mesh)
+
+        assert interior.sum() > 0, "Need interior vertices for this test"
+        assert torch.allclose(
+            div_v[interior],
+            torch.full_like(div_v[interior], 2.0),
+            atol=1e-12,
+        )
+
+    def test_2d_div_single_component(self):
+        """div(x, 0) = 1 at interior vertices."""
+        from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
+        from physicsnemo.mesh.primitives.planar import structured_grid
+
+        mesh = structured_grid.load(n_x=8, n_y=8)
+        mesh = Mesh(points=mesh.points.to(torch.float64), cells=mesh.cells)
+
+        v_field = torch.zeros_like(mesh.points)
+        v_field[:, 0] = mesh.points[:, 0]
+        div_v = compute_divergence_points_dec(mesh, v_field)
+        interior = self._interior_mask_2d(mesh)
+
+        assert torch.allclose(
+            div_v[interior],
+            torch.ones_like(div_v[interior]),
+            atol=1e-12,
+        )
+
+    def test_2d_div_rotation(self):
+        """div(-y, x) = 0 at interior vertices (divergence-free field)."""
+        from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
+        from physicsnemo.mesh.primitives.planar import structured_grid
+
+        mesh = structured_grid.load(n_x=8, n_y=8)
+        mesh = Mesh(points=mesh.points.to(torch.float64), cells=mesh.cells)
+
+        v_field = torch.stack(
+            [-mesh.points[:, 1], mesh.points[:, 0]], dim=-1
+        )
+        div_v = compute_divergence_points_dec(mesh, v_field)
+        interior = self._interior_mask_2d(mesh)
+
+        assert torch.allclose(
+            div_v[interior],
+            torch.zeros_like(div_v[interior]),
+            atol=1e-12,
+        )
+
+    ### 3D correctness test (tetrahedral mesh) ###############################
+
+    def test_3d_div_identity_interior(self, simple_tet_mesh):
+        """div(position) = 3 at the interior vertex of a 3D tet mesh."""
         from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
 
-        mesh = simple_tet_mesh
-        v = mesh.points.clone()
+        mesh = Mesh(
+            points=simple_tet_mesh.points.to(torch.float64),
+            cells=simple_tet_mesh.cells,
+        )
+        div_v = compute_divergence_points_dec(mesh, mesh.points.clone())
 
-        div_v = compute_divergence_points_dec(mesh, v)
+        # Vertex 4 at (0.5, 0.5, 0.5) is the interior vertex
+        assert torch.isclose(
+            div_v[4], torch.tensor(3.0, dtype=torch.float64), atol=1e-12
+        )
 
-        # Should be 3 (div of identity)
-        assert torch.allclose(div_v, torch.full_like(div_v, 3.0), atol=0.5)
+    ### 3D regression test: must not crash on meshes where n_edges != n_faces
 
+    def test_3d_no_crash_on_real_mesh(self):
+        """Divergence must run without error on a real 3D tet mesh."""
+        from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
+        from physicsnemo.mesh.primitives.procedural import lumpy_ball
 
-class TestDECDivergenceBasic:
-    """Test DEC divergence implementation."""
+        mesh = lumpy_ball.load(n_shells=2, subdivisions=1)
+        v_field = mesh.points.clone()
+        div_v = compute_divergence_points_dec(mesh, v_field)
 
-    def test_dec_divergence_basic(self):
-        """Test DEC divergence code path."""
+        assert div_v.shape == (mesh.n_points,)
+        assert torch.isfinite(div_v).all()
+
+    ### Shape and dtype tests ################################################
+
+    def test_output_shape_and_finiteness_2d(self):
+        """Basic smoke test: correct shape and finite values on 2D mesh."""
         from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
 
-        # Simple triangle mesh
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [0.5, 0.5]])
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [0.5, 0.5]]
+        )
         cells = torch.tensor([[0, 1, 3], [0, 2, 3], [1, 2, 3]])
         mesh = Mesh(points=points, cells=cells)
 
-        # Simple vector field
-        v = points.clone()  # v = r
+        div_v = compute_divergence_points_dec(mesh, points.clone())
 
-        div_v = compute_divergence_points_dec(mesh, v)
-
-        # Just verify it runs and returns finite values
         assert div_v.shape == (mesh.n_points,)
         assert torch.isfinite(div_v).all()
 
