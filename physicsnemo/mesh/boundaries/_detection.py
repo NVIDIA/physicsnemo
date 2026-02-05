@@ -69,22 +69,22 @@ def get_boundary_vertices(mesh: "Mesh") -> torch.Tensor:
     if mesh.n_cells == 0:
         return torch.zeros(n_points, dtype=torch.bool, device=device)
 
-    ### Extract boundary edges (codimension-1 facets that appear in only 1 cell)
-    # For n-manifolds, a boundary edge is an (n-1)-facet with only 1 adjacent cell
-    candidate_edges, _ = extract_candidate_facets(
+    ### Extract codimension-1 facets (the true boundary facets) that appear in only 1 cell.
+    # For 1D manifolds these are vertices (0-simplices), for 2D they are edges, for 3D faces.
+    candidate_facets, _ = extract_candidate_facets(
         mesh.cells,
-        manifold_codimension=mesh.n_manifold_dims - 1,
+        manifold_codimension=1,
     )
 
-    # Get boundary edges (appear exactly once)
-    boundary_edges, _, _ = categorize_facets_by_count(
-        candidate_edges, target_counts="boundary"
+    # Boundary facets appear in exactly one cell
+    boundary_facets, _, _ = categorize_facets_by_count(
+        candidate_facets, target_counts="boundary"
     )
 
-    ### Mark all vertices incident to boundary edges
+    ### Mark all vertices that belong to boundary facets
     is_boundary_vertex = torch.zeros(n_points, dtype=torch.bool, device=device)
-    if len(boundary_edges) > 0:
-        is_boundary_vertex.scatter_(0, boundary_edges.flatten(), True)
+    if len(boundary_facets) > 0:
+        is_boundary_vertex.scatter_(0, boundary_facets.flatten(), True)
 
     return is_boundary_vertex
 
@@ -177,8 +177,11 @@ def get_boundary_cells(
 def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
     """Get edges that lie on the mesh boundary.
 
-    An edge is on the boundary if it is a codimension-1 facet that appears in
-    only one cell.
+    For 2D manifolds, boundary edges are codimension-1 facets appearing in only
+    one cell. For 1D manifolds (edge meshes), the boundary consists of vertices
+    rather than edges, so an empty tensor is returned. For 3D+ manifolds, boundary
+    edges are those belonging to at least one boundary face (codimension-1 facet
+    appearing in only one cell).
 
     Parameters
     ----------
@@ -189,7 +192,7 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
     -------
     torch.Tensor
         Tensor of shape (n_boundary_edges, 2) containing boundary edge connectivity.
-        Returns empty tensor of shape (0, 2) for watertight meshes.
+        Returns empty tensor of shape (0, 2) for watertight meshes or 1D manifolds.
 
     Examples
     --------
@@ -211,19 +214,47 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
 
     device = mesh.cells.device
 
-    ### Handle empty mesh
-    if mesh.n_cells == 0:
+    ### Handle empty mesh or 1D manifolds (whose boundary consists of vertices, not edges)
+    if mesh.n_cells == 0 or mesh.n_manifold_dims < 2:
         return torch.zeros((0, 2), dtype=torch.int64, device=device)
 
-    ### Extract all edges (with duplicates)
-    candidate_edges, _ = extract_candidate_facets(
-        mesh.cells,
-        manifold_codimension=mesh.n_manifold_dims - 1,
+    ### For 2D manifolds, boundary edges are codim-1 facets appearing in exactly 1 cell.
+    ### For 3D+ manifolds, extract edges of boundary faces.
+    if mesh.n_manifold_dims == 2:
+        # Edges are codim-1 facets; boundary = appear in exactly 1 cell
+        candidate_edges, _ = extract_candidate_facets(
+            mesh.cells, manifold_codimension=1
+        )
+        boundary_edges, _, _ = categorize_facets_by_count(
+            candidate_edges, target_counts="boundary"
+        )
+        return boundary_edges
+
+    # For 3D+ manifolds: find boundary faces (codim-1), then extract their edges
+    candidate_faces, _ = extract_candidate_facets(
+        mesh.cells, manifold_codimension=1
+    )
+    boundary_faces, _, _ = categorize_facets_by_count(
+        candidate_faces, target_counts="boundary"
     )
 
-    # Get boundary edges (appear exactly once)
-    boundary_edges, _, _ = categorize_facets_by_count(
-        candidate_edges, target_counts="boundary"
-    )
+    if len(boundary_faces) == 0:
+        return torch.zeros((0, 2), dtype=torch.int64, device=device)
+
+    # Extract unique edges from boundary faces
+    n_verts_per_face = boundary_faces.shape[1]
+    from itertools import combinations
+
+    combo_indices = list(combinations(range(n_verts_per_face), 2))
+    combo_tensor = torch.tensor(combo_indices, dtype=torch.long)  # (n_combos, 2)
+
+    # Gather edges from boundary faces: (n_boundary_faces, n_combos, 2)
+    all_edges = boundary_faces[:, combo_tensor]
+    # Reshape to (n_boundary_faces * n_combos, 2)
+    all_edges = all_edges.reshape(-1, 2)
+    # Sort each edge for canonical ordering
+    all_edges = torch.sort(all_edges, dim=-1).values
+    # Deduplicate
+    boundary_edges = torch.unique(all_edges, dim=0)
 
     return boundary_edges

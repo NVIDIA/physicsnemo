@@ -99,7 +99,9 @@ class BVH:
     def from_mesh(cls, mesh: "Mesh") -> "BVH":
         """Construct a BVH from a mesh.
 
-        Uses the Surface Area Heuristic (SAH) for high-quality tree construction.
+        Uses top-down construction with median split along the longest axis
+        of each node's bounding box. Cells are sorted by centroid along the
+        split axis, then divided at the median into left and right children.
 
         Parameters
         ----------

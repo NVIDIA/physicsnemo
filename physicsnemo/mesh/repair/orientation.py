@@ -84,23 +84,14 @@ def fix_orientation(
 
     adjacency = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
 
-    ### Step 2: Extract edges to determine shared edge orientation
-    from physicsnemo.mesh.boundaries import extract_candidate_facets
-
-    edges_with_dupes, parent_faces = extract_candidate_facets(
-        mesh.cells, manifold_codimension=1
-    )
-
-    # For each edge, determine if adjacent faces have consistent orientation
-    # Two faces are consistent if they traverse the shared edge in opposite directions
-
-    ### Step 3: Propagate orientation using iterative flooding (vectorized)
+    ### Step 2: Propagate orientation using iterative flooding (vectorized)
     # Track which faces have been oriented
     is_oriented = torch.zeros(n_cells, dtype=torch.bool, device=device)
     should_flip = torch.zeros(n_cells, dtype=torch.bool, device=device)
     component_id = torch.full((n_cells,), -1, dtype=torch.long, device=device)
 
     n_components = 0
+    largest_component_size = 0
 
     # Process each connected component using iterative propagation
     while not torch.all(is_oriented):
@@ -191,9 +182,7 @@ def fix_orientation(
 
             current_front = next_front
 
-        if n_components == 0:
-            largest_component_size = component_size
-
+        largest_component_size = max(largest_component_size, component_size)
         n_components += 1
 
     ### Step 4: Apply flips

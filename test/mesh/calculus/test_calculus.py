@@ -1534,22 +1534,6 @@ class TestExteriorDerivative:
             exterior_derivative_1(mesh, edge_values, edges)
 
 
-class TestHodgeStarErrors:
-    """Test Hodge star error paths."""
-
-    def test_codifferential_not_implemented(self, simple_tet_mesh):
-        """Test that codifferential raises NotImplementedError."""
-        from physicsnemo.mesh.calculus._exterior_derivative import exterior_derivative_0
-        from physicsnemo.mesh.calculus._hodge_star import codifferential
-
-        mesh = simple_tet_mesh
-        vertex_values = torch.ones(mesh.n_points)
-        edge_values, edges = exterior_derivative_0(mesh, vertex_values)
-
-        with pytest.raises(NotImplementedError):
-            codifferential(k=0, edges=edges)
-
-
 class TestCircumcentricDual:
     """Test circumcentric dual computation."""
 

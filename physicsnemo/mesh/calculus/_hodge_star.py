@@ -17,7 +17,7 @@
 """Hodge star operator for Discrete Exterior Calculus.
 
 The Hodge star ⋆ maps k-forms to (n-k)-forms, where n is the manifold dimension.
-It's essential for defining the codifferential δ and inner products on forms.
+It's used for defining inner products on forms and building higher-level DEC operators.
 
 Key property: ⋆⋆ = (-1)^(k(n-k)) on k-forms
 
@@ -135,58 +135,3 @@ def hodge_star_1(
         return primal_1form * volume_ratio.view(-1, *([1] * (primal_1form.ndim - 1)))
 
 
-def codifferential(
-    k: int,
-    **kwargs,
-) -> torch.Tensor:
-    """Compute codifferential δ of a (k+1)-form.
-
-    The codifferential is the adjoint of the exterior derivative:
-        δ = (-1)^(nk+1) ⋆ d ⋆
-
-    Maps Ω^(k+1)(K) → Ω^k(K).
-
-    Fundamental property: δ² = 0 (applying δ twice gives zero)
-
-    For k=0 (acting on 1-forms): δ = (-1)^(n×0+1) ⋆₀ d₀ ⋆₁ = -⋆₀ d₀ ⋆₁
-    This gives the divergence operator.
-
-    Parameters
-    ----------
-    k : int
-        Degree of the output form (input is (k+1)-form)
-    **kwargs
-        Additional arguments needed for specific k values (e.g., 'edges' for k=0)
-
-    Returns
-    -------
-    torch.Tensor
-        k-form values after applying codifferential
-
-    Examples
-    --------
-    >>> import torch
-    >>> # Compute divergence of a 1-form on edges
-    >>> edges = torch.tensor([[0, 1], [1, 2], [0, 2]])
-    >>> # div_f = codifferential(k=0, edges=edges)  # requires mesh context
-    """
-    if k == 0:
-        ### δ: Ω¹ → Ω⁰ (divergence)
-        # δ = -⋆₀ d₀ ⋆₁ (for n odd) or +⋆₀ d₀ ⋆₁ (for n even)
-        edges = kwargs.get("edges")
-        if edges is None:
-            raise ValueError("Must provide 'edges' argument for k=0 codifferential")
-
-        # Step 2: Apply d₀ on dual mesh (this requires dual mesh structure)
-        # For now, we'll implement this directly using the divergence formula
-        # from the DEC paper (lines 1610-1654)
-
-        # This is complex to implement fully, so let's return a placeholder
-        # The full implementation requires dual mesh construction
-        raise NotImplementedError(
-            "Codifferential requires full dual mesh implementation. "
-            "Use explicit divergence formula instead."
-        )
-
-    else:
-        raise NotImplementedError(f"Codifferential for k={k} not yet implemented")
