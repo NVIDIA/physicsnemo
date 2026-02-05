@@ -40,3 +40,5 @@ jobs:
         pip install -e . --group dev
 
     - uses: pre-commit/action@v3.0.1
+      with:
+        extra_args: license --all-files
