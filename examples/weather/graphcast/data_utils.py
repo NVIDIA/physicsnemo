@@ -23,7 +23,7 @@ from torch.nn.functional import interpolate
 
 from physicsnemo.core.version_check import check_version_spec
 
-from .graph_utils import deg2rad
+from physicsnemo.models.graphcast.utils.graph_utils import deg2rad
 
 NC_AVAILABLE = check_version_spec("netCDF4", "1.7.0", hard_fail=False)
 

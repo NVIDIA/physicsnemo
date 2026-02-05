@@ -16,6 +16,15 @@
 
 import torch
 import numpy as np
+from physicsnemo.models.graphcast.utils.graph_utils import deg2rad
+
+
+def normalized_grid_cell_area(lat: Tensor, unit="deg") -> Tensor:
+    """Normalized area of the latitude-longitude grid cell"""
+    if unit == "deg":
+        lat = deg2rad(lat)
+    area = torch.abs(torch.cos(lat))
+    return area / torch.mean(area)
 
 
 def prepare_input(
