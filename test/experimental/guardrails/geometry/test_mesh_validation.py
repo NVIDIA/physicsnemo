@@ -36,11 +36,11 @@ def test_validate_mesh_min_verts():
     vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     faces = np.array([[0, 1, 2]])
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    
+
     # Should fail with default min_verts=4
     with pytest.raises(ValueError, match="Too few vertices"):
         validate_mesh(mesh, min_verts=10)
-    
+
     # Should pass with lower threshold
     validate_mesh(mesh, min_verts=3)
 
@@ -50,7 +50,7 @@ def test_validate_mesh_non_finite_vertices():
     mesh = trimesh.creation.box()
     # Corrupt vertices with NaN
     mesh.vertices[0, 0] = np.nan
-    
+
     with pytest.raises(ValueError, match="Non-finite"):
         validate_mesh(mesh)
 
@@ -61,7 +61,7 @@ def test_validate_mesh_zero_area():
     vertices = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
     faces = np.array([[0, 1, 2], [1, 2, 3]])
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-    
+
     with pytest.raises(ValueError, match="Non-positive"):
         validate_mesh(mesh)
 
@@ -70,7 +70,7 @@ def test_validate_mesh_not_trimesh():
     """Test rejection of non-Trimesh objects."""
     with pytest.raises(ValueError, match="Object is not a Trimesh"):
         validate_mesh("not a mesh")
-    
+
     with pytest.raises(ValueError, match="Object is not a Trimesh"):
         validate_mesh(None)
 
@@ -80,7 +80,7 @@ def test_validate_mesh_min_verts_parametric(min_verts):
     """Test various minimum vertex thresholds."""
     # Create mesh with known vertex count
     mesh = trimesh.creation.icosphere(subdivisions=2)  # ~42 vertices
-    
+
     if mesh.vertices.shape[0] >= min_verts:
         validate_mesh(mesh, min_verts=min_verts)
     else:

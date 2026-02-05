@@ -33,11 +33,11 @@ def test_extract_features_basic():
     # Use icosphere with enough vertices for validation (subdivisions=2 gives ~80 vertices)
     mesh = trimesh.creation.icosphere(subdivisions=2)
     features = extract_features(mesh)
-    
+
     # Check output shape
     assert features.shape == (len(FEATURE_NAMES),)
     assert features.shape[0] == 22
-    
+
     # Check all values are finite
     assert np.isfinite(features).all()
 
@@ -47,7 +47,7 @@ def test_extract_features_centroid():
     # Create icosphere centered at origin
     mesh = trimesh.creation.icosphere(subdivisions=2)
     features = extract_features(mesh)
-    
+
     # First 3 features are centroid
     centroid = features[:3]
     # Should be near zero (box is centered)
@@ -59,10 +59,10 @@ def test_extract_features_translated_mesh():
     # Create icosphere at different position
     mesh = trimesh.creation.icosphere(subdivisions=2)
     mesh.apply_translation([10, 20, 30])
-    
+
     features = extract_features(mesh)
     centroid = features[:3]
-    
+
     # Centroid should reflect translation
     assert np.allclose(centroid, [10, 20, 30], atol=0.1)
 
@@ -72,20 +72,22 @@ def test_extract_features_area():
     # Unit sphere has surface area of approximately 4*pi
     mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=3)
     features = extract_features(mesh)
-    
+
     # Feature index 18 is total_area
     total_area = features[18]
     expected_area = 4 * np.pi
-    assert np.isclose(total_area, expected_area, rtol=0.1)  # Allow 10% error for discretization
+    assert np.isclose(
+        total_area, expected_area, rtol=0.1
+    )  # Allow 10% error for discretization
 
 
 def test_extract_features_deterministic():
     """Test that feature extraction is deterministic."""
     mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=3)
-    
+
     features1 = extract_features(mesh)
     features2 = extract_features(mesh)
-    
+
     assert np.allclose(features1, features2)
 
 
@@ -95,7 +97,7 @@ def test_extract_features_invalid_mesh():
     vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     faces = np.array([[0, 1, 2]])
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    
+
     with pytest.raises(ValueError, match="Too few vertices"):
         extract_features(mesh)
 
@@ -106,7 +108,7 @@ def test_extract_features_insufficient_pca():
     vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     faces = np.array([[0, 1, 2]])
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    
+
     # Will fail with "Too few vertices" from mesh validation
     with pytest.raises(ValueError, match="Too few vertices"):
         extract_features(mesh)
@@ -119,13 +121,13 @@ def test_extract_features_various_shapes(shape):
         mesh = trimesh.creation.icosphere(radius=2.0, subdivisions=2)
     elif shape == "cylinder":
         mesh = trimesh.creation.cylinder(radius=1.0, height=3.0, sections=32)
-    
+
     features = extract_features(mesh)
-    
+
     # Check shape and finiteness
     assert features.shape == (22,)
     assert np.isfinite(features).all()
-    
+
     # Check that features are non-trivial (not all zeros)
     assert not np.allclose(features, 0.0)
 
@@ -133,10 +135,10 @@ def test_extract_features_various_shapes(shape):
 def test_feature_hash_deterministic():
     """Test that feature hash is deterministic."""
     names = ["feat1", "feat2", "feat3"]
-    
+
     hash1 = feature_hash(names)
     hash2 = feature_hash(names)
-    
+
     assert hash1 == hash2
     assert len(hash1) == 64  # SHA-256 produces 64 hex characters
 
@@ -146,11 +148,11 @@ def test_feature_hash_sensitive():
     names1 = ["feat1", "feat2", "feat3"]
     names2 = ["feat1", "feat2", "feat4"]  # Changed last element
     names3 = ["feat1", "feat3", "feat2"]  # Reordered
-    
+
     hash1 = feature_hash(names1)
     hash2 = feature_hash(names2)
     hash3 = feature_hash(names3)
-    
+
     # All should be different
     assert hash1 != hash2
     assert hash1 != hash3

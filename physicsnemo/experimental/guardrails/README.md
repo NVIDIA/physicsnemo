@@ -4,12 +4,17 @@ Out-of-distribution detection for geometric data using density-based anomaly det
 
 ## Overview
 
-The geometry guardrails module provides tools for detecting anomalous geometric configurations in CAD models, simulation meshes, and other 3D shape data. It learns the distribution of "normal" geometries from training data and flags unusual or unexpected shapes at inference time.
+The geometry guardrails module provides tools for detecting anomalous geometric
+configurations in CAD models, simulation meshes, and other 3D shape data. It
+learns the distribution of "normal" geometries from training data and flags
+unusual or unexpected shapes at inference time.
 
 **Key Features:**
+
 - **Density-based anomaly detection** using Gaussian Mixture Models
 - **Non-invariant features** that capture position, orientation, and scale
-- **Three-level classification**: OK, WARN, REJECT based on configurable thresholds
+- **Three-level classification**: OK, WARN, REJECT based on configurable
+  thresholds
 - **Parallel processing** for efficient batch processing of STL files
 - **Serialization support** for saving and loading fitted models
 - **Comprehensive validation** with automatic schema compatibility checking
@@ -24,9 +29,14 @@ pip install trimesh scikit-learn
 
 **For fast STL loading** (optional, experimental):
 
-The geometry guardrails include an adapter for optional Rust-based STL readers that can provide faster file I/O. The code will automatically detect and use any compatible reader installed in your environment, with graceful fallback to `trimesh`.
+The geometry guardrails include an adapter for optional Rust-based STL readers
+that can provide faster file I/O. The code will automatically detect and use
+any compatible reader installed in your environment, with graceful fallback to
+`trimesh`.
 
-This is recommended for processing large batches of STL files, but **not required**. See [Fast I/O](#fast-io-optional) below for implementation details if you want to build your own accelerator.
+This is recommended for processing large batches of STL files, but **not
+required**. See [Fast I/O](#fast-io-optional) below for implementation details
+if you want to build your own accelerator.
 
 ## Quick Start
 
@@ -62,7 +72,8 @@ for res in results:
 
 ### Working with STL Directories
 
-For large datasets stored as STL files, use the directory-based API with automatic parallel processing:
+For large datasets stored as STL files, use the directory-based API with
+automatic parallel processing:
 
 ```python
 from pathlib import Path
@@ -147,9 +158,11 @@ guardrail_gpu.fit(train_meshes)
 results = guardrail_gpu.query(test_meshes)
 ```
 
-GPU acceleration is most beneficial for large datasetscand batch inference. For small datasets and batches, CPU may be faster due to transfer overhead.
+GPU acceleration is most beneficial for large datasets and batch inference. For
+small datasets and batches, CPU may be faster due to transfer overhead.
 
 **Device Options:**
+
 ```python
 device="cpu"       # CPU-only (default, always available)
 device="cuda"      # Default GPU
@@ -157,6 +170,7 @@ device="cuda:0"    # Specific GPU device
 ```
 
 **Loading Models on Different Devices:**
+
 ```python
 # Save on CPU
 guardrail_cpu = GeometryGuardrail(device="cpu")
@@ -184,20 +198,24 @@ The guardrail extracts **22 non-invariant geometric features** from each mesh:
 | Total Surface Area | Sum of all face areas | 1 |
 | Projected Areas | Area projections onto XY, XZ, YZ planes | 3 |
 
-**Important**: Features are intentionally **not invariant** to transformations. This allows detection of geometries that differ in:
+**Important**: Features are intentionally **not invariant** to transformations.
+This allows detection of geometries that differ in:
+
 - **Translation** (absolute position in space)
 - **Rotation** (absolute orientation)
 - **Scale** (absolute size)
 
 ### Density Modeling
 
-A **Gaussian Mixture Model (GMM)** learns the probability density \( p(\mathbf{x}) \) over the feature space:
+A **Gaussian Mixture Model (GMM)** learns the probability density
+\( p(\mathbf{x}) \) over the feature space:
 
 $$
 p(\mathbf{x}) = \sum_{k=1}^{K} \pi_k \mathcal{N}(\mathbf{x} | \mu_k, \Sigma_k)
 $$
 
 where:
+
 - \( K \) is the number of components (`n_components`)
 - \( \pi_k \) are mixture weights
 - \( \mu_k, \Sigma_k \) are mean and covariance for component \( k \)
@@ -212,10 +230,12 @@ Higher scores indicate lower likelihood (more anomalous).
 
 ### Classification
 
-Anomaly scores are converted to **empirical percentiles** relative to the training distribution. Given percentile \( p \):
+Anomaly scores are converted to **empirical percentiles** relative to the
+training distribution. Given percentile \( p \):
 
 - **OK**: \( p < \text{warn\_pct} \) — Typical geometry
-- **WARN**: \( \text{warn\_pct} \leq p < \text{reject\_pct} \) — Unusual geometry (investigate)
+- **WARN**: \( \text{warn\_pct} \leq p < \text{reject\_pct} \) — Unusual
+  geometry (investigate)
 - **REJECT**: \( p \geq \text{reject\_pct} \) — Highly anomalous (likely OOD)
 
 ## Examples
@@ -243,52 +263,75 @@ for r in results:
 
 ## Fast I/O (Optional)
 
-The geometry guardrails include an adapter (`fast_stl.py`) that can utilize optional Rust-based STL readers faster file I/O. This is useful for large-scale batch processing or large STL files.
+The geometry guardrails include an adapter (`fast_stl.py`) that can utilize
+optional Rust-based STL readers for faster file I/O. This is useful for
+large-scale batch processing or large STL files.
 
-A reference Rust implementation is available in the repository at `stlreader/` (not built by default). Key features:
+A reference Rust implementation is available in the repository at `stlreader/`
+(not built by default). Key features:
+
 - Uses `stl_io` crate for fast binary/ASCII parsing
 - Precomputes normals and areas during load
 - Integrates with NumPy via PyO3
 
 To build (requires Rust toolchain):
+
 ```bash
 cd stlreader
 pip install maturin
 maturin develop --release
 ```
 
-This is **entirely optional** and intended for users with high-performance requirements.
-
+This is **entirely optional** and intended for users with high-performance
+requirements.
 
 ## TODO: Future Enhancements (Contributions Welcome!)
 
-We welcome contributions to advance the geometry guardrails module. Key areas for future work:
+We welcome contributions to advance the geometry guardrails module. Key areas
+for future work:
 
 ### 1. **Advanced Shape Descriptors**
-Expand beyond basic geometric features to include spectral descriptors (Laplacian eigenfunctions), topological features, curvature statistics, and graph-based representations. Support configurable feature sets and custom extractors.
+
+Expand beyond basic geometric features to include spectral descriptors
+(Laplacian eigenfunctions), topological features, curvature statistics, and
+graph-based representations. Support configurable feature sets and custom
+extractors.
 
 ### 2. **Optional Invariance**
-Add user-configurable invariance to rotation, scale, and translation. Currently all features are non-invariant.
+
+Add user-configurable invariance to rotation, scale, and translation. Currently
+all features are non-invariant.
 
 ### 3. **Expanded GPU Support**
-Extend GPU acceleration beyond GMM to cover feature extraction, PCE density estimation, and batch STL loading.
+
+Extend GPU acceleration beyond GMM to cover feature extraction, PCE density
+estimation, and batch STL loading.
 
 ### 4. **Advanced Anomaly Detection Methods**
-Implement additional density estimation methods: Kernel Density Estimation, Variational Autoencoders, Normalizing Flows, and deep learning approaches.
+
+Implement additional density estimation methods: Kernel Density Estimation,
+Variational Autoencoders, Normalizing Flows, and deep learning approaches.
 
 ### 5. **Interpretability & Explainability**
-Provide feature importance analysis and visual diagnostics to help users understand why specific geometries were flagged as anomalous.
+
+Provide feature importance analysis and visual diagnostics to help users
+understand why specific geometries were flagged as anomalous.
 
 ### 7. **Multi-Modal & Multi-Physics**
-Extend guardrails to jointly model geometry, material properties, boundary conditions, simulation results, and manufacturing metadata for comprehensive anomaly detection.
+
+Extend guardrails to jointly model geometry, material properties, boundary
+conditions, simulation results, and manufacturing metadata for comprehensive
+anomaly detection.
 
 ---
 
-**How to Contribute:** Fork the repository, implement enhancements with tests and documentation following PhysicsNemo coding standards (`.cursor/rules/`), and submit a pull request. For questions, open an issue on GitHub.
-
+**How to Contribute:** Fork the repository, implement enhancements with tests
+and documentation following PhysicsNemo coding standards (`.cursor/rules/`),
+and submit a pull request. For questions, open an issue on GitHub.
 
 ## Support
 
 For issues, questions, or contributions:
+
 - File issues on the PhysicsNemo GitHub repository
-- Consult the full documentation at https://docs.nvidia.com/physicsnemo
+- Consult the full documentation at <https://docs.nvidia.com/physicsnemo>

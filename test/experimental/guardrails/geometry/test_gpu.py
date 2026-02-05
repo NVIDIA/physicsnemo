@@ -129,7 +129,10 @@ def test_guardrail_gpu():
     assert guardrail.density.backend == "torch"
 
     # Query with GPU
-    test_meshes = [trimesh.creation.box(), trimesh.creation.icosphere(radius=10.0, subdivisions=2)]
+    test_meshes = [
+        trimesh.creation.box(),
+        trimesh.creation.icosphere(radius=10.0, subdivisions=2),
+    ]
     results = guardrail.query(test_meshes)
 
     assert len(results) == 2

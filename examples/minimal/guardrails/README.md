@@ -1,10 +1,13 @@
 # Geometry Guardrails Example
 
-This example demonstrates how to use PhysicsNeMo's geometry guardrails for validating CAD/STL files against a distribution of known-good geometries.
+This example demonstrates how to use PhysicsNeMo's geometry guardrails for
+validating CAD/STL files against a distribution of known-good geometries.
 
 ## Overview
 
-Geometry guardrails provide out-of-distribution (OOD) detection for 3D geometric data. They learn the distribution of "normal" geometries from training data and flag unusual or unexpected shapes at inference time.
+Geometry guardrails provide out-of-distribution (OOD) detection for 3D
+geometric data. They learn the distribution of "normal" geometries from
+training data and flag unusual or unexpected shapes at inference time.
 
 ## Prerequisites
 
@@ -18,7 +21,7 @@ pip install trimesh scikit-learn
 
 Create the following directory structure with your data:
 
-```
+```text
 examples/guardrails/
 ├── geometry_validation.py     # Main script
 ├── README.md                   # This file
@@ -37,7 +40,8 @@ examples/guardrails/
 
 ### 1. Prepare Your Data
 
-Place your training geometries in `data/train_geometries/` and geometries to validate in `data/test_geometries/`.
+Place your training geometries in `data/train_geometries/` and geometries to
+validate in `data/test_geometries/`.
 
 ### 2. Run the Example
 
@@ -46,6 +50,7 @@ python geometry_validation.py
 ```
 
 The script will:
+
 1. Check for available optimizations (GPU, fast STL reader)
 2. Train a guardrail model (or load existing model)
 3. Validate test geometries
@@ -55,7 +60,7 @@ The script will:
 
 **Output Example:**
 
-```
+```text
 ============================================================
 Results: 100 geometries validated
   OK:      85 (85.0%)
@@ -88,7 +93,8 @@ guardrail = GeometryGuardrail(
 
 ### Handle Multiple Geometry Families
 
-If your training data contains distinct families (e.g., brackets vs. gears), increase `n_components`:
+If your training data contains distinct families (e.g., brackets vs. gears),
+increase `n_components`:
 
 ```python
 guardrail = GeometryGuardrail(
@@ -99,17 +105,19 @@ guardrail = GeometryGuardrail(
 
 ## Troubleshooting
 
-**Issue: "No valid STL files found"**
+### Issue: "No valid STL files found"
 
-*Solution:* Verify STL files are valid, contain sufficient vertices, and paths are correct.
+*Solution:* Verify STL files are valid, contain sufficient vertices, and paths
+are correct.
 
-**Issue: Too many false positives**
+### Issue: Too many false positives
 
 *Solution:* Lower thresholds (`warn_pct`, `reject_pct`).
 
-**Issue: Slow performance**
+### Issue: Slow performance
 
-*Solution:* Enable GPU (`device="cuda"`), increase `n_workers`, or reduce dataset size.
+*Solution:* Enable GPU (`device="cuda"`), increase `n_workers`, or reduce
+dataset size.
 
 ## Support
 

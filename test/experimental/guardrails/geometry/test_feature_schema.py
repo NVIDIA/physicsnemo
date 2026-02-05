@@ -31,7 +31,7 @@ def test_feature_schema_attributes():
     assert hasattr(FeatureSchema, "version")
     assert hasattr(FeatureSchema, "hash")
     assert hasattr(FeatureSchema, "dim")
-    
+
     assert FeatureSchema.names == FEATURE_NAMES
     assert FeatureSchema.dim == len(FEATURE_NAMES)
     assert FeatureSchema.dim == 22
@@ -42,7 +42,7 @@ def test_feature_schema_validate_array_valid():
     # Single sample
     X = np.random.randn(1, 22)
     FeatureSchema.validate_array(X)  # Should not raise
-    
+
     # Multiple samples
     X = np.random.randn(100, 22)
     FeatureSchema.validate_array(X)  # Should not raise
@@ -54,7 +54,7 @@ def test_feature_schema_validate_array_wrong_dimensions():
     X = np.random.randn(22)
     with pytest.raises(ValueError, match="Feature array must be 2D"):
         FeatureSchema.validate_array(X)
-    
+
     # 3D array
     X = np.random.randn(10, 22, 5)
     with pytest.raises(ValueError, match="Feature array must be 2D"):
@@ -67,7 +67,7 @@ def test_feature_schema_validate_array_wrong_features():
     X = np.random.randn(10, 10)
     with pytest.raises(ValueError, match="Feature dimension mismatch"):
         FeatureSchema.validate_array(X)
-    
+
     # Too many features
     X = np.random.randn(10, 30)
     with pytest.raises(ValueError, match="Feature dimension mismatch"):
@@ -78,7 +78,7 @@ def test_feature_schema_hash_consistent():
     """Test that schema hash is consistent."""
     hash1 = FeatureSchema.hash
     hash2 = FeatureSchema.hash
-    
+
     assert hash1 == hash2
     assert isinstance(hash1, str)
     assert len(hash1) == 64  # SHA-256
