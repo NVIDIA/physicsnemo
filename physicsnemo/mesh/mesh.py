@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import types
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
 import torch
@@ -266,6 +267,11 @@ class Mesh:
             raise TypeError(
                 f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
             )
+        if self.points.device != self.cells.device:
+            raise ValueError(
+                f"`points` and `cells` must be on the same device, "
+                f"but got {self.points.device=} and {self.cells.device=}."
+            )
 
     if TYPE_CHECKING:
         # Type stub for the `to` method dynamically added by @tensorclass.
@@ -307,6 +313,14 @@ class Mesh:
             >>> mesh_gpu = mesh.to("cuda")
             >>> mesh_cpu = mesh.to(device="cpu")
             >>> mesh_fp16 = mesh.to(torch.float16)
+            """
+            ...
+
+        def clone(self) -> Self:
+            """Return a shallow clone of this Mesh.
+
+            All tensor storage is shared with the original; metadata and
+            TensorDict structure are independent copies.
             """
             ...
 
@@ -947,8 +961,8 @@ class Mesh:
         if not torch.compiler.is_compiling():
             if len(meshes) == 0:
                 raise ValueError("At least one Mesh must be provided to merge.")
-            elif len(meshes) == 1:  # Short-circuit for speed in this case
-                return meshes[0]
+            elif len(meshes) == 1:  # Return a shallow copy to avoid aliasing
+                return meshes[0].clone()
             if not all(isinstance(m, Mesh) for m in meshes):
                 raise TypeError(
                     f"All objects must be Mesh types. Got:\n"
@@ -1009,7 +1023,7 @@ class Mesh:
         self,
         indices: int
         | slice
-        | type(Ellipsis)  # ty: ignore[invalid-type-form]
+        | types.EllipsisType
         | None
         | torch.Tensor
         | Sequence[int | bool],
@@ -1103,7 +1117,7 @@ class Mesh:
         self,
         indices: int
         | slice
-        | type(Ellipsis)  # ty: ignore[invalid-type-form]
+        | types.EllipsisType
         | None
         | torch.Tensor
         | Sequence[int | bool | slice],
@@ -1905,7 +1919,7 @@ class Mesh:
         alpha_edges: float = 1.0,
         show_edges: bool = True,
         ax=None,
-        **kwargs,
+        backend_options: dict[str, Any] | None = None,
     ):
         """Draw the mesh using matplotlib or PyVista backend.
 
@@ -1954,8 +1968,9 @@ class Mesh:
         ax : matplotlib.axes.Axes, optional
             (matplotlib only) Existing matplotlib axes to plot on. If None,
             creates new figure and axes.
-        **kwargs : dict
-            Additional backend-specific keyword arguments.
+        backend_options : dict[str, Any], optional
+            Additional keyword arguments forwarded to the underlying
+            visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
 
         Returns
         -------
@@ -2005,7 +2020,7 @@ class Mesh:
             alpha_edges=alpha_edges,
             show_edges=show_edges,
             ax=ax,
-            **kwargs,
+            backend_options=backend_options,
         )
 
     def translate(
