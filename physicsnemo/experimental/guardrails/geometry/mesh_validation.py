@@ -17,10 +17,11 @@
 from __future__ import annotations
 
 import numpy as np
-import trimesh
+
+from physicsnemo.mesh import Mesh as PhysicsNeMoMesh
 
 
-def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 4) -> None:
+def validate_mesh(mesh: PhysicsNeMoMesh, min_verts: int = 4) -> None:
     r"""
     Validate basic geometric integrity of a mesh.
 
@@ -30,7 +31,7 @@ def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 4) -> None:
 
     Parameters
     ----------
-    mesh : trimesh.Trimesh
+    mesh : physicsnemo.mesh.Mesh
         Input triangular surface mesh to validate.
     min_verts : int, optional
         Minimum number of vertices required for a valid mesh. Defaults to 4.
@@ -39,7 +40,7 @@ def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 4) -> None:
     Raises
     ------
     ValueError
-        If ``mesh`` is not a :class:`trimesh.Trimesh` instance.
+        If ``mesh`` is not a :class:`physicsnemo.mesh.Mesh` instance.
     ValueError
         If the mesh contains fewer than ``min_verts`` vertices.
     ValueError
@@ -47,16 +48,20 @@ def validate_mesh(mesh: trimesh.Trimesh, min_verts: int = 4) -> None:
     ValueError
         If the mesh surface area is non-positive.
     """
-    if not isinstance(mesh, trimesh.Trimesh):
-        raise ValueError("Object is not a Trimesh")
+    if not isinstance(mesh, PhysicsNeMoMesh):
+        raise ValueError("Object is not a physicsnemo.mesh.Mesh")
 
-    if mesh.vertices.shape[0] < min_verts:
+    if mesh.n_points < min_verts:
         raise ValueError(
-            f"Too few vertices: {mesh.vertices.shape[0]} < {min_verts}"
+            f"Too few vertices: {mesh.n_points} < {min_verts}"
         )
 
-    if not np.isfinite(mesh.vertices).all():
+    # Check for non-finite vertex coordinates
+    verts = mesh.points.cpu().numpy()
+    if not np.isfinite(verts).all():
         raise ValueError("Non-finite vertex coordinates")
 
-    if mesh.area <= 0:
+    # Check surface area
+    total_area = float(mesh.cell_areas.sum().item())
+    if total_area <= 0:
         raise ValueError("Non-positive surface area")

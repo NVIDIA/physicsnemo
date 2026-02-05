@@ -180,7 +180,7 @@ datapipes-extras = [
     "netCDF4",
 ]
 experimental-extras = [
-    "trimesh>=4.0.0",
+    "pyvista>=0.40.0",
     "scikit-learn>=1.0.0",
 ]
 

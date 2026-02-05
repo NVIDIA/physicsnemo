@@ -19,7 +19,9 @@ from __future__ import annotations
 import hashlib
 
 import numpy as np
-import trimesh
+import torch
+
+from physicsnemo.mesh import Mesh as PhysicsNeMoMesh
 
 from .mesh_validation import validate_mesh
 
@@ -86,7 +88,7 @@ def feature_hash(names: list[str]) -> str:
     return h.hexdigest()
 
 
-def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
+def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_validation: bool = False) -> np.ndarray | torch.Tensor:
     r"""
     Extract non-invariant geometric descriptors from a triangular mesh.
 
@@ -97,40 +99,52 @@ def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
 
     Parameters
     ----------
-    mesh : trimesh.Trimesh
+    mesh : physicsnemo.mesh.Mesh
         Input triangular surface mesh. Must pass validation checks.
+    return_tensor : bool, optional
+        If True, return PyTorch tensor on the same device as mesh.
+        If False, return numpy array. Default is False.
+    skip_validation : bool, optional
+        If True, skip mesh validation (assumes validation already done).
+        Useful when validation is performed earlier in the pipeline.
+        Default is False.
 
     Returns
     -------
-    np.ndarray
+    np.ndarray or torch.Tensor
         1D feature vector of shape :math:`(22,)` containing all geometric
         descriptors in the order specified by :data:`FEATURE_NAMES`.
+        Returns tensor if ``return_tensor=True``, otherwise numpy array.
 
     Raises
     ------
     ValueError
         If the mesh fails validation checks (see :func:`validate_mesh`).
+        This is only checked if ``skip_validation=False``.
     ValueError
-        If the mesh has insufficient vertices for PCA (< 10 vertices).
+        If the mesh has insufficient vertices for PCA (< 4 vertices).
     RuntimeError
         If the computed feature vector length does not match the schema.
 
     Examples
     --------
-    >>> import trimesh
     >>> import numpy as np
+    >>> import pyvista as pv
+    >>> from physicsnemo.mesh.io import from_pyvista
     >>> from physicsnemo.experimental.guardrails.geometry import extract_features
     >>> 
-    >>> # Create a unit cube
-    >>> mesh = trimesh.creation.box(extents=[1, 1, 1])
+    >>> # Create a unit cube using PyVista
+    >>> pv_mesh = pv.Cube()
+    >>> mesh = from_pyvista(pv_mesh)
     >>> features = extract_features(mesh)
     >>> print(f"Feature vector shape: {features.shape}")
     Feature vector shape: (22,)
-    >>> 
-    >>> # Centroid should be near origin
-    >>> centroid = features[:3]
-    >>> np.allclose(centroid, [0, 0, 0], atol=1e-6)
-    True
+    
+    >>> # Get features as tensor on GPU
+    >>> mesh_gpu = mesh.to("cuda")
+    >>> features_gpu = extract_features(mesh_gpu, return_tensor=True)
+    >>> print(f"Feature device: {features_gpu.device}")
+    cuda:0
 
     Notes
     -----
@@ -147,27 +161,35 @@ def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
     **Important**: Features are intentionally **not** invariant to transformations.
     This allows the guardrail to detect geometric configurations based on their
     absolute position and orientation in space.
-    """
-    # Validate mesh integrity
-    validate_mesh(mesh)
 
-    verts = mesh.vertices
-    centroid = verts.mean(axis=0)  # Shape: (3,)
-    X = verts - centroid  # Center vertices
+    **GPU Support**: If the mesh is on GPU, all computations are performed on GPU
+    for efficiency. Set ``return_tensor=True`` to keep features on GPU.
+    """
+    # Validate mesh integrity (unless already validated)
+    if not skip_validation:
+        validate_mesh(mesh)
+
+    # Get device from mesh
+    device = mesh.points.device
+    
+    # Work with torch tensors directly (no conversion to numpy)
+    verts = mesh.points  # Shape: (N, 3) - already on device
+    centroid = verts.mean(dim=0)  # Shape: (3,)
+    X = verts - centroid.unsqueeze(0)  # Center vertices
 
     if X.shape[0] < 4:
         raise ValueError("Insufficient points for PCA (need at least 4)")
 
     # Compute PCA via singular value decomposition
     # U: left singular vectors, S: singular values, Vt: right singular vectors transposed
-    _, S, Vt = np.linalg.svd(X, full_matrices=False)
+    U, S, Vt = torch.linalg.svd(X, full_matrices=False)
     
     # Convert singular values to eigenvalues (variance)
-    eigvals = (S**2) / (X.shape[0] - 1)  # Shape: (3,)
+    eigvals = (S ** 2) / (X.shape[0] - 1)  # Shape: (3,)
     eigvecs = Vt.T  # Shape: (3, 3)
 
     # Sort eigenvalues and eigenvectors in descending order
-    idx = np.argsort(eigvals)[::-1]
+    idx = torch.argsort(eigvals, descending=True)
     eigvals = eigvals[idx]
     eigvecs = eigvecs[:, idx]
 
@@ -181,32 +203,36 @@ def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
     pca_vals = eigvals[:3]  # Shape: (3,)
 
     # Compute axis-aligned bounding box extents
-    bbox_min = verts.min(axis=0)  # Shape: (3,)
-    bbox_max = verts.max(axis=0)  # Shape: (3,)
+    bbox_min = verts.min(dim=0)[0]  # Shape: (3,)
+    bbox_max = verts.max(dim=0)[0]  # Shape: (3,)
     extents = bbox_max - bbox_min  # Shape: (3,)
 
     # Compute second moments (variance per axis)
-    second_moments = ((verts - centroid) ** 2).mean(axis=0)  # Shape: (3,)
+    second_moments = ((verts - centroid.unsqueeze(0)) ** 2).mean(dim=0)  # Shape: (3,)
 
     # Compute projected surface areas onto coordinate planes
-    normals = mesh.face_normals  # Shape: (n_faces, 3)
-    areas = mesh.area_faces  # Shape: (n_faces,)
+    # physicsnemo.mesh provides cell_normals and cell_areas
+    normals = mesh.cell_normals  # Shape: (n_faces, 3) - already on device
+    areas = mesh.cell_areas  # Shape: (n_faces,) - already on device
 
     # Project area onto each coordinate plane
-    A_xy = np.sum(areas * np.abs(normals[:, 2]))  # Area weighted by |z-component|
-    A_xz = np.sum(areas * np.abs(normals[:, 1]))  # Area weighted by |y-component|
-    A_yz = np.sum(areas * np.abs(normals[:, 0]))  # Area weighted by |x-component|
+    A_xy = (areas * torch.abs(normals[:, 2])).sum()  # Area weighted by |z-component|
+    A_xz = (areas * torch.abs(normals[:, 1])).sum()  # Area weighted by |y-component|
+    A_yz = (areas * torch.abs(normals[:, 0])).sum()  # Area weighted by |x-component|
+
+    # Total surface area
+    total_area = mesh.cell_areas.sum()
 
     # Concatenate all features into a single vector
-    feats = np.concatenate(
+    feats = torch.cat(
         [
             centroid,  # 3 components
             pca_axes,  # 6 components
             pca_vals,  # 3 components
             extents,  # 3 components
             second_moments,  # 3 components
-            [mesh.area],  # 1 component (total surface area)
-            [A_xy, A_xz, A_yz],  # 3 components
+            total_area.unsqueeze(0),  # 1 component (total surface area)
+            torch.stack([A_xy, A_xz, A_yz]),  # 3 components
         ]
     )  # Total: 22 components
 
@@ -217,4 +243,8 @@ def extract_features(mesh: trimesh.Trimesh) -> np.ndarray:
             f"got {feats.shape[0]}"
         )
 
-    return feats
+    # Return tensor or numpy array based on flag
+    if return_tensor:
+        return feats
+    else:
+        return feats.cpu().numpy()

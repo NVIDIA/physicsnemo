@@ -23,19 +23,17 @@ out-of-distribution geometric configurations:
 - **Gaussian Mixture Models (GMM)**: Flexible, supports multi-modal distributions
 - **Polynomial Chaos Expansion (PCE)**: Physics-informed, better for high-dimensional correlated data
 
-Supports both CPU (scikit-learn) and GPU (PyTorch for GMM) backends for
-performance optimization on large datasets.
+Both methods use PyTorch and support CPU and GPU acceleration.
 """
 
 from __future__ import annotations
 
 import numpy as np
-from sklearn.mixture import GaussianMixture
-
+import torch
 
 class GeometryDensityModel:
     r"""
-    Density model for anomaly detection with multiple backend options.
+    Density model for anomaly detection with multiple method options.
 
     This class provides a unified interface for density estimation supporting
     multiple methods:
@@ -54,31 +52,31 @@ class GeometryDensityModel:
         For GMM: Number of Gaussian components. For PCE: Number of PCA components
         (None = auto-select). Default is 1.
     covariance_type : str, optional
-        For GMM only: Covariance type (``"full"``, ``"tied"``, ``"diag"``, ``"spherical"``).
-        Default is ``"full"``.
+        For GMM only: Covariance type. Currently only ``"full"`` is supported.
+        Default is ``"full"``. This parameter is stored for serialization but
+        TorchGMM always uses full covariance matrices.
     poly_degree : int, optional
         For PCE only: Polynomial degree for expansion. Default is 2.
     interaction_only : bool, optional
         For PCE only: If True, only include interaction terms. Default is False.
     random_state : int or None, optional
         Random seed for reproducible initialization. Default is 0.
-    device : str, optional
+    device : str or torch.device, optional
         Device to use for computation. Options:
-        - ``"cpu"``: Use scikit-learn on CPU (default)
-        - ``"cuda"``: Use PyTorch GMM on GPU (GMM only)
-        - ``"cuda:0"``, ``"cuda:1"``, etc.: Specific GPU device (GMM only)
-        Default is ``"cpu"``.
+        - ``"cpu"``: Use PyTorch on CPU (default)
+        - ``"cuda"``: Use PyTorch on GPU (both GMM and PCE supported)
+        - ``"cuda:0"``, ``"cuda:1"``, etc.: Specific GPU device
+        Default is ``"cpu"``. Both GMM and PCE support GPU acceleration.
 
     Attributes
     ----------
-    model : GaussianMixture, TorchGMM, or PCEDensityModel
-        The underlying density estimation model.
-    ref_scores : np.ndarray or None
+    model : TorchGMM or PCEDensityModel
+        The underlying density estimation model (both use PyTorch).
+    ref_scores : torch.Tensor or None
         Reference anomaly scores from training data for percentile computation.
-    device : str
+        Stored on the same device as the model (GPU-first resident).
+    device : torch.device
         Device being used for computation.
-    backend : str
-        Backend being used: ``"sklearn"``, ``"torch"``, or ``"pce"``.
     method : str
         Density estimation method: ``"gmm"`` or ``"pce"``.
 
@@ -120,40 +118,7 @@ class GeometryDensityModel:
     >>> model_gpu.fit(X_train)
     >>> scores_gpu = model_gpu.score(X_test)
 
-    Notes
-    -----
-    **Choosing a Method**:
-
-    Use **GMM** when:
-    
-    - Data has multi-modal distributions (multiple sub-populations)
-    - Features are relatively independent
-    - You need GPU acceleration for large datasets
-    - Default choice for most applications
-
-    Use **PCE** when:
-    
-    - Features have strong correlations (common in physics)
-    - You want interpretable polynomial coefficients
-    - Data is high-dimensional with smooth distributions
-    - You prefer avoiding GMM hyperparameter tuning
-
-    **Performance Comparison**:
-
-    =====================  =========  =========  ==============  ================
-    Method                 Multi-modal Correlated GPU Support    Interpretability
-    =====================  =========  =========  ==============  ================
-    GMM (n_comp=1)         ✗          Medium     ✓               Medium
-    GMM (n_comp>1)         ✓          Medium     ✓               Low
-    PCE                    ✗          ✓          ✗               ✓
-    =====================  =========  =========  ==============  ================
-
-    **Device and Backend Selection**:
-
-    - CPU + GMM → scikit-learn (always available)
-    - GPU + GMM → PyTorch (requires torch, 2-10x faster)
-    - CPU + PCE → NumPy + scikit-learn (GPU not supported for PCE)
-
+   
     See Also
     --------
     :class:`GeometryGuardrail` : Main API that uses this density model.
@@ -176,16 +141,17 @@ class GeometryDensityModel:
         self.poly_degree = poly_degree
         self.interaction_only = interaction_only
         self.random_state = random_state
-        self.device = device
         self.ref_scores = None
 
         # Validate method
         if self.method not in ["gmm", "pce"]:
             raise ValueError(f"method must be 'gmm' or 'pce', got '{self.method}'")
 
-        # Validate device for PCE
-        if self.method == "pce" and device != "cpu":
-            raise ValueError("PCE method only supports device='cpu'")
+        # Parse device
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
 
         # Initialize model based on method
         if self.method == "gmm":
@@ -194,48 +160,14 @@ class GeometryDensityModel:
             self._init_pce()
 
     def _init_gmm(self):
-        """Initialize GMM model (sklearn or torch)."""
-        if self.device == "cpu":
-            # Use sklearn GMM (wrapped for consistent API)
-            from sklearn.mixture import GaussianMixture as SklearnGMM
-            
-            class SklearnGMMWrapper:
-                """Wrapper to add .score() method to sklearn GMM."""
-                def __init__(self, gmm):
-                    self.gmm = gmm
-                
-                def fit(self, X):
-                    return self.gmm.fit(X)
-                
-                def score(self, X):
-                    """Return negative log-likelihood (anomaly scores)."""
-                    return -self.gmm.score_samples(X)
-                
-                def score_samples(self, X):
-                    """Return log-likelihood (for compatibility)."""
-                    return self.gmm.score_samples(X)
-            
-            gmm_base = SklearnGMM(
-                n_components=self.n_components,
-                covariance_type=self.covariance_type,
-                random_state=self.random_state,
-            )
-            self.model = SklearnGMMWrapper(gmm_base)
-            self.backend = "sklearn"
-        else:
-            # Use PyTorch GMM
-            from physicsnemo.core.version_check import check_version_spec
+        """Initialize GMM model using PyTorch (works on both CPU and GPU)."""
+        from .gmm_torch import TorchGMM
 
-            check_version_spec("torch", "2.0.0", hard_fail=True)
-
-            from .gmm_torch import TorchGMM
-
-            self.model = TorchGMM(
-                n_components=self.n_components,
-                device=self.device,
-                random_state=self.random_state,
-            )
-            self.backend = "torch"
+        self.model = TorchGMM(
+            n_components=self.n_components,
+            device=self.device,
+            random_state=self.random_state,
+        )
 
     def _init_pce(self):
         """Initialize PCE model."""
@@ -246,23 +178,23 @@ class GeometryDensityModel:
             poly_degree=self.poly_degree,
             interaction_only=self.interaction_only,
             random_state=self.random_state,
+            device=self.device,
         )
-        self.backend = "pce"
 
-    def fit(self, X: np.ndarray) -> None:
+    def fit(self, X: np.ndarray | torch.Tensor) -> None:
         r"""
         Fit the density model and store reference scores.
 
         This method trains the underlying model (GMM or PCE) on the provided feature
         array and computes anomaly scores for all training samples to establish
-        a reference distribution. Automatically uses the appropriate backend based
-        on the method and device settings.
+        a reference distribution.
 
         Parameters
         ----------
-        X : np.ndarray
+        X : np.ndarray or torch.Tensor
             Training feature array of shape :math:`(N, D)` where :math:`N` is
             the number of samples and :math:`D` is the feature dimensionality.
+            If numpy array, will be converted to torch tensor and moved to device.
 
         Examples
         --------
@@ -275,49 +207,52 @@ class GeometryDensityModel:
         >>> # GMM on CPU
         >>> model = GeometryDensityModel(method="gmm", n_components=2, device="cpu")
         >>> model.fit(X_train)
-        >>> print(f"Backend: {model.backend}")
-        Backend: sklearn
+        >>> print(f"Method: {model.method}")
+        Method: gmm
         >>> 
-        >>> # GMM on GPU (requires PyTorch and CUDA)
+        >>> # GMM on GPU
         >>> model_gpu = GeometryDensityModel(method="gmm", n_components=2, device="cuda")
         >>> model_gpu.fit(X_train)
-        >>> print(f"Backend: {model_gpu.backend}")
-        Backend: torch
         >>> 
-        >>> # PCE on CPU
-        >>> model_pce = GeometryDensityModel(method="pce", n_components=10)
+        >>> model_pce = GeometryDensityModel(method="pce", n_components=10, device="cuda")
         >>> model_pce.fit(X_train)
-        >>> print(f"Backend: {model_pce.backend}")
-        Backend: pce
 
         Notes
         -----
         The reference scores are essential for converting raw anomaly scores to
         empirical percentiles. They represent the expected distribution of scores
         for in-distribution samples.
-
-        **Performance**: GPU fitting (GMM only) provides speedup for N > 1000 samples.
-        For smaller datasets, CPU may be faster due to transfer overhead.
         """
-        self.model.fit(X)
-        # Compute reference scores for training data
-        self.ref_scores = self.model.score(X)
+        # Convert to torch tensor if needed and move to device
+        if isinstance(X, np.ndarray):
+            X_torch = torch.from_numpy(X).float().to(self.device)
+        elif isinstance(X, torch.Tensor):
+            X_torch = X.float().to(self.device)
+        else:
+            raise TypeError(f"X must be np.ndarray or torch.Tensor, got {type(X)}")
+        
+        self.model.fit(X_torch)
+        # Compute reference scores for training data (returns torch tensor)
+        scores = self.model.score(X_torch)
+        # Store as tensor on device (GPU-first resident)
+        self.ref_scores = scores  # Already a torch tensor on device
 
-    def score(self, X: np.ndarray) -> np.ndarray:
+    def score(self, X: np.ndarray | torch.Tensor) -> torch.Tensor:
         r"""
         Compute anomaly scores for samples.
 
         Parameters
         ----------
-        X : np.ndarray
+        X : np.ndarray or torch.Tensor
             Feature array of shape :math:`(N, D)` where :math:`N` is the
             number of samples and :math:`D` is the feature dimensionality.
+            If numpy array, will be converted to torch tensor and moved to device.
 
         Returns
         -------
-        np.ndarray
+        torch.Tensor
             Anomaly scores of shape :math:`(N,)`. Higher scores indicate
-            more anomalous samples.
+            more anomalous samples. Returns tensor on the same device as input (GPU-first resident).
 
         Examples
         --------
@@ -342,9 +277,19 @@ class GeometryDensityModel:
 
         Higher scores always indicate more anomalous samples.
         """
-        return self.model.score(X)
+        # Convert to torch tensor if needed and move to device
+        if isinstance(X, np.ndarray):
+            X_torch = torch.from_numpy(X).float().to(self.device)
+        elif isinstance(X, torch.Tensor):
+            X_torch = X.float().to(self.device)
+        else:
+            raise TypeError(f"X must be np.ndarray or torch.Tensor, got {type(X)}")
+        
+        scores = self.model.score(X_torch)
+        # Keep as tensor on device (GPU-first resident)
+        return scores
 
-    def percentiles(self, scores: np.ndarray) -> np.ndarray:
+    def percentiles(self, scores: np.ndarray | torch.Tensor) -> np.ndarray:
         r"""
         Convert anomaly scores to empirical percentiles.
 
@@ -355,8 +300,9 @@ class GeometryDensityModel:
 
         Parameters
         ----------
-        scores : np.ndarray
+        scores : np.ndarray or torch.Tensor
             Anomaly scores of shape :math:`(N,)` as returned by :meth:`score`.
+            If torch tensor, will be moved to same device as ref_scores.
 
         Returns
         -------
@@ -400,7 +346,28 @@ class GeometryDensityModel:
                 "Density model not fitted. Call fit() before computing percentiles."
             )
 
-        return np.array([100.0 * np.mean(self.ref_scores <= s) for s in scores])
+        # Convert to torch tensor if needed
+        if isinstance(scores, np.ndarray):
+            scores_torch = torch.from_numpy(scores).to(self.device)
+        elif isinstance(scores, torch.Tensor):
+            scores_torch = scores.to(self.device)
+        else:
+            raise TypeError(f"scores must be np.ndarray or torch.Tensor, got {type(scores)}")
+        
+        # Ensure ref_scores is on same device (always torch.Tensor after fit)
+        ref_scores_torch = self.ref_scores.to(self.device)
+        
+        # Validate ref_scores is not empty
+        if len(ref_scores_torch) == 0:
+            raise RuntimeError("Reference scores are empty. Model may not have been fitted correctly.")
+        
+        # Compute percentiles using broadcasting (efficient on GPU)
+        scores_expanded = scores_torch.unsqueeze(1)  # (n_scores, 1)
+        ref_expanded = ref_scores_torch.unsqueeze(0)  # (1, n_ref)
+        percentiles = 100.0 * (ref_expanded <= scores_expanded).sum(dim=1).float() / len(ref_scores_torch)
+        
+        # Return as numpy array
+        return percentiles.cpu().numpy()
 
     def get_state(self) -> dict:
         """
@@ -418,33 +385,22 @@ class GeometryDensityModel:
             "poly_degree": self.poly_degree,
             "interaction_only": self.interaction_only,
             "random_state": self.random_state,
-            "device": self.device,
-            "backend": self.backend,
-            "ref_scores": self.ref_scores,
+            "ref_scores": self.ref_scores.cpu().numpy(),
         }
 
-        # Serialize model-specific parameters
-        if self.backend == "sklearn":
-            # For sklearn GMM, save the underlying GMM parameters
-            state["model_params"] = {
-                "weights_": self.model.gmm.weights_,
-                "means_": self.model.gmm.means_,
-                "covariances_": self.model.gmm.covariances_,
-                "converged_": self.model.gmm.converged_,
-                "n_iter_": self.model.gmm.n_iter_,
-            }
-        elif self.backend == "torch":
-            # For TorchGMM, convert to sklearn-compatible dict
+        # Serialize model-specific parameters based on method
+        if self.method == "gmm":
+            # For GMM (TorchGMM), convert to sklearn-compatible dict
             state["model_params"] = self.model.to_sklearn_dict()
-        elif self.backend == "pce":
-            # For PCE, use its get_params method
-            state["model_params"] = self.model.get_params()
+        elif self.method == "pce":
+            # For PCE, use its get_state method
+            state["model_params"] = self.model.get_state()
         else:
-            raise RuntimeError(f"Unknown backend: {self.backend}")
+            raise RuntimeError(f"Unknown method: {self.method}")
 
         return state
 
-    def set_state(self, state: dict) -> None:
+    def set_state(self, state: dict, device: str | torch.device) -> None:
         """
         Restore model state from serialized data.
 
@@ -452,6 +408,8 @@ class GeometryDensityModel:
         ----------
         state : dict
             State dictionary as returned by :meth:`get_state`.
+        device : str or torch.device
+            Device to load the model on.
         """
         # Restore basic attributes
         self.method = state["method"]
@@ -460,50 +418,20 @@ class GeometryDensityModel:
         self.poly_degree = state["poly_degree"]
         self.interaction_only = state["interaction_only"]
         self.random_state = state["random_state"]
-        self.device = state["device"]
-        self.backend = state["backend"]
-        self.ref_scores = state["ref_scores"]
+        
+        # Set device (runtime parameter, not part of model state)
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+        
+        # Convert ref_scores back to torch tensor on device
+        ref_scores_data = state["ref_scores"]
+        self.ref_scores = torch.from_numpy(ref_scores_data).float().to(self.device)
 
-        # Restore model
-        if self.backend == "sklearn":
-            from sklearn.mixture import GaussianMixture as SklearnGMM
-            
-            class SklearnGMMWrapper:
-                """Wrapper to add .score() method to sklearn GMM."""
-                def __init__(self, gmm):
-                    self.gmm = gmm
-                
-                def fit(self, X):
-                    return self.gmm.fit(X)
-                
-                def score(self, X):
-                    """Return negative log-likelihood (anomaly scores)."""
-                    return -self.gmm.score_samples(X)
-                
-                def score_samples(self, X):
-                    """Return log-likelihood (for compatibility)."""
-                    return self.gmm.score_samples(X)
-            
-            gmm_base = SklearnGMM(
-                n_components=self.n_components,
-                covariance_type=self.covariance_type,
-                random_state=self.random_state,
-            )
-            # Restore fitted parameters
-            params = state["model_params"]
-            gmm_base.weights_ = params["weights_"]
-            gmm_base.means_ = params["means_"]
-            gmm_base.covariances_ = params["covariances_"]
-            gmm_base.converged_ = params["converged_"]
-            gmm_base.n_iter_ = params["n_iter_"]
-            gmm_base.precisions_cholesky_ = np.linalg.cholesky(
-                np.linalg.inv(params["covariances_"])
-            )
-            
-            self.model = SklearnGMMWrapper(gmm_base)
-        elif self.backend == "torch":
+        # Restore model based on method
+        if self.method == "gmm":
             from .gmm_torch import TorchGMM
-            import torch
             
             self.model = TorchGMM(
                 n_components=self.n_components,
@@ -519,7 +447,7 @@ class GeometryDensityModel:
             self.model.n_iter_ = params["n_iter_"]
             # Recompute precisions_cholesky_
             self.model.precisions_cholesky_ = self.model._compute_precision_cholesky()
-        elif self.backend == "pce":
+        elif self.method == "pce":
             from .density_pce import PCEDensityModel
             
             self.model = PCEDensityModel(
@@ -527,7 +455,8 @@ class GeometryDensityModel:
                 poly_degree=self.poly_degree,
                 interaction_only=self.interaction_only,
                 random_state=self.random_state,
+                device=self.device,
             )
-            self.model.set_params(state["model_params"])
+            self.model.set_state(state["model_params"], device=self.device)
         else:
-            raise RuntimeError(f"Unknown backend: {self.backend}")
+            raise RuntimeError(f"Unknown method: {self.method}")

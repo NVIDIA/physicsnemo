@@ -345,7 +345,7 @@ class TorchGMM(nn.Module):
         
         return self
 
-    def score_samples(self, X: torch.Tensor | np.ndarray) -> np.ndarray:
+    def score_samples(self, X: torch.Tensor | np.ndarray) -> torch.Tensor:
         """
         Compute log-likelihood of samples under the model.
 
@@ -356,8 +356,8 @@ class TorchGMM(nn.Module):
 
         Returns
         -------
-        np.ndarray
-            Log-likelihoods of shape (n_samples,).
+        torch.Tensor
+            Log-likelihoods of shape (n_samples,). Returns tensor on the same device as input.
         """
         # Convert to torch tensor if needed
         if isinstance(X, np.ndarray):
@@ -375,10 +375,10 @@ class TorchGMM(nn.Module):
         # Log sum exp
         log_prob_norm = torch.logsumexp(weighted_log_prob, dim=1)
         
-        # Return as numpy array on CPU
-        return log_prob_norm.cpu().numpy()
+        # Return as torch tensor (keep on device for efficiency)
+        return log_prob_norm
 
-    def score(self, X: torch.Tensor | np.ndarray) -> np.ndarray:
+    def score(self, X: torch.Tensor | np.ndarray) -> torch.Tensor:
         """
         Compute anomaly scores (negative log-likelihood) for samples.
 
@@ -393,9 +393,9 @@ class TorchGMM(nn.Module):
 
         Returns
         -------
-        np.ndarray
+        torch.Tensor
             Anomaly scores of shape (n_samples,). Higher values indicate
-            more anomalous samples.
+            more anomalous samples. Returns tensor on the same device as input.
 
         Notes
         -----

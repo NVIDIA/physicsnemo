@@ -16,7 +16,6 @@
 
 from .density_model import GeometryDensityModel
 from .density_pce import PCEDensityModel
-from .fast_stl import FastMesh, is_fast_reader_available, load_stl_fast
 from .feature_extraction import (
     FEATURE_NAMES,
     FEATURE_VERSION,
@@ -33,12 +32,9 @@ __all__ = [
     "GeometryDensityModel",
     "PCEDensityModel",
     "FeatureSchema",
-    "FastMesh",
     "extract_features",
     "validate_mesh",
     "load_features_from_dir",
-    "load_stl_fast",
-    "is_fast_reader_available",
     "feature_hash",
     "FEATURE_NAMES",
     "FEATURE_VERSION",

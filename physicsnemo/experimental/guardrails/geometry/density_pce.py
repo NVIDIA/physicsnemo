@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
+from itertools import product
+
 import numpy as np
+import torch
 
-from physicsnemo.core.version_check import require_version_spec
+from physicsnemo.core.version_check import check_version_spec
 
 
-@require_version_spec("scikit-learn", "1.0.0")
 class PCEDensityModel:
     r"""
     Polynomial Chaos Expansion using Hermite polynomials for density-based anomaly detection.
@@ -33,11 +35,8 @@ class PCEDensityModel:
 
     Anomaly scores are computed based on the reconstruction error in the Hermite
     polynomial space using Mahalanobis distance.
-    
-    .. note::
-        
-        **CPU-only implementation**: This method currently supports CPU computation only.
-        For GPU acceleration, use GMM (``method="gmm"``) instead.
+
+    Supports both CPU and GPU computation via PyTorch.
 
     Parameters
     ----------
@@ -54,38 +53,51 @@ class PCEDensityModel:
         Default is False.
     random_state : int or None, optional
         Random seed for reproducibility. Default is None.
+    device : str or torch.device, optional
+        Device to run computations on (e.g., ``"cpu"``, ``"cuda"``).
+        Default is ``"cpu"``.
 
     Attributes
     ----------
-    pca_ : sklearn.decomposition.PCA
-        Fitted PCA transformer.
+    device : torch.device
+        Device being used for computation.
     hermite_degree_ : int
         Maximum degree of Hermite polynomials used.
-    poly_mean_ : np.ndarray
+    poly_mean_ : torch.Tensor
         Mean of Hermite polynomial features from training data.
-    poly_cov_ : np.ndarray
+    poly_cov_ : torch.Tensor
         Covariance matrix of Hermite polynomial features.
-    training_scores_ : np.ndarray
+    poly_cov_inv_ : torch.Tensor
+        Inverse covariance matrix (precomputed for efficiency).
+    training_scores_ : torch.Tensor
         Anomaly scores for training data (for percentile computation).
     n_features_in_ : int
         Number of input features.
     n_pca_components_ : int
         Number of PCA components actually used.
+    pca_mean_ : torch.Tensor
+        Mean of training data (for standardization).
+    pca_std_ : torch.Tensor
+        Standard deviation of training data (for standardization).
+    pca_components_ : torch.Tensor
+        PCA components (eigenvectors).
+    pca_explained_variance_ratio_ : torch.Tensor
+        Explained variance ratio for each component.
 
     Examples
     --------
-    >>> import numpy as np
+    >>> import torch
     >>> from physicsnemo.experimental.guardrails.geometry import PCEDensityModel
     >>> 
     >>> # Training data (100 samples, 22 features)
-    >>> X_train = np.random.randn(100, 22)
+    >>> X_train = torch.randn(100, 22)
     >>> 
-    >>> # Fit PCE model with Hermite polynomials
-    >>> model = PCEDensityModel(n_components=10, poly_degree=2)
+    >>> # Fit PCE model with Hermite polynomials on GPU
+    >>> model = PCEDensityModel(n_components=10, poly_degree=2, device="cuda")
     >>> model.fit(X_train)
     >>> 
     >>> # Score new data
-    >>> X_test = np.random.randn(10, 22)
+    >>> X_test = torch.randn(10, 22, device="cuda")
     >>> scores = model.score(X_test)
     >>> percentiles = model.percentiles(scores)
     >>> print(f"Anomaly percentiles: {percentiles}")
@@ -135,15 +147,26 @@ class PCEDensityModel:
         poly_degree: int = 2,
         interaction_only: bool = False,
         random_state: int | None = None,
+        device: str | torch.device = "cpu",
     ):
         self.n_components = n_components
         self.poly_degree = poly_degree
         self.interaction_only = interaction_only
         self.random_state = random_state
+        
+        # Set device
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+        
+        # Set random seed if provided
+        if random_state is not None:
+            torch.manual_seed(random_state)
+            if torch.cuda.is_available() and self.device.type == "cuda":
+                torch.cuda.manual_seed(random_state)
 
         # Fitted attributes (set during fit)
-        self.pca_ = None
-        self.scaler_ = None
         self.hermite_degree_ = None
         self.n_pca_components_ = None
         self.poly_mean_ = None
@@ -151,16 +174,21 @@ class PCEDensityModel:
         self.poly_cov_inv_ = None
         self.training_scores_ = None
         self.n_features_in_ = None
+        self.pca_mean_ = None
+        self.pca_std_ = None
+        self.pca_components_ = None
+        self.pca_explained_variance_ratio_ = None
 
-    def fit(self, X: np.ndarray) -> PCEDensityModel:
+    def fit(self, X: torch.Tensor | np.ndarray) -> PCEDensityModel:
         r"""
         Fit PCE density model using Hermite polynomials to training data.
 
         Parameters
         ----------
-        X : np.ndarray
+        X : torch.Tensor or np.ndarray
             Training features of shape :math:`(N, D)` where :math:`N` is the
             number of samples and :math:`D` is the feature dimension.
+            If numpy array, will be converted to torch tensor.
 
         Returns
         -------
@@ -172,8 +200,13 @@ class PCEDensityModel:
         ValueError
             If X has insufficient samples or invalid shape.
         """
-        from sklearn.decomposition import PCA
-        from sklearn.preprocessing import StandardScaler
+        # Convert to torch tensor if needed and move to device
+        if isinstance(X, np.ndarray):
+            X = torch.from_numpy(X).float().to(self.device)
+        elif isinstance(X, torch.Tensor):
+            X = X.float().to(self.device)
+        else:
+            raise TypeError(f"X must be np.ndarray or torch.Tensor, got {type(X)}")
 
         # Validate input
         if X.ndim != 2:
@@ -183,25 +216,37 @@ class PCEDensityModel:
 
         self.n_features_in_ = X.shape[1]
 
-        # Standardize features
-        self.scaler_ = StandardScaler()
-        X_scaled = self.scaler_.fit_transform(X)
+        # Standardize features (zero mean, unit variance)
+        self.pca_mean_ = X.mean(dim=0, keepdim=True)
+        self.pca_std_ = X.std(dim=0, keepdim=True)
+        # Avoid division by zero
+        self.pca_std_ = torch.clamp(self.pca_std_, min=1e-8)
+        X_scaled = (X - self.pca_mean_) / self.pca_std_
 
-        # Apply PCA
+        # Apply PCA using SVD
+        # Center the data (already done by standardization)
+        # Compute SVD: X = U @ S @ V^T
+        U, S, Vt = torch.linalg.svd(X_scaled, full_matrices=False)
+        
+        # Explained variance ratio
+        explained_variance = (S ** 2) / (X.shape[0] - 1)
+        total_variance = explained_variance.sum()
+        self.pca_explained_variance_ratio_ = explained_variance / total_variance
+        
+        # Determine number of components
         if self.n_components is None:
             # Auto-select to explain 95% variance
-            n_comp = min(X.shape[0], X.shape[1])
+            cum_var = torch.cumsum(self.pca_explained_variance_ratio_, dim=0)
+            n_keep = torch.searchsorted(cum_var, torch.tensor(0.95, device=self.device)) + 1
+            n_keep = min(n_keep.item(), X.shape[1])
         else:
-            n_comp = min(self.n_components, X.shape[0], X.shape[1])
-
-        self.pca_ = PCA(n_components=n_comp, random_state=self.random_state)
-        X_pca = self.pca_.fit_transform(X_scaled)
-
-        # If n_components was None, trim to 95% variance
-        if self.n_components is None:
-            cum_var = np.cumsum(self.pca_.explained_variance_ratio_)
-            n_keep = np.searchsorted(cum_var, 0.95) + 1
-            X_pca = X_pca[:, :n_keep]
+            n_keep = min(self.n_components, X.shape[0], X.shape[1])
+        
+        # Store PCA components (transpose of Vt)
+        self.pca_components_ = Vt[:n_keep, :].T  # Shape: (n_features, n_components)
+        
+        # Project to PCA space
+        X_pca = X_scaled @ self.pca_components_  # Shape: (n_samples, n_components)
         
         self.n_pca_components_ = X_pca.shape[1]
         self.hermite_degree_ = self.poly_degree
@@ -210,35 +255,38 @@ class PCEDensityModel:
         X_hermite = self._generate_hermite_features(X_pca)
 
         # Compute statistics in Hermite polynomial space
-        self.poly_mean_ = np.mean(X_hermite, axis=0)
-        self.poly_cov_ = np.cov(X_hermite, rowvar=False)
+        self.poly_mean_ = X_hermite.mean(dim=0)  # Shape: (n_terms,)
+        
+        # Compute covariance matrix
+        X_centered = X_hermite - self.poly_mean_.unsqueeze(0)
+        self.poly_cov_ = (X_centered.T @ X_centered) / (X.shape[0] - 1)  # Shape: (n_terms, n_terms)
 
         # Add regularization to covariance for numerical stability
-        self.poly_cov_ += 1e-6 * np.eye(self.poly_cov_.shape[0])
+        self.poly_cov_ += 1e-6 * torch.eye(self.poly_cov_.shape[0], device=self.device)
 
         # Precompute inverse for Mahalanobis distance
-        self.poly_cov_inv_ = np.linalg.inv(self.poly_cov_)
+        self.poly_cov_inv_ = torch.linalg.inv(self.poly_cov_)
 
         # Store training scores for percentile computation
         self.training_scores_ = self._compute_scores(X_hermite)
 
         return self
 
-    def _generate_hermite_features(self, X: np.ndarray) -> np.ndarray:
+    def _generate_hermite_features(self, X: torch.Tensor) -> torch.Tensor:
         r"""
         Generate Hermite polynomial features from PCA components.
 
-        Uses NumPy's probabilist's Hermite polynomials which are orthogonal
-        with respect to the standard normal distribution.
+        Uses PyTorch implementation of probabilist's Hermite polynomials which are
+        orthogonal with respect to the standard normal distribution.
 
         Parameters
         ----------
-        X : np.ndarray
+        X : torch.Tensor
             PCA components, shape (N, d) where d is number of PCA components.
 
         Returns
         -------
-        X_hermite : np.ndarray
+        X_hermite : torch.Tensor
             Hermite polynomial features, shape (N, M) where M is the number
             of polynomial terms.
 
@@ -254,8 +302,6 @@ class PCEDensityModel:
 
             H_0(x) = 1, \quad H_1(x) = x, \quad H_{n+1}(x) = x H_n(x) - n H_{n-1}(x)
         """
-        from itertools import product
-
         n_samples, n_dims = X.shape
         max_degree = self.poly_degree
 
@@ -273,7 +319,7 @@ class PCEDensityModel:
         indices = [(0,) * n_dims] + indices
 
         n_terms = len(indices)
-        X_hermite = np.zeros((n_samples, n_terms))
+        X_hermite = torch.zeros((n_samples, n_terms), device=self.device, dtype=X.dtype)
 
         # Precompute Hermite polynomials for each dimension and degree
         hermite_cache = {}
@@ -284,7 +330,7 @@ class PCEDensityModel:
 
         # Evaluate each multivariate Hermite term
         for i, idx in enumerate(indices):
-            term = np.ones(n_samples)
+            term = torch.ones(n_samples, device=self.device, dtype=X.dtype)
             for dim, deg in enumerate(idx):
                 if deg > 0:
                     term *= hermite_cache[dim][deg]
@@ -292,33 +338,44 @@ class PCEDensityModel:
 
         return X_hermite
 
-    def _hermite_poly(self, x: np.ndarray, degree: int) -> np.ndarray:
+    def _hermite_poly(self, x: torch.Tensor, degree: int) -> torch.Tensor:
         r"""
-        Evaluate probabilist's Hermite polynomial of given degree.
+        Evaluate probabilist's Hermite polynomial of given degree using PyTorch.
 
-        Uses NumPy's hermite polynomial implementation (numpy.polynomial.hermite_e).
+        Uses recursive definition:
+        - H_0(x) = 1
+        - H_1(x) = x
+        - H_{n+1}(x) = x * H_n(x) - n * H_{n-1}(x)
 
         Parameters
         ----------
-        x : np.ndarray
+        x : torch.Tensor
             Input values.
         degree : int
             Polynomial degree.
 
         Returns
         -------
-        np.ndarray
+        torch.Tensor
             Hermite polynomial evaluated at x.
         """
-        from numpy.polynomial.hermite_e import hermeval
+        if degree == 0:
+            return torch.ones_like(x)
+        elif degree == 1:
+            return x
+        
+        # Recursive computation
+        h_prev = torch.ones_like(x)  # H_0
+        h_curr = x  # H_1
+        
+        for n in range(1, degree):
+            h_next = x * h_curr - n * h_prev
+            h_prev = h_curr
+            h_curr = h_next
+        
+        return h_curr
 
-        # Create coefficient array (all zeros except for the degree term)
-        coef = np.zeros(degree + 1)
-        coef[degree] = 1.0
-
-        return hermeval(x, coef)
-
-    def score(self, X: np.ndarray) -> np.ndarray:
+    def score(self, X: torch.Tensor | np.ndarray) -> torch.Tensor:
         r"""
         Compute anomaly scores for new data using Hermite polynomial expansion.
 
@@ -327,12 +384,13 @@ class PCEDensityModel:
 
         Parameters
         ----------
-        X : np.ndarray
+        X : torch.Tensor or np.ndarray
             Features to score, shape :math:`(N, D)`.
+            If numpy array, will be converted to torch tensor.
 
         Returns
         -------
-        scores : np.ndarray
+        scores : torch.Tensor
             Anomaly scores, shape :math:`(N,)`. Higher values are more anomalous.
 
         Notes
@@ -350,14 +408,24 @@ class PCEDensityModel:
         This is the Mahalanobis distance in Hermite polynomial space, which accounts
         for correlations and scales appropriately with variance.
         """
-        if self.pca_ is None:
+        if self.pca_components_ is None:
             raise RuntimeError("Model must be fitted before scoring")
 
-        # Transform to Hermite polynomial space
-        X_scaled = self.scaler_.transform(X)
-        X_pca = self.pca_.transform(X_scaled)
+        # Convert to torch tensor if needed and move to device
+        if isinstance(X, np.ndarray):
+            X = torch.from_numpy(X).float().to(self.device)
+        elif isinstance(X, torch.Tensor):
+            X = X.float().to(self.device)
+        else:
+            raise TypeError(f"X must be np.ndarray or torch.Tensor, got {type(X)}")
 
-        # Trim to match training components
+        # Standardize
+        X_scaled = (X - self.pca_mean_) / self.pca_std_
+
+        # Project to PCA space
+        X_pca = X_scaled @ self.pca_components_  # Shape: (n_samples, n_components)
+
+        # Trim to match training components (should already match, but be safe)
         if X_pca.shape[1] > self.n_pca_components_:
             X_pca = X_pca[:, :self.n_pca_components_]
 
@@ -366,19 +434,20 @@ class PCEDensityModel:
         # Compute Mahalanobis distance
         return self._compute_scores(X_hermite)
 
-    def _compute_scores(self, X_poly: np.ndarray) -> np.ndarray:
+    def _compute_scores(self, X_poly: torch.Tensor) -> torch.Tensor:
         """Compute Mahalanobis distance for polynomial features."""
         # Center the data
-        X_centered = X_poly - self.poly_mean_
+        X_centered = X_poly - self.poly_mean_.unsqueeze(0)
 
         # Mahalanobis distance: sqrt((x - mu)^T Sigma^-1 (x - mu))
-        mahal_dist = np.sqrt(
-            np.sum(X_centered @ self.poly_cov_inv_ * X_centered, axis=1)
+        # Using einsum for efficiency: (x-mu) @ Sigma^-1 @ (x-mu)^T
+        mahal_dist = torch.sqrt(
+            torch.sum(X_centered @ self.poly_cov_inv_ * X_centered, dim=1)
         )
 
         return mahal_dist
 
-    def percentiles(self, scores: np.ndarray) -> np.ndarray:
+    def percentiles(self, scores: torch.Tensor | np.ndarray) -> np.ndarray:
         r"""
         Convert anomaly scores to empirical percentiles.
 
@@ -388,7 +457,7 @@ class PCEDensityModel:
 
         Parameters
         ----------
-        scores : np.ndarray
+        scores : torch.Tensor or np.ndarray
             Anomaly scores from :meth:`score`.
 
         Returns
@@ -399,19 +468,30 @@ class PCEDensityModel:
         if self.training_scores_ is None:
             raise RuntimeError("Model must be fitted before computing percentiles")
 
+        # Convert to torch tensor if needed
+        if isinstance(scores, np.ndarray):
+            scores = torch.from_numpy(scores).to(self.device)
+        elif isinstance(scores, torch.Tensor):
+            scores = scores.to(self.device)
+        else:
+            raise TypeError(f"scores must be np.ndarray or torch.Tensor, got {type(scores)}")
+
+        # Validate training_scores_ is not empty
+        if len(self.training_scores_) == 0:
+            raise RuntimeError("Training scores are empty. Model may not have been fitted correctly.")
+        
         # Compute percentile of each score relative to training distribution
-        percentiles = np.array(
-            [
-                100.0 * (self.training_scores_ < score).sum() / len(self.training_scores_)
-                for score in scores
-            ]
-        )
+        # Using broadcasting for efficiency
+        scores_expanded = scores.unsqueeze(1)  # (n_scores, 1)
+        training_expanded = self.training_scores_.unsqueeze(0)  # (1, n_training)
+        percentiles = 100.0 * (training_expanded <= scores_expanded).sum(dim=1).float() / len(self.training_scores_)
 
-        return percentiles
+        # Convert to numpy for return
+        return percentiles.cpu().numpy()
 
-    def get_params(self) -> dict:
+    def get_state(self) -> dict:
         r"""
-        Get model parameters for serialization.
+        Get model state for serialization.
 
         Returns
         -------
@@ -423,36 +503,60 @@ class PCEDensityModel:
             "poly_degree": self.poly_degree,
             "interaction_only": self.interaction_only,
             "random_state": self.random_state,
-            "pca_": self.pca_,
-            "scaler_": self.scaler_,
             "hermite_degree_": self.hermite_degree_,
             "n_pca_components_": self.n_pca_components_,
-            "poly_mean_": self.poly_mean_,
-            "poly_cov_": self.poly_cov_,
-            "poly_cov_inv_": self.poly_cov_inv_,
-            "training_scores_": self.training_scores_,
+            "poly_mean_": self.poly_mean_.cpu().numpy() if self.poly_mean_ is not None else None,
+            "poly_cov_": self.poly_cov_.cpu().numpy() if self.poly_cov_ is not None else None,
+            "poly_cov_inv_": self.poly_cov_inv_.cpu().numpy() if self.poly_cov_inv_ is not None else None,
+            "training_scores_": self.training_scores_.cpu().numpy() if self.training_scores_ is not None else None,
             "n_features_in_": self.n_features_in_,
+            "pca_mean_": self.pca_mean_.cpu().numpy() if self.pca_mean_ is not None else None,
+            "pca_std_": self.pca_std_.cpu().numpy() if self.pca_std_ is not None else None,
+            "pca_components_": self.pca_components_.cpu().numpy() if self.pca_components_ is not None else None,
+            "pca_explained_variance_ratio_": self.pca_explained_variance_ratio_.cpu().numpy() if self.pca_explained_variance_ratio_ is not None else None,
         }
 
-    def set_params(self, params: dict) -> None:
+    def set_state(self, state: dict, device: str | torch.device) -> None:
         r"""
-        Set model parameters from dictionary (for deserialization).
+        Set model state from dictionary (for deserialization).
 
         Parameters
         ----------
-        params : dict
-            Dictionary of parameters from :meth:`get_params`.
+        state : dict
+            Dictionary of parameters from :meth:`get_state`.
+        device : str or torch.device
+            Device to load model on. Allows loading a model trained on one
+            device and using it on another device.
         """
-        self.n_components = params["n_components"]
-        self.poly_degree = params["poly_degree"]
-        self.interaction_only = params["interaction_only"]
-        self.random_state = params["random_state"]
-        self.pca_ = params["pca_"]
-        self.scaler_ = params["scaler_"]
-        self.hermite_degree_ = params["hermite_degree_"]
-        self.n_pca_components_ = params["n_pca_components_"]
-        self.poly_mean_ = params["poly_mean_"]
-        self.poly_cov_ = params["poly_cov_"]
-        self.poly_cov_inv_ = params["poly_cov_inv_"]
-        self.training_scores_ = params["training_scores_"]
-        self.n_features_in_ = params["n_features_in_"]
+        self.n_components = state["n_components"]
+        self.poly_degree = state["poly_degree"]
+        self.interaction_only = state["interaction_only"]
+        self.random_state = state["random_state"]
+        
+        # Set device (runtime parameter, not part of model state)
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
+        
+        self.hermite_degree_ = state["hermite_degree_"]
+        self.n_pca_components_ = state["n_pca_components_"]
+        self.n_features_in_ = state["n_features_in_"]
+        
+        # Convert numpy arrays back to torch tensors on device
+        if state["poly_mean_"] is not None:
+            self.poly_mean_ = torch.from_numpy(state["poly_mean_"]).float().to(self.device)
+        if state["poly_cov_"] is not None:
+            self.poly_cov_ = torch.from_numpy(state["poly_cov_"]).float().to(self.device)
+        if state["poly_cov_inv_"] is not None:
+            self.poly_cov_inv_ = torch.from_numpy(state["poly_cov_inv_"]).float().to(self.device)
+        if state["training_scores_"] is not None:
+            self.training_scores_ = torch.from_numpy(state["training_scores_"]).float().to(self.device)
+        if state["pca_mean_"] is not None:
+            self.pca_mean_ = torch.from_numpy(state["pca_mean_"]).float().to(self.device)
+        if state["pca_std_"] is not None:
+            self.pca_std_ = torch.from_numpy(state["pca_std_"]).float().to(self.device)
+        if state["pca_components_"] is not None:
+            self.pca_components_ = torch.from_numpy(state["pca_components_"]).float().to(self.device)
+        if state["pca_explained_variance_ratio_"] is not None:
+            self.pca_explained_variance_ratio_ = torch.from_numpy(state["pca_explained_variance_ratio_"]).float().to(self.device)

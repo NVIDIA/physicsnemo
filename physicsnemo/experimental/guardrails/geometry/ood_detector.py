@@ -19,14 +19,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.mesh import Mesh as PhysicsNeMoMesh
 
 # Check for required dependencies
-check_version_spec("trimesh", "3.0.0", hard_fail=True)
-check_version_spec("scikit-learn", "1.0.0", hard_fail=True)
-
-import trimesh
+check_version_spec("pyvista", "0.40.0", hard_fail=True)
 
 from .density_model import GeometryDensityModel
 from .feature_extraction import (
@@ -48,8 +47,8 @@ class GeometryGuardrail:
     probabilistic density model, and classifies new geometries as OK, WARN,
     or REJECT based on configurable percentile thresholds.
 
-    Supports multiple density estimation methods: Gaussian Mixture Model (GMM, CPU and GPU)
-    and Polynomial Chaos Expansion (PCE, CPU only) for improved performance on large datasets.
+    Supports multiple density estimation methods: Gaussian Mixture Model (GMM) and
+    Polynomial Chaos Expansion (PCE).
 
     Parameters
     ----------
@@ -79,10 +78,11 @@ class GeometryGuardrail:
     random_state : int or None, optional
         Random seed for reproducible initialization. Use ``None`` for
         non-deterministic behavior. Default is 0.
-    device : str, optional
-        Device to use for density model computation. Options:
-        - ``"cpu"``: Use scikit-learn on CPU (default, always available)
-        - ``"cuda"``: Use PyTorch GMM on GPU (requires PyTorch and CUDA, GMM only)
+    device : str or torch.device, optional
+        Device to use for all computations (mesh operations, feature extraction,
+        and density models). Options:
+        - ``"cpu"``: Use CPU (default)
+        - ``"cuda"``: Use GPU
         - ``"cuda:0"``, ``"cuda:1"``, etc.: Specific GPU device
         Default is ``"cpu"``.
 
@@ -100,24 +100,25 @@ class GeometryGuardrail:
         Feature schema version identifier.
     feature_hash : str
         Cryptographic hash of the feature schema for compatibility checking.
-    device : str
-        Device being used for density model computation.
+    device : str or torch.device
+        Device being used for all computations.
 
     Examples
     --------
     CPU-based (default):
 
-    >>> import trimesh
+    >>> import pyvista as pv
     >>> from pathlib import Path
+    >>> from physicsnemo.mesh.io import from_pyvista
     >>> from physicsnemo.experimental.guardrails import GeometryGuardrail
     >>> 
     >>> # Create and fit guardrail from training meshes (CPU)
-    >>> train_meshes = [trimesh.creation.box() for _ in range(100)]
+    >>> train_meshes = [from_pyvista(pv.Cube()) for _ in range(100)]
     >>> guardrail = GeometryGuardrail(n_components=1, device="cpu")
     >>> guardrail.fit(train_meshes)
     >>> 
     >>> # Query new geometries
-    >>> test_meshes = [trimesh.creation.sphere(), trimesh.creation.cylinder()]
+    >>> test_meshes = [from_pyvista(pv.Sphere()), from_pyvista(pv.Cylinder())]
     >>> results = guardrail.query(test_meshes)
     >>> for res in results:
     ...     print(f"Status: {res['status']}, Percentile: {res['percentile']:.1f}")
@@ -188,12 +189,12 @@ class GeometryGuardrail:
 
     .. important::
 
-        This guardrail requires the optional dependencies ``trimesh`` and
-        ``scikit-learn``
+        This guardrail requires the optional dependencies ``pyvista`` and
+        ``torch``
 
         .. code-block:: bash
 
-            pip install trimesh scikit-learn
+            pip install pyvista
 
     See Also
     --------
@@ -225,7 +226,12 @@ class GeometryGuardrail:
 
         self.warn_pct = warn_pct
         self.reject_pct = reject_pct
-        self.device = device
+        
+        # Parse device
+        if isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            self.device = device
         
         # Store method parameters for serialization
         self.method = method
@@ -240,7 +246,7 @@ class GeometryGuardrail:
             poly_degree=poly_degree,
             interaction_only=interaction_only,
             random_state=random_state,
-            device=device,
+            device=self.device,  # Use parsed device
         )
 
         self.feature_names = FEATURE_NAMES
@@ -251,18 +257,19 @@ class GeometryGuardrail:
     # Fitting
     # -------------------------------------------------------------------------
 
-    def fit(self, meshes: list[trimesh.Trimesh]) -> None:
+    def fit(self, meshes: list[PhysicsNeMoMesh]) -> None:
         r"""
-        Fit guardrail from a list of Trimesh objects.
+        Fit guardrail from a list of physicsnemo.mesh.Mesh objects.
 
         This method extracts features from all provided meshes and trains the
         density model to learn the distribution of in-distribution geometries.
 
         Parameters
         ----------
-        meshes : list[trimesh.Trimesh]
+        meshes : list[physicsnemo.mesh.Mesh]
             List of training meshes representing the in-distribution geometry space.
-            All meshes must pass validation checks.
+            All meshes must pass validation checks. Meshes will be moved to the
+            device specified in the guardrail constructor.
 
         Raises
         ------
@@ -282,13 +289,28 @@ class GeometryGuardrail:
 
         After fitting, the guardrail is ready to query new geometries.
         """
-        # Extract features from all meshes
-        X = np.vstack([extract_features(m) for m in meshes])
+        # Validate input
+        if not meshes:
+            raise ValueError("Cannot fit on empty list of meshes")
         
-        # Validate feature array
-        FeatureSchema.validate_array(X)
+        # Move meshes to device and extract features as tensors
+        features_list = []
         
-        # Fit density model
+        for mesh in meshes:
+            # Move mesh to device if not already there
+            mesh_on_device = mesh.to(self.device)
+            # Extract features as tensor (stays on device)
+            feat = extract_features(mesh_on_device, return_tensor=True)
+            features_list.append(feat)
+        
+        # Stack features into tensor
+        X = torch.stack(features_list)  # Shape: (N, 22)
+        
+        # Validate feature array (convert to numpy for validation)
+        X_np = X.cpu().numpy()
+        FeatureSchema.validate_array(X_np)
+        
+        # Fit density model (accepts torch tensor)
         self.density.fit(X)
 
     def fit_from_dir(self, stl_dir: Path, **loader_kwargs) -> None:
@@ -327,14 +349,22 @@ class GeometryGuardrail:
         --------
         :func:`load_features_from_dir` : Parallel STL loading and feature extraction.
         """
+        # Load features (always on CPU in workers)
         feats, _ = load_features_from_dir(stl_dir, **loader_kwargs)
-        self.density.fit(np.vstack(feats))
+        
+        # Validate that we have features
+        if not feats:
+            raise ValueError("No valid features extracted from STL files")
+        
+        # Convert to torch tensor and move to device
+        X = torch.from_numpy(np.vstack(feats)).float().to(self.device)
+        self.density.fit(X)
 
     # -------------------------------------------------------------------------
     # Querying
     # -------------------------------------------------------------------------
 
-    def query(self, meshes: list[trimesh.Trimesh]) -> list[dict]:
+    def query(self, meshes: list[PhysicsNeMoMesh]) -> list[dict]:
         r"""
         Query guardrail for a list of meshes.
 
@@ -344,7 +374,7 @@ class GeometryGuardrail:
 
         Parameters
         ----------
-        meshes : list[trimesh.Trimesh]
+        meshes : list[physicsnemo.mesh.Mesh]
             List of query meshes to evaluate.
 
         Returns
@@ -374,11 +404,26 @@ class GeometryGuardrail:
         --------
         :meth:`query_from_dir` : Query geometries from a directory of STL files.
         """
-        # Extract features
-        X = np.vstack([extract_features(m) for m in meshes])
+        # Validate input
+        if not meshes:
+            raise ValueError("Cannot query empty list of meshes")
         
-        # Validate feature array
-        FeatureSchema.validate_array(X)
+        # Move meshes to device and extract features as tensors
+        features_list = []
+        
+        for mesh in meshes:
+            # Move mesh to device if not already there
+            mesh_on_device = mesh.to(self.device)
+            # Extract features as tensor (stays on device)
+            feat = extract_features(mesh_on_device, return_tensor=True)
+            features_list.append(feat)
+        
+        # Stack features into tensor
+        X = torch.stack(features_list)  # Shape: (N, 22)
+        
+        # Validate feature array (convert to numpy for validation)
+        X_np = X.cpu().numpy()
+        FeatureSchema.validate_array(X_np)
         
         # Compute scores and percentiles
         scores = self.density.score(X)
@@ -433,9 +478,15 @@ class GeometryGuardrail:
         :func:`load_features_from_dir` : Parallel STL loading and feature extraction.
         :meth:`query` : Query individual mesh objects.
         """
-        # Load features from directory
+        # Load features (always on CPU in workers)
         feats, names = load_features_from_dir(stl_dir, **loader_kwargs)
-        X = np.vstack(feats)
+        
+        # Validate that we have features
+        if not feats:
+            raise ValueError("No valid features extracted from STL files")
+        
+        # Convert to torch tensor and move to device
+        X = torch.from_numpy(np.vstack(feats)).float().to(self.device)
 
         # Compute scores and percentiles
         scores = self.density.score(X)
@@ -497,7 +548,7 @@ class GeometryGuardrail:
         -----
         The saved file contains:
 
-        - ``gmm``: Fitted :class:`sklearn.mixture.GaussianMixture` object
+        - ``density_state``: Fitted density model state (GMM or PCE)
         - ``ref_scores``: Reference anomaly scores from training data
         - ``warn_pct``: Warning percentile threshold
         - ``reject_pct``: Rejection percentile threshold
@@ -535,7 +586,7 @@ class GeometryGuardrail:
         )
 
     @classmethod
-    def load(cls, path: Path, device: str = "cpu") -> "GeometryGuardrail":
+    def load(cls, path: Path, device: str | torch.device = "cpu") -> "GeometryGuardrail":
         r"""
         Load a serialized guardrail from disk.
 
@@ -617,7 +668,7 @@ class GeometryGuardrail:
             )
 
         # Reconstruct guardrail
-        # Extract all parameters (with defaults for backward compatibility)
+        # Extract all parameters
         method = str(data.get("method", "gmm"))
         n_components_raw = data.get("n_components", 1)
         # Handle None values (numpy may store as 0-d array or special object)
@@ -651,6 +702,6 @@ class GeometryGuardrail:
 
         # Restore density model state
         density_state = data["density_state"].item()
-        obj.density.set_state(density_state)
+        obj.density.set_state(density_state, device=obj.device)
 
         return obj

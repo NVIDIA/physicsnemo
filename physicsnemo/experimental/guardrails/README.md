@@ -24,32 +24,27 @@ unusual or unexpected shapes at inference time.
 This module requires optional dependencies:
 
 ```bash
-pip install trimesh scikit-learn
+pip install pyvista scikit-learn
 ```
 
-**For fast STL loading** (optional, experimental):
+**Mesh I/O**:
 
-The geometry guardrails include an adapter for optional Rust-based STL readers
-that can provide faster file I/O. The code will automatically detect and use
-any compatible reader installed in your environment, with graceful fallback to
-`trimesh`.
-
-This is recommended for processing large batches of STL files, but **not
-required**. See [Fast I/O](#fast-io-optional) below for implementation details
-if you want to build your own accelerator.
+The geometry guardrails use `physicsnemo.mesh` for mesh loading and processing,
+which provides GPU-accelerated mesh operations and uses PyVista for STL file I/O.
 
 ## Quick Start
 
 ### Basic Usage
 
 ```python
-import trimesh
+import pyvista as pv
+from physicsnemo.mesh.io import from_pyvista
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 
 # Load or create training meshes
 train_meshes = [
-    trimesh.load("part_001.stl", force="mesh"),
-    trimesh.load("part_002.stl", force="mesh"),
+    from_pyvista(pv.read("part_001.stl")),
+    from_pyvista(pv.read("part_002.stl")),
     # ... more training data
 ]
 
@@ -62,7 +57,7 @@ guardrail = GeometryGuardrail(
 guardrail.fit(train_meshes)
 
 # Query new geometries
-test_meshes = [trimesh.load("new_part.stl", force="mesh")]
+test_meshes = [from_pyvista(pv.read("new_part.stl"))]
 results = guardrail.query(test_meshes)
 
 for res in results:
@@ -100,24 +95,15 @@ for r in flagged:
     print(f"  {r['name']}: {r['status']} (p={r['percentile']:.1f}%)")
 ```
 
-**Fast STL Loading**:
+**Batch Processing**:
 
-If you've installed the optional Rust STL reader:
+For large datasets, use the directory-based API with automatic parallel processing:
 
 ```python
-from physicsnemo.experimental.guardrails.geometry import is_fast_reader_available
-
-# Check if fast reader is available
-if is_fast_reader_available():
-    print("Using fast Rust-based STL reader")
-else:
-    print("Using trimesh (install stlreader for 5-10x faster I/O)")
-
-# Use fast reader for batch loading
 guardrail.fit_from_dir(
     Path("/path/to/stl/files"),
-    n_workers=16,            # More workers benefit from faster I/O
-    use_fast_reader=True,    # Enable fast Rust reader
+    n_workers=16,            # Use 16 CPU cores for parallel processing
+    chunksize=8,             # Process 8 files per worker task
 )
 ```
 
@@ -260,30 +246,6 @@ for r in results:
     elif r["status"] == "WARN":
         print(f"WARN: {r['name']} (p={r['percentile']:.1f}%) - may need review")
 ```
-
-## Fast I/O (Optional)
-
-The geometry guardrails include an adapter (`fast_stl.py`) that can utilize
-optional Rust-based STL readers for faster file I/O. This is useful for
-large-scale batch processing or large STL files.
-
-A reference Rust implementation is available in the repository at `stlreader/`
-(not built by default). Key features:
-
-- Uses `stl_io` crate for fast binary/ASCII parsing
-- Precomputes normals and areas during load
-- Integrates with NumPy via PyO3
-
-To build (requires Rust toolchain):
-
-```bash
-cd stlreader
-pip install maturin
-maturin develop --release
-```
-
-This is **entirely optional** and intended for users with high-performance
-requirements.
 
 ## TODO: Future Enhancements (Contributions Welcome!)
 

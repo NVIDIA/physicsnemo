@@ -20,25 +20,28 @@ import multiprocessing as mp
 from pathlib import Path
 
 import numpy as np
-import trimesh
+
+from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 from .feature_extraction import extract_features
+from .mesh_validation import validate_mesh
 
+# Check for required dependencies
+check_version_spec("pyvista", "0.40.0", hard_fail=True)
 
-def _process_stl(path_str: str, use_fast_reader: bool = False) -> tuple[str, np.ndarray | None, str | None]:
+def _process_stl(path_str: str) -> tuple[str, np.ndarray | None, str | None]:
     r"""
     Load and extract features from a single STL file.
 
     This is a worker function designed for use with multiprocessing.Pool.
     It handles all exceptions internally to prevent pool crashes.
+    All processing is done on CPU to avoid OOM issues in multiprocessing.
 
     Parameters
     ----------
     path_str : str
-        String path to the STL file.
-    use_fast_reader : bool, optional
-        If True, attempt to use fast Rust reader. Falls back to trimesh
-        if not available. Default is False.
+        String path to the STL file
 
     Returns
     -------
@@ -48,39 +51,62 @@ def _process_stl(path_str: str, use_fast_reader: bool = False) -> tuple[str, np.
         - Feature array (np.ndarray) if successful, None if failed
         - Error message (str) if failed, None if successful
     """
+    import pyvista as pv
+
     path = Path(path_str)
+    
     try:
-        # Try fast reader first if requested
-        if use_fast_reader:
-            try:
-                from .fast_stl import load_stl_fast
-
-                mesh = load_stl_fast(path)
-            except (ImportError, Exception) as e:
-                # Fall back to trimesh on any error
-                if not isinstance(e, ImportError):
-                    # Log non-import errors (parsing failures, etc.)
-                    pass  # Silent fallback for now
-                mesh = trimesh.load(path, force="mesh")
-        else:
-            mesh = trimesh.load(path, force="mesh")
-
-        # Handle Scene objects (convert to single mesh)
-        if isinstance(mesh, trimesh.Scene):
-            # Concatenate all geometries in the scene
-            mesh = trimesh.util.concatenate(list(mesh.geometry.values()))
-
-        feat = extract_features(mesh)
+        # Load STL file using PyVista
+        pv_mesh = pv.read(str(path))
+        
+        # Handle multi-block datasets (e.g., multiple meshes in one file)
+        if isinstance(pv_mesh, pv.MultiBlock):
+            # Extract first mesh from multi-block
+            if len(pv_mesh) == 0:
+                raise ValueError("Multi-block dataset is empty")
+            pv_mesh = pv_mesh[0]
+        
+        # Check if mesh has any points before conversion
+        if pv_mesh.n_points == 0:
+            raise ValueError("Mesh has no points")
+        
+        # Check if mesh has faces (for surface meshes)
+        # PyVista meshes loaded from STL should have faces
+        if hasattr(pv_mesh, 'n_faces') and pv_mesh.n_faces == 0:
+            # Try to extract faces from cells if available
+            if hasattr(pv_mesh, 'n_cells') and pv_mesh.n_cells == 0:
+                raise ValueError("Mesh has no faces or cells")
+        
+        # Convert PyVista mesh to physicsnemo.mesh.Mesh
+        # STL files are surface meshes (2D manifolds in 3D space)
+        # from_pyvista will automatically triangulate if needed
+        mesh = from_pyvista(pv_mesh, manifold_dim=2)
+        
+        # Verify mesh has cells after conversion
+        if mesh.n_cells == 0:
+            raise ValueError(f"Mesh has no cells after conversion (n_points={mesh.n_points})")
+        
+        # Validate mesh integrity (comprehensive checks)
+        validate_mesh(mesh)
+        
+        # Extract features on CPU (mesh is already on CPU from from_pyvista)
+        # Returns numpy array for multiprocessing compatibility
+        feat = extract_features(mesh, return_tensor=False, skip_validation=True)
+        
+        # Clean up to free memory
+        del mesh, pv_mesh
+        
         return path.name, feat, None
     except Exception as e:
-        return path.name, None, str(e)
+        # Include more context in error message for debugging
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        return path.name, None, error_msg
 
 
 def load_features_from_dir(
     stl_dir: Path,
     n_workers: int | None = None,
     chunksize: int = 8,
-    use_fast_reader: bool = False,
 ) -> tuple[list[np.ndarray], list[str]]:
     r"""
     Load and featurize all STL files in a directory using multiprocessing.
@@ -88,6 +114,10 @@ def load_features_from_dir(
     This function parallelizes feature extraction across multiple CPU cores
     for efficient processing of large mesh datasets. It automatically handles
     errors and skips invalid files while reporting statistics.
+    
+    All processing is done on CPU in worker processes to avoid OOM issues.
+    Features are returned as numpy arrays and can be moved to GPU in the
+    main process if needed.
 
     Parameters
     ----------
@@ -100,10 +130,6 @@ def load_features_from_dir(
     chunksize : int, optional
         Number of files to process per worker task. Larger values reduce
         communication overhead but may cause load imbalance. Default is 8.
-    use_fast_reader : bool, optional
-        If True, use fast Rust-based STL reader (requires ``stlreader``).
-        Provides 5-10x speedup for I/O. Falls back to trimesh if not available.
-        Default is False.
 
     Returns
     -------
@@ -128,16 +154,14 @@ def load_features_from_dir(
     if n_workers is None:
         n_workers = max(1, mp.cpu_count() - 1)
 
-    # Create list of (path, use_fast_reader) tuples for starmap
-    # This avoids pickling issues with local functions
-    tasks = [(path, use_fast_reader) for path in paths]
+    # Prepare arguments for worker function (just paths, no device)
+    tasks = paths
 
     # Use spawn context for cross-platform compatibility
     ctx = mp.get_context("spawn")
     with ctx.Pool(processes=n_workers) as pool:
         # Process files in parallel with unordered results
-        # Use starmap to pass multiple arguments
-        for name, feat, err in pool.starmap(_process_stl, tasks, chunksize=chunksize):
+        for name, feat, err in pool.map(_process_stl, tasks, chunksize=chunksize):
             if err is None:
                 feats.append(feat)
                 names.append(name)
@@ -154,5 +178,13 @@ def load_features_from_dir(
     # Report skipped files if any
     if errors:
         print(f"[geometry guardrail] Skipped {len(errors)} invalid geometries")
+        # Print error summary for debugging
+        from collections import Counter
+        error_types = Counter(err.split(":")[0] for err in errors)
+        print(f"[geometry guardrail] Error breakdown: {dict(error_types)}")
+        # Print first few unique errors for debugging
+        unique_errors = list(dict.fromkeys(errors))[:5]
+        for i, err in enumerate(unique_errors, 1):
+            print(f"[geometry guardrail]   Example error {i}: {err}")
 
     return feats, names
