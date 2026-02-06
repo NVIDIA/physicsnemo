@@ -436,6 +436,15 @@ def _draw_3d(
 
             if active_scalar_source == "cells" and cell_scalar_values is not None:
                 facecolors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+            elif active_scalar_source == "points" and point_scalar_values is not None:
+                # Map per-vertex scalars to per-face colors by averaging each
+                # face's vertex RGBA values.  This avoids a separate scatter
+                # overlay that matplotlib cannot correctly depth-sort against
+                # Poly3DCollection faces (painter's algorithm limitation).
+                vertex_colors = scalar_mapper.to_rgba(
+                    point_scalar_values.cpu().numpy()
+                )  # (n_points, 4)
+                facecolors = vertex_colors[cells_np].mean(axis=1)  # (n_faces, 4)
             else:
                 facecolors = cell_neutral_color
 
@@ -464,7 +473,15 @@ def _draw_3d(
             pass  # Handle tetrahedra by extracting surface in future version
 
     ### Draw points
-    if alpha_points > 0:
+    # For 3D surface meshes, skip the scatter overlay: matplotlib cannot
+    # depth-sort scatter points against Poly3DCollection faces (painter's
+    # algorithm limitation).  Vertices are visible at face corners via edges,
+    # and point scalars are mapped onto face colors above.
+    has_opaque_surface = (
+        cells_np.shape[0] > 0 and cells_np.shape[1] - 1 == 2 and alpha_cells > 0
+    )
+
+    if alpha_points > 0 and not has_opaque_surface:
         if active_scalar_source == "points" and point_scalar_values is not None:
             colors = scalar_mapper.to_rgba(point_scalar_values.cpu().numpy())
         else:
