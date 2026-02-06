@@ -889,9 +889,19 @@ class Mesh:
                     )
             # Check that all cell_data dicts have the same keys across all meshes
             # (ignoring internal cache keys stored under CACHE_KEY)
-            ref_keys = set(meshes[0].cell_data.exclude(CACHE_KEY).keys())
+            ref_keys = set(
+                meshes[0]
+                .cell_data.exclude(CACHE_KEY)
+                .keys(include_nested=True, leaves_only=True)
+            )
             if not all(
-                set(m.cell_data.exclude(CACHE_KEY).keys()) == ref_keys for m in meshes
+                set(
+                    m.cell_data.exclude(CACHE_KEY).keys(
+                        include_nested=True, leaves_only=True
+                    )
+                )
+                == ref_keys
+                for m in meshes
             ):
                 raise ValueError("All meshes must have the same cell_data keys.")
 
@@ -1210,14 +1220,22 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            for key in self.cell_data.exclude(CACHE_KEY).keys():
-                if key in self.point_data.keys():
-                    raise ValueError(
-                        f"Key {key!r} already exists in point_data. "
-                        f"Set overwrite_keys=True to overwrite."
-                    )
+            src_keys = set(
+                self.cell_data.exclude(CACHE_KEY).keys(
+                    include_nested=True, leaves_only=True
+                )
+            )
+            dst_keys = set(
+                self.point_data.keys(include_nested=True, leaves_only=True)
+            )
+            conflicts = src_keys & dst_keys
+            if conflicts:
+                raise ValueError(
+                    f"Keys {conflicts} already exist in point_data. "
+                    f"Set overwrite_keys=True to overwrite."
+                )
 
-        ### Convert each cell data field to point data
+        ### Convert each cell data field to point data via scatter aggregation
         new_point_data = self.point_data.clone()
 
         # Get flat list of point indices and corresponding cell indices
@@ -1234,21 +1252,17 @@ class Mesh:
             self.n_cells, device=self.points.device
         ).repeat_interleave(n_vertices_per_cell)
 
-        for key, cell_values in self.cell_data.exclude(CACHE_KEY).items():
-            ### Use scatter aggregation utility to average cell values to points
-            # Expand cell values to one entry per vertex
-            src_data = cell_values[cell_indices]
-
-            # Aggregate to points using mean
-            point_values = scatter_aggregate(
-                src_data=src_data,
+        converted = self.cell_data.exclude(CACHE_KEY).apply(
+            lambda cell_values: scatter_aggregate(
+                src_data=cell_values[cell_indices],
                 src_to_dst_mapping=point_indices,
                 n_dst=self.n_points,
                 weights=None,
                 aggregation="mean",
-            )
-
-            new_point_data[key] = point_values
+            ),
+            batch_size=torch.Size([self.n_points]),
+        )
+        new_point_data.update(converted)
 
         ### Return new mesh with updated point data
         return Mesh(
@@ -1290,25 +1304,29 @@ class Mesh:
         """
         ### Check for key conflicts
         if not overwrite_keys:
-            for key in self.point_data.exclude(CACHE_KEY).keys():
-                if key in self.cell_data.keys():
-                    raise ValueError(
-                        f"Key {key!r} already exists in cell_data. "
-                        f"Set overwrite_keys=True to overwrite."
-                    )
+            src_keys = set(
+                self.point_data.exclude(CACHE_KEY).keys(
+                    include_nested=True, leaves_only=True
+                )
+            )
+            dst_keys = set(
+                self.cell_data.keys(include_nested=True, leaves_only=True)
+            )
+            conflicts = src_keys & dst_keys
+            if conflicts:
+                raise ValueError(
+                    f"Keys {conflicts} already exist in cell_data. "
+                    f"Set overwrite_keys=True to overwrite."
+                )
 
-        ### Convert each point data field to cell data
+        ### Convert each point data field to cell data by averaging over cell vertices
         new_cell_data = self.cell_data.clone()
 
-        for key, point_values in self.point_data.exclude(CACHE_KEY).items():
-            # Get point values for each cell and average
-            # cell_point_values shape: (n_cells, n_vertices_per_cell, ...)
-            cell_point_values = point_values[self.cells]
-
-            # Average over vertices dimension (dim=1)
-            cell_values = cell_point_values.mean(dim=1)
-
-            new_cell_data[key] = cell_values
+        converted = self.point_data.exclude(CACHE_KEY).apply(
+            lambda point_values: point_values[self.cells].mean(dim=1),
+            batch_size=torch.Size([self.n_cells]),
+        )
+        new_cell_data.update(converted)
 
         ### Return new mesh with updated cell data
         return Mesh(
@@ -2459,15 +2477,9 @@ class Mesh:
         return Mesh(
             points=self.points,
             cells=self.cells,
-            point_data=self.point_data.exclude(CACHE_KEY)
-            if CACHE_KEY in self.point_data.keys()
-            else self.point_data,
-            cell_data=self.cell_data.exclude(CACHE_KEY)
-            if CACHE_KEY in self.cell_data.keys()
-            else self.cell_data,
-            global_data=self.global_data.exclude(CACHE_KEY)
-            if CACHE_KEY in self.global_data.keys()
-            else self.global_data,
+            point_data=self.point_data.exclude(CACHE_KEY),
+            cell_data=self.cell_data.exclude(CACHE_KEY),
+            global_data=self.global_data.exclude(CACHE_KEY),
         )
 
 

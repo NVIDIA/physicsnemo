@@ -638,24 +638,24 @@ def _accumulate_sampled_data(
         )
 
     source_data = mesh.cell_data if data_source == "cells" else mesh.point_data
-    result = TensorDict({}, batch_size=torch.Size([n_queries]), device=device)
+    cells = mesh.cells  # captured for point-data interpolation below
 
-    for key, values in source_data.exclude(CACHE_KEY).items():
+    def _accumulate_field(values: torch.Tensor) -> torch.Tensor:
+        """Scatter-accumulate a single data field across query points."""
         output_shape = (n_queries,) + values.shape[1:]
         output = torch.full(
             output_shape, float("nan"), dtype=values.dtype, device=device
         )
 
         if len(query_indices) == 0:
-            result[key] = output
-            continue
+            return output
 
         ### Compute per-pair values
         if data_source == "cells":
             pair_values = values[cell_indices]
         else:
             assert bary_coords is not None  # guaranteed when len(query_indices) > 0
-            point_idx = mesh.cells[cell_indices]
+            point_idx = cells[cell_indices]
             point_vals = values[point_idx]
 
             if values.ndim == 1:
@@ -698,8 +698,15 @@ def _accumulate_sampled_data(
                 has_single = single_cell_mask[query_indices]
                 output[query_indices[has_single]] = pair_values[has_single]
 
-        result[key] = output
+        return output
 
+    # apply() always returns a TensorDict here (our fn never returns None),
+    # but the generic return type is TensorDict | None.
+    result = source_data.exclude(CACHE_KEY).apply(
+        _accumulate_field,
+        batch_size=torch.Size([n_queries]),
+    )
+    assert isinstance(result, TensorDict)
     return result
 
 

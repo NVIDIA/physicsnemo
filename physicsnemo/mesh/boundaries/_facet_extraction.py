@@ -512,50 +512,48 @@ def extract_facet_mesh_data(
 
     if data_source == "cells":
         ### Aggregate data from parent cells
-        if len(parent_mesh.cell_data.keys()) > 0:
-            ### Filter out cached properties
-            filtered_cell_data = parent_mesh.cell_data.exclude(CACHE_KEY)
+        filtered_cell_data = parent_mesh.cell_data.exclude(CACHE_KEY)
 
-            if len(filtered_cell_data.keys()) > 0:
-                ### Compute facet centroids if needed for inverse_distance
-                facet_centroids = None
-                if data_aggregation == "inverse_distance":
-                    facet_points = parent_mesh.points[candidate_facets]
-                    facet_centroids = facet_points.mean(dim=1)
+        if len(filtered_cell_data.keys()) > 0:
+            ### Compute facet centroids if needed for inverse_distance
+            facet_centroids = None
+            if data_aggregation == "inverse_distance":
+                facet_points = parent_mesh.points[candidate_facets]
+                facet_centroids = facet_points.mean(dim=1)
 
-                ### Prepare parent cell areas and centroids if needed
-                parent_cell_areas = None
-                parent_cell_centroids = None
+            ### Prepare parent cell areas and centroids if needed
+            parent_cell_areas = None
+            parent_cell_centroids = None
 
-                if data_aggregation == "area_weighted":
-                    parent_cell_areas = parent_mesh.cell_areas
-                if data_aggregation == "inverse_distance":
-                    parent_cell_centroids = parent_mesh.cell_centroids
+            if data_aggregation == "area_weighted":
+                parent_cell_areas = parent_mesh.cell_areas
+            if data_aggregation == "inverse_distance":
+                parent_cell_centroids = parent_mesh.cell_centroids
 
-                ### Compute aggregation weights
-                weights = compute_aggregation_weights(
-                    aggregation_strategy=data_aggregation,
-                    parent_cell_areas=parent_cell_areas,
-                    parent_cell_centroids=parent_cell_centroids,
-                    facet_centroids=facet_centroids,
-                    parent_cell_indices=parent_cell_indices,
-                )
+            ### Compute aggregation weights
+            weights = compute_aggregation_weights(
+                aggregation_strategy=data_aggregation,
+                parent_cell_areas=parent_cell_areas,
+                parent_cell_centroids=parent_cell_centroids,
+                facet_centroids=facet_centroids,
+                parent_cell_indices=parent_cell_indices,
+            )
 
-                ### Aggregate data from parent cells to unique facets
-                facet_cell_data = filtered_cell_data.apply(
-                    lambda tensor: _aggregate_tensor_data(
-                        tensor,
-                        parent_cell_indices,
-                        inverse_indices,
-                        n_unique_facets,
-                        weights,
-                    ),
-                    batch_size=torch.Size([n_unique_facets]),
-                )
+            ### Aggregate data from parent cells to unique facets
+            facet_cell_data = filtered_cell_data.apply(
+                lambda tensor: _aggregate_tensor_data(
+                    tensor,
+                    parent_cell_indices,
+                    inverse_indices,
+                    n_unique_facets,
+                    weights,
+                ),
+                batch_size=torch.Size([n_unique_facets]),
+            )
 
     elif data_source == "points":
         ### Aggregate data from facet vertices
-        if len(parent_mesh.point_data.keys()) > 0:
+        if len(parent_mesh.point_data.exclude(CACHE_KEY).keys()) > 0:
             facet_cell_data = _aggregate_point_data_to_facets(
                 point_data=parent_mesh.point_data,
                 candidate_facets=candidate_facets,

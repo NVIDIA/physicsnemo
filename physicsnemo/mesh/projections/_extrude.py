@@ -259,11 +259,12 @@ def extrude(
             end_idx = (child_idx + 1) * n_original_cells
             extruded_cells[start_idx:end_idx] = child_cells
 
-    ### Propagate data
+    ### Propagate data (excluding cached properties, which depend on geometry)
+    filtered_point_data = mesh.point_data.exclude(CACHE_KEY)
+    filtered_cell_data = mesh.cell_data.exclude(CACHE_KEY)
+
     # Point data: concatenate original and copy for extruded points
-    if mesh.point_data is not None and len(mesh.point_data.keys()) > 0:
-        # Exclude cached data before concatenation
-        filtered_point_data = mesh.point_data.exclude(CACHE_KEY)
+    if len(filtered_point_data.keys()) > 0:
         extruded_point_data = TensorDict.cat(
             [filtered_point_data, filtered_point_data.clone()],
             dim=0,
@@ -276,19 +277,10 @@ def extrude(
         )
 
     # Cell data: replicate each parent cell's data (N+1) times
-    if mesh.cell_data is not None and len(mesh.cell_data.keys()) > 0:
-        # Exclude cached data before replication
-        filtered_cell_data = mesh.cell_data.exclude(CACHE_KEY)
-
-        # Replicate: each cell's data appears n_children_per_parent times
-        # Use repeat_interleave to maintain parent-child grouping
-        extruded_cell_data = TensorDict(
-            {
-                key: value.repeat_interleave(n_children_per_parent, dim=0)
-                for key, value in filtered_cell_data.items()
-            },
+    if len(filtered_cell_data.keys()) > 0:
+        extruded_cell_data = filtered_cell_data.apply(
+            lambda t: t.repeat_interleave(n_children_per_parent, dim=0),
             batch_size=torch.Size([extruded_cells.shape[0]]),
-            device=extruded_cells.device,
         )
     else:
         extruded_cell_data = TensorDict(
