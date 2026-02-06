@@ -173,27 +173,60 @@ def from_pyvista(
         if lines_raw is None or len(lines_raw) == 0:
             cells = torch.empty((0, 2), dtype=torch.long)
         else:
-            # Parse the lines array and convert to line segments
-            cells_list = []
-            i = 0
-            while i < len(lines_raw):
-                n_points = lines_raw[i]
-                point_ids = lines_raw[i + 1 : i + 1 + n_points]
+            lines_array = np.asarray(lines_raw)
 
-                # Convert polyline to line segments (consecutive pairs)
-                cells_list.extend(
-                    [
-                        [point_ids[j], point_ids[j + 1]]
-                        for j in range(len(point_ids) - 1)
-                    ]
-                )
+            # Fast path: check if all line segments have uniform vertex count
+            # (common case — all edges have 2 vertices, stride = 3)
+            first_count = int(lines_array[0])
+            stride = first_count + 1
+            is_uniform = (
+                len(lines_array) % stride == 0
+                and len(lines_array) >= stride
+            )
+            if is_uniform:
+                n_segments = len(lines_array) // stride
+                reshaped = lines_array.reshape(n_segments, stride)
+                is_uniform = bool((reshaped[:, 0] == first_count).all())
 
-                i += n_points + 1
+            if is_uniform:
+                # Vectorized path: reshape and extract vertex columns
+                point_ids = reshaped[:, 1:]  # (n_segments, first_count)
 
-            if cells_list:
-                cells = torch.from_numpy(np.array(cells_list)).long()
+                # Convert polylines to consecutive line segments
+                if first_count == 2:
+                    # Already line segments — use directly
+                    cells = torch.from_numpy(point_ids.copy()).long()
+                else:
+                    # Polylines with >2 vertices: create consecutive pairs
+                    seg_starts = point_ids[:, :-1].reshape(-1)
+                    seg_ends = point_ids[:, 1:].reshape(-1)
+                    cells = torch.stack(
+                        [torch.from_numpy(seg_starts.copy()),
+                         torch.from_numpy(seg_ends.copy())],
+                        dim=1,
+                    ).long()
             else:
-                cells = torch.empty((0, 2), dtype=torch.long)
+                # Fallback: Python loop for non-uniform segment sizes
+                cells_list = []
+                i = 0
+                while i < len(lines_array):
+                    n_pts = int(lines_array[i])
+                    point_ids = lines_array[i + 1 : i + 1 + n_pts]
+
+                    # Convert polyline to line segments (consecutive pairs)
+                    cells_list.extend(
+                        [
+                            [point_ids[j], point_ids[j + 1]]
+                            for j in range(len(point_ids) - 1)
+                        ]
+                    )
+
+                    i += n_pts + 1
+
+                if cells_list:
+                    cells = torch.from_numpy(np.array(cells_list)).long()
+                else:
+                    cells = torch.empty((0, 2), dtype=torch.long)
 
     elif manifold_dim == 2:
         # Triangular cells - use regular_faces property

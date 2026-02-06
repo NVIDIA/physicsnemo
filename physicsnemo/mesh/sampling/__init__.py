@@ -32,12 +32,3 @@ from physicsnemo.mesh.sampling.sample_data import (
     find_nearest_cells,
     sample_data_at_points,
 )
-
-__all__ = [
-    "sample_random_points_on_cells",
-    "sample_data_at_points",
-    "find_containing_cells",
-    "find_all_containing_cells",
-    "find_nearest_cells",
-    "compute_barycentric_coordinates",
-]

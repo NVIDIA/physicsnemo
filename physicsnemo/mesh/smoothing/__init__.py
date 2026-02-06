@@ -21,5 +21,3 @@ important features like boundaries and sharp edges.
 """
 
 from physicsnemo.mesh.smoothing.laplacian import smooth_laplacian
-
-__all__ = ["smooth_laplacian"]

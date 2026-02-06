@@ -50,20 +50,3 @@ from physicsnemo.mesh.calculus.gradient import (
 from physicsnemo.mesh.calculus.laplacian import (
     compute_laplacian_points_dec,
 )
-
-__all__ = [
-    # High-level derivatives API
-    "compute_point_derivatives",
-    "compute_cell_derivatives",
-    # Gradient
-    "compute_gradient_points_lsq",
-    "compute_gradient_points_dec",
-    "compute_gradient_cells_lsq",
-    # Divergence
-    "compute_divergence_points_lsq",
-    "compute_divergence_points_dec",
-    # Curl
-    "compute_curl_points_lsq",
-    # Laplacian
-    "compute_laplacian_points_dec",
-]

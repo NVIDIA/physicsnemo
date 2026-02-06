@@ -21,5 +21,3 @@ This module provides data structures and algorithms for fast spatial queries:
 """
 
 from physicsnemo.mesh.spatial.bvh import BVH
-
-__all__ = ["BVH"]

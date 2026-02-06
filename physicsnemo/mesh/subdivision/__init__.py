@@ -38,9 +38,3 @@ Example:
 from physicsnemo.mesh.subdivision.butterfly import subdivide_butterfly
 from physicsnemo.mesh.subdivision.linear import subdivide_linear
 from physicsnemo.mesh.subdivision.loop import subdivide_loop
-
-__all__ = [
-    "subdivide_linear",
-    "subdivide_butterfly",
-    "subdivide_loop",
-]

@@ -25,5 +25,3 @@ This module provides functionality for:
 from physicsnemo.mesh.projections._embed import embed
 from physicsnemo.mesh.projections._extrude import extrude
 from physicsnemo.mesh.projections._project import project
-
-__all__ = ["embed", "extrude", "project"]

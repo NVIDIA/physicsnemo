@@ -43,5 +43,3 @@ Example:
 """
 
 from physicsnemo.mesh.remeshing._remeshing import remesh
-
-__all__ = ["remesh"]

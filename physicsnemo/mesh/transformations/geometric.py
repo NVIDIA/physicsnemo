@@ -164,7 +164,7 @@ def _build_rotation_matrix(
         return torch.stack([torch.stack([c, -s]), torch.stack([s, c])])
 
     ### 3D rotation using Rodrigues' formula: R = cI + s[u]_× + (1-c)(u⊗u)
-    axis = torch.as_tensor(axis, device=device, dtype=torch.float32)
+    axis = torch.as_tensor(axis, device=device, dtype=angle.dtype)
     if axis.shape != (3,):
         raise NotImplementedError(
             f"Rotation only supported for 2D (axis=None) or 3D (axis shape (3,)). "

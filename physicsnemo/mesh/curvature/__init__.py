@@ -50,9 +50,3 @@ from physicsnemo.mesh.curvature.gaussian import (
     gaussian_curvature_vertices,
 )
 from physicsnemo.mesh.curvature.mean import mean_curvature_vertices
-
-__all__ = [
-    "gaussian_curvature_vertices",
-    "gaussian_curvature_cells",
-    "mean_curvature_vertices",
-]

@@ -18,7 +18,7 @@
 
 This module provides functions to compute:
 - Cell-to-cells adjacency based on shared facets
-- Cells-to-points adjacency (vertices of each cell)
+- Cell-to-points adjacency (vertices of each cell)
 """
 
 from typing import TYPE_CHECKING
