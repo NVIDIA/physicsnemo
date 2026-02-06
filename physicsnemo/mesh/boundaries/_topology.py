@@ -186,8 +186,12 @@ def _check_edges_manifold(mesh: "Mesh") -> bool:
     """Check if edges satisfy manifold constraints.
 
     For 2D manifolds (triangles): Each edge should be shared by at most 2 triangles.
-    For 3D manifolds (tetrahedra): Each edge should have a valid "link" - the set of
-    facets (triangles) incident to the edge should form a topological disk or circle.
+    For 3D manifolds (tetrahedra): Each edge should have a valid "link" - the
+    codimension-1 faces (triangles) incident to the edge must form a single
+    connected chain (boundary edge) or cycle (interior edge). Two faces
+    containing the same edge are adjacent when their parent tets share a
+    codimension-1 facet that also contains the edge - equivalently, when the
+    two faces share a vertex besides the edge's two endpoints.
 
     Parameters
     ----------
@@ -205,52 +209,150 @@ def _check_edges_manifold(mesh: "Mesh") -> bool:
     if mesh.n_manifold_dims == 2:
         return True
 
-    ### For 3D meshes, extract edges (codimension-2 facets)
+    ### For 3D meshes, verify edge-link connectivity
     if mesh.n_manifold_dims == 3:
-        candidate_edges, parent_cell_indices = extract_candidate_facets(
-            mesh.cells,
-            manifold_codimension=2,
-        )
-
-        ### Find unique edges and their parent cells
-        unique_edges, inverse_indices = torch.unique(
-            candidate_edges,
-            dim=0,
-            return_inverse=True,
-        )
-
-        ### For each edge, check that the cells around it form a valid configuration
-        # In a manifold, the triangular faces around an edge should form a cycle
-        # (for interior edges) or a fan (for boundary edges)
-
-        ### Simple check: count cells per edge
-        # In a 3D manifold, an edge can be shared by any number of tetrahedra,
-        # but the triangular faces around the edge must form a valid fan/cycle
-
-        ### For now, we do a simpler check: ensure each edge appears in at least one cell
-        # A more sophisticated check would require analyzing the link of the edge
-        edge_counts = torch.zeros(
-            len(unique_edges), dtype=torch.int64, device=mesh.cells.device
-        )
-        edge_counts.scatter_add_(
-            dim=0,
-            index=inverse_indices,
-            src=torch.ones_like(inverse_indices),
-        )
-
-        ### All edges should be used by at least one cell
-        if torch.any(edge_counts == 0):
-            return False
-
-        ### Additional check: extract the triangular faces around each edge
-        # and verify they form a topological disk or circle
-        # This is more complex and requires analyzing face adjacency
-        # For now, we rely on the facet check which catches most non-manifold cases
-
-        return True
+        return _check_3d_edge_link_connectivity(mesh)
 
     ### For higher dimensions, we don't have specific checks yet
     return True
+
+
+def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
+    """Check that the face-link around every edge is connected (3D meshes).
+
+    For each edge in a 3D tetrahedral mesh, collect every codimension-1
+    face (triangle) that contains the edge. Two such faces are "link-
+    adjacent" when they share a third vertex (the non-edge vertex of each
+    face) via their parent tets sharing a triangular face that contains
+    the edge. All the faces around an edge must form a single connected
+    component; a disconnected link indicates a non-manifold edge.
+
+    The implementation is fully vectorized via union-find, following the
+    same pattern used in ``_check_3d_vertex_manifold``.
+
+    Parameters
+    ----------
+    mesh : Mesh
+        Input 3D tetrahedral mesh.
+
+    Returns
+    -------
+    bool
+        True if every edge has a connected face-link.
+    """
+    from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+
+    device = mesh.cells.device
+
+    ### Step 1: Extract candidate edges and their parent tets
+    candidate_edges, parent_cell_indices = extract_candidate_facets(
+        mesh.cells, manifold_codimension=2,
+    )
+    # candidate_edges: (n_candidate_edges, 2), parent_cell_indices: (n_candidate_edges,)
+
+    ### Step 2: Map each candidate edge to a unique edge index
+    unique_edges, edge_inverse = torch.unique(
+        candidate_edges, dim=0, return_inverse=True,
+    )
+    n_unique_edges = len(unique_edges)
+    n_candidates = len(candidate_edges)
+
+    if n_unique_edges == 0:
+        return True
+
+    ### Step 3: For each candidate edge, find the "third vertex" of the parent
+    # tet that is NOT one of the edge's two endpoints.  In a tet (4 vertices)
+    # with an edge occupying 2, there are 2 remaining vertices.  Each such
+    # (edge, third_vertex) triple identifies one face of the tet that contains
+    # the edge.  Two candidate edges that map to the same unique edge and
+    # share a third vertex came from tets that share a face containing the
+    # edge - making their link-faces adjacent.
+
+    tet_verts = mesh.cells[parent_cell_indices]  # (n_candidates, 4)
+    edge_v0 = candidate_edges[:, 0].unsqueeze(1)  # (n_candidates, 1)
+    edge_v1 = candidate_edges[:, 1].unsqueeze(1)  # (n_candidates, 1)
+
+    # Mask: which columns of each tet are NOT part of the edge
+    not_edge = (tet_verts != edge_v0) & (tet_verts != edge_v1)  # (n_candidates, 4)
+
+    # Extract the two non-edge vertices per candidate.
+    # not_edge has exactly 2 True values per row (for non-degenerate tets).
+    # Collect them into a (n_candidates, 2) tensor.
+    # Use a scatter trick: for each row, the True columns give the third vertices.
+    third_verts = tet_verts[not_edge].reshape(n_candidates, -1)  # (n_candidates, 2)
+
+    # If a tet is degenerate (edge vertex appears >2 times), third_verts may
+    # have fewer than 2 columns.  Skip the check for such edges.
+    if third_verts.shape[1] < 2:
+        return True
+
+    ### Step 4: Build adjacency between candidates that share both the same
+    # unique edge AND at least one third vertex.  Two candidates (c_a, c_b)
+    # are adjacent when edge_inverse[c_a] == edge_inverse[c_b] and they share
+    # a third vertex.
+    #
+    # Strategy: for each (unique_edge_id, third_vertex) pair, group the
+    # candidates that have that pair and union consecutive members.
+
+    # Expand: each candidate contributes two (edge_id, third_vert) keys.
+    # Use repeat_interleave so that entries i*2 and i*2+1 both correspond
+    # to candidate i (matching the interleaved layout of flatten()).
+    edge_ids_2x = edge_inverse.repeat_interleave(2)  # (2 * n_candidates,)
+    third_verts_flat = third_verts.flatten()  # (2 * n_candidates,)
+    cand_indices_2x = torch.arange(n_candidates, device=device).repeat_interleave(2)
+
+    # Composite sort key: (edge_id, third_vertex)
+    n_pts = mesh.n_points
+    sort_key = edge_ids_2x.long() * (n_pts + 1) + third_verts_flat.long()
+    sort_order = torch.argsort(sort_key)
+
+    sorted_cand = cand_indices_2x[sort_order]
+    sorted_key = sort_key[sort_order]
+
+    # Consecutive entries with the same key are candidates sharing an
+    # (edge, third_vertex) pair - they are link-adjacent.
+    same_key = sorted_key[:-1] == sorted_key[1:]
+    pair_a = sorted_cand[:-1][same_key]
+    pair_b = sorted_cand[1:][same_key]
+
+    ### Step 5: Union-find over candidates to find connected components per edge
+    labels = torch.arange(n_candidates, dtype=torch.long, device=device)
+
+    if len(pair_a) > 0:
+        # Union: merge to smaller label (bidirectional)
+        merge_from = torch.cat([
+            torch.maximum(pair_a, pair_b),
+            torch.maximum(pair_b, pair_a),
+        ])
+        merge_to = torch.cat([
+            torch.minimum(pair_a, pair_b),
+            torch.minimum(pair_b, pair_a),
+        ])
+        labels.scatter_reduce_(0, merge_from, merge_to, reduce="amin")
+
+        # Path compression
+        for _ in range(100):
+            prev = labels.clone()
+            labels = labels[labels]
+            if torch.equal(labels, prev):
+                break
+
+    ### Step 6: Check single connected component per unique edge.
+    # For each unique edge, all candidate entries must share the same root.
+    min_labels = torch.full(
+        (n_unique_edges,), n_candidates, dtype=torch.long, device=device,
+    )
+    max_labels = torch.zeros(n_unique_edges, dtype=torch.long, device=device)
+    min_labels.scatter_reduce_(0, edge_inverse, labels, reduce="amin")
+    max_labels.scatter_reduce_(0, edge_inverse, labels, reduce="amax")
+
+    # Count candidates per edge to identify edges with 2+ tets (others are
+    # trivially connected since they have a single candidate).
+    edge_counts = torch.zeros(n_unique_edges, dtype=torch.long, device=device)
+    edge_counts.scatter_add_(0, edge_inverse, torch.ones_like(edge_inverse))
+    multi = edge_counts >= 2
+
+    return bool(torch.all(min_labels[multi] == max_labels[multi]))
 
 
 def _check_vertices_manifold(mesh: "Mesh") -> bool:

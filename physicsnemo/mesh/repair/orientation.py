@@ -174,6 +174,15 @@ def fix_orientation(
             # Determine orientation using normals (vectorized over entire next_front)
             if mesh.n_spatial_dims == 3 and mesh.codimension == 1:
                 parent_normals = mesh.cell_normals[parent_faces_for_neighbors]
+
+                # Account for parents that were themselves flipped in a prior
+                # BFS iteration.  Their effective normal is the negation of the
+                # stored (original) normal.
+                parent_flip_sign = torch.where(
+                    should_flip[parent_faces_for_neighbors], -1.0, 1.0
+                ).unsqueeze(-1)  # (n_next, 1) for broadcasting over spatial dims
+                parent_normals = parent_normals * parent_flip_sign
+
                 neighbor_normals = mesh.cell_normals[next_front]
 
                 # Dot product: negative means opposite orientation
