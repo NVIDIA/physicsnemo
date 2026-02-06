@@ -32,7 +32,6 @@ def repair_mesh(
     remove_isolated: bool = True,
     fix_orientation: bool = False,  # Requires 3D, has loops
     fill_holes: bool = False,  # Expensive, opt-in
-    make_manifold: bool = False,  # Changes topology, opt-in
     tolerance: float = 1e-6,
     max_hole_edges: int = 10,
 ) -> tuple["Mesh", dict[str, dict]]:
@@ -47,7 +46,6 @@ def repair_mesh(
     3. Remove isolated points
     4. Fix orientation (if enabled)
     5. Fill holes (if enabled)
-    6. Make manifold (if enabled)
 
     Parameters
     ----------
@@ -63,8 +61,6 @@ def repair_mesh(
         Ensure consistent face normals (2D in 3D only).
     fill_holes : bool, optional
         Close boundary loops (expensive).
-    make_manifold : bool, optional
-        Split non-manifold edges (changes topology).
     tolerance : float, optional
         Absolute L2 distance threshold for merging duplicate points
         and area tolerance for degenerate cell detection.
@@ -98,7 +94,7 @@ def repair_mesh(
 
     ### Operation 2: Merge duplicate points (via clean_mesh)
     if merge_points:
-        from physicsnemo.mesh.boundaries._cleaning import clean_mesh
+        from physicsnemo.mesh.repair._cleaning import clean_mesh
 
         n_before = current_mesh.n_points
         current_mesh = clean_mesh(
@@ -145,14 +141,5 @@ def repair_mesh(
             all_stats["holes"] = stats
         else:
             all_stats["holes"] = {"skipped": "Only for 2D manifolds"}
-
-    ### Operation 6: Make manifold
-    if make_manifold:
-        raise NotImplementedError(
-            "Manifold repair (split_nonmanifold_edges) is not yet implemented.\n"
-            "This operation would duplicate vertices at non-manifold edges to make "
-            "the mesh manifold, but requires complex topology-preserving logic.\n"
-            "Set make_manifold=False to skip this operation."
-        )
 
     return current_mesh, all_stats

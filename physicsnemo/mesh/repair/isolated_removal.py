@@ -16,13 +16,13 @@
 
 """Remove isolated vertices from meshes.
 
-Thin wrapper around :func:`physicsnemo.mesh.boundaries._cleaning.remove_unused_points`
+Thin wrapper around :func:`physicsnemo.mesh.repair._cleaning.remove_unused_points`
 that accepts and returns :class:`Mesh` objects with statistics.
 """
 
 from typing import TYPE_CHECKING
 
-from physicsnemo.mesh.boundaries._cleaning import remove_unused_points
+from physicsnemo.mesh.repair._cleaning import remove_unused_points
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ def remove_isolated_vertices(
 
     Identifies vertices not referenced by any cell and removes them,
     updating cell indices accordingly. Delegates to
-    :func:`~physicsnemo.mesh.boundaries._cleaning.remove_unused_points`
+    :func:`~physicsnemo.mesh.repair._cleaning.remove_unused_points`
     for the core computation.
 
     Parameters
