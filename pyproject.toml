@@ -179,10 +179,6 @@ datapipes-extras = [
     "tfrecord",
     "netCDF4",
 ]
-experimental-extras = [
-    "pyvista>=0.40.0",
-    "scikit-learn>=1.0.0",
-]
 
 # Use case specific dependency groups.
 gnns = [
