@@ -470,6 +470,7 @@ def rotate(
         )
 
     rotation_matrix = _build_rotation_matrix(angle, axis, mesh.points.device)
+    rotation_matrix = rotation_matrix.to(dtype=mesh.points.dtype)
 
     ### Handle center by translate-rotate-translate
     if center is not None:
