@@ -79,7 +79,6 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
         Σ_vertices (K_i * A_i) = 2π * χ(M)
     where χ(M) is the Euler characteristic.
     """
-    device = mesh.points.device
     n_manifold_dims = mesh.n_manifold_dims
 
     ### Compute angle sums at each vertex

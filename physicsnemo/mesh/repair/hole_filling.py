@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.neighbors._adjacency import Adjacency, build_adjacency_from_pairs
+from physicsnemo.mesh.neighbors._adjacency import build_adjacency_from_pairs
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:

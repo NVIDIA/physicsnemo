@@ -126,7 +126,6 @@ class TestMortonCodes:
         # (not interleaved). Check that the first 50 sorted indices are all
         # from the same cluster.
         first_half = sorted_idx[:50]
-        second_half = sorted_idx[50:]
         first_from_a = (first_half < 50).sum()
         first_from_b = (first_half >= 50).sum()
 

@@ -72,14 +72,14 @@ def load(
     # Vectorized side cell generation (periodic in theta, open in height)
     i_idx = torch.arange(n_height - 1, device=device)
     j_idx = torch.arange(n_circ, device=device)
-    I, J = torch.meshgrid(i_idx, j_idx, indexing="ij")
-    I_flat = I.reshape(-1)
-    J_flat = J.reshape(-1)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    p00 = I_flat * n_circ + J_flat
-    p01 = I_flat * n_circ + (J_flat + 1) % n_circ
-    p10 = (I_flat + 1) * n_circ + J_flat
-    p11 = (I_flat + 1) * n_circ + (J_flat + 1) % n_circ
+    p00 = ii_flat * n_circ + jj_flat
+    p01 = ii_flat * n_circ + (jj_flat + 1) % n_circ
+    p10 = (ii_flat + 1) * n_circ + jj_flat
+    p11 = (ii_flat + 1) * n_circ + (jj_flat + 1) % n_circ
 
     tri1 = torch.stack([p00, p01, p10], dim=1)
     tri2 = torch.stack([p01, p11, p10], dim=1)

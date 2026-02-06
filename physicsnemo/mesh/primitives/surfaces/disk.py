@@ -90,14 +90,14 @@ def load(
     if n_radial > 1:
         i_idx = torch.arange(n_radial - 1, device=device)
         j_idx_outer = torch.arange(n_angular, device=device)
-        I, J = torch.meshgrid(i_idx, j_idx_outer, indexing="ij")
-        I_flat = I.reshape(-1)
-        J_flat = J.reshape(-1)
+        ii, jj = torch.meshgrid(i_idx, j_idx_outer, indexing="ij")
+        ii_flat = ii.reshape(-1)
+        jj_flat = jj.reshape(-1)
 
-        idx = 1 + I_flat * n_angular + J_flat
-        next_j_o = 1 + I_flat * n_angular + (J_flat + 1) % n_angular
-        idx_outer = 1 + (I_flat + 1) * n_angular + J_flat
-        next_j_outer = 1 + (I_flat + 1) * n_angular + (J_flat + 1) % n_angular
+        idx = 1 + ii_flat * n_angular + jj_flat
+        next_j_o = 1 + ii_flat * n_angular + (jj_flat + 1) % n_angular
+        idx_outer = 1 + (ii_flat + 1) * n_angular + jj_flat
+        next_j_outer = 1 + (ii_flat + 1) * n_angular + (jj_flat + 1) % n_angular
 
         tri1 = torch.stack([idx, next_j_o, idx_outer], dim=1)
         tri2 = torch.stack([next_j_o, next_j_outer, idx_outer], dim=1)

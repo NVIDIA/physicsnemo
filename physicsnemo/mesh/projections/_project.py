@@ -147,7 +147,12 @@ def project(
                     f"(valid range: 0 to {current_n_spatial_dims - 1})."
                 )
     else:
-        assert target_n_spatial_dims is not None  # for type narrowing
+        if (
+            target_n_spatial_dims is None
+        ):  # pragma: no cover — unreachable after validation above
+            raise ValueError(
+                "target_n_spatial_dims must not be None when keep_dims is None."
+            )
 
         if target_n_spatial_dims < 1:
             raise ValueError(

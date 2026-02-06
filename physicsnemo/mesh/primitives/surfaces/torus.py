@@ -74,14 +74,14 @@ def load(
     # Vectorized cell generation (closed in both u and v)
     i_idx = torch.arange(n_major, device=device)
     j_idx = torch.arange(n_minor, device=device)
-    I, J = torch.meshgrid(i_idx, j_idx, indexing="ij")
-    I_flat = I.reshape(-1)
-    J_flat = J.reshape(-1)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    idx = I_flat * n_minor + J_flat
-    next_i = ((I_flat + 1) % n_major) * n_minor + J_flat
-    next_j = I_flat * n_minor + (J_flat + 1) % n_minor
-    next_both = ((I_flat + 1) % n_major) * n_minor + (J_flat + 1) % n_minor
+    idx = ii_flat * n_minor + jj_flat
+    next_i = ((ii_flat + 1) % n_major) * n_minor + jj_flat
+    next_j = ii_flat * n_minor + (jj_flat + 1) % n_minor
+    next_both = ((ii_flat + 1) % n_major) * n_minor + (jj_flat + 1) % n_minor
 
     tri1 = torch.stack([idx, next_j, next_i], dim=1)
     tri2 = torch.stack([next_j, next_both, next_i], dim=1)

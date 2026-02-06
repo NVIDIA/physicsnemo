@@ -203,8 +203,6 @@ def _check_edges_manifold(mesh: "Mesh") -> bool:
     bool
         True if edges satisfy manifold constraints
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
-
     ### For 2D meshes, edges are codimension-1, already checked in _check_facets_manifold
     if mesh.n_manifold_dims == 2:
         return True

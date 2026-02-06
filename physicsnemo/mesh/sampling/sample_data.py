@@ -482,7 +482,6 @@ def find_nearest_cells(
         - projected_points: centroids of nearest cells, shape (n_queries, n_spatial_dims)
     """
     n_queries = query_points.shape[0]
-    device = mesh.points.device
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
 
     if bvh is not None and mesh.n_cells > 0 and n_queries > 0:
@@ -660,7 +659,12 @@ def _accumulate_sampled_data(
         if data_source == "cells":
             pair_values = values[cell_indices]
         else:
-            assert bary_coords is not None  # guaranteed when len(query_indices) > 0
+            if (
+                bary_coords is None
+            ):  # pragma: no cover — guaranteed when len(query_indices) > 0
+                raise RuntimeError(
+                    "bary_coords is unexpectedly None for non-empty query set."
+                )
             point_idx = cells[cell_indices]
             point_vals = values[point_idx]
 
@@ -712,7 +716,10 @@ def _accumulate_sampled_data(
         _accumulate_field,
         batch_size=torch.Size([n_queries]),
     )
-    assert isinstance(result, TensorDict)
+    if not isinstance(
+        result, TensorDict
+    ):  # pragma: no cover — apply() returns TensorDict here
+        raise TypeError(f"Expected TensorDict from apply(), got {type(result)}")
     return result
 
 

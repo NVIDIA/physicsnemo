@@ -517,7 +517,6 @@ def compute_cotan_weights_fem(
     local_pairs = list(combinations(range(n_verts_per_cell), 2))
     pair_i = torch.as_tensor([p[0] for p in local_pairs], device=device)
     pair_j = torch.as_tensor([p[1] for p in local_pairs], device=device)
-    n_pairs = len(local_pairs)
 
     # grad_dots: (n_cells, n_pairs) - one value per cell per local edge
     grad_dots = C[:, pair_i, pair_j]

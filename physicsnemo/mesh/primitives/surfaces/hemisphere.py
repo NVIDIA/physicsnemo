@@ -69,14 +69,14 @@ def load(
     # Vectorized cell generation (periodic in theta, open in phi)
     i_idx = torch.arange(phi_resolution - 1, device=device)
     j_idx = torch.arange(theta_resolution, device=device)
-    I, J = torch.meshgrid(i_idx, j_idx, indexing="ij")
-    I_flat = I.reshape(-1)
-    J_flat = J.reshape(-1)
+    ii, jj = torch.meshgrid(i_idx, j_idx, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    p00 = I_flat * theta_resolution + J_flat
-    p01 = I_flat * theta_resolution + (J_flat + 1) % theta_resolution
-    p10 = (I_flat + 1) * theta_resolution + J_flat
-    p11 = (I_flat + 1) * theta_resolution + (J_flat + 1) % theta_resolution
+    p00 = ii_flat * theta_resolution + jj_flat
+    p01 = ii_flat * theta_resolution + (jj_flat + 1) % theta_resolution
+    p10 = (ii_flat + 1) * theta_resolution + jj_flat
+    p11 = (ii_flat + 1) * theta_resolution + (jj_flat + 1) % theta_resolution
 
     tri1 = torch.stack([p00, p01, p10], dim=1)
     tri2 = torch.stack([p01, p11, p10], dim=1)

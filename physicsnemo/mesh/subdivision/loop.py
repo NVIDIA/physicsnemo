@@ -39,7 +39,6 @@ from physicsnemo.mesh.subdivision._topology import (
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
-    from physicsnemo.mesh.neighbors._adjacency import Adjacency
 
 
 def compute_loop_beta(valence: int) -> float:

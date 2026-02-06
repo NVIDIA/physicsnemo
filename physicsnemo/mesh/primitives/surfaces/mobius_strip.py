@@ -71,14 +71,14 @@ def load(
     # Regular cells (i < n_circ - 1): open in v, no twist
     i_reg = torch.arange(n_circ - 1, device=device)
     j_reg = torch.arange(n_width - 1, device=device)
-    I, J = torch.meshgrid(i_reg, j_reg, indexing="ij")
-    I_flat = I.reshape(-1)
-    J_flat = J.reshape(-1)
+    ii, jj = torch.meshgrid(i_reg, j_reg, indexing="ij")
+    ii_flat = ii.reshape(-1)
+    jj_flat = jj.reshape(-1)
 
-    idx_r = I_flat * n_width + J_flat
-    next_j_r = I_flat * n_width + J_flat + 1
-    next_i_r = (I_flat + 1) * n_width + J_flat
-    next_both_r = (I_flat + 1) * n_width + J_flat + 1
+    idx_r = ii_flat * n_width + jj_flat
+    next_j_r = ii_flat * n_width + jj_flat + 1
+    next_i_r = (ii_flat + 1) * n_width + jj_flat
+    next_both_r = (ii_flat + 1) * n_width + jj_flat + 1
 
     tri1_reg = torch.stack([idx_r, next_j_r, next_i_r], dim=1)
     tri2_reg = torch.stack([next_j_r, next_both_r, next_i_r], dim=1)
