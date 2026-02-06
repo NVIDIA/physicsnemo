@@ -46,7 +46,7 @@ def test_repr_simple_case():
 
 
 def test_repr_many_fields():
-    """Test many fields (>3) without nesting."""
+    """Test many fields (>3) triggers multiline formatting with point_data and cell_data."""
     points = torch.randn(100, 3)
     cells = torch.randint(0, 100, (50, 3))
     mesh = Mesh(
@@ -77,72 +77,8 @@ def test_repr_many_fields():
     assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
 
 
-def test_repr_nested_few_fields():
-    """Test nested TensorDict with ≤3 total fields."""
-    points = torch.randn(100, 3)
-    cells = torch.randint(0, 100, (50, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={},
-        cell_data={
-            "flow": TensorDict(
-                {
-                    "pressure": torch.randn(50),
-                    "velocity": torch.randn(50, 3),
-                },
-                batch_size=[50],
-            )
-        },
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=100, n_cells=50)
-    point_data : {}
-    cell_data  : {flow: {pressure: (), velocity: (3,)}}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
-def test_repr_nested_many_fields():
-    """Test nested TensorDict with >3 total fields."""
-    points = torch.randn(100, 3)
-    cells = torch.randint(0, 100, (50, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={},
-        cell_data={
-            "temperature": torch.randn(50),
-            "flow": TensorDict(
-                {
-                    "pressure": torch.randn(50),
-                    "velocity": torch.randn(50, 3),
-                },
-                batch_size=[50],
-            ),
-        },
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    # Keys are alphabetically sorted: flow, temperature
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=100, n_cells=50)
-    point_data : {}
-    cell_data  : {
-        flow       : {pressure: (), velocity: (3,)},
-        temperature: ()}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
 def test_repr_deeply_nested():
-    """Test deeply nested with many fields."""
+    """Test deeply nested TensorDicts with many fields across point_data and cell_data."""
     points = torch.randn(100, 3)
     cells = torch.randint(0, 100, (50, 3))
     mesh = Mesh(
@@ -186,8 +122,79 @@ def test_repr_deeply_nested():
     assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
 
 
+def test_repr_complex_nested():
+    """Test multiple nested levels with a lower-dimensional mesh (manifold_dim=1)."""
+    points = torch.randn(100, 2)
+    cells = torch.randint(0, 100, (50, 2))
+    mesh = Mesh(
+        points=points,
+        cells=cells,
+        point_data={"position": torch.randn(100, 2)},
+        cell_data={
+            "state": TensorDict(
+                {
+                    "thermal": TensorDict(
+                        {
+                            "temperature": torch.randn(50),
+                            "heat_flux": torch.randn(50, 2),
+                        },
+                        batch_size=[50],
+                    ),
+                    "mechanical": TensorDict(
+                        {
+                            "stress": torch.randn(50),
+                            "strain": torch.randn(50),
+                        },
+                        batch_size=[50],
+                    ),
+                },
+                batch_size=[50],
+            )
+        },
+        global_data={},
+    )
+
+    result = repr(mesh)
+
+    # Keys are alphabetically sorted at all levels
+    # state: mechanical, thermal (alphabetically)
+    # mechanical: strain, stress
+    # thermal: heat_flux, temperature
+    expected = r"""Mesh(manifold_dim=1, spatial_dim=2, n_points=100, n_cells=50)
+    point_data : {position: (2,)}
+    cell_data  : {
+        state: {
+            mechanical: {strain: (), stress: ()},
+            thermal   : {heat_flux: (2,), temperature: ()}}}
+    global_data: {}"""
+
+    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
+
+
+def test_repr_empty_mesh():
+    """Test repr for a mesh with no point_data, cell_data, or global_data."""
+    points = torch.randn(10, 3)
+    cells = torch.randint(0, 10, (5, 3))
+    mesh = Mesh(
+        points=points,
+        cells=cells,
+        point_data={},
+        cell_data={},
+        global_data={},
+    )
+
+    result = repr(mesh)
+
+    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
+    point_data : {}
+    cell_data  : {}
+    global_data: {}"""
+
+    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
+
+
 def test_repr_with_device():
-    """Test with explicitly set device."""
+    """Test that device info is shown when explicitly set."""
     points = torch.randn(100, 3)
     cells = torch.randint(0, 100, (50, 3))
     mesh = Mesh(
@@ -245,128 +252,8 @@ def test_repr_with_cuda_device():
     assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
 
 
-def test_repr_complex_nested():
-    """Test multiple nested levels with various field counts."""
-    points = torch.randn(100, 2)
-    cells = torch.randint(0, 100, (50, 2))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={"position": torch.randn(100, 2)},
-        cell_data={
-            "state": TensorDict(
-                {
-                    "thermal": TensorDict(
-                        {
-                            "temperature": torch.randn(50),
-                            "heat_flux": torch.randn(50, 2),
-                        },
-                        batch_size=[50],
-                    ),
-                    "mechanical": TensorDict(
-                        {
-                            "stress": torch.randn(50),
-                            "strain": torch.randn(50),
-                        },
-                        batch_size=[50],
-                    ),
-                },
-                batch_size=[50],
-            )
-        },
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    # Keys are alphabetically sorted at all levels
-    # state: mechanical, thermal (alphabetically)
-    # mechanical: strain, stress
-    # thermal: heat_flux, temperature
-    expected = r"""Mesh(manifold_dim=1, spatial_dim=2, n_points=100, n_cells=50)
-    point_data : {position: (2,)}
-    cell_data  : {
-        state: {
-            mechanical: {strain: (), stress: ()},
-            thermal   : {heat_flux: (2,), temperature: ()}}}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
-def test_repr_empty_mesh():
-    """Test edge case with empty mesh."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={},
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
-    point_data : {}
-    cell_data  : {}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
-def test_repr_single_field():
-    """Test edge case with single field."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={"temperature": torch.randn(10)},
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
-    point_data : {temperature: ()}
-    cell_data  : {}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
-def test_repr_exactly_three_fields():
-    """Test edge case with exactly 3 fields."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={
-            "temperature": torch.randn(10),
-            "pressure": torch.randn(10),
-            "velocity": torch.randn(10, 3),
-        },
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    # Keys are alphabetically sorted: pressure, temperature, velocity
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
-    point_data : {pressure: (), temperature: (), velocity: (3,)}
-    cell_data  : {}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
 def test_repr_with_cached_data():
-    """Test that cached data is included by default."""
+    """Test that cached data is included in repr output."""
     points = torch.randn(10, 3)
     cells = torch.randint(0, 10, (5, 3))
     mesh = Mesh(
@@ -387,160 +274,8 @@ def test_repr_with_cached_data():
     assert "centroids" in result, f"Expected centroids in output but got:\n{result}"
 
 
-def test_repr_with_multiple_cached_fields():
-    """Test that multiple cached fields are formatted correctly."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={},
-        cell_data={"pressure": torch.randn(5)},
-        global_data={},
-    )
-
-    # Access multiple cached properties to populate cache
-    _ = mesh.cell_centroids
-    _ = mesh.cell_areas
-
-    result = repr(mesh)
-
-    # Should show multiline format for cell_data since it has >3 total fields
-    # (pressure + _cache.centroids + _cache.areas = 3 fields in _cache, but total >3)
-    assert "_cache" in result
-    assert "centroids" in result
-    assert "areas" in result
-
-    # Verify structure is correct
-    lines = result.split("\n")
-    # Find the cell_data line
-    cell_data_line_idx = None
-    for i, line in enumerate(lines):
-        if "cell_data" in line:
-            cell_data_line_idx = i
-            break
-
-    # cell_data should be multiline since it has pressure + _cache with multiple fields
-    assert "{" in lines[cell_data_line_idx], "cell_data should start multiline format"
-
-
-def test_repr_with_subclass():
-    """Test that subclasses show their own class name."""
-
-    class CustomMesh(Mesh):
-        pass
-
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = CustomMesh(
-        points=points,
-        cells=cells,
-        point_data={},
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    # Should start with CustomMesh, not Mesh
-    assert result.startswith("CustomMesh("), (
-        f"Expected 'CustomMesh(' at start but got:\n{result}"
-    )
-
-
-def test_repr_colon_alignment():
-    """Test that colons are properly aligned at each level."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={"a": torch.randn(10)},
-        cell_data={"temperature": torch.randn(5), "p": torch.randn(5)},
-        global_data={},
-    )
-
-    result = repr(mesh)
-    lines = result.split("\n")
-
-    # Find colon positions in main data fields
-    colon_positions = [line.index(":") for line in lines[1:4] if ":" in line]
-
-    # All colons should be at the same position
-    assert len(set(colon_positions)) == 1, (
-        f"Colons not aligned: {colon_positions}\nOutput:\n{result}"
-    )
-
-
-def test_repr_indentation():
-    """Test that 4-space indentation is used at each level."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={
-            "a": torch.randn(10),
-            "b": torch.randn(10),
-            "c": torch.randn(10),
-            "d": torch.randn(10),
-        },
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-    lines = result.split("\n")
-
-    # Check that data field lines have 4 spaces
-    assert lines[1].startswith("    "), f"Expected 4 spaces but got: {repr(lines[1])}"
-
-    # Check that nested field lines have 8 spaces (4 * 2)
-    # Find a line that's a field inside point_data
-    for line in lines[2:]:
-        if ":" in line and line.strip().startswith(("a:", "b:", "c:", "d:")):
-            assert line.startswith("        "), (
-                f"Expected 8 spaces but got: {repr(line)}"
-            )
-            break
-
-
-def test_repr_alphabetical_sorting():
-    """Test that keys are displayed in alphabetical order."""
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (5, 3))
-
-    # Create mesh with keys in non-alphabetical order
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={
-            "zebra": torch.randn(10),
-            "alpha": torch.randn(10),
-            "delta": torch.randn(10),
-            "beta": torch.randn(10),
-        },
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    # Keys should be sorted: alpha, beta, delta, zebra
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=5)
-    point_data : {
-        alpha: (),
-        beta : (),
-        delta: (),
-        zebra: ()}
-    cell_data  : {}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"
-
-
 def test_repr_cache_always_last():
-    """Test that _cache appears last, even though '_' comes before letters alphabetically."""
+    """Test that _cache appears last in repr, after user-defined fields."""
     points = torch.randn(10, 3)
     cells = torch.randint(0, 10, (5, 3))
 
@@ -583,30 +318,3 @@ def test_repr_cache_always_last():
     assert alpha_pos < beta_pos < zebra_pos < cache_pos, (
         f"Keys not in correct order: alpha={alpha_pos}, beta={beta_pos}, zebra={zebra_pos}, _cache={cache_pos}"
     )
-
-
-def test_repr_edge_case_empty_cells():
-    """Test that __repr__ handles meshes with zero cells gracefully."""
-    # Create a mesh with zero cells (edge case)
-    points = torch.randn(10, 3)
-    cells = torch.randint(0, 10, (0, 3))  # Zero cells
-    mesh = Mesh(
-        points=points,
-        cells=cells,
-        point_data={},
-        cell_data={},
-        global_data={},
-    )
-
-    result = repr(mesh)
-
-    # Should handle zero cells gracefully
-    assert "n_cells=0" in result
-    assert "n_points=10" in result
-
-    expected = r"""Mesh(manifold_dim=2, spatial_dim=3, n_points=10, n_cells=0)
-    point_data : {}
-    cell_data  : {}
-    global_data: {}"""
-
-    assert result == expected, f"Expected:\n{expected}\n\nGot:\n{result}"

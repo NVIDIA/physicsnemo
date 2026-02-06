@@ -296,7 +296,9 @@ class TestGradient:
         # Coefficient of variation should be small
         cv = std_lap / mean_lap.abs().clamp(min=1e-10)
 
-        assert cv < 0.5, (
+        # CV < 0.3: lumpy_ball mesh has O(h) discretization error on second
+        # derivatives, but spatial variation should still be moderate.
+        assert cv < 0.3, (
             f"Laplacian not uniform: CV={cv:.3f}, mean={mean_lap:.3f}, std={std_lap:.3f}"
         )
 
@@ -369,8 +371,8 @@ class TestDivergence:
         divergence = compute_divergence_points_lsq(mesh, v)
 
         # ∂(yz)/∂x + ∂(xz)/∂y + ∂(xy)/∂z = 0 + 0 + 0 = 0
-        # But these are quadratic, so expect some error
-        assert divergence.abs().mean() < 0.5
+        # Quadratic components have O(h) LSQ error; lumpy_ball is moderate resolution.
+        assert divergence.abs().mean() < 0.15
 
 
 class TestCurl:
@@ -489,7 +491,8 @@ class TestLaplacian:
 
         # For a true harmonic function, Laplacian = 0
         # Interior points should have |Δφ| << |φ|
-        assert laplacian.abs().mean() < 0.5, (
+        # Coarse mesh (5 points, 4 triangles); large discretization error expected.
+        assert laplacian.abs().mean() < 0.3, (
             f"Harmonic function Laplacian should be ~0, got mean={laplacian.mean():.4f}"
         )
 
@@ -1617,9 +1620,11 @@ class TestCellDerivatives:
         grad = mesh_grad.cell_data["test_gradient"]
         assert grad.shape == (mesh.n_cells, mesh.n_spatial_dims)
 
-        # Should recover linear coefficients approximately
+        # Should recover linear coefficients approximately.
+        # Coarse mesh (4 tets, ~3 face-adjacent neighbors per cell); cell-based
+        # LSQ has limited accuracy with so few neighbors.
         expected = torch.tensor([2.0, 3.0, -1.0])
-        assert torch.allclose(grad.mean(dim=0), expected, atol=0.5)
+        assert torch.allclose(grad.mean(dim=0), expected, atol=0.25)
 
     def test_cell_gradient_dec_not_implemented(self, simple_tet_mesh):
         """Test that DEC cell gradients raise NotImplementedError."""
@@ -1647,12 +1652,13 @@ class TestTensorFields:
         # Shape should be (n_points, 3, 3) for 3D
         assert jacobian.shape == (mesh.n_points, 3, 3)
 
-        # For v=r, Jacobian should be identity
-        # Mean Jacobian should be close to I
+        # For v=r, Jacobian should be identity.
+        # Mean Jacobian should be close to I; coarse mesh (5 pts, 4 tets)
+        # limits per-point accuracy, but the mean should be tighter.
         mean_jac = jacobian.mean(dim=0)
         expected = torch.eye(3)
 
-        assert torch.allclose(mean_jac, expected, atol=0.2)
+        assert torch.allclose(mean_jac, expected, atol=0.1)
 
 
 ###############################################################################
@@ -2384,8 +2390,10 @@ class TestLaplacian3D:
         interior_lap = lap[is_interior]
         expected = torch.full_like(interior_lap, 6.0)
 
-        # The Kuhn triangulation gives exact results for this quadratic
-        assert torch.allclose(interior_lap, expected, atol=0.1), (
+        # Kuhn triangulation with subdivisions=5 gives near-exact results for
+        # quadratics at interior vertices (FEM cotangent weights are exact on
+        # symmetric stencils).
+        assert torch.allclose(interior_lap, expected, atol=0.05), (
             f"Laplacian of r^2 at interior: "
             f"mean = {interior_lap.mean():.4f}, "
             f"max deviation = {(interior_lap - 6.0).abs().max():.4f}"
@@ -2407,7 +2415,9 @@ class TestLaplacian3D:
         interior_lap = lap[is_interior]
         expected = torch.full_like(interior_lap, 2.0)
 
-        assert torch.allclose(interior_lap, expected, atol=0.1), (
+        # Kuhn triangulation with subdivisions=5; FEM cotangent weights are
+        # near-exact for single-variable quadratics at interior vertices.
+        assert torch.allclose(interior_lap, expected, atol=0.05), (
             f"Laplacian of x^2 at interior: "
             f"mean = {interior_lap.mean():.4f}, "
             f"max deviation = {(interior_lap - 2.0).abs().max():.4f}"
