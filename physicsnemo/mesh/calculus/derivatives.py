@@ -207,9 +207,12 @@ def compute_cell_derivatives(
     keys : str or tuple[str, ...] or Sequence or None
         Fields to compute gradients of (same format as
         :func:`compute_point_derivatives`).
-    method : {"lsq", "dec"}
-        Discretization method. Currently only ``"lsq"`` is supported for
-        cell-centered data.
+    method : {"lsq"}
+        Discretization method for cell-centered data. Currently only
+        ``"lsq"`` (weighted least-squares) is implemented. DEC gradients
+        for cell-centered data are not available because the standard DEC
+        exterior derivative maps vertex 0-forms to edge 1-forms; there is
+        no analogous cell-to-cell operator in the primal DEC complex.
     gradient_type : {"intrinsic", "extrinsic", "both"}
         Type of gradient to compute.
 
@@ -218,6 +221,11 @@ def compute_cell_derivatives(
     Mesh
         A new Mesh with gradient fields added to ``cell_data``. The original
         mesh is **not** modified.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``method="dec"`` is requested.
     """
     from physicsnemo.mesh.calculus.gradient import (
         compute_gradient_cells_lsq,
