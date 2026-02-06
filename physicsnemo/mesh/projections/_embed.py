@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spatial dimension embedding and projection operations."""
+"""Spatial dimension embedding operations."""
 
 import torch
 
@@ -22,78 +22,90 @@ from physicsnemo.mesh.mesh import Mesh
 from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 
-def embed_in_spatial_dims(
+def embed(
     mesh: Mesh,
     target_n_spatial_dims: int,
+    *,
+    insert_at: int | None = None,
 ) -> Mesh:
-    """Embed or project a mesh to a different number of spatial dimensions.
+    """Embed a mesh into a higher-dimensional ambient space.
 
-    This operation changes the spatial dimensionality of the mesh by adding or
-    removing dimensions from the points array, while preserving the manifold
-    structure and topology. New dimensions are appended to the end and initialized
-    to zero. When projecting down, trailing dimensions are discarded.
-
-    This is analogous to numpy.expand_dims() for the points array, but handles
-    the full mesh structure including data fields and cached properties.
+    Increases the spatial dimensionality of a mesh by inserting new zero-valued
+    coordinate dimensions, while preserving the manifold structure and topology.
+    This operation is non-destructive: the original coordinate values are retained
+    in their respective dimensions.
 
     Key behaviors:
         - Manifold dimension (n_manifold_dims) is preserved
-        - Topology (cells connectivity) is preserved
+        - Topology (cell connectivity) is preserved
         - Point/cell/global data are preserved as-is
         - Cached geometric properties are cleared (they depend on spatial embedding)
 
-    Examples of use cases:
-        - [2, 2] → [2, 3]: Embed 2D surface in 2D space into 3D space
-        - [1, 3] → [1, 2]: Project 3D curve down to 2D plane
-        - [2, 3] → [2, 4]: Embed 3D surface into 4D space
+    Use cases:
+        - [2, 2] -> [2, 3]: Embed a flat 2D surface into 3D space
+          (e.g., to enable surface normal computation via codimension-1)
+        - [1, 2] -> [1, 3]: Embed a 2D curve into 3D space
+        - [2, 3] -> [2, 4]: Embed a 3D surface into 4D space
 
     Parameters
     ----------
     mesh : Mesh
-        Input mesh to embed/project
+        Input mesh to embed.
     target_n_spatial_dims : int
-        Target number of spatial dimensions. Must be >= 1.
-        - If target > current: Points are padded with zeros in new dimensions
-        - If target < current: Points are sliced to keep only first 'target' dims
-        - If target == current: Returns mesh unchanged (no-op)
+        Target number of spatial dimensions. Must be >= current n_spatial_dims.
+        If equal to current, returns mesh unchanged (no-op).
+    insert_at : int | None, optional
+        Index at which to insert the new zero-valued dimensions. The new
+        dimensions form a contiguous block starting at this position, with
+        semantics matching ``list.insert``. Valid range is
+        ``0 <= insert_at <= n_current_spatial_dims``.
+
+        - ``None`` (default): append new dimensions at the end.
+          ``[x, y] -> [x, y, 0]``
+        - ``0``: prepend new dimensions at the start.
+          ``[x, y] -> [0, x, y]``
+        - ``1``: insert new dimensions after the first coordinate.
+          ``[x, y] -> [x, 0, y]``
 
     Returns
     -------
     Mesh
-        New mesh with modified spatial dimensions:
-        - points shape: (n_points, target_n_spatial_dims)
+        New mesh with increased spatial dimensions:
+        - points shape: ``(n_points, target_n_spatial_dims)``
         - n_manifold_dims: unchanged
         - cells: unchanged
         - point_data, cell_data: preserved (non-cached fields only)
-        - Cached geometric properties: cleared (depend on spatial embedding)
+        - Cached geometric properties: cleared
 
     Raises
     ------
     ValueError
-        If target_n_spatial_dims < 1
+        If ``target_n_spatial_dims < 1``.
     ValueError
-        If target_n_spatial_dims < n_manifold_dims (would create
-        impossible configuration where manifold exceeds ambient space)
+        If ``target_n_spatial_dims < current n_spatial_dims`` (use
+        :func:`project` to reduce dimensions).
+    ValueError
+        If ``insert_at`` is out of the valid range ``[0, n_spatial_dims]``.
 
     Examples
     --------
     >>> import torch
     >>> from physicsnemo.mesh import Mesh
-    >>> # Embed 2D triangle mesh in 2D space into 3D space
+    >>> from physicsnemo.mesh.projections import embed
     >>> points_2d = torch.tensor([[0., 0.], [1., 0.], [0., 1.]])
     >>> cells = torch.tensor([[0, 1, 2]])
     >>> mesh_2d = Mesh(points=points_2d, cells=cells)
-    >>> assert mesh_2d.n_spatial_dims == 2
     >>>
-    >>> # Embed in 3D (points become [x, y, 0])
-    >>> mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
-    >>> assert mesh_3d.n_spatial_dims == 3
+    >>> # Embed in 3D (default: append z=0)
+    >>> mesh_3d = embed(mesh_2d, target_n_spatial_dims=3)
     >>> assert mesh_3d.points.shape == (3, 3)
-    >>> assert torch.allclose(mesh_3d.points[0], torch.tensor([0., 0., 0.]))
+    >>> assert torch.allclose(mesh_3d.points[:, 2], torch.zeros(3))
     >>>
-    >>> # Project back to 2D
-    >>> mesh_2d_again = embed_in_spatial_dims(mesh_3d, target_n_spatial_dims=2)
-    >>> assert torch.allclose(mesh_2d_again.points, points_2d)
+    >>> # Embed with new dimension inserted at position 1: [x, y] -> [x, 0, y]
+    >>> mesh_3d_mid = embed(mesh_2d, target_n_spatial_dims=3, insert_at=1)
+    >>> assert torch.allclose(mesh_3d_mid.points[:, 0], points_2d[:, 0])
+    >>> assert torch.allclose(mesh_3d_mid.points[:, 1], torch.zeros(3))
+    >>> assert torch.allclose(mesh_3d_mid.points[:, 2], points_2d[:, 1])
     >>>
     >>> # Codimension changes affect normal computation
     >>> assert mesh_2d.codimension == 0  # no normals defined
@@ -105,12 +117,16 @@ def embed_in_spatial_dims(
     When spatial dimensions change, all cached geometric properties are cleared
     because they depend on the spatial embedding. This includes:
     - Cell/point normals (codimension changes)
-    - Cell centroids (need padding/slicing)
+    - Cell centroids (coordinate count changes)
     - Cell areas (intrinsically unchanged but cache is cleared for consistency)
     - Curvature values (depend on embedding)
 
-    User data in point_data and cell_data is preserved as-is. If you have
-    vector fields that should be padded/projected, you must handle this manually.
+    User data in ``point_data`` and ``cell_data`` is preserved as-is. If you have
+    vector fields that should also be padded, you must handle this manually.
+
+    See Also
+    --------
+    project : The inverse operation - reduce spatial dimensions.
     """
     ### Validate inputs
     if target_n_spatial_dims < 1:
@@ -118,32 +134,48 @@ def embed_in_spatial_dims(
             f"target_n_spatial_dims must be >= 1, got {target_n_spatial_dims=}"
         )
 
-    if target_n_spatial_dims < mesh.n_manifold_dims:
-        raise ValueError(
-            f"Cannot embed {mesh.n_manifold_dims=}-dimensional manifold in "
-            f"{target_n_spatial_dims=}-dimensional space.\n"
-            f"Spatial dimensions must be >= manifold dimensions."
-        )
-
     current_n_spatial_dims = mesh.n_spatial_dims
+
+    if target_n_spatial_dims < current_n_spatial_dims:
+        raise ValueError(
+            f"Cannot embed: {target_n_spatial_dims=} < current "
+            f"{current_n_spatial_dims=}. Use project() to reduce spatial dimensions."
+        )
 
     ### Short-circuit if no change needed
     if target_n_spatial_dims == current_n_spatial_dims:
         return mesh
 
-    ### Modify points array
-    if target_n_spatial_dims > current_n_spatial_dims:
-        # Pad with zeros in new dimensions (append to end)
-        n_new_dims = target_n_spatial_dims - current_n_spatial_dims
-        new_points = torch.nn.functional.pad(
-            mesh.points,
-            (0, n_new_dims),  # Pad last dimension
-            mode="constant",
-            value=0.0,
+    n_new_dims = target_n_spatial_dims - current_n_spatial_dims
+
+    ### Validate insert_at
+    if insert_at is not None and not (0 <= insert_at <= current_n_spatial_dims):
+        raise ValueError(
+            f"insert_at must be in [0, {current_n_spatial_dims}], got {insert_at=}"
         )
-    else:  # target_n_spatial_dims < current_n_spatial_dims
-        # Slice to keep only first target_n_spatial_dims dimensions
-        new_points = mesh.points[:, :target_n_spatial_dims]
+
+    ### Construct new points array
+    if insert_at is None or insert_at == current_n_spatial_dims:
+        # Append zeros at end (fast path)
+        new_points = torch.nn.functional.pad(
+            mesh.points, (0, n_new_dims), mode="constant", value=0.0
+        )
+    elif insert_at == 0:
+        # Prepend zeros at start (fast path)
+        new_points = torch.nn.functional.pad(
+            mesh.points, (n_new_dims, 0), mode="constant", value=0.0
+        )
+    else:
+        # Insert zeros at arbitrary interior position
+        prefix = mesh.points[:, :insert_at]
+        zeros = torch.zeros(
+            mesh.n_points,
+            n_new_dims,
+            dtype=mesh.points.dtype,
+            device=mesh.points.device,
+        )
+        suffix = mesh.points[:, insert_at:]
+        new_points = torch.cat([prefix, zeros, suffix], dim=1)
 
     ### Preserve cells (topology unchanged)
     new_cells = mesh.cells
@@ -152,7 +184,7 @@ def embed_in_spatial_dims(
     # Cached properties depend on spatial embedding and must be recomputed
     new_point_data = mesh.point_data.exclude(CACHE_KEY)
     new_cell_data = mesh.cell_data.exclude(CACHE_KEY)
-    new_global_data = mesh.global_data  # Global data is preserved as-is
+    new_global_data = mesh.global_data
 
     ### Create new mesh with modified spatial dimensions
     return Mesh(
