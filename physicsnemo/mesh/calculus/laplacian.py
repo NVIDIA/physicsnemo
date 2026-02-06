@@ -153,15 +153,12 @@ def compute_laplacian_points_dec(
         get_or_compute_dual_volumes_0,
     )
 
-    n_points = mesh.n_points
-    device = mesh.points.device
-
     ### Get cotangent weights and edges via FEM stiffness matrix (works for any dimension)
     cotan_weights, sorted_edges = compute_cotan_weights_fem(mesh)
 
     ### Apply cotangent Laplacian operator using shared utility
     laplacian = _apply_cotan_laplacian_operator(
-        n_vertices=n_points,
+        n_vertices=mesh.n_points,
         edges=sorted_edges,
         cotan_weights=cotan_weights,
         data=point_values,
