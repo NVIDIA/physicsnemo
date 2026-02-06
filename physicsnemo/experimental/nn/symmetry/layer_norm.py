@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -300,6 +300,13 @@ class _EquivariantNormBase(Module):
         m0_imag_mask = make_m0_imag_mask(mmax)
         self.register_buffer("m0_imag_mask", m0_imag_mask, persistent=True)
 
+        # Precompute combined mask for efficient input/output processing
+        # validity_mask: [lmax+1, mmax+1] -> [1, lmax+1, mmax+1, 1, 1]
+        # m0_imag_mask: [1, 1, mmax+1, 2, 1]
+        # combined_mask: [1, lmax+1, mmax+1, 2, 1]
+        combined_mask = validity_mask[None, :, :, None, None] * m0_imag_mask
+        self.register_buffer("combined_mask", combined_mask, persistent=False)
+
     def _register_subtract_mean_buffers(self, subtract_mean: bool) -> None:
         r"""Register buffers for mean subtraction control (eliminates runtime branching).
 
@@ -355,19 +362,8 @@ class _EquivariantNormBase(Module):
         Tensor
             Prepared tensor with validity and m0 masks applied.
         """
-        # Cast to compute dtype
-        x = x.to(compute_dtype)
-
-        # Apply validity mask
-        validity_mask_expanded = self.validity_mask[None, :, :, None, None].to(
-            compute_dtype
-        )
-        x = x * validity_mask_expanded
-
-        # Apply m0 imaginary mask
-        x = x * self.m0_imag_mask.to(compute_dtype)
-
-        return x
+        # Cast to compute dtype and apply combined mask in single operation
+        return x.to(compute_dtype) * self.combined_mask.to(compute_dtype)
 
     def _finalize_output(
         self, x: Tensor, compute_dtype: torch.dtype, input_dtype: torch.dtype
@@ -388,17 +384,8 @@ class _EquivariantNormBase(Module):
         Tensor
             Finalized tensor with validity and m0 masks applied, cast to input dtype.
         """
-        # Apply validity mask
-        validity_mask_expanded = self.validity_mask[None, :, :, None, None].to(
-            compute_dtype
-        )
-        x = x * validity_mask_expanded
-
-        # Apply m0 imaginary mask
-        x = x * self.m0_imag_mask.to(compute_dtype)
-
-        # Cast back to input dtype
-        return x.to(input_dtype)
+        # Apply combined mask and cast to input dtype
+        return (x * self.combined_mask.to(compute_dtype)).to(input_dtype)
 
     def _validate_input_shape(self, x: Tensor) -> None:
         r"""Validate input tensor shape.
