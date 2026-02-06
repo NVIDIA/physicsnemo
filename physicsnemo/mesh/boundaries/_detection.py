@@ -250,7 +250,9 @@ def get_boundary_edges(mesh: "Mesh") -> torch.Tensor:
     from itertools import combinations
 
     combo_indices = list(combinations(range(n_verts_per_face), 2))
-    combo_tensor = torch.tensor(combo_indices, dtype=torch.long, device=device)  # (n_combos, 2)
+    combo_tensor = torch.tensor(
+        combo_indices, dtype=torch.long, device=device
+    )  # (n_combos, 2)
 
     # Gather edges from boundary faces: (n_boundary_faces, n_combos, 2)
     all_edges = boundary_faces[:, combo_tensor]

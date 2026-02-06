@@ -179,10 +179,7 @@ def from_pyvista(
             # (common case — all edges have 2 vertices, stride = 3)
             first_count = int(lines_array[0])
             stride = first_count + 1
-            is_uniform = (
-                len(lines_array) % stride == 0
-                and len(lines_array) >= stride
-            )
+            is_uniform = len(lines_array) % stride == 0 and len(lines_array) >= stride
             if is_uniform:
                 n_segments = len(lines_array) // stride
                 reshaped = lines_array.reshape(n_segments, stride)
@@ -201,8 +198,10 @@ def from_pyvista(
                     seg_starts = point_ids[:, :-1].reshape(-1)
                     seg_ends = point_ids[:, 1:].reshape(-1)
                     cells = torch.stack(
-                        [torch.from_numpy(seg_starts.copy()),
-                         torch.from_numpy(seg_ends.copy())],
+                        [
+                            torch.from_numpy(seg_starts.copy()),
+                            torch.from_numpy(seg_ends.copy()),
+                        ],
                         dim=1,
                     ).long()
             else:

@@ -1799,7 +1799,7 @@ class Mesh:
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
             n = math.ceil(math.log(safe_size) / math.log(base))
-            return base ** n
+            return base**n
 
         target_n_points = next_power_size(self.n_points, power)
         target_n_cells = next_power_size(self.n_cells, power)

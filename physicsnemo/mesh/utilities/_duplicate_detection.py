@@ -73,9 +73,7 @@ def vectorized_connected_components(
         # Also need to merge through current parent pointers
         parent_from = parent[pairs[:, 0]]
         parent_to = parent[pairs[:, 1]]
-        all_merge_from = torch.cat(
-            [merge_from, torch.maximum(parent_from, parent_to)]
-        )
+        all_merge_from = torch.cat([merge_from, torch.maximum(parent_from, parent_to)])
         all_merge_to = torch.cat([merge_to, torch.minimum(parent_from, parent_to)])
 
         parent.scatter_reduce_(
