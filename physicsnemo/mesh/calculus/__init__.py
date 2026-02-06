@@ -48,7 +48,6 @@ from physicsnemo.mesh.calculus.gradient import (
     compute_gradient_points_lsq,
 )
 from physicsnemo.mesh.calculus.laplacian import (
-    compute_laplacian_points,
     compute_laplacian_points_dec,
 )
 
@@ -66,6 +65,5 @@ __all__ = [
     # Curl
     "compute_curl_points_lsq",
     # Laplacian
-    "compute_laplacian_points",
     "compute_laplacian_points_dec",
 ]

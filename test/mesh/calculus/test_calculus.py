@@ -1219,12 +1219,9 @@ class TestLaplacianNumericalProperties:
         rel_diff = torch.abs(f_Lg - Lf_g) / (torch.abs(f_Lg) + torch.abs(Lf_g) + 1e-10)
         assert rel_diff < 0.01  # Within 1%
 
-    def test_laplacian_wrapper_function(self):
-        """Test the wrapper function compute_laplacian_points."""
-        from physicsnemo.mesh.calculus.laplacian import (
-            compute_laplacian_points,
-            compute_laplacian_points_dec,
-        )
+    def test_laplacian_dec_basic(self):
+        """Test compute_laplacian_points_dec produces correct shape and dtype."""
+        from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
         # Create simple triangle mesh
         points = torch.tensor(
@@ -1237,17 +1234,14 @@ class TestLaplacianNumericalProperties:
         )
 
         cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
-
         mesh = Mesh(points=points, cells=cells)
 
         scalar_values = torch.randn(mesh.n_points)
 
-        # Test wrapper function
-        laplacian1 = compute_laplacian_points(mesh, scalar_values)
-        laplacian2 = compute_laplacian_points_dec(mesh, scalar_values)
+        laplacian = compute_laplacian_points_dec(mesh, scalar_values)
 
-        # Should be identical
-        assert torch.allclose(laplacian1, laplacian2)
+        assert laplacian.shape == scalar_values.shape
+        assert laplacian.dtype == scalar_values.dtype
 
 
 class TestLaplacianManifoldDimensions:
@@ -2441,131 +2435,87 @@ class TestLaplacian3D:
         )
 
 
-class TestCotanWeightsCrossValidation:
-    """Cross-validate FEM cotangent weights against the 2D-specific implementation.
+class TestCotanWeightsFEM:
+    """Verify FEM cotangent weights against analytically known values.
 
-    On triangle meshes, the FEM stiffness approach must produce identical
-    cotangent weights to the classical (1/2)(cot alpha + cot beta) formula.
+    For 2D triangle meshes, the FEM stiffness matrix approach produces
+    weights equal to (1/2)(cot alpha + cot beta) for each edge, where
+    alpha and beta are the angles opposite the edge in the two adjacent
+    triangles.
     """
 
-    def test_weights_match_on_flat_mesh(self):
-        """FEM weights match 2D cotangent weights on a flat triangular mesh."""
+    def test_equilateral_triangle_weights(self):
+        """FEM weights for an equilateral triangle match cot(60 deg)/2."""
         from physicsnemo.mesh.calculus._circumcentric_dual import (
             compute_cotan_weights_fem,
-            compute_cotan_weights_triangle_mesh,
         )
 
-        # Create a flat 2D mesh with mixed acute/obtuse triangles
+        # Equilateral triangle: all angles = 60 deg, cot(60) = 1/sqrt(3)
+        h = (3**0.5) / 2
         points = torch.tensor(
-            [
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [1.0, 1.0],
-                [0.0, 1.0],
-                [0.5, 0.5],
-            ],
+            [[0.0, 0.0], [1.0, 0.0], [0.5, h]],
             dtype=torch.float64,
         )
-        cells = torch.tensor(
-            [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
-            dtype=torch.long,
-        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
         mesh = Mesh(points=points, cells=cells)
 
-        old_weights, old_edges = compute_cotan_weights_triangle_mesh(
-            mesh, return_edges=True
-        )
-        new_weights, new_edges = compute_cotan_weights_fem(mesh)
+        weights, edges = compute_cotan_weights_fem(mesh)
 
-        # Edges should be the same set (both sorted)
-        assert torch.equal(old_edges, new_edges), (
-            f"Edge sets differ:\nold: {old_edges}\nnew: {new_edges}"
-        )
+        # Each edge is boundary (1 triangle), weight = cot(60 deg) / 2
+        expected_weight = (1.0 / (3**0.5)) / 2.0
+        assert torch.allclose(
+            weights, torch.full_like(weights, expected_weight), atol=1e-10
+        ), f"Expected all weights ~{expected_weight:.6f}, got {weights}"
 
-        # Weights should match closely
-        assert torch.allclose(old_weights, new_weights, atol=1e-10), (
-            f"Weight mismatch:\n"
-            f"  max diff = {(old_weights - new_weights).abs().max():.2e}\n"
-            f"  old = {old_weights}\n"
-            f"  new = {new_weights}"
-        )
-
-    def test_weights_match_on_3d_surface(self):
-        """FEM weights match 2D cotangent weights on a surface mesh in 3D."""
+    def test_right_triangle_weights(self):
+        """FEM weights for a right triangle match known cotangent values."""
         from physicsnemo.mesh.calculus._circumcentric_dual import (
             compute_cotan_weights_fem,
-            compute_cotan_weights_triangle_mesh,
+        )
+
+        # Right triangle: 90 deg at origin, 45 deg at the other two
+        points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=torch.float64,
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.long)
+        mesh = Mesh(points=points, cells=cells)
+
+        weights, edges = compute_cotan_weights_fem(mesh)
+
+        # Expected (boundary, 1 triangle):
+        #   edge [0,1]: opposite angle at v2 = 45 deg, cot(45)=1 -> w = 0.5
+        #   edge [0,2]: opposite angle at v1 = 45 deg, cot(45)=1 -> w = 0.5
+        #   edge [1,2]: opposite angle at v0 = 90 deg, cot(90)=0 -> w = 0.0
+        expected = {(0, 1): 0.5, (0, 2): 0.5, (1, 2): 0.0}
+        for i, edge in enumerate(edges):
+            key = (int(edge[0]), int(edge[1]))
+            assert abs(weights[i].item() - expected[key]) < 1e-10, (
+                f"Edge {key}: expected {expected[key]:.4f}, got {weights[i]:.4f}"
+            )
+
+    def test_weights_on_3d_surface(self):
+        """FEM weights are well-defined on a surface mesh in 3D."""
+        from physicsnemo.mesh.calculus._circumcentric_dual import (
+            compute_cotan_weights_fem,
         )
         from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
 
         mesh = sphere_icosahedral.load(subdivisions=2)
-        # Use float64 for tighter comparison
         mesh = Mesh(
             points=mesh.points.to(torch.float64),
             cells=mesh.cells,
         )
 
-        old_weights, old_edges = compute_cotan_weights_triangle_mesh(
-            mesh, return_edges=True
-        )
-        new_weights, new_edges = compute_cotan_weights_fem(mesh)
+        weights, edges = compute_cotan_weights_fem(mesh)
 
-        assert torch.equal(old_edges, new_edges)
-        assert torch.allclose(old_weights, new_weights, atol=1e-8), (
-            f"Weight mismatch on icosahedral sphere:\n"
-            f"  max diff = {(old_weights - new_weights).abs().max():.2e}\n"
-            f"  mean diff = {(old_weights - new_weights).abs().mean():.2e}"
+        # Sanity: icosahedral sphere has all positive cotan weights (Delaunay)
+        assert (weights > -1e-8).all(), (
+            f"Unexpected large negative weight: {weights.min():.2e}"
         )
-
-    def test_laplacian_results_match_on_2d_mesh(self):
-        """DEC Laplacian results are unchanged for triangle meshes.
-
-        Verifies that the refactoring from the 2D-specific code path to the
-        general FEM code path does not change the numerical output for the
-        existing 2D case.
-        """
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
-            compute_cotan_weights_fem,
-            compute_cotan_weights_triangle_mesh,
-            get_or_compute_dual_volumes_0,
-        )
-        from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
-
-        # Build mesh with a non-trivial scalar field
-        points = torch.tensor(
-            [
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [1.0, 1.0],
-                [0.0, 1.0],
-                [0.5, 0.5],
-                [0.25, 0.75],
-            ],
-            dtype=torch.float64,
-        )
-        cells = torch.tensor(
-            [[0, 1, 4], [1, 2, 4], [2, 3, 5], [3, 0, 5], [4, 5, 3], [4, 5, 0]],
-            dtype=torch.long,
-        )
-        mesh = Mesh(points=points, cells=cells)
-        f = points[:, 0] ** 2 + points[:, 1] ** 2
-
-        # Compute via old path
-        old_w, old_e = compute_cotan_weights_triangle_mesh(mesh, return_edges=True)
-        old_lap = _apply_cotan_laplacian_operator(
-            mesh.n_points, old_e, old_w, f, mesh.points.device
-        )
-
-        # Compute via new path
-        new_w, new_e = compute_cotan_weights_fem(mesh)
-        new_lap = _apply_cotan_laplacian_operator(
-            mesh.n_points, new_e, new_w, f, mesh.points.device
-        )
-
-        assert torch.allclose(old_lap, new_lap, atol=1e-10), (
-            f"Laplacian output differs:\n"
-            f"  max diff = {(old_lap - new_lap).abs().max():.2e}"
-        )
+        # All edges accounted for
+        assert edges.shape[1] == 2
+        assert len(weights) == len(edges)
 
 
 if __name__ == "__main__":

@@ -180,26 +180,3 @@ def compute_laplacian_points_dec(
         ).clamp(min=safe_eps(dual_volumes_0.dtype))
 
     return laplacian
-
-
-def compute_laplacian_points(
-    mesh: "Mesh",
-    point_values: torch.Tensor,
-) -> torch.Tensor:
-    """Compute Laplace-Beltrami at vertices using DEC.
-
-    This is a convenience wrapper for compute_laplacian_points_dec.
-
-    Parameters
-    ----------
-    mesh : Mesh
-        Simplicial mesh
-    point_values : torch.Tensor
-        Values at vertices
-
-    Returns
-    -------
-    torch.Tensor
-        Laplacian at vertices
-    """
-    return compute_laplacian_points_dec(mesh, point_values)

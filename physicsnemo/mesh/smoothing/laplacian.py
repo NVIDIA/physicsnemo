@@ -24,12 +24,12 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.boundaries import get_boundary_edges, get_boundary_vertices
-from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
-from physicsnemo.mesh.calculus._circumcentric_dual import (
-    compute_cotan_weights_triangle_mesh,
+from physicsnemo.mesh.boundaries import get_boundary_vertices
+from physicsnemo.mesh.boundaries._facet_extraction import (
+    extract_candidate_facets,
+    extract_unique_edges,
 )
-from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+from physicsnemo.mesh.calculus._circumcentric_dual import compute_cotan_weights_fem
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -144,11 +144,8 @@ def smooth_laplacian(
     n_points = mesh.n_points
     n_spatial_dims = mesh.n_spatial_dims
 
-    ### Extract unique edges and compute weights
-    edges, _ = extract_unique_edges(mesh)  # (n_edges, 2)
-
-    # Compute cotangent weights for edges
-    edge_weights = _compute_edge_weights(mesh, edges)  # (n_edges,)
+    ### Compute edge weights (also extracts unique edges)
+    edge_weights, edges = _compute_edge_weights(mesh)  # (n_edges,), (n_edges, 2)
 
     ### Save original positions for constrained vertices
     original_points = mesh.points.clone()
@@ -238,7 +235,9 @@ def smooth_laplacian(
     return mesh
 
 
-def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
+def _compute_edge_weights(
+    mesh: "Mesh",
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute weights for each edge based on mesh geometry.
 
     For codimension-1 manifolds with n_manifold_dims >= 2: uses cotangent weights
@@ -248,23 +247,19 @@ def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
     ----------
     mesh : Mesh
         Input mesh
-    edges : torch.Tensor
-        Edge connectivity, shape (n_edges, 2)
 
     Returns
     -------
-    torch.Tensor
-        Edge weights, shape (n_edges,)
+    tuple[torch.Tensor, torch.Tensor]
+        Tuple of (edge_weights, edges) where edge_weights has shape (n_edges,)
+        and edges has shape (n_edges, 2).
     """
-    n_edges = len(edges)
     device = mesh.points.device
     dtype = mesh.points.dtype
 
     if mesh.codimension == 1 and mesh.n_manifold_dims >= 2:
-        ### Use cotangent weights (geometry-aware)
-        weights = compute_cotan_weights_triangle_mesh(
-            mesh, edges=edges, return_edges=False
-        )
+        ### Use cotangent weights (geometry-aware) via FEM stiffness matrix
+        weights, edges = compute_cotan_weights_fem(mesh)
 
         ### Clamp weights for numerical stability
         # Negative cotangents occur for obtuse angles - treat as zero (no contribution)
@@ -273,9 +268,10 @@ def _compute_edge_weights(mesh: "Mesh", edges: torch.Tensor) -> torch.Tensor:
 
     else:
         ### Use uniform weights for 1D manifolds or higher codimension
-        weights = torch.ones(n_edges, dtype=dtype, device=device)
+        edges, _ = extract_unique_edges(mesh)
+        weights = torch.ones(len(edges), dtype=dtype, device=device)
 
-    return weights
+    return weights, edges
 
 
 def _get_feature_vertices(
@@ -329,7 +325,8 @@ def _detect_sharp_edges(
 ) -> torch.Tensor:
     """Detect edges with dihedral angle exceeding threshold.
 
-    Fully vectorized implementation using scatter operations.
+    Fully vectorized implementation using :func:`find_edges_in_reference`
+    for O(n log n) edge matching and O(n) memory.
 
     Parameters
     ----------
@@ -345,6 +342,8 @@ def _detect_sharp_edges(
     torch.Tensor
         Sharp edges, shape (n_sharp_edges, 2)
     """
+    from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
+
     device = mesh.points.device
     n_manifold_dims = mesh.n_manifold_dims
 
@@ -354,32 +353,15 @@ def _detect_sharp_edges(
         manifold_codimension=n_manifold_dims - 1,
     )
 
-    ### Map candidate edges to unique edges using hashing
-    sorted_candidate_edges = torch.sort(candidate_edges, dim=1).values
-    sorted_edges = torch.sort(edges, dim=1).values
-
-    # Hash edges for fast lookup: hash = v0 * (n_points + 1) + v1
-    def edge_to_hash(e: torch.Tensor) -> torch.Tensor:
-        """Convert sorted edge (v0, v1) to unique hash."""
-        return e[:, 0] * (mesh.n_points + 1) + e[:, 1]
-
-    unique_edge_hashes = edge_to_hash(sorted_edges)
-    candidate_edge_hashes = edge_to_hash(sorted_candidate_edges)
-
-    # Build hash-to-index mapping for unique edges
-    max_hash = unique_edge_hashes.max().item()
-    edge_hash_to_idx = torch.full((max_hash + 1,), -1, dtype=torch.long, device=device)
-    edge_hash_to_idx[unique_edge_hashes] = torch.arange(
-        len(unique_edge_hashes), device=device
-    )
-    candidate_to_unique = edge_hash_to_idx[candidate_edge_hashes]
+    ### Map candidate edges to unique edges via searchsorted (O(m log n), O(n) memory)
+    candidate_to_unique, matched = find_edges_in_reference(edges, candidate_edges)
 
     ### Count cells per edge
     edge_cell_counts = torch.zeros(len(edges), dtype=torch.long, device=device)
     edge_cell_counts.scatter_add_(
         0,
         candidate_to_unique,
-        torch.ones_like(candidate_to_unique),
+        matched.long(),  # only count matched candidates
     )
 
     ### Find interior edges (exactly 2 adjacent cells)
@@ -390,84 +372,50 @@ def _detect_sharp_edges(
 
     interior_edge_indices = torch.where(interior_edge_mask)[0]
 
-    ### For each interior edge, collect its two adjacent cells (vectorized)
-    # Strategy: Sort candidates by edge index, then use cumulative counting
+    ### Collect the two adjacent cells per interior edge
+    # Sort matched candidates by their unique edge index; within each group of
+    # size 2, the first element becomes cell_a and the second becomes cell_b.
+    valid_mask = matched
+    valid_candidate_to_unique = candidate_to_unique[valid_mask]
+    valid_parent_cells = parent_cell_indices[valid_mask]
 
-    # Sort candidates by their unique edge index
-    sorted_order = torch.argsort(candidate_to_unique)
-    sorted_edge_ids = candidate_to_unique[sorted_order]
+    sorted_order = torch.argsort(valid_candidate_to_unique, stable=True)
+    sorted_edge_ids = valid_candidate_to_unique[sorted_order]
+    sorted_parent_cells = valid_parent_cells[sorted_order]
 
-    # For each position in sorted array, compute how many times we've seen this edge before
-    # This is the "occurrence index" (0 for first, 1 for second, etc.)
-    # Vectorized approach: use cumsum on a binary indicator of edge boundaries
+    # Detect group boundaries (where the edge index changes)
+    # is_first: True at positions where the edge id differs from the predecessor
+    is_first_in_group = torch.cat([
+        torch.ones(1, dtype=torch.bool, device=device),
+        sorted_edge_ids[1:] != sorted_edge_ids[:-1],
+    ])
+    # is_second: True at positions where the edge id equals the predecessor
+    is_second_in_group = torch.cat([
+        torch.zeros(1, dtype=torch.bool, device=device),
+        sorted_edge_ids[1:] == sorted_edge_ids[:-1],
+    ])
 
-    # Mark boundaries: True where edge_id changes (first occurrence of each edge)
-    edge_changes = torch.cat(
-        [
-            torch.ones(1, dtype=torch.bool, device=device),
-            sorted_edge_ids[1:] != sorted_edge_ids[:-1],
-        ]
-    )
-
-    # Cumsum to get group numbers for each unique edge in the sorted array
-    group_numbers = torch.cumsum(edge_changes.long(), dim=0) - 1
-
-    # For each group, compute running index within that group
-    # Start indices for each group
-    group_starts = torch.where(edge_changes)[0]
-
-    # Broadcast group_starts to all positions in that group
-    group_start_for_each_pos = torch.zeros(
-        len(sorted_order), dtype=torch.long, device=device
-    )
-    group_start_for_each_pos.scatter_(
-        0, torch.arange(len(sorted_order), device=device), group_starts[group_numbers]
-    )
-
-    # Occurrence index = position - group_start
-    occurrence_indices = (
-        torch.arange(len(sorted_order), device=device) - group_start_for_each_pos
-    )
-
-    # Map back to original candidate order
-    occurrence_in_original_order = torch.zeros(
-        len(candidate_edges), dtype=torch.long, device=device
-    )
-    occurrence_in_original_order[sorted_order] = occurrence_indices
-
-    # Split into first (0) and second (1) occurrences
-    is_first = occurrence_in_original_order == 0
-    is_second = occurrence_in_original_order == 1
-
-    # Build edge-to-cells mapping
+    # Build per-edge cell arrays (scatter first/second occurrence to edge index)
     edge_first_cell = torch.full((len(edges),), -1, dtype=torch.long, device=device)
     edge_second_cell = torch.full((len(edges),), -1, dtype=torch.long, device=device)
 
-    # Use scatter to assign (will keep last value if multiple, but we expect exactly one)
     edge_first_cell.scatter_(
-        0, candidate_to_unique[is_first], parent_cell_indices[is_first]
+        0, sorted_edge_ids[is_first_in_group], sorted_parent_cells[is_first_in_group]
     )
     edge_second_cell.scatter_(
-        0, candidate_to_unique[is_second], parent_cell_indices[is_second]
+        0, sorted_edge_ids[is_second_in_group], sorted_parent_cells[is_second_in_group]
     )
 
     ### Compute dihedral angles for interior edges (vectorized)
     interior_first_cells = edge_first_cell[interior_edge_indices]
     interior_second_cells = edge_second_cell[interior_edge_indices]
 
-    # Get normals for both cells
-    normals_first = mesh.cell_normals[
-        interior_first_cells
-    ]  # (n_interior, n_spatial_dims)
-    normals_second = mesh.cell_normals[
-        interior_second_cells
-    ]  # (n_interior, n_spatial_dims)
+    normals_first = mesh.cell_normals[interior_first_cells]   # (n_interior, n_spatial_dims)
+    normals_second = mesh.cell_normals[interior_second_cells]  # (n_interior, n_spatial_dims)
 
-    # Compute angles
     cos_angles = (normals_first * normals_second).sum(dim=-1)
     cos_angles = cos_angles.clamp(-1.0, 1.0)
-    angles_rad = torch.acos(cos_angles)
-    angles_deg = angles_rad * 180.0 / torch.pi
+    angles_deg = torch.acos(cos_angles) * (180.0 / torch.pi)
 
     ### Filter for sharp edges
     sharp_mask = angles_deg > feature_angle
@@ -476,5 +424,4 @@ def _detect_sharp_edges(
     if len(sharp_edge_indices) == 0:
         return torch.empty((0, 2), dtype=edges.dtype, device=device)
 
-    sharp_edges = edges[sharp_edge_indices]
-    return sharp_edges
+    return edges[sharp_edge_indices]

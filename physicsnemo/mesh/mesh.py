@@ -1571,13 +1571,15 @@ class Mesh:
         >>> boundary = sphere.get_boundary_mesh()
         >>> assert boundary.n_cells == 0  # no boundary
         """
-        ### Call kernel to extract boundary mesh data
-        from physicsnemo.mesh.boundaries import extract_boundary_mesh_data
+        ### Call kernel to extract boundary facets (codim-1, appearing in exactly 1 cell)
+        from physicsnemo.mesh.boundaries import extract_facet_mesh_data
 
-        boundary_cells, boundary_cell_data = extract_boundary_mesh_data(
+        boundary_cells, boundary_cell_data = extract_facet_mesh_data(
             parent_mesh=self,
+            manifold_codimension=1,
             data_source=data_source,
             data_aggregation=data_aggregation,
+            target_counts="boundary",
         )
 
         ### Filter out cached properties from point_data
@@ -2237,21 +2239,32 @@ class Mesh:
     ) -> "Mesh":
         """Compute gradients of cell_data fields.
 
-        This is a convenience method that delegates to physicsnemo.mesh.calculus.compute_cell_derivatives.
+        This is a convenience method that delegates to
+        :func:`physicsnemo.mesh.calculus.compute_cell_derivatives`.
 
         Parameters
         ----------
         keys : str or tuple[str, ...] or list[str | tuple[str, ...]] or None, optional
             Fields to compute gradients of (same format as compute_point_derivatives).
-        method : {"lsq", "dec"}, optional
-            Discretization method. Currently only "lsq" is fully supported for cells.
+        method : {"lsq"}, optional
+            Discretization method for cell-centered data. Currently only
+            ``"lsq"`` (weighted least-squares) is implemented. DEC
+            gradients for cell-centered data are not available because the
+            standard DEC exterior derivative maps vertex 0-forms to edge
+            1-forms; there is no analogous cell-to-cell operator in the
+            primal DEC complex.
         gradient_type : {"intrinsic", "extrinsic", "both"}, optional
             Type of gradient to compute.
 
         Returns
         -------
         Mesh
-            Self (mesh) with gradient fields added to cell_data (modified in place).
+            A new Mesh with gradient fields added to ``cell_data``.
+
+        Raises
+        ------
+        NotImplementedError
+            If ``method="dec"`` is requested.
 
         Examples
         --------
@@ -2521,7 +2534,7 @@ class Mesh:
         ...     remove_duplicate_cells=False
         ... )
         """
-        from physicsnemo.mesh.boundaries import clean_mesh
+        from physicsnemo.mesh.repair import clean_mesh
 
         return clean_mesh(
             mesh=self,

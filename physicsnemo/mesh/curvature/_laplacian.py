@@ -83,19 +83,10 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
             device=device,
         )
 
-    ### Extract unique edges
-    from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+    ### Compute cotangent weights and edges via FEM stiffness matrix
+    from physicsnemo.mesh.calculus._circumcentric_dual import compute_cotan_weights_fem
 
-    unique_edges, _ = extract_unique_edges(mesh)  # (n_edges, 2)
-
-    ### Compute cotangent weights for each edge
-    from physicsnemo.mesh.calculus._circumcentric_dual import (
-        compute_cotan_weights_triangle_mesh,
-    )
-
-    cotangent_weights = compute_cotan_weights_triangle_mesh(
-        mesh, edges=unique_edges, return_edges=False
-    )
+    cotangent_weights, unique_edges = compute_cotan_weights_fem(mesh)
 
     ### Apply cotangent Laplacian operator to point coordinates using shared utility
     from physicsnemo.mesh.calculus.laplacian import _apply_cotan_laplacian_operator
