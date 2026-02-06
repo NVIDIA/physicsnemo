@@ -20,15 +20,13 @@ This module handles the combinatorial aspects of subdivision: computing
 subdivision patterns and generating child cell connectivity.
 
 Edge extraction is provided by
-:func:`physicsnemo.mesh.boundaries._facet_extraction.extract_unique_edges`,
+:func:`physicsnemo.mesh.utilities._topology.extract_unique_edges`,
 re-exported here for backwards compatibility.
 """
 
 import torch
 
-from physicsnemo.mesh.boundaries._facet_extraction import (  # noqa: F401
-    extract_unique_edges,
-)
+from physicsnemo.mesh.utilities._topology import extract_unique_edges  # noqa: F401
 
 
 

@@ -122,7 +122,7 @@ def get_point_to_points_adjacency(mesh: "Mesh") -> Adjacency:
         >>> adj.to_list()
         [[1, 2], [0, 2], [0, 1]]
     """
-    from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+    from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
     ### Handle empty mesh
     if mesh.n_cells == 0 or mesh.n_points == 0:

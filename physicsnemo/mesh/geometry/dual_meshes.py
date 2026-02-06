@@ -452,7 +452,7 @@ def compute_cotan_weights_fem(
     """
     from itertools import combinations
 
-    from physicsnemo.mesh.boundaries._facet_extraction import extract_unique_edges
+    from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
     device = mesh.points.device
     dtype = mesh.points.dtype

@@ -25,10 +25,8 @@ from typing import TYPE_CHECKING
 import torch
 
 from physicsnemo.mesh.boundaries import get_boundary_vertices
-from physicsnemo.mesh.boundaries._facet_extraction import (
-    extract_candidate_facets,
-    extract_unique_edges,
-)
+from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
+from physicsnemo.mesh.utilities._topology import extract_unique_edges
 from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
 
 if TYPE_CHECKING:

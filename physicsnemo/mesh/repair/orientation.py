@@ -121,10 +121,10 @@ def fix_orientation(
             neighbor_counts = offsets_end - offsets_start  # (n_front,)
 
             # Build gather indices for all neighbors using broadcasting
-            # Shape: (n_front, max_neighbors) - padded with -1 for ragged structure
-            max_neighbors = (
-                neighbor_counts.max().item() if len(neighbor_counts) > 0 else 0
-            )
+            # Static upper bound avoids .item() graph break inside the BFS loop.
+            # For an n-simplex, each cell has at most (n+1) facets, so at most
+            # (n+1) face-adjacent neighbors.
+            max_neighbors = mesh.n_manifold_dims + 1
 
             if max_neighbors == 0:
                 break
