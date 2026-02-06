@@ -454,8 +454,15 @@ def find_nearest_cells(
     mesh: "Mesh",
     query_points: torch.Tensor,
     chunk_size: int = 10000,
+    bvh: BVH | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Find the nearest cell for each query point (by centroid distance).
+
+    When a *bvh* is provided the function uses an expanding-radius BVH search
+    (following the pattern in
+    :func:`~physicsnemo.mesh.utilities._duplicate_detection.find_duplicate_pairs`)
+    to avoid the O(n_queries * n_cells) brute-force computation. Queries that
+    fall outside all BVH candidate cells fall back to the brute-force path.
 
     Parameters
     ----------
@@ -464,7 +471,10 @@ def find_nearest_cells(
     query_points : torch.Tensor
         Query point locations, shape (n_queries, n_spatial_dims).
     chunk_size : int
-        Number of queries to process at once.
+        Number of queries to process at once (brute-force path only).
+    bvh : BVH or None, optional
+        Pre-built Bounding Volume Hierarchy. When provided, enables
+        O(n_queries * log(n_cells)) search for most queries.
 
     Returns
     -------
@@ -472,31 +482,131 @@ def find_nearest_cells(
         (cell_indices, projected_points):
         - cell_indices: shape (n_queries,)
         - projected_points: centroids of nearest cells, shape (n_queries, n_spatial_dims)
-
-    Notes
-    -----
-    Uses centroid distances as an approximation. Complexity is
-    O(n_queries * n_cells); a BVH-accelerated nearest-neighbour search
-    is not yet implemented.
     """
     n_queries = query_points.shape[0]
     device = mesh.points.device
     cell_centroids = mesh.cell_centroids  # (n_cells, n_spatial_dims)
 
-    if n_queries * mesh.n_cells <= chunk_size * chunk_size:
-        diffs = query_points.unsqueeze(1) - cell_centroids.unsqueeze(0)
-        distances_sq = (diffs**2).sum(dim=-1)
-        cell_indices = distances_sq.argmin(dim=1)
-    else:
-        cell_indices = torch.empty(n_queries, dtype=torch.long, device=device)
-        for start in range(0, n_queries, chunk_size):
-            end = min(start + chunk_size, n_queries)
-            diffs = query_points[start:end].unsqueeze(1) - cell_centroids.unsqueeze(0)
-            distances_sq = (diffs**2).sum(dim=-1)
-            cell_indices[start:end] = distances_sq.argmin(dim=1)
+    if bvh is not None and mesh.n_cells > 0 and n_queries > 0:
+        cell_indices, resolved = _find_nearest_cells_bvh(
+            query_points, cell_centroids, bvh, mesh.n_cells, mesh.n_spatial_dims,
+        )
 
+        ### Fall back to brute force for any queries without BVH candidates
+        if not resolved.all():
+            remaining = torch.where(~resolved)[0]
+            remaining_indices = _find_nearest_cells_brute(
+                query_points[remaining], cell_centroids, chunk_size,
+            )
+            cell_indices[remaining] = remaining_indices
+
+        projected_points = cell_centroids[cell_indices]
+        return cell_indices, projected_points
+
+    ### Brute-force path (no BVH)
+    cell_indices = _find_nearest_cells_brute(
+        query_points, cell_centroids, chunk_size,
+    )
     projected_points = cell_centroids[cell_indices]
     return cell_indices, projected_points
+
+
+def _find_nearest_cells_brute(
+    query_points: torch.Tensor,
+    cell_centroids: torch.Tensor,
+    chunk_size: int,
+) -> torch.Tensor:
+    """Brute-force nearest-centroid search with chunking for memory safety."""
+    n_queries = query_points.shape[0]
+    device = query_points.device
+
+    if n_queries * len(cell_centroids) <= chunk_size * chunk_size:
+        diffs = query_points.unsqueeze(1) - cell_centroids.unsqueeze(0)
+        distances_sq = (diffs**2).sum(dim=-1)
+        return distances_sq.argmin(dim=1)
+
+    cell_indices = torch.empty(n_queries, dtype=torch.long, device=device)
+    for start in range(0, n_queries, chunk_size):
+        end = min(start + chunk_size, n_queries)
+        diffs = query_points[start:end].unsqueeze(1) - cell_centroids.unsqueeze(0)
+        distances_sq = (diffs**2).sum(dim=-1)
+        cell_indices[start:end] = distances_sq.argmin(dim=1)
+    return cell_indices
+
+
+def _find_nearest_cells_bvh(
+    query_points: torch.Tensor,
+    cell_centroids: torch.Tensor,
+    bvh: BVH,
+    n_cells: int,
+    n_spatial_dims: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """BVH-accelerated nearest-centroid search with expanding radius.
+
+    Returns
+    -------
+    cell_indices : torch.Tensor
+        Shape (n_queries,). Best cell index found so far (-1 if unresolved).
+    resolved : torch.Tensor
+        Shape (n_queries,) bool. True for queries with at least one candidate.
+    """
+    n_queries = query_points.shape[0]
+    device = query_points.device
+
+    cell_indices = torch.full((n_queries,), -1, dtype=torch.long, device=device)
+    resolved = torch.zeros(n_queries, dtype=torch.bool, device=device)
+
+    ### Estimate initial search tolerance from BVH root extent
+    root_extent = bvh.node_aabb_max[0] - bvh.node_aabb_min[0]
+    # Typical cell diameter ~ total extent / n_cells^(1/d)
+    tolerance = root_extent.max().item() / max(n_cells ** (1.0 / n_spatial_dims), 1.0)
+
+    ### Expanding-radius search: double tolerance each round until all resolved
+    max_rounds = 20  # tolerance doubles each round → covers 2^20 ~ 1M× initial
+    for _ in range(max_rounds):
+        remaining_mask = ~resolved
+        remaining_idx = torch.where(remaining_mask)[0]
+        if len(remaining_idx) == 0:
+            break
+
+        candidates = bvh.find_candidate_cells(
+            query_points[remaining_idx],
+            aabb_tolerance=tolerance,
+            max_candidates_per_point=64,
+        )
+
+        if candidates.n_total_neighbors > 0:
+            src, tgt = candidates.expand_to_pairs()
+            # src indexes into the remaining subset; map to global query indices
+            global_query = remaining_idx[src]
+
+            ### Compute squared centroid distances for all (query, candidate) pairs
+            dists_sq = (
+                (query_points[global_query] - cell_centroids[tgt]) ** 2
+            ).sum(dim=-1)
+
+            ### Per-query minimum via scatter
+            best_dist = torch.full(
+                (n_queries,), float("inf"), dtype=dists_sq.dtype, device=device
+            )
+            best_dist.scatter_reduce_(0, global_query, dists_sq, reduce="amin")
+
+            # Identify which pair achieved the minimum for each query
+            is_best = dists_sq == best_dist[global_query]
+            # Among ties, take the first occurrence per query
+            first_best = torch.zeros(n_queries, dtype=torch.bool, device=device)
+            first_best.scatter_(0, global_query[is_best], True)
+            best_mask = is_best & first_best[global_query]
+
+            cell_indices[global_query[best_mask]] = tgt[best_mask]
+
+            # Mark queries that received at least one candidate as resolved
+            has_candidate = candidates.counts > 0
+            resolved[remaining_idx[has_candidate]] = True
+
+        tolerance *= 2.0
+
+    return cell_indices, resolved
 
 
 # ---------------------------------------------------------------------------
@@ -678,13 +788,13 @@ def sample_data_at_points(
 
     n_queries = query_points.shape[0]
 
+    ### Ensure BVH is available (shared across projection and containment)
+    bvh = _ensure_bvh(mesh, bvh)
+
     ### Handle projection onto nearest cell
     if project_onto_nearest_cell:
-        _, projected_points = find_nearest_cells(mesh, query_points)
+        _, projected_points = find_nearest_cells(mesh, query_points, bvh=bvh)
         query_points = projected_points
-
-    ### Find containing pairs (always BVH-accelerated)
-    bvh = _ensure_bvh(mesh, bvh)
     query_indices, cell_indices, bary_coords = _find_containing_pairs(
         mesh, query_points, bvh, tolerance
     )
