@@ -314,12 +314,13 @@ def build_adjacency_from_pairs(
             indices=torch.zeros(0, dtype=torch.int64, device=device),
         )
 
-    ### Sort by (source, target) for grouping
-    # Use lexicographic sort: sort by source first, then by target
-    # Multiply source by (max_target + 1) to ensure source dominates in sort order
-    max_target = target_indices.max().item() if len(target_indices) > 0 else 0
-    sort_keys = source_indices * (max_target + 2) + target_indices
-    sort_indices = torch.argsort(sort_keys)
+    ### Lexicographic sort by (source, target) using two stable argsorts.
+    # This avoids the int64 overflow that occurs with the composite-key
+    # approach (source * max_target + target) when indices exceed ~3 × 10^9.
+    sort_by_target = torch.argsort(target_indices, stable=True)
+    sort_indices = sort_by_target[
+        torch.argsort(source_indices[sort_by_target], stable=True)
+    ]
 
     sorted_sources = source_indices[sort_indices]
     sorted_targets = target_indices[sort_indices]

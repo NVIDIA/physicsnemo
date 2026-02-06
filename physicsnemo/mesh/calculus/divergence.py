@@ -125,7 +125,11 @@ def compute_divergence_points_lsq(
     For vector field v = [vₓ, vᵧ, v_z]:
         div(v) = ∂vₓ/∂x + ∂vᵧ/∂y + ∂v_z/∂z
 
-    Computes gradient of each component, then takes the trace.
+    Computes the full Jacobian via a single batched LSQ solve, then takes
+    the trace. This is more efficient than solving each component separately,
+    because the adjacency construction, neighbor grouping, A-matrix assembly,
+    and batched lstsq are all performed once instead of ``n_spatial_dims``
+    times.
 
     Parameters
     ----------
@@ -141,24 +145,9 @@ def compute_divergence_points_lsq(
     """
     from physicsnemo.mesh.calculus._lsq_reconstruction import compute_point_gradient_lsq
 
-    n_points = mesh.n_points
-    n_spatial_dims = mesh.n_spatial_dims
+    ### Single call computes full Jacobian: J[i, j, k] = ∂v_j/∂x_k
+    # Shape: (n_points, n_spatial_dims, n_spatial_dims)
+    jacobian = compute_point_gradient_lsq(mesh, vector_field)
 
-    ### Compute gradient of each component
-    # For 3D: ∇vₓ, ∇vᵧ, ∇v_z
-    # Each is (n_points, n_spatial_dims)
-
-    divergence = torch.zeros(
-        n_points, dtype=vector_field.dtype, device=mesh.points.device
-    )
-
-    for dim in range(n_spatial_dims):
-        component = vector_field[:, dim]  # (n_points,)
-        grad_component = compute_point_gradient_lsq(
-            mesh, component
-        )  # (n_points, n_spatial_dims)
-
-        # Take diagonal: ∂v_dim/∂dim
-        divergence += grad_component[:, dim]
-
-    return divergence
+    ### Divergence = trace of Jacobian = Σ_k ∂v_k/∂x_k
+    return torch.einsum("...ii", jacobian)
