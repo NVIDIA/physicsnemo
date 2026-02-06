@@ -63,7 +63,6 @@ def remove_degenerate_cells(
     >>> assert stats["n_cells_final"] == mesh.n_cells  # no degenerates in clean mesh
     """
     n_original = mesh.n_cells
-    device = mesh.points.device
 
     if n_original == 0:
         return mesh, {
@@ -84,11 +83,7 @@ def remove_degenerate_cells(
     cells_sorted = torch.sort(mesh.cells, dim=1).values  # (n_cells, n_verts)
 
     # Check if any adjacent sorted vertices are equal
-    n_verts_per_cell = mesh.n_manifold_dims + 1
-    has_duplicates = torch.zeros(n_original, dtype=torch.bool, device=device)
-
-    for i in range(n_verts_per_cell - 1):
-        has_duplicates |= cells_sorted[:, i] == cells_sorted[:, i + 1]
+    has_duplicates = (cells_sorted[:, 1:] == cells_sorted[:, :-1]).any(dim=-1)
 
     has_unique_vertices = ~has_duplicates
 
