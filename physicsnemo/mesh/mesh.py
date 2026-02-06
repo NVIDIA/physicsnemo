@@ -2527,8 +2527,8 @@ class Mesh:
             mesh=self,
             tolerance=tolerance,
             merge_points=merge_points,
-            remove_duplicate_cells_flag=remove_duplicate_cells,
-            remove_unused_points_flag=remove_unused_points,
+            deduplicate_cells=remove_duplicate_cells,
+            drop_unused_points=remove_unused_points,
         )
 
     def strip_caches(self) -> "Mesh":

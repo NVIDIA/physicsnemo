@@ -152,17 +152,12 @@ def extrude(
         )
         vector_tensor[-1] = 1.0
     else:
-        # Convert to tensor if needed
-        if not isinstance(vector, torch.Tensor):
-            vector_tensor = torch.tensor(
-                vector,
-                dtype=mesh.points.dtype,
-                device=mesh.points.device,
-            )
-        else:
-            vector_tensor = vector.to(
-                dtype=mesh.points.dtype, device=mesh.points.device
-            )
+        # Convert to tensor if needed (torch.as_tensor avoids copies when possible)
+        vector_tensor = torch.as_tensor(
+            vector,
+            dtype=mesh.points.dtype,
+            device=mesh.points.device,
+        )
 
         # Validate vector shape
         if vector_tensor.ndim != 1:

@@ -112,7 +112,7 @@ def sample_random_points_on_cells(
     # When alpha=1, Gamma(1,1) is equivalent to Exponential(1), which is more efficient
     if alpha == 1.0:
         distribution = torch.distributions.Exponential(
-            rate=torch.tensor(1.0, device=mesh.points.device),
+            rate=torch.ones((), device=mesh.points.device),
         )
     else:
         if torch.compiler.is_compiling():
@@ -122,9 +122,10 @@ def sample_random_points_on_cells(
                 f"when using torch.compile. Use alpha=1.0 (uniform distribution) instead, or disable torch.compile.\n"
                 f"See https://github.com/pytorch/pytorch/issues/165751."
             )
+        _rate = torch.ones((), device=mesh.points.device)
         distribution = torch.distributions.Gamma(
-            concentration=torch.tensor(alpha, device=mesh.points.device),
-            rate=torch.tensor(1.0, device=mesh.points.device),
+            concentration=torch.full((), alpha, device=mesh.points.device),
+            rate=_rate,
         )
 
     raw_barycentric_coords = distribution.sample((n_samples, mesh.n_manifold_dims + 1))

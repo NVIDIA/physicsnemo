@@ -358,8 +358,8 @@ def clean_mesh(
     mesh: "Mesh",
     tolerance: float = 1e-12,
     merge_points: bool = True,
-    remove_duplicate_cells_flag: bool = True,
-    remove_unused_points_flag: bool = True,
+    deduplicate_cells: bool = True,
+    drop_unused_points: bool = True,
 ) -> "Mesh":
     """Clean and repair a mesh.
 
@@ -376,9 +376,9 @@ def clean_mesh(
         Absolute L2 distance threshold for merging duplicate points.
     merge_points : bool, optional
         Whether to merge duplicate points.
-    remove_duplicate_cells_flag : bool, optional
+    deduplicate_cells : bool, optional
         Whether to remove duplicate cells.
-    remove_unused_points_flag : bool, optional
+    drop_unused_points : bool, optional
         Whether to remove unused points.
 
     Returns
@@ -413,14 +413,14 @@ def clean_mesh(
         )
 
     ### Step 2: Remove duplicate cells
-    if remove_duplicate_cells_flag:
+    if deduplicate_cells:
         cells, cell_data = remove_duplicate_cells(
             cells=cells,
             cell_data=cell_data,
         )
 
     ### Step 3: Remove unused points
-    if remove_unused_points_flag:
+    if drop_unused_points:
         points, cells, point_data, _ = remove_unused_points(
             points=points,
             cells=cells,

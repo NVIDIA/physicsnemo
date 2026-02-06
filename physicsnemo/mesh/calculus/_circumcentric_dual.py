@@ -399,12 +399,11 @@ def compute_cotan_weights_fem(
     det_threshold = (edge_length_scale ** (2 * n_manifold_dims)) * 1e-12
     is_degenerate = det_G.abs() < det_threshold  # (n_cells,)
 
-    if is_degenerate.any():
-        # Add identity to make degenerate Gram matrices invertible.
-        # The contribution from these cells will be zeroed by cell_volumes ~ 0.
-        eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
-        G = G.clone()
-        G[is_degenerate] += eye
+    # Add identity to degenerate Gram matrices to make them invertible.
+    # The contribution from these cells will be zeroed by cell_volumes ~ 0.
+    # Written branchlessly so torch.compile can trace through without graph breaks.
+    eye = torch.eye(n_manifold_dims, dtype=dtype, device=device)
+    G = G + is_degenerate.float().unsqueeze(-1).unsqueeze(-1) * eye
 
     ### Invert Gram matrix
     # G_inv: (n_cells, n_manifold_dims, n_manifold_dims)
@@ -424,8 +423,8 @@ def compute_cotan_weights_fem(
     ### Extract gradient dot products for each local edge pair
     # Local edge pairs in combinations order (matches extract_candidate_facets)
     local_pairs = list(combinations(range(n_verts_per_cell), 2))
-    pair_i = torch.tensor([p[0] for p in local_pairs], device=device)
-    pair_j = torch.tensor([p[1] for p in local_pairs], device=device)
+    pair_i = torch.as_tensor([p[0] for p in local_pairs], device=device)
+    pair_j = torch.as_tensor([p[1] for p in local_pairs], device=device)
     n_pairs = len(local_pairs)
 
     # grad_dots: (n_cells, n_pairs) - one value per cell per local edge

@@ -125,9 +125,9 @@ def get_cell_to_cells_adjacency(
     # diff != 0 marks transitions between different facets
     facet_changes = torch.cat(
         [
-            torch.tensor([0], device=sorted_facet_ids.device),
+            sorted_facet_ids.new_zeros(1),
             torch.where(sorted_facet_ids[1:] != sorted_facet_ids[:-1])[0] + 1,
-            torch.tensor([len(sorted_facet_ids)], device=sorted_facet_ids.device),
+            sorted_facet_ids.new_tensor([len(sorted_facet_ids)]),
         ]
     )
 

@@ -108,7 +108,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
     gaussian_curvature = torch.where(
         dual_volumes > 0,
         gaussian_curvature,
-        torch.tensor(float("nan"), dtype=gaussian_curvature.dtype, device=device),
+        torch.full_like(gaussian_curvature, float("nan")),
     )
 
     return gaussian_curvature
@@ -263,7 +263,7 @@ def gaussian_curvature_cells(mesh: "Mesh") -> torch.Tensor:
     gaussian_curvature = torch.where(
         cell_areas > 0,
         gaussian_curvature,
-        torch.tensor(float("nan"), dtype=gaussian_curvature.dtype, device=device),
+        torch.full_like(gaussian_curvature, float("nan")),
     )
 
     return gaussian_curvature

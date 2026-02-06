@@ -137,9 +137,7 @@ def mean_curvature_vertices(
     mean_curvature = torch.where(
         dual_volumes > 0,
         mean_curvature,
-        torch.tensor(
-            float("nan"), dtype=mean_curvature.dtype, device=mesh.points.device
-        ),
+        torch.full_like(mean_curvature, float("nan")),
     )
 
     ### Handle boundary vertices
@@ -156,9 +154,7 @@ def mean_curvature_vertices(
         # Set boundary vertices to NaN
         mean_curvature = torch.where(
             is_boundary_vertex,
-            torch.tensor(
-                float("nan"), dtype=mean_curvature.dtype, device=mesh.points.device
-            ),
+            torch.full_like(mean_curvature, float("nan")),
             mean_curvature,
         )
 

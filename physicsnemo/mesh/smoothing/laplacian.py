@@ -225,8 +225,9 @@ def smooth_laplacian(
         mesh.points = mesh.points + relaxation_factor * laplacian
 
         ### Restore constrained vertices to original positions
-        if torch.any(constrained_vertices):
-            mesh.points[constrained_vertices] = original_points[constrained_vertices]
+        # Written unconditionally to avoid a torch.compile graph break;
+        # masked assignment on an all-False mask is a no-op.
+        mesh.points[constrained_vertices] = original_points[constrained_vertices]
 
         ### Check convergence
         if convergence > 0:
@@ -403,7 +404,7 @@ def _detect_sharp_edges(
     # Mark boundaries: True where edge_id changes (first occurrence of each edge)
     edge_changes = torch.cat(
         [
-            torch.tensor([True], device=device),
+            torch.ones(1, dtype=torch.bool, device=device),
             sorted_edge_ids[1:] != sorted_edge_ids[:-1],
         ]
     )

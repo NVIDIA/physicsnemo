@@ -105,8 +105,8 @@ def repair_mesh(
             current_mesh,
             tolerance=tolerance,
             merge_points=True,
-            remove_duplicate_cells_flag=False,
-            remove_unused_points_flag=False,
+            deduplicate_cells=False,
+            drop_unused_points=False,
         )
         n_after = current_mesh.n_points
         all_stats["merge_points"] = {

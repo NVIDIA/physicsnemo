@@ -27,6 +27,7 @@ import torch
 
 from physicsnemo.mesh.boundaries import extract_candidate_facets
 from physicsnemo.mesh.utilities._duplicate_detection import find_duplicate_pairs
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -40,7 +41,7 @@ def validate_mesh(
     check_out_of_bounds: bool = True,
     check_manifoldness: bool = False,  # Only 2D, opt-in
     check_self_intersection: bool = False,  # Very expensive, opt-in
-    tolerance: float = 1e-10,
+    tolerance: float | None = None,
     raise_on_error: bool = False,
 ) -> Mapping[str, bool | int | torch.Tensor]:
     """Validate mesh integrity and detect common errors.
@@ -64,8 +65,9 @@ def validate_mesh(
         Check manifold topology (2D only, expensive)
     check_self_intersection : bool
         Check for self-intersecting cells (very expensive)
-    tolerance : float
-        Tolerance for geometric checks (areas, distances)
+    tolerance : float | None
+        Tolerance for geometric checks (areas, distances).
+        If ``None`` (default), uses a dtype-aware epsilon via :func:`safe_eps`.
     raise_on_error : bool
         If True, raise ValueError on first error. If False,
         return dict with all validation results.
@@ -98,6 +100,10 @@ def validate_mesh(
     >>> report = validate_mesh(mesh)
     >>> assert report["valid"] == True
     """
+    ### Default tolerance based on point dtype
+    if tolerance is None:
+        tolerance = safe_eps(mesh.points.dtype)
+
     results = {
         "valid": True,
     }

@@ -246,7 +246,7 @@ def compute_angles_at_vertices(mesh: "Mesh") -> torch.Tensor:
             # Create mask for vertices that equal point_idx
             is_point = edge_verts == point_idx
             other_indices = torch.where(
-                ~is_point, edge_verts, torch.tensor(-1, device=edge_verts.device)
+                ~is_point, edge_verts, edge_verts.new_full(edge_verts.shape, -1)
             )
             other_vertices = other_indices.max(dim=1).values  # (n_incident,)
 
