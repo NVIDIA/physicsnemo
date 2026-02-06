@@ -337,7 +337,7 @@ class TestRepairPipeline:
         assert mesh_clean.n_points == original_n_points
         assert mesh_clean.n_cells == original_n_cells
         assert stats["degenerates"]["n_zero_area_cells"] == 0
-        assert stats["duplicates"]["n_duplicates_merged"] == 0
+        assert stats["merge_points"]["n_duplicates_merged"] == 0
         assert stats["isolated"]["n_isolated_removed"] == 0
 
     def test_pipeline_preserves_data(self, device):
@@ -446,7 +446,7 @@ class TestRepairIntegration:
         mesh1, _ = remove_degenerate_cells(mesh)
         assert mesh1.n_cells == 1  # Removed degenerate
 
-        mesh2 = mesh1.clean()
+        mesh2 = mesh1.clean(remove_unused_points=False)
         assert mesh2.n_points == 4  # Merged duplicates
 
         mesh3, _ = remove_isolated_vertices(mesh2)
