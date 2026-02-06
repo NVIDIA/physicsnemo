@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import torch
@@ -22,10 +22,13 @@ import torch
 from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
 
+if TYPE_CHECKING:
+    import pyvista
+
 
 @require_version_spec("pyvista")
 def from_pyvista(
-    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",  # noqa: F821
+    pyvista_mesh: "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet",
     manifold_dim: int | Literal["auto"] = "auto",
 ) -> Mesh:
     """Convert a PyVista mesh to a physicsnemo.mesh Mesh.
@@ -213,16 +216,16 @@ def from_pyvista(
     return Mesh(
         points=points,
         cells=cells,
-        point_data=pyvista_mesh.point_data,  # type: ignore[arg-type]
-        cell_data=pyvista_mesh.cell_data,  # type: ignore[arg-type]
-        global_data=pyvista_mesh.field_data,  # type: ignore[arg-type]
+        point_data=pyvista_mesh.point_data,
+        cell_data=pyvista_mesh.cell_data,
+        global_data=pyvista_mesh.field_data,
     )
 
 
 @require_version_spec("pyvista")
 def to_pyvista(
     mesh: Mesh,
-) -> "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet":  # noqa: F821
+) -> "pyvista.PolyData | pyvista.UnstructuredGrid | pyvista.PointSet":
     """Convert a physicsnemo.mesh Mesh to a PyVista mesh.
 
     Parameters
