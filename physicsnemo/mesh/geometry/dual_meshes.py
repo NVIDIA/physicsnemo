@@ -222,85 +222,56 @@ def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
         # Check if obtuse (any angle > π/2)
         is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
 
-        ### Non-obtuse triangles: Use circumcentric Voronoi formula (Eq. 7)
-        # A_voronoi_i = (1/8) * Σ (||e_ij||² cot(α_ij) + ||e_ik||² cot(α_ik))
-        # For each vertex i in a non-obtuse triangle, compute Voronoi contribution
-        non_obtuse_mask = ~is_obtuse
+        ### Branchless computation of mixed Voronoi areas
+        # For each cell we compute BOTH the circumcentric Voronoi formula (Eq. 7,
+        # valid for acute triangles) and the mixed-area formula (Figure 4, for
+        # obtuse triangles), then select per-cell via torch.where.
+        # This avoids data-dependent branching that would break torch.compile.
 
-        if non_obtuse_mask.any():
-            ### Extract non-obtuse triangles
-            non_obtuse_cells = mesh.cells[non_obtuse_mask]  # (n_non_obtuse, 3)
-            non_obtuse_vertices = cell_vertices[
-                non_obtuse_mask
-            ]  # (n_non_obtuse, 3, n_spatial_dims)
-            non_obtuse_angles = all_angles[non_obtuse_mask]  # (n_non_obtuse, 3)
+        eps = safe_eps(all_angles.dtype)
 
-            ### For each of the 3 vertices in each triangle, compute Voronoi area
-            # Vertex 0: uses edges to vertices 1 and 2
-            # Voronoi area = (1/8) * (||edge_01||² * cot(angle_2) + ||edge_02||² * cot(angle_1))
+        for local_v_idx in range(3):
+            next_idx = (local_v_idx + 1) % 3
+            prev_idx = (local_v_idx + 2) % 3
 
-            for local_v_idx in range(3):
-                ### Get the two adjacent vertices (in cyclic order)
-                next_idx = (local_v_idx + 1) % 3
-                prev_idx = (local_v_idx + 2) % 3
+            ### Voronoi contribution (Eq. 7) - computed for ALL cells
+            edge_to_next = (
+                cell_vertices[:, next_idx, :] - cell_vertices[:, local_v_idx, :]
+            )  # (n_cells, n_spatial_dims)
+            edge_to_prev = (
+                cell_vertices[:, prev_idx, :] - cell_vertices[:, local_v_idx, :]
+            )  # (n_cells, n_spatial_dims)
 
-                ### Compute edge vectors from current vertex
-                edge_to_next = (
-                    non_obtuse_vertices[:, next_idx, :]
-                    - non_obtuse_vertices[:, local_v_idx, :]
-                )  # (n_non_obtuse, n_spatial_dims)
-                edge_to_prev = (
-                    non_obtuse_vertices[:, prev_idx, :]
-                    - non_obtuse_vertices[:, local_v_idx, :]
-                )  # (n_non_obtuse, n_spatial_dims)
+            edge_to_next_sq = (edge_to_next**2).sum(dim=-1)  # (n_cells,)
+            edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)  # (n_cells,)
 
-                ### Compute edge lengths squared
-                edge_to_next_sq = (edge_to_next**2).sum(dim=-1)  # (n_non_obtuse,)
-                edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)  # (n_non_obtuse,)
+            cot_prev = torch.cos(all_angles[:, prev_idx]) / torch.sin(
+                all_angles[:, prev_idx]
+            ).clamp(min=eps)
+            cot_next = torch.cos(all_angles[:, next_idx]) / torch.sin(
+                all_angles[:, next_idx]
+            ).clamp(min=eps)
 
-                ### Get cotangents of opposite angles
-                # Cotangent at prev vertex (opposite to edge_to_next)
-                cot_prev = torch.cos(non_obtuse_angles[:, prev_idx]) / torch.sin(
-                    non_obtuse_angles[:, prev_idx]
-                ).clamp(min=safe_eps(non_obtuse_angles.dtype))
-                # Cotangent at next vertex (opposite to edge_to_prev)
-                cot_next = torch.cos(non_obtuse_angles[:, next_idx]) / torch.sin(
-                    non_obtuse_angles[:, next_idx]
-                ).clamp(min=safe_eps(non_obtuse_angles.dtype))
+            voronoi_contribution = (
+                edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
+            ) / 8.0  # (n_cells,)
 
-                ### Compute Voronoi area contribution for this vertex (Equation 7)
-                voronoi_contribution = (
-                    edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
-                ) / 8.0  # (n_non_obtuse,)
+            ### Mixed-area contribution (Figure 4) - computed for ALL cells
+            is_obtuse_at_vertex = all_angles[:, local_v_idx] > torch.pi / 2
+            mixed_contribution = torch.where(
+                is_obtuse_at_vertex,
+                cell_volumes / 2.0,
+                cell_volumes / 4.0,
+            )  # (n_cells,)
 
-                ### Scatter to global dual volumes
-                vertex_indices = non_obtuse_cells[:, local_v_idx]
-                dual_volumes.scatter_add_(0, vertex_indices, voronoi_contribution)
+            ### Select per cell: Voronoi for acute, mixed for obtuse
+            contribution = torch.where(
+                is_obtuse, mixed_contribution, voronoi_contribution
+            )
 
-        ### Obtuse triangles: Use mixed area (Figure 4)
-        # If angle at vertex is obtuse: add area(T)/2
-        # Else: add area(T)/4
-        if is_obtuse.any():
-            obtuse_cells = mesh.cells[is_obtuse]  # (n_obtuse, 3)
-            obtuse_volumes = cell_volumes[is_obtuse]  # (n_obtuse,)
-            obtuse_angles = all_angles[is_obtuse]  # (n_obtuse, 3)
-
-            ### For each of the 3 vertices in each obtuse triangle
-            for local_v_idx in range(3):
-                ### Check if angle at this vertex is obtuse
-                is_obtuse_at_vertex = obtuse_angles[:, local_v_idx] > torch.pi / 2
-
-                ### Compute contribution based on Meyer Figure 4
-                # If obtuse at vertex: area(T)/2, else: area(T)/4
-                contribution = torch.where(
-                    is_obtuse_at_vertex,
-                    obtuse_volumes / 2.0,
-                    obtuse_volumes / 4.0,
-                )  # (n_obtuse,)
-
-                ### Scatter to global dual volumes
-                vertex_indices = obtuse_cells[:, local_v_idx]
-                dual_volumes.scatter_add_(0, vertex_indices, contribution)
+            ### Scatter to global dual volumes
+            vertex_indices = mesh.cells[:, local_v_idx]
+            dual_volumes.scatter_add_(0, vertex_indices, contribution)
 
     elif n_manifold_dims >= 3:
         ### 3D and higher: Barycentric subdivision

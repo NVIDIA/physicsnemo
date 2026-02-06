@@ -147,7 +147,7 @@ def compute_edge_support_volume_cell_fractions(
         ### Compute within-group position (0, 1, 2, ...) for each entry
         # Find group boundaries where edge index changes
         group_starts = torch.cat([
-            torch.tensor([0], device=device, dtype=torch.long),
+            sorted_edges_idx.new_zeros(1),
             torch.where(sorted_edges_idx[1:] != sorted_edges_idx[:-1])[0] + 1,
         ])
 
@@ -183,19 +183,17 @@ def compute_edge_support_volume_cell_fractions(
 
     for slot in range(2):
         valid_mask = edge_to_cells[:, slot] >= 0
-        if not valid_mask.any():
-            continue
-
-        valid_edges = torch.where(valid_mask)[0]
-        cell_indices = edge_to_cells[valid_edges, slot]
+        # Clamp indices to 0 for invalid slots (distances will be zeroed by mask)
+        safe_cell_indices = edge_to_cells[:, slot].clamp(min=0)
 
         # Distance from edge midpoint to circumcenter
         distances = torch.norm(
-            circumcenters[cell_indices] - edge_midpoints[valid_edges],
+            circumcenters[safe_cell_indices] - edge_midpoints,
             dim=-1,
-        )  # (n_valid,)
+        )  # (n_edges,)
 
-        dual_edge_segments[valid_edges, slot] = distances
+        # Zero out distances for invalid slots (no adjacent cell)
+        dual_edge_segments[:, slot] = torch.where(valid_mask, distances, distances.new_zeros(()))
 
     ### Compute total dual edge length for each edge
     total_dual_lengths = dual_edge_segments.sum(dim=1)  # (n_edges,)
@@ -308,66 +306,50 @@ def compute_vertex_support_volume_cell_fractions(
 
         is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
 
-        ### Voronoi areas for acute triangles (Meyer Eq. 7)
-        non_obtuse_mask = ~is_obtuse
-        if non_obtuse_mask.any():
-            non_obtuse_indices = torch.where(non_obtuse_mask)[0]
-            non_obtuse_vertices = cell_vertices[non_obtuse_mask]
-            non_obtuse_angles = all_angles[non_obtuse_mask]
+        ### Branchless mixed Voronoi area computation (both acute and obtuse)
+        # Computes both formulas for all cells, selects via torch.where.
+        eps = safe_eps(all_angles.dtype)
+        cell_idx_range = torch.arange(n_cells, device=device)
 
-            for local_v_idx in range(3):
-                next_idx = (local_v_idx + 1) % 3
-                prev_idx = (local_v_idx + 2) % 3
+        for local_v_idx in range(3):
+            next_idx = (local_v_idx + 1) % 3
+            prev_idx = (local_v_idx + 2) % 3
 
-                edge_to_next = (
-                    non_obtuse_vertices[:, next_idx, :]
-                    - non_obtuse_vertices[:, local_v_idx, :]
-                )
-                edge_to_prev = (
-                    non_obtuse_vertices[:, prev_idx, :]
-                    - non_obtuse_vertices[:, local_v_idx, :]
-                )
+            ### Voronoi contribution (Eq. 7) - computed for ALL cells
+            edge_to_next = (
+                cell_vertices[:, next_idx, :] - cell_vertices[:, local_v_idx, :]
+            )
+            edge_to_prev = (
+                cell_vertices[:, prev_idx, :] - cell_vertices[:, local_v_idx, :]
+            )
 
-                edge_to_next_sq = (edge_to_next**2).sum(dim=-1)
-                edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)
+            edge_to_next_sq = (edge_to_next**2).sum(dim=-1)
+            edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)
 
-                cot_prev = torch.cos(
-                    non_obtuse_angles[:, prev_idx]
-                ) / torch.sin(non_obtuse_angles[:, prev_idx]).clamp(
-                    min=safe_eps(non_obtuse_angles.dtype)
-                )
-                cot_next = torch.cos(
-                    non_obtuse_angles[:, next_idx]
-                ) / torch.sin(non_obtuse_angles[:, next_idx]).clamp(
-                    min=safe_eps(non_obtuse_angles.dtype)
-                )
+            cot_prev = torch.cos(all_angles[:, prev_idx]) / torch.sin(
+                all_angles[:, prev_idx]
+            ).clamp(min=eps)
+            cot_next = torch.cos(all_angles[:, next_idx]) / torch.sin(
+                all_angles[:, next_idx]
+            ).clamp(min=eps)
 
-                ### Raw Voronoi area |⋆v ∩ cell| (Eq. 7)
-                voronoi_in_cell = (
-                    edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
-                ) / 8.0
+            voronoi_acute = (
+                edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
+            ) / 8.0
 
-                pair_indices = non_obtuse_indices * 3 + local_v_idx
-                voronoi_areas[pair_indices] = voronoi_in_cell
+            ### Mixed-area contribution (Figure 4) - computed for ALL cells
+            is_obtuse_at_vertex = all_angles[:, local_v_idx] > torch.pi / 2
+            voronoi_obtuse = torch.where(
+                is_obtuse_at_vertex,
+                cell_areas / 2.0,
+                cell_areas / 4.0,
+            )
 
-        ### Voronoi areas for obtuse triangles (Meyer Fig. 4)
-        if is_obtuse.any():
-            obtuse_indices = torch.where(is_obtuse)[0]
-            obtuse_areas = cell_areas[is_obtuse]
-            obtuse_angles = all_angles[is_obtuse]
+            ### Select per cell
+            voronoi_in_cell = torch.where(is_obtuse, voronoi_obtuse, voronoi_acute)
 
-            for local_v_idx in range(3):
-                is_obtuse_at_vertex = obtuse_angles[:, local_v_idx] > torch.pi / 2
-
-                ### Mixed area: obtuse vertex gets half, others get quarter
-                voronoi_in_cell = torch.where(
-                    is_obtuse_at_vertex,
-                    obtuse_areas / 2.0,
-                    obtuse_areas / 4.0,
-                )
-
-                pair_indices = obtuse_indices * 3 + local_v_idx
-                voronoi_areas[pair_indices] = voronoi_in_cell
+            pair_indices = cell_idx_range * 3 + local_v_idx
+            voronoi_areas[pair_indices] = voronoi_in_cell
 
     ### Normalize per vertex: fraction = |⋆v ∩ cell| / |⋆v|
     # Map each (cell, local_vertex) pair to its global vertex index
