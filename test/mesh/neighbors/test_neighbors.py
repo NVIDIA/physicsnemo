@@ -186,13 +186,67 @@ def assert_on_device(tensor: torch.Tensor, expected_device: str) -> None:
     )
 
 
+def _compute_adjacency(mesh, adj_type):
+    """Compute adjacency of the given type on a mesh.
+
+    Helper used by disjoint-mesh and transformation-invariance tests.
+    """
+    if adj_type == "point_to_points":
+        return mesh.get_point_to_points_adjacency()
+    elif adj_type == "cell_to_cells":
+        return mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
+    elif adj_type == "point_to_cells":
+        return mesh.get_point_to_cells_adjacency()
+    elif adj_type == "cells_to_points":
+        return mesh.get_cells_to_points_adjacency()
+    else:
+        raise ValueError(f"Unknown adjacency type: {adj_type}")
+
+
+### Parametrization Constants ###
+
+# Common dimension configs for adjacency tests (excludes 0-manifold point clouds)
+_SIMPLEX_DIM_CONFIGS = [
+    (2, 1),  # Edges in 2D
+    (2, 2),  # Triangles in 2D
+    (3, 1),  # Edges in 3D
+    (3, 2),  # Surfaces in 3D
+    (3, 3),  # Volumes in 3D
+]
+
+# All four adjacency types for parametrized tests
+_ADJACENCY_TYPES = [
+    pytest.param("point_to_points", id="point_to_points"),
+    pytest.param("cell_to_cells", id="cell_to_cells"),
+    pytest.param("point_to_cells", id="point_to_cells"),
+    pytest.param("cells_to_points", id="cells_to_points"),
+]
+
+# Geometric transforms for invariance tests
+_TRANSFORMS = [
+    pytest.param("translation", id="translation"),
+    pytest.param("rotation", id="rotation"),
+    pytest.param("reflection", id="reflection"),
+]
+
 ### Test Fixtures ###
 
 
-@pytest.fixture
-def airplane_mesh_pair(device):
-    """2D manifold (triangular surface) in 3D space."""
-    pv_mesh = pv.examples.load_airplane()
+@pytest.fixture(
+    params=[
+        pytest.param("airplane", id="airplane"),
+        pytest.param("tetbeam", id="tetbeam"),
+    ]
+)
+def real_mesh_pair(request, device):
+    """Real-world mesh pair (physicsnemo + pyvista) for cross-validation.
+
+    Parametrized over airplane (2D surface in 3D) and tetbeam (3D volume) meshes.
+    """
+    if request.param == "airplane":
+        pv_mesh = pv.examples.load_airplane()
+    else:
+        pv_mesh = pv.examples.load_tetbeam()
     tm_mesh = from_pyvista(pv_mesh)
     tm_mesh = Mesh(
         points=tm_mesh.points.to(device),
@@ -204,17 +258,26 @@ def airplane_mesh_pair(device):
 
 
 @pytest.fixture
-def tetbeam_mesh_pair(device):
-    """3D manifold (tetrahedral volume) in 3D space."""
-    pv_mesh = pv.examples.load_tetbeam()
-    tm_mesh = from_pyvista(pv_mesh)
-    tm_mesh = Mesh(
-        points=tm_mesh.points.to(device),
-        cells=tm_mesh.cells.to(device),
-        point_data=tm_mesh.point_data,
-        cell_data=tm_mesh.cell_data,
+def simple_triangles(device):
+    """Simple triangle mesh for basic testing (shared across test classes)."""
+    points = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ],
+        device=device,
     )
-    return tm_mesh, pv_mesh
+    cells = torch.tensor(
+        [
+            [0, 1, 2],
+            [1, 3, 2],
+        ],
+        device=device,
+        dtype=torch.int64,
+    )
+    return Mesh(points=points, cells=cells)
 
 
 class TestPointToPointsAdjacency:
@@ -222,9 +285,9 @@ class TestPointToPointsAdjacency:
 
     ### Cross-validation against PyVista ###
 
-    def test_airplane_point_neighbors(self, airplane_mesh_pair):
-        """Validate point-to-points adjacency against PyVista for airplane mesh."""
-        tm_mesh, pv_mesh = airplane_mesh_pair
+    def test_cross_validation_point_neighbors(self, real_mesh_pair):
+        """Validate point-to-points adjacency against PyVista."""
+        tm_mesh, pv_mesh = real_mesh_pair
         device = tm_mesh.points.device.type
 
         ### Compute adjacency using physicsnemo.mesh
@@ -246,46 +309,17 @@ class TestPointToPointsAdjacency:
         )
 
         for i, (tm_nbrs, pv_nbrs) in enumerate(zip(tm_neighbors, pv_neighbors)):
-            # Sort both for order-independent comparison
             tm_sorted = sorted(tm_nbrs)
             pv_sorted = sorted(pv_nbrs)
             assert tm_sorted == pv_sorted, (
                 f"Point {i} neighbors mismatch:\n  physicsnemo.mesh: {tm_sorted}\n  pyvista:   {pv_sorted}"
             )
 
-    def test_tetbeam_point_neighbors(self, tetbeam_mesh_pair):
-        """Validate point-to-points adjacency against PyVista for tetbeam mesh."""
-        tm_mesh, pv_mesh = tetbeam_mesh_pair
-        device = tm_mesh.points.device.type
+    ### Symmetry Tests ###
 
-        ### Compute adjacency using physicsnemo.mesh
-        adj = tm_mesh.get_point_to_points_adjacency()
-        assert_on_device(adj.offsets, device)
-        assert_on_device(adj.indices, device)
-
-        tm_neighbors = adj.to_list()
-
-        ### Get ground truth from PyVista (requires Python loop)
-        pv_neighbors = []
-        for i in range(pv_mesh.n_points):
-            neighbors = pv_mesh.point_neighbors(i)
-            pv_neighbors.append(neighbors)
-
-        ### Compare results (order-independent)
-        assert len(tm_neighbors) == len(pv_neighbors)
-
-        for i, (tm_nbrs, pv_nbrs) in enumerate(zip(tm_neighbors, pv_neighbors)):
-            tm_sorted = sorted(tm_nbrs)
-            pv_sorted = sorted(pv_nbrs)
-            assert tm_sorted == pv_sorted, (
-                f"Point {i} neighbors mismatch:\n  physicsnemo.mesh: {tm_sorted}\n  pyvista:   {pv_sorted}"
-            )
-
-    ### Symmetry Tests on Real-World Meshes ###
-
-    def test_symmetry_airplane(self, airplane_mesh_pair):
-        """Verify point adjacency is symmetric on airplane mesh (complex real-world case)."""
-        tm_mesh, _ = airplane_mesh_pair
+    def test_symmetry_real_mesh(self, real_mesh_pair):
+        """Verify point adjacency is symmetric on real-world meshes."""
+        tm_mesh, _ = real_mesh_pair
 
         adj = tm_mesh.get_point_to_points_adjacency()
         neighbors = adj.to_list()
@@ -297,31 +331,9 @@ class TestPointToPointsAdjacency:
                     f"Asymmetric adjacency: {i} neighbors {j}, but {j} doesn't neighbor {i}"
                 )
 
-    def test_symmetry_tetbeam(self, tetbeam_mesh_pair):
-        """Verify point adjacency is symmetric on tetbeam mesh (complex real-world case)."""
-        tm_mesh, _ = tetbeam_mesh_pair
-
-        adj = tm_mesh.get_point_to_points_adjacency()
-        neighbors = adj.to_list()
-
-        for i, nbrs in enumerate(neighbors):
-            for j in nbrs:
-                assert i in neighbors[j], (
-                    f"Asymmetric adjacency: {i} neighbors {j}, but {j} doesn't neighbor {i}"
-                )
-
     ### Parametrized Tests on Synthetic Meshes (Exhaustive Dimensional Coverage) ###
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),  # Edges in 2D
-            (2, 2),  # Triangles in 2D
-            (3, 1),  # Edges in 3D
-            (3, 2),  # Surfaces in 3D
-            (3, 3),  # Volumes in 3D
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_symmetry_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify point adjacency is symmetric across all dimension combinations (synthetic meshes)."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -338,16 +350,7 @@ class TestPointToPointsAdjacency:
                     f"{i} neighbors {j}, but {j} doesn't neighbor {i}"
                 )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_no_self_loops_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify no point is its own neighbor across dimensions."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -360,16 +363,7 @@ class TestPointToPointsAdjacency:
                 f"Point {i} is listed as its own neighbor ({n_spatial_dims=}, {n_manifold_dims=})"
             )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_no_duplicates_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify each neighbor appears exactly once across dimensions."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -410,13 +404,13 @@ class TestCellToCellsAdjacency:
 
     ### Cross-validation against PyVista ###
 
-    def test_airplane_cell_neighbors(self, airplane_mesh_pair):
-        """Validate cell-to-cells adjacency against PyVista for airplane mesh."""
-        tm_mesh, pv_mesh = airplane_mesh_pair
+    def test_cross_validation_cell_neighbors(self, real_mesh_pair):
+        """Validate cell-to-cells adjacency against PyVista."""
+        tm_mesh, pv_mesh = real_mesh_pair
         device = tm_mesh.points.device.type
 
         ### Compute adjacency using physicsnemo.mesh
-        # For triangular mesh, codimension=1 means sharing an edge
+        # Codimension=1: sharing edges for triangles, sharing faces for tets
         adj = tm_mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
         assert_on_device(adj.offsets, device)
         assert_on_device(adj.indices, device)
@@ -424,11 +418,11 @@ class TestCellToCellsAdjacency:
         tm_neighbors = adj.to_list()
 
         ### Get ground truth from PyVista
-        # For triangular meshes, codimension=1 (sharing an edge) corresponds to
-        # PyVista's connections="edges"
+        # Map codimension=1 to PyVista connection type based on manifold dimension
+        pv_connection = {2: "edges", 3: "faces"}[tm_mesh.n_manifold_dims]
         pv_neighbors = []
         for i in range(pv_mesh.n_cells):
-            neighbors = pv_mesh.cell_neighbors(i, connections="edges")
+            neighbors = pv_mesh.cell_neighbors(i, connections=pv_connection)
             pv_neighbors.append(neighbors)
 
         ### Compare results (order-independent)
@@ -443,56 +437,11 @@ class TestCellToCellsAdjacency:
                 f"Cell {i} neighbors mismatch:\n  physicsnemo.mesh: {tm_sorted}\n  pyvista:   {pv_sorted}"
             )
 
-    def test_tetbeam_cell_neighbors(self, tetbeam_mesh_pair):
-        """Validate cell-to-cells adjacency against PyVista for tetbeam mesh."""
-        tm_mesh, pv_mesh = tetbeam_mesh_pair
-        device = tm_mesh.points.device.type
+    ### Symmetry Tests ###
 
-        ### Compute adjacency using physicsnemo.mesh
-        # For tetrahedral mesh, codimension=1 means sharing a triangular face
-        adj = tm_mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        assert_on_device(adj.offsets, device)
-        assert_on_device(adj.indices, device)
-
-        tm_neighbors = adj.to_list()
-
-        ### Get ground truth from PyVista
-        # For tetrahedral meshes, codimension=1 (sharing a face) corresponds to
-        # PyVista's connections="faces"
-        pv_neighbors = []
-        for i in range(pv_mesh.n_cells):
-            neighbors = pv_mesh.cell_neighbors(i, connections="faces")
-            pv_neighbors.append(neighbors)
-
-        ### Compare results
-        assert len(tm_neighbors) == len(pv_neighbors)
-
-        for i, (tm_nbrs, pv_nbrs) in enumerate(zip(tm_neighbors, pv_neighbors)):
-            tm_sorted = sorted(tm_nbrs)
-            pv_sorted = sorted(pv_nbrs)
-            assert tm_sorted == pv_sorted, (
-                f"Cell {i} neighbors mismatch:\n  physicsnemo.mesh: {tm_sorted}\n  pyvista:   {pv_sorted}"
-            )
-
-    ### Symmetry Tests on Real-World Meshes ###
-
-    def test_symmetry_airplane(self, airplane_mesh_pair):
-        """Verify cell adjacency is symmetric on airplane mesh (complex real-world case)."""
-        tm_mesh, _ = airplane_mesh_pair
-
-        adj = tm_mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors = adj.to_list()
-
-        for i, nbrs in enumerate(neighbors):
-            for j in nbrs:
-                assert i in neighbors[j], (
-                    f"Asymmetric adjacency: cell {i} neighbors cell {j}, "
-                    f"but cell {j} doesn't neighbor cell {i}"
-                )
-
-    def test_symmetry_tetbeam(self, tetbeam_mesh_pair):
-        """Verify cell adjacency is symmetric on tetbeam mesh (complex real-world case)."""
-        tm_mesh, _ = tetbeam_mesh_pair
+    def test_symmetry_real_mesh(self, real_mesh_pair):
+        """Verify cell adjacency is symmetric on real-world meshes."""
+        tm_mesh, _ = real_mesh_pair
 
         adj = tm_mesh.get_cell_to_cells_adjacency(adjacency_codimension=1)
         neighbors = adj.to_list()
@@ -506,16 +455,7 @@ class TestCellToCellsAdjacency:
 
     ### Parametrized Tests on Synthetic Meshes (Exhaustive Dimensional Coverage) ###
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),  # Edges in 2D
-            (2, 2),  # Triangles in 2D
-            (3, 1),  # Edges in 3D
-            (3, 2),  # Surfaces in 3D
-            (3, 3),  # Volumes in 3D
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_symmetry_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify cell adjacency is symmetric across all dimension combinations (synthetic meshes)."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -531,16 +471,7 @@ class TestCellToCellsAdjacency:
                     f"cell {i} neighbors cell {j}, but cell {j} doesn't neighbor cell {i}"
                 )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_no_self_loops_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify no cell is its own neighbor across dimensions."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -553,16 +484,7 @@ class TestCellToCellsAdjacency:
                 f"Cell {i} is listed as its own neighbor ({n_spatial_dims=}, {n_manifold_dims=})"
             )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_no_duplicates_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify each neighbor appears exactly once across dimensions."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -617,28 +539,6 @@ class TestCellToCellsAdjacency:
 class TestPointToCellsAdjacency:
     """Test point-to-cells (star) adjacency computation."""
 
-    @pytest.fixture
-    def simple_triangles(self, device):
-        """Simple triangle mesh for basic testing."""
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [1.0, 1.0, 0.0],
-            ],
-            device=device,
-        )
-        cells = torch.tensor(
-            [
-                [0, 1, 2],
-                [1, 3, 2],
-            ],
-            device=device,
-            dtype=torch.int64,
-        )
-        return Mesh(points=points, cells=cells)
-
     def test_simple_triangle_star(self, simple_triangles):
         """Test star computation on simple triangle mesh."""
         mesh = simple_triangles
@@ -662,9 +562,9 @@ class TestPointToCellsAdjacency:
         # Point 3 is in cell 1 only
         assert sorted(stars[3]) == [1]
 
-    def test_airplane_consistency(self, airplane_mesh_pair):
-        """Verify consistency of point-to-cells adjacency for airplane mesh."""
-        tm_mesh, pv_mesh = airplane_mesh_pair
+    def test_consistency_real_mesh(self, real_mesh_pair):
+        """Verify consistency of point-to-cells adjacency on real-world meshes."""
+        tm_mesh, _ = real_mesh_pair
 
         adj = tm_mesh.get_point_to_cells_adjacency()
         stars = adj.to_list()
@@ -678,32 +578,7 @@ class TestPointToCellsAdjacency:
                     f"but vertex's star doesn't contain the cell"
                 )
 
-    def test_tetbeam_consistency(self, tetbeam_mesh_pair):
-        """Verify consistency of point-to-cells adjacency for tetbeam mesh."""
-        tm_mesh, pv_mesh = tetbeam_mesh_pair
-
-        adj = tm_mesh.get_point_to_cells_adjacency()
-        stars = adj.to_list()
-
-        ### Verify each cell's vertices have that cell in their star
-        for cell_id in range(tm_mesh.n_cells):
-            cell_vertices = tm_mesh.cells[cell_id].tolist()
-            for vertex_id in cell_vertices:
-                assert cell_id in stars[vertex_id], (
-                    f"Cell {cell_id} contains vertex {vertex_id}, "
-                    f"but vertex's star doesn't contain the cell"
-                )
-
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_no_duplicates_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify each cell appears exactly once in each point's star."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -717,16 +592,7 @@ class TestPointToCellsAdjacency:
                 f"({n_spatial_dims=}, {n_manifold_dims=})"
             )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_completeness_parametrized(self, n_spatial_dims, n_manifold_dims, device):
         """Verify all cell-point relationships are captured."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
@@ -747,28 +613,6 @@ class TestPointToCellsAdjacency:
 class TestCellsToPointsAdjacency:
     """Test cells-to-points adjacency computation."""
 
-    @pytest.fixture
-    def simple_triangles(self, device):
-        """Simple triangle mesh for basic testing."""
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [1.0, 1.0, 0.0],
-            ],
-            device=device,
-        )
-        cells = torch.tensor(
-            [
-                [0, 1, 2],
-                [1, 3, 2],
-            ],
-            device=device,
-            dtype=torch.int64,
-        )
-        return Mesh(points=points, cells=cells)
-
     def test_simple_triangle_vertices(self, simple_triangles):
         """Test cells-to-points on simple triangle mesh."""
         mesh = simple_triangles
@@ -786,16 +630,7 @@ class TestCellsToPointsAdjacency:
         # Cell 1 has vertices [1, 3, 2]
         assert vertices[1] == [1, 3, 2]
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_matches_cells_array_parametrized(
         self, n_spatial_dims, n_manifold_dims, device
     ):
@@ -815,16 +650,7 @@ class TestCellsToPointsAdjacency:
                 f"  ({n_spatial_dims=}, {n_manifold_dims=})"
             )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_all_cells_same_size_parametrized(
         self, n_spatial_dims, n_manifold_dims, device
     ):
@@ -842,16 +668,7 @@ class TestCellsToPointsAdjacency:
                 f"({n_spatial_dims=}, {n_manifold_dims=})"
             )
 
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
-    )
+    @pytest.mark.parametrize("n_spatial_dims,n_manifold_dims", _SIMPLEX_DIM_CONFIGS)
     def test_inverse_of_point_to_cells_parametrized(
         self, n_spatial_dims, n_manifold_dims, device
     ):
@@ -1254,222 +1071,82 @@ class TestDisjointMeshNeighborhood:
 
         return sphere_a, sphere_b
 
-    def test_point_to_points_disjoint(self, sphere_pair):
-        """Verify point-to-points adjacency for disjoint meshes."""
+    @staticmethod
+    def _disjoint_offsets(sphere_a, adj_type):
+        """Return (n_sources_a, n_targets_a) for a disjoint merge.
+
+        These determine how indices are offset in the merged mesh:
+        - n_sources_a: number of source entities in sphere A (index offset for B's sources)
+        - n_targets_a: number of target entities in sphere A (value offset for B's targets)
+        """
+        if adj_type == "point_to_points":
+            return sphere_a.n_points, sphere_a.n_points
+        elif adj_type == "cell_to_cells":
+            return sphere_a.n_cells, sphere_a.n_cells
+        elif adj_type == "point_to_cells":
+            return sphere_a.n_points, sphere_a.n_cells
+        elif adj_type == "cells_to_points":
+            return sphere_a.n_cells, sphere_a.n_points
+        raise ValueError(f"Unknown adj_type: {adj_type}")
+
+    @pytest.mark.parametrize("adj_type", _ADJACENCY_TYPES)
+    def test_disjoint_adjacency(self, sphere_pair, adj_type):
+        """Verify adjacency for disjoint meshes preserves individual connectivity."""
         sphere_a, sphere_b = sphere_pair
 
         # Compute adjacency for individual meshes
-        adj_a = sphere_a.get_point_to_points_adjacency()
-        adj_b = sphere_b.get_point_to_points_adjacency()
+        adj_a = _compute_adjacency(sphere_a, adj_type)
+        adj_b = _compute_adjacency(sphere_b, adj_type)
 
-        neighbors_a = adj_a.to_list()
-        neighbors_b = adj_b.to_list()
+        results_a = adj_a.to_list()
+        results_b = adj_b.to_list()
 
         # Merge the meshes
         merged = Mesh.merge([sphere_a, sphere_b])
-        adj_merged = merged.get_point_to_points_adjacency()
-        neighbors_merged = adj_merged.to_list()
+        adj_merged = _compute_adjacency(merged, adj_type)
+        results_merged = adj_merged.to_list()
 
-        # Validate merged connectivity
-        n_points_a = sphere_a.n_points
+        n_sources_a, n_targets_a = self._disjoint_offsets(sphere_a, adj_type)
 
-        # Check sphere A's points in merged mesh (indices 0 to n_points_a-1)
-        for i in range(n_points_a):
-            expected = sorted(neighbors_a[i])
-            actual = sorted(neighbors_merged[i])
+        # cells_to_points preserves vertex ordering; others use set comparison
+        order_sensitive = adj_type == "cells_to_points"
+        normalize = (lambda x: x) if order_sensitive else sorted
+
+        # Check sphere A's entries in merged mesh
+        for i in range(n_sources_a):
+            expected = normalize(results_a[i])
+            actual = normalize(results_merged[i])
             assert actual == expected, (
-                f"Point {i} (sphere A) neighbors mismatch in merged mesh:\n"
+                f"Source {i} (sphere A) {adj_type} mismatch in merged mesh:\n"
                 f"  expected: {expected}\n"
                 f"  actual:   {actual}"
             )
 
-        # Check sphere B's points in merged mesh (indices n_points_a onwards)
-        for i in range(sphere_b.n_points):
-            # Sphere B's neighbors should be offset by n_points_a
-            expected = sorted([n + n_points_a for n in neighbors_b[i]])
-            actual = sorted(neighbors_merged[i + n_points_a])
+        # Check sphere B's entries (targets offset by n_targets_a)
+        for i in range(len(results_b)):
+            expected = normalize([n + n_targets_a for n in results_b[i]])
+            actual = normalize(results_merged[i + n_sources_a])
             assert actual == expected, (
-                f"Point {i} (sphere B, index {i + n_points_a} in merged) neighbors mismatch:\n"
+                f"Source {i} (sphere B, index {i + n_sources_a} in merged) "
+                f"{adj_type} mismatch:\n"
                 f"  expected: {expected}\n"
                 f"  actual:   {actual}"
             )
 
         # Verify no cross-mesh connections (critical for disjoint property)
-        for i in range(n_points_a):
-            for neighbor in neighbors_merged[i]:
-                assert neighbor < n_points_a, (
-                    f"Point {i} in sphere A has neighbor {neighbor} from sphere B (disjoint violation)"
+        for i in range(n_sources_a):
+            for target in results_merged[i]:
+                assert target < n_targets_a, (
+                    f"Source {i} in sphere A has target {target} from sphere B "
+                    f"({adj_type} disjoint violation)"
                 )
 
-        for i in range(sphere_b.n_points):
-            merged_idx = i + n_points_a
-            for neighbor in neighbors_merged[merged_idx]:
-                assert neighbor >= n_points_a, (
-                    f"Point {merged_idx} in sphere B has neighbor {neighbor} from sphere A (disjoint violation)"
-                )
-
-    def test_cell_to_cells_disjoint(self, sphere_pair):
-        """Verify cell-to-cells adjacency for disjoint meshes."""
-        sphere_a, sphere_b = sphere_pair
-
-        # Compute adjacency for individual meshes
-        adj_a = sphere_a.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        adj_b = sphere_b.get_cell_to_cells_adjacency(adjacency_codimension=1)
-
-        neighbors_a = adj_a.to_list()
-        neighbors_b = adj_b.to_list()
-
-        # Merge the meshes
-        merged = Mesh.merge([sphere_a, sphere_b])
-        adj_merged = merged.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_merged = adj_merged.to_list()
-
-        # Validate merged connectivity
-        n_cells_a = sphere_a.n_cells
-
-        # Check sphere A's cells in merged mesh
-        for i in range(n_cells_a):
-            expected = sorted(neighbors_a[i])
-            actual = sorted(neighbors_merged[i])
-            assert actual == expected, (
-                f"Cell {i} (sphere A) neighbors mismatch in merged mesh:\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-
-        # Check sphere B's cells in merged mesh
-        for i in range(sphere_b.n_cells):
-            # Sphere B's cell neighbors should be offset by n_cells_a
-            expected = sorted([n + n_cells_a for n in neighbors_b[i]])
-            actual = sorted(neighbors_merged[i + n_cells_a])
-            assert actual == expected, (
-                f"Cell {i} (sphere B, index {i + n_cells_a} in merged) neighbors mismatch:\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-
-        # Verify no cross-mesh connections
-        for i in range(n_cells_a):
-            for neighbor in neighbors_merged[i]:
-                assert neighbor < n_cells_a, (
-                    f"Cell {i} in sphere A has neighbor {neighbor} from sphere B (disjoint violation)"
-                )
-
-        for i in range(sphere_b.n_cells):
-            merged_idx = i + n_cells_a
-            for neighbor in neighbors_merged[merged_idx]:
-                assert neighbor >= n_cells_a, (
-                    f"Cell {merged_idx} in sphere B has neighbor {neighbor} from sphere A (disjoint violation)"
-                )
-
-    def test_point_to_cells_disjoint(self, sphere_pair):
-        """Verify point-to-cells adjacency for disjoint meshes."""
-        sphere_a, sphere_b = sphere_pair
-
-        # Compute adjacency for individual meshes
-        adj_a = sphere_a.get_point_to_cells_adjacency()
-        adj_b = sphere_b.get_point_to_cells_adjacency()
-
-        stars_a = adj_a.to_list()
-        stars_b = adj_b.to_list()
-
-        # Merge the meshes
-        merged = Mesh.merge([sphere_a, sphere_b])
-        adj_merged = merged.get_point_to_cells_adjacency()
-        stars_merged = adj_merged.to_list()
-
-        # Validate merged connectivity
-        n_points_a = sphere_a.n_points
-        n_cells_a = sphere_a.n_cells
-
-        # Check sphere A's points in merged mesh
-        for i in range(n_points_a):
-            expected = sorted(stars_a[i])
-            actual = sorted(stars_merged[i])
-            assert actual == expected, (
-                f"Point {i} (sphere A) star mismatch in merged mesh:\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-
-        # Check sphere B's points in merged mesh
-        for i in range(sphere_b.n_points):
-            # Sphere B's cell indices should be offset by n_cells_a
-            expected = sorted([c + n_cells_a for c in stars_b[i]])
-            actual = sorted(stars_merged[i + n_points_a])
-            assert actual == expected, (
-                f"Point {i} (sphere B, index {i + n_points_a} in merged) star mismatch:\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-
-        # Verify no cross-mesh connections
-        for i in range(n_points_a):
-            for cell in stars_merged[i]:
-                assert cell < n_cells_a, (
-                    f"Point {i} in sphere A is in cell {cell} from sphere B (disjoint violation)"
-                )
-
-        for i in range(sphere_b.n_points):
-            merged_idx = i + n_points_a
-            for cell in stars_merged[merged_idx]:
-                assert cell >= n_cells_a, (
-                    f"Point {merged_idx} in sphere B is in cell {cell} from sphere A (disjoint violation)"
-                )
-
-    def test_cells_to_points_disjoint(self, sphere_pair):
-        """Verify cells-to-points adjacency for disjoint meshes."""
-        sphere_a, sphere_b = sphere_pair
-
-        # Compute adjacency for individual meshes
-        adj_a = sphere_a.get_cells_to_points_adjacency()
-        adj_b = sphere_b.get_cells_to_points_adjacency()
-
-        vertices_a = adj_a.to_list()
-        vertices_b = adj_b.to_list()
-
-        # Merge the meshes
-        merged = Mesh.merge([sphere_a, sphere_b])
-        adj_merged = merged.get_cells_to_points_adjacency()
-        vertices_merged = adj_merged.to_list()
-
-        # Validate merged connectivity
-        n_points_a = sphere_a.n_points
-        n_cells_a = sphere_a.n_cells
-
-        # Check sphere A's cells in merged mesh
-        for i in range(n_cells_a):
-            expected = vertices_a[i]  # Order matters for cells-to-points
-            actual = vertices_merged[i]
-            assert actual == expected, (
-                f"Cell {i} (sphere A) vertices mismatch in merged mesh:\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-
-        # Check sphere B's cells in merged mesh
-        for i in range(sphere_b.n_cells):
-            # Sphere B's point indices should be offset by n_points_a
-            expected = [v + n_points_a for v in vertices_b[i]]
-            actual = vertices_merged[i + n_cells_a]
-            assert actual == expected, (
-                f"Cell {i} (sphere B, index {i + n_cells_a} in merged) vertices mismatch:\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-
-        # Verify no cross-mesh vertex references
-        for i in range(n_cells_a):
-            for vertex in vertices_merged[i]:
-                assert vertex < n_points_a, (
-                    f"Cell {i} in sphere A references vertex {vertex} from sphere B (disjoint violation)"
-                )
-
-        for i in range(sphere_b.n_cells):
-            merged_idx = i + n_cells_a
-            for vertex in vertices_merged[merged_idx]:
-                assert vertex >= n_points_a, (
-                    f"Cell {merged_idx} in sphere B references vertex {vertex} from sphere A (disjoint violation)"
+        for i in range(len(results_b)):
+            merged_idx = i + n_sources_a
+            for target in results_merged[merged_idx]:
+                assert target >= n_targets_a, (
+                    f"Source {merged_idx} in sphere B has target {target} "
+                    f"from sphere A ({adj_type} disjoint violation)"
                 )
 
 
@@ -1541,354 +1218,58 @@ class TestNeighborTransformationInvariance:
 
         return reflection
 
-    def test_translation_invariance_point_to_points(self, sphere_mesh):
-        """Verify point-to-points adjacency is invariant under translation."""
+    def _apply_transform(self, points: torch.Tensor, transform: str) -> torch.Tensor:
+        """Apply a geometric transformation to mesh points.
+
+        Args:
+            points: Point coordinates, shape (N, 3)
+            transform: One of "translation", "rotation", "reflection"
+
+        Returns:
+            Transformed points, shape (N, 3)
+        """
+        if transform == "translation":
+            translation = torch.tensor([10.0, -5.0, 7.5], device=points.device)
+            return points + translation
+        elif transform == "rotation":
+            axis = torch.tensor([1.0, 1.0, 1.0], device=points.device)
+            angle = torch.pi / 4
+            rotation_matrix = self._create_rotation_matrix(axis, angle)
+            return torch.matmul(points, rotation_matrix.T)
+        elif transform == "reflection":
+            normal = torch.tensor([1.0, 0.0, 0.0], device=points.device)
+            reflection_matrix = self._create_reflection_matrix(normal)
+            return torch.matmul(points, reflection_matrix.T)
+        else:
+            raise ValueError(f"Unknown transform: {transform}")
+
+    @pytest.mark.parametrize("adj_type", _ADJACENCY_TYPES)
+    @pytest.mark.parametrize("transform", _TRANSFORMS)
+    def test_adjacency_transformation_invariant(
+        self, sphere_mesh, adj_type, transform
+    ):
+        """Verify adjacency is invariant under geometric transformations."""
         original = sphere_mesh
 
         # Compute adjacency for original mesh
-        adj_original = original.get_point_to_points_adjacency()
-        neighbors_original = adj_original.to_list()
+        adj_original = _compute_adjacency(original, adj_type)
+        results_original = adj_original.to_list()
 
-        # Translate by arbitrary vector
-        translation = torch.tensor([10.0, -5.0, 7.5], device=original.points.device)
-        translated = Mesh(
-            points=original.points + translation,
+        # Apply transformation
+        transformed_points = self._apply_transform(original.points, transform)
+        transformed = Mesh(
+            points=transformed_points,
             cells=original.cells,
             point_data=original.point_data,
             cell_data=original.cell_data,
             global_data=original.global_data,
         )
 
-        # Compute adjacency for translated mesh
-        adj_translated = translated.get_point_to_points_adjacency()
-        neighbors_translated = adj_translated.to_list()
+        # Compute adjacency for transformed mesh
+        adj_transformed = _compute_adjacency(transformed, adj_type)
+        results_transformed = adj_transformed.to_list()
 
         # Connectivity should be identical
-        assert neighbors_original == neighbors_translated, (
-            "Translation changed point-to-points connectivity (topology violation)"
-        )
-
-    def test_rotation_invariance_point_to_points(self, sphere_mesh):
-        """Verify point-to-points adjacency is invariant under rotation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_point_to_points_adjacency()
-        neighbors_original = adj_original.to_list()
-
-        # Rotate by 45 degrees around arbitrary axis [1, 1, 1]
-        axis = torch.tensor([1.0, 1.0, 1.0], device=original.points.device)
-        angle = torch.pi / 4
-        rotation_matrix = self._create_rotation_matrix(axis, angle)
-
-        rotated_points = torch.matmul(original.points, rotation_matrix.T)
-        rotated = Mesh(
-            points=rotated_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for rotated mesh
-        adj_rotated = rotated.get_point_to_points_adjacency()
-        neighbors_rotated = adj_rotated.to_list()
-
-        # Connectivity should be identical
-        assert neighbors_original == neighbors_rotated, (
-            "Rotation changed point-to-points connectivity (topology violation)"
-        )
-
-    def test_reflection_invariance_point_to_points(self, sphere_mesh):
-        """Verify point-to-points adjacency is invariant under reflection."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_point_to_points_adjacency()
-        neighbors_original = adj_original.to_list()
-
-        # Reflect across plane with normal [1, 0, 0] (yz-plane)
-        normal = torch.tensor([1.0, 0.0, 0.0], device=original.points.device)
-        reflection_matrix = self._create_reflection_matrix(normal)
-
-        reflected_points = torch.matmul(original.points, reflection_matrix.T)
-        reflected = Mesh(
-            points=reflected_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for reflected mesh
-        adj_reflected = reflected.get_point_to_points_adjacency()
-        neighbors_reflected = adj_reflected.to_list()
-
-        # Connectivity should be identical
-        assert neighbors_original == neighbors_reflected, (
-            "Reflection changed point-to-points connectivity (topology violation)"
-        )
-
-    def test_translation_invariance_cell_to_cells(self, sphere_mesh):
-        """Verify cell-to-cells adjacency is invariant under translation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_original = adj_original.to_list()
-
-        # Translate by arbitrary vector
-        translation = torch.tensor([10.0, -5.0, 7.5], device=original.points.device)
-        translated = Mesh(
-            points=original.points + translation,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for translated mesh
-        adj_translated = translated.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_translated = adj_translated.to_list()
-
-        # Connectivity should be identical
-        assert neighbors_original == neighbors_translated, (
-            "Translation changed cell-to-cells connectivity (topology violation)"
-        )
-
-    def test_rotation_invariance_cell_to_cells(self, sphere_mesh):
-        """Verify cell-to-cells adjacency is invariant under rotation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_original = adj_original.to_list()
-
-        # Rotate by 60 degrees around z-axis
-        axis = torch.tensor([0.0, 0.0, 1.0], device=original.points.device)
-        angle = torch.pi / 3
-        rotation_matrix = self._create_rotation_matrix(axis, angle)
-
-        rotated_points = torch.matmul(original.points, rotation_matrix.T)
-        rotated = Mesh(
-            points=rotated_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for rotated mesh
-        adj_rotated = rotated.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_rotated = adj_rotated.to_list()
-
-        # Connectivity should be identical
-        assert neighbors_original == neighbors_rotated, (
-            "Rotation changed cell-to-cells connectivity (topology violation)"
-        )
-
-    def test_reflection_invariance_cell_to_cells(self, sphere_mesh):
-        """Verify cell-to-cells adjacency is invariant under reflection."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_original = adj_original.to_list()
-
-        # Reflect across xy-plane (normal [0, 0, 1])
-        normal = torch.tensor([0.0, 0.0, 1.0], device=original.points.device)
-        reflection_matrix = self._create_reflection_matrix(normal)
-
-        reflected_points = torch.matmul(original.points, reflection_matrix.T)
-        reflected = Mesh(
-            points=reflected_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for reflected mesh
-        adj_reflected = reflected.get_cell_to_cells_adjacency(adjacency_codimension=1)
-        neighbors_reflected = adj_reflected.to_list()
-
-        # Connectivity should be identical
-        assert neighbors_original == neighbors_reflected, (
-            "Reflection changed cell-to-cells connectivity (topology violation)"
-        )
-
-    def test_translation_invariance_point_to_cells(self, sphere_mesh):
-        """Verify point-to-cells adjacency is invariant under translation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_point_to_cells_adjacency()
-        stars_original = adj_original.to_list()
-
-        # Translate by arbitrary vector
-        translation = torch.tensor([10.0, -5.0, 7.5], device=original.points.device)
-        translated = Mesh(
-            points=original.points + translation,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for translated mesh
-        adj_translated = translated.get_point_to_cells_adjacency()
-        stars_translated = adj_translated.to_list()
-
-        # Connectivity should be identical
-        assert stars_original == stars_translated, (
-            "Translation changed point-to-cells connectivity (topology violation)"
-        )
-
-    def test_rotation_invariance_point_to_cells(self, sphere_mesh):
-        """Verify point-to-cells adjacency is invariant under rotation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_point_to_cells_adjacency()
-        stars_original = adj_original.to_list()
-
-        # Rotate by 30 degrees around x-axis
-        axis = torch.tensor([1.0, 0.0, 0.0], device=original.points.device)
-        angle = torch.pi / 6
-        rotation_matrix = self._create_rotation_matrix(axis, angle)
-
-        rotated_points = torch.matmul(original.points, rotation_matrix.T)
-        rotated = Mesh(
-            points=rotated_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for rotated mesh
-        adj_rotated = rotated.get_point_to_cells_adjacency()
-        stars_rotated = adj_rotated.to_list()
-
-        # Connectivity should be identical
-        assert stars_original == stars_rotated, (
-            "Rotation changed point-to-cells connectivity (topology violation)"
-        )
-
-    def test_reflection_invariance_point_to_cells(self, sphere_mesh):
-        """Verify point-to-cells adjacency is invariant under reflection."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_point_to_cells_adjacency()
-        stars_original = adj_original.to_list()
-
-        # Reflect across xz-plane (normal [0, 1, 0])
-        normal = torch.tensor([0.0, 1.0, 0.0], device=original.points.device)
-        reflection_matrix = self._create_reflection_matrix(normal)
-
-        reflected_points = torch.matmul(original.points, reflection_matrix.T)
-        reflected = Mesh(
-            points=reflected_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for reflected mesh
-        adj_reflected = reflected.get_point_to_cells_adjacency()
-        stars_reflected = adj_reflected.to_list()
-
-        # Connectivity should be identical
-        assert stars_original == stars_reflected, (
-            "Reflection changed point-to-cells connectivity (topology violation)"
-        )
-
-    def test_translation_invariance_cells_to_points(self, sphere_mesh):
-        """Verify cells-to-points adjacency is invariant under translation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_cells_to_points_adjacency()
-        vertices_original = adj_original.to_list()
-
-        # Translate by arbitrary vector
-        translation = torch.tensor([10.0, -5.0, 7.5], device=original.points.device)
-        translated = Mesh(
-            points=original.points + translation,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for translated mesh
-        adj_translated = translated.get_cells_to_points_adjacency()
-        vertices_translated = adj_translated.to_list()
-
-        # Connectivity should be identical
-        assert vertices_original == vertices_translated, (
-            "Translation changed cells-to-points connectivity (topology violation)"
-        )
-
-    def test_rotation_invariance_cells_to_points(self, sphere_mesh):
-        """Verify cells-to-points adjacency is invariant under rotation."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_cells_to_points_adjacency()
-        vertices_original = adj_original.to_list()
-
-        # Rotate by 90 degrees around y-axis
-        axis = torch.tensor([0.0, 1.0, 0.0], device=original.points.device)
-        angle = torch.pi / 2
-        rotation_matrix = self._create_rotation_matrix(axis, angle)
-
-        rotated_points = torch.matmul(original.points, rotation_matrix.T)
-        rotated = Mesh(
-            points=rotated_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for rotated mesh
-        adj_rotated = rotated.get_cells_to_points_adjacency()
-        vertices_rotated = adj_rotated.to_list()
-
-        # Connectivity should be identical
-        assert vertices_original == vertices_rotated, (
-            "Rotation changed cells-to-points connectivity (topology violation)"
-        )
-
-    def test_reflection_invariance_cells_to_points(self, sphere_mesh):
-        """Verify cells-to-points adjacency is invariant under reflection."""
-        original = sphere_mesh
-
-        # Compute adjacency for original mesh
-        adj_original = original.get_cells_to_points_adjacency()
-        vertices_original = adj_original.to_list()
-
-        # Reflect across arbitrary plane with normal [1, 1, 1]
-        normal = torch.tensor([1.0, 1.0, 1.0], device=original.points.device)
-        reflection_matrix = self._create_reflection_matrix(normal)
-
-        reflected_points = torch.matmul(original.points, reflection_matrix.T)
-        reflected = Mesh(
-            points=reflected_points,
-            cells=original.cells,
-            point_data=original.point_data,
-            cell_data=original.cell_data,
-            global_data=original.global_data,
-        )
-
-        # Compute adjacency for reflected mesh
-        adj_reflected = reflected.get_cells_to_points_adjacency()
-        vertices_reflected = adj_reflected.to_list()
-
-        # Connectivity should be identical
-        assert vertices_original == vertices_reflected, (
-            "Reflection changed cells-to-points connectivity (topology violation)"
+        assert results_original == results_transformed, (
+            f"{transform.title()} changed {adj_type} connectivity (topology violation)"
         )

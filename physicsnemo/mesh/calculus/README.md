@@ -331,7 +331,6 @@ src/physicsnemo.mesh/calculus/
 ├── _exterior_derivative.py        # DEC: exterior derivative d
 ├── _hodge_star.py                 # DEC: Hodge star ⋆
 ├── _sharp_flat.py                 # DEC: sharp ♯ and flat ♭
-├── _circumcentric_dual.py         # Circumcenters and dual mesh utilities
 │
 ├── _lsq_reconstruction.py         # LSQ: gradient reconstruction (ambient space)
 └── _lsq_intrinsic.py             # LSQ: intrinsic gradients (tangent space)

@@ -513,3 +513,124 @@ class TestWatertightFaceDeletion:
             f"Mesh with {description} should NOT be watertight "
             f"(deleted {num_to_delete} of {n_cells} faces)"
         )
+
+
+###############################################################################
+# Regression: _check_edges_manifold for 3D tetrahedral meshes
+###############################################################################
+
+
+class TestEdgeManifoldCheck3DRegression:
+    """Regression tests for 3D edge-link connectivity checking.
+
+    The original ``_check_edges_manifold`` for 3D meshes only checked that
+    each edge appeared in at least one cell (trivially true), so it always
+    returned True.  The fix implements proper face-link connectivity around
+    each edge via union-find.
+    """
+
+    def test_two_tets_sharing_only_edge_is_non_manifold(self, device):
+        """Two tets sharing only an edge (no shared face) are non-manifold.
+
+        T1 = (0,1,2,3), T2 = (0,1,4,5).  All 8 triangular faces appear
+        exactly once (passes facet check).  But the face-link around edge
+        (0,1) is disconnected: {(0,1,2),(0,1,3)} and {(0,1,4),(0,1,5)} form
+        two components.  The old implementation returned True; the fix
+        correctly returns False.
+        """
+        from physicsnemo.mesh.boundaries._topology import (
+            _check_edges_manifold,
+            _check_facets_manifold,
+        )
+
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 1.0, 0.0],
+                [0.5, 0.5, 1.0],
+                [0.5, -1.0, 0.0],
+                [0.5, -0.5, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 1, 4, 5]], device=device, dtype=torch.int64
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        assert _check_facets_manifold(mesh), "Facets should pass"
+        assert not _check_edges_manifold(mesh), (
+            "Edges check should fail for two tets sharing only an edge"
+        )
+
+    def test_two_tets_sharing_face_is_manifold(self, device):
+        """Two tets sharing a complete face are manifold."""
+        from physicsnemo.mesh.boundaries._topology import _check_edges_manifold
+
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 1.0, 0.0],
+                [0.5, 0.5, 1.0],
+                [0.5, 0.5, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 1, 2, 4]], device=device, dtype=torch.int64
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        assert _check_edges_manifold(mesh), (
+            "Two tets sharing face (0,1,2) should pass edge check"
+        )
+
+    def test_tet_cycle_around_edge_is_manifold(self, device):
+        """Four tets forming a closed cycle around edge (0,1) are manifold."""
+        from physicsnemo.mesh.boundaries._topology import _check_edges_manifold
+
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 1.0, 0.0],
+                [0.5, 0.0, 1.0],
+                [0.5, -1.0, 0.0],
+                [0.5, 0.0, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 1, 3, 4], [0, 1, 4, 5], [0, 1, 5, 2]],
+            device=device,
+            dtype=torch.int64,
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        assert _check_edges_manifold(mesh), (
+            "4-tet cycle around an edge should pass edge check"
+        )
+
+    def test_is_manifold_edges_level_catches_nonmanifold(self, device):
+        """is_manifold(check_level='edges') returns False for the non-manifold case."""
+        points = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.5, 1.0, 0.0],
+                [0.5, 0.5, 1.0],
+                [0.5, -1.0, 0.0],
+                [0.5, -0.5, -1.0],
+            ],
+            device=device,
+        )
+        cells = torch.tensor(
+            [[0, 1, 2, 3], [0, 1, 4, 5]], device=device, dtype=torch.int64
+        )
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh.is_manifold(check_level="facets") is True
+        assert mesh.is_manifold(check_level="edges") is False
+        assert mesh.is_manifold(check_level="full") is False

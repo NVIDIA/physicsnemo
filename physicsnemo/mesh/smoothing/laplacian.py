@@ -29,7 +29,7 @@ from physicsnemo.mesh.boundaries._facet_extraction import (
     extract_candidate_facets,
     extract_unique_edges,
 )
-from physicsnemo.mesh.calculus._circumcentric_dual import compute_cotan_weights_fem
+from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh

@@ -107,7 +107,7 @@ def compute_edge_support_volume_cell_fractions(
             f"Got {mesh.n_manifold_dims=}"
         )
 
-    from physicsnemo.mesh.calculus._circumcentric_dual import compute_circumcenters
+    from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
     n_edges = len(edges)
     device = mesh.points.device
@@ -401,7 +401,7 @@ def compute_dual_edge_volumes_in_cells(
         )
 
     from physicsnemo.mesh.boundaries import extract_candidate_facets
-    from physicsnemo.mesh.calculus._circumcentric_dual import compute_circumcenters
+    from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
     ### Extract all edges with their parent cells
     candidate_edges, parent_cells = extract_candidate_facets(

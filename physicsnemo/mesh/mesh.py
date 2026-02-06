@@ -1415,6 +1415,7 @@ class Mesh:
         manifold_codimension: int = 1,
         data_source: Literal["points", "cells"] = "cells",
         data_aggregation: Literal["mean", "area_weighted", "inverse_distance"] = "mean",
+        target_counts: "list[int] | Literal['boundary', 'shared', 'interior', 'all']" = "all",
     ) -> "Mesh":
         """Extract k-codimension facet mesh from this n-dimensional mesh.
 
@@ -1448,6 +1449,13 @@ class Mesh:
             - "area_weighted": Weighted by parent cell areas
             - "inverse_distance": Weighted by inverse distance from facet centroid
               to parent cell centroids
+        target_counts : list[int] | {"boundary", "shared", "interior", "all"}, optional
+            Which facets to keep based on how many parent cells share them:
+            - "all": Keep all unique facets (default)
+            - "boundary": Keep only boundary facets (appearing in exactly 1 cell)
+            - "shared": Keep only shared facets (appearing in 2+ cells)
+            - "interior": Keep only interior facets (appearing in exactly 2 cells)
+            - list[int]: Keep facets with counts matching any value in the list
 
         Returns
         -------
@@ -1495,6 +1503,7 @@ class Mesh:
             manifold_codimension=manifold_codimension,
             data_source=data_source,
             data_aggregation=data_aggregation,
+            target_counts=target_counts,
         )
 
         ### Create and return new Mesh
@@ -1517,37 +1526,22 @@ class Mesh:
     ) -> "Mesh":
         """Extract the boundary surface of this mesh.
 
-        Extracts only the codimension-1 facets that lie on the boundary (appear in
-        exactly one cell). This produces the watertight boundary surface of a mesh.
+        Convenience wrapper around :meth:`get_facet_mesh` that extracts only
+        boundary facets (those appearing in exactly one parent cell).
 
-        Key difference from get_facet_mesh():
-        - get_facet_mesh(): Returns ALL facets (interior + boundary)
-        - get_boundary_mesh(): Returns ONLY boundary facets (appear in 1 cell)
-
-        For a closed watertight mesh, this returns an empty mesh. For an open mesh
-        (e.g., a tetrahedral volume), this returns the triangulated surface boundary.
+        See :meth:`get_facet_mesh` for full parameter documentation.
 
         Parameters
         ----------
         data_source : {"points", "cells"}, optional
-            Source of data inheritance:
-            - "cells": Boundary facets inherit from their single parent cell
-            - "points": Boundary facets inherit from their boundary vertices
+            Source of data inheritance. Default: "cells".
         data_aggregation : {"mean", "area_weighted", "inverse_distance"}, optional
-            Strategy for aggregating data (only applies when
-            data_source="cells"):
-            - "mean": Simple arithmetic mean
-            - "area_weighted": Weighted by parent cell areas
-            - "inverse_distance": Weighted by inverse distance from facet centroid
-            Note: For boundary facets, each has exactly one parent cell, so
-            aggregation typically doesn't affect results.
+            Strategy for aggregating data. Default: "mean".
 
         Returns
         -------
         Mesh
-            New Mesh with n_manifold_dims = self.n_manifold_dims - 1, containing
-            only the boundary facets. The mesh shares the same points array but has
-            new cells connectivity representing the boundary.
+            Boundary mesh containing only boundary facets.
 
         Notes
         -----
@@ -1571,26 +1565,11 @@ class Mesh:
         >>> boundary = sphere.get_boundary_mesh()
         >>> assert boundary.n_cells == 0  # no boundary
         """
-        ### Call kernel to extract boundary facets (codim-1, appearing in exactly 1 cell)
-        from physicsnemo.mesh.boundaries import extract_facet_mesh_data
-
-        boundary_cells, boundary_cell_data = extract_facet_mesh_data(
-            parent_mesh=self,
+        return self.get_facet_mesh(
             manifold_codimension=1,
             data_source=data_source,
             data_aggregation=data_aggregation,
             target_counts="boundary",
-        )
-
-        ### Filter out cached properties from point_data
-        filtered_point_data = self.point_data.exclude(CACHE_KEY)
-
-        return Mesh(
-            points=self.points,  # Share the same points
-            cells=boundary_cells,  # New connectivity for boundary facets only
-            point_data=filtered_point_data,  # User data only, no cached properties
-            cell_data=boundary_cell_data,  # Aggregated cell data
-            global_data=self.global_data,  # Share global data
         )
 
     def is_watertight(self) -> bool:

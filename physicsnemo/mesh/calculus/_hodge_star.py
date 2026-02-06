@@ -71,7 +71,7 @@ def hodge_star_0(
     >>> star_f = hodge_star_0(mesh, f)
     >>> # star_f[i] = f[i] * dual_volume[i]
     """
-    from physicsnemo.mesh.calculus._circumcentric_dual import (
+    from physicsnemo.mesh.geometry.dual_meshes import (
         get_or_compute_dual_volumes_0,
     )
 
@@ -118,7 +118,7 @@ def hodge_star_1(
     torch.Tensor
         Dual (n-1)-form values, shape (n_edges,) or (n_edges, ...)
     """
-    from physicsnemo.mesh.calculus._circumcentric_dual import compute_cotan_weights_fem
+    from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
     from physicsnemo.mesh.utilities._edge_lookup import find_edges_in_reference
 
     ### Get FEM cotangent weights w_ij = |⋆e|/|e| in canonical edge order

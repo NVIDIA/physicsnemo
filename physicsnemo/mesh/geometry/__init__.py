@@ -27,4 +27,11 @@ These are used by both DEC operators (calculus module) and differential
 geometry computations (curvature module).
 """
 
-from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
+from physicsnemo.mesh.geometry.dual_meshes import (
+    compute_circumcenters,
+    compute_cotan_weights_fem,
+    compute_dual_volumes_0,
+    compute_dual_volumes_1,
+    get_or_compute_circumcenters,
+    get_or_compute_dual_volumes_0,
+)

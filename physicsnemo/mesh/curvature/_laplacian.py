@@ -84,7 +84,7 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
         )
 
     ### Compute cotangent weights and edges via FEM stiffness matrix
-    from physicsnemo.mesh.calculus._circumcentric_dual import compute_cotan_weights_fem
+    from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
 
     cotangent_weights, unique_edges = compute_cotan_weights_fem(mesh)
 

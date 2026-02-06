@@ -1205,7 +1205,7 @@ class TestLaplacianNumericalProperties:
         # (up to boundary terms, which don't exist for closed manifolds)
 
         # Get Voronoi areas for proper inner product
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             get_or_compute_dual_volumes_0,
         )
 
@@ -1533,7 +1533,7 @@ class TestCircumcentricDual:
 
     def test_circumcenter_edge(self):
         """Test circumcenter of edge (1-simplex)."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import compute_circumcenters
+        from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
         # Single edge
         vertices = torch.tensor([[[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]])
@@ -1546,7 +1546,7 @@ class TestCircumcentricDual:
 
     def test_circumcenter_triangle_2d(self):
         """Test circumcenter of triangle in 2D."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import compute_circumcenters
+        from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
         # Right triangle at origin
         vertices = torch.tensor([[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]])
@@ -1559,7 +1559,7 @@ class TestCircumcentricDual:
 
     def test_circumcenter_triangle_3d(self):
         """Test circumcenter of triangle embedded in 3D."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import compute_circumcenters
+        from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
         # Right triangle in xy-plane
         vertices = torch.tensor([[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]])
@@ -1573,7 +1573,7 @@ class TestCircumcentricDual:
 
     def test_circumcenter_tetrahedron(self):
         """Test circumcenter of tetrahedron."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import compute_circumcenters
+        from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
 
         # Regular tetrahedron (approximately)
         vertices = torch.tensor(
@@ -2446,7 +2446,7 @@ class TestCotanWeightsFEM:
 
     def test_equilateral_triangle_weights(self):
         """FEM weights for an equilateral triangle match cot(60 deg)/2."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             compute_cotan_weights_fem,
         )
 
@@ -2469,7 +2469,7 @@ class TestCotanWeightsFEM:
 
     def test_right_triangle_weights(self):
         """FEM weights for a right triangle match known cotangent values."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             compute_cotan_weights_fem,
         )
 
@@ -2496,7 +2496,7 @@ class TestCotanWeightsFEM:
 
     def test_weights_on_3d_surface(self):
         """FEM weights are well-defined on a surface mesh in 3D."""
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             compute_cotan_weights_fem,
         )
         from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral

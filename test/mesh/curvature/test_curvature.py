@@ -705,3 +705,78 @@ class TestCurvatureSigns:
         # With outward normals, sphere should have positive H
         # (All should have same sign)
         assert torch.all(H > 0) or torch.all(H < 0)
+
+
+###############################################################################
+# Regression: gaussian_curvature_cells on embedded manifolds
+###############################################################################
+
+
+class TestGaussianCurvatureCellsRegression:
+    """Regression tests for gaussian_curvature_cells on embedded manifolds.
+
+    The original implementation computed pairwise angles between centroid-to-
+    centroid vectors in ambient 3D space instead of the manifold's tangent
+    plane, causing spurious curvature on developable surfaces (e.g. cylinders)
+    and divergence with mesh refinement.
+    """
+
+    def test_cylinder_curvature_near_zero(self, device):
+        """Cylinder has zero intrinsic Gaussian curvature (developable surface).
+
+        Interior cells should have |K| near zero.  The original implementation
+        gave |K| ~ 3-40 on a cylinder, *increasing* with mesh refinement.
+        """
+        from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
+        cyl = cylinder_open.load(n_circ=32, n_height=16).to(device)
+        K = cyl.gaussian_curvature_cells
+        K_finite = K[~torch.isnan(K)]
+
+        assert K_finite.abs().mean() < 0.05, (
+            f"Cylinder K_cells abs mean = {K_finite.abs().mean():.4f}, "
+            "expected near 0 for a developable surface"
+        )
+
+    def test_sphere_curvature_correct(self, device):
+        """Sphere of radius r should have K = 1/r^2."""
+        from physicsnemo.mesh.primitives.surfaces import sphere_icosahedral
+
+        for radius in (1.0, 2.0):
+            sphere = sphere_icosahedral.load(radius=radius, subdivisions=3).to(device)
+            K = sphere.gaussian_curvature_cells
+            K_finite = K[~torch.isnan(K)]
+            expected = 1.0 / radius**2
+
+            assert abs(K_finite.mean().item() - expected) < 0.1 * expected, (
+                f"Sphere r={radius}: K_cells mean = {K_finite.mean():.4f}, "
+                f"expected {expected:.4f}"
+            )
+
+    def test_cylinder_convergence(self, device):
+        """Cell curvature on a cylinder should not diverge with refinement."""
+        from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
+        means = []
+        for n in (16, 32, 64):
+            cyl = cylinder_open.load(n_circ=n, n_height=n).to(device)
+            K = cyl.gaussian_curvature_cells
+            means.append(K[~torch.isnan(K)].abs().mean().item())
+
+        assert means[-1] < means[0] + 0.01, (
+            f"Cell curvature diverges with refinement: {means}"
+        )
+
+    def test_boundary_cells_are_nan(self, device):
+        """Boundary cells (touching boundary vertices) should be NaN."""
+        from physicsnemo.mesh.primitives.surfaces import cylinder_open
+
+        cyl = cylinder_open.load(n_circ=16, n_height=8).to(device)
+        K = cyl.gaussian_curvature_cells
+
+        from physicsnemo.mesh.boundaries._detection import get_boundary_cells
+
+        is_bnd = get_boundary_cells(cyl)
+        assert torch.isnan(K[is_bnd]).all(), (
+            "Boundary cells should have NaN curvature"
+        )

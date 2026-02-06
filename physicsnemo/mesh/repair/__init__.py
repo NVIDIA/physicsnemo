@@ -24,11 +24,11 @@ from physicsnemo.mesh.repair._cleaning import (
     clean_mesh,
     merge_duplicate_points,
     remove_duplicate_cells,
+    remove_isolated_vertices,
     remove_unused_points,
 )
 from physicsnemo.mesh.repair.degenerate_removal import remove_degenerate_cells
 from physicsnemo.mesh.repair.hole_filling import fill_holes
-from physicsnemo.mesh.repair.isolated_removal import remove_isolated_vertices
 from physicsnemo.mesh.repair.orientation import fix_orientation
 from physicsnemo.mesh.repair.pipeline import repair_mesh
 

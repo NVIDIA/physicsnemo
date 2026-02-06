@@ -199,7 +199,7 @@ class TestCotangentWeightsCorrectness:
         cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=device)
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             compute_cotan_weights_fem,
         )
 
@@ -231,7 +231,7 @@ class TestCotangentWeightsCorrectness:
         cells = torch.tensor([[0, 1, 2]], dtype=torch.int64, device=device)
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             compute_cotan_weights_fem,
         )
 
@@ -282,7 +282,7 @@ class TestCotangentWeightsCorrectness:
         )
         mesh = Mesh(points=points, cells=cells)
 
-        from physicsnemo.mesh.calculus._circumcentric_dual import (
+        from physicsnemo.mesh.geometry.dual_meshes import (
             compute_cotan_weights_fem,
         )
 

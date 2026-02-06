@@ -113,7 +113,7 @@ def repair_mesh(
 
     ### Operation 3: Remove isolated points
     if remove_isolated:
-        from physicsnemo.mesh.repair.isolated_removal import (
+        from physicsnemo.mesh.repair._cleaning import (
             remove_isolated_vertices as remove_iso,
         )
 

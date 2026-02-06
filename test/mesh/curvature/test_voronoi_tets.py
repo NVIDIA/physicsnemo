@@ -20,7 +20,7 @@ import pytest
 import torch
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.calculus._circumcentric_dual import get_or_compute_dual_volumes_0
+from physicsnemo.mesh.geometry.dual_meshes import get_or_compute_dual_volumes_0
 
 
 @pytest.fixture

@@ -77,7 +77,7 @@ def compute_divergence_points_dec(
     torch.Tensor
         Divergence at vertices, shape ``(n_points,)``.
     """
-    from physicsnemo.mesh.calculus._circumcentric_dual import (
+    from physicsnemo.mesh.geometry.dual_meshes import (
         compute_cotan_weights_fem,
         get_or_compute_dual_volumes_0,
     )
