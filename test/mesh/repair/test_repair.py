@@ -308,9 +308,6 @@ class TestRepairPipeline:
 
         mesh_clean, all_stats = repair_mesh(
             mesh,
-            remove_duplicates=True,
-            remove_degenerates=True,
-            remove_isolated=True,
         )
 
         # Should have fixed all problems
@@ -319,7 +316,7 @@ class TestRepairPipeline:
 
         # Verify individual stats
         assert "degenerates" in all_stats
-        assert "duplicates" in all_stats
+        assert "merge_points" in all_stats
         assert "isolated" in all_stats
 
         assert all_stats["degenerates"]["n_cells_original"] == 2
