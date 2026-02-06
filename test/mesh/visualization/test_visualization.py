@@ -28,8 +28,8 @@ from physicsnemo.mesh import Mesh
 matplotlib = pytest.importorskip("matplotlib")
 pv = pytest.importorskip("pyvista")
 
-plt = matplotlib.pyplot
 matplotlib.use("Agg")  # Use non-interactive backend for testing
+import matplotlib.pyplot as plt  # noqa: E402 — must be after backend selection
 
 
 def create_0d_point_cloud(n_points: int = 10) -> Mesh:

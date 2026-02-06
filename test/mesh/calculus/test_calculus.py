@@ -1598,6 +1598,27 @@ class TestCircumcentricDual:
             else:
                 assert torch.allclose(dist, ref_dist, atol=1e-4)
 
+    def test_circumcenter_non_origin_triangle(self):
+        """Regression test: circumcenter for triangle not at origin.
+
+        The bug was a wrong RHS in the linear system that only showed up
+        when the first vertex was not at the origin.
+        Triangle (1,1), (5,1), (1,5) has circumcenter at (3,3).
+        """
+        from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
+
+        vertices = torch.tensor([[[1.0, 1.0], [5.0, 1.0], [1.0, 5.0]]])
+        cc = compute_circumcenters(vertices)
+        torch.testing.assert_close(cc, torch.tensor([[3.0, 3.0]]), atol=1e-6, rtol=1e-6)
+
+    def test_circumcenter_equilateral_triangle(self):
+        """Regression test: circumcenter of equilateral triangle centered at origin."""
+        from physicsnemo.mesh.geometry.dual_meshes import compute_circumcenters
+
+        vertices = torch.tensor([[[1.0, 0.0], [-0.5, 0.8660254], [-0.5, -0.8660254]]])
+        cc = compute_circumcenters(vertices)
+        torch.testing.assert_close(cc, torch.zeros(1, 2), atol=1e-5, rtol=1e-5)
+
 
 ###############################################################################
 # Cell Derivatives Tests
