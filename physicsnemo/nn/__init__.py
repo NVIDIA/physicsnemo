@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -69,6 +69,7 @@ from .module.fully_connected_layers import (
     Linear,
 )
 from .module.group_norm import GroupNorm, get_group_norm
+from .module.gumbel_softmax import GumbelSoftmax, gumbel_softmax
 from .module.kan_layers import KolmogorovArnoldNetwork
 from .module.mlp_layers import Mlp
 from .module.resample_layers import (

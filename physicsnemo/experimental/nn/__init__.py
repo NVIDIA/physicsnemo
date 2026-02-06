@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,15 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-from torch import Tensor
+"""Experimental neural network components for PhysicsNemo.
 
-from physicsnemo.models.graphcast.utils.graph_utils import deg2rad
-
-
-def normalized_grid_cell_area(lat: Tensor, unit="deg") -> Tensor:
-    """Normalized area of the latitude-longitude grid cell"""
-    if unit == "deg":
-        lat = deg2rad(lat)
-    area = torch.abs(torch.cos(lat))
-    return area / torch.mean(area)
+This subpackage contains experimental neural network layers and utilities
+that are under active development. These components may have breaking API
+changes between releases.
+"""

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -16,19 +16,17 @@
 
 import torch
 
-from physicsnemo.models.graphcast.utils.loss import (
+from physicsnemo.metrics.climate.graphcast_loss import (
     CellAreaWeightedLossFunction,
     CustomCellAreaWeightedLossFunction,
 )
-from test.conftest import requires_module
 
 
-@requires_module("sklearn")
-def test_loss():
+def test_loss(device):
     """Tests if the custom loss function is equivalent to the default loss function."""
-    pred1 = torch.rand(1, 2, 721, 1440, device="cuda")
-    target1 = torch.rand(1, 2, 721, 1440, device="cuda")
-    area = torch.rand(721, 1440, device="cuda")
+    pred1 = torch.rand(1, 2, 721, 1440, device=device)
+    target1 = torch.rand(1, 2, 721, 1440, device=device)
+    area = torch.rand(721, 1440, device=device)
 
     default_loss = CellAreaWeightedLossFunction(area)
     custom_loss = CustomCellAreaWeightedLossFunction(area)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -18,5 +18,10 @@
 # from .datapipes.meta import DatapipeMetaData  # noqa E402
 from .core.meta import ModelMetaData  # noqa E402
 from .core.module import Module  # noqa E402
+
+# This is to ensure warp is quiet at startup:
+import warp as wp
+
+wp.config.quiet = True
 
 __version__ = "1.4.0a0"
