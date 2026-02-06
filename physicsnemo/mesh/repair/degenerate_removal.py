@@ -108,7 +108,7 @@ def remove_degenerate_cells(
     ### Transfer data (excluding cache)
     new_cell_data = mesh.cell_data.exclude(CACHE_KEY)[keep_mask]
 
-    ### Keep all points and point data (will be cleaned by remove_isolated_vertices if needed)
+    ### Keep all points and point data (will be cleaned by remove_isolated_points if needed)
     from physicsnemo.mesh.mesh import Mesh
 
     cleaned_mesh = Mesh(

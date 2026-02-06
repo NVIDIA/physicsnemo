@@ -126,6 +126,14 @@ def hodge_star_1(
 
     ### Map the caller's edges to the canonical ordering
     indices, matched = find_edges_in_reference(canonical_edges, edges)
+
+    if not matched.all():
+        n_unmatched = (~matched).sum().item()
+        raise ValueError(
+            f"hodge_star_1: {n_unmatched} of {len(edges)} input edges were not found "
+            "in the mesh's canonical edge set. Ensure edges are valid mesh edges."
+        )
+
     cotan_weights = canonical_weights[indices]  # (n_edges,)
 
     ### Apply Hodge star: ⋆α(⋆e) = α(e) × w_ij

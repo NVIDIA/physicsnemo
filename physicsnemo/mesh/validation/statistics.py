@@ -25,10 +25,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from physicsnemo.mesh.validation.quality import (
-    compute_cell_edge_lengths,
-    compute_quality_metrics,
-)
+from physicsnemo.mesh.validation.quality import compute_quality_metrics
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -97,16 +94,6 @@ def compute_mesh_statistics(
     n_used = len(used_vertices)
     stats["n_isolated_vertices"] = mesh.n_points - n_used
 
-    ### Compute edge length statistics
-    all_edge_lengths = compute_cell_edge_lengths(mesh).flatten()
-
-    stats["edge_length_stats"] = (
-        all_edge_lengths.min().item(),
-        all_edge_lengths.mean().item(),
-        all_edge_lengths.max().item(),
-        all_edge_lengths.std(correction=0).item(),
-    )
-
     ### Compute cell area statistics
     stats["cell_area_stats"] = (
         areas.min().item(),
@@ -115,8 +102,20 @@ def compute_mesh_statistics(
         areas.std(correction=0).item(),
     )
 
-    ### Compute quality metrics statistics
+    ### Compute quality metrics (includes edge lengths internally)
     quality_metrics = compute_quality_metrics(mesh)
+
+    ### Extract edge length statistics from quality metrics
+    # compute_quality_metrics already computes min/max edge lengths per cell,
+    # so we derive stats from those to avoid a redundant compute_cell_edge_lengths call.
+    min_edge = quality_metrics["min_edge_length"]
+    max_edge = quality_metrics["max_edge_length"]
+    stats["edge_length_stats"] = (
+        min_edge.min().item(),
+        (min_edge.mean().item() + max_edge.mean().item()) / 2.0,
+        max_edge.max().item(),
+        max_edge.std(correction=0).item(),
+    )
 
     if "aspect_ratio" in quality_metrics.keys():
         aspect_ratios = quality_metrics["aspect_ratio"]

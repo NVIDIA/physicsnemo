@@ -96,5 +96,4 @@ def compute_laplacian_at_points(mesh: "Mesh") -> torch.Tensor:
         edges=unique_edges,
         cotan_weights=cotangent_weights,
         data=mesh.points,
-        device=device,
     )

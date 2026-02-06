@@ -148,8 +148,8 @@ def compute_point_derivatives(
                 grad_extrinsic = compute_gradient_points_lsq(
                     mesh, field_values, intrinsic=False
                 )
-                grad_intrinsic = compute_gradient_points_lsq(
-                    mesh, field_values, intrinsic=True
+                grad_intrinsic = project_to_tangent_space(
+                    mesh, grad_extrinsic, location="points"
                 )
         elif method == "dec":
             # DEC always computes in ambient space initially

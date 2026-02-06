@@ -198,7 +198,7 @@ def _compute_adjacency(mesh, adj_type):
     elif adj_type == "point_to_cells":
         return mesh.get_point_to_cells_adjacency()
     elif adj_type == "cells_to_points":
-        return mesh.get_cells_to_points_adjacency()
+        return mesh.get_cell_to_points_adjacency()
     else:
         raise ValueError(f"Unknown adjacency type: {adj_type}")
 
@@ -618,7 +618,7 @@ class TestCellsToPointsAdjacency:
         mesh = simple_triangles
         device = mesh.points.device.type
 
-        adj = mesh.get_cells_to_points_adjacency()
+        adj = mesh.get_cell_to_points_adjacency()
         assert_on_device(adj.offsets, device)
         assert_on_device(adj.indices, device)
 
@@ -637,7 +637,7 @@ class TestCellsToPointsAdjacency:
         """Verify cells-to-points matches the cells array across dimensions."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
 
-        adj = mesh.get_cells_to_points_adjacency()
+        adj = mesh.get_cell_to_points_adjacency()
         vertices = adj.to_list()
 
         # Verify each cell's vertices match the cells array
@@ -657,7 +657,7 @@ class TestCellsToPointsAdjacency:
         """Verify all cells have the correct number of vertices."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
 
-        adj = mesh.get_cells_to_points_adjacency()
+        adj = mesh.get_cell_to_points_adjacency()
         vertices = adj.to_list()
 
         # All cells should have (n_manifold_dims + 1) vertices
@@ -676,7 +676,7 @@ class TestCellsToPointsAdjacency:
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
 
         # Get both adjacencies
-        cells_to_points = mesh.get_cells_to_points_adjacency().to_list()
+        cells_to_points = mesh.get_cell_to_points_adjacency().to_list()
         points_to_cells = mesh.get_point_to_cells_adjacency().to_list()
 
         # For each cell-point pair, verify the inverse relationship
@@ -788,7 +788,7 @@ class TestEdgeCases:
         assert len(adj.indices) == 0
 
         # Cells-to-points
-        adj = mesh.get_cells_to_points_adjacency()
+        adj = mesh.get_cell_to_points_adjacency()
         assert adj.n_sources == 0
         assert len(adj.indices) == 0
 
@@ -925,7 +925,7 @@ class TestEdgeCases:
             mesh.get_point_to_points_adjacency(),
             mesh.get_point_to_cells_adjacency(),
             mesh.get_cell_to_cells_adjacency(),
-            mesh.get_cells_to_points_adjacency(),
+            mesh.get_cell_to_points_adjacency(),
         ]
 
         for adj in adjacencies:
@@ -972,7 +972,7 @@ class TestEdgeCases:
 
         # Point-to-cells: sum should equal cells-to-points
         point_to_cells = mesh.get_point_to_cells_adjacency()
-        cells_to_points = mesh.get_cells_to_points_adjacency()
+        cells_to_points = mesh.get_cell_to_points_adjacency()
         assert point_to_cells.n_total_neighbors == cells_to_points.n_total_neighbors
 
     def test_cross_adjacency_consistency(self, device):
@@ -1000,7 +1000,7 @@ class TestEdgeCases:
         # Get all adjacencies
         point_to_points = mesh.get_point_to_points_adjacency().to_list()
         point_to_cells = mesh.get_point_to_cells_adjacency().to_list()
-        cells_to_points = mesh.get_cells_to_points_adjacency().to_list()
+        cells_to_points = mesh.get_cell_to_points_adjacency().to_list()
         cell_to_cells = mesh.get_cell_to_cells_adjacency().to_list()
 
         # Consistency check 1: If points A and B are neighbors,

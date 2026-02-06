@@ -28,6 +28,7 @@ import torch
 
 from physicsnemo.mesh.curvature._laplacian import compute_laplacian_at_points
 from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -103,7 +104,7 @@ def mean_curvature_vertices(
 
     ### Compute mean curvature
     # H = ||L @ points|| / (2 * dual_volume)
-    dual_volumes_safe = torch.clamp(dual_volumes, min=1e-30)
+    dual_volumes_safe = torch.clamp(dual_volumes, min=safe_eps(dual_volumes.dtype))
     mean_curvature = laplacian_magnitude / (2.0 * dual_volumes_safe)
 
     ### Determine sign using normal orientation

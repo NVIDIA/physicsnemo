@@ -41,40 +41,6 @@ if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
 
 
-def compute_loop_beta(valence: int) -> float:
-    """Compute Loop subdivision beta weight based on vertex valence.
-
-    The beta weight determines how much an original vertex is influenced by
-    its neighbors. For regular vertices (valence 6), beta = 1/16.
-
-    Parameters
-    ----------
-    valence : int
-        Number of edges incident to the vertex
-
-    Returns
-    -------
-    float
-        Beta weight for this valence
-
-    Formula
-    -------
-    For valence n:
-    - If n == 3: beta = 3/16
-    - Else: beta = (1/n) * (5/8 - (3/8 + 1/4 * cos(2π/n))²)
-
-    This formula ensures smooth limit surfaces.
-    """
-    if valence == 3:
-        return 3.0 / 16.0
-    else:
-        cos_term = 3.0 / 8.0 + 0.25 * float(
-            torch.cos(torch.tensor(2.0 * torch.pi / valence))
-        )
-        beta = (1.0 / valence) * (5.0 / 8.0 - cos_term * cos_term)
-        return beta
-
-
 def reposition_original_vertices_2d(
     mesh: "Mesh",
     unique_edges: torch.Tensor | None = None,

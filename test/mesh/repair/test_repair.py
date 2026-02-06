@@ -23,7 +23,7 @@ from physicsnemo.mesh import Mesh
 from physicsnemo.mesh.repair import (
     fill_holes,
     remove_degenerate_cells,
-    remove_isolated_vertices,
+    remove_isolated_points,
     repair_mesh,
 )
 
@@ -226,7 +226,7 @@ class TestIsolatedRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_isolated_vertices(mesh)
+        mesh_clean, stats = remove_isolated_points(mesh)
 
         assert stats["n_isolated_removed"] == 1
         assert mesh_clean.n_points == 3
@@ -251,7 +251,7 @@ class TestIsolatedRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_isolated_vertices(mesh)
+        mesh_clean, stats = remove_isolated_points(mesh)
 
         assert stats["n_isolated_removed"] == 3
         assert mesh_clean.n_points == 3
@@ -272,7 +272,7 @@ class TestIsolatedRemoval:
 
         mesh = Mesh(points=points, cells=cells)
 
-        mesh_clean, stats = remove_isolated_vertices(mesh)
+        mesh_clean, stats = remove_isolated_points(mesh)
 
         assert stats["n_isolated_removed"] == 0
         assert mesh_clean.n_points == 3
@@ -449,7 +449,7 @@ class TestRepairIntegration:
         mesh2 = mesh1.clean(remove_unused_points=False)
         assert mesh2.n_points == 4  # Merged duplicates
 
-        mesh3, _ = remove_isolated_vertices(mesh2)
+        mesh3, _ = remove_isolated_points(mesh2)
         assert mesh3.n_points == 3  # Removed isolated
 
         # Final mesh should be clean

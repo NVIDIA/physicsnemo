@@ -31,10 +31,7 @@ This module consolidates tests from:
 import pytest
 import torch
 
-from physicsnemo.mesh.curvature._angles import (
-    compute_angles_at_vertices,
-    compute_solid_angle_at_tet_vertex,
-)
+from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
 from physicsnemo.mesh.curvature._utils import (
     compute_triangle_angles,
     stable_angle_between_vectors,
@@ -279,83 +276,12 @@ class TestTriangleAngleSum:
 
 
 ###############################################################################
-# Solid Angles 3D
+# Angles 3D
 ###############################################################################
 
 
-class TestSolidAngles3D:
-    """Tests for solid angle computation in 3D tetrahedral meshes."""
-
-    def test_solid_angle_regular_tetrahedron(self, device):
-        """Test solid angle at vertex of regular tetrahedron."""
-        # Regular tetrahedron: each vertex has solid angle ≈ 0.551 steradians
-        # This is arccos(23/27) or approximately π - 3*arccos(1/3)
-
-        # Create regular tetrahedron vertices
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.5, (3**0.5) / 2, 0.0],
-                [0.5, (3**0.5) / 6, ((2 / 3) ** 0.5)],
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
-
-        # Compute solid angle at vertex 0
-        vertex_pos = points[0]
-        opposite_vertices = points[[1, 2, 3]]
-
-        solid_angle = compute_solid_angle_at_tet_vertex(vertex_pos, opposite_vertices)
-
-        # For regular tet, each corner has solid angle ≈ 0.55129 steradians
-        expected = torch.acos(torch.tensor(23 / 27, device=device))  # Exact formula
-
-        assert torch.abs(solid_angle - expected) < 1e-5
-
-    def test_solid_angle_right_tetrahedron(self, device):
-        """Test solid angle at right-angle corner."""
-        # Tetrahedron with right angle at origin
-        vertex_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
-        opposite_vertices = torch.tensor(
-            [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
-
-        solid_angle = compute_solid_angle_at_tet_vertex(vertex_pos, opposite_vertices)
-
-        # Right angle corner: solid angle = π/2 steradians
-        expected = torch.pi / 2
-
-        assert torch.abs(solid_angle - expected) < 1e-5
-
-    def test_solid_angle_vectorized(self, device):
-        """Test vectorized computation of multiple solid angles."""
-        # Create multiple tetrahedron vertices
-        n_tets = 10
-
-        torch.manual_seed(42)
-        # Apex vertices
-        apexes = torch.randn(n_tets, 3, device=device)
-
-        # Opposite face vertices (random triangles)
-        opposite_verts = (
-            torch.randn(n_tets, 3, 3, device=device) + apexes.unsqueeze(1) + 1.0
-        )
-
-        # Compute solid angles
-        solid_angles = compute_solid_angle_at_tet_vertex(apexes, opposite_verts)
-
-        # Should all be positive and less than 4π (full sphere)
-        assert torch.all(solid_angles > 0)
-        assert torch.all(solid_angles < 4 * torch.pi)
-        assert solid_angles.shape == (n_tets,)
+class TestAngles3D:
+    """Tests for angle computation in 3D tetrahedral meshes."""
 
     def test_angles_at_vertices_3d_single_tet(self, device):
         """Test angle computation for single tetrahedron."""
@@ -421,28 +347,6 @@ class TestSolidAngles3D:
         assert angles[0] > angles[3]
         assert angles[1] > angles[3]
         assert angles[2] > angles[3]
-
-    def test_solid_angle_degenerate_protection(self, device):
-        """Test that degenerate cases don't produce NaN."""
-        # Nearly degenerate tetrahedron (very flat)
-        vertex_pos = torch.tensor([0.0, 0.0, 0.0], device=device)
-        opposite_vertices = torch.tensor(
-            [
-                [1.0, 0.0, 0.0],
-                [2.0, 0.0, 0.0],
-                [1.5, 0.001, 0.0],  # Very small height
-            ],
-            dtype=torch.float32,
-            device=device,
-        )
-
-        solid_angle = compute_solid_angle_at_tet_vertex(vertex_pos, opposite_vertices)
-
-        # Should be small but not NaN
-        assert not torch.isnan(solid_angle)
-        assert solid_angle >= 0
-        assert solid_angle < 0.01  # Very small solid angle
-
 
 ###############################################################################
 # Multi-Edge Vertices 1D

@@ -207,9 +207,8 @@ def validate_mesh(
             # For n-simplex: V = (1/n!) * det([v1-v0, v2-v0, ..., vn-v0])
             relative_vectors = cell_vertices[:, 1:] - cell_vertices[:, [0]]
 
-            # Compute determinant
-            if mesh.n_manifold_dims == 3:
-                # 3D case: determinant of 3x3 matrix
+            # Compute determinant (works for 2x2 and 3x3 matrices)
+            if mesh.n_manifold_dims >= 2:
                 det = torch.det(relative_vectors)  # (n_cells,)
 
                 inverted_mask = det < 0
@@ -227,7 +226,7 @@ def validate_mesh(
                             f"Problem cells: {results['inverted_cell_indices'].tolist()[:10]}"
                         )
             else:
-                # For other dimensions, orientation check is more complex
+                # For 1D, orientation check is more complex
                 results["n_inverted_cells"] = -1  # Not implemented
         else:
             # Codimension > 0: orientation not well-defined

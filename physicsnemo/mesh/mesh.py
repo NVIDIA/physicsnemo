@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import types
 from typing import TYPE_CHECKING, Any, Literal, Self, Sequence
 
@@ -250,27 +251,28 @@ class Mesh:
         self.global_data = global_data
 
         ### Validate shapes and dtypes
-        if self.points.ndim != 2:
-            raise ValueError(
-                f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
-            )
-        if self.cells.ndim != 2:
-            raise ValueError(
-                f"`cells` must have shape (n_cells, n_manifold_dimensions + 1), but got {self.cells.shape=}."
-            )
-        if self.n_manifold_dims > self.n_spatial_dims:
-            raise ValueError(
-                f"`n_manifold_dims` must be <= `n_spatial_dims`, but got {self.n_manifold_dims=} > {self.n_spatial_dims=}."
-            )
-        if torch.is_floating_point(self.cells):
-            raise TypeError(
-                f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
-            )
-        if self.points.device != self.cells.device:
-            raise ValueError(
-                f"`points` and `cells` must be on the same device, "
-                f"but got {self.points.device=} and {self.cells.device=}."
-            )
+        if not torch.compiler.is_compiling():
+            if self.points.ndim != 2:
+                raise ValueError(
+                    f"`points` must have shape (n_points, n_spatial_dimensions), but got {self.points.shape=}."
+                )
+            if self.cells.ndim != 2:
+                raise ValueError(
+                    f"`cells` must have shape (n_cells, n_manifold_dimensions + 1), but got {self.cells.shape=}."
+                )
+            if self.n_manifold_dims > self.n_spatial_dims:
+                raise ValueError(
+                    f"`n_manifold_dims` must be <= `n_spatial_dims`, but got {self.n_manifold_dims=} > {self.n_spatial_dims=}."
+                )
+            if torch.is_floating_point(self.cells):
+                raise TypeError(
+                    f"`cells` must have an int-like dtype, but got {self.cells.dtype=}."
+                )
+            if self.points.device != self.cells.device:
+                raise ValueError(
+                    f"`points` and `cells` must be on the same device, "
+                    f"but got {self.points.device=} and {self.cells.device=}."
+                )
 
     if TYPE_CHECKING:
         # Type stub for the `to` method dynamically added by @tensorclass.
@@ -416,10 +418,7 @@ class Mesh:
             )  # Result: (n_cells, n_manifold_dims, n_manifold_dims)
 
             ### Compute volume: sqrt(|det(G)|) / n!
-            # Compute factorial using torch for small integers
-            factorial = torch.arange(
-                1, self.n_manifold_dims + 1, device=gram_matrix.device
-            ).prod()
+            factorial = math.factorial(self.n_manifold_dims)
 
             cached = gram_matrix.det().abs().sqrt() / factorial
             set_cached(self.cell_data, "areas", cached)
@@ -1648,7 +1647,7 @@ class Mesh:
             self, adjacency_codimension=adjacency_codimension
         )
 
-    def get_cells_to_points_adjacency(self):
+    def get_cell_to_points_adjacency(self):
         """Get the vertices (points) that comprise each cell.
 
         This is a simple wrapper around the cells array that returns it in the
@@ -1665,13 +1664,13 @@ class Mesh:
         --------
         >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
         >>> mesh = two_triangles_2d.load()
-        >>> adj = mesh.get_cells_to_points_adjacency()
+        >>> adj = mesh.get_cell_to_points_adjacency()
         >>> # Get vertices of cell 0
         >>> vertices_of_cell_0 = adj.to_list()[0]
         """
-        from physicsnemo.mesh.neighbors import get_cells_to_points_adjacency
+        from physicsnemo.mesh.neighbors import get_cell_to_points_adjacency
 
-        return get_cells_to_points_adjacency(self)
+        return get_cell_to_points_adjacency(self)
 
     def pad(
         self,
@@ -1799,8 +1798,8 @@ class Mesh:
 
             # Solve for n: floor(base^n) >= current_size
             # n >= log(current_size) / log(base)
-            n = (torch.tensor(safe_size).log() / torch.tensor(base).log()).ceil()
-            return int(torch.tensor(base) ** n)
+            n = math.ceil(math.log(safe_size) / math.log(base))
+            return base ** n
 
         target_n_points = next_power_size(self.n_points, power)
         target_n_cells = next_power_size(self.n_cells, power)
@@ -2440,13 +2439,14 @@ class Mesh:
         """
         from physicsnemo.mesh.repair import clean_mesh
 
-        return clean_mesh(
+        cleaned, _stats = clean_mesh(
             mesh=self,
             tolerance=tolerance,
             merge_points=merge_points,
             deduplicate_cells=remove_duplicate_cells,
             drop_unused_points=remove_unused_points,
         )
+        return cleaned
 
     def strip_caches(self) -> "Mesh":
         r"""Return a new mesh with all cached values removed.

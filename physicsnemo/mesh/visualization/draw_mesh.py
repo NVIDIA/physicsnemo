@@ -192,6 +192,26 @@ def draw_mesh(
             f"Unknown {backend=!r}. Supported backends: {supported}, 'auto'."
         )
 
+    # Track the resolved backend for warning checks below
+    resolved_backend = backend
+
+    ### Warn about unsupported options
+    if backend_options and resolved_backend == "matplotlib":
+        import warnings
+
+        warnings.warn(
+            "backend_options are only supported with the 'pyvista' backend and will be ignored.",
+            stacklevel=2,
+        )
+
+    if alpha_edges != 1.0 and resolved_backend == "pyvista":
+        import warnings
+
+        warnings.warn(
+            "alpha_edges is not supported by the 'pyvista' backend and will be ignored.",
+            stacklevel=2,
+        )
+
     ### Dispatch to backend
     if backend == "matplotlib":
         from physicsnemo.mesh.visualization._matplotlib_impl import draw_mesh_matplotlib

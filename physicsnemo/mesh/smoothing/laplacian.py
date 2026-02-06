@@ -170,6 +170,10 @@ def smooth_laplacian(
         bbox_diagonal = torch.norm(bbox_max - bbox_min)
         convergence_threshold = convergence * bbox_diagonal
 
+    ### Pre-allocate buffers for iterative smoothing (avoid per-iteration allocation)
+    laplacian = torch.zeros((n_points, n_spatial_dims), dtype=dtype, device=device)
+    weight_sum = torch.zeros(n_points, dtype=dtype, device=device)
+
     ### Iterative smoothing
     for iteration in range(n_iter):
         # Save old positions for convergence check
@@ -177,8 +181,8 @@ def smooth_laplacian(
             old_points = mesh.points.clone()
 
         ### Compute Laplacian at each vertex: L(p_i) = Σ_j w_ij (p_j - p_i)
-        laplacian = torch.zeros((n_points, n_spatial_dims), dtype=dtype, device=device)
-        weight_sum = torch.zeros(n_points, dtype=dtype, device=device)
+        laplacian.zero_()
+        weight_sum.zero_()
 
         # For each edge (i, j) with weight w:
         #   laplacian[i] += w * (p_j - p_i)

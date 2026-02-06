@@ -33,6 +33,7 @@ def repair_mesh(
     fix_orientation: bool = False,  # Requires 3D, has loops
     fill_holes: bool = False,  # Expensive, opt-in
     tolerance: float = 1e-6,
+    area_tolerance: float = 1e-10,
     max_hole_edges: int = 10,
 ) -> tuple["Mesh", dict[str, dict]]:
     """Apply multiple repair operations in sequence.
@@ -62,8 +63,11 @@ def repair_mesh(
     fill_holes : bool, optional
         Close boundary loops (expensive).
     tolerance : float, optional
-        Absolute L2 distance threshold for merging duplicate points
-        and area tolerance for degenerate cell detection.
+        Absolute L2 distance threshold for merging duplicate points.
+    area_tolerance : float, optional
+        Area threshold for degenerate cell detection. Cells with area
+        below this value are considered degenerate and removed. Defaults
+        to ``1e-10``, matching :func:`remove_degenerate_cells`'s own default.
     max_hole_edges : int, optional
         Maximum hole size to fill.
 
@@ -89,7 +93,7 @@ def repair_mesh(
             remove_degenerate_cells as remove_deg,
         )
 
-        current_mesh, stats = remove_deg(current_mesh, area_tolerance=tolerance)
+        current_mesh, stats = remove_deg(current_mesh, area_tolerance=area_tolerance)
         all_stats["degenerates"] = stats
 
     ### Operation 2: Merge duplicate points (via clean_mesh)
@@ -97,7 +101,7 @@ def repair_mesh(
         from physicsnemo.mesh.repair._cleaning import clean_mesh
 
         n_before = current_mesh.n_points
-        current_mesh = clean_mesh(
+        current_mesh, clean_stats = clean_mesh(
             current_mesh,
             tolerance=tolerance,
             merge_points=True,
@@ -110,11 +114,12 @@ def repair_mesh(
             "n_points_final": n_after,
             "n_duplicates_merged": n_before - n_after,
         }
+        all_stats["clean"] = clean_stats
 
     ### Operation 3: Remove isolated points
     if remove_isolated:
         from physicsnemo.mesh.repair._cleaning import (
-            remove_isolated_vertices as remove_iso,
+            remove_isolated_points as remove_iso,
         )
 
         current_mesh, stats = remove_iso(current_mesh)
@@ -122,7 +127,7 @@ def repair_mesh(
 
     ### Operation 4: Fix orientation
     if fix_orientation:
-        if mesh.n_manifold_dims == 2 and mesh.n_spatial_dims == 3:
+        if current_mesh.n_manifold_dims == 2 and current_mesh.n_spatial_dims == 3:
             from physicsnemo.mesh.repair.orientation import (
                 fix_orientation as fix_orient,
             )
@@ -134,7 +139,7 @@ def repair_mesh(
 
     ### Operation 5: Fill holes
     if fill_holes:
-        if mesh.n_manifold_dims == 2:
+        if current_mesh.n_manifold_dims == 2:
             from physicsnemo.mesh.repair.hole_filling import fill_holes as fill_h
 
             current_mesh, stats = fill_h(current_mesh, max_hole_edges=max_hole_edges)

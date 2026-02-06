@@ -35,6 +35,71 @@ import warnings
 import torch
 
 
+def vectorized_connected_components(
+    pairs: torch.Tensor, n_elements: int
+) -> torch.Tensor:
+    """Compute connected components from pairwise connections.
+
+    Uses iterative vectorized union-find with path compression.
+
+    Parameters
+    ----------
+    pairs : torch.Tensor
+        Shape (n_pairs, 2). Each row is a pair of element indices that should
+        be in the same component.
+    n_elements : int
+        Total number of elements.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape (n_elements,). labels[i] is the canonical (smallest index)
+        representative of element i's component.
+    """
+    device = pairs.device
+    parent = torch.arange(n_elements, dtype=torch.long, device=device)
+
+    if len(pairs) == 0:
+        return parent
+
+    ### Iterative union-find: repeat union + path compression until stable
+    max_iterations = 100
+    for _ in range(max_iterations):
+        prev = parent.clone()
+
+        # Union step: merge to smaller index
+        merge_from = torch.maximum(pairs[:, 0], pairs[:, 1])
+        merge_to = torch.minimum(pairs[:, 0], pairs[:, 1])
+        # Also need to merge through current parent pointers
+        parent_from = parent[pairs[:, 0]]
+        parent_to = parent[pairs[:, 1]]
+        all_merge_from = torch.cat(
+            [merge_from, torch.maximum(parent_from, parent_to)]
+        )
+        all_merge_to = torch.cat([merge_to, torch.minimum(parent_from, parent_to)])
+
+        parent.scatter_reduce_(
+            dim=0,
+            index=all_merge_from,
+            src=all_merge_to,
+            reduce="amin",
+        )
+
+        # Path compression
+        parent = parent[parent]
+
+        if torch.equal(parent, prev):
+            break
+    else:
+        warnings.warn(
+            f"Union-find did not converge in {max_iterations} iterations. "
+            "This should not happen for valid meshes.",
+            stacklevel=2,
+        )
+
+    return parent
+
+
 def find_duplicate_pairs(
     points: torch.Tensor,
     tolerance: float,
@@ -130,39 +195,9 @@ def compute_canonical_indices(
     n_points = points.shape[0]
     device = points.device
 
-    parent = torch.arange(n_points, device=device, dtype=torch.long)
-
     if n_points < 2:
-        return parent
+        return torch.arange(n_points, device=device, dtype=torch.long)
 
     pairs = find_duplicate_pairs(points, tolerance)
 
-    if len(pairs) == 0:
-        return parent
-
-    ### Vectorised union: merge to smaller index
-    merge_from = torch.maximum(pairs[:, 0], pairs[:, 1])
-    merge_to = torch.minimum(pairs[:, 0], pairs[:, 1])
-
-    parent.scatter_reduce_(
-        dim=0,
-        index=merge_from,
-        src=merge_to,
-        reduce="amin",
-    )
-
-    ### Path compression (each iteration halves tree depth → O(log n) total)
-    max_iterations = 100
-    for _ in range(max_iterations):
-        prev = parent.clone()
-        parent = parent[parent]
-        if torch.equal(parent, prev):
-            break
-    else:
-        warnings.warn(
-            f"Union-find path compression did not converge in {max_iterations} "
-            "iterations.  This should not happen for valid meshes.",
-            stacklevel=2,
-        )
-
-    return parent
+    return vectorized_connected_components(pairs, n_points)

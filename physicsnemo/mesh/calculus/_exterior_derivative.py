@@ -100,17 +100,8 @@ def exterior_derivative_0(
     # This is important for consistent orientation
     sorted_edges, sort_indices = torch.sort(edges, dim=-1)
 
-    # Compute differences
-    if vertex_0form.ndim == 1:
-        # Scalar case
-        edge_values = (
-            vertex_0form[sorted_edges[:, 1]] - vertex_0form[sorted_edges[:, 0]]
-        )
-    else:
-        # Tensor case: apply to each component
-        edge_values = (
-            vertex_0form[sorted_edges[:, 1]] - vertex_0form[sorted_edges[:, 0]]
-        )
+    # Compute differences (indexing works for any ndim)
+    edge_values = vertex_0form[sorted_edges[:, 1]] - vertex_0form[sorted_edges[:, 0]]
 
     return edge_values, sorted_edges
 

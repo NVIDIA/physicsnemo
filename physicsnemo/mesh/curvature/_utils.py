@@ -64,7 +64,7 @@ def compute_full_angle_n_sphere(n_manifold_dims: int) -> float:
     ### General case (n ≥ 2): Surface area of (n-1)-sphere
     # Formula: 2π^(n/2) / Γ(n/2)
     n = n_manifold_dims
-    return (2 * math.pi) ** (n / 2.0) / math.exp(math.lgamma(n / 2.0))
+    return 2 * math.pi ** (n / 2.0) / math.exp(math.lgamma(n / 2.0))
 
 
 def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
@@ -97,8 +97,8 @@ def stable_angle_between_vectors(v1: torch.Tensor, v2: torch.Tensor) -> torch.Te
     ### Compute cross product magnitude (generalized)
     # For 2D/3D: ||v1 × v2|| = ||v1|| * ||v2|| * sin(θ)
     # More generally: ||v1|| * ||v2|| * sin(θ) = sqrt(||v1||² * ||v2||² - (v1·v2)²)
-    v1_norm = torch.norm(v1, dim=-1)
-    v2_norm = torch.norm(v2, dim=-1)
+    v1_norm = torch.linalg.vector_norm(v1, dim=-1)
+    v2_norm = torch.linalg.vector_norm(v2, dim=-1)
 
     cross_magnitude_sq = v1_norm**2 * v2_norm**2 - dot_product**2
     # Clamp to avoid numerical issues with negative values near zero

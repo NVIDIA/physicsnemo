@@ -91,6 +91,137 @@ def _scatter_add_cell_contributions_to_vertices(
         )
 
 
+def _compute_meyer_mixed_voronoi_areas(
+    cell_vertices: torch.Tensor,  # (n_cells, 3, n_spatial_dims)
+    cell_areas: torch.Tensor,  # (n_cells,)
+) -> torch.Tensor:
+    """Compute per-(cell, local_vertex) mixed Voronoi areas (Meyer et al. 2003).
+
+    This implements the branchless mixed Voronoi area formula for triangular meshes,
+    handling both acute and obtuse triangles correctly. For acute triangles, uses the
+    circumcentric Voronoi formula (Meyer Eq. 7). For obtuse triangles, uses the
+    mixed area subdivision (Meyer Fig. 4).
+
+    Parameters
+    ----------
+    cell_vertices : torch.Tensor
+        Vertex positions for each triangle cell.
+        Shape: (n_cells, 3, n_spatial_dims)
+    cell_areas : torch.Tensor
+        Area of each triangle cell.
+        Shape: (n_cells,)
+
+    Returns
+    -------
+    torch.Tensor
+        Per-(cell, local_vertex) Voronoi areas, shape (n_cells * 3,).
+        Ordered as [cell0_v0, cell0_v1, cell0_v2, cell1_v0, ...], i.e.
+        the flattened (n_cells, 3) tensor where column j corresponds to
+        local vertex j.
+
+    References
+    ----------
+    Meyer, M., Desbrun, M., Schröder, P., & Barr, A. H. (2003).
+    "Discrete Differential-Geometry Operators for Triangulated 2-Manifolds".
+    Section 3.3 (Equation 7) and Section 3.4 (Figure 4).
+    """
+    from physicsnemo.mesh.curvature._utils import compute_triangle_angles
+
+    n_cells = cell_vertices.shape[0]
+    device = cell_vertices.device
+    dtype = cell_vertices.dtype
+
+    ### Compute all 3 angles in a single vectorized call (E6 optimization)
+    # Stack the 3 vertex permutations so compute_triangle_angles is called once
+    # instead of three times. Each permutation computes the angle at a different
+    # vertex of the triangle.
+    #   Permutation 0: angle at vertex 0 -> (v0, v1, v2)
+    #   Permutation 1: angle at vertex 1 -> (v1, v2, v0)
+    #   Permutation 2: angle at vertex 2 -> (v2, v0, v1)
+    stacked_p0 = torch.cat(
+        [
+            cell_vertices[:, 0, :],
+            cell_vertices[:, 1, :],
+            cell_vertices[:, 2, :],
+        ],
+        dim=0,
+    )  # (3 * n_cells, n_spatial_dims)
+    stacked_p1 = torch.cat(
+        [
+            cell_vertices[:, 1, :],
+            cell_vertices[:, 2, :],
+            cell_vertices[:, 0, :],
+        ],
+        dim=0,
+    )  # (3 * n_cells, n_spatial_dims)
+    stacked_p2 = torch.cat(
+        [
+            cell_vertices[:, 2, :],
+            cell_vertices[:, 0, :],
+            cell_vertices[:, 1, :],
+        ],
+        dim=0,
+    )  # (3 * n_cells, n_spatial_dims)
+
+    stacked_angles = compute_triangle_angles(
+        stacked_p0, stacked_p1, stacked_p2
+    )  # (3 * n_cells,)
+
+    # Unstack into (n_cells, 3) where column j = angle at local vertex j
+    all_angles = stacked_angles.reshape(3, n_cells).T  # (n_cells, 3)
+
+    # Check if triangle is obtuse (any angle > pi/2)
+    is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
+
+    ### Branchless computation of mixed Voronoi areas
+    # Computes both acute (Eq. 7) and obtuse (Fig. 4) formulas for all cells,
+    # then selects per-cell via torch.where. This avoids data-dependent branching
+    # that would break torch.compile.
+    eps = safe_eps(all_angles.dtype)
+    voronoi_per_vertex = torch.zeros(n_cells, 3, dtype=dtype, device=device)
+
+    for local_v_idx in range(3):
+        next_idx = (local_v_idx + 1) % 3
+        prev_idx = (local_v_idx + 2) % 3
+
+        ### Voronoi contribution (Eq. 7) - computed for ALL cells
+        edge_to_next = (
+            cell_vertices[:, next_idx, :] - cell_vertices[:, local_v_idx, :]
+        )  # (n_cells, n_spatial_dims)
+        edge_to_prev = (
+            cell_vertices[:, prev_idx, :] - cell_vertices[:, local_v_idx, :]
+        )  # (n_cells, n_spatial_dims)
+
+        edge_to_next_sq = (edge_to_next**2).sum(dim=-1)  # (n_cells,)
+        edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)  # (n_cells,)
+
+        cot_prev = torch.cos(all_angles[:, prev_idx]) / torch.sin(
+            all_angles[:, prev_idx]
+        ).clamp(min=eps)
+        cot_next = torch.cos(all_angles[:, next_idx]) / torch.sin(
+            all_angles[:, next_idx]
+        ).clamp(min=eps)
+
+        voronoi_contribution = (
+            edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
+        ) / 8.0  # (n_cells,)
+
+        ### Mixed-area contribution (Figure 4) - computed for ALL cells
+        is_obtuse_at_vertex = all_angles[:, local_v_idx] > torch.pi / 2
+        mixed_contribution = torch.where(
+            is_obtuse_at_vertex,
+            cell_areas / 2.0,
+            cell_areas / 4.0,
+        )  # (n_cells,)
+
+        ### Select per cell: Voronoi for acute, mixed for obtuse
+        voronoi_per_vertex[:, local_v_idx] = torch.where(
+            is_obtuse, mixed_contribution, voronoi_contribution
+        )
+
+    return voronoi_per_vertex.reshape(-1)  # (n_cells * 3,)
+
+
 def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
     """Compute circumcentric dual 0-cell volumes (Voronoi regions) at mesh vertices.
 
@@ -200,83 +331,18 @@ def compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
         # The previous buggy implementation in _circumcentric_dual.py assumed
         # circumcenters were always inside triangles, which is only true for acute.
 
-        # Compute all three angles in each triangle
         cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
+        voronoi_areas = _compute_meyer_mixed_voronoi_areas(
+            cell_vertices, cell_volumes
+        )  # (n_cells * 3,)
 
-        from physicsnemo.mesh.curvature._utils import compute_triangle_angles
-
-        angles_0 = compute_triangle_angles(
-            cell_vertices[:, 0, :],
-            cell_vertices[:, 1, :],
-            cell_vertices[:, 2, :],
-        )
-        angles_1 = compute_triangle_angles(
-            cell_vertices[:, 1, :],
-            cell_vertices[:, 2, :],
-            cell_vertices[:, 0, :],
-        )
-        angles_2 = compute_triangle_angles(
-            cell_vertices[:, 2, :],
-            cell_vertices[:, 0, :],
-            cell_vertices[:, 1, :],
-        )
-
-        # Stack angles: (n_cells, 3)
-        all_angles = torch.stack([angles_0, angles_1, angles_2], dim=1)
-
-        # Check if obtuse (any angle > π/2)
-        is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
-
-        ### Branchless computation of mixed Voronoi areas
-        # For each cell we compute BOTH the circumcentric Voronoi formula (Eq. 7,
-        # valid for acute triangles) and the mixed-area formula (Figure 4, for
-        # obtuse triangles), then select per-cell via torch.where.
-        # This avoids data-dependent branching that would break torch.compile.
-
-        eps = safe_eps(all_angles.dtype)
-
+        ### Scatter to global dual volumes
+        voronoi_areas_2d = voronoi_areas.reshape(mesh.n_cells, 3)  # (n_cells, 3)
         for local_v_idx in range(3):
-            next_idx = (local_v_idx + 1) % 3
-            prev_idx = (local_v_idx + 2) % 3
-
-            ### Voronoi contribution (Eq. 7) - computed for ALL cells
-            edge_to_next = (
-                cell_vertices[:, next_idx, :] - cell_vertices[:, local_v_idx, :]
-            )  # (n_cells, n_spatial_dims)
-            edge_to_prev = (
-                cell_vertices[:, prev_idx, :] - cell_vertices[:, local_v_idx, :]
-            )  # (n_cells, n_spatial_dims)
-
-            edge_to_next_sq = (edge_to_next**2).sum(dim=-1)  # (n_cells,)
-            edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)  # (n_cells,)
-
-            cot_prev = torch.cos(all_angles[:, prev_idx]) / torch.sin(
-                all_angles[:, prev_idx]
-            ).clamp(min=eps)
-            cot_next = torch.cos(all_angles[:, next_idx]) / torch.sin(
-                all_angles[:, next_idx]
-            ).clamp(min=eps)
-
-            voronoi_contribution = (
-                edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
-            ) / 8.0  # (n_cells,)
-
-            ### Mixed-area contribution (Figure 4) - computed for ALL cells
-            is_obtuse_at_vertex = all_angles[:, local_v_idx] > torch.pi / 2
-            mixed_contribution = torch.where(
-                is_obtuse_at_vertex,
-                cell_volumes / 2.0,
-                cell_volumes / 4.0,
-            )  # (n_cells,)
-
-            ### Select per cell: Voronoi for acute, mixed for obtuse
-            contribution = torch.where(
-                is_obtuse, mixed_contribution, voronoi_contribution
-            )
-
-            ### Scatter to global dual volumes
             vertex_indices = mesh.cells[:, local_v_idx]
-            dual_volumes.scatter_add_(0, vertex_indices, contribution)
+            dual_volumes.scatter_add_(
+                0, vertex_indices, voronoi_areas_2d[:, local_v_idx]
+            )
 
     elif n_manifold_dims >= 3:
         ### 3D and higher: Barycentric subdivision
@@ -325,14 +391,15 @@ def compute_circumcenters(
         For simplex with vertices v₀, v₁, ..., vₙ, the circumcenter c satisfies:
             ||c - v₀||² = ||c - v₁||² = ... = ||c - vₙ||²
 
-        This gives n linear equations in n_spatial_dims unknowns:
-            2(v_i - v₀)·c = ||v_i||² - ||v₀||²  for i=1,...,n
+        Substituting d = c - v₀ gives n linear equations:
+            2(v_i - v₀)·d = ||v_i - v₀||²  for i=1,...,n
 
-        In matrix form: A·c = b where:
+        In matrix form: A·d = b where:
             A = 2[(v₁-v₀)^T, (v₂-v₀)^T, ...]^T
-            b = [||v₁||²-||v₀||², ||v₂||²-||v₀||², ...]^T
+            b = [||v₁-v₀||², ||v₂-v₀||², ...]^T
 
-        For over-determined systems (embedded manifolds), use least-squares.
+        Then c = v₀ + d. For over-determined systems (embedded manifolds),
+        use least-squares.
     """
     n_simplices, n_vertices, n_spatial_dims = vertices.shape
     n_manifold_dims = n_vertices - 1
@@ -359,15 +426,13 @@ def compute_circumcenters(
     # Shape: (n_simplices, n_manifold_dims, n_spatial_dims)
     A = 2 * relative_vecs
 
-    # Right-hand side: ||v_i||² - ||v₀||²
+    # Right-hand side: ||v_i - v₀||²
     # Shape: (n_simplices, n_manifold_dims)
-    vi_squared = (vertices[:, 1:, :] ** 2).sum(dim=-1)
-    v0_squared = (v0**2).sum(dim=-1, keepdim=True)
-    b = vi_squared - v0_squared
+    b = (relative_vecs**2).sum(dim=-1)
 
     ### Solve for circumcenter
     # Need to solve: A @ (c - v₀) = b for each simplex
-    # This is: 2*(v_i - v₀) @ (c - v₀) = ||v_i||² - ||v₀||²
+    # This is: 2*(v_i - v₀) @ (c - v₀) = ||v_i - v₀||²
 
     if n_manifold_dims == n_spatial_dims:
         ### Square system: use direct solve

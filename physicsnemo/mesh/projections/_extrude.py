@@ -234,6 +234,12 @@ def extrude(
         # For each parent cell, generate all children simultaneously
         parent_cells = mesh.cells  # Shape: (n_cells, n_vertices_per_parent)
 
+        # NOTE: This loop iterates over child indices (bounded by simplex
+        # dimension, not mesh size), so the iteration count is small (e.g. 3
+        # for triangles -> tetrahedra).  For higher performance on very high-
+        # dimensional simplices, this could be vectorized using a precomputed
+        # tessellation pattern + torch.gather, similar to generate_child_cells
+        # in subdivision/_topology.py.
         for child_idx in range(n_children_per_parent):
             # Child i has vertices: [v0', v1', ..., vi', vi, vi+1, ..., vN]
             # Extruded part: v0', v1', ..., vi' (child_idx + 1 vertices)
@@ -276,10 +282,13 @@ def extrude(
             device=all_points.device,
         )
 
-    # Cell data: replicate each parent cell's data (N+1) times
+    # Cell data: replicate each parent cell's data (N+1) times.
+    # Cells are ordered child-major: [c0_parent0, c0_parent1, ..., c1_parent0, ...],
+    # so the parent index for cell i is i % n_original_cells.  Using .repeat()
+    # tiles the entire parent block N+1 times, producing the correct ordering.
     if len(filtered_cell_data.keys()) > 0:
         extruded_cell_data = filtered_cell_data.apply(
-            lambda t: t.repeat_interleave(n_children_per_parent, dim=0),
+            lambda t: t.repeat(n_children_per_parent, *([1] * (t.ndim - 1))),
             batch_size=torch.Size([extruded_cells.shape[0]]),
         )
     else:

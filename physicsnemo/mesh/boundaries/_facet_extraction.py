@@ -597,6 +597,8 @@ def _aggregate_point_data_to_facets(
 
     def _aggregate_point_tensor(tensor: torch.Tensor) -> torch.Tensor:
         """Aggregate a single tensor from points to facets."""
+        from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
+
         ### Gather point data for vertices of each candidate facet
         # Shape: (n_candidate_facets, n_vertices_per_facet, *data_shape)
         facet_point_data = tensor[candidate_facets]
@@ -605,36 +607,13 @@ def _aggregate_point_data_to_facets(
         # Shape: (n_candidate_facets, *data_shape)
         candidate_facet_data = facet_point_data.mean(dim=1)
 
-        ### Aggregate to unique facets
-        data_shape = candidate_facet_data.shape[1:]
-        aggregated_data = torch.zeros(
-            (n_unique_facets, *data_shape),
-            dtype=candidate_facet_data.dtype,
-            device=candidate_facet_data.device,
+        ### Aggregate to unique facets using scatter_aggregate
+        return scatter_aggregate(
+            src_data=candidate_facet_data,
+            src_to_dst_mapping=inverse_indices,
+            n_dst=n_unique_facets,
+            aggregation="mean",
         )
-
-        aggregated_data.scatter_add_(
-            dim=0,
-            index=inverse_indices.view(-1, *([1] * len(data_shape))).expand_as(
-                candidate_facet_data
-            ),
-            src=candidate_facet_data,
-        )
-
-        ### Count facets and normalize
-        facet_counts = torch.zeros(
-            n_unique_facets, dtype=torch.float32, device=candidate_facet_data.device
-        )
-        facet_counts.scatter_add_(
-            dim=0,
-            index=inverse_indices,
-            src=torch.ones_like(inverse_indices, dtype=torch.float32),
-        )
-
-        aggregated_data = aggregated_data / facet_counts.view(
-            -1, *([1] * len(data_shape))
-        )
-        return aggregated_data
 
     ### Use TensorDict.apply() to handle nested structure automatically
     return point_data.apply(

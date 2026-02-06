@@ -17,13 +17,15 @@
 """Laplace-Beltrami operator for scalar fields.
 
 The Laplace-Beltrami operator is the generalization of the Laplacian to
-curved manifolds. In DEC: Δ = δd = -⋆d⋆d
+curved manifolds.
+
+This implementation uses the analyst's sign convention:
+    Δf(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
+
+which is positive for locally convex functions (e.g., Δ(x²) = 2).
 
 For functions (0-forms), this gives the discrete Laplace-Beltrami operator
 which reduces to the standard Laplacian on flat manifolds.
-
-DEC formula (from Desbrun et al. lines 1689-1705):
-    Δf(v₀) = -(1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
 
 This is the cotangent Laplacian, intrinsic to the manifold.
 """
@@ -43,7 +45,6 @@ def _apply_cotan_laplacian_operator(
     edges: torch.Tensor,
     cotan_weights: torch.Tensor,
     data: torch.Tensor,
-    device: torch.device,
 ) -> torch.Tensor:
     """Apply cotangent Laplacian operator to data via scatter-add.
 
@@ -63,8 +64,6 @@ def _apply_cotan_laplacian_operator(
         Cotangent weights for each edge, shape (n_edges,)
     data : torch.Tensor
         Data at vertices, shape (n_vertices, *data_shape)
-    device : torch.device
-        Device for computation
 
     Returns
     -------
@@ -78,9 +77,10 @@ def _apply_cotan_laplacian_operator(
     >>> n_points, edges = 4, torch.tensor([[0, 1], [1, 2], [0, 2]])
     >>> weights = torch.ones(3)
     >>> scalar_field = torch.randn(4)
-    >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field, "cpu")
+    >>> laplacian = _apply_cotan_laplacian_operator(n_points, edges, weights, scalar_field)
     """
     ### Initialize output with same shape as data
+    device = data.device
     if data.ndim == 1:
         laplacian = torch.zeros(n_vertices, dtype=data.dtype, device=device)
     else:
@@ -128,7 +128,7 @@ def compute_laplacian_points_dec(
 
     This is the INTRINSIC Laplacian - it automatically respects the manifold structure.
 
-    Formula: Δf(v₀) = -(1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
+    Formula: Δf(v₀) = (1/|⋆v₀|) Σ_{edges from v₀} (|⋆e|/|e|)(f(v) - f(v₀))
 
     Where:
     - |⋆v₀| is the dual 0-cell volume (Voronoi cell around vertex)
@@ -165,7 +165,6 @@ def compute_laplacian_points_dec(
         edges=sorted_edges,
         cotan_weights=cotan_weights,
         data=point_values,
-        device=device,
     )
 
     ### Normalize by Voronoi areas

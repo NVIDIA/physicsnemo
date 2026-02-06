@@ -288,7 +288,7 @@ def get_cell_to_cells_adjacency(
     )
 
 
-def get_cells_to_points_adjacency(mesh: "Mesh") -> Adjacency:
+def get_cell_to_points_adjacency(mesh: "Mesh") -> Adjacency:
     """Get the vertices (points) that comprise each cell.
 
     This is a simple wrapper around the cells array that returns it in the
@@ -314,7 +314,7 @@ def get_cells_to_points_adjacency(mesh: "Mesh") -> Adjacency:
         >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 1.], [1., 1.]])
         >>> cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         >>> mesh = Mesh(points=points, cells=cells)
-        >>> adj = get_cells_to_points_adjacency(mesh)
+        >>> adj = get_cell_to_points_adjacency(mesh)
         >>> adj.to_list()
         [[0, 1, 2], [1, 3, 2]]
     """

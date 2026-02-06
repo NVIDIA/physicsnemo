@@ -302,45 +302,29 @@ def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
     third_verts_flat = third_verts.flatten()  # (2 * n_candidates,)
     cand_indices_2x = torch.arange(n_candidates, device=device).repeat_interleave(2)
 
-    # Composite sort key: (edge_id, third_vertex)
-    n_pts = mesh.n_points
-    sort_key = edge_ids_2x.long() * (n_pts + 1) + third_verts_flat.long()
-    sort_order = torch.argsort(sort_key)
+    # Use lexicographic sort via two stable argsorts to avoid integer overflow
+    order = torch.argsort(third_verts_flat.long(), stable=True)
+    order = order[torch.argsort(edge_ids_2x[order].long(), stable=True)]
 
-    sorted_cand = cand_indices_2x[sort_order]
-    sorted_key = sort_key[sort_order]
+    sorted_cand = cand_indices_2x[order]
+    sorted_edge_ids = edge_ids_2x[order]
+    sorted_third_verts = third_verts_flat[order]
 
-    # Consecutive entries with the same key are candidates sharing an
-    # (edge, third_vertex) pair - they are link-adjacent.
-    same_key = sorted_key[:-1] == sorted_key[1:]
+    # Consecutive entries with the same (edge_id, third_vertex) pair
+    # are candidates sharing a link-adjacent face.
+    same_key = (sorted_edge_ids[:-1] == sorted_edge_ids[1:]) & (
+        sorted_third_verts[:-1] == sorted_third_verts[1:]
+    )
     pair_a = sorted_cand[:-1][same_key]
     pair_b = sorted_cand[1:][same_key]
 
     ### Step 5: Union-find over candidates to find connected components per edge
-    labels = torch.arange(n_candidates, dtype=torch.long, device=device)
+    from physicsnemo.mesh.utilities._duplicate_detection import (
+        vectorized_connected_components,
+    )
 
-    if len(pair_a) > 0:
-        # Union: merge to smaller label (bidirectional)
-        merge_from = torch.cat(
-            [
-                torch.maximum(pair_a, pair_b),
-                torch.maximum(pair_b, pair_a),
-            ]
-        )
-        merge_to = torch.cat(
-            [
-                torch.minimum(pair_a, pair_b),
-                torch.minimum(pair_b, pair_a),
-            ]
-        )
-        labels.scatter_reduce_(0, merge_from, merge_to, reduce="amin")
-
-        # Path compression
-        for _ in range(100):
-            prev = labels.clone()
-            labels = labels[labels]
-            if torch.equal(labels, prev):
-                break
+    pairs = torch.stack([pair_a, pair_b], dim=1)
+    labels = vectorized_connected_components(pairs, n_candidates)
 
     ### Step 6: Check single connected component per unique edge.
     # For each unique edge, all candidate entries must share the same root.
@@ -536,16 +520,21 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     # Sort by composite key (vertex_id, edge_v0, edge_v1) to group identical
     # (vertex, edge) tuples together. Consecutive entries sharing a key are
     # face pairs connected via that edge.
-    n_pts = mesh.n_points
-    sort_key = (
-        vertex_ids_3x * (n_pts * n_pts) + all_edges[:, 0] * n_pts + all_edges[:, 1]
-    )
-    sort_idx = torch.argsort(sort_key)
-    sorted_face_idx = face_indices_3x[sort_idx]
-    sorted_key = sort_key[sort_idx]
+    # Use lexicographic sort via three stable argsorts to avoid integer overflow
+    order = torch.argsort(all_edges[:, 1], stable=True)
+    order = order[torch.argsort(all_edges[order, 0], stable=True)]
+    order = order[torch.argsort(vertex_ids_3x[order], stable=True)]
 
-    # Adjacent entries with the same key are face pairs that share an edge
-    same_key = sorted_key[:-1] == sorted_key[1:]
+    sorted_face_idx = face_indices_3x[order]
+    sorted_vertex_ids = vertex_ids_3x[order]
+    sorted_edges = all_edges[order]
+
+    # Adjacent entries with the same (vertex_id, edge_v0, edge_v1) are face pairs
+    same_key = (
+        (sorted_vertex_ids[:-1] == sorted_vertex_ids[1:])
+        & (sorted_edges[:-1, 0] == sorted_edges[1:, 0])
+        & (sorted_edges[:-1, 1] == sorted_edges[1:, 1])
+    )
     pair_f1 = sorted_face_idx[:-1][same_key]
     pair_f2 = sorted_face_idx[1:][same_key]
 
@@ -556,30 +545,13 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
         incident_counts = p2c.counts  # (n_points,)
         return bool(torch.all(incident_counts <= 1))
 
-    ### Step 5: Vectorized union-find (following _duplicate_detection pattern)
-    labels = torch.arange(total, dtype=torch.long, device=device)
-
-    # Union: bidirectional merge to smaller label
-    merge_from = torch.cat(
-        [
-            torch.maximum(pair_f1, pair_f2),
-            torch.maximum(pair_f2, pair_f1),
-        ]
+    ### Step 5: Vectorized union-find (using shared utility)
+    from physicsnemo.mesh.utilities._duplicate_detection import (
+        vectorized_connected_components,
     )
-    merge_to = torch.cat(
-        [
-            torch.minimum(pair_f1, pair_f2),
-            torch.minimum(pair_f2, pair_f1),
-        ]
-    )
-    labels.scatter_reduce_(0, merge_from, merge_to, reduce="amin")
 
-    # Path compression: iteratively chase parent pointers until stable
-    for _ in range(100):
-        prev = labels.clone()
-        labels = labels[labels]
-        if torch.equal(labels, prev):
-            break
+    pairs = torch.stack([pair_f1, pair_f2], dim=1)
+    labels = vectorized_connected_components(pairs, total)
 
     ### Step 6: Check single connected component per vertex
     # For each vertex, all its link faces must share the same root label.

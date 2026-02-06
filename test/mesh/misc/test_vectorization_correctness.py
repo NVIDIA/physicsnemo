@@ -71,29 +71,6 @@ class TestLoopSubdivisionCorrectness:
             torch.tensor(expected_valences, dtype=torch.int64, device=device),
         )
 
-    def test_loop_beta_weights_analytical(self, device):
-        """Verify Loop beta weights match the analytical formula."""
-        from physicsnemo.mesh.subdivision.loop import compute_loop_beta
-
-        # Test known valences
-        test_cases = [
-            (3, 3.0 / 16.0),  # Special case: valence 3
-            (6, None),  # Regular case - compute expected
-        ]
-
-        for valence, expected in test_cases:
-            if expected is None:
-                # Compute expected using formula
-                cos_term = 3.0 / 8.0 + 0.25 * float(
-                    torch.cos(torch.tensor(2.0 * torch.pi / valence))
-                )
-                expected = (1.0 / valence) * (5.0 / 8.0 - cos_term * cos_term)
-
-            actual = compute_loop_beta(valence)
-            assert abs(actual - expected) < 1e-10, (
-                f"Valence {valence}: {actual} != {expected}"
-            )
-
     def test_loop_edge_opposite_vertex_finding(self, device):
         """Verify that opposite vertex finding in Loop subdivision is correct."""
         # Create simple mesh where we know the opposite vertices

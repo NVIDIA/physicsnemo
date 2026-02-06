@@ -33,6 +33,7 @@ import torch
 from physicsnemo.mesh.curvature._angles import compute_angles_at_vertices
 from physicsnemo.mesh.curvature._utils import compute_full_angle_n_sphere
 from physicsnemo.mesh.geometry.dual_meshes import compute_dual_volumes_0
+from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -99,7 +100,7 @@ def gaussian_curvature_vertices(mesh: "Mesh") -> torch.Tensor:
     # K = angle_defect / dual_volume
     # For isolated vertices (dual_volume = 0), this gives inf/nan
     # Clamp areas to avoid division by zero, use inf for zero areas
-    dual_volumes_safe = torch.clamp(dual_volumes, min=1e-30)
+    dual_volumes_safe = torch.clamp(dual_volumes, min=safe_eps(dual_volumes.dtype))
 
     gaussian_curvature = angle_defect / dual_volumes_safe
 

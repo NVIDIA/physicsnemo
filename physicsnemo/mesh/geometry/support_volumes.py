@@ -285,75 +285,16 @@ def compute_vertex_support_volume_cell_fractions(
             voronoi_areas[pair_indices] = approx_voronoi
     else:
         ### 2D manifolds: Meyer mixed area computation for |⋆v ∩ cell|
+        from physicsnemo.mesh.geometry.dual_meshes import (
+            _compute_meyer_mixed_voronoi_areas,
+        )
+
         cell_vertices = mesh.points[mesh.cells]  # (n_cells, 3, n_spatial_dims)
         cell_areas = mesh.cell_areas  # (n_cells,)
 
-        from physicsnemo.mesh.curvature._utils import compute_triangle_angles
-
-        ### Compute angles at each vertex of each cell
-        angles_0 = compute_triangle_angles(
-            cell_vertices[:, 0, :],
-            cell_vertices[:, 1, :],
-            cell_vertices[:, 2, :],
-        )
-        angles_1 = compute_triangle_angles(
-            cell_vertices[:, 1, :],
-            cell_vertices[:, 2, :],
-            cell_vertices[:, 0, :],
-        )
-        angles_2 = compute_triangle_angles(
-            cell_vertices[:, 2, :],
-            cell_vertices[:, 0, :],
-            cell_vertices[:, 1, :],
-        )
-        all_angles = torch.stack([angles_0, angles_1, angles_2], dim=1)  # (n_cells, 3)
-
-        is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
-
-        ### Branchless mixed Voronoi area computation (both acute and obtuse)
-        # Computes both formulas for all cells, selects via torch.where.
-        eps = safe_eps(all_angles.dtype)
-        cell_idx_range = torch.arange(n_cells, device=device)
-
-        for local_v_idx in range(3):
-            next_idx = (local_v_idx + 1) % 3
-            prev_idx = (local_v_idx + 2) % 3
-
-            ### Voronoi contribution (Eq. 7) - computed for ALL cells
-            edge_to_next = (
-                cell_vertices[:, next_idx, :] - cell_vertices[:, local_v_idx, :]
-            )
-            edge_to_prev = (
-                cell_vertices[:, prev_idx, :] - cell_vertices[:, local_v_idx, :]
-            )
-
-            edge_to_next_sq = (edge_to_next**2).sum(dim=-1)
-            edge_to_prev_sq = (edge_to_prev**2).sum(dim=-1)
-
-            cot_prev = torch.cos(all_angles[:, prev_idx]) / torch.sin(
-                all_angles[:, prev_idx]
-            ).clamp(min=eps)
-            cot_next = torch.cos(all_angles[:, next_idx]) / torch.sin(
-                all_angles[:, next_idx]
-            ).clamp(min=eps)
-
-            voronoi_acute = (
-                edge_to_next_sq * cot_prev + edge_to_prev_sq * cot_next
-            ) / 8.0
-
-            ### Mixed-area contribution (Figure 4) - computed for ALL cells
-            is_obtuse_at_vertex = all_angles[:, local_v_idx] > torch.pi / 2
-            voronoi_obtuse = torch.where(
-                is_obtuse_at_vertex,
-                cell_areas / 2.0,
-                cell_areas / 4.0,
-            )
-
-            ### Select per cell
-            voronoi_in_cell = torch.where(is_obtuse, voronoi_obtuse, voronoi_acute)
-
-            pair_indices = cell_idx_range * 3 + local_v_idx
-            voronoi_areas[pair_indices] = voronoi_in_cell
+        voronoi_areas[:] = _compute_meyer_mixed_voronoi_areas(
+            cell_vertices, cell_areas
+        )  # (n_cells * 3,)
 
     ### Normalize per vertex: fraction = |⋆v ∩ cell| / |⋆v|
     # Map each (cell, local_vertex) pair to its global vertex index

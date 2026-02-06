@@ -330,9 +330,9 @@ class TestExtrude:
         ### Verify dimensions
         assert extruded.n_cells == 4  # 2 edges x 2 children each = 4 triangles
 
-        ### Verify cell_data replication maintains grouping
-        # First 2 cells should have cell_id=10, next 2 should have cell_id=20
-        expected_cell_ids = torch.tensor([10, 10, 20, 20])
+        ### Verify cell_data replication matches child-major cell ordering
+        # Cells are ordered [child0_parent0, child0_parent1, child1_parent0, child1_parent1]
+        expected_cell_ids = torch.tensor([10, 20, 10, 20])
         assert torch.equal(extruded.cell_data["cell_id"], expected_cell_ids)
 
     def test_extrude_empty_mesh(self):

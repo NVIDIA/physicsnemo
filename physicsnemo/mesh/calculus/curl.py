@@ -41,7 +41,7 @@ def compute_curl_points_lsq(
 ) -> torch.Tensor:
     """Compute curl at vertices using LSQ gradient method.
 
-    For 3D vector field v = [vₓ, vᵧ, vᵧ]:
+    For 3D vector field v = [vₓ, vᵧ, v_z]:
         curl(v) = [∂vᵧ/∂y - ∂vᵧ/∂z, ∂vₓ/∂z - ∂vᵧ/∂x, ∂vᵧ/∂x - ∂vₓ/∂y]
 
     Computes Jacobian of vector field, then takes antisymmetric part.
@@ -72,18 +72,10 @@ def compute_curl_points_lsq(
 
     n_points = mesh.n_points
 
-    ### Compute Jacobian: gradient of each component
-    # Shape: (n_points, 3, 3) where jacobian[i,j,k] = ∂v_j/∂x_k
-    jacobian = torch.zeros(
-        (n_points, 3, 3),
-        dtype=vector_field.dtype,
-        device=mesh.points.device,
-    )
-
-    for component_idx in range(3):
-        component = vector_field[:, component_idx]  # (n_points,)
-        grad_component = compute_point_gradient_lsq(mesh, component)  # (n_points, 3)
-        jacobian[:, component_idx, :] = grad_component
+    ### Compute full Jacobian in one batched LSQ solve
+    # vector_field: (n_points, 3) -> jacobian: (n_points, 3, 3)
+    # jacobian[i, j, k] = ∂v_j/∂x_k
+    jacobian = compute_point_gradient_lsq(mesh, vector_field)
 
     ### Compute curl from Jacobian
     # curl = [∂vz/∂y - ∂vy/∂z, ∂vx/∂z - ∂vz/∂x, ∂vy/∂x - ∂vx/∂y]

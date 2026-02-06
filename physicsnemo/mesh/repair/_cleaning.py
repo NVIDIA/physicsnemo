@@ -20,7 +20,7 @@ This module provides functions to clean and repair meshes:
 - Merge duplicate points within tolerance
 - Remove duplicate cells
 - Remove unused points
-- Remove isolated vertices (mesh-level wrapper)
+- Remove isolated points (mesh-level wrapper)
 """
 
 from typing import TYPE_CHECKING
@@ -363,7 +363,7 @@ def clean_mesh(
     merge_points: bool = True,
     deduplicate_cells: bool = True,
     drop_unused_points: bool = True,
-) -> "Mesh":
+) -> tuple["Mesh", dict]:
     """Clean and repair a mesh.
 
     Performs various cleaning operations to fix common mesh issues:
@@ -386,8 +386,11 @@ def clean_mesh(
 
     Returns
     -------
-    Mesh
-        Cleaned mesh with same structure but repaired topology.
+    tuple[Mesh, dict]
+        Tuple of (cleaned_mesh, stats) where stats tracks what was done:
+        - ``"n_points_before_merge"`` / ``"n_points_after_merge"``
+        - ``"n_cells_before_dedup"`` / ``"n_cells_after_dedup"``
+        - ``"n_points_before_drop"`` / ``"n_points_after_drop"``
 
     Examples
     --------
@@ -397,7 +400,7 @@ def clean_mesh(
     >>> points = torch.tensor([[0., 0.], [1., 0.], [0., 0.], [1., 1.]])
     >>> cells = torch.tensor([[0, 1, 3], [2, 1, 3]])
     >>> mesh = Mesh(points=points, cells=cells)
-    >>> cleaned = clean_mesh(mesh)
+    >>> cleaned, stats = clean_mesh(mesh)
     >>> assert cleaned.n_points == 3  # points 0 and 2 merged
     """
     points = mesh.points
@@ -405,30 +408,40 @@ def clean_mesh(
     point_data = mesh.point_data.exclude(CACHE_KEY)
     cell_data = mesh.cell_data.exclude(CACHE_KEY)
     global_data = mesh.global_data
+    stats: dict = {}
 
     ### Step 1: Merge duplicate points
     if merge_points:
+        n_before = points.shape[0]
         points, cells, point_data, _ = merge_duplicate_points(
             points=points,
             cells=cells,
             point_data=point_data,
             tolerance=tolerance,
         )
+        stats["n_points_before_merge"] = n_before
+        stats["n_points_after_merge"] = points.shape[0]
 
     ### Step 2: Remove duplicate cells
     if deduplicate_cells:
+        n_before = cells.shape[0]
         cells, cell_data = remove_duplicate_cells(
             cells=cells,
             cell_data=cell_data,
         )
+        stats["n_cells_before_dedup"] = n_before
+        stats["n_cells_after_dedup"] = cells.shape[0]
 
     ### Step 3: Remove unused points
     if drop_unused_points:
+        n_before = points.shape[0]
         points, cells, point_data, _ = remove_unused_points(
             points=points,
             cells=cells,
             point_data=point_data,
         )
+        stats["n_points_before_drop"] = n_before
+        stats["n_points_after_drop"] = points.shape[0]
 
     ### Create cleaned mesh
     from physicsnemo.mesh.mesh import Mesh
@@ -439,15 +452,15 @@ def clean_mesh(
         point_data=point_data,
         cell_data=cell_data,
         global_data=global_data,
-    )
+    ), stats
 
 
-def remove_isolated_vertices(
+def remove_isolated_points(
     mesh: "Mesh",
 ) -> tuple["Mesh", dict[str, int]]:
-    """Remove vertices not appearing in any cell.
+    """Remove points not appearing in any cell.
 
-    Identifies vertices not referenced by any cell and removes them,
+    Identifies points not referenced by any cell and removes them,
     updating cell indices accordingly. Delegates to
     :func:`~physicsnemo.mesh.repair._cleaning.remove_unused_points`
     for the core computation.
@@ -461,7 +474,7 @@ def remove_isolated_vertices(
     -------
     tuple[Mesh, dict[str, int]]
         Tuple of (cleaned_mesh, stats_dict) where stats_dict contains:
-        - "n_isolated_removed": Number of isolated vertices removed
+        - "n_isolated_removed": Number of isolated points removed
         - "n_points_original": Original number of points
         - "n_points_final": Final number of points
 
@@ -469,7 +482,7 @@ def remove_isolated_vertices(
     --------
     >>> from physicsnemo.mesh.primitives.basic import two_triangles_2d
     >>> mesh = two_triangles_2d.load()
-    >>> mesh_clean, stats = remove_isolated_vertices(mesh)
+    >>> mesh_clean, stats = remove_isolated_points(mesh)
     >>> assert stats["n_isolated_removed"] == 0  # no isolated in clean mesh
     """
     n_original = mesh.n_points
