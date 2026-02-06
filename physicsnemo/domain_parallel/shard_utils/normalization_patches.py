@@ -121,6 +121,11 @@ class PartialGroupNorm(torch.autograd.Function):
 
         HxW = input.numel() // (N * C)
 
+        if weight is not None:
+            weight = weight.to(input.dtype)
+        if bias is not None:
+            bias = bias.to(input.dtype)
+
         local_output, mean, rstd = aten.native_group_norm(
             input, weight, bias, N, C, HxW, num_groups, eps
         )
@@ -128,8 +133,9 @@ class PartialGroupNorm(torch.autograd.Function):
         # Sync the mean and rstd across all ranks
         # Note that the variance has to be inverted to make it a linear sync:
 
-        global_mean = mean.clone()
-        global_var = (1.0 / (rstd**2)) - eps
+        local_mean = mean.clone()
+        local_var = (1.0 / (rstd**2)) - eps
+        local_mean_sq = mean**2
 
         # If the mesh is 2D, we still want to reduce this over entire tensor.
         # The DistributedManager provides a caching mechanism for getting a mesh-wide group:
@@ -140,33 +146,58 @@ class PartialGroupNorm(torch.autograd.Function):
 
         # Could merge these if needed.  They are probably small,
         # so paying more for latency than bandwidth.
-        dist.all_reduce(global_mean, op=dist.ReduceOp.SUM, group=group)
-        dist.all_reduce(global_var, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(local_mean, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(local_var, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(local_mean_sq, op=dist.ReduceOp.SUM, group=group)
 
         # Compute final global statistics
-        global_mean = global_mean / count
-        global_var = global_var / count
+        avg_mean = local_mean / count
+        avg_var = local_var / count
+        avg_mean_sq = local_mean_sq / count
 
+        global_mean = avg_mean
+        global_var = avg_var + (avg_mean_sq - avg_mean**2)
         global_rstd = torch.rsqrt(global_var + eps)
 
         # Correct the output from global stats:
 
         original_shape = input.shape
+        # (N, num_groups, -1) flattens (N, C, *spatial) so last dim is (C // num_groups) * HxW
+        output_view_shape = (N, num_groups, -1)
+        # Stats (mean, rstd, etc.) are (N, num_groups); view as (N, num_groups, 1) to broadcast
+        stats_view_shape = (N, num_groups, 1)
 
-        broadcast_shape = (N, num_groups, -1)
+        scale_factor = (global_rstd / rstd).view(stats_view_shape)
 
-        scale_factor = (global_rstd / rstd).view(broadcast_shape)
+        # weight/bias are (C,); broadcast to (1, num_groups, (C//num_groups)*HxW) to match output
+        w = weight if weight is not None else torch.ones(C, device=input.device, dtype=input.dtype)
+        b = bias if bias is not None else torch.zeros(C, device=input.device, dtype=input.dtype)
+        channels_per_group = C // num_groups
+        weight_view = (
+            w.view(1, num_groups, channels_per_group)
+            .unsqueeze(-1)
+            .expand(1, num_groups, channels_per_group, HxW)
+            .reshape(1, num_groups, -1)
+        )
+        bias_view = (
+            b.view(1, num_groups, channels_per_group)
+            .unsqueeze(-1)
+            .expand(1, num_groups, channels_per_group, HxW)
+            .reshape(1, num_groups, -1)
+        )
 
-        # Correct to the globally normalized output:
-        local_output = (
-            local_output.view(broadcast_shape)
-            - global_mean.view(broadcast_shape)
-            + mean.view(broadcast_shape)
-        ) * scale_factor
+        local_output = local_output.view(output_view_shape)
+        # Strip affine to get local normalized, then correct to globally normalized (no affine).
+        # Formula: global_norm = (local_output - bias)/weight * (global_rstd/rstd) + (mean - avg_mean)*global_rstd
+        weight_safe = weight_view.clamp(min=eps)
+        normalized_corrected = (
+            (local_output - bias_view) / weight_safe * scale_factor
+            + (mean.view(stats_view_shape) - avg_mean.view(stats_view_shape))
+            * global_rstd.view(stats_view_shape)
+        )
+        local_output = normalized_corrected.view(original_shape)
 
-        local_output = local_output.view(original_shape)
-
-        # Now, apply the weight and
+        # Apply the affine (weight and bias) once.
         if weight is not None:
             local_output = local_output * weight.view(1, -1, *([1] * (input.dim() - 2)))
         if bias is not None:
