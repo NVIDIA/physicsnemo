@@ -14,19 +14,69 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Mapping
+
 from matplotlib import pyplot as plt
 import numpy as np
 
 
-def validation_plot(generated, truth, variable):
-    """Produce validation plot created during training."""
-    fig, (a, b) = plt.subplots(1, 2)
-    im = a.imshow(generated)
-    a.set_title("generated, {}.png".format(variable))
+def _normalize_backgrounds(background):
+    """Ensure background inputs are handled uniformly."""
+    if background is None:
+        return {}
+    if isinstance(background, Mapping):
+        return background
+    if isinstance(background, (list, tuple)):
+        return {f"background_{idx}": arr for idx, arr in enumerate(background)}
+    return {"background": background}
+
+
+def validation_plot(generated, truth, input_state, variable, background=None):
+    """Produce validation plot created during training.
+
+    Args:
+        generated: Generated output array
+        truth: Ground truth array
+        input_state: Input state array (t=0)
+        variable: Variable name for title
+        background: Optional background channel(s) - dict, list, or single array
+
+    Returns:
+        matplotlib figure
+    """
+    backgrounds = _normalize_backgrounds(background)
+    num_panels = 3 + max(len(backgrounds), 1)
+    fig, axes = plt.subplots(
+        1, num_panels, sharex=True, sharey=True, figsize=(4 * num_panels, 5)
+    )
+    if num_panels == 1:
+        axes = [axes]
+    a, b, c = axes[:3]
+    vmin, vmax = truth.min(), truth.max()
+    im = a.imshow(generated, vmin=vmin, vmax=vmax)
+    a.set_title("generated, {}".format(variable))
     plt.colorbar(im, fraction=0.046, pad=0.04)
-    im = b.imshow(truth)
+    im = b.imshow(truth, vmin=vmin, vmax=vmax)
     b.set_title("truth")
     plt.colorbar(im, fraction=0.046, pad=0.04)
+    if input_state is None:
+        c.set_title("input (none)")
+        c.axis("off")
+    else:
+        im = c.imshow(input_state, vmin=vmin, vmax=vmax)
+        c.set_title("input")
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+    if backgrounds:
+        for idx, (name, bg) in enumerate(backgrounds.items()):
+            ax = axes[3 + idx]
+            gmin, gmax = float(np.nanmin(bg)), float(np.nanmax(bg))
+            im = ax.imshow(bg, vmin=gmin, vmax=gmax)
+            ax.set_title(f"background: {name}")
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    else:
+        # fallback: show empty panel to keep layout predictable
+        ax = axes[3]
+        ax.axis("off")
     return fig
 
 
