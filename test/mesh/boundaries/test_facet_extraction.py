@@ -525,27 +525,21 @@ class TestRigorousAggregation:
         ### Should have 5 edges total
         assert facet_mesh.n_cells == 5
 
-        ### Interior edge [0, 2] should average both face IDs
-        interior_edge_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 0) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        assert len(interior_edge_idx) == 1
-        assert torch.isclose(
-            facet_mesh.cell_data["id"][interior_edge_idx[0]],
-            torch.tensor(1.5),  # (1.0 + 2.0) / 2
-            rtol=1e-6,
-        )
-
-        ### Boundary edge [0, 1] should only have face 1's ID
-        boundary_edge_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 0) & (facet_mesh.cells[:, 1] == 1)
-        )[0]
-        assert len(boundary_edge_idx) == 1
-        assert torch.isclose(
-            facet_mesh.cell_data["id"][boundary_edge_idx[0]],
-            torch.tensor(1.0),
-            rtol=1e-6,
-        )
+        ### Verify interior edge averages both IDs, boundary edge keeps single ID
+        expected_ids = {
+            (0, 2): 1.5,  # Interior: (1.0 + 2.0) / 2
+            (0, 1): 1.0,  # Boundary: only face 1
+        }
+        for (v0, v1), expected_id in expected_ids.items():
+            edge_idx = torch.where(
+                (facet_mesh.cells[:, 0] == v0) & (facet_mesh.cells[:, 1] == v1)
+            )[0]
+            assert len(edge_idx) == 1
+            assert torch.isclose(
+                facet_mesh.cell_data["id"][edge_idx[0]],
+                torch.tensor(expected_id),
+                rtol=1e-6,
+            ), f"Edge [{v0}, {v1}] expected id {expected_id}"
 
     def test_multidimensional_point_data(self):
         """Test point data inheritance with multidimensional data (e.g., vectors)."""
@@ -766,19 +760,15 @@ class TestNestedTensorDicts:
         edge_01_idx = torch.where(
             (facet_mesh.cells[:, 0] == 0) & (facet_mesh.cells[:, 1] == 1)
         )[0]
+        idx = edge_01_idx[0]
 
         # Velocity: ([1, 0] + [0, 1]) / 2 = [0.5, 0.5]
         assert torch.allclose(
-            facet_mesh.cell_data["velocity"][edge_01_idx[0]],
-            torch.tensor([0.5, 0.5]),
-            rtol=1e-6,
+            facet_mesh.cell_data["velocity"][idx], torch.tensor([0.5, 0.5]), rtol=1e-6
         )
-
         # Nested density: (1.0 + 2.0) / 2 = 1.5
         assert torch.isclose(
-            facet_mesh.cell_data["nested"]["density"][edge_01_idx[0]],
-            torch.tensor(1.5),
-            rtol=1e-6,
+            facet_mesh.cell_data["nested"]["density"][idx], torch.tensor(1.5), rtol=1e-6
         )
 
     def test_nested_with_area_weighting(self):
@@ -826,7 +816,6 @@ class TestNestedTensorDicts:
         shared_edge_idx = torch.where(
             (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
         )[0]
-
         # Expected: (100.0 * 1.0 + 300.0 * 2.0) / (1.0 + 2.0) = 700 / 3
         expected = (100.0 * 1.0 + 300.0 * 2.0) / (1.0 + 2.0)
         assert torch.isclose(
@@ -863,27 +852,20 @@ class TestNestedTensorDicts:
         shared_edge_idx = torch.where(
             (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
         )[0]
+        idx = shared_edge_idx[0]
 
         ### Check all data types averaged correctly
         assert torch.isclose(
-            facet_mesh.cell_data["flat_scalar"][shared_edge_idx[0]],
-            torch.tensor(15.0),
-            rtol=1e-6,
+            facet_mesh.cell_data["flat_scalar"][idx], torch.tensor(15.0), rtol=1e-6
         )
         assert torch.allclose(
-            facet_mesh.cell_data["flat_vector"][shared_edge_idx[0]],
-            torch.tensor([2.0, 3.0]),
-            rtol=1e-6,
+            facet_mesh.cell_data["flat_vector"][idx], torch.tensor([2.0, 3.0]), rtol=1e-6
         )
         assert torch.isclose(
-            facet_mesh.cell_data["nested"]["a"][shared_edge_idx[0]],
-            torch.tensor(150.0),
-            rtol=1e-6,
+            facet_mesh.cell_data["nested"]["a"][idx], torch.tensor(150.0), rtol=1e-6
         )
         assert torch.allclose(
-            facet_mesh.cell_data["nested"]["b"][shared_edge_idx[0]],
-            torch.tensor([6.0, 7.0]),
-            rtol=1e-6,
+            facet_mesh.cell_data["nested"]["b"][idx], torch.tensor([6.0, 7.0]), rtol=1e-6
         )
 
 
@@ -1025,46 +1007,30 @@ class TestHigherCodimension:
         assert "pressure" in edge_mesh.cell_data
         assert "temperature" in edge_mesh.cell_data
 
-        ### Find the shared edge [1, 2]
+        ### Verify pressure values for shared and boundary edges
+        expected_pressures = {
+            (1, 2): 150.0,  # Shared edge: (100 + 200) / 2
+            (0, 1): 100.0,  # First tet only
+            (4, 5): 200.0,  # Second tet only
+        }
+        for (v0, v1), expected_pressure in expected_pressures.items():
+            edge_idx = torch.where(
+                (edge_mesh.cells[:, 0] == v0) & (edge_mesh.cells[:, 1] == v1)
+            )[0]
+            assert len(edge_idx) == 1, f"Edge [{v0}, {v1}] should exist exactly once"
+            assert torch.isclose(
+                edge_mesh.cell_data["pressure"][edge_idx[0]],
+                torch.tensor(expected_pressure),
+                rtol=1e-5,
+            ), f"Edge [{v0}, {v1}] pressure expected {expected_pressure}"
+
+        ### Shared edge should also have aggregated temperature
         shared_edge_idx = torch.where(
             (edge_mesh.cells[:, 0] == 1) & (edge_mesh.cells[:, 1] == 2)
         )[0]
-        assert len(shared_edge_idx) == 1, "Shared edge should be deduplicated"
-
-        ### Shared edge should have mean of both parent cell values
-        # pressure: (100 + 200) / 2 = 150
-        # temperature: (300 + 500) / 2 = 400
-        assert torch.isclose(
-            edge_mesh.cell_data["pressure"][shared_edge_idx[0]],
-            torch.tensor(150.0),
-            rtol=1e-5,
-        )
         assert torch.isclose(
             edge_mesh.cell_data["temperature"][shared_edge_idx[0]],
-            torch.tensor(400.0),
-            rtol=1e-5,
-        )
-
-        ### Edges belonging to only one tet should have that tet's value
-        # Edge [0, 1] belongs only to first tet
-        edge_01_idx = torch.where(
-            (edge_mesh.cells[:, 0] == 0) & (edge_mesh.cells[:, 1] == 1)
-        )[0]
-        assert len(edge_01_idx) == 1
-        assert torch.isclose(
-            edge_mesh.cell_data["pressure"][edge_01_idx[0]],
-            torch.tensor(100.0),
-            rtol=1e-5,
-        )
-
-        # Edge [4, 5] belongs only to second tet
-        edge_45_idx = torch.where(
-            (edge_mesh.cells[:, 0] == 4) & (edge_mesh.cells[:, 1] == 5)
-        )[0]
-        assert len(edge_45_idx) == 1
-        assert torch.isclose(
-            edge_mesh.cell_data["pressure"][edge_45_idx[0]],
-            torch.tensor(200.0),
+            torch.tensor(400.0),  # (300 + 500) / 2
             rtol=1e-5,
         )
 
