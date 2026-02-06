@@ -172,7 +172,7 @@ def validate_mesh(
         # - tolerance is in distance units
         # - areas have units of length^n_manifold_dims
         # So use tolerance^n_manifold_dims for a consistent comparison
-        area_tolerance = tolerance ** mesh.n_manifold_dims
+        area_tolerance = tolerance**mesh.n_manifold_dims
 
         # Find cells with area below tolerance
         degenerate_mask = areas < area_tolerance

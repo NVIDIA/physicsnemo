@@ -175,8 +175,12 @@ def compute_point_derivatives(
             value = grad_extrinsic if gradient_type == "extrinsic" else grad_intrinsic
             new_point_data[out_key] = value
         elif gradient_type == "both":
-            new_point_data[_make_output_key(key, "_gradient_extrinsic")] = grad_extrinsic
-            new_point_data[_make_output_key(key, "_gradient_intrinsic")] = grad_intrinsic
+            new_point_data[_make_output_key(key, "_gradient_extrinsic")] = (
+                grad_extrinsic
+            )
+            new_point_data[_make_output_key(key, "_gradient_intrinsic")] = (
+                grad_intrinsic
+            )
         else:
             raise ValueError(f"Invalid {gradient_type=}")
 

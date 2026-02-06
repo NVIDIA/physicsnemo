@@ -24,7 +24,9 @@ import torch
 from physicsnemo.mesh.utilities._tolerances import safe_eps
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32, torch.float64])
+@pytest.mark.parametrize(
+    "dtype", [torch.bfloat16, torch.float16, torch.float32, torch.float64]
+)
 class TestSafeEps:
     """Verify safe_eps returns principled, dtype-aware floor values."""
 

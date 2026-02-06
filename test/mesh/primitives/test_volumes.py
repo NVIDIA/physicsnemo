@@ -171,8 +171,7 @@ class TestCubeVolumeBoundary:
         boundary = cube.get_boundary_mesh().clean()
 
         assert boundary.is_manifold(), (
-            "Boundary surface should be manifold "
-            "(no T-junctions or non-manifold edges)"
+            "Boundary surface should be manifold (no T-junctions or non-manifold edges)"
         )
 
 

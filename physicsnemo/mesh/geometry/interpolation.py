@@ -187,19 +187,15 @@ def compute_barycentric_gradients(
             edge_v1_v0 = v1 - v0
 
             # |cross|² = (2A)²; clamp for degenerate triangles (zero area)
-            cross_norm_sq = (cross * cross).sum(dim=-1, keepdim=True).clamp(
-                min=safe_eps(cross.dtype)
+            cross_norm_sq = (
+                (cross * cross)
+                .sum(dim=-1, keepdim=True)
+                .clamp(min=safe_eps(cross.dtype))
             )
 
-            gradients[:, 0, :] = (
-                torch.linalg.cross(cross, edge_v2_v1) / cross_norm_sq
-            )
-            gradients[:, 1, :] = (
-                torch.linalg.cross(cross, edge_v0_v2) / cross_norm_sq
-            )
-            gradients[:, 2, :] = (
-                torch.linalg.cross(cross, edge_v1_v0) / cross_norm_sq
-            )
+            gradients[:, 0, :] = torch.linalg.cross(cross, edge_v2_v1) / cross_norm_sq
+            gradients[:, 1, :] = torch.linalg.cross(cross, edge_v0_v2) / cross_norm_sq
+            gradients[:, 2, :] = torch.linalg.cross(cross, edge_v1_v0) / cross_norm_sq
 
     elif n_manifold_dims == 3:
         ### 3D tetrahedra: Use dual basis / perpendicular to opposite face
@@ -229,7 +225,9 @@ def compute_barycentric_gradients(
             )  # (n_cells, 1)
 
             ### Normalize face normal
-            face_normal_unit = face_normal / (2.0 * face_area).clamp(min=safe_eps(face_area.dtype))
+            face_normal_unit = face_normal / (2.0 * face_area).clamp(
+                min=safe_eps(face_area.dtype)
+            )
 
             ### Height from vertex to opposite face
             vertex_pos = cell_vertices[:, local_v_idx, :]

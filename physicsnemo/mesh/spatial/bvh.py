@@ -376,15 +376,9 @@ class BVH:
         node_aabb_max_buf = torch.full(
             (max_nodes, D), float("-inf"), dtype=dtype, device=device
         )
-        node_left_child = torch.full(
-            (max_nodes,), -1, dtype=torch.long, device=device
-        )
-        node_right_child = torch.full(
-            (max_nodes,), -1, dtype=torch.long, device=device
-        )
-        leaf_start_buf = torch.full(
-            (max_nodes,), -1, dtype=torch.long, device=device
-        )
+        node_left_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
+        node_right_child = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
+        leaf_start_buf = torch.full((max_nodes,), -1, dtype=torch.long, device=device)
         leaf_count_buf = torch.zeros(max_nodes, dtype=torch.long, device=device)
 
         # ---------------------------------------------------------------
@@ -439,9 +433,10 @@ class BVH:
 
             # Assign child node IDs (breadth-first within each level)
             n_internal = len(internal_indices)
-            left_ids = node_count + torch.arange(
-                n_internal, dtype=torch.long, device=device
-            ) * 2
+            left_ids = (
+                node_count
+                + torch.arange(n_internal, dtype=torch.long, device=device) * 2
+            )
             right_ids = left_ids + 1
             node_count += 2 * n_internal
 
@@ -594,12 +589,8 @@ class BVH:
             )
 
         ### Initialize work queue: all queries start at root (node 0)
-        current_query_indices = torch.arange(
-            n_queries, dtype=torch.long, device=dev
-        )
-        current_node_indices = torch.zeros(
-            n_queries, dtype=torch.long, device=dev
-        )
+        current_query_indices = torch.arange(n_queries, dtype=torch.long, device=dev)
+        current_node_indices = torch.zeros(n_queries, dtype=torch.long, device=dev)
 
         ### Track candidate counts per query (for max_candidates enforcement)
         candidates_count = torch.zeros(n_queries, dtype=torch.long, device=dev)
@@ -655,9 +646,7 @@ class BVH:
 
             # Enforce max_candidates limit
             if max_candidates_per_point is not None and len(int_query) > 0:
-                under_limit = (
-                    candidates_count[int_query] < max_candidates_per_point
-                )
+                under_limit = candidates_count[int_query] < max_candidates_per_point
                 int_query = int_query[under_limit]
                 int_node = int_node[under_limit]
 

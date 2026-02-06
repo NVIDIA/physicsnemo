@@ -34,8 +34,8 @@ from physicsnemo.mesh.boundaries._facet_extraction import (
     extract_candidate_facets,
     extract_facet_mesh_data,
 )
-from physicsnemo.mesh.utilities._topology import extract_unique_edges
 from physicsnemo.mesh.boundaries._topology import (
     is_manifold,
     is_watertight,
 )
+from physicsnemo.mesh.utilities._topology import extract_unique_edges

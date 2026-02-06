@@ -131,9 +131,7 @@ def compute_vertex_angles(mesh: "Mesh") -> torch.Tensor:
     ### Compute correlation matrix C for each vertex of each cell
     # C[i,j] = normalized_edge_i . normalized_edge_j
     # Shape: (n_cells, n_verts, n_edges, n_edges)
-    corr_matrix = torch.einsum(
-        "cvid,cvjd->cvij", edges_normalized, edges_normalized
-    )
+    corr_matrix = torch.einsum("cvid,cvjd->cvij", edges_normalized, edges_normalized)
 
     ### Compute det(C) for each vertex: (n_cells, n_verts)
     det_C = torch.linalg.det(corr_matrix)
@@ -192,8 +190,6 @@ def compute_vertex_angle_sums(mesh: "Mesh") -> torch.Tensor:
     angle_sums = torch.zeros(
         mesh.n_points, dtype=mesh.points.dtype, device=mesh.points.device
     )
-    angle_sums.scatter_add_(
-        0, mesh.cells.reshape(-1), angles.reshape(-1)
-    )
+    angle_sums.scatter_add_(0, mesh.cells.reshape(-1), angles.reshape(-1))
 
     return angle_sums

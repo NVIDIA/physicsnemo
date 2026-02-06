@@ -116,9 +116,7 @@ def _trace_boundary_loops(
 
         # Only keep closed loops with at least 3 vertices
         if current == start and len(loop_compact) >= 3:
-            compact_tensor = torch.tensor(
-                loop_compact, dtype=torch.long, device=device
-            )
+            compact_tensor = torch.tensor(loop_compact, dtype=torch.long, device=device)
             # Map back to original vertex indices
             loops.append(unique_verts[compact_tensor])
 

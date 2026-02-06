@@ -68,7 +68,10 @@ def compute_cell_edge_lengths(mesh: "Mesh") -> torch.Tensor:
 
     # All (i, j) pairs with i < j via upper-triangular indices
     i_indices, j_indices = torch.triu_indices(
-        n_verts_per_cell, n_verts_per_cell, offset=1, device=mesh.points.device,
+        n_verts_per_cell,
+        n_verts_per_cell,
+        offset=1,
+        device=mesh.points.device,
     )
     # Edge vectors and their lengths: (n_cells, n_edges_per_cell)
     edge_vectors = cell_vertices[:, j_indices] - cell_vertices[:, i_indices]

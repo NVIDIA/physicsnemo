@@ -777,6 +777,4 @@ class TestGaussianCurvatureCellsRegression:
         from physicsnemo.mesh.boundaries._detection import get_boundary_cells
 
         is_bnd = get_boundary_cells(cyl)
-        assert torch.isnan(K[is_bnd]).all(), (
-            "Boundary cells should have NaN curvature"
-        )
+        assert torch.isnan(K[is_bnd]).all(), "Boundary cells should have NaN curvature"

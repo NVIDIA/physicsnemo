@@ -133,5 +133,3 @@ def hodge_star_1(
         return primal_1form * cotan_weights
     else:
         return primal_1form * cotan_weights.view(-1, *([1] * (primal_1form.ndim - 1)))
-
-

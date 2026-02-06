@@ -234,9 +234,7 @@ def _find_containing_pairs(
     device = mesh.points.device
 
     ### Get candidate pairs from BVH (AABB overlap test)
-    candidate_adj = bvh.find_candidate_cells(
-        query_points, aabb_tolerance=tolerance
-    )
+    candidate_adj = bvh.find_candidate_cells(query_points, aabb_tolerance=tolerance)
 
     if candidate_adj.n_total_neighbors == 0:
         return (
@@ -489,14 +487,20 @@ def find_nearest_cells(
 
     if bvh is not None and mesh.n_cells > 0 and n_queries > 0:
         cell_indices, resolved = _find_nearest_cells_bvh(
-            query_points, cell_centroids, bvh, mesh.n_cells, mesh.n_spatial_dims,
+            query_points,
+            cell_centroids,
+            bvh,
+            mesh.n_cells,
+            mesh.n_spatial_dims,
         )
 
         ### Fall back to brute force for any queries without BVH candidates
         if not resolved.all():
             remaining = torch.where(~resolved)[0]
             remaining_indices = _find_nearest_cells_brute(
-                query_points[remaining], cell_centroids, chunk_size,
+                query_points[remaining],
+                cell_centroids,
+                chunk_size,
             )
             cell_indices[remaining] = remaining_indices
 
@@ -505,7 +509,9 @@ def find_nearest_cells(
 
     ### Brute-force path (no BVH)
     cell_indices = _find_nearest_cells_brute(
-        query_points, cell_centroids, chunk_size,
+        query_points,
+        cell_centroids,
+        chunk_size,
     )
     projected_points = cell_centroids[cell_indices]
     return cell_indices, projected_points
@@ -581,9 +587,9 @@ def _find_nearest_cells_bvh(
             global_query = remaining_idx[src]
 
             ### Compute squared centroid distances for all (query, candidate) pairs
-            dists_sq = (
-                (query_points[global_query] - cell_centroids[tgt]) ** 2
-            ).sum(dim=-1)
+            dists_sq = ((query_points[global_query] - cell_centroids[tgt]) ** 2).sum(
+                dim=-1
+            )
 
             ### Per-query minimum via scatter
             best_dist = torch.full(
@@ -684,13 +690,13 @@ def _accumulate_sampled_data(
 
             valid = query_containment_count > 0
             if values.ndim == 1:
-                output[valid] = (
-                    output_sum[valid] / query_containment_count[valid].to(values.dtype)
+                output[valid] = output_sum[valid] / query_containment_count[valid].to(
+                    values.dtype
                 )
             else:
-                output[valid] = output_sum[valid] / query_containment_count[
-                    valid
-                ].to(values.dtype).view(-1, *([1] * (values.ndim - 1)))
+                output[valid] = output_sum[valid] / query_containment_count[valid].to(
+                    values.dtype
+                ).view(-1, *([1] * (values.ndim - 1)))
 
         else:  # "nan" strategy
             single_cell_mask = query_containment_count == 1

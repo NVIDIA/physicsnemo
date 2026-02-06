@@ -187,9 +187,7 @@ class TestBVHConstruction:
 
     def test_build_from_triangle_mesh(self):
         """Test building BVH from a simple triangle mesh."""
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
-        )
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
         cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         mesh = Mesh(points=points, cells=cells)
 
@@ -311,8 +309,7 @@ class TestBVHConstruction:
             max_leaves = (30 + min_cells_per_leaf - 1) // min_cells_per_leaf
             max_nodes = max(1, 2 * max_leaves - 1)
             assert bvh.n_nodes <= max_nodes, (
-                f"Node count {bvh.n_nodes} exceeds bound {max_nodes} "
-                f"for {leaf_size=}"
+                f"Node count {bvh.n_nodes} exceeds bound {max_nodes} for {leaf_size=}"
             )
 
 
@@ -324,9 +321,7 @@ class TestBVHTraversal:
 
     def test_find_candidates_point_inside(self):
         """Test finding candidates for point inside a cell."""
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
-        )
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
         cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         mesh = Mesh(points=points, cells=cells)
         bvh = BVH.from_mesh(mesh)
@@ -353,16 +348,12 @@ class TestBVHTraversal:
 
     def test_find_candidates_multiple_points(self):
         """Test finding candidates for multiple query points."""
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
-        )
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
         cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         mesh = Mesh(points=points, cells=cells)
         bvh = BVH.from_mesh(mesh)
 
-        queries = torch.tensor(
-            [[0.25, 0.25], [0.75, 0.75], [10.0, 10.0]]
-        )
+        queries = torch.tensor([[0.25, 0.25], [0.75, 0.75], [10.0, 10.0]])
         candidates = bvh.find_candidate_cells(queries)
 
         candidates_list = candidates.to_list()
@@ -442,9 +433,7 @@ class TestBVHTraversal:
                 [2.0, 1.0],
             ]
         )
-        cells = torch.tensor(
-            [[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]]
-        )
+        cells = torch.tensor([[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]])
         mesh = Mesh(points=points, cells=cells)
 
         query = torch.tensor([[0.5, 0.5], [1.5, 0.5]])
@@ -513,9 +502,7 @@ class TestBVHCorrectness:
                 [2.0, 1.0],
             ]
         )
-        cells = torch.tensor(
-            [[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]]
-        )
+        cells = torch.tensor([[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]])
         mesh = Mesh(points=points, cells=cells)
         bvh = BVH.from_mesh(mesh)
 

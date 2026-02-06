@@ -132,9 +132,9 @@ def _propagate_flip_from_parents(
 
     # Account for parents that were themselves flipped in a prior BFS level.
     # Their effective normal is the negation of the stored (original) normal.
-    parent_flip_sign = torch.where(
-        should_flip[parents], -1.0, 1.0
-    ).unsqueeze(-1)  # (n_next, 1) for broadcasting over spatial dims
+    parent_flip_sign = torch.where(should_flip[parents], -1.0, 1.0).unsqueeze(
+        -1
+    )  # (n_next, 1) for broadcasting over spatial dims
     parent_normals = parent_normals * parent_flip_sign
 
     child_normals = cell_normals[children]  # (n_next, 3)

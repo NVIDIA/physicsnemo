@@ -71,9 +71,7 @@ class TestEquivalence2D:
         ### Sample with both methods
         result_brute = sample_data_at_points(mesh, queries, data_source="cells")
         bvh = BVH.from_mesh(mesh)
-        result_bvh = sample_data_at_points(
-            mesh, queries, data_source="cells", bvh=bvh
-        )
+        result_bvh = sample_data_at_points(mesh, queries, data_source="cells", bvh=bvh)
 
         ### Results should be identical
         for key in result_brute.keys():
@@ -118,9 +116,7 @@ class TestEquivalence2D:
         ### Sample with both methods
         result_brute = sample_data_at_points(mesh, queries, data_source="points")
         bvh = BVH.from_mesh(mesh)
-        result_bvh = sample_data_at_points(
-            mesh, queries, data_source="points", bvh=bvh
-        )
+        result_bvh = sample_data_at_points(mesh, queries, data_source="points", bvh=bvh)
 
         ### Results should be identical
         for key in result_brute.keys():
@@ -151,9 +147,7 @@ class TestEquivalence2D:
         ### Sample
         result_brute = sample_data_at_points(mesh, queries, data_source="points")
         bvh = BVH.from_mesh(mesh)
-        result_bvh = sample_data_at_points(
-            mesh, queries, data_source="points", bvh=bvh
-        )
+        result_bvh = sample_data_at_points(mesh, queries, data_source="points", bvh=bvh)
 
         ### Verify
         assert torch.allclose(
@@ -216,9 +210,7 @@ class TestEquivalence3D:
         )
 
         ### Test point data
-        result_brute_points = sample_data_at_points(
-            mesh, queries, data_source="points"
-        )
+        result_brute_points = sample_data_at_points(mesh, queries, data_source="points")
         result_bvh_points = sample_data_at_points(
             mesh, queries, data_source="points", bvh=bvh
         )
@@ -374,9 +366,7 @@ class TestEquivalenceLargeMesh:
 
         ### Sample both ways
         result_brute = sample_data_at_points(mesh, queries, data_source="cells")
-        result_bvh = sample_data_at_points(
-            mesh, queries, data_source="cells", bvh=bvh
-        )
+        result_bvh = sample_data_at_points(mesh, queries, data_source="cells", bvh=bvh)
 
         ### Results should match
         assert torch.allclose(

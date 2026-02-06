@@ -617,7 +617,9 @@ class TestQualityMetricsEdgeCases:
         assert not torch.isnan(metrics["quality_score"][0])
         assert not torch.isnan(metrics["min_angle"][0])
         # Regular tet: all solid angles should be equal, so min == max
-        assert torch.isclose(metrics["min_angle"][0], metrics["max_angle"][0], atol=1e-5)
+        assert torch.isclose(
+            metrics["min_angle"][0], metrics["max_angle"][0], atol=1e-5
+        )
 
 
 ###############################################################################

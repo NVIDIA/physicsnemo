@@ -169,7 +169,9 @@ def compute_point_gradient_lsq_intrinsic(
 
             ### Compute weights (based on ambient distances)
             distances = torch.norm(A_ambient, dim=-1)  # (n_group, n_neighbors)
-            weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
+            weights = 1.0 / distances.pow(weight_power).clamp(
+                min=safe_eps(distances.dtype)
+            )
 
             ### Apply weights to tangent-space system
             sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)

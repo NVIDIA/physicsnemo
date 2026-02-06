@@ -146,10 +146,12 @@ def compute_edge_support_volume_cell_fractions(
 
         ### Compute within-group position (0, 1, 2, ...) for each entry
         # Find group boundaries where edge index changes
-        group_starts = torch.cat([
-            sorted_edges_idx.new_zeros(1),
-            torch.where(sorted_edges_idx[1:] != sorted_edges_idx[:-1])[0] + 1,
-        ])
+        group_starts = torch.cat(
+            [
+                sorted_edges_idx.new_zeros(1),
+                torch.where(sorted_edges_idx[1:] != sorted_edges_idx[:-1])[0] + 1,
+            ]
+        )
 
         # Compute cumulative position within each group
         # positions[i] = i - group_start for entry i
@@ -193,13 +195,17 @@ def compute_edge_support_volume_cell_fractions(
         )  # (n_edges,)
 
         # Zero out distances for invalid slots (no adjacent cell)
-        dual_edge_segments[:, slot] = torch.where(valid_mask, distances, distances.new_zeros(()))
+        dual_edge_segments[:, slot] = torch.where(
+            valid_mask, distances, distances.new_zeros(())
+        )
 
     ### Compute total dual edge length for each edge
     total_dual_lengths = dual_edge_segments.sum(dim=1)  # (n_edges,)
 
     ### Compute fractions: |⋆edge ∩ cell| / |⋆edge|
-    fractions = dual_edge_segments / total_dual_lengths.unsqueeze(-1).clamp(min=safe_eps(total_dual_lengths.dtype))
+    fractions = dual_edge_segments / total_dual_lengths.unsqueeze(-1).clamp(
+        min=safe_eps(total_dual_lengths.dtype)
+    )
 
     return fractions  # (n_edges, 2) - fractions for up to 2 adjacent cells
 
@@ -300,9 +306,7 @@ def compute_vertex_support_volume_cell_fractions(
             cell_vertices[:, 0, :],
             cell_vertices[:, 1, :],
         )
-        all_angles = torch.stack(
-            [angles_0, angles_1, angles_2], dim=1
-        )  # (n_cells, 3)
+        all_angles = torch.stack([angles_0, angles_1, angles_2], dim=1)  # (n_cells, 3)
 
         is_obtuse = torch.any(all_angles > torch.pi / 2, dim=1)  # (n_cells,)
 

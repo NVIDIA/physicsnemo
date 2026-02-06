@@ -689,7 +689,9 @@ class Mesh:
             # For a simplex, angle at vertex k is between edges to other vertices
             from physicsnemo.mesh.geometry._angles import compute_vertex_angles
 
-            vertex_angles = compute_vertex_angles(self)  # (n_cells, n_vertices_per_cell)
+            vertex_angles = compute_vertex_angles(
+                self
+            )  # (n_cells, n_vertices_per_cell)
             weights = vertex_angles.flatten()
 
             if weighting == "angle_area":
@@ -1225,9 +1227,7 @@ class Mesh:
                     include_nested=True, leaves_only=True
                 )
             )
-            dst_keys = set(
-                self.point_data.keys(include_nested=True, leaves_only=True)
-            )
+            dst_keys = set(self.point_data.keys(include_nested=True, leaves_only=True))
             conflicts = src_keys & dst_keys
             if conflicts:
                 raise ValueError(
@@ -1309,9 +1309,7 @@ class Mesh:
                     include_nested=True, leaves_only=True
                 )
             )
-            dst_keys = set(
-                self.cell_data.keys(include_nested=True, leaves_only=True)
-            )
+            dst_keys = set(self.cell_data.keys(include_nested=True, leaves_only=True))
             conflicts = src_keys & dst_keys
             if conflicts:
                 raise ValueError(

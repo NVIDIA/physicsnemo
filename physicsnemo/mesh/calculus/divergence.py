@@ -91,13 +91,17 @@ def compute_divergence_points_dec(
     dual_volumes_0 = get_or_compute_dual_volumes_0(mesh)  # (n_points,)
 
     ### Edge vectors: (w - v) for each canonical edge [v, w] with v < w
-    edge_vectors = mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]  # (n_edges, n_spatial_dims)
+    edge_vectors = (
+        mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]
+    )  # (n_edges, n_spatial_dims)
 
     v0_indices = edges[:, 0]  # (n_edges,)
     v1_indices = edges[:, 1]  # (n_edges,)
 
     ### PDP-flat 1-form value: <X_flat, e> = (X(v) + X(w))/2 . (w - v)
-    v_edge = (vector_field[v0_indices] + vector_field[v1_indices]) / 2  # (n_edges, n_spatial_dims)
+    v_edge = (
+        vector_field[v0_indices] + vector_field[v1_indices]
+    ) / 2  # (n_edges, n_spatial_dims)
     flat_1form = (v_edge * edge_vectors).sum(dim=-1)  # (n_edges,)
 
     ### Weighted flux: w_ij × <X_flat, e>
@@ -106,7 +110,9 @@ def compute_divergence_points_dec(
     ### Scatter-add to vertices with orientation signs
     # v0 (smaller index): edge points outward from v0's dual cell → positive
     # v1 (larger index):  edge points inward to v1's dual cell   → negative
-    divergence = torch.zeros(n_points, dtype=vector_field.dtype, device=mesh.points.device)
+    divergence = torch.zeros(
+        n_points, dtype=vector_field.dtype, device=mesh.points.device
+    )
     divergence.scatter_add_(0, v0_indices, weighted_flux)
     divergence.scatter_add_(0, v1_indices, -weighted_flux)
 

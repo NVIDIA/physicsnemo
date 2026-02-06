@@ -1245,9 +1245,7 @@ class TestNeighborTransformationInvariance:
 
     @pytest.mark.parametrize("adj_type", _ADJACENCY_TYPES)
     @pytest.mark.parametrize("transform", _TRANSFORMS)
-    def test_adjacency_transformation_invariant(
-        self, sphere_mesh, adj_type, transform
-    ):
+    def test_adjacency_transformation_invariant(self, sphere_mesh, adj_type, transform):
         """Verify adjacency is invariant under geometric transformations."""
         original = sphere_mesh
 

@@ -2066,9 +2066,7 @@ class TestDivergenceDEC:
         mesh = structured_grid.load(n_x=8, n_y=8)
         mesh = Mesh(points=mesh.points.to(torch.float64), cells=mesh.cells)
 
-        v_field = torch.stack(
-            [-mesh.points[:, 1], mesh.points[:, 0]], dim=-1
-        )
+        v_field = torch.stack([-mesh.points[:, 1], mesh.points[:, 0]], dim=-1)
         div_v = compute_divergence_points_dec(mesh, v_field)
         interior = self._interior_mask_2d(mesh)
 
@@ -2115,9 +2113,7 @@ class TestDivergenceDEC:
         """Basic smoke test: correct shape and finite values on 2D mesh."""
         from physicsnemo.mesh.calculus.divergence import compute_divergence_points_dec
 
-        points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [0.5, 0.5]]
-        )
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [0.5, 0.5]])
         cells = torch.tensor([[0, 1, 3], [0, 2, 3], [1, 2, 3]])
         mesh = Mesh(points=points, cells=cells)
 
@@ -2225,9 +2221,7 @@ class TestLaplacian1D:
         from physicsnemo.mesh.calculus.laplacian import compute_laplacian_points_dec
 
         # Non-uniform spacing
-        x = torch.tensor(
-            [0.0, 0.1, 0.25, 0.5, 0.6, 0.85, 1.0], dtype=torch.float64
-        )
+        x = torch.tensor([0.0, 0.1, 0.25, 0.5, 0.6, 0.85, 1.0], dtype=torch.float64)
         points = x.unsqueeze(-1)  # (7, 1)
         n = len(x)
         cells = torch.stack([torch.arange(n - 1), torch.arange(1, n)], dim=1)
@@ -2348,18 +2342,15 @@ class TestLaplacian3D:
 
         mesh = load(size=2.0, subdivisions=4)
         # Linear function: f = 2x + 3y - z + 5
-        f = (
-            2.0 * mesh.points[:, 0]
-            + 3.0 * mesh.points[:, 1]
-            - mesh.points[:, 2]
-            + 5.0
-        )
+        f = 2.0 * mesh.points[:, 0] + 3.0 * mesh.points[:, 1] - mesh.points[:, 2] + 5.0
         lap = compute_laplacian_points_dec(mesh, f)
 
         # Interior points: far from the cube boundary
         half_size = 1.0  # cube has size 2, so boundary is at ±1
         is_interior = (mesh.points.abs() < half_size * 0.8).all(dim=-1)
-        assert is_interior.sum() > 10, "Need enough interior points for a meaningful test"
+        assert is_interior.sum() > 10, (
+            "Need enough interior points for a meaningful test"
+        )
 
         interior_lap = lap[is_interior]
         assert torch.allclose(
@@ -2442,9 +2433,7 @@ class TestLaplacian3D:
         half_size = 0.5
         is_interior = (mesh.points.abs() < half_size * 0.8).all(dim=-1)
         interior_lap = lap[is_interior]
-        assert torch.allclose(
-            interior_lap, torch.zeros_like(interior_lap), atol=1e-4
-        )
+        assert torch.allclose(interior_lap, torch.zeros_like(interior_lap), atol=1e-4)
 
 
 class TestCotanWeightsFEM:

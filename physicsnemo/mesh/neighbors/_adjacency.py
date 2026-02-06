@@ -196,7 +196,9 @@ class Adjacency:
         ### For each position in indices, find which source it belongs to
         # offsets[i] <= position < offsets[i+1] means position belongs to source i
         # searchsorted(offsets, position, right=True) - 1 gives source index
-        positions = torch.arange(self.n_total_neighbors, dtype=torch.int64, device=device)
+        positions = torch.arange(
+            self.n_total_neighbors, dtype=torch.int64, device=device
+        )
         source_indices = torch.searchsorted(self.offsets, positions, right=True) - 1
 
         return source_indices, self.indices

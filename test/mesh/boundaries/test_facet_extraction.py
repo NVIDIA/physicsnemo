@@ -372,6 +372,7 @@ class TestDataInheritance:
             rtol=1e-5,
         )
 
+
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
 
@@ -406,6 +407,7 @@ class TestEdgeCases:
             include_nested=True
         )
         assert ("_cache", "areas") not in facet_mesh.cell_data.keys(include_nested=True)
+
 
 class TestRigorousAggregation:
     """Rigorous tests for data aggregation with exact value verification."""
@@ -859,13 +861,17 @@ class TestNestedTensorDicts:
             facet_mesh.cell_data["flat_scalar"][idx], torch.tensor(15.0), rtol=1e-6
         )
         assert torch.allclose(
-            facet_mesh.cell_data["flat_vector"][idx], torch.tensor([2.0, 3.0]), rtol=1e-6
+            facet_mesh.cell_data["flat_vector"][idx],
+            torch.tensor([2.0, 3.0]),
+            rtol=1e-6,
         )
         assert torch.isclose(
             facet_mesh.cell_data["nested"]["a"][idx], torch.tensor(150.0), rtol=1e-6
         )
         assert torch.allclose(
-            facet_mesh.cell_data["nested"]["b"][idx], torch.tensor([6.0, 7.0]), rtol=1e-6
+            facet_mesh.cell_data["nested"]["b"][idx],
+            torch.tensor([6.0, 7.0]),
+            rtol=1e-6,
         )
 
 
@@ -891,9 +897,7 @@ class TestHigherCodimension:
     ):
         """Test higher codimension extraction across mesh types."""
         if n_spatial_dims == 2:
-            points = torch.tensor(
-                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
-            )
+            points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
             cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
         else:
             points = torch.tensor(

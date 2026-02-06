@@ -313,15 +313,21 @@ def to_pyvista(
     ### Convert data dictionaries (flatten high-rank tensors for VTK compatibility)
     for k, v in mesh.point_data.items(include_nested=True, leaves_only=True):
         arr = v.cpu().numpy()
-        pv_mesh.point_data[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        pv_mesh.point_data[str(k)] = (
+            arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        )
 
     for k, v in mesh.cell_data.items(include_nested=True, leaves_only=True):
         arr = v.cpu().numpy()
-        pv_mesh.cell_data[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        pv_mesh.cell_data[str(k)] = (
+            arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        )
 
     for k, v in mesh.global_data.items(include_nested=True, leaves_only=True):
         arr = v.cpu().numpy()
-        pv_mesh.field_data[str(k)] = arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        pv_mesh.field_data[str(k)] = (
+            arr.reshape(arr.shape[0], -1) if arr.ndim > 2 else arr
+        )
 
     return pv_mesh
 

@@ -403,7 +403,6 @@ def compute_circumcenters(
     return circumcenters
 
 
-
 def compute_cotan_weights_fem(
     mesh: "Mesh",
 ) -> tuple[torch.Tensor, torch.Tensor]:

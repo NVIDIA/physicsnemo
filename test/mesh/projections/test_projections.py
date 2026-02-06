@@ -890,9 +890,7 @@ class TestEmbed:
         result = embed(mesh, target_n_spatial_dims=3, insert_at=1)
 
         assert result.n_spatial_dims == 3
-        expected = torch.tensor(
-            [[1.0, 0.0, 2.0], [3.0, 0.0, 4.0]], dtype=torch.float32
-        )
+        expected = torch.tensor([[1.0, 0.0, 2.0], [3.0, 0.0, 4.0]], dtype=torch.float32)
         assert torch.allclose(result.points, expected)
 
     def test_embed_insert_at_end_explicit(self):
@@ -911,9 +909,7 @@ class TestEmbed:
     def test_embed_insert_at_multiple_dims(self):
         """Test inserting multiple new dimensions at an interior position."""
         ### Create 3D mesh
-        points = torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -943,9 +939,7 @@ class TestEmbed:
 
     def test_embed_raises_when_target_less_than_current(self):
         """Test that embed rejects target < current (should use project)."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -1003,9 +997,7 @@ class TestProject:
 
     def test_project_no_change_returns_same_mesh(self):
         """Test that projecting to current dimension returns unchanged mesh."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -1015,9 +1007,7 @@ class TestProject:
     def test_project_preserves_data(self):
         """Test that point/cell/global data is preserved during projection."""
         ### Create mesh with all data types
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         point_data = TensorDict(
             {"temperature": torch.tensor([300.0, 400.0])}, batch_size=[2]
@@ -1102,9 +1092,7 @@ class TestProject:
     def test_project_keep_dims_basic(self):
         """Test projecting with specific dimension selection."""
         ### Create 3D edge
-        points = torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -1112,17 +1100,13 @@ class TestProject:
         result = project(mesh, keep_dims=[0, 2])
 
         assert result.n_spatial_dims == 2
-        expected = torch.tensor(
-            [[1.0, 3.0], [4.0, 6.0]], dtype=torch.float32
-        )
+        expected = torch.tensor([[1.0, 3.0], [4.0, 6.0]], dtype=torch.float32)
         assert torch.allclose(result.points, expected)
 
     def test_project_keep_dims_reorder(self):
         """Test that keep_dims can reorder dimensions."""
         ### Create 3D edge
-        points = torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -1130,17 +1114,13 @@ class TestProject:
         result = project(mesh, keep_dims=[2, 0])
 
         assert result.n_spatial_dims == 2
-        expected = torch.tensor(
-            [[3.0, 1.0], [6.0, 4.0]], dtype=torch.float32
-        )
+        expected = torch.tensor([[3.0, 1.0], [6.0, 4.0]], dtype=torch.float32)
         assert torch.allclose(result.points, expected)
 
     def test_project_keep_dims_single(self):
         """Test keeping a single dimension for a 0D manifold."""
         ### Create 0D point cloud in 3D space
-        points = torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
         cells = torch.tensor([[0], [1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -1154,9 +1134,7 @@ class TestProject:
     def test_project_keep_dims_matches_target_n_spatial_dims(self):
         """Test that keep_dims=[0, 1] matches target_n_spatial_dims=2."""
         ### Create 3D edge
-        points = torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 
@@ -1252,9 +1230,7 @@ class TestProject:
 
     def test_project_raises_on_out_of_range_keep_dims(self):
         """Test that out-of-range keep_dims indices raise ValueError."""
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
-        )
+        points = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh = Mesh(points=points, cells=cells)
 

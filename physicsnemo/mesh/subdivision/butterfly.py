@@ -82,9 +82,7 @@ def _build_edge_to_triangle_pairs(
     edge_idx = unique_sort_perm[positions]  # Maps each candidate to a unique-edge index
 
     ### Fill pair table by scattering parent triangle indices
-    pair_table = torch.full(
-        (n_unique_edges, 2), -1, dtype=torch.long, device=device
-    )
+    pair_table = torch.full((n_unique_edges, 2), -1, dtype=torch.long, device=device)
 
     # First pass fills slot 0 for every edge
     pair_table[:, 0].scatter_(0, edge_idx, parent_cell_indices)
@@ -146,9 +144,7 @@ def compute_butterfly_weights_2d(
     # Canonical (sorted) hashes for the unique edges
     sorted_unique, _ = torch.sort(unique_edges, dim=1)
     sorted_cands, _ = torch.sort(candidate_edges, dim=1)
-    max_v = (
-        max(sorted_unique.max().item(), sorted_cands.max().item()) + 1
-    )
+    max_v = max(sorted_unique.max().item(), sorted_cands.max().item()) + 1
     unique_hash = sorted_unique[:, 0] * max_v + sorted_unique[:, 1]
 
     # Pair table: (n_edges, 2), with -1 for missing second triangle
@@ -193,11 +189,15 @@ def compute_butterfly_weights_2d(
 
     T0_verts = mesh.cells[int_tris[:, 0]]  # (n_int, 3)
     T0_opp_mask = ~((T0_verts == v0.unsqueeze(1)) | (T0_verts == v1.unsqueeze(1)))
-    a = torch.gather(T0_verts, 1, torch.argmax(T0_opp_mask.int(), dim=1, keepdim=True)).squeeze(1)
+    a = torch.gather(
+        T0_verts, 1, torch.argmax(T0_opp_mask.int(), dim=1, keepdim=True)
+    ).squeeze(1)
 
     T1_verts = mesh.cells[int_tris[:, 1]]  # (n_int, 3)
     T1_opp_mask = ~((T1_verts == v0.unsqueeze(1)) | (T1_verts == v1.unsqueeze(1)))
-    b = torch.gather(T1_verts, 1, torch.argmax(T1_opp_mask.int(), dim=1, keepdim=True)).squeeze(1)
+    b = torch.gather(
+        T1_verts, 1, torch.argmax(T1_opp_mask.int(), dim=1, keepdim=True)
+    ).squeeze(1)
 
     ### 4-point base contribution: 1/2·v0 + 1/2·v1 + 1/8·a + 1/8·b
     midpoint = (

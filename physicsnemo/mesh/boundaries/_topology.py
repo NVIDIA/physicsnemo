@@ -246,13 +246,16 @@ def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
 
     ### Step 1: Extract candidate edges and their parent tets
     candidate_edges, parent_cell_indices = extract_candidate_facets(
-        mesh.cells, manifold_codimension=2,
+        mesh.cells,
+        manifold_codimension=2,
     )
     # candidate_edges: (n_candidate_edges, 2), parent_cell_indices: (n_candidate_edges,)
 
     ### Step 2: Map each candidate edge to a unique edge index
     unique_edges, edge_inverse = torch.unique(
-        candidate_edges, dim=0, return_inverse=True,
+        candidate_edges,
+        dim=0,
+        return_inverse=True,
     )
     n_unique_edges = len(unique_edges)
     n_candidates = len(candidate_edges)
@@ -320,14 +323,18 @@ def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
 
     if len(pair_a) > 0:
         # Union: merge to smaller label (bidirectional)
-        merge_from = torch.cat([
-            torch.maximum(pair_a, pair_b),
-            torch.maximum(pair_b, pair_a),
-        ])
-        merge_to = torch.cat([
-            torch.minimum(pair_a, pair_b),
-            torch.minimum(pair_b, pair_a),
-        ])
+        merge_from = torch.cat(
+            [
+                torch.maximum(pair_a, pair_b),
+                torch.maximum(pair_b, pair_a),
+            ]
+        )
+        merge_to = torch.cat(
+            [
+                torch.minimum(pair_a, pair_b),
+                torch.minimum(pair_b, pair_a),
+            ]
+        )
         labels.scatter_reduce_(0, merge_from, merge_to, reduce="amin")
 
         # Path compression
@@ -340,7 +347,10 @@ def _check_3d_edge_link_connectivity(mesh: "Mesh") -> bool:
     ### Step 6: Check single connected component per unique edge.
     # For each unique edge, all candidate entries must share the same root.
     min_labels = torch.full(
-        (n_unique_edges,), n_candidates, dtype=torch.long, device=device,
+        (n_unique_edges,),
+        n_candidates,
+        dtype=torch.long,
+        device=device,
     )
     max_labels = torch.zeros(n_unique_edges, dtype=torch.long, device=device)
     min_labels.scatter_reduce_(0, edge_inverse, labels, reduce="amin")
@@ -530,9 +540,7 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     # face pairs connected via that edge.
     n_pts = mesh.n_points
     sort_key = (
-        vertex_ids_3x * (n_pts * n_pts)
-        + all_edges[:, 0] * n_pts
-        + all_edges[:, 1]
+        vertex_ids_3x * (n_pts * n_pts) + all_edges[:, 0] * n_pts + all_edges[:, 1]
     )
     sort_idx = torch.argsort(sort_key)
     sorted_face_idx = face_indices_3x[sort_idx]
@@ -554,14 +562,18 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     labels = torch.arange(total, dtype=torch.long, device=device)
 
     # Union: bidirectional merge to smaller label
-    merge_from = torch.cat([
-        torch.maximum(pair_f1, pair_f2),
-        torch.maximum(pair_f2, pair_f1),
-    ])
-    merge_to = torch.cat([
-        torch.minimum(pair_f1, pair_f2),
-        torch.minimum(pair_f2, pair_f1),
-    ])
+    merge_from = torch.cat(
+        [
+            torch.maximum(pair_f1, pair_f2),
+            torch.maximum(pair_f2, pair_f1),
+        ]
+    )
+    merge_to = torch.cat(
+        [
+            torch.minimum(pair_f1, pair_f2),
+            torch.minimum(pair_f2, pair_f1),
+        ]
+    )
     labels.scatter_reduce_(0, merge_from, merge_to, reduce="amin")
 
     # Path compression: iteratively chase parent pointers until stable
@@ -585,9 +597,7 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     multi_incident = incident_counts >= 2
 
     # Also exclude degenerate vertices from the check
-    degenerate_per_vertex = torch.zeros(
-        mesh.n_points, dtype=torch.bool, device=device
-    )
+    degenerate_per_vertex = torch.zeros(mesh.n_points, dtype=torch.bool, device=device)
     degenerate_per_vertex.scatter_(0, vertex_ids[is_degenerate], True)
 
     check_mask = multi_incident & ~degenerate_per_vertex

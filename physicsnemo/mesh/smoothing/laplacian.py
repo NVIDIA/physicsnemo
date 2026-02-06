@@ -26,8 +26,8 @@ import torch
 
 from physicsnemo.mesh.boundaries import get_boundary_vertices
 from physicsnemo.mesh.boundaries._facet_extraction import extract_candidate_facets
-from physicsnemo.mesh.utilities._topology import extract_unique_edges
 from physicsnemo.mesh.geometry.dual_meshes import compute_cotan_weights_fem
+from physicsnemo.mesh.utilities._topology import extract_unique_edges
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -383,15 +383,19 @@ def _detect_sharp_edges(
 
     # Detect group boundaries (where the edge index changes)
     # is_first: True at positions where the edge id differs from the predecessor
-    is_first_in_group = torch.cat([
-        torch.ones(1, dtype=torch.bool, device=device),
-        sorted_edge_ids[1:] != sorted_edge_ids[:-1],
-    ])
+    is_first_in_group = torch.cat(
+        [
+            torch.ones(1, dtype=torch.bool, device=device),
+            sorted_edge_ids[1:] != sorted_edge_ids[:-1],
+        ]
+    )
     # is_second: True at positions where the edge id equals the predecessor
-    is_second_in_group = torch.cat([
-        torch.zeros(1, dtype=torch.bool, device=device),
-        sorted_edge_ids[1:] == sorted_edge_ids[:-1],
-    ])
+    is_second_in_group = torch.cat(
+        [
+            torch.zeros(1, dtype=torch.bool, device=device),
+            sorted_edge_ids[1:] == sorted_edge_ids[:-1],
+        ]
+    )
 
     # Build per-edge cell arrays (scatter first/second occurrence to edge index)
     edge_first_cell = torch.full((len(edges),), -1, dtype=torch.long, device=device)
@@ -408,8 +412,12 @@ def _detect_sharp_edges(
     interior_first_cells = edge_first_cell[interior_edge_indices]
     interior_second_cells = edge_second_cell[interior_edge_indices]
 
-    normals_first = mesh.cell_normals[interior_first_cells]   # (n_interior, n_spatial_dims)
-    normals_second = mesh.cell_normals[interior_second_cells]  # (n_interior, n_spatial_dims)
+    normals_first = mesh.cell_normals[
+        interior_first_cells
+    ]  # (n_interior, n_spatial_dims)
+    normals_second = mesh.cell_normals[
+        interior_second_cells
+    ]  # (n_interior, n_spatial_dims)
 
     cos_angles = (normals_first * normals_second).sum(dim=-1)
     cos_angles = cos_angles.clamp(-1.0, 1.0)

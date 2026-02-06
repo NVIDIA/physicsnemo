@@ -489,11 +489,14 @@ def extract_facet_mesh_data(
     ### Deduplicate, optionally filtering by occurrence count
     if target_counts == "all":
         unique_facets, inverse_indices = torch.unique(
-            candidate_facets, dim=0, return_inverse=True,
+            candidate_facets,
+            dim=0,
+            return_inverse=True,
         )
     else:
         unique_facets, inverse_indices, _ = categorize_facets_by_count(
-            candidate_facets, target_counts=target_counts,
+            candidate_facets,
+            target_counts=target_counts,
         )
         # Discard candidates that were filtered out (inverse == -1)
         keep_mask = inverse_indices >= 0

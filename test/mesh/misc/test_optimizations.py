@@ -480,9 +480,7 @@ class TestHierarchicalSampling:
         # Build BVH
         bvh = BVH.from_mesh(mesh)
 
-        result = sample_data_at_points(
-            mesh, query_points, bvh=bvh, data_source="cells"
-        )
+        result = sample_data_at_points(mesh, query_points, bvh=bvh, data_source="cells")
 
         # Point inside the tet should get temperature value
         assert "temperature" in result

@@ -29,7 +29,6 @@ import torch
 from physicsnemo.mesh.utilities._topology import extract_unique_edges  # noqa: F401
 
 
-
 def get_subdivision_pattern(n_manifold_dims: int) -> torch.Tensor:
     """Get the subdivision pattern for splitting an n-simplex.
 

@@ -63,10 +63,12 @@ def _extract_boundary_facets(
     )
 
     candidate_facets, parent_cell_indices = extract_candidate_facets(
-        mesh.cells, manifold_codimension=manifold_codimension,
+        mesh.cells,
+        manifold_codimension=manifold_codimension,
     )
     boundary_facets, inverse_indices, _ = categorize_facets_by_count(
-        candidate_facets, target_counts="boundary",
+        candidate_facets,
+        target_counts="boundary",
     )
     boundary_candidate_mask = inverse_indices >= 0
     return boundary_facets, parent_cell_indices, boundary_candidate_mask
@@ -177,7 +179,8 @@ def get_boundary_cells(
 
     ### Extract boundary facets and determine which parent cells they belong to
     _, parent_cell_indices, boundary_candidate_mask = _extract_boundary_facets(
-        mesh, manifold_codimension=boundary_codimension,
+        mesh,
+        manifold_codimension=boundary_codimension,
     )
 
     ### Mark cells that contain at least one boundary facet

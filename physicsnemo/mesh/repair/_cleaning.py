@@ -246,10 +246,12 @@ def remove_duplicate_cells(
 
     # Find group boundaries: where the group ID changes
     # First element is always a boundary (first occurrence)
-    is_first_in_group = torch.cat([
-        torch.tensor([True], device=device),
-        sorted_inverse[1:] != sorted_inverse[:-1],
-    ])
+    is_first_in_group = torch.cat(
+        [
+            torch.tensor([True], device=device),
+            sorted_inverse[1:] != sorted_inverse[:-1],
+        ]
+    )
 
     # Map back to original indices: first_occurrence_indices are the cells to keep
     first_occurrence_indices = sorted_order[is_first_in_group]

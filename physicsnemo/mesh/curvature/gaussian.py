@@ -159,7 +159,9 @@ def gaussian_curvature_cells(mesh: "Mesh") -> torch.Tensor:
     n_valid = valid.sum(dim=1)  # (n_cells,)
 
     # Replace NaN with 0 for summation, then divide by count of valid vertices
-    cell_vertex_K_safe = torch.where(valid, cell_vertex_K, torch.zeros_like(cell_vertex_K))
+    cell_vertex_K_safe = torch.where(
+        valid, cell_vertex_K, torch.zeros_like(cell_vertex_K)
+    )
     K_sum = cell_vertex_K_safe.sum(dim=1)  # (n_cells,)
     K_cells = K_sum / n_valid.clamp(min=1).to(K_sum.dtype)
 
