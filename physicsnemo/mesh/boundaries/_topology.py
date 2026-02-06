@@ -23,7 +23,6 @@ This module provides functions to check topological properties of meshes:
 
 from typing import TYPE_CHECKING, Literal
 
-import numpy as np
 import torch
 
 if TYPE_CHECKING:
@@ -361,16 +360,9 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     contains it. This is the primary non-manifold vertex configuration not
     caught by the facet and edge checks.
 
-    Algorithm:
-        For each vertex v with 2+ incident tetrahedra:
-
-        1. Extract the link face (3 non-v vertices, sorted) from each
-           incident tet.
-        2. For each edge of each link face, record which local tet owns it.
-           When two local tets share a link-face edge, they are adjacent in
-           the link graph.
-        3. Use union-find on the local tets, merging via shared edges.
-        4. Verify that all local tets end up in one connected component.
+    This implementation is fully vectorized (no Python loops over vertices),
+    following the union-find pattern from
+    :func:`~physicsnemo.mesh.utilities._duplicate_detection.compute_canonical_indices`.
 
     Parameters
     ----------
@@ -384,68 +376,117 @@ def _check_3d_vertex_manifold(mesh: "Mesh") -> bool:
     """
     from physicsnemo.mesh.neighbors import get_point_to_cells_adjacency
 
+    device = mesh.cells.device
+
     p2c = get_point_to_cells_adjacency(mesh)
 
-    ### Move to CPU numpy for the per-vertex connectivity check
-    offsets = p2c.offsets.cpu().numpy()
-    p2c_indices = p2c.indices.cpu().numpy()
-    cells_np = mesh.cells.cpu().numpy()
+    ### Step 1: Expand p2c to all (vertex_id, tet_id) pairs
+    vertex_ids, tet_ids = p2c.expand_to_pairs()  # both shape (total_pairs,)
+    total = len(vertex_ids)
+    if total == 0:
+        return True
 
-    for v in range(mesh.n_points):
-        start, end = offsets[v], offsets[v + 1]
-        n_incident = end - start
+    ### Step 2: Extract link faces (3 non-v vertices per incident tet)
+    tet_verts = mesh.cells[tet_ids]  # (total, 4)
 
-        ### Vertices with 0 or 1 incident tets have trivially connected links
-        if n_incident <= 1:
-            continue
+    # Find which column of each tet holds the vertex v
+    # (total, 4) == (total, 1) -> bool mask, argmax gives first True column
+    v_col = (tet_verts == vertex_ids.unsqueeze(1)).byte().argmax(dim=1)  # (total,)
 
-        incident_tet_verts = cells_np[p2c_indices[start:end]]  # (n_incident, 4)
+    # Detect degenerate tets (vertex appears more than once)
+    v_occurrence_count = (tet_verts == vertex_ids.unsqueeze(1)).sum(dim=1)
+    is_degenerate = v_occurrence_count > 1
 
-        ### Extract sorted link faces: the 3 non-v vertices of each tet
-        link_faces: list[tuple[int, int, int]] = []
-        for row in incident_tet_verts:
-            non_v = row[row != v]
-            if len(non_v) != 3:
-                continue  # Degenerate tet with duplicate vertex v
-            non_v.sort()
-            link_faces.append((int(non_v[0]), int(non_v[1]), int(non_v[2])))
+    # Precomputed lookup: given v is at column c, take columns COL_MAP[c]
+    _COL_MAP = torch.tensor(
+        [[1, 2, 3], [0, 2, 3], [0, 1, 3], [0, 1, 2]],
+        dtype=torch.long,
+        device=device,
+    )
+    gather_cols = _COL_MAP[v_col]  # (total, 3)
+    link_faces = torch.gather(tet_verts, 1, gather_cols)  # (total, 3)
 
-        n_faces = len(link_faces)
-        if n_faces <= 1:
-            continue
+    # Sort each link face for canonical ordering
+    link_faces, _ = torch.sort(link_faces, dim=1)
 
-        ### Union-find: merge local tets whose link faces share an edge
-        # For each edge of each link face, the first tet to claim that edge
-        # becomes the representative; subsequent tets are unioned with it.
-        parent = list(range(n_faces))
-        edge_to_first: dict[tuple[int, int], int] = {}
+    ### Step 3: Generate all edges of all link faces
+    # Each sorted face (a, b, c) gives edges: (a,b), (a,c), (b,c)
+    edge_ab = link_faces[:, :2]  # (total, 2) -> columns 0,1
+    edge_ac = link_faces[:, [0, 2]]  # (total, 2) -> columns 0,2
+    edge_bc = link_faces[:, 1:]  # (total, 2) -> columns 1,2
 
-        for face_idx, (a, b, c) in enumerate(link_faces):
-            for edge in ((a, b), (a, c), (b, c)):
-                if edge in edge_to_first:
-                    _uf_union(parent, edge_to_first[edge], face_idx)
-                else:
-                    edge_to_first[edge] = face_idx
+    all_edges = torch.cat([edge_ab, edge_ac, edge_bc], dim=0)  # (3*total, 2)
 
-        ### Verify single connected component
-        root = _uf_find(parent, 0)
-        for i in range(1, n_faces):
-            if _uf_find(parent, i) != root:
-                return False
+    # Matching vertex_ids and face indices, repeated 3x
+    face_indices = torch.arange(total, device=device)
+    vertex_ids_3x = vertex_ids.repeat(3)  # (3*total,)
+    face_indices_3x = face_indices.repeat(3)  # (3*total,)
 
-    return True
+    ### Step 4: Find pairs of link faces sharing an edge at the same vertex
+    # Sort by composite key (vertex_id, edge_v0, edge_v1) to group identical
+    # (vertex, edge) tuples together. Consecutive entries sharing a key are
+    # face pairs connected via that edge.
+    n_pts = mesh.n_points
+    sort_key = (
+        vertex_ids_3x * (n_pts * n_pts)
+        + all_edges[:, 0] * n_pts
+        + all_edges[:, 1]
+    )
+    sort_idx = torch.argsort(sort_key)
+    sorted_face_idx = face_indices_3x[sort_idx]
+    sorted_key = sort_key[sort_idx]
 
+    # Adjacent entries with the same key are face pairs that share an edge
+    same_key = sorted_key[:-1] == sorted_key[1:]
+    pair_f1 = sorted_face_idx[:-1][same_key]
+    pair_f2 = sorted_face_idx[1:][same_key]
 
-def _uf_find(parent: list[int], i: int) -> int:
-    """Find root of element *i* with path halving (union-find helper)."""
-    while parent[i] != i:
-        parent[i] = parent[parent[i]]
-        i = parent[i]
-    return i
+    if len(pair_f1) == 0:
+        # No shared edges at all - each link face is isolated.
+        # Vertices with 0 or 1 incident tet are trivially manifold.
+        # Vertices with 2+ incident tets but no shared edges are non-manifold.
+        incident_counts = p2c.counts  # (n_points,)
+        return bool(torch.all(incident_counts <= 1))
 
+    ### Step 5: Vectorized union-find (following _duplicate_detection pattern)
+    labels = torch.arange(total, dtype=torch.long, device=device)
 
-def _uf_union(parent: list[int], i: int, j: int) -> None:
-    """Merge the components containing *i* and *j* (union-find helper)."""
-    ri, rj = _uf_find(parent, i), _uf_find(parent, j)
-    if ri != rj:
-        parent[ri] = rj
+    # Union: bidirectional merge to smaller label
+    merge_from = torch.cat([
+        torch.maximum(pair_f1, pair_f2),
+        torch.maximum(pair_f2, pair_f1),
+    ])
+    merge_to = torch.cat([
+        torch.minimum(pair_f1, pair_f2),
+        torch.minimum(pair_f2, pair_f1),
+    ])
+    labels.scatter_reduce_(0, merge_from, merge_to, reduce="amin")
+
+    # Path compression: iteratively chase parent pointers until stable
+    for _ in range(100):
+        prev = labels.clone()
+        labels = labels[labels]
+        if torch.equal(labels, prev):
+            break
+
+    ### Step 6: Check single connected component per vertex
+    # For each vertex, all its link faces must share the same root label.
+    # Use scatter to find min and max label per vertex.
+    min_labels = torch.full((mesh.n_points,), total, dtype=torch.long, device=device)
+    max_labels = torch.zeros(mesh.n_points, dtype=torch.long, device=device)
+
+    min_labels.scatter_reduce_(0, vertex_ids, labels, reduce="amin")
+    max_labels.scatter_reduce_(0, vertex_ids, labels, reduce="amax")
+
+    # Only check vertices with 2+ incident tets (others are trivially manifold)
+    incident_counts = p2c.counts  # (n_points,)
+    multi_incident = incident_counts >= 2
+
+    # Also exclude degenerate vertices from the check
+    degenerate_per_vertex = torch.zeros(
+        mesh.n_points, dtype=torch.bool, device=device
+    )
+    degenerate_per_vertex.scatter_(0, vertex_ids[is_degenerate], True)
+
+    check_mask = multi_incident & ~degenerate_per_vertex
+    return bool(torch.all(min_labels[check_mask] == max_labels[check_mask]))
