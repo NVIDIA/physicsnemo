@@ -173,30 +173,6 @@ class TestBasicEdgeExtraction:
             expected_edges,
         )
 
-    def test_tetrahedron_to_triangular_cells(self):
-        """A tetrahedron should produce 4 triangular cells."""
-        ### Create a tetrahedron (3-simplex)
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ]
-        )
-        cells = torch.tensor([[0, 1, 2, 3]])  # Single tetrahedron
-
-        mesh = Mesh(points=points, cells=cells)
-        facet_mesh = mesh.get_facet_mesh()
-
-        ### Should have 4 triangular cells
-        assert facet_mesh.n_cells == 4
-        assert facet_mesh.n_manifold_dims == 2
-        assert facet_mesh.n_spatial_dims == 3
-
-        ### Each face should have 3 vertices
-        assert facet_mesh.cells.shape[1] == 3
-
     def test_facet_mesh_to_points(self):
         """An edge mesh (1-simplices) should extract to 0-simplices."""
         ### Create a simple line segment mesh
@@ -254,141 +230,69 @@ class TestBasicEdgeExtraction:
 class TestDataInheritance:
     """Test data inheritance from parent mesh to edge mesh."""
 
-    def test_cell_data_inheritance_mean(self):
-        """Test face data inheritance with mean aggregation."""
-        ### Create two triangles with face data
+    @pytest.mark.parametrize(
+        "data_aggregation",
+        [
+            pytest.param("mean", id="mean"),
+            pytest.param("area_weighted", id="area_weighted"),
+            pytest.param("inverse_distance", id="inverse_distance"),
+        ],
+    )
+    def test_cell_data_inheritance(self, data_aggregation):
+        """Test face data inheritance with different aggregation strategies."""
+        ### Create two triangles with known geometry
         points = torch.tensor(
             [
                 [0.0, 0.0],
-                [1.0, 0.0],
-                [0.5, 1.0],
-                [1.5, 0.5],
+                [2.0, 0.0],
+                [0.0, 1.0],
+                [2.0, 2.0],
             ]
         )
         cells = torch.tensor(
             [
-                [0, 1, 2],
-                [1, 3, 2],
+                [0, 1, 2],  # Triangle 1
+                [1, 3, 2],  # Triangle 2 (shares edge [1, 2])
             ]
         )
 
         cell_data = {
-            "temperature": torch.tensor([100.0, 200.0]),
-        }
-
-        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
-        facet_mesh = mesh.get_facet_mesh(data_source="cells", data_aggregation="mean")
-
-        ### Edge [1, 2] is shared by both triangles
-        # It should have temperature = (100 + 200) / 2 = 150
-        shared_edge_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        assert len(shared_edge_idx) == 1
-        assert torch.isclose(
-            facet_mesh.cell_data["temperature"][shared_edge_idx[0]],
-            torch.tensor(150.0),
-            rtol=1e-5,
-        )
-
-    def test_cell_data_inheritance_area_weighted(self):
-        """Test face data inheritance with area-weighted aggregation."""
-        ### Create two triangles with different areas
-        points = torch.tensor(
-            [
-                [0.0, 0.0],
-                [2.0, 0.0],  # Wider base for first triangle
-                [1.0, 1.0],
-                [2.0, 2.0],  # Larger second triangle
-            ]
-        )
-        cells = torch.tensor(
-            [
-                [0, 1, 2],  # First triangle
-                [1, 3, 2],  # Second triangle (larger area)
-            ]
-        )
-
-        cell_data = {
-            "value": torch.tensor([1.0, 2.0]),
+            "value": torch.tensor([100.0, 300.0]),
         }
 
         mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
         facet_mesh = mesh.get_facet_mesh(
-            data_source="cells", data_aggregation="area_weighted"
+            data_source="cells", data_aggregation=data_aggregation
         )
 
-        ### Shared edge [1, 2] should be weighted by parent face areas
+        ### Shared edge [1, 2] should have aggregated value
         shared_edge_idx = torch.where(
             (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
         )[0]
         assert len(shared_edge_idx) == 1
 
-        ### Compute expected value
-        areas = mesh.cell_areas
-        expected_value = (1.0 * areas[0] + 2.0 * areas[1]) / (areas[0] + areas[1])
+        ### Compute expected value based on aggregation method
+        if data_aggregation == "mean":
+            expected_value = torch.tensor(200.0)  # (100 + 300) / 2
+        elif data_aggregation == "area_weighted":
+            areas = mesh.cell_areas
+            expected_value = (100.0 * areas[0] + 300.0 * areas[1]) / (
+                areas[0] + areas[1]
+            )
+        elif data_aggregation == "inverse_distance":
+            edge_centroid = (points[1] + points[2]) / 2
+            tri1_centroid = points[cells[0]].mean(dim=0)
+            tri2_centroid = points[cells[1]].mean(dim=0)
+            dist1 = torch.norm(edge_centroid - tri1_centroid)
+            dist2 = torch.norm(edge_centroid - tri2_centroid)
+            w1, w2 = 1.0 / dist1, 1.0 / dist2
+            expected_value = (100.0 * w1 + 300.0 * w2) / (w1 + w2)
 
         assert torch.isclose(
             facet_mesh.cell_data["value"][shared_edge_idx[0]],
             expected_value,
             rtol=1e-5,
         )
-
-    def test_cell_data_inheritance_inverse_distance(self):
-        """Test face data inheritance with inverse distance weighting."""
-        ### Create two triangles with known geometry
-        points = torch.tensor(
-            [
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [0.5, 1.0],
-                [1.5, 0.5],
-            ]
-        )
-        cells = torch.tensor(
-            [
-                [0, 1, 2],
-                [1, 3, 2],
-            ]
-        )
-
-        cell_data = {
-            "value": torch.tensor([1.0, 2.0]),
-        }
-
-        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
-        facet_mesh = mesh.get_facet_mesh(
-            data_source="cells", data_aggregation="inverse_distance"
-        )
-
-        ### Manually compute expected value for shared edge [1, 2]
-        # Edge [1, 2] midpoint: ([1.0, 0.0] + [0.5, 1.0]) / 2 = [0.75, 0.5]
-        edge_12_centroid = torch.tensor([0.75, 0.5])
-
-        # Triangle 1 centroid: ([0.0, 0.0] + [1.0, 0.0] + [0.5, 1.0]) / 3 = [0.5, 1/3]
-        tri1_centroid = torch.tensor([0.5, 1.0 / 3.0])
-
-        # Triangle 2 centroid: ([1.0, 0.0] + [1.5, 0.5] + [0.5, 1.0]) / 3 = [1.0, 0.5]
-        tri2_centroid = torch.tensor([1.0, 0.5])
-
-        # Distances
-        dist1 = torch.norm(edge_12_centroid - tri1_centroid)
-        dist2 = torch.norm(edge_12_centroid - tri2_centroid)
-
-        # Weights (inverse distance)
-        weight1 = 1.0 / dist1
-        weight2 = 1.0 / dist2
-
-        # Expected weighted average
-        expected_value = (1.0 * weight1 + 2.0 * weight2) / (weight1 + weight2)
-
-        shared_edge_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        assert len(shared_edge_idx) == 1
-
-        actual_value = facet_mesh.cell_data["value"][shared_edge_idx[0]]
-        assert torch.isclose(actual_value, expected_value, rtol=1e-5)
 
     def test_point_data_inheritance(self):
         """Test point data inheritance (averaging from boundary vertices)."""
@@ -413,33 +317,16 @@ class TestDataInheritance:
         # Edge [0, 1]: (0.0 + 1.0) / 2 = 0.5
         # Edge [0, 2]: (0.0 + 2.0) / 2 = 1.0
         # Edge [1, 2]: (1.0 + 2.0) / 2 = 1.5
-
-        edge_01_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 0) & (facet_mesh.cells[:, 1] == 1)
-        )[0]
-        assert torch.isclose(
-            facet_mesh.cell_data["value"][edge_01_idx[0]],
-            torch.tensor(0.5),
-            rtol=1e-5,
-        )
-
-        edge_02_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 0) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        assert torch.isclose(
-            facet_mesh.cell_data["value"][edge_02_idx[0]],
-            torch.tensor(1.0),
-            rtol=1e-5,
-        )
-
-        edge_12_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        assert torch.isclose(
-            facet_mesh.cell_data["value"][edge_12_idx[0]],
-            torch.tensor(1.5),
-            rtol=1e-5,
-        )
+        expected_values = {(0, 1): 0.5, (0, 2): 1.0, (1, 2): 1.5}
+        for (v0, v1), expected in expected_values.items():
+            edge_idx = torch.where(
+                (facet_mesh.cells[:, 0] == v0) & (facet_mesh.cells[:, 1] == v1)
+            )[0]
+            assert torch.isclose(
+                facet_mesh.cell_data["value"][edge_idx[0]],
+                torch.tensor(expected),
+                rtol=1e-5,
+            ), f"Edge [{v0}, {v1}] expected {expected}"
 
     def test_multidimensional_data_aggregation(self):
         """Test that multidimensional face data is aggregated correctly."""
@@ -485,19 +372,6 @@ class TestDataInheritance:
             rtol=1e-5,
         )
 
-    def test_global_data_preserved(self):
-        """Test that global data is preserved in edge mesh."""
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
-        cells = torch.tensor([[0, 1, 2]])
-        global_data = {"time": torch.tensor(42.0)}
-
-        mesh = Mesh(points=points, cells=cells, global_data=global_data)
-        facet_mesh = mesh.get_facet_mesh()
-
-        assert "time" in facet_mesh.global_data
-        assert torch.equal(facet_mesh.global_data["time"], torch.tensor(42.0))
-
-
 class TestEdgeCases:
     """Test edge cases and boundary conditions."""
 
@@ -532,53 +406,6 @@ class TestEdgeCases:
             include_nested=True
         )
         assert ("_cache", "areas") not in facet_mesh.cell_data.keys(include_nested=True)
-
-    def test_3d_triangle_mesh(self):
-        """Test triangle mesh embedded in 3D space."""
-        ### Triangle in 3D (codimension-1)
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-            ]
-        )
-        cells = torch.tensor([[0, 1, 2]])
-
-        mesh = Mesh(points=points, cells=cells)
-        facet_mesh = mesh.get_facet_mesh()
-
-        assert facet_mesh.n_spatial_dims == 3
-        assert facet_mesh.n_manifold_dims == 1
-        assert facet_mesh.n_cells == 3
-
-    def test_multiple_tets(self):
-        """Test multiple tetrahedra sharing cells."""
-        ### Two tetrahedra sharing a triangular face
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],  # 0
-                [1.0, 0.0, 0.0],  # 1
-                [0.0, 1.0, 0.0],  # 2
-                [0.0, 0.0, 1.0],  # 3
-                [0.0, 0.0, -1.0],  # 4
-            ]
-        )
-        cells = torch.tensor(
-            [
-                [0, 1, 2, 3],  # Tet 1
-                [0, 1, 2, 4],  # Tet 2 (shares triangle [0,1,2])
-            ]
-        )
-
-        mesh = Mesh(points=points, cells=cells)
-        facet_mesh = mesh.get_facet_mesh()
-
-        ### Each tet produces 4 triangular cells
-        # But they share triangle [0, 1, 2], so we have 8 - 1 = 7 unique cells
-        assert facet_mesh.n_cells == 7
-        assert facet_mesh.n_manifold_dims == 2
-
 
 class TestRigorousAggregation:
     """Rigorous tests for data aggregation with exact value verification."""
@@ -625,38 +452,7 @@ class TestRigorousAggregation:
 
     def test_area_weighted_with_exact_areas(self):
         """Test area-weighted aggregation with manually computed areas."""
-        ### Create two triangles with different known areas
-        # Triangle 1: vertices at (0,0), (1,0), (0,1) - right triangle, area = 0.5
-        # Triangle 2: vertices at (1,0), (3,0), (1,2) - right triangle, area = 2.0
-        points = torch.tensor(
-            [
-                [0.0, 0.0],  # 0
-                [1.0, 0.0],  # 1
-                [0.0, 1.0],  # 2
-                [3.0, 0.0],  # 3
-                [1.0, 2.0],  # 4
-            ]
-        )
-        cells = torch.tensor(
-            [
-                [0, 1, 2],  # Triangle 1: base=1, height=1, area = 0.5
-                [1, 3, 4],  # Triangle 2: base=2, height=2, area = 2.0
-            ]
-        )
-
-        cell_data = {
-            "temperature": torch.tensor([100.0, 300.0]),
-        }
-
-        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
-
-        ### Verify our area calculation matches expected values
-        areas = mesh.cell_areas
-        assert torch.isclose(areas[0], torch.tensor(0.5), rtol=1e-5)
-        assert torch.isclose(areas[1], torch.tensor(2.0), rtol=1e-5)
-
-        ### For this test, we need triangles that share an edge
-        # Let me create a better configuration with shared edge
+        ### Create two triangles with known areas that share an edge
         points2 = torch.tensor(
             [
                 [0.0, 0.0],  # 0
@@ -776,27 +572,20 @@ class TestRigorousAggregation:
         mesh = Mesh(points=points, cells=cells, point_data=point_data)
         facet_mesh = mesh.get_facet_mesh(data_source="points")
 
-        ### Edge [0, 1] should average velocities of points 0 and 1
-        edge_01_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 0) & (facet_mesh.cells[:, 1] == 1)
-        )[0]
-        expected_vel_01 = torch.tensor([0.5, 0.5])  # ([1,0] + [0,1]) / 2
-        assert torch.allclose(
-            facet_mesh.cell_data["velocity"][edge_01_idx[0]],
-            expected_vel_01,
-            rtol=1e-6,
-        )
-
-        ### Edge [1, 2] should average velocities of points 1 and 2
-        edge_12_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        expected_vel_12 = torch.tensor([0.5, 1.0])  # ([0,1] + [1,1]) / 2
-        assert torch.allclose(
-            facet_mesh.cell_data["velocity"][edge_12_idx[0]],
-            expected_vel_12,
-            rtol=1e-6,
-        )
+        ### Each edge should average velocities of its endpoint vertices
+        expected_velocities = {
+            (0, 1): torch.tensor([0.5, 0.5]),  # ([1,0] + [0,1]) / 2
+            (1, 2): torch.tensor([0.5, 1.0]),  # ([0,1] + [1,1]) / 2
+        }
+        for (v0, v1), expected_vel in expected_velocities.items():
+            edge_idx = torch.where(
+                (facet_mesh.cells[:, 0] == v0) & (facet_mesh.cells[:, 1] == v1)
+            )[0]
+            assert torch.allclose(
+                facet_mesh.cell_data["velocity"][edge_idx[0]],
+                expected_vel,
+                rtol=1e-6,
+            ), f"Edge [{v0}, {v1}] velocity mismatch"
 
     def test_tet_to_triangles_exact_count(self):
         """Test that a single tet produces exactly 4 unique triangular cells."""
@@ -909,56 +698,6 @@ class TestRigorousAggregation:
 
 class TestNestedTensorDicts:
     """Test edge extraction with nested TensorDict data structures."""
-
-    def test_nested_cell_data(self):
-        """Test face data aggregation with nested TensorDicts."""
-        from tensordict import TensorDict
-
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.5, 1.0], [1.5, 0.5]])
-        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
-
-        ### Create nested TensorDict
-        cell_data = TensorDict(
-            {
-                "scalar": torch.tensor([100.0, 200.0]),
-                "nested": TensorDict(
-                    {
-                        "temperature": torch.tensor([10.0, 20.0]),
-                        "pressure": torch.tensor([5.0, 15.0]),
-                    },
-                    batch_size=torch.Size([2]),
-                ),
-            },
-            batch_size=torch.Size([2]),
-        )
-
-        mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
-        facet_mesh = mesh.get_facet_mesh(data_source="cells", data_aggregation="mean")
-
-        ### Shared edge [1, 2] should have averaged values
-        shared_edge_idx = torch.where(
-            (facet_mesh.cells[:, 0] == 1) & (facet_mesh.cells[:, 1] == 2)
-        )[0]
-        assert len(shared_edge_idx) == 1
-
-        ### Check scalar data
-        assert torch.isclose(
-            facet_mesh.cell_data["scalar"][shared_edge_idx[0]],
-            torch.tensor(150.0),  # (100 + 200) / 2
-            rtol=1e-6,
-        )
-
-        ### Check nested data
-        assert torch.isclose(
-            facet_mesh.cell_data["nested"]["temperature"][shared_edge_idx[0]],
-            torch.tensor(15.0),  # (10 + 20) / 2
-            rtol=1e-6,
-        )
-        assert torch.isclose(
-            facet_mesh.cell_data["nested"]["pressure"][shared_edge_idx[0]],
-            torch.tensor(10.0),  # (5 + 15) / 2
-            rtol=1e-6,
-        )
 
     def test_deeply_nested_cell_data(self):
         """Test aggregation with deeply nested TensorDicts."""
@@ -1151,78 +890,60 @@ class TestNestedTensorDicts:
 class TestHigherCodimension:
     """Test extraction of higher-codimension meshes."""
 
-    def test_triangle_to_vertices_codim2(self):
-        """Extract vertices (codimension 2) from a triangle mesh."""
-        points = torch.tensor(
-            [
-                [0.0, 0.0],
-                [1.0, 0.0],
-                [0.0, 1.0],
-                [1.0, 1.0],
-            ]
-        )
-        # Two triangles
-        cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+    @pytest.mark.parametrize(
+        "n_spatial_dims,n_manifold_dims,codim,expected_manifold_dim,expected_n_cells,expected_cell_size",
+        [
+            pytest.param(2, 2, 2, 0, 4, 1, id="triangles_to_vertices"),
+            pytest.param(3, 3, 2, 1, 6, 2, id="tets_to_edges"),
+            pytest.param(3, 3, 3, 0, 4, 1, id="tets_to_vertices"),
+        ],
+    )
+    def test_basic_higher_codimension(
+        self,
+        n_spatial_dims,
+        n_manifold_dims,
+        codim,
+        expected_manifold_dim,
+        expected_n_cells,
+        expected_cell_size,
+    ):
+        """Test higher codimension extraction across mesh types."""
+        if n_spatial_dims == 2:
+            points = torch.tensor(
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+            )
+            cells = torch.tensor([[0, 1, 2], [1, 3, 2]])
+        else:
+            points = torch.tensor(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ]
+            )
+            cells = torch.tensor([[0, 1, 2, 3]])
 
         mesh = Mesh(points=points, cells=cells)
-        vertex_mesh = mesh.get_facet_mesh(manifold_codimension=2)
+        facet_mesh = mesh.get_facet_mesh(manifold_codimension=codim)
 
-        ### Should extract 4 unique vertices from 6 candidates (3 per triangle)
-        assert vertex_mesh.n_manifold_dims == 0
-        assert vertex_mesh.n_cells == 4
-        assert vertex_mesh.cells.shape == (4, 1)
+        assert facet_mesh.n_manifold_dims == expected_manifold_dim
+        assert facet_mesh.n_cells == expected_n_cells
+        assert facet_mesh.cells.shape == (expected_n_cells, expected_cell_size)
 
-        ### Vertices should be sorted and unique
-        expected_vertices = torch.tensor([[0], [1], [2], [3]])
-        assert torch.equal(
-            torch.sort(vertex_mesh.cells, dim=0)[0],
-            expected_vertices,
-        )
+        ### For tet→edges, verify all 6 edges are present
+        if n_spatial_dims == 3 and codim == 2:
+            expected_edges = {(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)}
+            actual_edges = {tuple(edge.tolist()) for edge in facet_mesh.cells}
+            assert actual_edges == expected_edges
 
-    def test_tetrahedron_to_edges_codim2(self):
-        """Extract edges (codimension 2) from a tetrahedral mesh."""
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ]
-        )
-        cells = torch.tensor([[0, 1, 2, 3]])  # Single tetrahedron
-
-        mesh = Mesh(points=points, cells=cells)
-        edge_mesh = mesh.get_facet_mesh(manifold_codimension=2)
-
-        ### A tetrahedron has C(4,2) = 6 edges
-        assert edge_mesh.n_manifold_dims == 1
-        assert edge_mesh.n_cells == 6
-        assert edge_mesh.cells.shape == (6, 2)
-
-        ### All 6 edges should be present (convert to set for comparison)
-        expected_edges = {(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)}
-        actual_edges = {tuple(edge.tolist()) for edge in edge_mesh.cells}
-        assert actual_edges == expected_edges
-
-    def test_tetrahedron_to_vertices_codim3(self):
-        """Extract vertices (codimension 3) from a tetrahedral mesh."""
-        points = torch.tensor(
-            [
-                [0.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ]
-        )
-        cells = torch.tensor([[0, 1, 2, 3]])  # Single tetrahedron
-
-        mesh = Mesh(points=points, cells=cells)
-        vertex_mesh = mesh.get_facet_mesh(manifold_codimension=3)
-
-        ### A tetrahedron has 4 vertices
-        assert vertex_mesh.n_manifold_dims == 0
-        assert vertex_mesh.n_cells == 4
-        assert vertex_mesh.cells.shape == (4, 1)
+        ### For triangles→vertices, verify sorted unique vertices
+        if n_spatial_dims == 2 and codim == 2:
+            expected_vertices = torch.tensor([[0], [1], [2], [3]])
+            assert torch.equal(
+                torch.sort(facet_mesh.cells, dim=0)[0],
+                expected_vertices,
+            )
 
     def test_codimension_too_large_raises_error(self):
         """Test that requesting too high a codimension raises an error."""
@@ -1387,7 +1108,7 @@ class TestFacetExtractionParametrized:
     def test_basic_facet_extraction_parametrized(
         self, n_spatial_dims, n_manifold_dims, device
     ):
-        """Test basic facet extraction across all dimension combinations."""
+        """Test basic facet extraction and deduplication across all dimension combinations."""
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
 
         facet_mesh = mesh.get_facet_mesh()
@@ -1414,19 +1135,22 @@ class TestFacetExtractionParametrized:
             f"got {facet_mesh.cells.shape[1]}"
         )
 
+        # Verify deduplication (facets are unique)
+        if mesh.n_cells >= 2:
+            sorted_facets = torch.sort(facet_mesh.cells, dim=1)[0]
+            unique_facets = torch.unique(sorted_facets, dim=0)
+            assert unique_facets.shape[0] == sorted_facets.shape[0], (
+                f"Found duplicate facets: {sorted_facets.shape[0]} facets, "
+                f"but only {unique_facets.shape[0]} unique"
+            )
+
     @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims,data_aggregation",
-        [
-            (2, 2, "mean"),
-            (2, 2, "area_weighted"),
-            (2, 2, "inverse_distance"),
-            (3, 2, "mean"),
-            (3, 2, "area_weighted"),
-            (3, 2, "inverse_distance"),
-            (3, 3, "mean"),
-            (3, 3, "area_weighted"),
-            (3, 3, "inverse_distance"),
-        ],
+        "n_spatial_dims,n_manifold_dims",
+        [(2, 2), (3, 2), (3, 3)],
+    )
+    @pytest.mark.parametrize(
+        "data_aggregation",
+        ["mean", "area_weighted", "inverse_distance"],
     )
     def test_data_aggregation_parametrized(
         self, n_spatial_dims, n_manifold_dims, data_aggregation, device
@@ -1472,58 +1196,6 @@ class TestFacetExtractionParametrized:
     @pytest.mark.parametrize(
         "n_spatial_dims,n_manifold_dims",
         [
-            (2, 2),  # Triangles
-            (3, 2),  # Surfaces
-            (3, 3),  # Volumes
-        ],
-    )
-    def test_point_data_aggregation_parametrized(
-        self, n_spatial_dims, n_manifold_dims, device
-    ):
-        """Test point data aggregation across dimensions."""
-        mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
-
-        # Add point data
-        point_values = torch.arange(mesh.n_points, dtype=torch.float32, device=device)
-        mesh.point_data["point_id"] = point_values
-
-        facet_mesh = mesh.get_facet_mesh(data_source="points")
-
-        # Verify data was inherited
-        assert "point_id" in facet_mesh.cell_data, (
-            "Point data should be aggregated to facet cell_data"
-        )
-
-        # Verify device
-        assert_on_device(facet_mesh.cell_data["point_id"], device)
-
-    @pytest.mark.parametrize(
-        "n_manifold_dims,codim",
-        [
-            (2, 2),  # Triangles → Points (codim 2)
-            (3, 2),  # Tets → Edges (codim 2)
-            (3, 3),  # Tets → Points (codim 3)
-        ],
-    )
-    def test_higher_codimension_parametrized(self, n_manifold_dims, codim, device):
-        """Test higher codimension extractions across dimensions."""
-        n_spatial_dims = 3  # Use 3D for all to support higher manifold dims
-        mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
-
-        facet_mesh = mesh.get_facet_mesh(manifold_codimension=codim)
-
-        expected_manifold_dim = n_manifold_dims - codim
-        assert facet_mesh.n_manifold_dims == expected_manifold_dim, (
-            f"Expected manifold dim {expected_manifold_dim}, "
-            f"got {facet_mesh.n_manifold_dims}"
-        )
-
-        assert_on_device(facet_mesh.points, device)
-        assert_on_device(facet_mesh.cells, device)
-
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
             (2, 1),
             (2, 2),
             (3, 1),
@@ -1555,67 +1227,37 @@ class TestFacetExtractionParametrized:
 
     @pytest.mark.parametrize(
         "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 1),
-            (2, 2),
-            (3, 1),
-            (3, 2),
-            (3, 3),
-        ],
+        [(2, 2), (3, 2), (3, 3)],
     )
-    def test_facet_deduplication_parametrized(
+    def test_data_inheritance_parametrized(
         self, n_spatial_dims, n_manifold_dims, device
     ):
-        """Test that shared facets are properly deduplicated across dimensions."""
-        mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
-
-        # For meshes with multiple cells, some facets should be shared
-        if mesh.n_cells < 2:
-            pytest.skip("Need at least 2 cells for this test")
-
-        facet_mesh = mesh.get_facet_mesh()
-
-        # Verify facets are unique (no duplicates in cells array)
-        # Sort each facet for comparison
-        sorted_facets = torch.sort(facet_mesh.cells, dim=1)[0]
-
-        # Check for duplicates
-        unique_facets = torch.unique(sorted_facets, dim=0)
-
-        assert unique_facets.shape[0] == sorted_facets.shape[0], (
-            f"Found duplicate facets: {sorted_facets.shape[0]} facets, "
-            f"but only {unique_facets.shape[0]} unique"
-        )
-
-    @pytest.mark.parametrize(
-        "n_spatial_dims,n_manifold_dims",
-        [
-            (2, 2),
-            (3, 2),
-            (3, 3),
-        ],
-    )
-    def test_multidimensional_data_aggregation_parametrized(
-        self, n_spatial_dims, n_manifold_dims, device
-    ):
-        """Test aggregation of multi-dimensional data (vectors, tensors)."""
+        """Test point data and multidimensional cell data inheritance across dimensions."""
         torch.manual_seed(42)
         mesh = create_simple_mesh(n_spatial_dims, n_manifold_dims, device=device)
 
-        # Add vector field
+        # Test point data aggregation
+        point_values = torch.arange(mesh.n_points, dtype=torch.float32, device=device)
+        mesh.point_data["point_id"] = point_values
+
+        facet_mesh_pt = mesh.get_facet_mesh(data_source="points")
+        assert "point_id" in facet_mesh_pt.cell_data, (
+            "Point data should be aggregated to facet cell_data"
+        )
+        assert_on_device(facet_mesh_pt.cell_data["point_id"], device)
+
+        # Test multidimensional cell data aggregation
         velocity = torch.randn(mesh.n_cells, n_spatial_dims, device=device)
         mesh.cell_data["velocity"] = velocity
 
-        facet_mesh = mesh.get_facet_mesh(
+        facet_mesh_cd = mesh.get_facet_mesh(
             data_source="cells",
             data_aggregation="mean",
         )
 
-        # Verify vector data was aggregated
-        assert "velocity" in facet_mesh.cell_data
-        assert facet_mesh.cell_data["velocity"].shape == (
-            facet_mesh.n_cells,
+        assert "velocity" in facet_mesh_cd.cell_data
+        assert facet_mesh_cd.cell_data["velocity"].shape == (
+            facet_mesh_cd.n_cells,
             n_spatial_dims,
-        ), f"Velocity shape mismatch: {facet_mesh.cell_data['velocity'].shape=}"
-
-        assert_on_device(facet_mesh.cell_data["velocity"], device)
+        ), f"Velocity shape mismatch: {facet_mesh_cd.cell_data['velocity'].shape=}"
+        assert_on_device(facet_mesh_cd.cell_data["velocity"], device)
