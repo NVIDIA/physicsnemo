@@ -47,7 +47,12 @@ def test_density_model_fit():
     assert model.model is not None
     assert model.ref_scores is not None
     assert model.ref_scores.shape == (100,)
-    assert np.isfinite(model.ref_scores).all()
+    ref_scores_np = (
+        model.ref_scores.cpu().numpy()
+        if hasattr(model.ref_scores, "cpu")
+        else model.ref_scores
+    )
+    assert np.isfinite(ref_scores_np).all()
 
 
 def test_density_model_score():
@@ -62,8 +67,10 @@ def test_density_model_score():
     scores = model.score(X_test)
 
     assert scores.shape == (10,)
-    assert np.isfinite(scores).all()
-    assert (scores >= 0).all()  # Negative log-likelihood should be non-negative
+    # Convert to numpy for assertions
+    scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
+    assert np.isfinite(scores_np).all()
+    assert (scores_np >= 0).all()  # Negative log-likelihood should be non-negative
 
 
 def test_density_model_percentiles():
@@ -138,7 +145,9 @@ def test_density_model_various_components(gmm_components):
 
     assert scores.shape == (100,)
     assert pcts.shape == (100,)
-    assert np.isfinite(scores).all()
+    # Convert to numpy for assertions
+    scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
+    assert np.isfinite(scores_np).all()
     assert np.all((pcts >= 0) & (pcts <= 100))
 
 
