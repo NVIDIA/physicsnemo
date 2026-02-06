@@ -11,10 +11,12 @@ unusual or unexpected shapes at inference time.
 
 **Key Features:**
 
-- **Density-based anomaly detection** using Gaussian Mixture Models
+- **Density-based anomaly detection** using Gaussian Mixture Models (GMM) or
+  Polynomial Chaos Expansion (PCE)
 - **Non-invariant features** that capture position, orientation, and scale
 - **Three-level classification**: OK, WARN, REJECT based on configurable
   thresholds
+- **GPU acceleration** for both GMM and PCE methods (PyTorch-based)
 - **Parallel processing** for efficient batch processing of STL files
 - **Serialization support** for saving and loading fitted models
 - **Comprehensive validation** with automatic schema compatibility checking
@@ -24,15 +26,23 @@ unusual or unexpected shapes at inference time.
 This module requires optional dependencies:
 
 ```bash
-pip install pyvista scikit-learn
+pip install pyvista
 ```
 
-**Mesh I/O**:
-
-The geometry guardrails use `physicsnemo.mesh` for mesh loading and processing,
-which provides GPU-accelerated mesh operations and uses PyVista for STL file I/O.
-
 ## Quick Start
+
+### Choosing a Method
+
+The guardrail supports two density estimation methods:
+
+- **GMM (Gaussian Mixture Model)**: Default method, best for unimodal or
+  multimodal Gaussian-like distributions. Fast and interpretable.
+- **PCE (Polynomial Chaos Expansion)**: Better for capturing non-Gaussian
+  distributions and higher-order correlations. More computationally intensive
+  but can model complex feature relationships.
+
+Use `method="gmm"` (default) for most cases, or `method="pce"` when you need
+to capture non-Gaussian patterns in your geometry distribution.
 
 ### Basic Usage
 
@@ -50,6 +60,7 @@ train_meshes = [
 
 # Create and fit guardrail
 guardrail = GeometryGuardrail(
+    method="gmm",        # Use GMM (or "pce" for Polynomial Chaos Expansion)
     n_components=1,      # Number of Gaussian components (1 = single Gaussian)
     warn_pct=99.0,       # Flag geometries above 99th percentile as WARN
     reject_pct=99.9,     # Flag geometries above 99.9th percentile as REJECT
@@ -75,7 +86,12 @@ from pathlib import Path
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 
 # Fit from directory of STL files
-guardrail = GeometryGuardrail(n_components=2, warn_pct=95.0, reject_pct=99.0)
+guardrail = GeometryGuardrail(
+    method="gmm",
+    n_components=2,
+    warn_pct=99.0,
+    reject_pct=99.9,
+)
 guardrail.fit_from_dir(
     Path("/path/to/training/stl/files"),
     n_workers=8,      # Use 8 CPU cores
@@ -123,29 +139,31 @@ results = loaded_guardrail.query(test_meshes)
 
 ### GPU Acceleration
 
-For improved performance on large datasets, use GPU acceleration:
+Both GMM and PCE methods support GPU acceleration via PyTorch:
 
 ```python
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 
 # Create guardrail with GPU support (requires PyTorch and CUDA)
 guardrail_gpu = GeometryGuardrail(
+    method="gmm",        # Both "gmm" and "pce" support GPU
     n_components=2,
     warn_pct=95.0,
     reject_pct=99.0,
-    device="cuda",  # Use GPU
+    device="cuda",       # Use GPU
     random_state=42,
 )
 
 # Fit on GPU (faster for large datasets)
 guardrail_gpu.fit(train_meshes)
 
-# Fast batch inference
+# Fast batch inference on GPU
 results = guardrail_gpu.query(test_meshes)
 ```
 
-GPU acceleration is most beneficial for large datasets and batch inference. For
-small datasets and batches, CPU may be faster due to transfer overhead.
+**Note**: Multiprocessing workers always run on CPU to avoid OOM issues. Features
+are extracted on CPU in parallel, then moved to the specified device (CPU or GPU)
+in the main process for density model training and inference.
 
 **Device Options:**
 
@@ -193,26 +211,31 @@ This allows detection of geometries that differ in:
 
 ### Density Modeling
 
-A **Gaussian Mixture Model (GMM)** learns the probability density
+The guardrail supports two density estimation methods:
+
+**1. Gaussian Mixture Model (GMM)** - Default method, learns the probability density
 \( p(\mathbf{x}) \) over the feature space:
 
 $$
 p(\mathbf{x}) = \sum_{k=1}^{K} \pi_k \mathcal{N}(\mathbf{x} | \mu_k, \Sigma_k)
 $$
 
-where:
+where \( K \) is the number of components (`n_components`), \( \pi_k \) are mixture
+weights, and \( \mu_k, \Sigma_k \) are mean and covariance for component \( k \).
 
-- \( K \) is the number of components (`n_components`)
-- \( \pi_k \) are mixture weights
-- \( \mu_k, \Sigma_k \) are mean and covariance for component \( k \)
+**2. Polynomial Chaos Expansion (PCE)** - Alternative method using polynomial
+basis functions for density estimation. Useful for capturing non-Gaussian
+distributions and higher-order correlations.
 
 For a new geometry with features \( \mathbf{x} \), the **anomaly score** is:
 
 $$
-s(\mathbf{x}) = -\log p(\mathbf{x} | \theta)
+s(\mathbf{x}) = -\log p(\mathbf{x} | \theta) \quad \text{(GMM)}
 $$
 
-Higher scores indicate lower likelihood (more anomalous).
+or Mahalanobis distance (PCE). Higher scores indicate lower likelihood (more anomalous).
+
+Both methods use PyTorch and support GPU acceleration.
 
 ### Classification
 
@@ -223,29 +246,6 @@ training distribution. Given percentile \( p \):
 - **WARN**: \( \text{warn\_pct} \leq p < \text{reject\_pct} \) — Unusual
   geometry (investigate)
 - **REJECT**: \( p \geq \text{reject\_pct} \) — Highly anomalous (likely OOD)
-
-## Examples
-
-### Additive Manufacturing Quality Control
-
-```python
-from pathlib import Path
-from physicsnemo.experimental.guardrails import GeometryGuardrail
-
-# Fit on known-good parts from production
-guardrail = GeometryGuardrail(n_components=1, warn_pct=99.0, reject_pct=99.9)
-guardrail.fit_from_dir(Path("production_parts/good/"), n_workers=16)
-
-# Monitor new parts
-results = guardrail.query_from_dir(Path("production_parts/new_batch/"), n_workers=16)
-
-# Flag for manual inspection
-for r in results:
-    if r["status"] == "REJECT":
-        print(f"REJECT: {r['name']} (p={r['percentile']:.1f}%) - inspect immediately")
-    elif r["status"] == "WARN":
-        print(f"WARN: {r['name']} (p={r['percentile']:.1f}%) - may need review")
-```
 
 ## TODO: Future Enhancements (Contributions Welcome!)
 
@@ -264,28 +264,16 @@ extractors.
 Add user-configurable invariance to rotation, scale, and translation. Currently
 all features are non-invariant.
 
-### 3. **Expanded GPU Support**
+### 3. **Enhanced Feature Extraction**
 
-Extend GPU acceleration beyond GMM to cover feature extraction, PCE density
-estimation, and batch STL loading.
+Optimize feature extraction for GPU acceleration. Currently, feature extraction
+runs on CPU in multiprocessing workers, with features moved to GPU for density
+modeling. Direct GPU feature extraction could further improve performance.
 
-### 4. **Advanced Anomaly Detection Methods**
+### 4. Advanced Anomaly Detection Methods
 
 Implement additional density estimation methods: Kernel Density Estimation,
 Variational Autoencoders, Normalizing Flows, and deep learning approaches.
-
-### 5. **Interpretability & Explainability**
-
-Provide feature importance analysis and visual diagnostics to help users
-understand why specific geometries were flagged as anomalous.
-
-### 7. **Multi-Modal & Multi-Physics**
-
-Extend guardrails to jointly model geometry, material properties, boundary
-conditions, simulation results, and manufacturing metadata for comprehensive
-anomaly detection.
-
----
 
 **How to Contribute:** Fork the repository, implement enhancements with tests
 and documentation following PhysicsNemo coding standards (`.cursor/rules/`),

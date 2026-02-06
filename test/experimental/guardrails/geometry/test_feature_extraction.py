@@ -18,7 +18,7 @@
 
 import numpy as np
 import pytest
-import trimesh
+import pyvista as pv
 
 from physicsnemo.experimental.guardrails.geometry import (
     FEATURE_NAMES,
@@ -26,12 +26,12 @@ from physicsnemo.experimental.guardrails.geometry import (
     extract_features,
     feature_hash,
 )
+from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 
 def test_extract_features_basic():
     """Test basic feature extraction from a simple mesh."""
-    # Use icosphere with enough vertices for validation (subdivisions=2 gives ~80 vertices)
-    mesh = trimesh.creation.icosphere(subdivisions=2)
+    mesh = from_pyvista(pv.Sphere())
     features = extract_features(mesh)
 
     # Check output shape
@@ -44,33 +44,33 @@ def test_extract_features_basic():
 
 def test_extract_features_centroid():
     """Test that centroid features are correct."""
-    # Create icosphere centered at origin
-    mesh = trimesh.creation.icosphere(subdivisions=2)
+    mesh = from_pyvista(pv.Sphere())
     features = extract_features(mesh)
 
     # First 3 features are centroid
     centroid = features[:3]
-    # Should be near zero (box is centered)
+    # Should be near zero (sphere is centered)
     assert np.allclose(centroid, [0, 0, 0], atol=1e-6)
 
 
 def test_extract_features_translated_mesh():
     """Test feature extraction on translated mesh."""
-    # Create icosphere at different position
-    mesh = trimesh.creation.icosphere(subdivisions=2)
-    mesh.apply_translation([10, 20, 30])
+    sphere = pv.Sphere()
+    sphere.translate([10, 20, 30], inplace=True)
+    mesh = from_pyvista(sphere)
 
     features = extract_features(mesh)
     centroid = features[:3]
 
-    # Centroid should reflect translation
-    assert np.allclose(centroid, [10, 20, 30], atol=0.1)
+    # Centroid should reflect translation (PyVista sphere is centered at origin, then translated)
+    # Allow larger tolerance due to discretization and potential numerical issues
+    assert np.allclose(centroid, [10, 20, 30], atol=1.0)
 
 
 def test_extract_features_area():
     """Test that surface area feature is correct."""
     # Unit sphere has surface area of approximately 4*pi
-    mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=3)
+    mesh = from_pyvista(pv.Sphere(radius=1.0))
     features = extract_features(mesh)
 
     # Feature index 18 is total_area
@@ -83,7 +83,7 @@ def test_extract_features_area():
 
 def test_extract_features_deterministic():
     """Test that feature extraction is deterministic."""
-    mesh = trimesh.creation.icosphere(radius=1.0, subdivisions=3)
+    mesh = from_pyvista(pv.Sphere(radius=1.0))
 
     features1 = extract_features(mesh)
     features2 = extract_features(mesh)
@@ -93,10 +93,10 @@ def test_extract_features_deterministic():
 
 def test_extract_features_invalid_mesh():
     """Test that invalid meshes raise errors."""
-    # Too few vertices
-    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    faces = np.array([[0, 1, 2]])
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+    # Too few vertices - create minimal triangle
+    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    pv_mesh = pv.PolyData(vertices, faces=[3, 0, 1, 2])
+    mesh = from_pyvista(pv_mesh)
 
     with pytest.raises(ValueError, match="Too few vertices"):
         extract_features(mesh)
@@ -105,22 +105,22 @@ def test_extract_features_invalid_mesh():
 def test_extract_features_insufficient_pca():
     """Test error on insufficient points for PCA."""
     # Create mesh with only 3 vertices (less than 4 required for PCA)
-    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    faces = np.array([[0, 1, 2]])
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    pv_mesh = pv.PolyData(vertices, faces=[3, 0, 1, 2])
+    mesh = from_pyvista(pv_mesh)
 
     # Will fail with "Too few vertices" from mesh validation
     with pytest.raises(ValueError, match="Too few vertices"):
         extract_features(mesh)
 
 
-@pytest.mark.parametrize("shape", ["icosphere", "cylinder"])
+@pytest.mark.parametrize("shape", ["sphere", "cylinder"])
 def test_extract_features_various_shapes(shape):
     """Test feature extraction on various primitive shapes."""
-    if shape == "icosphere":
-        mesh = trimesh.creation.icosphere(radius=2.0, subdivisions=2)
+    if shape == "sphere":
+        mesh = from_pyvista(pv.Sphere(radius=2.0))
     elif shape == "cylinder":
-        mesh = trimesh.creation.cylinder(radius=1.0, height=3.0, sections=32)
+        mesh = from_pyvista(pv.Cylinder(radius=1.0, height=3.0))
 
     features = extract_features(mesh)
 

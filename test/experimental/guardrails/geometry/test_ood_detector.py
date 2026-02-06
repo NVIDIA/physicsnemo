@@ -21,16 +21,19 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import trimesh
+import pyvista as pv
+import torch
 
 from physicsnemo.experimental.guardrails import GeometryGuardrail
 from physicsnemo.experimental.guardrails.geometry import FEATURE_NAMES, FEATURE_VERSION
+from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 
 def test_guardrail_constructor():
     """Test GuardRail constructor with various parameters."""
     guardrail = GeometryGuardrail(
-        n_components=2,
+        method="gmm",
+        gmm_components=2,
         warn_pct=95.0,
         reject_pct=99.0,
         random_state=42,
@@ -46,26 +49,26 @@ def test_guardrail_constructor_invalid_thresholds():
     """Test that invalid thresholds raise errors."""
     # warn_pct > reject_pct
     with pytest.raises(ValueError, match="warn_pct"):
-        GeometryGuardrail(warn_pct=99.0, reject_pct=95.0)
+        GeometryGuardrail(method="gmm", warn_pct=99.0, reject_pct=95.0)
 
     # Out of range
     with pytest.raises(ValueError, match="warn_pct must be in"):
-        GeometryGuardrail(warn_pct=150.0)
+        GeometryGuardrail(method="gmm", warn_pct=150.0)
 
     with pytest.raises(ValueError, match="reject_pct must be in"):
-        GeometryGuardrail(reject_pct=-10.0)
+        GeometryGuardrail(method="gmm", reject_pct=-10.0)
 
 
 def test_guardrail_fit():
     """Test fitting guardrail on mesh objects."""
     # Create training meshes
     train_meshes = [
-        trimesh.creation.box(extents=[1, 1, 1]),
-        trimesh.creation.box(extents=[1.5, 1.5, 1.5]),
-        trimesh.creation.box(extents=[0.8, 0.8, 0.8]),
+        from_pyvista(pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))),
+        from_pyvista(pv.Box(bounds=(-0.75, 0.75, -0.75, 0.75, -0.75, 0.75))),
+        from_pyvista(pv.Box(bounds=(-0.4, 0.4, -0.4, 0.4, -0.4, 0.4))),
     ]
 
-    guardrail = GeometryGuardrail(n_components=1, random_state=42)
+    guardrail = GeometryGuardrail(method="gmm", gmm_components=1, random_state=42)
     guardrail.fit(train_meshes)
 
     # Check that density model is fitted
@@ -75,10 +78,11 @@ def test_guardrail_fit():
 def test_guardrail_query():
     """Test querying guardrail with new meshes."""
     # Create and fit guardrail
-    train_meshes = [trimesh.creation.box(extents=[1, 1, 1]) for _ in range(10)]
+    train_meshes = [from_pyvista(pv.Cube()) for _ in range(10)]
 
     guardrail = GeometryGuardrail(
-        n_components=1,
+        method="gmm",
+        gmm_components=1,
         warn_pct=80.0,
         reject_pct=95.0,
         random_state=42,
@@ -87,8 +91,8 @@ def test_guardrail_query():
 
     # Query similar and dissimilar meshes
     test_meshes = [
-        trimesh.creation.box(extents=[1, 1, 1]),  # Similar
-        trimesh.creation.icosphere(radius=100.0, subdivisions=2),  # Very different
+        from_pyvista(pv.Cube()),  # Similar
+        from_pyvista(pv.Sphere(radius=100.0)),  # Very different
     ]
 
     results = guardrail.query(test_meshes)
@@ -101,7 +105,7 @@ def test_guardrail_query():
 
 def test_guardrail_classification():
     """Test that classification logic works correctly."""
-    guardrail = GeometryGuardrail(warn_pct=90.0, reject_pct=95.0)
+    guardrail = GeometryGuardrail(method="gmm", warn_pct=90.0, reject_pct=95.0)
 
     assert guardrail._classify(50.0) == "OK"
     assert guardrail._classify(89.9) == "OK"
@@ -114,10 +118,11 @@ def test_guardrail_classification():
 def test_guardrail_save_load():
     """Test saving and loading guardrail."""
     # Create and fit guardrail
-    train_meshes = [trimesh.creation.box() for _ in range(10)]
+    train_meshes = [from_pyvista(pv.Cube()) for _ in range(10)]
 
     guardrail = GeometryGuardrail(
-        n_components=1,
+        method="gmm",
+        gmm_components=1,
         warn_pct=95.0,
         reject_pct=99.0,
         random_state=42,
@@ -138,7 +143,7 @@ def test_guardrail_save_load():
         assert loaded.feature_version == guardrail.feature_version
 
         # Test that loaded model gives same results
-        test_mesh = [trimesh.creation.box()]
+        test_mesh = [from_pyvista(pv.Cube())]
         results_orig = guardrail.query(test_mesh)
         results_loaded = loaded.query(test_mesh)
 
@@ -151,7 +156,7 @@ def test_guardrail_save_load():
 
 def test_guardrail_save_before_fit():
     """Test that saving before fit raises error."""
-    guardrail = GeometryGuardrail()
+    guardrail = GeometryGuardrail(method="gmm")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = Path(tmpdir) / "guardrail.npz"
@@ -167,11 +172,14 @@ def test_guardrail_fit_from_dir():
 
         # Save some test meshes
         for i in range(5):
-            mesh = trimesh.creation.box(extents=[1 + i * 0.1] * 3)
-            mesh.export(stl_dir / f"mesh_{i:03d}.stl")
+            size = 1 + i * 0.1
+            box = pv.Box(
+                bounds=(-size / 2, size / 2, -size / 2, size / 2, -size / 2, size / 2)
+            )
+            box.save(str(stl_dir / f"mesh_{i:03d}.stl"))
 
         # Fit guardrail
-        guardrail = GeometryGuardrail(random_state=42)
+        guardrail = GeometryGuardrail(method="gmm", random_state=42)
         guardrail.fit_from_dir(stl_dir, n_workers=2)
 
         assert guardrail.density.ref_scores is not None
@@ -181,8 +189,8 @@ def test_guardrail_fit_from_dir():
 def test_guardrail_query_from_dir():
     """Test querying from STL directory."""
     # Fit guardrail on some meshes
-    train_meshes = [trimesh.creation.box() for _ in range(10)]
-    guardrail = GeometryGuardrail(random_state=42)
+    train_meshes = [from_pyvista(pv.Cube()) for _ in range(10)]
+    guardrail = GeometryGuardrail(method="gmm", random_state=42)
     guardrail.fit(train_meshes)
 
     # Create temporary directory with test STL files
@@ -191,8 +199,11 @@ def test_guardrail_query_from_dir():
 
         # Save test meshes
         for i in range(3):
-            mesh = trimesh.creation.box(extents=[1 + i * 0.5] * 3)
-            mesh.export(stl_dir / f"test_{i:03d}.stl")
+            size = 1 + i * 0.5
+            box = pv.Box(
+                bounds=(-size / 2, size / 2, -size / 2, size / 2, -size / 2, size / 2)
+            )
+            box.save(str(stl_dir / f"test_{i:03d}.stl"))
 
         # Query directory
         results = guardrail.query_from_dir(stl_dir, n_workers=2)
@@ -204,19 +215,19 @@ def test_guardrail_query_from_dir():
         assert all(r["name"].endswith(".stl") for r in results)
 
 
-@pytest.mark.parametrize("n_components", [1, 2])
-@pytest.mark.parametrize("cov_type", ["full", "diag"])
-def test_guardrail_various_configs(n_components, cov_type):
+@pytest.mark.parametrize("gmm_components", [1, 2])
+def test_guardrail_various_configs(gmm_components):
     """Test guardrail with various configurations."""
-    train_meshes = [trimesh.creation.box() for _ in range(10)]
+    train_meshes = [from_pyvista(pv.Cube()) for _ in range(10)]
 
     guardrail = GeometryGuardrail(
-        n_components=n_components,
+        method="gmm",
+        gmm_components=gmm_components,
         random_state=42,
     )
     guardrail.fit(train_meshes)
 
-    test_meshes = [trimesh.creation.icosphere(subdivisions=2)]
+    test_meshes = [from_pyvista(pv.Sphere())]
     results = guardrail.query(test_meshes)
 
     assert len(results) == 1
@@ -226,10 +237,27 @@ def test_guardrail_various_configs(n_components, cov_type):
 def test_guardrail_outlier_detection():
     """Test that guardrail correctly identifies outliers."""
     # Train on unit cubes
-    train_meshes = [trimesh.creation.box(extents=[1 + 0.1 * i] * 3) for i in range(20)]
+    train_meshes = []
+    for i in range(20):
+        size = 1 + 0.1 * i
+        train_meshes.append(
+            from_pyvista(
+                pv.Box(
+                    bounds=(
+                        -size / 2,
+                        size / 2,
+                        -size / 2,
+                        size / 2,
+                        -size / 2,
+                        size / 2,
+                    )
+                )
+            )
+        )
 
     guardrail = GeometryGuardrail(
-        n_components=1,
+        method="gmm",
+        gmm_components=1,
         warn_pct=95.0,
         reject_pct=99.0,
         random_state=42,
@@ -237,8 +265,8 @@ def test_guardrail_outlier_detection():
     guardrail.fit(train_meshes)
 
     # Test with inlier and outlier
-    inlier = trimesh.creation.box(extents=[1.5, 1.5, 1.5])
-    outlier = trimesh.creation.icosphere(radius=100.0, subdivisions=2)  # Very different
+    inlier = from_pyvista(pv.Box(bounds=(-0.75, 0.75, -0.75, 0.75, -0.75, 0.75)))
+    outlier = from_pyvista(pv.Sphere(radius=100.0))  # Very different
 
     results = guardrail.query([inlier, outlier])
 
@@ -247,3 +275,42 @@ def test_guardrail_outlier_detection():
 
     # Outlier should be flagged (at least WARN)
     assert results[1]["status"] in ["WARN", "REJECT"]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_guardrail_gpu():
+    """Test GeometryGuardrail with GPU acceleration."""
+    train_meshes = []
+    for i in range(20):
+        size = 1 + 0.1 * i
+        train_meshes.append(
+            from_pyvista(
+                pv.Box(
+                    bounds=(
+                        -size / 2,
+                        size / 2,
+                        -size / 2,
+                        size / 2,
+                        -size / 2,
+                        size / 2,
+                    )
+                )
+            )
+        )
+
+    guardrail = GeometryGuardrail(
+        method="gmm",
+        gmm_components=1,
+        warn_pct=90.0,
+        reject_pct=95.0,
+        device="cuda",
+        random_state=42,
+    )
+    guardrail.fit(train_meshes)
+
+    test_meshes = [from_pyvista(pv.Cube()), from_pyvista(pv.Sphere(radius=10.0))]
+    results = guardrail.query(test_meshes)
+
+    assert len(results) == 2
+    assert all("percentile" in r for r in results)
+    assert all("status" in r for r in results)

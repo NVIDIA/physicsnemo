@@ -18,14 +18,15 @@
 
 import numpy as np
 import pytest
-import trimesh
+import pyvista as pv
 
 from physicsnemo.experimental.guardrails.geometry import validate_mesh
+from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 
 def test_validate_mesh_valid():
     """Test validation of a valid mesh."""
-    mesh = trimesh.creation.box(extents=[1, 1, 1])
+    mesh = from_pyvista(pv.Cube())
     # Should not raise
     validate_mesh(mesh)
 
@@ -33,9 +34,9 @@ def test_validate_mesh_valid():
 def test_validate_mesh_min_verts():
     """Test minimum vertices validation."""
     # Create simple mesh with few vertices
-    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
-    faces = np.array([[0, 1, 2]])
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+    vertices = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32)
+    pv_mesh = pv.PolyData(vertices, faces=[3, 0, 1, 2])
+    mesh = from_pyvista(pv_mesh)
 
     # Should fail with default min_verts=4
     with pytest.raises(ValueError, match="Too few vertices"):
@@ -47,9 +48,12 @@ def test_validate_mesh_min_verts():
 
 def test_validate_mesh_non_finite_vertices():
     """Test detection of non-finite vertex coordinates."""
-    mesh = trimesh.creation.box()
+    pv_mesh = pv.Cube()
     # Corrupt vertices with NaN
-    mesh.vertices[0, 0] = np.nan
+    points = pv_mesh.points.copy()
+    points[0, 0] = np.nan
+    pv_mesh.points = points
+    mesh = from_pyvista(pv_mesh)
 
     with pytest.raises(ValueError, match="Non-finite"):
         validate_mesh(mesh)
@@ -58,20 +62,22 @@ def test_validate_mesh_non_finite_vertices():
 def test_validate_mesh_zero_area():
     """Test detection of zero surface area."""
     # Create degenerate mesh (all vertices colinear)
-    vertices = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
-    faces = np.array([[0, 1, 2], [1, 2, 3]])
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    vertices = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]], dtype=np.float32)
+    # Create faces array for PyVista format [n, i0, i1, i2, n, i0, i1, i2]
+    pv_faces = np.array([3, 0, 1, 2, 3, 1, 2, 3], dtype=np.int32)
+    pv_mesh = pv.PolyData(vertices, faces=pv_faces)
+    mesh = from_pyvista(pv_mesh)
 
     with pytest.raises(ValueError, match="Non-positive"):
         validate_mesh(mesh)
 
 
-def test_validate_mesh_not_trimesh():
-    """Test rejection of non-Trimesh objects."""
-    with pytest.raises(ValueError, match="Object is not a Trimesh"):
+def test_validate_mesh_not_physicsnemo_mesh():
+    """Test rejection of non-PhysicsNeMo mesh objects."""
+    with pytest.raises(ValueError, match="Object is not a physicsnemo.mesh.Mesh"):
         validate_mesh("not a mesh")
 
-    with pytest.raises(ValueError, match="Object is not a Trimesh"):
+    with pytest.raises(ValueError, match="Object is not a physicsnemo.mesh.Mesh"):
         validate_mesh(None)
 
 
@@ -79,9 +85,9 @@ def test_validate_mesh_not_trimesh():
 def test_validate_mesh_min_verts_parametric(min_verts):
     """Test various minimum vertex thresholds."""
     # Create mesh with known vertex count
-    mesh = trimesh.creation.icosphere(subdivisions=2)  # ~42 vertices
+    mesh = from_pyvista(pv.Sphere())
 
-    if mesh.vertices.shape[0] >= min_verts:
+    if mesh.n_points >= min_verts:
         validate_mesh(mesh, min_verts=min_verts)
     else:
         with pytest.raises(ValueError, match="Too few vertices"):

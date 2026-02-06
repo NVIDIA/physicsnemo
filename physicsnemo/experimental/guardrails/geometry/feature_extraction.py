@@ -139,12 +139,6 @@ def extract_features(mesh: PhysicsNeMoMesh, return_tensor: bool = False, skip_va
     >>> features = extract_features(mesh)
     >>> print(f"Feature vector shape: {features.shape}")
     Feature vector shape: (22,)
-    
-    >>> # Get features as tensor on GPU
-    >>> mesh_gpu = mesh.to("cuda")
-    >>> features_gpu = extract_features(mesh_gpu, return_tensor=True)
-    >>> print(f"Feature device: {features_gpu.device}")
-    cuda:0
 
     Notes
     -----

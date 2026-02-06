@@ -15,142 +15,95 @@
 # limitations under the License.
 
 """
-Geometry Guardrail Example
+Geometry Guardrail Example with DrivAerML and AhmedML Datasets
 
-This example demonstrates how to use geometry guardrails for validating
-CAD/STL files in a production workflow.
+This example demonstrates geometry guardrails using real-world automotive datasets:
+- DrivAerML: 500 parametrically morphed DrivAer vehicle variants
+- AhmedML: 500 Ahmed car body variations
+
+The example runs three experiments:
+1. GMM: Train on DrivAerML, test on DrivAerML validation
+2. PCE: Train on DrivAerML, test on DrivAerML validation
+3. Cross-dataset: Train on DrivAerML, test on AhmedML
 """
 
 import multiprocessing as mp
 from pathlib import Path
 
 from physicsnemo.experimental.guardrails import GeometryGuardrail
-from physicsnemo.experimental.guardrails.geometry import is_fast_reader_available
 
 
-def check_optimizations():
-    """Check and report available performance optimizations."""
-    # Check for GPU
-    try:
-        import torch
-
-        has_gpu = torch.cuda.is_available()
-    except ImportError:
-        has_gpu = False
-
-    # Check for fast reader
-    has_fast_reader = is_fast_reader_available()
-
-    return {
-        "gpu": has_gpu,
-        "fast_reader": has_fast_reader,
-        "device": "cuda" if has_gpu else "cpu",
-    }
+def prepare_datasets(
+    train_dir: Path,
+    val_dir: Path,
+    ahmedml_dir: Path,
+) -> None:
+    """Verify that datasets are properly downloaded and organized."""
+    if not train_dir.exists() or not list(train_dir.glob("drivaer_*.stl")):
+        raise FileNotFoundError(f"DrivAerML training directory not found: {train_dir}")
+    if not val_dir.exists() or not list(val_dir.glob("drivaer_*.stl")):
+        raise FileNotFoundError(f"DrivAerML validation directory not found: {val_dir}")
+    if not ahmedml_dir.exists() or not list(ahmedml_dir.glob("ahmed_*.stl")):
+        raise FileNotFoundError(f"AhmedML directory not found: {ahmedml_dir}")
 
 
-def train_guardrail(train_dir: Path, model_path: Path, device: str = "cpu"):
-    """
-    Train a geometry guardrail from a directory of STL files.
-
-    Parameters
-    ----------
-    train_dir : Path
-        Directory containing training STL files (known-good geometries).
-    model_path : Path
-        Path where the trained model will be saved.
-    device : str, optional
-        Device for computation ('cpu' or 'cuda'). Default is 'cpu'.
-    """
-    print(f"\n{'=' * 60}")
-    print("Training Geometry Guardrail")
-    print(f"{'=' * 60}")
-    print(f"Training data: {train_dir}")
-    print(f"Device: {device}")
-    print(f"Workers: {mp.cpu_count() - 1}")
+def train_and_evaluate(
+    train_dir: Path,
+    test_dir: Path,
+    method: str,
+    method_name: str,
+    model_path: Path,
+    device: str,
+    gmm_components: int = 1,
+    pce_components: int | None = None,
+) -> dict:
+    """Train a guardrail and evaluate on test data."""
+    print(f"\n{method_name} ({method.upper()})")
 
     # Create guardrail
-    guardrail = GeometryGuardrail(
-        n_components=1,  # Single Gaussian (unimodal assumption)
-        warn_pct=99.0,  # Flag top 1% as warnings
-        reject_pct=99.9,  # Flag top 0.1% as rejections
-        device=device,
-        random_state=42,
-    )
+    if method == "gmm":
+        guardrail = GeometryGuardrail(
+            method="gmm",
+            gmm_components=gmm_components,
+            warn_pct=99.0,
+            reject_pct=99.9,
+            device=device,
+            random_state=42,
+        )
+    else:  # pce
+        guardrail = GeometryGuardrail(
+            method="pce",
+            pce_components=pce_components,
+            warn_pct=99.0,
+            reject_pct=99.9,
+            device=device,
+            random_state=42,
+        )
 
-    # Train from directory
-    guardrail.fit_from_dir(
-        train_dir,
-        n_workers=mp.cpu_count() - 1,
-        chunksize=8,
-    )
-
-    # Save model
+    # Train
+    guardrail.fit_from_dir(train_dir, n_workers=mp.cpu_count() - 1, chunksize=8)
     guardrail.save(model_path)
-    print(f"\n✓ Model trained and saved to {model_path}")
 
-
-def validate_geometries(test_dir: Path, model_path: Path, device: str = "cpu"):
-    """
-    Validate geometries using a trained guardrail.
-
-    Parameters
-    ----------
-    test_dir : Path
-        Directory containing STL files to validate.
-    model_path : Path
-        Path to the trained guardrail model.
-    device : str, optional
-        Device for computation ('cpu' or 'cuda'). Default is 'cpu'.
-
-    Returns
-    -------
-    dict
-        Validation statistics and results.
-    """
-    print(f"\n{'=' * 60}")
-    print("Validating Geometries")
-    print(f"{'=' * 60}")
-    print(f"Test data: {test_dir}")
-    print(f"Model: {model_path}")
-    print(f"Device: {device}")
-
-    # Load guardrail
-    guardrail = GeometryGuardrail.load(model_path, device=device)
-
-    # Validate all geometries
+    # Evaluate
     results = guardrail.query_from_dir(
-        test_dir,
-        n_workers=mp.cpu_count() - 1,
-        chunksize=8,
+        test_dir, n_workers=mp.cpu_count() - 1, chunksize=8
     )
 
     # Compute statistics
     ok_count = sum(1 for r in results if r["status"] == "OK")
     warn_count = sum(1 for r in results if r["status"] == "WARN")
     reject_count = sum(1 for r in results if r["status"] == "REJECT")
+    total = len(results)
 
-    # Print summary
-    print(f"\n{'=' * 60}")
-    print(f"Results: {len(results)} geometries validated")
-    print(f"  OK:     {ok_count:3d} ({100 * ok_count / len(results):.1f}%)")
-    print(f"  WARN:   {warn_count:3d} ({100 * warn_count / len(results):.1f}%)")
-    print(f"  REJECT: {reject_count:3d} ({100 * reject_count / len(results):.1f}%)")
-    print(f"{'=' * 60}\n")
-
-    # Show detailed results
-    for r in sorted(results, key=lambda x: x["percentile"], reverse=True):
-        status_icon = {"OK": "✓", "WARN": "⚠", "REJECT": "✗"}[r["status"]]
-        print(
-            f"{status_icon} {r['name']:40s} {r['percentile']:6.2f}% [{r['status']:6s}]"
-        )
-
-    # Highlight rejected geometries
-    if reject_count > 0:
-        print(f"\n⚠ WARNING: {reject_count} geometries flagged for manual review")
-        print("These may be corrupted, out-of-spec, or highly anomalous.")
+    print(
+        f"  OK: {ok_count} ({100 * ok_count / total:.1f}%) | "
+        f"WARN: {warn_count} ({100 * warn_count / total:.1f}%) | "
+        f"REJECT: {reject_count} ({100 * reject_count / total:.1f}%)"
+    )
 
     return {
-        "total": len(results),
+        "method": method_name,
+        "total": total,
         "ok": ok_count,
         "warn": warn_count,
         "reject": reject_count,
@@ -160,50 +113,47 @@ def validate_geometries(test_dir: Path, model_path: Path, device: str = "cpu"):
 
 def main():
     """Main execution function."""
-    # Example paths (modify these for your data)
-    train_dir = Path("data/train_geometries")
-    test_dir = Path("data/test_geometries")
-    model_path = Path("geometry_guardrail.npz")
+    data_dir = Path("data")
+    train_dir = data_dir / "drivaerml_train"
+    val_dir = data_dir / "drivaerml_val"
+    ahmedml_dir = data_dir / "ahmedml"
+    device = "cuda"
 
-    # Check available optimizations
-    opts = check_optimizations()
-    print(f"\n{'=' * 60}")
-    print("Performance Optimizations")
-    print(f"{'=' * 60}")
-    print(f"GPU Available: {'✓' if opts['gpu'] else '✗'}")
-    print(f"Fast STL Reader: {'✓' if opts['fast_reader'] else '✗'}")
-    print(f"Selected Device: {opts['device']}")
+    prepare_datasets(train_dir, val_dir, ahmedml_dir)
 
-    # Check if model exists, otherwise train
-    if model_path.exists():
-        print(f"\n✓ Using existing model: {model_path}")
-    else:
-        print(f"\n✗ No model found at {model_path}")
-        if not train_dir.exists():
-            print(f"\nERROR: Training directory not found: {train_dir}")
-            print("\nPlease create the following directories:")
-            print(f"  - {train_dir}  (known-good geometries for training)")
-            print(f"  - {test_dir}   (geometries to validate)")
-            return
+    # Experiment 1: GMM - DrivAerML train → DrivAerML validation
+    stats1 = train_and_evaluate(
+        train_dir=train_dir,
+        test_dir=val_dir,
+        method="gmm",
+        method_name="GMM - DrivAerML Train → DrivAerML Validation",
+        model_path=Path("drivaerml_gmm.npz"),
+        device=device,
+        gmm_components=1,
+    )
 
-        print("\nTraining new model...")
-        train_guardrail(train_dir, model_path, device=opts["device"])
+    # Experiment 2: PCE - DrivAerML train → DrivAerML validation
+    stats2 = train_and_evaluate(
+        train_dir=train_dir,
+        test_dir=val_dir,
+        method="pce",
+        method_name="PCE - DrivAerML Train → DrivAerML Validation",
+        model_path=Path("drivaerml_pce.npz"),
+        device=device,
+    )
 
-    # Validate test geometries
-    if not test_dir.exists():
-        print(f"\nERROR: Test directory not found: {test_dir}")
-        print(f"Please create {test_dir} and add STL files to validate.")
-        return
+    # Experiment 3: GMM - DrivAerML train → AhmedML (cross-dataset)
+    stats3 = train_and_evaluate(
+        train_dir=train_dir,
+        test_dir=ahmedml_dir,
+        method="gmm",
+        method_name="GMM - DrivAerML Train → AhmedML (Cross-Dataset)",
+        model_path=Path("drivaerml_gmm.npz"),
+        device=device,
+        gmm_components=1,
+    )
 
-    stats = validate_geometries(test_dir, model_path, device=opts["device"])
-
-    # Exit with appropriate status
-    if stats["reject"] > 0:
-        print("\n⚠ Some geometries were rejected. Review flagged files.")
-        exit(1)
-    else:
-        print("\n✓ All geometries passed validation.")
-        exit(0)
+    print("\n✓ All experiments completed")
 
 
 if __name__ == "__main__":

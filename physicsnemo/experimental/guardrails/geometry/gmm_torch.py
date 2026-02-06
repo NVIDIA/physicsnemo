@@ -55,44 +55,6 @@ class TorchGMM(nn.Module):
         Component means of shape :math:`(K, D)` where :math:`D` is feature dim.
     covariances_ : torch.Tensor
         Covariance matrices of shape :math:`(K, D, D)`.
-
-    Examples
-    --------
-    >>> import torch
-    >>> from physicsnemo.experimental.guardrails.geometry.gmm_torch import TorchGMM
-    >>> 
-    >>> # Create synthetic data
-    >>> X = torch.randn(1000, 22, device='cuda')
-    >>> 
-    >>> # Fit GMM
-    >>> gmm = TorchGMM(n_components=2, device='cuda')
-    >>> gmm.fit(X)
-    >>> 
-    >>> # Score new samples
-    >>> X_test = torch.randn(10, 22, device='cuda')
-    >>> log_probs = gmm.score_samples(X_test)
-    >>> print(log_probs.shape)
-    torch.Size([10])
-
-    Notes
-    -----
-    **Performance Considerations**:
-
-    - For small datasets (N < 100), CPU may be faster due to transfer overhead
-    - Batch scoring is highly efficient on GPU for inference
-
-    **Algorithm**:
-
-    The EM algorithm alternates between:
-
-    1. **E-step**: Compute posterior probabilities :math:`\gamma_{nk}`
-    2. **M-step**: Update parameters :math:`(\pi_k, \mu_k, \Sigma_k)`
-
-    Convergence is reached when the log-likelihood improvement falls below ``tol``.
-
-    See Also
-    --------
-    :class:`GeometryDensityModel` : High-level density model interface.
     """
 
     def __init__(
@@ -411,14 +373,14 @@ class TorchGMM(nn.Module):
         # Return negative log-likelihood (higher = more anomalous)
         return -self.score_samples(X)
 
-    def to_sklearn_dict(self) -> dict:
+    def get_state(self) -> dict:
         """
-        Convert parameters to scikit-learn compatible dictionary.
+        Get model state for serialization.
 
         Returns
         -------
         dict
-            Dictionary containing GMM parameters compatible with scikit-learn.
+            Dictionary containing GMM parameters for serialization.
         """
         return {
             "weights_": self.weights_.cpu().numpy(),
@@ -428,53 +390,22 @@ class TorchGMM(nn.Module):
             "n_iter_": self.n_iter_,
         }
 
-    @classmethod
-    def from_sklearn(cls, sklearn_gmm, device: str | torch.device | None = None):
+    def set_state(self, state: dict, device: str | torch.device) -> None:
         """
-        Create TorchGMM from fitted scikit-learn GaussianMixture.
+        Restore model state from serialized data.
 
         Parameters
         ----------
-        sklearn_gmm : sklearn.mixture.GaussianMixture
-            Fitted scikit-learn GMM. Must have ``covariance_type='full'``.
-        device : str or torch.device, optional
-            Device to place parameters on.
-
-        Returns
-        -------
-        TorchGMM
-            TorchGMM with parameters copied from sklearn model.
-        
-        Raises
-        ------
-        ValueError
-            If sklearn_gmm does not use full covariance matrices.
+        state : dict
+            State dictionary as returned by :meth:`get_state`.
+        device : str or torch.device
+            Device to load the model on.
         """
-        if sklearn_gmm.covariance_type != "full":
-            raise ValueError(
-                f"TorchGMM only supports full covariance matrices, "
-                f"but sklearn GMM has covariance_type='{sklearn_gmm.covariance_type}'"
-            )
-        
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            device = torch.device(device)
-        
-        # Create instance
-        model = cls(
-            n_components=sklearn_gmm.n_components,
-            device=device,
-        )
-        
-        # Copy parameters
-        model.weights_ = torch.from_numpy(sklearn_gmm.weights_).float().to(device)
-        model.means_ = torch.from_numpy(sklearn_gmm.means_).float().to(device)
-        model.covariances_ = torch.from_numpy(sklearn_gmm.covariances_).float().to(device)
-        model.converged_ = sklearn_gmm.converged_
-        model.n_iter_ = sklearn_gmm.n_iter_
+        self.weights_ = torch.from_numpy(state["weights_"]).float().to(device)
+        self.means_ = torch.from_numpy(state["means_"]).float().to(device)
+        self.covariances_ = torch.from_numpy(state["covariances_"]).float().to(device)
+        self.converged_ = state["converged_"]
+        self.n_iter_ = state["n_iter_"]
         
         # Compute precision Cholesky
-        model.precisions_cholesky_ = model._compute_precision_cholesky()
-        
-        return model
+        self.precisions_cholesky_ = self._compute_precision_cholesky()

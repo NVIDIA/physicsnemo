@@ -500,9 +500,6 @@ class PCEDensityModel:
         """
         return {
             "n_components": self.n_components,
-            "poly_degree": self.poly_degree,
-            "interaction_only": self.interaction_only,
-            "random_state": self.random_state,
             "hermite_degree_": self.hermite_degree_,
             "n_pca_components_": self.n_pca_components_,
             "poly_mean_": self.poly_mean_.cpu().numpy() if self.poly_mean_ is not None else None,
@@ -529,9 +526,6 @@ class PCEDensityModel:
             device and using it on another device.
         """
         self.n_components = state["n_components"]
-        self.poly_degree = state["poly_degree"]
-        self.interaction_only = state["interaction_only"]
-        self.random_state = state["random_state"]
         
         # Set device (runtime parameter, not part of model state)
         if isinstance(device, str):

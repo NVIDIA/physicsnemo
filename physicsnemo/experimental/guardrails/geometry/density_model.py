@@ -14,18 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-r"""
-Density estimation for geometry guardrails.
-
-This module implements multiple density estimation methods for detecting
-out-of-distribution geometric configurations:
-
-- **Gaussian Mixture Models (GMM)**: Flexible, supports multi-modal distributions
-- **Polynomial Chaos Expansion (PCE)**: Physics-informed, better for high-dimensional correlated data
-
-Both methods use PyTorch and support CPU and GPU acceleration.
-"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -38,8 +26,8 @@ class GeometryDensityModel:
     This class provides a unified interface for density estimation supporting
     multiple methods:
 
-    - **GMM (Gaussian Mixture Model)**: Flexible, supports multi-modal distributions
-    - **PCE (Polynomial Chaos Expansion)**: Physics-informed, better for correlated features
+    - GMM (Gaussian Mixture Model)
+    - PCE (Polynomial Chaos Expansion)
 
     Parameters
     ----------
@@ -47,14 +35,11 @@ class GeometryDensityModel:
         Density estimation method. Options:
         - ``"gmm"``: Gaussian Mixture Model (default)
         - ``"pce"``: Polynomial Chaos Expansion
-        Default is ``"gmm"``.
-    n_components : int, optional
-        For GMM: Number of Gaussian components. For PCE: Number of PCA components
-        (None = auto-select). Default is 1.
-    covariance_type : str, optional
-        For GMM only: Covariance type. Currently only ``"full"`` is supported.
-        Default is ``"full"``. This parameter is stored for serialization but
-        TorchGMM always uses full covariance matrices.
+    gmm_components : int, optional
+        For GMM only: Number of Gaussian mixture components. Default is 1.
+    pce_components : int or None, optional
+        For PCE only: Number of PCA components (None = auto-select to 95% variance).
+        Default is None.
     poly_degree : int, optional
         For PCE only: Polynomial degree for expansion. Default is 2.
     interaction_only : bool, optional
@@ -79,65 +64,25 @@ class GeometryDensityModel:
         Device being used for computation.
     method : str
         Density estimation method: ``"gmm"`` or ``"pce"``.
-
-    Examples
-    --------
-    GMM on CPU (default):
-
-    >>> import numpy as np
-    >>> from physicsnemo.experimental.guardrails.geometry import GeometryDensityModel
-    >>> 
-    >>> # Training data
-    >>> rng = np.random.RandomState(42)
-    >>> X_train = rng.randn(100, 22)
-    >>> 
-    >>> # Fit GMM model
-    >>> model = GeometryDensityModel(method="gmm", n_components=1)
-    >>> model.fit(X_train)
-    >>> 
-    >>> # Score new samples
-    >>> X_test = rng.randn(10, 22)
-    >>> scores = model.score(X_test)
-    >>> percentiles = model.percentiles(scores)
-
-    PCE for physics-informed detection:
-
-    >>> # Fit PCE model (better for correlated features)
-    >>> model_pce = GeometryDensityModel(
-    ...     method="pce",
-    ...     n_components=10,  # PCA components
-    ...     poly_degree=2,     # Quadratic expansion
-    ... )
-    >>> model_pce.fit(X_train)
-    >>> scores_pce = model_pce.score(X_test)
-
-    GPU-accelerated GMM:
-
-    >>> # Requires PyTorch
-    >>> model_gpu = GeometryDensityModel(method="gmm", n_components=2, device="cuda")
-    >>> model_gpu.fit(X_train)
-    >>> scores_gpu = model_gpu.score(X_test)
-
    
     See Also
     --------
     :class:`GeometryGuardrail` : Main API that uses this density model.
-    :class:`PCEDensityModel` : Standalone PCE implementation.
     """
 
     def __init__(
         self,
         method: str = "gmm",
-        n_components: int = 1,
-        covariance_type: str = "full",
+        gmm_components: int = 1,
+        pce_components: int | None = None,
         poly_degree: int = 2,
         interaction_only: bool = False,
         random_state: int | None = 0,
         device: str = "cpu",
     ):
         self.method = method.lower()
-        self.n_components = n_components
-        self.covariance_type = covariance_type
+        self.gmm_components = gmm_components
+        self.pce_components = pce_components
         self.poly_degree = poly_degree
         self.interaction_only = interaction_only
         self.random_state = random_state
@@ -164,7 +109,7 @@ class GeometryDensityModel:
         from .gmm_torch import TorchGMM
 
         self.model = TorchGMM(
-            n_components=self.n_components,
+            n_components=self.gmm_components,
             device=self.device,
             random_state=self.random_state,
         )
@@ -174,7 +119,7 @@ class GeometryDensityModel:
         from .density_pce import PCEDensityModel
 
         self.model = PCEDensityModel(
-            n_components=self.n_components,
+            n_components=self.pce_components,
             poly_degree=self.poly_degree,
             interaction_only=self.interaction_only,
             random_state=self.random_state,
@@ -195,33 +140,6 @@ class GeometryDensityModel:
             Training feature array of shape :math:`(N, D)` where :math:`N` is
             the number of samples and :math:`D` is the feature dimensionality.
             If numpy array, will be converted to torch tensor and moved to device.
-
-        Examples
-        --------
-        >>> import numpy as np
-        >>> from physicsnemo.experimental.guardrails.geometry import GeometryDensityModel
-        >>> 
-        >>> rng = np.random.RandomState(42)
-        >>> X_train = rng.randn(100, 22)
-        >>> 
-        >>> # GMM on CPU
-        >>> model = GeometryDensityModel(method="gmm", n_components=2, device="cpu")
-        >>> model.fit(X_train)
-        >>> print(f"Method: {model.method}")
-        Method: gmm
-        >>> 
-        >>> # GMM on GPU
-        >>> model_gpu = GeometryDensityModel(method="gmm", n_components=2, device="cuda")
-        >>> model_gpu.fit(X_train)
-        >>> 
-        >>> model_pce = GeometryDensityModel(method="pce", n_components=10, device="cuda")
-        >>> model_pce.fit(X_train)
-
-        Notes
-        -----
-        The reference scores are essential for converting raw anomaly scores to
-        empirical percentiles. They represent the expected distribution of scores
-        for in-distribution samples.
         """
         # Convert to torch tensor if needed and move to device
         if isinstance(X, np.ndarray):
@@ -253,29 +171,6 @@ class GeometryDensityModel:
         torch.Tensor
             Anomaly scores of shape :math:`(N,)`. Higher scores indicate
             more anomalous samples. Returns tensor on the same device as input (GPU-first resident).
-
-        Examples
-        --------
-        >>> import numpy as np
-        >>> from physicsnemo.experimental.guardrails.geometry import GeometryDensityModel
-        >>> 
-        >>> rng = np.random.RandomState(42)
-        >>> X_train = rng.randn(100, 22)
-        >>> X_test = rng.randn(10, 22)
-        >>> 
-        >>> model = GeometryDensityModel(method="gmm")
-        >>> model.fit(X_train)
-        >>> scores = model.score(X_test)
-        >>> print(f"Score range: [{scores.min():.2f}, {scores.max():.2f}]")
-
-        Notes
-        -----
-        The anomaly score depends on the method:
-
-        - **GMM**: Negative log-likelihood :math:`-\log p(\mathbf{x} | \theta)`
-        - **PCE**: Mahalanobis distance in Hermite polynomial space
-
-        Higher scores always indicate more anomalous samples.
         """
         # Convert to torch tensor if needed and move to device
         if isinstance(X, np.ndarray):
@@ -314,32 +209,6 @@ class GeometryDensityModel:
         RuntimeError
             If the density model has not been fitted yet (i.e., :attr:`ref_scores`
             is ``None``).
-
-        Examples
-        --------
-        >>> import numpy as np
-        >>> from physicsnemo.experimental.guardrails.geometry import GeometryDensityModel
-        >>> 
-        >>> rng = np.random.RandomState(42)
-        >>> X_train = rng.randn(100, 22)
-        >>> X_test = rng.randn(10, 22)
-        >>> 
-        >>> model = GeometryDensityModel(method="gmm")
-        >>> model.fit(X_train)
-        >>> scores = model.score(X_test)
-        >>> pcts = model.percentiles(scores)
-        >>> print(f"Percentiles: {pcts}")
-
-        Notes
-        -----
-        The percentile for score :math:`s` is computed as:
-
-        .. math::
-
-            \text{percentile}(s) = 100 \times \frac{1}{N} \sum_{i=1}^{N} \mathbb{1}[s_i^{\text{ref}} \leq s]
-
-        where :math:`\{s_1^{\text{ref}}, \ldots, s_N^{\text{ref}}\}` are the
-        reference scores from training data.
         """
         if self.ref_scores is None:
             raise RuntimeError(
@@ -380,23 +249,16 @@ class GeometryDensityModel:
         """
         state = {
             "method": self.method,
-            "n_components": self.n_components,
-            "covariance_type": self.covariance_type,
+            "gmm_components": self.gmm_components,
+            "pce_components": self.pce_components,
             "poly_degree": self.poly_degree,
             "interaction_only": self.interaction_only,
             "random_state": self.random_state,
             "ref_scores": self.ref_scores.cpu().numpy(),
         }
 
-        # Serialize model-specific parameters based on method
-        if self.method == "gmm":
-            # For GMM (TorchGMM), convert to sklearn-compatible dict
-            state["model_params"] = self.model.to_sklearn_dict()
-        elif self.method == "pce":
-            # For PCE, use its get_state method
-            state["model_params"] = self.model.get_state()
-        else:
-            raise RuntimeError(f"Unknown method: {self.method}")
+        # Serialize model-specific parameters
+        state["model_params"] = self.model.get_state()
 
         return state
 
@@ -413,8 +275,8 @@ class GeometryDensityModel:
         """
         # Restore basic attributes
         self.method = state["method"]
-        self.n_components = state["n_components"]
-        self.covariance_type = state["covariance_type"]
+        self.gmm_components = state["gmm_components"]
+        self.pce_components = state.get("pce_components", None)
         self.poly_degree = state["poly_degree"]
         self.interaction_only = state["interaction_only"]
         self.random_state = state["random_state"]
@@ -434,24 +296,16 @@ class GeometryDensityModel:
             from .gmm_torch import TorchGMM
             
             self.model = TorchGMM(
-                n_components=self.n_components,
+                n_components=self.gmm_components,
                 device=self.device,
                 random_state=self.random_state,
             )
-            # Restore fitted parameters
-            params = state["model_params"]
-            self.model.weights_ = torch.from_numpy(params["weights_"]).float().to(self.device)
-            self.model.means_ = torch.from_numpy(params["means_"]).float().to(self.device)
-            self.model.covariances_ = torch.from_numpy(params["covariances_"]).float().to(self.device)
-            self.model.converged_ = params["converged_"]
-            self.model.n_iter_ = params["n_iter_"]
-            # Recompute precisions_cholesky_
-            self.model.precisions_cholesky_ = self.model._compute_precision_cholesky()
+            self.model.set_state(state["model_params"], device=self.device)
         elif self.method == "pce":
             from .density_pce import PCEDensityModel
             
             self.model = PCEDensityModel(
-                n_components=self.n_components,
+                n_components=self.pce_components,
                 poly_degree=self.poly_degree,
                 interaction_only=self.interaction_only,
                 random_state=self.random_state,

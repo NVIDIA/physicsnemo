@@ -21,15 +21,14 @@ from pathlib import Path
 
 import numpy as np
 
-from physicsnemo.core.version_check import check_version_spec
+from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.io.io_pyvista import from_pyvista
 
 from .feature_extraction import extract_features
 from .mesh_validation import validate_mesh
 
-# Check for required dependencies
-check_version_spec("pyvista", "0.40.0", hard_fail=True)
 
+@require_version_spec("pyvista")
 def _process_stl(path_str: str) -> tuple[str, np.ndarray | None, str | None]:
     r"""
     Load and extract features from a single STL file.
@@ -103,6 +102,7 @@ def _process_stl(path_str: str) -> tuple[str, np.ndarray | None, str | None]:
         return path.name, None, error_msg
 
 
+@require_version_spec("pyvista")
 def load_features_from_dir(
     stl_dir: Path,
     n_workers: int | None = None,

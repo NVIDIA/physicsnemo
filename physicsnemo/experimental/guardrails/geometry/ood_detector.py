@@ -57,18 +57,20 @@ class GeometryGuardrail:
         - ``"gmm"``: Gaussian Mixture Model
         - ``"pce"``: Polynomial Chaos Expansion
         Default is ``"gmm"``.
-    n_components : int, optional
-        For GMM: Number of Gaussian components (1=unimodal, >1=multimodal).
-        For PCE: Number of PCA components (None=auto-select to 95% variance).
+    gmm_components : int, optional
+        For GMM only: Number of Gaussian mixture components (1=unimodal, >1=multimodal).
         Default is 1.
+    pce_components : int or None, optional
+        For PCE only: Number of PCA components (None=auto-select to 95% variance).
+        Default is None.
     warn_pct : float, optional
         Percentile threshold for issuing warnings. Geometries with anomaly scores
         above this percentile will be flagged as WARN. Must be in range [0, 100].
-        Default is 95.0.
+        Default is 99.0.
     reject_pct : float, optional
         Percentile threshold for rejection. Geometries with anomaly scores above
         this percentile will be flagged as REJECT. Must be in range [0, 100] and
-        should be >= ``warn_pct``. Default is 99.0.
+        should be >= ``warn_pct``. Default is 99.9.
     poly_degree : int, optional
         For PCE only: Polynomial degree for expansion (1=linear, 2=quadratic, etc.).
         Default is 2.
@@ -79,12 +81,13 @@ class GeometryGuardrail:
         Random seed for reproducible initialization. Use ``None`` for
         non-deterministic behavior. Default is 0.
     device : str or torch.device, optional
-        Device to use for all computations (mesh operations, feature extraction,
-        and density models). Options:
+        Device to use for density model computations and feature tensors. Options:
         - ``"cpu"``: Use CPU (default)
         - ``"cuda"``: Use GPU
         - ``"cuda:0"``, ``"cuda:1"``, etc.: Specific GPU device
         Default is ``"cpu"``.
+        Mesh operations are always performed on CPU in worker processes, and only the resulting
+        feature tensors are moved to the specified device.
 
     Attributes
     ----------
@@ -114,7 +117,7 @@ class GeometryGuardrail:
     >>> 
     >>> # Create and fit guardrail from training meshes (CPU)
     >>> train_meshes = [from_pyvista(pv.Cube()) for _ in range(100)]
-    >>> guardrail = GeometryGuardrail(n_components=1, device="cpu")
+    >>> guardrail = GeometryGuardrail(gmm_components=1, device="cpu")
     >>> guardrail.fit(train_meshes)
     >>> 
     >>> # Query new geometries
@@ -122,28 +125,6 @@ class GeometryGuardrail:
     >>> results = guardrail.query(test_meshes)
     >>> for res in results:
     ...     print(f"Status: {res['status']}, Percentile: {res['percentile']:.1f}")
-
-    GPU-accelerated:
-
-    >>> # Use GPU for faster inference on large batches
-    >>> guardrail_gpu = GeometryGuardrail(
-    ...     n_components=2,
-    ...     warn_pct=95.0,
-    ...     reject_pct=99.0,
-    ...     device="cuda" 
-    ... )
-    >>> guardrail_gpu.fit(train_meshes)
-    >>> 
-    >>> # Fast batch inference on GPU
-    >>> results_gpu = guardrail_gpu.query(test_meshes)
-
-    Saving and loading:
-
-    >>> # Save fitted guardrail (device info is NOT saved, specify on load)
-    >>> guardrail.save(Path("guardrail.npz"))
-    >>> 
-    >>> # Load and specify device
-    >>> loaded = GeometryGuardrail.load(Path("guardrail.npz"), device="cuda")
 
     Notes
     -----
@@ -182,20 +163,6 @@ class GeometryGuardrail:
     - **WARN**: :math:`\text{warn\_pct} \leq p < \text{reject\_pct}` (unusual geometry)
     - **REJECT**: :math:`p \geq \text{reject\_pct}` (highly anomalous geometry)
 
-    **GPU Acceleration**:
-
-    GPU acceleration is most beneficial for large datasetscand batch inference. 
-    For small datasets and batches, CPU may be faster due to transfer overhead.
-
-    .. important::
-
-        This guardrail requires the optional dependencies ``pyvista`` and
-        ``torch``
-
-        .. code-block:: bash
-
-            pip install pyvista
-
     See Also
     --------
     :class:`GeometryDensityModel` : Underlying density estimation model.
@@ -206,9 +173,10 @@ class GeometryGuardrail:
     def __init__(
         self,
         method: str = "gmm",
-        n_components: int = 1,
-        warn_pct: float = 95.0,
-        reject_pct: float = 99.0,
+        gmm_components: int = 1,
+        pce_components: int | None = None,
+        warn_pct: float = 99.0,
+        reject_pct: float = 99.9,
         poly_degree: int = 2,
         interaction_only: bool = False,
         random_state: int | None = 0,
@@ -235,18 +203,20 @@ class GeometryGuardrail:
         
         # Store method parameters for serialization
         self.method = method
-        self.n_components = n_components
+        self.gmm_components = gmm_components
+        self.pce_components = pce_components
         self.poly_degree = poly_degree
         self.interaction_only = interaction_only
         self.random_state = random_state
 
         self.density = GeometryDensityModel(
             method=method,
-            n_components=n_components,
+            gmm_components=gmm_components,
+            pce_components=pce_components,
             poly_degree=poly_degree,
             interaction_only=interaction_only,
             random_state=random_state,
-            device=self.device,  # Use parsed device
+            device=self.device,
         )
 
         self.feature_names = FEATURE_NAMES
@@ -268,8 +238,7 @@ class GeometryGuardrail:
         ----------
         meshes : list[physicsnemo.mesh.Mesh]
             List of training meshes representing the in-distribution geometry space.
-            All meshes must pass validation checks. Meshes will be moved to the
-            device specified in the guardrail constructor.
+            All meshes must pass validation checks.
 
         Raises
         ------
@@ -277,17 +246,6 @@ class GeometryGuardrail:
             If any mesh fails validation (see :func:`validate_mesh`).
         ValueError
             If feature extraction fails for any mesh.
-
-        Notes
-        -----
-        The fitting process involves:
-
-        1. Extracting features from each mesh (see :func:`extract_features`)
-        2. Stacking features into a matrix :math:`\mathbf{X} \in \mathbb{R}^{N \times D}`
-        3. Validating feature schema (see :class:`FeatureSchema`)
-        4. Fitting the GMM and computing reference scores
-
-        After fitting, the guardrail is ready to query new geometries.
         """
         # Validate input
         if not meshes:
@@ -579,7 +537,8 @@ class GeometryGuardrail:
             feature_version=self.feature_version,
             feature_hash=self.feature_hash,
             method=self.method,
-            n_components=self.n_components,
+            gmm_components=self.gmm_components,
+            pce_components=self.pce_components,
             poly_degree=self.poly_degree,
             interaction_only=self.interaction_only,
             random_state=self.random_state,
@@ -670,19 +629,17 @@ class GeometryGuardrail:
         # Reconstruct guardrail
         # Extract all parameters
         method = str(data.get("method", "gmm"))
-        n_components_raw = data.get("n_components", 1)
-        # Handle None values (numpy may store as 0-d array or special object)
-        try:
-            # Try to extract scalar from numpy array
-            if hasattr(n_components_raw, 'item'):
-                n_components_raw = n_components_raw.item()
-        except (ValueError, AttributeError):
-            pass
-        # Now check if it's None or convert to int
-        if n_components_raw is None:
-            n_components = None
+        gmm_components = int(data.get("gmm_components", 1))
+        pce_components_raw = data.get("pce_components", None)
+        if pce_components_raw is not None:
+            try:
+                if hasattr(pce_components_raw, 'item'):
+                    pce_components_raw = pce_components_raw.item()
+            except (ValueError, AttributeError):
+                pass
+            pce_components = None if pce_components_raw is None else int(pce_components_raw)
         else:
-            n_components = int(n_components_raw)
+            pce_components = None
         poly_degree = int(data.get("poly_degree", 2))
         interaction_only = bool(data.get("interaction_only", False))
         random_state = data.get("random_state", 0)
@@ -691,7 +648,8 @@ class GeometryGuardrail:
         
         obj = cls(
             method=method,
-            n_components=n_components,
+            gmm_components=gmm_components,
+            pce_components=pce_components,
             warn_pct=float(data["warn_pct"]),
             reject_pct=float(data["reject_pct"]),
             poly_degree=poly_degree,

@@ -41,7 +41,9 @@ class TestPCEDensityModel:
         model.fit(X_train)
 
         # Verify model is fitted
-        assert model.pca_ is not None
+        assert model.pca_components_ is not None
+        assert model.pca_mean_ is not None
+        assert model.pca_std_ is not None
         assert model.poly_mean_ is not None
         assert model.poly_cov_ is not None
         assert model.training_scores_ is not None
@@ -51,7 +53,9 @@ class TestPCEDensityModel:
         scores = model.score(X_test)
 
         assert scores.shape == (10,)
-        assert np.all(scores >= 0)  # Mahalanobis distance is non-negative
+        # Convert to numpy for assertion
+        scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
+        assert np.all(scores_np >= 0)  # Mahalanobis distance is non-negative
 
     def test_percentiles(self):
         """Test percentile computation."""
@@ -79,7 +83,7 @@ class TestPCEDensityModel:
         model.fit(X_train)
 
         # Should have selected fewer than 10 components
-        assert model.pca_.n_components_ <= 10
+        assert model.n_pca_components_ <= 10
 
     def test_interaction_only(self):
         """Test polynomial expansion with interaction_only."""
@@ -104,23 +108,23 @@ class TestPCEDensityModel:
         assert scores.shape == (10,)
         assert scores_full.shape == (10,)
 
-    def test_get_set_params(self):
-        """Test parameter serialization."""
+    def test_get_set_state(self):
+        """Test state serialization."""
         rng = np.random.RandomState(42)
         X_train = rng.randn(100, 22)
 
         model = PCEDensityModel(n_components=10, poly_degree=2)
         model.fit(X_train)
 
-        # Get parameters
-        params = model.get_params()
-        assert "n_components" in params
-        assert "poly_degree" in params
-        assert "pca_" in params
+        # Get state
+        state = model.get_state()
+        assert "n_components" in state
+        assert "hermite_degree_" in state
+        assert "pca_components_" in state
 
-        # Create new model and set parameters
+        # Create new model and set state
         new_model = PCEDensityModel()
-        new_model.set_params(params)
+        new_model.set_state(state, device=model.device)
 
         # Should produce same scores
         X_test = rng.randn(10, 22)
@@ -171,4 +175,6 @@ def test_polynomial_degrees(poly_degree):
     scores = model.score(X_test)
 
     assert scores.shape == (10,)
-    assert np.all(np.isfinite(scores))
+    # Convert to numpy for assertion
+    scores_np = scores.cpu().numpy() if hasattr(scores, "cpu") else scores
+    assert np.all(np.isfinite(scores_np))
