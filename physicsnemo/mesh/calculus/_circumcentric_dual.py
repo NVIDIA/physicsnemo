@@ -445,67 +445,53 @@ def compute_cotan_weights_fem(
     return cotan_weights, unique_edges
 
 
-def compute_dual_volumes_1(mesh: "Mesh") -> torch.Tensor:
+def compute_dual_volumes_1(
+    mesh: "Mesh",
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute dual 1-cell volumes (dual to edges).
 
-    For triangle meshes, uses the circumcentric dual construction from DEC.
-    The dual 1-cell for an edge consists of segments from the edge midpoint
-    to the circumcenters of adjacent triangles.
+    The dual 1-cell of an edge is the portion of the circumcentric dual mesh
+    associated with that edge. For a 2D triangle mesh, it consists of segments
+    from the edge midpoint to the circumcenters of adjacent triangles:
 
-    For an edge shared by triangles with opposite angles α and β:
-        |⋆e| = (|e|/2)(cot α + cot β) = |e| × w_ij
-    where w_ij are the cotangent weights.
+        |⋆e| = |e| × w_ij
 
-    For boundary edges (shared by only one triangle), the dual volume is half
-    of an interior edge with the same geometry, since only one triangle contributes.
+    where w_ij is the FEM cotangent weight for the edge. This relationship
+    holds for any manifold dimension; the FEM stiffness matrix approach
+    (see :func:`compute_cotan_weights_fem`) derives these weights from the
+    gradient dot products of barycentric basis functions.
 
     Parameters
     ----------
     mesh : Mesh
-        Input simplicial mesh
+        Input simplicial mesh of any manifold dimension.
 
     Returns
     -------
-    torch.Tensor
-        Dual 1-cell volumes for each edge, shape (n_edges,)
+    tuple[torch.Tensor, torch.Tensor]
+        Tuple of ``(dual_volumes, edges)``:
+
+        - ``dual_volumes``: Dual 1-cell volume for each edge, shape ``(n_edges,)``.
+          May be negative for edges in non-Delaunay configurations (obtuse
+          angles exceeding pi/2 at both adjacent cells).
+        - ``edges``: Canonically sorted edge connectivity, shape ``(n_edges, 2)``,
+          with ``edges[:, 0] < edges[:, 1]``.
 
     Notes
     -----
-    Dual volumes are guaranteed to be non-negative. For degenerate or
-    near-degenerate triangles, volumes may be zero or very small.
+    Negative dual volumes are geometrically meaningful: they indicate that the
+    circumcentric dual edge crosses the primal edge. Clamping them to zero (as
+    some implementations do) silently degrades accuracy on non-Delaunay meshes.
     """
-    if mesh.n_manifold_dims == 2:
-        ### Use cotangent weights for triangles
-        # The cotangent weights already encode the ratio |⋆e|/|e|
-        # So to get |⋆e|, we multiply by |e|
-        cotan_weights, edges = compute_cotan_weights_triangle_mesh(mesh)
-        edge_lengths = torch.norm(
-            mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]],
-            dim=-1,
-        )
+    ### Derive cotangent weights from the FEM stiffness matrix (works for any dimension)
+    cotan_weights, edges = compute_cotan_weights_fem(mesh)
 
-        # |⋆e| = |e| × (|⋆e|/|e|) = |e| × w_ij
-        # where w_ij = (1/2)(cot α + cot β) is the cotangent weight
-        dual_volumes_1 = cotan_weights * edge_lengths
+    ### |⋆e| = w_ij × |e|
+    edge_vectors = mesh.points[edges[:, 1]] - mesh.points[edges[:, 0]]
+    edge_lengths = torch.norm(edge_vectors, dim=-1)
+    dual_volumes_1 = cotan_weights * edge_lengths
 
-        # Ensure non-negative values (cotangent can be negative for obtuse angles,
-        # but the sum over adjacent triangles should be positive for valid meshes)
-        # Clamp to zero as a safety measure for numerical edge cases
-        dual_volumes_1 = torch.clamp(dual_volumes_1, min=0.0)
-
-    else:
-        ### For other dimensions, use simplified approximation
-        edge_mesh = mesh.get_facet_mesh(manifold_codimension=1)
-        edges = edge_mesh.cells
-        sorted_edges, _ = torch.sort(edges, dim=-1)
-
-        edge_lengths = torch.norm(
-            mesh.points[sorted_edges[:, 1]] - mesh.points[sorted_edges[:, 0]],
-            dim=-1,
-        )
-        dual_volumes_1 = edge_lengths
-
-    return dual_volumes_1
+    return dual_volumes_1, edges
 
 
 def get_or_compute_dual_volumes_0(mesh: "Mesh") -> torch.Tensor:
