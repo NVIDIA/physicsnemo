@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # Sampler args 
 # Below are passed as kwargs to physicsnemo.utils.diffusion.determinisitic_sampler
 # Also supports stochastic sampling via S_churn and related args.

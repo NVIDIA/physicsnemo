@@ -23,6 +23,7 @@ rundir: ./${training.outdir}/${training.experiment_name}/${training.run_id} # Pa
 num_data_workers: 4 # Number of dataloader worker threads per proc
 log_to_wandb: False # Whether or not to log to Weights & Biases (requires wandb account)
 wandb_mode: "online" # logging mode, "online" or "offline"
+log_to_tensorboard: False # Whether to log to TensorBoard (logs saved in rundir/tensorboard)
 seed: -1 # Specify a random seed by setting this to an int > 0
 cudnn_benchmark: True # Enable/disable CuDNN benchmark mode
 resume_checkpoint: "latest" # epoch number to continue training from, or "latest" for the latest checkpoint
@@ -40,14 +41,56 @@ lr: 4E-4 # Initial learning rate
 lr_rampup_steps: 1000 # Number of training steps over which to perform linear LR warmup
 total_train_steps: 16000 # Number of total training steps, 16000 with batch size 64 corresponds to StormCast paper regression
 clip_grad_norm: -1 # Threshold for gradient clipping, set to -1 to disable
-fp_optimizations: fp32 # Floating point mode, one of ["fp32", "amp-fp16", "amp-bf16"]
-compile_model: False # use torch.compile to compile model
+
+# Performance and optimization (like corrdiff perf section)
+perf:
+  fp_optimizations: fp32 # Floating point mode: "fp32", "amp-fp16", "amp-bf16"
+  torch_compile: False # Use torch.compile to compile model
+  use_apex_gn: False # Use Apex GroupNorm (enables channels_last memory format)
+  allow_tf32: False # Allow TF32 for matmul and cuDNN (faster but less precise)
+  allow_fp16_reduced_precision: False # Allow reduced precision reductions in fp16
+
+# Optimizer configuration
+optimizer:
+  name: "adam" # Optimizer type: "adam", "adamw", "stableadamw"
+  betas: [0.9, 0.999] # Adam beta parameters
+  weight_decay: 0.0 # Weight decay (L2 regularization)
+  eps: 1.0E-8 # Adam epsilon for numerical stability
+  fused: True # Use fused CUDA kernel (faster)
+
+# Scheduler configuration (optional - warmup is handled via lr_rampup_steps, scheduler handles decay)
+# Any torch.optim.lr_scheduler class is supported. Use exact PyTorch class names.
+# Parameters are passed directly to the scheduler constructor.
+#
+# Example 1: CosineAnnealingLR
+# scheduler:
+#   name: "CosineAnnealingLR"
+#   T_max: 15000 # Steps for cosine decay (defaults to total_train_steps - lr_rampup_steps)
+#   eta_min: 0.0 # Minimum learning rate
+#
+# Example 2: ReduceLROnPlateau (reduces LR when validation loss plateaus)
+# scheduler:
+#   name: "ReduceLROnPlateau"
+#   mode: "min" # "min" for loss, "max" for metrics like accuracy
+#   factor: 0.25 # Factor to reduce LR by (new_lr = lr * factor)
+#   patience: 3 # Number of validation cycles with no improvement before reducing LR
+#   threshold: 1e-5 # Threshold for measuring improvement
+#   cooldown: 0 # Steps to wait after reducing LR before resuming normal operation
+#   min_lr: 0.0 # Minimum learning rate
 
 # Validation options
+validation_steps: 1 # Number of batches to evaluate during validation
 validation_plot_variables: ["u10m", "v10m", "t2m", "refc", "q1", "q5", "q10"]
+validation_plot_background_variables: [] # Background variables to show in validation plots (list of names or indices)
 
 # Loss options
 loss:
   type: 'regression' # Loss type; use 'regression' or 'edm' for the regression and diffusion, respectively
-  sigma_distribution: "lognormal" # EDM noise sampling distribution, "lognormal" or "loguniform"
-  P_mean: -1.2 # Center of the EDM lognormal noise sampling distribution
+  # sigma_distribution: "lognormal" # EDM noise sampling distribution, "lognormal" or "loguniform"
+  # sigma_data: 0.5 # Standard deviation of the data (set to match your normalized data's std)
+  # # Lognormal distribution parameters (used when sigma_distribution: "lognormal")
+  # P_mean: -1.2 # Center of the lognormal noise distribution
+  # P_std: 1.2 # Std of the lognormal noise distribution
+  # Loguniform distribution parameters (used when sigma_distribution: "loguniform")
+  # sigma_min: 0.002 # Minimum noise level
+  # sigma_max: 80.0 # Maximum noise level

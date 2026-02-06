@@ -178,6 +178,9 @@ class SongUNet(Module):
         temporal information about the diffusion process. In that sense it is a
         simpler version of the positional embedding used in
         :class:`~physicsnemo.models.diffusion_unets.SongUNetPosEmbd`.
+    bottleneck_attention : bool, optional, default=True
+        If ``True``, applies self-attention at the bottleneck (innermost decoder block).
+        Set to ``False`` to disable bottleneck attention for faster inference.
     use_apex_gn : bool, optional, default=False
         A flag indicating whether we want to use Apex GroupNorm for NHWC layout.
         Apex needs to be installed for this to work. Need to set this as False on cpu.
@@ -276,6 +279,7 @@ class SongUNet(Module):
         resample_filter: List[int] = [1, 1],
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
+        bottleneck_attention: bool = True,
         use_apex_gn: bool = False,
         act: str = "silu",
         profile_mode: bool = False,
@@ -464,7 +468,10 @@ class SongUNet(Module):
             res = self.img_shape_y >> level
             if level == len(channel_mult) - 1:
                 self.dec[f"{res}x{res}_in0"] = UNetBlock(
-                    in_channels=cout, out_channels=cout, attention=True, **block_kwargs
+                    in_channels=cout,
+                    out_channels=cout,
+                    attention=bottleneck_attention,
+                    **block_kwargs,
                 )
                 self.dec[f"{res}x{res}_in1"] = UNetBlock(
                     in_channels=cout, out_channels=cout, **block_kwargs
@@ -873,6 +880,7 @@ class SongUNetPosEmbd(SongUNet):
         N_grid_channels: int = 4,
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
+        bottleneck_attention: bool = True,
         use_apex_gn: bool = False,
         act: str = "silu",
         profile_mode: bool = False,
@@ -911,6 +919,7 @@ class SongUNetPosEmbd(SongUNet):
             resample_filter=resample_filter,
             checkpoint_level=checkpoint_level,
             additive_pos_embed=additive_pos_embed,
+            bottleneck_attention=bottleneck_attention,
             use_apex_gn=use_apex_gn,
             act=act,
             profile_mode=profile_mode,
@@ -1497,6 +1506,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
         prob_channels: List[int] = [],
         checkpoint_level: int = 0,
         additive_pos_embed: bool = False,
+        bottleneck_attention: bool = True,
         use_apex_gn: bool = False,
         act: str = "silu",
         profile_mode: bool = False,
@@ -1525,6 +1535,7 @@ class SongUNetPosLtEmbd(SongUNetPosEmbd):
             N_grid_channels=N_grid_channels,
             checkpoint_level=checkpoint_level,
             additive_pos_embed=additive_pos_embed,
+            bottleneck_attention=bottleneck_attention,
             use_apex_gn=use_apex_gn,
             act=act,
             profile_mode=profile_mode,
