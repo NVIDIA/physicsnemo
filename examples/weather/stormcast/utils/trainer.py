@@ -720,8 +720,9 @@ class Trainer:
             loss_value.backward()
 
         # Gradient clipping
-        if self.cfg.training.clip_grad_norm > 0:
-            clip_grad_norm_(self.net.parameters(), self.cfg.training.clip_grad_norm)
+        clip_grad_norm = self.cfg.training.get("clip_grad_norm", -1)
+        if clip_grad_norm > 0:
+            clip_grad_norm_(self.net.parameters(), clip_grad_norm)
 
         # Manual LR warmup (linear ramp) - only during warmup phase
         # After warmup, let the scheduler control the LR

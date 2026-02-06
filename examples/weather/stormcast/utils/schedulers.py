@@ -94,8 +94,11 @@ def init_scheduler(
     if not hasattr(lr_scheduler_module, name):
         raise ValueError(f"Unknown scheduler: {name}")
     scheduler_cls = getattr(lr_scheduler_module, name)
-    if not isinstance(scheduler_cls, type) or not issubclass(
-        scheduler_cls, LRScheduler
+    # Allow LRScheduler subclasses and ReduceLROnPlateau (which didn't inherit
+    # from LRScheduler in PyTorch <2.0)
+    if not isinstance(scheduler_cls, type) or not (
+        issubclass(scheduler_cls, LRScheduler)
+        or issubclass(scheduler_cls, ReduceLROnPlateau)
     ):
         raise ValueError(f"{name} is not a learning rate scheduler")
 
