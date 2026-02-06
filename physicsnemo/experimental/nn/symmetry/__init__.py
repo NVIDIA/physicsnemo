@@ -36,23 +36,45 @@ EdgeRotation
     call the module to apply rotations.
 SO3ConvolutionBlock
     SO(3) block-wise transformation using SO3Linear -> GateActivation -> SO3Linear.
+EquivariantRMSNormSHGrid
+    RMS normalization for spherical harmonic features with global scaling.
+EquivariantLayerNormSHGrid
+    LayerNorm for l=0, shared global scaling for l>0 with degree balancing.
+EquivariantLayerNormGrid
+    Per-degree normalization with independent scaling for each l.
 
 Functions
 ---------
 make_grid_mask
     Create a boolean mask for valid (l, m) pairs in the grid layout.
+make_degree_balance_weight
+    Create weights to balance contribution from each spherical harmonic degree.
+make_m0_imag_mask
+    Create mask that zeros out m=0 imaginary component.
 """
 
 from physicsnemo.experimental.nn.symmetry.activation import GateActivation
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
+from physicsnemo.experimental.nn.symmetry.layer_norm import (
+    EquivariantLayerNormGrid,
+    EquivariantLayerNormSHGrid,
+    EquivariantRMSNormSHGrid,
+    make_degree_balance_weight,
+    make_m0_imag_mask,
+)
 from physicsnemo.experimental.nn.symmetry.so2_conv import SO2Convolution
 from physicsnemo.experimental.nn.symmetry.so3_block import SO3ConvolutionBlock
 from physicsnemo.experimental.nn.symmetry.wigner import EdgeRotation
 
 __all__ = [
     "EdgeRotation",
+    "EquivariantLayerNormGrid",
+    "EquivariantLayerNormSHGrid",
+    "EquivariantRMSNormSHGrid",
     "GateActivation",
     "SO2Convolution",
     "SO3ConvolutionBlock",
+    "make_degree_balance_weight",
     "make_grid_mask",
+    "make_m0_imag_mask",
 ]
