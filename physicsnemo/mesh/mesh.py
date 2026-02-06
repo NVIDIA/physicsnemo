@@ -1736,11 +1736,11 @@ class Mesh:
         return self.__class__(
             points=_pad_by_tiling_last(self.points, target_n_points),
             cells=_pad_with_value(self.cells, target_n_cells, self.n_points - 1),
-            point_data=self.point_data.apply(  # type: ignore
+            point_data=self.point_data.apply(
                 lambda x: _pad_with_value(x, target_n_points, data_padding_value),
                 batch_size=torch.Size([target_n_points]),
             ),
-            cell_data=self.cell_data.apply(  # type: ignore
+            cell_data=self.cell_data.apply(
                 lambda x: _pad_with_value(x, target_n_cells, data_padding_value),
                 batch_size=torch.Size([target_n_cells]),
             ),
