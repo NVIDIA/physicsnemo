@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import inspect
 import io
 import json
@@ -35,7 +36,7 @@ import torch
 
 from physicsnemo.core.filesystem import _download_cached, _get_fs
 from physicsnemo.core.meta import ModelMetaData
-from physicsnemo.core.registry import ModelRegistry
+from physicsnemo.core.registry import _ENTRYPOINT_TYPES, ModelRegistry
 
 # Used for saving checkpoints of nested modules
 _BASE_CKPT_PREFIX = "__physicsnemo.Module__"
@@ -369,11 +370,8 @@ class Module(torch.nn.Module):
                 # Cross fingers and hope for the best (maybe the class name changed)
                 _cls = cls
 
-        # This works with the importlib.metadata.EntryPoint
-        # if isinstance(_cls, importlib.metadata.EntryPoint):
-        if "EntryPoint" in str(type(_cls)):
-            # I hate myself for this.  Somehow, we've got crossvoer pollution from
-            # importlib_metadata.EntryPoint.
+        # This works with both importlib.metadata.EntryPoint and importlib_metadata.EntryPoint
+        if isinstance(_cls, _ENTRYPOINT_TYPES):
             _cls = _cls.load()
 
         return _cls
@@ -401,6 +399,8 @@ class Module(torch.nn.Module):
 
         Examples
         --------
+        >>> import warnings
+        >>> warnings.filterwarnings("ignore")
         >>> from physicsnemo.core.module import Module
         >>> # Define the argument dictionary with the three required keys
         >>> arg_dict = {
