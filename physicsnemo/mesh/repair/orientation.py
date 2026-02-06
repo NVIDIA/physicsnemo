@@ -28,6 +28,120 @@ from physicsnemo.mesh.utilities._cache import CACHE_KEY
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
+    from physicsnemo.mesh.neighbors._adjacency import Adjacency
+
+
+def _gather_unoriented_neighbors(
+    front: torch.Tensor,
+    adjacency: "Adjacency",
+    is_oriented: torch.Tensor,
+    max_neighbors: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Expand a BFS front by one level, returning only unoriented neighbors.
+
+    Given the current front of face indices and a CSR adjacency structure,
+    gathers all neighbors, filters to those not yet oriented, and tracks
+    which front face discovered each neighbor.
+
+    Parameters
+    ----------
+    front : torch.Tensor
+        Face indices in the current BFS front. Shape (n_front,).
+    adjacency : Adjacency
+        CSR cell-to-cell adjacency.
+    is_oriented : torch.Tensor
+        Boolean mask of already-oriented faces. Shape (n_cells,).
+    max_neighbors : int
+        Upper bound on neighbors per face (n_manifold_dims + 1 for simplices).
+
+    Returns
+    -------
+    tuple[torch.Tensor, torch.Tensor]
+        (next_front, parent_faces) where next_front contains the unoriented
+        neighbor indices and parent_faces[k] is the front face that discovered
+        next_front[k]. Both are empty tensors when no unoriented neighbors exist.
+    """
+    device = front.device
+
+    if max_neighbors == 0:
+        empty = torch.empty(0, device=device, dtype=torch.long)
+        return empty, empty
+
+    ### Gather all neighbors for entire front via the CSR structure
+    offsets_start = adjacency.offsets[front]  # (n_front,)
+    offsets_end = adjacency.offsets[front + 1]  # (n_front,)
+    neighbor_counts = offsets_end - offsets_start  # (n_front,)
+
+    # Build padded gather indices using offset + arange pattern.
+    # Static upper bound avoids .item() graph break inside the BFS loop.
+    # Shape: (n_front, max_neighbors)
+    neighbor_offsets = torch.arange(max_neighbors, device=device, dtype=torch.long)
+    gather_indices = offsets_start.unsqueeze(1) + neighbor_offsets.unsqueeze(0)
+
+    # Mask for valid neighbors (within each face's actual neighbor count)
+    # Shape: (n_front, max_neighbors)
+    valid_mask = neighbor_offsets.unsqueeze(0) < neighbor_counts.unsqueeze(1)
+
+    # Gather all neighbors (use 0 for out-of-bounds, filtered out below)
+    # Shape: (n_front, max_neighbors)
+    gather_indices_safe = torch.where(
+        valid_mask, gather_indices, torch.zeros_like(gather_indices)
+    )
+    all_neighbors = adjacency.indices[gather_indices_safe]
+
+    ### Filter to unoriented neighbors only
+    keep_mask = valid_mask & ~is_oriented[all_neighbors]
+
+    if not keep_mask.any():
+        empty = torch.empty(0, device=device, dtype=torch.long)
+        return empty, empty
+
+    next_front = all_neighbors[keep_mask]  # (n_next,)
+
+    # Track which front face discovered each neighbor
+    # Shape: (n_front, max_neighbors) -> (n_next,)
+    parent_faces = front.unsqueeze(1).expand(-1, max_neighbors)[keep_mask]
+
+    return next_front, parent_faces
+
+
+def _propagate_flip_from_parents(
+    children: torch.Tensor,
+    parents: torch.Tensor,
+    cell_normals: torch.Tensor,
+    should_flip: torch.Tensor,
+) -> None:
+    """Determine flip flags for children based on normal agreement with parents.
+
+    For each child face, compares its stored normal against the effective normal
+    of its parent (accounting for any prior flip). If the dot product is negative,
+    the child needs to be flipped for consistent orientation.
+
+    Parameters
+    ----------
+    children : torch.Tensor
+        Face indices of newly discovered BFS neighbors. Shape (n_next,).
+    parents : torch.Tensor
+        Face indices of the parent that discovered each child. Shape (n_next,).
+    cell_normals : torch.Tensor
+        Per-face normals from the mesh. Shape (n_cells, n_spatial_dims).
+    should_flip : torch.Tensor
+        Boolean mask updated in-place. Shape (n_cells,).
+    """
+    parent_normals = cell_normals[parents]  # (n_next, 3)
+
+    # Account for parents that were themselves flipped in a prior BFS level.
+    # Their effective normal is the negation of the stored (original) normal.
+    parent_flip_sign = torch.where(
+        should_flip[parents], -1.0, 1.0
+    ).unsqueeze(-1)  # (n_next, 1) for broadcasting over spatial dims
+    parent_normals = parent_normals * parent_flip_sign
+
+    child_normals = cell_normals[children]  # (n_next, 3)
+
+    # Negative dot product means opposite orientation -> needs flip
+    dots = (child_normals * parent_normals).sum(dim=-1)
+    should_flip[children] = dots < 0
 
 
 def fix_orientation(
@@ -84,117 +198,52 @@ def fix_orientation(
 
     adjacency = get_cell_to_cells_adjacency(mesh, adjacency_codimension=1)
 
-    ### Step 2: Propagate orientation using iterative flooding (vectorized)
-    # Track which faces have been oriented
+    ### Step 2: Propagate orientation using iterative BFS (flat state machine)
     is_oriented = torch.zeros(n_cells, dtype=torch.bool, device=device)
     should_flip = torch.zeros(n_cells, dtype=torch.bool, device=device)
     component_id = torch.full((n_cells,), -1, dtype=torch.long, device=device)
 
-    n_components = 0
-    largest_component_size = 0
+    max_neighbors = mesh.n_manifold_dims + 1
+    current_front = torch.empty(0, device=device, dtype=torch.long)
+    component_sizes: list[int] = []
 
-    # Process each connected component using iterative propagation
-    while not torch.all(is_oriented):
-        # Find an unoriented face to start from
-        unoriented_indices = torch.where(~is_oriented)[0]
-        if len(unoriented_indices) == 0:
-            break
-
-        start_face = unoriented_indices[0]
-
-        # Initialize component
-        is_oriented[start_face] = True
-        component_id[start_face] = n_components
-        current_front = torch.tensor([start_face], device=device, dtype=torch.long)
-
-        component_size = 1
-
-        # Iteratively expand front until no more neighbors (fully vectorized)
-        for iteration in range(n_cells):  # Max iterations = n_cells (diameter of graph)
-            if len(current_front) == 0:
+    while True:
+        ### Phase A: If front exhausted, seed next component or terminate
+        if len(current_front) == 0:
+            unoriented = torch.where(~is_oriented)[0]
+            if len(unoriented) == 0:
                 break
+            seed = unoriented[0]
+            is_oriented[seed] = True
+            component_id[seed] = len(component_sizes)
+            current_front = seed.unsqueeze(0)
+            component_sizes.append(1)
+            continue
 
-            ### Gather all neighbors for entire front at once
-            # Compute neighbor counts for each face in front
-            offsets_start = adjacency.offsets[current_front]  # (n_front,)
-            offsets_end = adjacency.offsets[current_front + 1]  # (n_front,)
-            neighbor_counts = offsets_end - offsets_start  # (n_front,)
+        ### Phase B: Expand BFS front by one level
+        next_front, parent_faces = _gather_unoriented_neighbors(
+            current_front, adjacency, is_oriented, max_neighbors
+        )
 
-            # Build gather indices for all neighbors using broadcasting
-            # Static upper bound avoids .item() graph break inside the BFS loop.
-            # For an n-simplex, each cell has at most (n+1) facets, so at most
-            # (n+1) face-adjacent neighbors.
-            max_neighbors = mesh.n_manifold_dims + 1
+        if len(next_front) == 0:
+            current_front = next_front  # Triggers re-seeding on next iteration
+            continue
 
-            if max_neighbors == 0:
-                break
+        is_oriented[next_front] = True
+        component_id[next_front] = len(component_sizes) - 1
+        component_sizes[-1] += len(next_front)
 
-            # Generate indices using offset + arange pattern
-            # Shape: (n_front, max_neighbors)
-            neighbor_offsets = torch.arange(
-                max_neighbors, device=device, dtype=torch.long
+        if mesh.n_spatial_dims == 3 and mesh.codimension == 1:
+            _propagate_flip_from_parents(
+                next_front, parent_faces, mesh.cell_normals, should_flip
             )
-            gather_indices = offsets_start.unsqueeze(1) + neighbor_offsets.unsqueeze(0)
 
-            # Mask for valid neighbors (within each face's neighbor count)
-            # Shape: (n_front, max_neighbors)
-            valid_mask = neighbor_offsets.unsqueeze(0) < neighbor_counts.unsqueeze(1)
+        current_front = next_front
 
-            # Gather all neighbors (use 0 for invalid, will filter out)
-            # Shape: (n_front, max_neighbors)
-            gather_indices_safe = torch.where(
-                valid_mask,
-                gather_indices,
-                torch.zeros_like(gather_indices),
-            )
-            all_neighbors_padded = adjacency.indices[gather_indices_safe]
+    n_components = len(component_sizes)
+    largest_component_size = max(component_sizes, default=0)
 
-            # Filter to unoriented neighbors only
-            # Shape: (n_front, max_neighbors)
-            is_unoriented = ~is_oriented[all_neighbors_padded]
-            keep_mask = valid_mask & is_unoriented
-
-            # Check if we have any unoriented neighbors
-            if not keep_mask.any():
-                break
-
-            # Flatten and extract valid neighbors
-            next_front = all_neighbors_padded[keep_mask]  # (n_next,)
-
-            # For each neighbor, track which parent face it came from
-            # Shape: (n_front, max_neighbors) -> (n_next,)
-            parent_faces_expanded = current_front.unsqueeze(1).expand(-1, max_neighbors)
-            parent_faces_for_neighbors = parent_faces_expanded[keep_mask]  # (n_next,)
-
-            # Mark as oriented
-            is_oriented[next_front] = True
-            component_id[next_front] = n_components
-            component_size += len(next_front)
-
-            # Determine orientation using normals (vectorized over entire next_front)
-            if mesh.n_spatial_dims == 3 and mesh.codimension == 1:
-                parent_normals = mesh.cell_normals[parent_faces_for_neighbors]
-
-                # Account for parents that were themselves flipped in a prior
-                # BFS iteration.  Their effective normal is the negation of the
-                # stored (original) normal.
-                parent_flip_sign = torch.where(
-                    should_flip[parent_faces_for_neighbors], -1.0, 1.0
-                ).unsqueeze(-1)  # (n_next, 1) for broadcasting over spatial dims
-                parent_normals = parent_normals * parent_flip_sign
-
-                neighbor_normals = mesh.cell_normals[next_front]
-
-                # Dot product: negative means opposite orientation
-                dots = (neighbor_normals * parent_normals).sum(dim=-1)
-                should_flip[next_front] = dots < 0
-
-            current_front = next_front
-
-        largest_component_size = max(largest_component_size, component_size)
-        n_components += 1
-
-    ### Step 4: Apply flips
+    ### Step 3: Apply flips
     n_flipped = should_flip.sum().item()
 
     if n_flipped > 0:
@@ -222,7 +271,7 @@ def fix_orientation(
     stats = {
         "n_faces_flipped": n_flipped,
         "n_components": n_components,
-        "largest_component_size": largest_component_size if n_components > 0 else 0,
+        "largest_component_size": largest_component_size,
     }
 
     return oriented_mesh, stats
