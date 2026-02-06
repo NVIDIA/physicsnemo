@@ -612,10 +612,12 @@ class TestQualityMetricsEdgeCases:
 
         metrics = compute_quality_metrics(mesh)
 
-        # Should compute metrics even for tets (angles will be NaN)
+        # Should compute metrics for tets including solid angles
         assert metrics.shape[0] == 1
         assert not torch.isnan(metrics["quality_score"][0])
-        assert torch.isnan(metrics["min_angle"][0])  # Not defined for tets yet
+        assert not torch.isnan(metrics["min_angle"][0])
+        # Regular tet: all solid angles should be equal, so min == max
+        assert torch.isclose(metrics["min_angle"][0], metrics["max_angle"][0], atol=1e-5)
 
 
 ###############################################################################

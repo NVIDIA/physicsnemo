@@ -18,6 +18,7 @@
 
 This module contains fundamental geometric operations that are shared across
 the codebase, including:
+- Interior angle computation for n-simplices
 - Dual mesh (Voronoi/circumcentric) computations
 - Circumcenter calculations
 - Support volume computations (for DEC)
@@ -27,6 +28,10 @@ These are used by both DEC operators (calculus module) and differential
 geometry computations (curvature module).
 """
 
+from physicsnemo.mesh.geometry._angles import (
+    compute_vertex_angle_sums,
+    compute_vertex_angles,
+)
 from physicsnemo.mesh.geometry.dual_meshes import (
     compute_circumcenters,
     compute_cotan_weights_fem,

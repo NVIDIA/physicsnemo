@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 import torch
 from tensordict import TensorDict
 
-from physicsnemo.mesh.curvature._utils import compute_triangle_angles
+from physicsnemo.mesh.geometry._angles import compute_vertex_angles
 
 if TYPE_CHECKING:
     from physicsnemo.mesh.mesh import Mesh
@@ -116,7 +116,6 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
 
     ### Compute edge lengths for each cell
     edge_lengths = compute_cell_edge_lengths(mesh)  # (n_cells, n_edges_per_cell)
-    cell_vertices = mesh.points[mesh.cells]  # (n_cells, n_verts, n_dims)
 
     max_edge = edge_lengths.max(dim=1).values
     min_edge = edge_lengths.min(dim=1).values
@@ -132,30 +131,14 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     characteristic_length = areas * n_verts_per_cell / (perimeter + 1e-10)
     aspect_ratio = max_edge / (characteristic_length + 1e-10)
 
-    ### Compute angles (for 2D manifolds - triangles)
-    if mesh.n_manifold_dims == 2:
-        # Compute all three angles per triangle
-        angle0 = compute_triangle_angles(
-            cell_vertices[:, 0],
-            cell_vertices[:, 1],
-            cell_vertices[:, 2],
-        )
-        angle1 = compute_triangle_angles(
-            cell_vertices[:, 1],
-            cell_vertices[:, 2],
-            cell_vertices[:, 0],
-        )
-        angle2 = compute_triangle_angles(
-            cell_vertices[:, 2],
-            cell_vertices[:, 0],
-            cell_vertices[:, 1],
-        )
-
-        all_angles = torch.stack([angle0, angle1, angle2], dim=1)
+    ### Compute interior angles at each vertex of each cell
+    if mesh.n_manifold_dims >= 2:
+        # Unified formula works for triangles, tetrahedra, and higher simplices
+        all_angles = compute_vertex_angles(mesh)  # (n_cells, n_verts_per_cell)
         min_angle = all_angles.min(dim=1).values
         max_angle = all_angles.max(dim=1).values
     else:
-        # For non-triangular cells, angle computation is more complex
+        # For 1D manifolds (edges), interior angles are not meaningful
         min_angle = torch.full((n_cells,), float("nan"), dtype=dtype, device=device)
         max_angle = torch.full((n_cells,), float("nan"), dtype=dtype, device=device)
 
@@ -174,12 +157,16 @@ def compute_quality_metrics(mesh: "Mesh") -> TensorDict:
     # Aspect ratio quality: 1 / aspect_ratio (clamped)
     aspect_quality = 1.0 / torch.clamp(aspect_ratio, min=1.0, max=10.0)
 
-    # Angle quality (for triangles): min_angle / (π/3) and (π/3) / max_angle
+    # Angle quality: measure how uniform the vertex angles are within each cell
     if mesh.n_manifold_dims == 2:
+        # For triangles: compare against equilateral ideal (pi/3)
         ideal_angle = torch.pi / 3
         min_angle_quality = torch.clamp(min_angle / ideal_angle, max=1.0)
         max_angle_quality = torch.clamp(ideal_angle / max_angle, max=1.0)
         angle_quality = (min_angle_quality + max_angle_quality) / 2
+    elif mesh.n_manifold_dims >= 3:
+        # For tets and higher: use min/max ratio (1.0 for regular simplex)
+        angle_quality = torch.clamp(min_angle / (max_angle + 1e-10), max=1.0)
     else:
         angle_quality = torch.ones((n_cells,), dtype=dtype, device=device)
 

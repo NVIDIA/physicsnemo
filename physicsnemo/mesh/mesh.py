@@ -34,7 +34,6 @@ from physicsnemo.mesh.utilities._cache import (
 )
 from physicsnemo.mesh.utilities._padding import _pad_by_tiling_last, _pad_with_value
 from physicsnemo.mesh.utilities._scatter_ops import scatter_aggregate
-from physicsnemo.mesh.utilities._tolerances import safe_eps
 from physicsnemo.mesh.utilities.mesh_repr import format_mesh_repr
 from physicsnemo.mesh.visualization.draw_mesh import draw_mesh
 
@@ -688,9 +687,9 @@ class Mesh:
         elif weighting in ("angle", "angle_area"):
             # Compute interior angles at each vertex of each cell
             # For a simplex, angle at vertex k is between edges to other vertices
-            vertex_angles = (
-                self._compute_vertex_angles()
-            )  # (n_cells, n_vertices_per_cell)
+            from physicsnemo.mesh.geometry._angles import compute_vertex_angles
+
+            vertex_angles = compute_vertex_angles(self)  # (n_cells, n_vertices_per_cell)
             weights = vertex_angles.flatten()
 
             if weighting == "angle_area":
@@ -715,96 +714,6 @@ class Mesh:
 
         ### Normalize to get unit normals
         return F.normalize(accumulated_normals, dim=-1)
-
-    def _compute_vertex_angles(self) -> torch.Tensor:
-        """Compute generalized interior angles at each vertex of each cell.
-
-        For an n-simplex, the "angle" at a vertex is computed using the unified
-        formula that generalizes to arbitrary dimensions:
-
-            Ω = 2 × arctan(√det(C) / (1 + Σᵢ<ⱼ Cᵢⱼ))
-
-        where C is the correlation (normalized Gram) matrix of edge vectors:
-            Cᵢⱼ = (eᵢ · eⱼ) / (|eᵢ| |eⱼ|)
-
-        This formula reduces to:
-        - For triangles (n=2): the planar interior angle θ
-        - For tetrahedra (n=3): the solid angle Ω (steradians)
-        - For higher n: the generalized solid angle
-
-        Returns
-        -------
-        torch.Tensor
-            Tensor of shape (n_cells, n_vertices_per_cell) containing the
-            generalized angle at each vertex.
-
-        Notes
-        -----
-        This formula is derived by recognizing that both the planar angle formula
-        and the Van Oosterom & Strackee (1983) solid angle formula follow the
-        same pattern when expressed in terms of the correlation matrix.
-
-        The formula uses atan2 for numerical stability when the denominator
-        approaches zero (nearly degenerate simplices).
-        """
-        n_edges = self.n_manifold_dims  # edges from each vertex
-
-        # Get vertex positions: (n_cells, n_verts, n_spatial_dims)
-        cell_vertices = self.points[self.cells]
-
-        # For each vertex k, compute the edge vectors to the other n_edges vertices
-        # Use roll to get shifted vertex positions:
-        # rolled[:, :, i, :] = cell_vertices[:, (k + i + 1) % n_verts, :]
-
-        # Build edge vectors for all vertices simultaneously
-        # edges[k, i] = v_{(k+i+1) mod n_verts} - v_k
-        # Shape: (n_cells, n_verts, n_edges, n_spatial_dims)
-        edges = torch.stack(
-            [
-                torch.roll(cell_vertices, shifts=-(i + 1), dims=1) - cell_vertices
-                for i in range(n_edges)
-            ],
-            dim=2,
-        )
-
-        # Compute edge lengths: (n_cells, n_verts, n_edges)
-        edge_lengths = edges.norm(dim=-1)
-
-        # Compute normalized edges: (n_cells, n_verts, n_edges, n_spatial_dims)
-        edges_normalized = edges / edge_lengths.unsqueeze(-1).clamp(min=safe_eps(edge_lengths.dtype))
-
-        # Compute correlation matrix C for each vertex of each cell
-        # C[i,j] = normalized_edge_i · normalized_edge_j
-        # Shape: (n_cells, n_verts, n_edges, n_edges)
-        # Using einsum: C_ij = sum_d (edges_normalized[:,:,i,d] * edges_normalized[:,:,j,d])
-        corr_matrix = torch.einsum(
-            "cvid,cvjd->cvij", edges_normalized, edges_normalized
-        )
-
-        # Compute det(C) for each vertex: (n_cells, n_verts)
-        det_C = torch.linalg.det(corr_matrix)
-
-        # Compute sum of off-diagonal elements: Σᵢ<ⱼ Cᵢⱼ
-        # For an n×n matrix, sum of upper triangle (excluding diagonal)
-        # Create upper triangle mask
-        triu_mask = torch.triu(
-            torch.ones(n_edges, n_edges, device=self.points.device, dtype=torch.bool),
-            diagonal=1,
-        )
-        # Sum off-diagonal: (n_cells, n_verts)
-        sum_off_diag = corr_matrix[:, :, triu_mask].sum(dim=-1)
-
-        # Denominator: 1 + Σᵢ<ⱼ Cᵢⱼ
-        denominator = 1.0 + sum_off_diag
-
-        # Numerator: √det(C) (use abs for numerical stability with near-degenerate cells)
-        numerator = det_C.abs().sqrt()
-
-        # Compute angle: Ω = 2 × arctan(numerator / denominator)
-        # Use atan2 for numerical stability
-        angles = 2.0 * torch.atan2(numerator, denominator)
-
-        return angles
 
     @property
     def gaussian_curvature_vertices(self) -> torch.Tensor:
