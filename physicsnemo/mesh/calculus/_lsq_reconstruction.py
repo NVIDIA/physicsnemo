@@ -81,106 +81,51 @@ def _solve_batched_lsq_gradients(
 
     gradients = torch.zeros(gradient_shape, dtype=dtype, device=device)
 
-    ### Group entities by neighbor count for efficient batched processing
-    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]  # (n_entities,)
-    unique_counts, inverse_indices = torch.unique(neighbor_counts, return_inverse=True)
-
     ### Process each neighbor-count group in parallel
-    for count_idx, n_neighbors in enumerate(unique_counts):
-        n_neighbors = int(n_neighbors)
+    from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
 
-        # Skip if too few neighbors or no neighbors
-        if n_neighbors < min_neighbors or n_neighbors == 0:
-            continue
-
-        # Find all entities with this neighbor count
-        entity_mask = inverse_indices == count_idx
-        entity_indices = torch.where(entity_mask)[0]  # (n_group,)
+    for batch in iter_neighborhood_batches(
+        positions, adjacency, min_neighbors=min_neighbors
+    ):
+        entity_indices = batch.entity_indices
+        neighbors_flat = batch.neighbor_indices
+        A = batch.relative_positions  # (n_group, n_neighbors, n_spatial_dims)
         n_group = len(entity_indices)
+        n_neighbors = batch.n_neighbors
 
-        if n_group == 0:
-            continue
+        ### Function differences (b vector)
+        b = values[neighbors_flat] - values[entity_indices].unsqueeze(1)
 
-        ### Extract neighbor indices for this group
-        # Shape: (n_group, n_neighbors)
-        offsets_group = adjacency.offsets[entity_indices]  # (n_group,)
-        neighbor_idx_ranges = offsets_group.unsqueeze(1) + torch.arange(
-            n_neighbors, device=device
-        ).unsqueeze(0)  # (n_group, n_neighbors)
-        neighbors_flat = adjacency.indices[
-            neighbor_idx_ranges
-        ]  # (n_group, n_neighbors)
-
-        ### Build LSQ matrices for all entities in group
-        # Current entity positions: (n_group, n_spatial_dims)
-        x0 = positions[entity_indices]  # (n_group, n_spatial_dims)
-
-        # Neighbor positions: (n_group, n_neighbors, n_spatial_dims)
-        x_neighbors = positions[neighbors_flat]
-
-        # Relative positions (A matrix): (n_group, n_neighbors, n_spatial_dims)
-        A = x_neighbors - x0.unsqueeze(1)
-
-        # Function differences (b vector)
-        if is_scalar:
-            # (n_group,) and (n_group, n_neighbors)
-            b = values[neighbors_flat] - values[entity_indices].unsqueeze(1)
-        else:
-            # (n_group, extra_dims...) and (n_group, n_neighbors, extra_dims...)
-            b = values[neighbors_flat] - values[entity_indices].unsqueeze(1)
-
-        ### Compute weights
-        distances = torch.norm(A, dim=-1)  # (n_group, n_neighbors)
+        ### Compute inverse-distance weights
+        distances = torch.linalg.vector_norm(A, dim=-1)  # (n_group, n_neighbors)
         weights = 1.0 / distances.pow(weight_power).clamp(min=safe_eps(distances.dtype))
 
-        ### Apply weights to system
+        ### Apply sqrt-weights to system
         sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
         A_weighted = sqrt_w * A  # (n_group, n_neighbors, n_spatial_dims)
 
         ### Solve batched least-squares
-        try:
-            if is_scalar:
-                # b_weighted: (n_group, n_neighbors)
-                b_weighted = sqrt_w.squeeze(-1) * b
-                # Solve batched system
-                solution = torch.linalg.lstsq(
-                    A_weighted,  # (n_group, n_neighbors, n_spatial_dims)
-                    b_weighted.unsqueeze(-1),  # (n_group, n_neighbors, 1)
-                    rcond=None,
-                ).solution.squeeze(-1)  # (n_group, n_spatial_dims)
+        if is_scalar:
+            b_weighted = sqrt_w.squeeze(-1) * b  # (n_group, n_neighbors)
+            solution = torch.linalg.lstsq(
+                A_weighted, b_weighted.unsqueeze(-1), rcond=None
+            ).solution.squeeze(-1)  # (n_group, n_spatial_dims)
 
-                gradients[entity_indices] = solution
-            else:
-                # Tensor field case
-                b_weighted = sqrt_w * b  # (n_group, n_neighbors, extra_dims...)
-                orig_shape = b.shape[2:]  # Extra dimensions
-                b_flat = b_weighted.reshape(
-                    n_group, n_neighbors, -1
-                )  # (n_group, n_neighbors, n_components)
+            gradients[entity_indices] = solution
+        else:
+            # Tensor field: flatten extra dims, solve, reshape back
+            b_weighted = sqrt_w * b  # (n_group, n_neighbors, ...)
+            orig_shape = b.shape[2:]
+            b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
 
-                solution = torch.linalg.lstsq(
-                    A_weighted,  # (n_group, n_neighbors, n_spatial_dims)
-                    b_flat,  # (n_group, n_neighbors, n_components)
-                    rcond=None,
-                ).solution  # (n_group, n_spatial_dims, n_components)
+            solution = torch.linalg.lstsq(
+                A_weighted, b_flat, rcond=None
+            ).solution  # (n_group, n_spatial_dims, n_components)
 
-                # Reshape and permute: (n_group, n_spatial_dims, *orig_shape)
-                solution_reshaped = solution.reshape(
-                    n_group, n_spatial_dims, *orig_shape
-                )
-                # Move spatial_dims to second position
-                perm = [0] + list(range(2, solution_reshaped.ndim)) + [1]
-                gradients[entity_indices] = solution_reshaped.permute(*perm)
-
-        except torch.linalg.LinAlgError:
-            import warnings
-
-            warnings.warn(
-                "Singular linear system in LSQ gradient reconstruction. "
-                "Affected vertices (e.g., isolated or collinear neighborhoods) "
-                "will have zero gradients.",
-                stacklevel=2,
-            )
+            solution_reshaped = solution.reshape(n_group, n_spatial_dims, *orig_shape)
+            # Permute spatial_dims to second position
+            perm = [0] + list(range(2, solution_reshaped.ndim)) + [1]
+            gradients[entity_indices] = solution_reshaped.permute(*perm)
 
     return gradients
 

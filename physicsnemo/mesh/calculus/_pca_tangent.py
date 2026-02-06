@@ -103,68 +103,32 @@ def estimate_tangent_space_pca(
         device=device,
     )
 
-    ### Compute neighbor counts per point
-    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]  # (n_points,)
-
-    ### Clamp to k_neighbors and group by effective neighbor count
+    ### Identity fallback for points with insufficient neighbors
+    min_required = n_manifold_dims + 1
+    neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]
     effective_counts = torch.minimum(
-        neighbor_counts, torch.tensor(k_neighbors, dtype=torch.int64, device=device)
+        neighbor_counts,
+        torch.tensor(k_neighbors, dtype=neighbor_counts.dtype, device=device),
     )
-    unique_counts, inverse_indices = torch.unique(effective_counts, return_inverse=True)
+    insufficient_mask = effective_counts < min_required
+    if insufficient_mask.any():
+        insufficient_indices = torch.where(insufficient_mask)[0]
+        for i in range(min(n_manifold_dims, n_spatial_dims)):
+            tangent_basis[insufficient_indices, i, i] = 1.0
+        for i in range(min(codimension, n_spatial_dims - n_manifold_dims)):
+            normal_basis[insufficient_indices, i, n_manifold_dims + i] = 1.0
 
-    ### Process each neighbor-count group in vectorized batches
-    for count_idx, n_neighbors in enumerate(unique_counts):
-        n_neighbors = int(n_neighbors)
+    ### Process each neighbor-count group via shared iterator
+    from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
 
-        ### Skip if too few neighbors
-        if n_neighbors < n_manifold_dims + 1:
-            # Identity fallback for insufficient neighbors
-            points_mask = inverse_indices == count_idx
-            point_indices = torch.where(points_mask)[0]
+    for batch in iter_neighborhood_batches(
+        mesh.points, adjacency, min_neighbors=min_required, max_neighbors=k_neighbors
+    ):
+        point_indices = batch.entity_indices
+        centered = batch.relative_positions  # (n_group, n_neighbors, n_spatial_dims)
+        n_neighbors = batch.n_neighbors
 
-            # Tangent basis: first n_manifold_dims standard basis vectors
-            for i in range(min(n_manifold_dims, n_spatial_dims)):
-                tangent_basis[point_indices, i, i] = 1.0
-
-            # Normal basis: remaining standard basis vectors
-            for i in range(min(codimension, n_spatial_dims - n_manifold_dims)):
-                normal_basis[point_indices, i, n_manifold_dims + i] = 1.0
-
-            continue
-
-        ### Find all points with this neighbor count
-        points_mask = inverse_indices == count_idx
-        point_indices = torch.where(points_mask)[0]  # (n_group,)
-        n_group = len(point_indices)
-
-        if n_group == 0:
-            continue
-
-        ### Extract neighbor indices for this group (vectorized)
-        # Shape: (n_group, n_neighbors)
-        offsets_group = adjacency.offsets[point_indices]  # (n_group,)
-        neighbor_idx_ranges = offsets_group.unsqueeze(1) + torch.arange(
-            n_neighbors, device=device
-        ).unsqueeze(0)  # (n_group, n_neighbors)
-        neighbors_flat = adjacency.indices[
-            neighbor_idx_ranges
-        ]  # (n_group, n_neighbors)
-
-        ### Gather neighborhood positions
-        # Shape: (n_group, n_neighbors, n_spatial_dims)
-        neighborhood_points = mesh.points[neighbors_flat]
-
-        # Current point positions: (n_group, n_spatial_dims)
-        center_points = mesh.points[point_indices]
-
-        ### Center the neighborhoods
-        # Shape: (n_group, n_neighbors, n_spatial_dims)
-        centered = neighborhood_points - center_points.unsqueeze(1)
-
-        ### Compute covariance matrices for all points in group
-        # C = (1/k) X^T X where X is centered data
-        # Use batch matrix multiplication: (n_group, n_spatial_dims, n_neighbors) @ (n_group, n_neighbors, n_spatial_dims)
-        # Result: (n_group, n_spatial_dims, n_spatial_dims)
+        ### Covariance matrix: C = (1/k) X^T X
         cov_matrices = (
             torch.bmm(
                 centered.transpose(1, 2),  # (n_group, n_spatial_dims, n_neighbors)
@@ -174,39 +138,21 @@ def estimate_tangent_space_pca(
         )
 
         ### Batch eigen-decomposition
-        # eigenvalues: (n_group, n_spatial_dims)
-        # eigenvectors: (n_group, n_spatial_dims, n_spatial_dims)
         eigenvalues, eigenvectors = torch.linalg.eigh(cov_matrices)
 
-        ### Sort eigenvectors by eigenvalue (descending) for each point
-        # Get sorting indices: (n_group, n_spatial_dims)
+        ### Sort eigenvectors by eigenvalue (descending)
         sorted_indices = torch.argsort(eigenvalues, dim=1, descending=True)
-
-        # Apply sorting to eigenvectors using gather
-        # Expand indices for gathering: (n_group, n_spatial_dims, n_spatial_dims)
         sorted_idx_expanded = sorted_indices.unsqueeze(1).expand_as(eigenvectors)
         eigenvectors_sorted = torch.gather(
             eigenvectors, dim=2, index=sorted_idx_expanded
         )
 
         ### Extract tangent and normal bases
-        # First n_manifold_dims eigenvectors span tangent space
-        # eigenvectors_sorted: (n_group, n_spatial_dims, n_spatial_dims)
-        #   where eigenvectors_sorted[i, :, j] is the j-th eigenvector for point i
-        tangent_vecs = eigenvectors_sorted[
-            :, :, :n_manifold_dims
-        ]  # (n_group, n_spatial_dims, n_manifold_dims)
-        tangent_basis[point_indices] = tangent_vecs.transpose(
-            1, 2
-        )  # (n_group, n_manifold_dims, n_spatial_dims)
+        tangent_vecs = eigenvectors_sorted[:, :, :n_manifold_dims]
+        tangent_basis[point_indices] = tangent_vecs.transpose(1, 2)
 
-        # Remaining eigenvectors span normal space
-        normal_vecs = eigenvectors_sorted[
-            :, :, n_manifold_dims:
-        ]  # (n_group, n_spatial_dims, codimension)
-        normal_basis[point_indices] = normal_vecs.transpose(
-            1, 2
-        )  # (n_group, codimension, n_spatial_dims)
+        normal_vecs = eigenvectors_sorted[:, :, n_manifold_dims:]
+        normal_basis[point_indices] = normal_vecs.transpose(1, 2)
 
     return tangent_basis, normal_basis
 

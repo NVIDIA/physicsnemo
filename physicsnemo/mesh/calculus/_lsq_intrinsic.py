@@ -105,136 +105,63 @@ def compute_point_gradient_lsq_intrinsic(
             point_normals, n_manifold_dims
         )  # (n_points, n_spatial_dims, n_manifold_dims)
 
-        ### Group points by neighbor count for efficient batched processing
-        neighbor_counts = adjacency.offsets[1:] - adjacency.offsets[:-1]  # (n_points,)
-        unique_counts, inverse_indices = torch.unique(
-            neighbor_counts, return_inverse=True
-        )
-
         ### Process each neighbor-count group in parallel
-        for count_idx, n_neighbors in enumerate(unique_counts):
-            n_neighbors = int(n_neighbors)
+        from physicsnemo.mesh.calculus._neighborhoods import iter_neighborhood_batches
 
-            # Skip if too few neighbors
-            if n_neighbors < 2:
-                continue
-
-            # Find all points with this neighbor count
-            points_mask = inverse_indices == count_idx
-            point_indices = torch.where(points_mask)[0]  # (n_group,)
+        for batch in iter_neighborhood_batches(mesh.points, adjacency, min_neighbors=2):
+            point_indices = batch.entity_indices
+            neighbors_flat = batch.neighbor_indices
+            A_ambient = (
+                batch.relative_positions
+            )  # (n_group, n_neighbors, n_spatial_dims)
             n_group = len(point_indices)
+            n_neighbors = batch.n_neighbors
 
-            if n_group == 0:
-                continue
-
-            ### Extract neighbor indices for this group
-            # Shape: (n_group, n_neighbors)
-            offsets_group = adjacency.offsets[point_indices]  # (n_group,)
-            neighbor_idx_ranges = offsets_group.unsqueeze(1) + torch.arange(
-                n_neighbors, device=device
-            ).unsqueeze(0)  # (n_group, n_neighbors)
-            neighbors_flat = adjacency.indices[
-                neighbor_idx_ranges
-            ]  # (n_group, n_neighbors)
-
-            ### Build LSQ matrices in ambient space
-            # Current point positions: (n_group, n_spatial_dims)
-            x0 = mesh.points[point_indices]  # (n_group, n_spatial_dims)
-
-            # Neighbor positions: (n_group, n_neighbors, n_spatial_dims)
-            x_neighbors = mesh.points[neighbors_flat]
-
-            # Relative positions (A matrix): (n_group, n_neighbors, n_spatial_dims)
-            A_ambient = x_neighbors - x0.unsqueeze(1)
-
-            ### Project LSQ system into tangent space
-            # Tangent bases for this group: (n_group, n_spatial_dims, n_manifold_dims)
-            tangent_basis = tangent_bases[point_indices]
-
-            # Project A into tangent space: A_tangent = A_ambient @ tangent_basis
-            # For each group element: A_ambient[i, :, :] @ tangent_basis[i, :, :]
-            # (n_group, n_neighbors, n_spatial_dims) @ (n_group, n_spatial_dims, n_manifold_dims)
-            # = (n_group, n_neighbors, n_manifold_dims)
+            ### Project into tangent space
+            tangent_basis = tangent_bases[
+                point_indices
+            ]  # (n_group, n_spatial_dims, n_manifold_dims)
             A_tangent = torch.einsum("gns,gsm->gnm", A_ambient, tangent_basis)
 
-            # Function differences
-            if is_scalar:
-                b = point_values[neighbors_flat] - point_values[
-                    point_indices
-                ].unsqueeze(1)  # (n_group, n_neighbors)
-            else:
-                b = point_values[neighbors_flat] - point_values[
-                    point_indices
-                ].unsqueeze(1)  # (n_group, n_neighbors, ...)
+            ### Function differences
+            b = point_values[neighbors_flat] - point_values[point_indices].unsqueeze(1)
 
-            ### Compute weights (based on ambient distances)
-            distances = torch.norm(A_ambient, dim=-1)  # (n_group, n_neighbors)
+            ### Compute inverse-distance weights (using ambient distances)
+            distances = torch.linalg.vector_norm(A_ambient, dim=-1)
             weights = 1.0 / distances.pow(weight_power).clamp(
                 min=safe_eps(distances.dtype)
             )
 
-            ### Apply weights to tangent-space system
+            ### Apply sqrt-weights to tangent-space system
             sqrt_w = weights.sqrt().unsqueeze(-1)  # (n_group, n_neighbors, 1)
-            A_tangent_weighted = (
-                sqrt_w * A_tangent
-            )  # (n_group, n_neighbors, n_manifold_dims)
+            A_tangent_weighted = sqrt_w * A_tangent
 
             ### Solve batched least-squares in tangent space
-            try:
-                if is_scalar:
-                    b_weighted = sqrt_w.squeeze(-1) * b  # (n_group, n_neighbors)
-                    # Solve for gradient in tangent coordinates
-                    grad_tangent = torch.linalg.lstsq(
-                        A_tangent_weighted,  # (n_group, n_neighbors, n_manifold_dims)
-                        b_weighted.unsqueeze(-1),  # (n_group, n_neighbors, 1)
-                        rcond=None,
-                    ).solution.squeeze(-1)  # (n_group, n_manifold_dims)
+            if is_scalar:
+                b_weighted = sqrt_w.squeeze(-1) * b
+                grad_tangent = torch.linalg.lstsq(
+                    A_tangent_weighted, b_weighted.unsqueeze(-1), rcond=None
+                ).solution.squeeze(-1)  # (n_group, n_manifold_dims)
 
-                    # Convert back to ambient coordinates
-                    # grad_ambient = tangent_basis @ grad_tangent
-                    # (n_group, n_spatial_dims, n_manifold_dims) @ (n_group, n_manifold_dims)
-                    grad_ambient = torch.einsum(
-                        "gsm,gm->gs", tangent_basis, grad_tangent
-                    )  # (n_group, n_spatial_dims)
+                # Map back to ambient coordinates
+                grad_ambient = torch.einsum("gsm,gm->gs", tangent_basis, grad_tangent)
+                gradients[point_indices] = grad_ambient
+            else:
+                # Tensor field: flatten extra dims, solve, map back
+                b_weighted = sqrt_w * b
+                orig_shape = b.shape[2:]
+                b_flat = b_weighted.reshape(n_group, n_neighbors, -1)
 
-                    gradients[point_indices] = grad_ambient
-                else:
-                    # Tensor field case
-                    b_weighted = sqrt_w * b  # (n_group, n_neighbors, ...)
-                    orig_shape = b.shape[2:]  # Extra dimensions
-                    b_flat = b_weighted.reshape(
-                        n_group, n_neighbors, -1
-                    )  # (n_group, n_neighbors, n_components)
+                grad_tangent = torch.linalg.lstsq(
+                    A_tangent_weighted, b_flat, rcond=None
+                ).solution  # (n_group, n_manifold_dims, n_components)
 
-                    grad_tangent = torch.linalg.lstsq(
-                        A_tangent_weighted,  # (n_group, n_neighbors, n_manifold_dims)
-                        b_flat,  # (n_group, n_neighbors, n_components)
-                        rcond=None,
-                    ).solution  # (n_group, n_manifold_dims, n_components)
-
-                    # Convert to ambient: (n_group, n_spatial_dims, n_manifold_dims) @ (n_group, n_manifold_dims, n_components)
-                    grad_ambient = torch.bmm(
-                        tangent_basis,  # (n_group, n_spatial_dims, n_manifold_dims)
-                        grad_tangent,  # (n_group, n_manifold_dims, n_components)
-                    )  # (n_group, n_spatial_dims, n_components)
-
-                    # Reshape: (n_group, n_spatial_dims, *orig_shape)
-                    grad_ambient_reshaped = grad_ambient.reshape(
-                        n_group, n_spatial_dims, *orig_shape
-                    )
-                    # Move spatial_dims to second position: (n_group, *orig_shape, n_spatial_dims)
-                    perm = [0] + list(range(2, grad_ambient_reshaped.ndim)) + [1]
-                    gradients[point_indices] = grad_ambient_reshaped.permute(*perm)
-
-            except torch.linalg.LinAlgError:
-                import warnings
-
-                warnings.warn(
-                    "Singular linear system in intrinsic LSQ gradient reconstruction. "
-                    "Affected vertices (e.g., isolated or collinear neighborhoods) "
-                    "will have zero gradients.",
-                    stacklevel=2,
+                grad_ambient = torch.bmm(tangent_basis, grad_tangent)
+                grad_ambient_reshaped = grad_ambient.reshape(
+                    n_group, n_spatial_dims, *orig_shape
                 )
+                perm = [0] + list(range(2, grad_ambient_reshaped.ndim)) + [1]
+                gradients[point_indices] = grad_ambient_reshaped.permute(*perm)
 
     return gradients
 
@@ -285,7 +212,9 @@ def _build_tangent_bases_vectorized(
     ### Project v1 onto tangent plane: v1 = v1 - (v1·n)n
     v1_dot_n = (v1 * normals).sum(dim=-1, keepdim=True)  # (n_points, 1)
     v1 = v1 - v1_dot_n * normals  # (n_points, n_spatial_dims)
-    v1 = v1 / torch.norm(v1, dim=-1, keepdim=True).clamp(min=safe_eps(v1.dtype))
+    v1 = v1 / torch.linalg.vector_norm(v1, dim=-1, keepdim=True).clamp(
+        min=safe_eps(v1.dtype)
+    )
 
     if n_manifold_dims == 1:
         # 1D manifold (curves): single tangent vector
@@ -296,7 +225,9 @@ def _build_tangent_bases_vectorized(
         # Second tangent vector: v2 = n × v1
         if n_spatial_dims == 3:
             v2 = torch.linalg.cross(normals, v1)  # (n_points, 3)
-            v2 = v2 / torch.norm(v2, dim=-1, keepdim=True).clamp(min=safe_eps(v2.dtype))
+            v2 = v2 / torch.linalg.vector_norm(v2, dim=-1, keepdim=True).clamp(
+                min=safe_eps(v2.dtype)
+            )
             return torch.stack([v1, v2], dim=-1)  # (n_points, 3, 2)
         else:
             raise ValueError(
