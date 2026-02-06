@@ -15,72 +15,24 @@
 # limitations under the License.
 
 
-"""A script to check that copyright headers exists"""
+"""A script to check that copyright headers exist.
+
+This script can be run in two modes:
+1. With filenames passed as arguments (used by pre-commit)
+2. With --all-files to check all files in the repository
+"""
 
 import argparse
-import fnmatch
-import itertools
 import json
-import os
 import re
-import shutil
-import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
 
-def read_gitignore(gitignore_path):
-    """
-    Read the .gitignore file and collect patterns to skip
-    """
-    ignore_patterns = []
-    if gitignore_path.exists():
-        with gitignore_path.open("r") as file:
-            for line in file:
-                stripped_line = line.strip()
-                if stripped_line and not stripped_line.startswith("#"):
-                    ignore_patterns.append(stripped_line)
-    return ignore_patterns
-
-
-def is_ignored(path, working_path, ignore_patterns):
-    """
-    Check if the path needs to be ignored
-    """
-    # Get the git root path to stop the search
-    git_root_path = Path(__file__) / Path(working_path)
-    git_root_path = git_root_path.resolve()
-
-    for pattern in ignore_patterns:
-        normalized_pattern = pattern.rstrip("/")
-
-        # Filter paths that are outside git root
-        relevant_children = [
-            part
-            for part in [path] + list(path.parents)
-            if git_root_path in part.parents or part == git_root_path
-        ]
-
-        # Check the directory itself and each parent directory
-        for part in relevant_children:
-            # Match directories (patterns ending with '/')
-            if pattern.endswith("/") and part.is_dir():
-                if fnmatch.fnmatch(part.name, normalized_pattern):
-                    return True
-
-            # Match files or directories without a trailing '/'
-            if not pattern.endswith("/") and (
-                fnmatch.fnmatch(str(part), pattern)
-                or fnmatch.fnmatch(part.name, normalized_pattern)
-            ):
-                return True
-
-    return False
-
-
 def get_top_comments(_data):
     """
-    Get all lines where comments should exist
+    Get all lines where comments should exist.
     """
     lines_to_extract = []
     for i, line in enumerate(_data):
@@ -102,69 +54,117 @@ def get_top_comments(_data):
     return comments
 
 
-def get_committed_files():
+def get_all_files(working_path, exts, exclude_dirs):
     """
-    Get a list of files that are part of the current commit, excluding deleted files
-    """
-    git_executable = shutil.which("git")
-
-    # Basic check: ensure it's an absolute path and executable
-    if (
-        not git_executable
-        or not os.path.isabs(git_executable)
-        or not os.access(git_executable, os.X_OK)
-    ):
-        raise RuntimeError("Invalid git executable")
-
-    result = subprocess.run(  # noqa S603
-        [git_executable, "diff", "--name-status", "--cached"],
-        capture_output=True,
-        text=True,
-    )
-    files = []
-    for line in result.stdout.splitlines():
-        status, *file_path = line.split("\t")
-        if status.startswith("R"):
-            files.append(file_path[1])
-        elif status != "D":
-            files.append("\t".join(file_path))
-    return files
-
-
-def get_all_files(working_path, exts):
-    """
-    Get a list of all files in the directory with specified extensions
+    Get a list of all files in the directory with specified extensions,
+    excluding files in excluded directories.
     """
     all_files = []
+    exclude_paths = [Path(p).resolve() for p in exclude_dirs]
+
     for ext in exts:
-        all_files.extend(working_path.rglob(f"*{ext}"))
+        # Handle extensions that start with "." vs filenames like "Dockerfile"
+        if ext.startswith("."):
+            pattern = f"*{ext}"
+        else:
+            pattern = ext
+
+        for filepath in working_path.rglob(pattern):
+            # Check if file is under any excluded directory
+            is_excluded = any(
+                exclude_path in filepath.parents or filepath == exclude_path
+                for exclude_path in exclude_paths
+            )
+            if not is_excluded:
+                all_files.append(filepath)
+
     return all_files
+
+
+def check_file_header(filename, pyheader, pyheader_lines, starting_year, current_year):
+    """
+    Check a single file for proper copyright header.
+
+    Returns:
+        tuple: (is_problematic, has_gpl, error_message)
+    """
+    try:
+        with open(str(filename), "r", encoding="utf-8") as original:
+            data = original.readlines()
+    except (OSError, UnicodeDecodeError) as e:
+        return True, False, f"Could not read file: {e}"
+
+    data = get_top_comments(data)
+
+    # Check for ignore marker
+    if data and "# ignore_header_test" in data[0]:
+        return False, False, None
+
+    # Check if enough header lines exist
+    if len(data) < pyheader_lines - 1:
+        return True, False, "has less header lines than the copyright template"
+
+    # Look for NVIDIA copyright line
+    found = False
+    is_problematic = False
+    error_msg = None
+
+    for i, line in enumerate(data):
+        if re.search(re.compile("Copyright.*NVIDIA.*", re.IGNORECASE), line):
+            found = True
+            # Check year
+            year_good = False
+            for year in range(starting_year, current_year + 1):
+                year_line = pyheader[0].format(CURRENT_YEAR=year)
+                if year_line in data[i]:
+                    year_good = True
+                    break
+                year_line_aff = year_line.split(".")
+                year_line_aff = year_line_aff[0] + " & AFFILIATES." + year_line_aff[1]
+                if year_line_aff in data[i]:
+                    year_good = True
+                    break
+            if not year_good:
+                is_problematic = True
+                error_msg = "had an error with the year"
+            break
+
+    if not found:
+        is_problematic = True
+        error_msg = "did not match the regex: `Copyright.*NVIDIA.*`"
+
+    # Check for GPL license
+    has_gpl = any("gpl" in line.lower() for line in data)
+
+    return is_problematic, has_gpl, error_msg
 
 
 def main():
     """
-    Main function to check the copyright headers
+    Main function to check the copyright headers.
     """
     parser = argparse.ArgumentParser(description="Check copyright headers in files.")
     parser.add_argument(
+        "filenames",
+        nargs="*",
+        help="Filenames to check (passed by pre-commit).",
+    )
+    parser.add_argument(
+        "-a",
         "--all-files",
         action="store_true",
-        help="Check all files in the directory instead of just committed files.",
+        help="Check all files in the directory instead of files passed as arguments.",
     )
     args = parser.parse_args()
 
     with open(Path(__file__).parent.resolve() / Path("config.json")) as f:
         config = json.loads(f.read())
-    print("License check config:")
-    print(json.dumps(config, sort_keys=True, indent=4))
 
     current_year = int(datetime.today().year)
     starting_year = 2024
     python_header_path = Path(__file__).parent.resolve() / Path(
         config["copyright_file"]
     )
-    working_path = Path(__file__).parent.resolve() / Path(config["dir"])
-    exts = config["include-ext"]
 
     with open(python_header_path, "r", encoding="utf-8") as original:
         pyheader = original.read().split("\n")
@@ -172,97 +172,58 @@ def main():
 
     # Determine which files to check
     if args.all_files:
-        # Build list of files to check, excluding those in exclude-dir
-        exclude_paths = [
-            (Path(__file__).parent / Path(path)).resolve().rglob("*")
+        working_path = Path(__file__).parent.resolve() / Path(config["dir"])
+        exts = config["include-ext"]
+        exclude_dirs = [
+            (Path(__file__).parent / Path(path)).resolve()
             for path in config.get("exclude-dir", [])
         ]
-        all_exclude_paths = itertools.chain.from_iterable(exclude_paths)
-        exclude_filenames = [p for p in all_exclude_paths if p.suffix in exts]
-        filenames = [p for p in working_path.resolve().rglob("*") if p.suffix in exts]
-        filenames = [
-            filename for filename in filenames if filename not in exclude_filenames
-        ]
+        filenames = get_all_files(working_path.resolve(), exts, exclude_dirs)
+        print("License check config:")
+        print(json.dumps(config, sort_keys=True, indent=4))
+    elif args.filenames:
+        # Files passed from pre-commit (already filtered by pre-commit config)
+        filenames = [Path(f) for f in args.filenames]
     else:
-        committed_files = get_committed_files()
-        filenames = [Path(f) for f in committed_files if Path(f).suffix in exts]
+        # No files to check
+        print("No files to check.")
+        return 0
 
     problematic_files = []
     gpl_files = []
 
-    ignore_patterns = read_gitignore(working_path / Path(".gitignore"))
-
     for filename in filenames:
-        # Check if the file is ignored in gitignore. # NOTE this can be removed if
-        # the files don't need to be tested against gitignore patters.
-        if not is_ignored(filename, working_path, ignore_patterns):
-            with open(str(filename), "r", encoding="utf-8") as original:
-                data = original.readlines()
+        is_problematic, has_gpl, error_msg = check_file_header(
+            filename, pyheader, pyheader_lines, starting_year, current_year
+        )
 
-            data = get_top_comments(data)
-            if data and "# ignore_header_test" in data[0]:
-                continue
-            if len(data) < pyheader_lines - 1:
-                print(f"{filename} has less header lines than the copyright template")
-                problematic_files.append(filename)
-                continue
+        if is_problematic:
+            print(f"{filename} {error_msg}")
+            problematic_files.append(filename)
 
-            found = False
-            for i, line in enumerate(data):
-                if re.search(re.compile("Copyright.*NVIDIA.*", re.IGNORECASE), line):
-                    found = True
-                    # Check 1st line manually
-                    year_good = False
-                    for year in range(starting_year, current_year + 1):
-                        year_line = pyheader[0].format(CURRENT_YEAR=year)
-                        if year_line in data[i]:
-                            year_good = True
-                            break
-                        year_line_aff = year_line.split(".")
-                        year_line_aff = (
-                            year_line_aff[0] + " & AFFILIATES." + year_line_aff[1]
-                        )
-                        if year_line_aff in data[i]:
-                            year_good = True
-                            break
-                    if not year_good:
-                        problematic_files.append(filename)
-                        print(f"{filename} had an error with the year")
-                        break
-                    # while "opyright" in data[i]:
-                    #    i += 1
-                    # for j in range(1, pyheader_lines):
-                    #    if pyheader[j] not in data[i + j - 1]:
-                    #        problematic_files.append(filename)
-                    #        print(f"{filename} missed the line: {pyheader[j]}")
-                    #        break
-                if found:
-                    break
-            if not found:
-                print(f"{filename} did not match the regex: `Copyright.*NVIDIA.*`")
-                problematic_files.append(filename)
-
-            # test if GPL license exists
-            for lines in data:
-                if "gpl" in lines.lower():
-                    gpl_files.append(filename)
-                    break
+        if has_gpl:
+            gpl_files.append(filename)
 
     if len(problematic_files) > 0:
         print(
-            "test_header.py found the following files that might not have a copyright header:"
+            "header_check.py found the following files that might not have a "
+            "copyright header:"
         )
         for _file in problematic_files:
-            print(_file)
-    if len(gpl_files) > 0:
-        print("test_header.py found the following files that might have GPL copyright:")
-        for _file in gpl_files:
-            print(_file)
-    assert len(problematic_files) == 0, "header test failed!"
-    assert len(gpl_files) == 0, "found gpl license, header test failed!"
+            print(f"  {_file}")
 
-    print("Success: File headers look good!")
+    if len(gpl_files) > 0:
+        print(
+            "header_check.py found the following files that might have GPL copyright:"
+        )
+        for _file in gpl_files:
+            print(f"  {_file}")
+
+    if len(problematic_files) > 0 or len(gpl_files) > 0:
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
