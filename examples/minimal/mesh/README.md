@@ -39,6 +39,7 @@ pip install -e ".[mesh]"
 
 ## Tutorial Overview
 
+<!-- markdownlint-disable MD013 -->
 | Tutorial | Topic | What You'll Learn |
 |----------|-------|-------------------|
 | **1. Getting Started** | Core concepts | Mesh structure, data attachment, GPU acceleration |
@@ -47,6 +48,7 @@ pip install -e ".[mesh]"
 | **4. Neighbors & Spatial** | Queries | Adjacency, BVH, sampling, interpolation |
 | **5. Quality & Repair** | Mesh health | Validation, quality metrics, repair |
 | **6. ML Integration** | Production workflows | Performance, batching, torch.compile |
+<!-- markdownlint-enable MD013 -->
 
 ## Running the Tutorials
 
