@@ -14,14 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for projection operations (extrusion, embedding, spatial dimension changes)."""
+"""Tests for projection operations (extrusion, embedding, projection)."""
 
 import pytest
 import torch
 from tensordict import TensorDict
 
 from physicsnemo.mesh import Mesh
-from physicsnemo.mesh.projections import embed_in_spatial_dims, extrude
+from physicsnemo.mesh.projections import embed, extrude, project
 
 
 class TestExtrude:
@@ -173,7 +173,7 @@ class TestExtrude:
         assert torch.equal(extruded.cells, expected_cells)
 
         ### Verify total volume
-        # Original triangle has area 0.5, extruded by height 1.0 → volume = 0.5
+        # Original triangle has area 0.5, extruded by height 1.0 -> volume = 0.5
         total_volume = extruded.cell_areas.sum()  # "areas" is generic for n-volumes
         expected_volume = 0.5
         assert torch.allclose(total_volume, torch.tensor(expected_volume), atol=1e-6)
@@ -237,7 +237,7 @@ class TestExtrude:
         assert extruded.n_cells == 3
 
         ### Verify that original points are padded with zeros
-        # Original points should be padded: [x, y] → [x, y, 0]
+        # Original points should be padded: [x, y] -> [x, y, 0]
         expected_original = torch.tensor(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
         )
@@ -299,7 +299,7 @@ class TestExtrude:
         )
         mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
 
-        ### Extrude (1D edge → 2D, creates 2 child cells per parent)
+        ### Extrude (1D edge -> 2D, creates 2 child cells per parent)
         extruded = extrude(mesh, vector=[0.0, 1.0])
 
         ### Verify cell_data is replicated
@@ -328,7 +328,7 @@ class TestExtrude:
         extruded = extrude(mesh, vector=[0.0, 1.0])
 
         ### Verify dimensions
-        assert extruded.n_cells == 4  # 2 edges × 2 children each = 4 triangles
+        assert extruded.n_cells == 4  # 2 edges x 2 children each = 4 triangles
 
         ### Verify cell_data replication maintains grouping
         # First 2 cells should have cell_id=10, next 2 should have cell_id=20
@@ -367,12 +367,12 @@ class TestExtrude:
     @pytest.mark.parametrize(
         "n_manifold_dims,n_spatial_dims",
         [
-            (0, 1),  # Points in 1D → edges in 1D
-            (0, 2),  # Points in 2D → edges in 2D
-            (0, 3),  # Points in 3D → edges in 3D
-            (1, 2),  # Edges in 2D → triangles in 2D
-            (1, 3),  # Edges in 3D → triangles in 3D
-            (2, 3),  # Triangles in 3D → tetrahedra in 3D
+            (0, 1),  # Points in 1D -> edges in 1D
+            (0, 2),  # Points in 2D -> edges in 2D
+            (0, 3),  # Points in 3D -> edges in 3D
+            (1, 2),  # Edges in 2D -> triangles in 2D
+            (1, 3),  # Edges in 3D -> triangles in 3D
+            (2, 3),  # Triangles in 3D -> tetrahedra in 3D
         ],
     )
     def test_extrude_various_dimensions(self, n_manifold_dims, n_spatial_dims):
@@ -462,7 +462,7 @@ class TestExtrude:
         )
 
     def test_extrude_4d_to_5d(self):
-        """Test high-dimensional extrusion: 3D manifold in 4D space → 4D manifold."""
+        """Test high-dimensional extrusion: 3D manifold in 4D space -> 4D manifold."""
         ### Create a 3-simplex (tetrahedron) in 4D space
         points = torch.tensor(
             [
@@ -568,8 +568,8 @@ class TestExtrude:
         assert torch.allclose(extruded.points[2:], expected_extruded)
 
 
-class TestEmbedInSpatialDims:
-    """Test suite for spatial dimension embedding/projection functionality."""
+class TestEmbed:
+    """Test suite for spatial dimension embedding functionality."""
 
     def test_embed_2d_to_3d(self):
         """Test embedding a 2D mesh in 2D space into 3D space."""
@@ -583,7 +583,7 @@ class TestEmbedInSpatialDims:
         assert mesh_2d.codimension == 0
 
         ### Embed in 3D space
-        mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
+        mesh_3d = embed(mesh_2d, target_n_spatial_dims=3)
 
         ### Verify dimensions
         assert mesh_3d.n_spatial_dims == 3
@@ -607,37 +607,6 @@ class TestEmbedInSpatialDims:
         # Normal should point in z-direction
         assert torch.allclose(normals[0, 2].abs(), torch.tensor(1.0))
 
-    def test_project_3d_to_2d(self):
-        """Test projecting a 2D mesh in 3D space down to 2D space."""
-        ### Create 2D triangle in 3D space
-        points = torch.tensor(
-            [[0.0, 0.0, 1.0], [1.0, 0.0, 2.0], [0.0, 1.0, 3.0]], dtype=torch.float32
-        )
-        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
-        mesh_3d = Mesh(points=points, cells=cells)
-
-        assert mesh_3d.n_spatial_dims == 3
-        assert mesh_3d.codimension == 1
-
-        ### Project to 2D space
-        mesh_2d = embed_in_spatial_dims(mesh_3d, target_n_spatial_dims=2)
-
-        ### Verify dimensions
-        assert mesh_2d.n_spatial_dims == 2
-        assert mesh_2d.n_manifold_dims == 2
-        assert mesh_2d.codimension == 0  # No longer codimension-1
-        assert mesh_2d.n_points == 3
-        assert mesh_2d.n_cells == 1
-
-        ### Verify points are sliced (z-coordinate removed)
-        expected_points = torch.tensor(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32
-        )
-        assert torch.allclose(mesh_2d.points, expected_points)
-
-        ### Verify cells unchanged
-        assert torch.equal(mesh_2d.cells, cells)
-
     def test_embed_1d_curve_2d_to_3d(self):
         """Test embedding a 1D curve in 2D space into 3D space."""
         ### Create edge in 2D
@@ -650,7 +619,7 @@ class TestEmbedInSpatialDims:
         assert mesh_2d.codimension == 1
 
         ### Embed in 3D
-        mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
+        mesh_3d = embed(mesh_2d, target_n_spatial_dims=3)
 
         ### Verify dimensions
         assert mesh_3d.n_manifold_dims == 1
@@ -671,7 +640,7 @@ class TestEmbedInSpatialDims:
         mesh = Mesh(points=points, cells=cells)
 
         ### Embed to same dimension
-        result = embed_in_spatial_dims(mesh, target_n_spatial_dims=3)
+        result = embed(mesh, target_n_spatial_dims=3)
 
         ### Should be same object (no-op)
         assert result is mesh
@@ -691,7 +660,7 @@ class TestEmbedInSpatialDims:
         mesh = Mesh(points=points, cells=cells, point_data=point_data)
 
         ### Embed in 3D
-        embedded = embed_in_spatial_dims(mesh, target_n_spatial_dims=3)
+        embedded = embed(mesh, target_n_spatial_dims=3)
 
         ### Verify point_data preserved
         assert "temperature" in embedded.point_data
@@ -715,7 +684,7 @@ class TestEmbedInSpatialDims:
         mesh = Mesh(points=points, cells=cells, cell_data=cell_data)
 
         ### Embed in 3D
-        embedded = embed_in_spatial_dims(mesh, target_n_spatial_dims=3)
+        embedded = embed(mesh, target_n_spatial_dims=3)
 
         ### Verify cell_data preserved
         assert "region_id" in embedded.cell_data
@@ -732,7 +701,7 @@ class TestEmbedInSpatialDims:
         mesh = Mesh(points=points, cells=cells, global_data=global_data)
 
         ### Embed in 3D
-        embedded = embed_in_spatial_dims(mesh, target_n_spatial_dims=3)
+        embedded = embed(mesh, target_n_spatial_dims=3)
 
         ### Verify global_data preserved
         assert "simulation_time" in embedded.global_data
@@ -759,7 +728,7 @@ class TestEmbedInSpatialDims:
         assert len(mesh.cell_data["_cache"]) > 0
 
         ### Embed in 4D
-        embedded = embed_in_spatial_dims(mesh, target_n_spatial_dims=4)
+        embedded = embed(mesh, target_n_spatial_dims=4)
 
         ### Verify cache is cleared
         # Cache should either not exist or be empty
@@ -768,58 +737,29 @@ class TestEmbedInSpatialDims:
 
     def test_embed_multiple_steps(self):
         """Test embedding through multiple dimension changes."""
-        ### Start with 1D in 2D
+        ### Start with 1D edge in 2D space
         points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
         cells = torch.tensor([[0, 1]], dtype=torch.int64)
         mesh_2d = Mesh(points=points, cells=cells)
 
         ### Embed to 3D
-        mesh_3d = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
+        mesh_3d = embed(mesh_2d, target_n_spatial_dims=3)
         assert mesh_3d.n_spatial_dims == 3
         assert torch.allclose(
             mesh_3d.points, torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         )
 
         ### Embed to 4D
-        mesh_4d = embed_in_spatial_dims(mesh_3d, target_n_spatial_dims=4)
+        mesh_4d = embed(mesh_3d, target_n_spatial_dims=4)
         assert mesh_4d.n_spatial_dims == 4
         assert torch.allclose(
             mesh_4d.points, torch.tensor([[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
         )
 
         ### Project back to 2D
-        mesh_2d_again = embed_in_spatial_dims(mesh_4d, target_n_spatial_dims=2)
+        mesh_2d_again = project(mesh_4d, target_n_spatial_dims=2)
         assert mesh_2d_again.n_spatial_dims == 2
         assert torch.allclose(mesh_2d_again.points, points)
-
-    def test_embed_raises_on_invalid_target(self):
-        """Test that invalid target dimensions raise appropriate errors."""
-        ### Create mesh
-        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
-        cells = torch.tensor([[0, 1]], dtype=torch.int64)
-        mesh = Mesh(points=points, cells=cells)
-
-        ### Target < 1 should fail
-        with pytest.raises(ValueError, match="target_n_spatial_dims must be >= 1"):
-            embed_in_spatial_dims(mesh, target_n_spatial_dims=0)
-
-        with pytest.raises(ValueError, match="target_n_spatial_dims must be >= 1"):
-            embed_in_spatial_dims(mesh, target_n_spatial_dims=-1)
-
-    def test_embed_raises_when_target_less_than_manifold_dims(self):
-        """Test that we can't embed manifold in lower-dimensional space."""
-        ### Create 2D mesh
-        points = torch.tensor(
-            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
-        )
-        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
-        mesh = Mesh(points=points, cells=cells)
-
-        assert mesh.n_manifold_dims == 2
-
-        ### Can't project 2D manifold to 1D space
-        with pytest.raises(ValueError, match="Cannot embed.*dimensional manifold"):
-            embed_in_spatial_dims(mesh, target_n_spatial_dims=1)
 
     def test_embed_round_trip_preserves_topology(self):
         """Test that embedding up and projecting down preserves topology."""
@@ -835,8 +775,8 @@ class TestEmbedInSpatialDims:
         original_area = mesh_original.cell_areas[0].item()
 
         ### Embed to 5D and back
-        mesh_5d = embed_in_spatial_dims(mesh_original, target_n_spatial_dims=5)
-        mesh_back = embed_in_spatial_dims(mesh_5d, target_n_spatial_dims=3)
+        mesh_5d = embed(mesh_original, target_n_spatial_dims=5)
+        mesh_back = project(mesh_5d, target_n_spatial_dims=3)
 
         ### Verify topology preserved
         assert torch.equal(mesh_back.cells, cells)
@@ -857,12 +797,6 @@ class TestEmbedInSpatialDims:
             (3, 4),
             (3, 5),
             (4, 5),
-            (5, 4),
-            (5, 3),
-            (5, 2),
-            (4, 3),
-            (4, 2),
-            (3, 2),
         ],
     )
     def test_embed_various_dimension_changes(self, start_dims, target_dims):
@@ -876,8 +810,8 @@ class TestEmbedInSpatialDims:
         assert mesh.n_spatial_dims == start_dims
         assert mesh.n_manifold_dims == 1
 
-        ### Embed/project to target
-        result = embed_in_spatial_dims(mesh, target_n_spatial_dims=target_dims)
+        ### Embed to target
+        result = embed(mesh, target_n_spatial_dims=target_dims)
 
         ### Verify dimensions
         assert result.n_spatial_dims == target_dims
@@ -900,7 +834,7 @@ class TestEmbedInSpatialDims:
         assert mesh.n_spatial_dims == 2
 
         ### Embed in 4D
-        embedded = embed_in_spatial_dims(mesh, target_n_spatial_dims=4)
+        embedded = embed(mesh, target_n_spatial_dims=4)
 
         ### Verify
         assert embedded.n_manifold_dims == 0
@@ -921,8 +855,411 @@ class TestEmbedInSpatialDims:
         mesh = Mesh(points=points, cells=cells)
 
         ### Embed
-        embedded = embed_in_spatial_dims(mesh, target_n_spatial_dims=5)
+        embedded = embed(mesh, target_n_spatial_dims=5)
 
         ### Verify cells exactly the same (not just values, but same object)
         assert embedded.cells is mesh.cells
         assert torch.equal(embedded.cells, cells)
+
+    # --- insert_at tests ---
+
+    def test_embed_insert_at_beginning(self):
+        """Test embedding with new dimensions prepended at the start."""
+        ### Create 2D edge
+        points = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Embed to 4D with insert_at=0: [x, y] -> [0, 0, x, y]
+        result = embed(mesh, target_n_spatial_dims=4, insert_at=0)
+
+        assert result.n_spatial_dims == 4
+        expected = torch.tensor(
+            [[0.0, 0.0, 1.0, 2.0], [0.0, 0.0, 3.0, 4.0]], dtype=torch.float32
+        )
+        assert torch.allclose(result.points, expected)
+
+    def test_embed_insert_at_middle(self):
+        """Test embedding with new dimension inserted in the middle."""
+        ### Create 2D edge
+        points = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Embed to 3D with insert_at=1: [x, y] -> [x, 0, y]
+        result = embed(mesh, target_n_spatial_dims=3, insert_at=1)
+
+        assert result.n_spatial_dims == 3
+        expected = torch.tensor(
+            [[1.0, 0.0, 2.0], [3.0, 0.0, 4.0]], dtype=torch.float32
+        )
+        assert torch.allclose(result.points, expected)
+
+    def test_embed_insert_at_end_explicit(self):
+        """Test that insert_at=n_spatial_dims gives same result as default."""
+        ### Create 2D edge
+        points = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Embed to 4D with insert_at=2 (=n_spatial_dims): [x, y] -> [x, y, 0, 0]
+        result_explicit = embed(mesh, target_n_spatial_dims=4, insert_at=2)
+        result_default = embed(mesh, target_n_spatial_dims=4)
+
+        assert torch.allclose(result_explicit.points, result_default.points)
+
+    def test_embed_insert_at_multiple_dims(self):
+        """Test inserting multiple new dimensions at an interior position."""
+        ### Create 3D mesh
+        points = torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Embed to 5D with insert_at=2: [x, y, z] -> [x, y, 0, 0, z]
+        result = embed(mesh, target_n_spatial_dims=5, insert_at=2)
+
+        assert result.n_spatial_dims == 5
+        expected = torch.tensor(
+            [[1.0, 2.0, 0.0, 0.0, 3.0], [4.0, 5.0, 0.0, 0.0, 6.0]],
+            dtype=torch.float32,
+        )
+        assert torch.allclose(result.points, expected)
+
+    # --- Error tests ---
+
+    def test_embed_raises_on_target_less_than_one(self):
+        """Test that target < 1 raises ValueError."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="target_n_spatial_dims must be >= 1"):
+            embed(mesh, target_n_spatial_dims=0)
+
+        with pytest.raises(ValueError, match="target_n_spatial_dims must be >= 1"):
+            embed(mesh, target_n_spatial_dims=-1)
+
+    def test_embed_raises_when_target_less_than_current(self):
+        """Test that embed rejects target < current (should use project)."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="Use project"):
+            embed(mesh, target_n_spatial_dims=2)
+
+    def test_embed_raises_on_insert_at_out_of_range(self):
+        """Test that out-of-range insert_at raises ValueError."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### insert_at=-1 is invalid
+        with pytest.raises(ValueError, match="insert_at must be in"):
+            embed(mesh, target_n_spatial_dims=4, insert_at=-1)
+
+        ### insert_at=3 is invalid for a 2D mesh (valid range is [0, 2])
+        with pytest.raises(ValueError, match="insert_at must be in"):
+            embed(mesh, target_n_spatial_dims=4, insert_at=3)
+
+
+class TestProject:
+    """Test suite for spatial dimension projection functionality."""
+
+    def test_project_3d_to_2d(self):
+        """Test projecting a 2D mesh in 3D space down to 2D space."""
+        ### Create 2D triangle in 3D space
+        points = torch.tensor(
+            [[0.0, 0.0, 1.0], [1.0, 0.0, 2.0], [0.0, 1.0, 3.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh_3d = Mesh(points=points, cells=cells)
+
+        assert mesh_3d.n_spatial_dims == 3
+        assert mesh_3d.codimension == 1
+
+        ### Project to 2D space
+        mesh_2d = project(mesh_3d, target_n_spatial_dims=2)
+
+        ### Verify dimensions
+        assert mesh_2d.n_spatial_dims == 2
+        assert mesh_2d.n_manifold_dims == 2
+        assert mesh_2d.codimension == 0  # No longer codimension-1
+        assert mesh_2d.n_points == 3
+        assert mesh_2d.n_cells == 1
+
+        ### Verify points are sliced (z-coordinate removed)
+        expected_points = torch.tensor(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float32
+        )
+        assert torch.allclose(mesh_2d.points, expected_points)
+
+        ### Verify cells unchanged
+        assert torch.equal(mesh_2d.cells, cells)
+
+    def test_project_no_change_returns_same_mesh(self):
+        """Test that projecting to current dimension returns unchanged mesh."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        result = project(mesh, target_n_spatial_dims=3)
+        assert result is mesh
+
+    def test_project_preserves_data(self):
+        """Test that point/cell/global data is preserved during projection."""
+        ### Create mesh with all data types
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        point_data = TensorDict(
+            {"temperature": torch.tensor([300.0, 400.0])}, batch_size=[2]
+        )
+        cell_data = TensorDict({"region_id": torch.tensor([42])}, batch_size=[1])
+        global_data = TensorDict({"time": torch.tensor(1.5)}, batch_size=[])
+        mesh = Mesh(
+            points=points,
+            cells=cells,
+            point_data=point_data,
+            cell_data=cell_data,
+            global_data=global_data,
+        )
+
+        ### Project to 2D
+        result = project(mesh, target_n_spatial_dims=2)
+
+        ### Verify all data preserved
+        assert torch.allclose(
+            result.point_data["temperature"], torch.tensor([300.0, 400.0])
+        )
+        assert result.cell_data["region_id"] == 42
+        assert torch.allclose(result.global_data["time"], torch.tensor(1.5))
+
+    def test_project_clears_cache(self):
+        """Test that cached geometric properties are cleared on projection."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        # Populate cache
+        _ = mesh.cell_centroids
+        _ = mesh.cell_areas
+        assert "_cache" in mesh.cell_data
+
+        ### Project to 2D
+        result = project(mesh, target_n_spatial_dims=2)
+
+        ### Verify cache is cleared
+        if "_cache" in result.cell_data:
+            assert len(result.cell_data["_cache"]) == 0
+
+    @pytest.mark.parametrize(
+        "start_dims,target_dims",
+        [
+            (5, 4),
+            (5, 3),
+            (5, 2),
+            (4, 3),
+            (4, 2),
+            (3, 2),
+        ],
+    )
+    def test_project_various_dimension_changes(self, start_dims, target_dims):
+        """Test projection across various dimension combinations."""
+        ### Create simple edge in start_dims space
+        points = torch.zeros((2, start_dims), dtype=torch.float32)
+        points[1, 0] = 1.0  # Edge along first axis
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh.n_spatial_dims == start_dims
+        assert mesh.n_manifold_dims == 1
+
+        ### Project to target
+        result = project(mesh, target_n_spatial_dims=target_dims)
+
+        ### Verify dimensions
+        assert result.n_spatial_dims == target_dims
+        assert result.n_manifold_dims == 1  # Unchanged
+        assert result.n_points == 2
+        assert result.n_cells == 1
+
+        ### Verify edge length preserved (intrinsic - first dim always kept)
+        edge_length = result.cell_areas[0]
+        assert torch.allclose(edge_length, torch.tensor(1.0))
+
+    # --- keep_dims tests ---
+
+    def test_project_keep_dims_basic(self):
+        """Test projecting with specific dimension selection."""
+        ### Create 3D edge
+        points = torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Project keeping dims 0 and 2 (x and z): [x, y, z] -> [x, z]
+        result = project(mesh, keep_dims=[0, 2])
+
+        assert result.n_spatial_dims == 2
+        expected = torch.tensor(
+            [[1.0, 3.0], [4.0, 6.0]], dtype=torch.float32
+        )
+        assert torch.allclose(result.points, expected)
+
+    def test_project_keep_dims_reorder(self):
+        """Test that keep_dims can reorder dimensions."""
+        ### Create 3D edge
+        points = torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Project keeping dims [2, 0]: [x, y, z] -> [z, x]
+        result = project(mesh, keep_dims=[2, 0])
+
+        assert result.n_spatial_dims == 2
+        expected = torch.tensor(
+            [[3.0, 1.0], [6.0, 4.0]], dtype=torch.float32
+        )
+        assert torch.allclose(result.points, expected)
+
+    def test_project_keep_dims_single(self):
+        """Test keeping a single dimension for a 0D manifold."""
+        ### Create 0D point cloud in 3D space
+        points = torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0], [1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        ### Keep only the middle dimension
+        result = project(mesh, keep_dims=[1])
+
+        assert result.n_spatial_dims == 1
+        expected = torch.tensor([[2.0], [5.0]], dtype=torch.float32)
+        assert torch.allclose(result.points, expected)
+
+    def test_project_keep_dims_matches_target_n_spatial_dims(self):
+        """Test that keep_dims=[0, 1] matches target_n_spatial_dims=2."""
+        ### Create 3D edge
+        points = torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        result_target = project(mesh, target_n_spatial_dims=2)
+        result_keep = project(mesh, keep_dims=[0, 1])
+
+        assert torch.allclose(result_target.points, result_keep.points)
+
+    def test_project_preserves_topology_with_keep_dims(self):
+        """Test that cell connectivity is unchanged with keep_dims."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=torch.float32,
+        )
+        cells = torch.tensor([[0, 1, 2], [0, 2, 3]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        result = project(mesh, keep_dims=[0, 2])
+
+        ### Cells should be identical references
+        assert result.cells is mesh.cells
+
+    # --- Error tests ---
+
+    def test_project_raises_when_both_args_specified(self):
+        """Test that specifying both arguments raises ValueError."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="exactly one"):
+            project(mesh, target_n_spatial_dims=1, keep_dims=[0])
+
+    def test_project_raises_when_neither_arg_specified(self):
+        """Test that specifying neither argument raises ValueError."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="Must specify"):
+            project(mesh)
+
+    def test_project_raises_on_target_less_than_one(self):
+        """Test that target < 1 raises ValueError."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="target_n_spatial_dims must be >= 1"):
+            project(mesh, target_n_spatial_dims=0)
+
+        with pytest.raises(ValueError, match="target_n_spatial_dims must be >= 1"):
+            project(mesh, target_n_spatial_dims=-1)
+
+    def test_project_raises_when_target_greater_than_current(self):
+        """Test that project rejects target > current (should use embed)."""
+        points = torch.tensor([[0.0, 0.0], [1.0, 0.0]], dtype=torch.float32)
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="Use embed"):
+            project(mesh, target_n_spatial_dims=4)
+
+    def test_project_raises_when_result_less_than_manifold(self):
+        """Test that projecting below manifold dimensions raises ValueError."""
+        ### Create 2D mesh in 3D space
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh.n_manifold_dims == 2
+
+        ### Can't project 2D manifold to 1D space
+        with pytest.raises(ValueError, match="spatial dimensions must be >= manifold"):
+            project(mesh, target_n_spatial_dims=1)
+
+    def test_project_raises_when_keep_dims_too_few_for_manifold(self):
+        """Test that keep_dims resulting in < manifold dims raises ValueError."""
+        ### Create 2D mesh in 3D space
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1, 2]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        assert mesh.n_manifold_dims == 2
+
+        ### Keeping only 1 dim is insufficient for 2D manifold
+        with pytest.raises(ValueError, match="spatial dimensions must be >= manifold"):
+            project(mesh, keep_dims=[0])
+
+    def test_project_raises_on_out_of_range_keep_dims(self):
+        """Test that out-of-range keep_dims indices raise ValueError."""
+        points = torch.tensor(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=torch.float32
+        )
+        cells = torch.tensor([[0, 1]], dtype=torch.int64)
+        mesh = Mesh(points=points, cells=cells)
+
+        with pytest.raises(ValueError, match="keep_dims contains index 5"):
+            project(mesh, keep_dims=[0, 5])
+
+        with pytest.raises(ValueError, match="keep_dims contains index -1"):
+            project(mesh, keep_dims=[-1, 0])

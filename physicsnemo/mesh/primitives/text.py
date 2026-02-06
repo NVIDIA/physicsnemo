@@ -29,7 +29,7 @@ import torch
 
 from physicsnemo.core.version_check import require_version_spec
 from physicsnemo.mesh.mesh import Mesh
-from physicsnemo.mesh.projections import embed_in_spatial_dims, extrude
+from physicsnemo.mesh.projections import embed, extrude
 
 
 def _compute_polygon_signed_area(vertices) -> float:
@@ -550,7 +550,7 @@ def text_3d_3d(
     )
 
     # Embed to 3D and extrude
-    mesh_3d_surface = embed_in_spatial_dims(mesh_2d, target_n_spatial_dims=3)
+    mesh_3d_surface = embed(mesh_2d, target_n_spatial_dims=3)
     volume = extrude(
         mesh_3d_surface,
         vector=torch.tensor(

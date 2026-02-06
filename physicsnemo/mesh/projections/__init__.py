@@ -17,12 +17,13 @@
 """Projection operations for mesh extrusion, embedding, and spatial dimension manipulation.
 
 This module provides functionality for:
+- Embedding meshes in higher-dimensional spaces (non-destructive)
+- Projecting meshes to lower-dimensional spaces (lossy)
 - Extruding manifolds to higher dimensions
-- Embedding meshes in higher/lower-dimensional spaces
-- Projecting meshes between different spatial dimensions
 """
 
-from physicsnemo.mesh.projections._embed import embed_in_spatial_dims
+from physicsnemo.mesh.projections._embed import embed
 from physicsnemo.mesh.projections._extrude import extrude
+from physicsnemo.mesh.projections._project import project
 
-__all__ = ["extrude", "embed_in_spatial_dims"]
+__all__ = ["embed", "extrude", "project"]
