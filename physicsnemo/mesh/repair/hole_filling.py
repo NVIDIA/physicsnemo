@@ -38,8 +38,8 @@ def _trace_boundary_loops(
 
     Each boundary edge connects two vertices. A boundary loop is a connected
     cycle of boundary edges. This function identifies all such loops by
-    walking along the boundary edge graph using an :class:`Adjacency` structure
-    instead of Python dicts.
+    building an :class:`Adjacency` structure from the edges, converting it to
+    Python lists for efficient scalar access, and walking the graph on CPU.
 
     Parameters
     ----------
@@ -74,23 +74,30 @@ def _trace_boundary_loops(
     compact_targets = torch.cat([compact_v1, compact_v0])
     adj = build_adjacency_from_pairs(compact_sources, compact_targets, n_boundary_verts)
 
-    ### Walk loops using Adjacency lookups
-    visited = torch.zeros(n_boundary_verts, dtype=torch.bool, device=device)
+    ### Convert adjacency to Python lists for scalar-access walks.
+    # This replaces O(N) per-vertex .item() GPU-CPU syncs with 2 bulk transfers.
+    offsets = adj.offsets.tolist()
+    indices = adj.indices.tolist()
+    unique_verts_cpu = unique_verts.cpu()
+
+    ### Walk loops using pure-Python indexing.
+    # This walk is sequential by nature: each step depends on (current, prev)
+    # to select the next vertex, so it cannot be vectorized. Parallel algorithms
+    # (union-find, label propagation) can find components but not vertex ordering,
+    # which is required for fan triangulation. Boundary loops are small in
+    # practice, so the O(N) CPU walk is not a bottleneck.
+    visited = [False] * n_boundary_verts
     loops: list[torch.Tensor] = []
 
-    for _ in range(n_boundary_verts):
-        # Find an unvisited boundary vertex to seed a new loop
-        unvisited = torch.where(~visited)[0]
-        if len(unvisited) == 0:
-            break
+    for start in range(n_boundary_verts):
+        if visited[start]:
+            continue
 
-        start = unvisited[0].item()
         loop_compact = [start]
         visited[start] = True
 
         # Step to the first neighbor
-        nb_s = adj.offsets[start].item()
-        current = adj.indices[nb_s].item()
+        current = indices[offsets[start]]
         prev = start
 
         while current != start:
@@ -98,27 +105,22 @@ def _trace_boundary_loops(
             loop_compact.append(current)
 
             # Get neighbors of current vertex
-            nb_s = adj.offsets[current].item()
-            nb_e = adj.offsets[current + 1].item()
-            n_neighbors = nb_e - nb_s
+            nb_s = offsets[current]
+            nb_e = offsets[current + 1]
 
-            if n_neighbors != 2:
+            if nb_e - nb_s != 2:
                 # Non-manifold boundary vertex - abandon this walk
                 break
 
             # Pick the neighbor that isn't the one we came from
-            nb0 = adj.indices[nb_s].item()
-            nb1 = adj.indices[nb_s + 1].item()
-            next_v = nb1 if nb0 == prev else nb0
-
-            prev = current
-            current = next_v
+            n0, n1 = indices[nb_s], indices[nb_s + 1]
+            prev, current = current, (n1 if n0 == prev else n0)
 
         # Only keep closed loops with at least 3 vertices
         if current == start and len(loop_compact) >= 3:
-            compact_tensor = torch.tensor(loop_compact, dtype=torch.long, device=device)
-            # Map back to original vertex indices
-            loops.append(unique_verts[compact_tensor])
+            compact_tensor = torch.tensor(loop_compact, dtype=torch.long)
+            # Map back to original vertex indices, return on original device
+            loops.append(unique_verts_cpu[compact_tensor].to(device))
 
     return loops
 
