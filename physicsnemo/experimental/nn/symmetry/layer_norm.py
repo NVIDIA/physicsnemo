@@ -329,6 +329,11 @@ class _EquivariantNormBase(Module):
             "l0_subtract_mean_mask", l0_subtract_mean_mask, persistent=False
         )
 
+        # Precompute scaled l0 mask: l0_subtract_mean_mask * subtract_mean_scale
+        # This eliminates one multiplication per forward pass
+        scaled_l0_mask = l0_subtract_mean_mask * subtract_mean_scale
+        self.register_buffer("scaled_l0_mask", scaled_l0_mask, persistent=False)
+
     def _get_compute_dtype(self, input_dtype: torch.dtype) -> torch.dtype:
         r"""Determine computation dtype for numerical stability.
 
@@ -604,10 +609,8 @@ class EquivariantRMSNormSHGrid(_EquivariantNormBase):
         l0_mean = x[:, 0:1, 0:1, 0:1, :].mean(
             dim=-1, keepdim=True
         )  # [batch, 1, 1, 1, 1]
-        # Subtract mean only at l=0, m=0, real - controlled by subtract_mean_scale and mask
-        x = x - l0_mean * self.l0_subtract_mean_mask.to(
-            compute_dtype
-        ) * self.subtract_mean_scale.to(compute_dtype)
+        # Subtract mean only at l=0, m=0, real - controlled by precomputed scaled_l0_mask
+        x = x - l0_mean * self.scaled_l0_mask.to(compute_dtype)
 
         # Compute norm with degree balancing (always use balanced path)
         x_squared = x.pow(2)  # [batch, lmax+1, mmax+1, 2, channels]
@@ -1110,10 +1113,8 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
         l0_mean = x[:, 0:1, 0:1, 0:1, :].mean(
             dim=-1, keepdim=True
         )  # [batch, 1, 1, 1, 1]
-        # Subtract mean only at l=0, m=0, real - controlled by subtract_mean_scale and mask
-        x = x - l0_mean * self.l0_subtract_mean_mask.to(
-            compute_dtype
-        ) * self.subtract_mean_scale.to(compute_dtype)
+        # Subtract mean only at l=0, m=0, real - controlled by precomputed scaled_l0_mask
+        x = x - l0_mean * self.scaled_l0_mask.to(compute_dtype)
 
         # Compute per-degree squared values
         x_squared = x.pow(2)  # [batch, lmax+1, mmax+1, 2, channels]
