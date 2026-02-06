@@ -335,9 +335,7 @@ class Trainer:
 
         self.enable_amp = fp_opt.startswith("amp")
         self.amp_dtype = torch.float16 if fp_opt == "amp-fp16" else torch.bfloat16
-        self.use_torch_compile = perf_cfg.get(
-            "torch_compile", self.cfg.training.get("compile_model", False)
-        )
+        self.use_torch_compile = perf_cfg.get("torch_compile", False)
         self.use_apex_gn = perf_cfg.get("use_apex_gn", False)
         self.memory_format = (
             torch.channels_last if self.use_apex_gn else torch.preserve_format
@@ -591,7 +589,7 @@ class Trainer:
         self.optimizer = build_optimizer(
             self.net.parameters(),
             self.cfg.training.get("optimizer", {}),
-            default_lr=self.cfg.training.lr,
+            lr=self.cfg.training.lr,
         )
 
         self.scheduler, self.scheduler_name = init_scheduler(

@@ -30,7 +30,7 @@ def build_optimizer(
     params: Iterable,
     cfg: Dict[str, Any],
     *,
-    default_lr: float,
+    lr: float,
 ) -> torch.optim.Optimizer:
     r"""
     Construct an optimizer from a config dict.
@@ -44,8 +44,6 @@ def build_optimizer(
 
         - ``name`` : str
             Optimizer type: "adam", "adamw", or "stableadamw".
-        - ``lr`` : float, optional
-            Learning rate (overrides default_lr if specified).
         - ``betas`` : list of float, optional
             Adam beta parameters [beta1, beta2], default [0.9, 0.999].
         - ``weight_decay`` : float, optional
@@ -55,8 +53,8 @@ def build_optimizer(
         - ``fused`` : bool, optional
             Use fused CUDA kernel for better performance, default True.
 
-    default_lr : float
-        Default learning rate used if not specified in cfg.
+    lr : float
+        Learning rate for the optimizer.
 
     Returns
     -------
@@ -73,11 +71,10 @@ def build_optimizer(
     >>> optimizer = build_optimizer(
     ...     model.parameters(),
     ...     {"name": "adamw", "weight_decay": 0.01},
-    ...     default_lr=1e-4,
+    ...     lr=1e-4,
     ... )
     """
     name = (cfg.get("name") or "adam").lower()
-    lr = float(cfg.get("lr", default_lr))
     betas = tuple(cfg.get("betas", [0.9, 0.999]))
     weight_decay = float(cfg.get("weight_decay", 0.0))
     eps = float(cfg.get("eps", 1e-8))
