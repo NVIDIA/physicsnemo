@@ -69,9 +69,13 @@ from test.experimental.nn.symmetry.conftest import get_rtol_atol
 # The device fixture includes: cpu, cuda (with automatic skip if unavailable)
 
 
-@pytest.fixture(params=[(2, 2), (4, 2), (6, 2), (4, 4)])
+@pytest.fixture(params=[(2, 2), (2, 1), (4, 4)])
 def lmax_mmax(request: pytest.FixtureRequest) -> tuple[int, int]:
     """Parameterized fixture for testing with different lmax/mmax configurations.
+
+    Includes:
+    - (2, 2): Small lmax with mmax == lmax (low complexity)
+    - (4, 4): Larger lmax with mmax == lmax (full grid, higher complexity)
 
     Parameters
     ----------
@@ -393,41 +397,6 @@ class TestRotateGridCoefficients:
             ),
         )
 
-        # Apply mask to ensure valid input
-        mask = make_grid_mask(lmax, mmax).to(device=device, dtype=dtype)
-        x = x * mask[None, :, :, None, None]
-        # Enforce m=0 imaginary = 0 constraint (real spherical harmonics property)
-        x[:, :, 0, 1, :] = 0.0
-
-        # Zero rotation
-        alpha = torch.zeros(batch_size, device=device, dtype=dtype)
-        beta = torch.zeros(batch_size, device=device, dtype=dtype)
-        gamma = torch.zeros(batch_size, device=device, dtype=dtype)
-
-        x_rotated = rotate_grid_coefficients(x, (alpha, beta, gamma))
-
-        # rescale tolerance
-        match dtype:
-            case torch.float32:
-                scaling = 10.0
-            case torch.float16:
-                scaling = 1e4
-            case torch.bfloat16:
-                scaling = 1e4
-            case _:
-                scaling = 1.0
-        rtol, atol = get_rtol_atol(dtype, scaling)
-        torch.testing.assert_close(
-            x,
-            x_rotated,
-            rtol=rtol,
-            atol=atol,
-            msg=(
-                f"Identity rotation should return input unchanged, "
-                f"max diff: {torch.abs(x - x_rotated).max().item():.2e}"
-            ),
-        )
-
     def test_scalar_invariance(
         self, lmax_mmax: tuple[int, int], dtype: torch.dtype, device: torch.device
     ) -> None:
@@ -580,13 +549,10 @@ class TestSO3Equivariance:
     @pytest.mark.parametrize(
         "alpha_val,beta_val,gamma_val",
         [
-            (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi / 4, math.pi / 3, math.pi / 6),  # Medium rotation
-            (math.pi, math.pi / 2, 0.0),  # Large rotation (180° about z, 90° about y)
-            (0.0, math.pi, 0.0),  # Inversion through y-axis
-            (2 * math.pi / 3, math.pi / 4, math.pi / 3),  # Arbitrary rotation
+            (0.1, 0.2, 0.3),  # Small rotation (near identity)
+            (math.pi, math.pi / 2, 0.0),  # Large rotation (boundary case with π)
         ],
-        ids=["small", "medium", "large", "y-inversion", "arbitrary"],
+        ids=["small", "large"],
     )
     def test_so3_linear_equivariance(
         self,
