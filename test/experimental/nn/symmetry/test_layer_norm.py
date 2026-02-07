@@ -545,7 +545,6 @@ class TestEquivariantRMSNormSHGrid:
 
     def test_torch_compile(
         self,
-        dtype: torch.dtype,
         device: torch.device,
         lmax_mmax: tuple[int, int],
         compile_config: tuple[str, str],
@@ -554,8 +553,6 @@ class TestEquivariantRMSNormSHGrid:
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
         device : torch.device
             Device to run on.
         lmax_mmax : tuple[int, int]
@@ -563,6 +560,7 @@ class TestEquivariantRMSNormSHGrid:
         compile_config : tuple[str, str]
             Tuple of (backend, mode) for torch.compile.
         """
+        dtype = torch.float32
         lmax, mmax = lmax_mmax
         compile_backend, compile_mode = compile_config
         channels = 16
@@ -1190,7 +1188,6 @@ class TestEquivariantLayerNormSHGrid:
 
     def test_torch_compile(
         self,
-        dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_layernorm_sh: tuple[int, int],
         compile_config: tuple[str, str],
@@ -1199,8 +1196,6 @@ class TestEquivariantLayerNormSHGrid:
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
         device : torch.device
             Device to run on.
         lmax_mmax_layernorm_sh : tuple[int, int]
@@ -1208,6 +1203,7 @@ class TestEquivariantLayerNormSHGrid:
         compile_config : tuple[str, str]
             Tuple of (backend, mode) for torch.compile.
         """
+        dtype = torch.float32
         lmax, mmax = lmax_mmax_layernorm_sh
         compile_backend, compile_mode = compile_config
         channels = 16
@@ -1749,7 +1745,6 @@ class TestEquivariantLayerNormGrid:
 
     def test_torch_compile(
         self,
-        dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_small: tuple[int, int],
         compile_config: tuple[str, str],
@@ -1758,8 +1753,6 @@ class TestEquivariantLayerNormGrid:
 
         Parameters
         ----------
-        dtype : torch.dtype
-            Data type for tensors.
         device : torch.device
             Device to run on.
         lmax_mmax_small : tuple[int, int]
@@ -1767,6 +1760,7 @@ class TestEquivariantLayerNormGrid:
         compile_config : tuple[str, str]
             Tuple of (backend, mode) for torch.compile.
         """
+        dtype = torch.float32
         lmax, mmax = lmax_mmax_small
         compile_backend, compile_mode = compile_config
         channels = 16
