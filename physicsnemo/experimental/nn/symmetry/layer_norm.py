@@ -561,6 +561,11 @@ class EquivariantRMSNormSHGrid(_EquivariantNormBase):
             bias_scale = torch.tensor(0.0)
         self.register_buffer("bias_scale", bias_scale, persistent=False)
 
+        # Precompute scaled bias mask: l0_subtract_mean_mask * bias_scale
+        # This eliminates one multiplication per forward pass
+        scaled_bias_mask = self.l0_subtract_mean_mask * bias_scale
+        self.register_buffer("scaled_bias_mask", scaled_bias_mask, persistent=False)
+
         # Degree balance weights: always computed, but form depends on std_balance_degrees
         if std_balance_degrees:
             balance_weight = make_degree_balance_weight(lmax, mmax)
@@ -661,10 +666,8 @@ class EquivariantRMSNormSHGrid(_EquivariantNormBase):
         )
         # affine_bias: [channels] -> [1, 1, 1, 1, channels]
         bias = affine_bias[None, None, None, None, :].to(compute_dtype)
-        # Only add to l=0, m=0, real component - controlled by bias_scale and mask
-        x = x + bias * self.l0_subtract_mean_mask.to(
-            compute_dtype
-        ) * self.bias_scale.to(compute_dtype)
+        # Only add to l=0, m=0, real component - controlled by precomputed scaled_bias_mask
+        x = x + bias * self.scaled_bias_mask.to(compute_dtype)
 
         # Finalize output
         return self._finalize_output(x, compute_dtype, input_dtype)
@@ -1083,6 +1086,12 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
         l0_only_mask[0, 0, 0, 0, 0] = 1.0
         self.register_buffer("l0_only_mask", l0_only_mask, persistent=True)
 
+        # Precompute scaled bias mask: l0_only_mask * bias_scale
+        # This eliminates one multiplication per forward pass
+        # Note: EquivariantLayerNormGrid uses l0_only_mask instead of l0_subtract_mean_mask
+        scaled_bias_mask = l0_only_mask * self.bias_scale
+        self.register_buffer("scaled_bias_mask", scaled_bias_mask, persistent=False)
+
     @torch.autocast("cuda", enabled=False)
     def forward(
         self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
@@ -1147,7 +1156,7 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
         )
         x = x * affine_weight[None, :, None, None, :]
 
-        # Apply bias to l=0 only: [channels] -> [1, 1, 1, 1, channels] * l0_only_mask
+        # Apply bias to l=0 only: [channels] -> [1, 1, 1, 1, channels] * scaled_bias_mask
         # Use Parameter if affine=True AND subtract_mean=True, else use buffer
         affine_bias = (
             self.affine_bias
@@ -1155,9 +1164,7 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
             else self._affine_bias_buffer
         )
         bias = affine_bias[None, None, None, None, :]  # [1, 1, 1, 1, channels]
-        x = x + bias * self.l0_only_mask.to(compute_dtype) * self.bias_scale.to(
-            compute_dtype
-        )
+        x = x + bias * self.scaled_bias_mask.to(compute_dtype)
 
         # Finalize output
         return self._finalize_output(x, compute_dtype, input_dtype)
