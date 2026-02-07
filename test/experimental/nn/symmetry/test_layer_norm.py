@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2023 - 2025 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-FileCopyrightText: Copyright (c) 2023 - 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-FileCopyrightText: All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -543,17 +543,12 @@ class TestEquivariantRMSNormSHGrid:
             msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
     def test_torch_compile_nograd(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
+        compile_config: tuple[str, str],
     ) -> None:
         """Forward pass should work with torch.compile.
 
@@ -565,12 +560,11 @@ class TestEquivariantRMSNormSHGrid:
             Device to run on.
         lmax_mmax : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        compile_backend : str
-            Backend for torch.compile.
-        compile_mode : str
-            Compilation mode.
+        compile_config : tuple[str, str]
+            Tuple of (backend, mode) for torch.compile.
         """
         lmax, mmax = lmax_mmax
+        compile_backend, compile_mode = compile_config
         channels = 16
         batch_size = 10
 
@@ -597,17 +591,12 @@ class TestEquivariantRMSNormSHGrid:
         rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
     def test_torch_compile_withgrad(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
+        compile_config: tuple[str, str],
     ) -> None:
         """Backward pass should work with torch.compile.
 
@@ -619,12 +608,11 @@ class TestEquivariantRMSNormSHGrid:
             Device to run on.
         lmax_mmax : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        compile_backend : str
-            Backend for torch.compile.
-        compile_mode : str
-            Compilation mode.
+        compile_config : tuple[str, str]
+            Tuple of (backend, mode) for torch.compile.
         """
         lmax, mmax = lmax_mmax
+        compile_backend, compile_mode = compile_config
         channels = 16
         batch_size = 10
 
@@ -1241,17 +1229,12 @@ class TestEquivariantLayerNormSHGrid:
             msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
     def test_torch_compile_nograd(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_layernorm_sh: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
+        compile_config: tuple[str, str],
     ) -> None:
         """Forward pass should work with torch.compile.
 
@@ -1263,12 +1246,11 @@ class TestEquivariantLayerNormSHGrid:
             Device to run on.
         lmax_mmax_layernorm_sh : tuple[int, int]
             Tuple of (lmax, mmax) values where lmax >= 1.
-        compile_backend : str
-            Backend for torch.compile.
-        compile_mode : str
-            Compilation mode.
+        compile_config : tuple[str, str]
+            Tuple of (backend, mode) for torch.compile.
         """
         lmax, mmax = lmax_mmax_layernorm_sh
+        compile_backend, compile_mode = compile_config
         channels = 16
         batch_size = 10
 
@@ -1295,17 +1277,12 @@ class TestEquivariantLayerNormSHGrid:
         rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
     def test_torch_compile_withgrad(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_layernorm_sh: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
+        compile_config: tuple[str, str],
     ) -> None:
         """Backward pass should work with torch.compile.
 
@@ -1317,12 +1294,11 @@ class TestEquivariantLayerNormSHGrid:
             Device to run on.
         lmax_mmax_layernorm_sh : tuple[int, int]
             Tuple of (lmax, mmax) values where lmax >= 1.
-        compile_backend : str
-            Backend for torch.compile.
-        compile_mode : str
-            Compilation mode.
+        compile_config : tuple[str, str]
+            Tuple of (backend, mode) for torch.compile.
         """
         lmax, mmax = lmax_mmax_layernorm_sh
+        compile_backend, compile_mode = compile_config
         channels = 16
         batch_size = 10
 
@@ -1853,17 +1829,12 @@ class TestEquivariantLayerNormGrid:
             msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
     def test_torch_compile_nograd(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_small: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
+        compile_config: tuple[str, str],
     ) -> None:
         """Forward pass should work with torch.compile.
 
@@ -1875,12 +1846,11 @@ class TestEquivariantLayerNormGrid:
             Device to run on.
         lmax_mmax_small : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        compile_backend : str
-            Backend for torch.compile.
-        compile_mode : str
-            Compilation mode.
+        compile_config : tuple[str, str]
+            Tuple of (backend, mode) for torch.compile.
         """
         lmax, mmax = lmax_mmax_small
+        compile_backend, compile_mode = compile_config
         channels = 16
         batch_size = 10
 
@@ -1907,17 +1877,12 @@ class TestEquivariantLayerNormGrid:
         rtol, atol = get_rtol_atol(dtype)
         torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
     def test_torch_compile_withgrad(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_small: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
+        compile_config: tuple[str, str],
     ) -> None:
         """Backward pass should work with torch.compile.
 
@@ -1929,12 +1894,11 @@ class TestEquivariantLayerNormGrid:
             Device to run on.
         lmax_mmax_small : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        compile_backend : str
-            Backend for torch.compile.
-        compile_mode : str
-            Compilation mode.
+        compile_config : tuple[str, str]
+            Tuple of (backend, mode) for torch.compile.
         """
         lmax, mmax = lmax_mmax_small
+        compile_backend, compile_mode = compile_config
         channels = 16
         batch_size = 10
 

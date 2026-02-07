@@ -204,3 +204,38 @@ def lmax_mmax(request: pytest.FixtureRequest) -> tuple[int, int]:
     - Higher order combinations for comprehensive testing
     """
     return request.param
+
+
+# =============================================================================
+# Fixtures for torch.compile testing
+# =============================================================================
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(("inductor", "default"), id="inductor-default"),
+        pytest.param(("inductor", "reduce-overhead"), id="inductor-reduce-overhead"),
+        pytest.param(("cudagraphs", "default"), id="cudagraphs"),
+    ]
+)
+def compile_config(request: pytest.FixtureRequest) -> tuple[str, str]:
+    """Parameterized fixture for torch.compile backend and mode configurations.
+
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Pytest fixture request object.
+
+    Returns
+    -------
+    tuple[str, str]
+        Tuple of (backend, mode) for torch.compile.
+
+    Notes
+    -----
+    Provides representative coverage of torch.compile configurations:
+    - inductor with default mode: Primary backend for most use cases
+    - inductor with reduce-overhead: Tests graph capture optimization
+    - cudagraphs: Tests CUDA graph compatibility (mode is ignored)
+    """
+    return request.param
