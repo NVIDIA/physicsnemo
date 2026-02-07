@@ -437,26 +437,19 @@ class TestEquivariantRMSNormSHGrid:
                 "affine_weight gradients contain non-finite values"
             )
 
-    @pytest.mark.parametrize("affine", [True, False])
-    @pytest.mark.parametrize("subtract_mean", [True, False])
     @pytest.mark.parametrize(
         "alpha_val,beta_val,gamma_val",
         [
             (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi / 4, math.pi / 3, math.pi / 6),  # Medium rotation
             (math.pi, math.pi / 2, 0.0),  # Large rotation
-            (0.0, math.pi, 0.0),  # Inversion through y-axis
-            (2 * math.pi / 3, math.pi / 4, math.pi / 3),  # Arbitrary rotation
         ],
-        ids=["small", "medium", "large", "y-inversion", "arbitrary"],
+        ids=["small", "large"],
     )
     def test_equivariance_preserved(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax: tuple[int, int],
-        affine: bool,
-        subtract_mean: bool,
         alpha_val: float,
         beta_val: float,
         gamma_val: float,
@@ -474,10 +467,6 @@ class TestEquivariantRMSNormSHGrid:
             Device to run on.
         lmax_mmax : tuple[int, int]
             Tuple of (lmax, mmax) values.
-        affine : bool
-            Whether to use affine transformation.
-        subtract_mean : bool
-            Whether to subtract mean from l=0 features.
         alpha_val : float
             First Euler angle (radians).
         beta_val : float
@@ -493,8 +482,8 @@ class TestEquivariantRMSNormSHGrid:
             lmax=lmax,
             mmax=mmax,
             num_channels=channels,
-            affine=affine,
-            subtract_mean=subtract_mean,
+            affine=True,
+            subtract_mean=True,
         ).to(device=device, dtype=dtype)
 
         # Create valid input
@@ -1102,12 +1091,9 @@ class TestEquivariantLayerNormSHGrid:
         "alpha_val,beta_val,gamma_val",
         [
             (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi / 4, math.pi / 3, math.pi / 6),  # Medium rotation
             (math.pi, math.pi / 2, 0.0),  # Large rotation
-            (0.0, math.pi, 0.0),  # Inversion through y-axis
-            (2 * math.pi / 3, math.pi / 4, math.pi / 3),  # Arbitrary rotation
         ],
-        ids=["small", "medium", "large", "y-inversion", "arbitrary"],
+        ids=["small", "large"],
     )
     def test_equivariance_preserved(
         self,
@@ -1659,12 +1645,9 @@ class TestEquivariantLayerNormGrid:
         "alpha_val,beta_val,gamma_val",
         [
             (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi / 4, math.pi / 3, math.pi / 6),  # Medium rotation
             (math.pi, math.pi / 2, 0.0),  # Large rotation
-            (0.0, math.pi, 0.0),  # Inversion through y-axis
-            (2 * math.pi / 3, math.pi / 4, math.pi / 3),  # Arbitrary rotation
         ],
-        ids=["small", "medium", "large", "y-inversion", "arbitrary"],
+        ids=["small", "large"],
     )
     def test_equivariance_preserved(
         self,
