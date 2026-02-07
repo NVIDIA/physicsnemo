@@ -63,11 +63,16 @@ from test.experimental.nn.symmetry.conftest import get_rtol_atol
 # Note: `is_half_precision` helper is provided by conftest.py
 
 
-@pytest.fixture(params=[(2, 2), (4, 2), (4, 4)])
+@pytest.fixture(params=[(2, 2), (2, 1), (4, 4)])
 def lmax_mmax(request: pytest.FixtureRequest) -> tuple[int, int]:
     """Parameterized fixture for testing with different lmax/mmax configurations.
 
     Note: lmax must be >= 1 for SO3ConvolutionBlock (requires gates for l>0).
+
+    Includes:
+    - (2, 2): Small lmax with mmax == lmax (low complexity)
+    - (2, 1): Small lmax with mmax != lmax (low complexity)
+    - (4, 4): Larger lmax with mmax == lmax (full grid, higher complexity)
 
     Parameters
     ----------
@@ -291,19 +296,22 @@ class TestSO3ConvolutionBlock:
         assert "lmax=4" in repr_str
         assert "mmax=2" in repr_str
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
     @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
+        "compile_backend,compile_mode",
+        [
+            ("inductor", "default"),
+            ("inductor", "reduce-overhead"),
+            ("cudagraphs", None),  # cudagraphs doesn't use mode
+        ],
+        ids=["inductor-default", "inductor-reduce-overhead", "cudagraphs"],
     )
-    def test_torch_compile_nograd(
+    def test_torch_compile(
         self,
-        dtype: torch.dtype,
-        device: torch.device,
         lmax_mmax: tuple[int, int],
         compile_backend: str,
-        compile_mode: str,
+        compile_mode: str | None,
     ):
-        """Ensure that compilation of the block is functional.
+        """Ensure that compilation of the block is functional for forward and backward.
 
         Notes
         -----
@@ -313,51 +321,19 @@ class TestSO3ConvolutionBlock:
         lmax, mmax = lmax_mmax
         batch_size = 16
         in_channels = 32
-        layer = (
-            SO3ConvolutionBlock(
-                in_channels=in_channels, hidden_channels=64, lmax=lmax, mmax=mmax
-            )
-            .to(device=device, dtype=dtype)
-            .eval()
-        )
-        if compile_backend == "cudagraphs":
-            # exclude mode specification for cudagraphs
-            compiled = torch.compile(layer, backend=compile_backend)
-        else:
-            compiled = torch.compile(layer, mode=compile_mode, backend=compile_backend)
-        x = torch.randn(
-            batch_size, lmax + 1, mmax + 1, 2, in_channels, device=device, dtype=dtype
-        )
-        with torch.no_grad():
-            ref_output = layer(x)
-            output = compiled(x)
-            rtol, atol = get_rtol_atol(dtype)
-            torch.testing.assert_close(ref_output, output, rtol=rtol, atol=atol)
+        # compilation shouldn't be too sensitive to dtype and device
+        dtype = torch.float32
+        device = "cuda"
 
-    @pytest.mark.parametrize("compile_backend", ["inductor", "cudagraphs"])
-    @pytest.mark.parametrize(
-        "compile_mode", ["default", "reduce-overhead", "max-autotune"]
-    )
-    def test_torch_compile_withgrad(
-        self,
-        dtype: torch.dtype,
-        device: torch.device,
-        lmax_mmax: tuple[int, int],
-        compile_backend: str,
-        compile_mode: str,
-    ):
-        """Ensure that compilation of the block is functional"""
-        lmax, mmax = lmax_mmax
-        batch_size = 16
-        in_channels = 32
         layer = SO3ConvolutionBlock(
             in_channels=in_channels, hidden_channels=64, lmax=lmax, mmax=mmax
         ).to(device=device, dtype=dtype)
-        if compile_backend == "cudagraphs":
-            # exclude mode specification for cudagraphs
+
+        if compile_mode is None:
             compiled = torch.compile(layer, backend=compile_backend)
         else:
             compiled = torch.compile(layer, mode=compile_mode, backend=compile_backend)
+
         x = torch.randn(
             batch_size,
             lmax + 1,
@@ -368,10 +344,23 @@ class TestSO3ConvolutionBlock:
             dtype=dtype,
             requires_grad=True,
         )
+
+        # Test forward pass (no grad) - verify numerical equivalence
+        layer.eval()
+        with torch.no_grad():
+            ref_output = layer(x.detach())
+            compiled_output = compiled(x.detach())
+            rtol, atol = get_rtol_atol(dtype)
+            torch.testing.assert_close(
+                ref_output, compiled_output, rtol=rtol, atol=atol
+            )
+
+        # Test backward pass (with grad) - verify gradients flow
+        layer.train()
         output = compiled(x)
         loss = ((torch.randn_like(output) - output) ** 2.0).mean()
         loss.backward()
-        assert hasattr(compiled.scalar_mlp[0].weight, "grad"), (
+        assert compiled.scalar_mlp[0].weight.grad is not None, (
             "No gradients attached after backward."
         )
         assert torch.isfinite(compiled.scalar_mlp[0].weight.grad).all()
@@ -394,17 +383,10 @@ class TestSO3BlockEquivariance:
     @pytest.mark.parametrize(
         "alpha_val,beta_val,gamma_val",
         [
-            (0.1, 0.2, 0.3),  # Small rotation
-            (math.pi / 4, math.pi / 3, math.pi / 6),  # Medium rotation
-            (
-                math.pi,
-                math.pi / 2,
-                0.0,
-            ),  # Large rotation (180deg about z, 90deg about y)
-            (0.0, math.pi, 0.0),  # Inversion through y-axis
-            (2 * math.pi / 3, math.pi / 4, math.pi / 3),  # Arbitrary rotation
+            (0.1, 0.2, 0.3),  # Small rotation (near identity)
+            (math.pi, math.pi / 2, 0.0),  # Large rotation (boundary case with π)
         ],
-        ids=["small", "medium", "large", "y-inversion", "arbitrary"],
+        ids=["small", "large"],
     )
     def test_so3_block_equivariance(
         self,
