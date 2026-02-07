@@ -543,62 +543,14 @@ class TestEquivariantRMSNormSHGrid:
             msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
-    def test_torch_compile_nograd(
+    def test_torch_compile(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax: tuple[int, int],
         compile_config: tuple[str, str],
     ) -> None:
-        """Forward pass should work with torch.compile.
-
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
-        lmax_mmax : tuple[int, int]
-            Tuple of (lmax, mmax) values.
-        compile_config : tuple[str, str]
-            Tuple of (backend, mode) for torch.compile.
-        """
-        lmax, mmax = lmax_mmax
-        compile_backend, compile_mode = compile_config
-        channels = 16
-        batch_size = 10
-
-        norm = EquivariantRMSNormSHGrid(lmax=lmax, mmax=mmax, num_channels=channels).to(
-            device=device, dtype=dtype
-        )
-        norm.eval()
-
-        if compile_backend == "cudagraphs":
-            compiled_norm = torch.compile(norm, backend=compile_backend)
-        else:
-            compiled_norm = torch.compile(
-                norm, mode=compile_mode, backend=compile_backend
-            )
-
-        x = torch.randn(
-            batch_size, lmax + 1, mmax + 1, 2, channels, device=device, dtype=dtype
-        )
-
-        with torch.no_grad():
-            ref_out = norm(x)
-            out = compiled_norm(x)
-
-        rtol, atol = get_rtol_atol(dtype)
-        torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
-
-    def test_torch_compile_withgrad(
-        self,
-        dtype: torch.dtype,
-        device: torch.device,
-        lmax_mmax: tuple[int, int],
-        compile_config: tuple[str, str],
-    ) -> None:
-        """Backward pass should work with torch.compile.
+        """Forward and backward pass should work with torch.compile.
 
         Parameters
         ----------
@@ -627,6 +579,7 @@ class TestEquivariantRMSNormSHGrid:
                 norm, mode=compile_mode, backend=compile_backend
             )
 
+        # Test forward pass matches reference
         x = torch.randn(
             batch_size,
             lmax + 1,
@@ -638,7 +591,13 @@ class TestEquivariantRMSNormSHGrid:
             requires_grad=True,
         )
 
+        ref_out = norm(x)
         out = compiled_norm(x)
+
+        rtol, atol = get_rtol_atol(dtype)
+        torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
+
+        # Test backward pass
         loss = ((torch.randn_like(out) - out) ** 2.0).mean()
         loss.backward()
 
@@ -1229,62 +1188,14 @@ class TestEquivariantLayerNormSHGrid:
             msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
-    def test_torch_compile_nograd(
+    def test_torch_compile(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_layernorm_sh: tuple[int, int],
         compile_config: tuple[str, str],
     ) -> None:
-        """Forward pass should work with torch.compile.
-
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
-        lmax_mmax_layernorm_sh : tuple[int, int]
-            Tuple of (lmax, mmax) values where lmax >= 1.
-        compile_config : tuple[str, str]
-            Tuple of (backend, mode) for torch.compile.
-        """
-        lmax, mmax = lmax_mmax_layernorm_sh
-        compile_backend, compile_mode = compile_config
-        channels = 16
-        batch_size = 10
-
-        norm = EquivariantLayerNormSHGrid(
-            lmax=lmax, mmax=mmax, num_channels=channels
-        ).to(device=device, dtype=dtype)
-        norm.eval()
-
-        if compile_backend == "cudagraphs":
-            compiled_norm = torch.compile(norm, backend=compile_backend)
-        else:
-            compiled_norm = torch.compile(
-                norm, mode=compile_mode, backend=compile_backend
-            )
-
-        x = torch.randn(
-            batch_size, lmax + 1, mmax + 1, 2, channels, device=device, dtype=dtype
-        )
-
-        with torch.no_grad():
-            ref_out = norm(x)
-            out = compiled_norm(x)
-
-        rtol, atol = get_rtol_atol(dtype)
-        torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
-
-    def test_torch_compile_withgrad(
-        self,
-        dtype: torch.dtype,
-        device: torch.device,
-        lmax_mmax_layernorm_sh: tuple[int, int],
-        compile_config: tuple[str, str],
-    ) -> None:
-        """Backward pass should work with torch.compile.
+        """Forward and backward pass should work with torch.compile.
 
         Parameters
         ----------
@@ -1313,6 +1224,7 @@ class TestEquivariantLayerNormSHGrid:
                 norm, mode=compile_mode, backend=compile_backend
             )
 
+        # Test forward pass matches reference
         x = torch.randn(
             batch_size,
             lmax + 1,
@@ -1324,7 +1236,13 @@ class TestEquivariantLayerNormSHGrid:
             requires_grad=True,
         )
 
+        ref_out = norm(x)
         out = compiled_norm(x)
+
+        rtol, atol = get_rtol_atol(dtype)
+        torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
+
+        # Test backward pass
         loss = ((torch.randn_like(out) - out) ** 2.0).mean()
         loss.backward()
 
@@ -1829,62 +1747,14 @@ class TestEquivariantLayerNormGrid:
             msg=f"Equivariance violated: max diff = {(y1 - y2).abs().max():.2e}",
         )
 
-    def test_torch_compile_nograd(
+    def test_torch_compile(
         self,
         dtype: torch.dtype,
         device: torch.device,
         lmax_mmax_small: tuple[int, int],
         compile_config: tuple[str, str],
     ) -> None:
-        """Forward pass should work with torch.compile.
-
-        Parameters
-        ----------
-        dtype : torch.dtype
-            Data type for tensors.
-        device : torch.device
-            Device to run on.
-        lmax_mmax_small : tuple[int, int]
-            Tuple of (lmax, mmax) values.
-        compile_config : tuple[str, str]
-            Tuple of (backend, mode) for torch.compile.
-        """
-        lmax, mmax = lmax_mmax_small
-        compile_backend, compile_mode = compile_config
-        channels = 16
-        batch_size = 10
-
-        norm = EquivariantLayerNormGrid(lmax=lmax, mmax=mmax, num_channels=channels).to(
-            device=device, dtype=dtype
-        )
-        norm.eval()
-
-        if compile_backend == "cudagraphs":
-            compiled_norm = torch.compile(norm, backend=compile_backend)
-        else:
-            compiled_norm = torch.compile(
-                norm, mode=compile_mode, backend=compile_backend
-            )
-
-        x = torch.randn(
-            batch_size, lmax + 1, mmax + 1, 2, channels, device=device, dtype=dtype
-        )
-
-        with torch.no_grad():
-            ref_out = norm(x)
-            out = compiled_norm(x)
-
-        rtol, atol = get_rtol_atol(dtype)
-        torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
-
-    def test_torch_compile_withgrad(
-        self,
-        dtype: torch.dtype,
-        device: torch.device,
-        lmax_mmax_small: tuple[int, int],
-        compile_config: tuple[str, str],
-    ) -> None:
-        """Backward pass should work with torch.compile.
+        """Forward and backward pass should work with torch.compile.
 
         Parameters
         ----------
@@ -1913,6 +1783,7 @@ class TestEquivariantLayerNormGrid:
                 norm, mode=compile_mode, backend=compile_backend
             )
 
+        # Test forward pass matches reference
         x = torch.randn(
             batch_size,
             lmax + 1,
@@ -1924,7 +1795,13 @@ class TestEquivariantLayerNormGrid:
             requires_grad=True,
         )
 
+        ref_out = norm(x)
         out = compiled_norm(x)
+
+        rtol, atol = get_rtol_atol(dtype)
+        torch.testing.assert_close(ref_out, out, rtol=rtol, atol=atol)
+
+        # Test backward pass
         loss = ((torch.randn_like(out) - out) ** 2.0).mean()
         loss.backward()
 
