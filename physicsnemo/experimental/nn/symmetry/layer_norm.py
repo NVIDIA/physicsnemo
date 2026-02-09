@@ -85,6 +85,11 @@ from physicsnemo.experimental.nn.symmetry.fused_norm_kernels import (
     layernorm_grid_normalize_submean_bias,
     layernorm_grid_reduce,
     layernorm_grid_reduce_submean,
+    rmsnorm_grid_normalize,
+    rmsnorm_grid_normalize_submean,
+    rmsnorm_grid_normalize_submean_bias,
+    rmsnorm_grid_reduce,
+    rmsnorm_grid_reduce_submean,
 )
 
 __all__ = [
@@ -1268,7 +1273,178 @@ class FusedEquivariantRMSNorm(EquivariantRMSNormSHGrid):
     FusedEquivariantLayerNorm : Fused per-degree normalization variant.
     """
 
-    _use_fused: bool = False  # Will become True when Warp kernels are integrated
+    _use_fused: bool = True
+
+    @torch.autocast("cuda", enabled=False)
+    def forward(
+        self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+    ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
+        r"""Apply equivariant RMS normalization using fused Warp kernels.
+
+        Parameters
+        ----------
+        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+            Input features in grid layout.
+
+        Returns
+        -------
+        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+            Normalized features.
+        """
+        # Validate input shape (skip during torch.compile)
+        if not torch.compiler.is_compiling():
+            self._validate_input_shape(x)
+
+        # Fall back to PyTorch on CPU or if gradients are required
+        # Note: Full autograd support for Warp kernels requires backward kernel implementation
+        if not x.is_cuda or x.requires_grad:
+            return super().forward(x)
+
+        # Get compute dtype and cast if needed
+        input_dtype = x.dtype
+        compute_dtype = self._get_compute_dtype(input_dtype)
+        if input_dtype != compute_dtype:
+            x = x.to(compute_dtype)
+
+        batch_size = x.shape[0]
+        lmax_p1 = self.lmax + 1
+
+        # Reshape: (batch, lmax+1, mmax+1, 2, channels) -> (batch, lmax+1, mmax+1, 2*channels)
+        # as warp only supports up to 4D
+        x_4d = x.contiguous().view(
+            batch_size, lmax_p1, self.mmax + 1, 2 * self.num_channels
+        )
+        output_4d = torch.empty_like(x_4d)
+
+        # Pre-compute l=0 mean in PyTorch only when needed
+        if self.subtract_mean:
+            l0_mean = x[:, 0, 0, 0, :].mean(dim=-1)  # [batch]
+
+        # Pre-allocate norm_stats tensor (must be zeroed for atomic accumulation)
+        # Shape is [batch] not [batch, lmax+1] - global RMS norm across all degrees
+        norm_stats = torch.zeros(batch_size, device=x.device, dtype=compute_dtype)
+
+        # Get the appropriate parameters
+        affine_weight = (
+            self.affine_weight if self.affine else self._affine_weight_buffer
+        )
+        affine_bias = (
+            self.affine_bias
+            if self.affine and self.affine_bias is not None
+            else self._affine_bias_buffer
+        )
+
+        # Get balance_weight (not per_degree_norm_weight - this is RMSNorm!)
+        balance_weight = (
+            self.balance_degree_weight
+            if self.std_balance_degrees
+            else self._balance_degree_weight_buffer
+        )
+
+        # CRITICAL: Factor of 2 accounts for real/imag averaging in RMSNorm
+        inv_num_channels = 1.0 / (2 * self.num_channels)
+
+        # Get warp device/stream
+        wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
+
+        with wp.ScopedStream(wp_stream):
+            # Kernel 1: Reduce — dispatch based on subtract_mean
+            if self.subtract_mean:
+                wp.launch(
+                    rmsnorm_grid_reduce_submean,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        l0_mean.detach(),
+                        norm_stats,
+                        balance_weight.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                    ],
+                    block_dim=self.num_channels,
+                    device=wp_device,
+                )
+            else:
+                wp.launch(
+                    rmsnorm_grid_reduce,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        norm_stats,
+                        balance_weight.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                    ],
+                    block_dim=self.num_channels,
+                    device=wp_device,
+                )
+
+            # Kernel 2: Normalize — dispatch based on subtract_mean and bias_scale
+            if self.subtract_mean and self.bias_scale.item() > 0.0:
+                wp.launch(
+                    rmsnorm_grid_normalize_submean_bias,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        output_4d,
+                        l0_mean.detach(),
+                        norm_stats.detach(),
+                        affine_weight.to(compute_dtype).detach(),
+                        affine_bias.to(compute_dtype).detach(),
+                        self.grid_mask_3d.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                        inv_num_channels,
+                        self.eps,
+                    ],
+                    device=wp_device,
+                )
+            elif self.subtract_mean:
+                wp.launch(
+                    rmsnorm_grid_normalize_submean,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        output_4d,
+                        l0_mean.detach(),
+                        norm_stats.detach(),
+                        affine_weight.to(compute_dtype).detach(),
+                        self.grid_mask_3d.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                        inv_num_channels,
+                        self.eps,
+                    ],
+                    device=wp_device,
+                )
+            else:
+                wp.launch(
+                    rmsnorm_grid_normalize,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        output_4d,
+                        norm_stats.detach(),
+                        affine_weight.to(compute_dtype).detach(),
+                        self.grid_mask_3d.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                        inv_num_channels,
+                        self.eps,
+                    ],
+                    device=wp_device,
+                )
+
+        # Reshape back: (batch, lmax+1, mmax+1, 2*channels) -> (batch, lmax+1, mmax+1, 2, channels)
+        output = output_4d.view(
+            batch_size, lmax_p1, self.mmax + 1, 2, self.num_channels
+        )
+
+        # Cast back if needed
+        if compute_dtype != input_dtype:
+            output = output.to(input_dtype)
+
+        return output
 
 
 class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):

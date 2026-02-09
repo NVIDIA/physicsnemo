@@ -315,3 +315,288 @@ def layernorm_grid_normalize_submean_bias(
                 val = val + affine_bias[c]
             val = val * grid_mask[l_idx, m, ri]
             output[batch_idx, l_idx, m, ri * num_channels + c] = val
+
+
+# =============================================================================
+# RMSNorm Kernels
+# =============================================================================
+
+
+@wp.kernel
+def rmsnorm_grid_reduce(
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    norm_stats: wp.array(dtype=float),  # [batch], pre-zeroed
+    balance_weight: wp.array2d(dtype=float),  # [lmax+1, mmax+1]
+    mmax: int,
+    num_channels: int,
+):
+    """Compute global norm statistics with tile reduction over channels.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels), block_dim=num_channels).
+    Multiple blocks (different l) accumulate into the same norm_stats[batch] via atomics.
+
+    Parameters
+    ----------
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input features.
+    norm_stats : [batch]
+        Output: accumulated sum-of-squares per batch. Pre-zeroed by caller.
+        Multiple l-blocks write to same batch slot via atomic add.
+    balance_weight : [lmax+1, mmax+1]
+        Degree balancing weights per (l, m).
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels (= block_dim).
+    """
+    batch_idx, l_idx, c = wp.tid()
+    num_valid_m = wp.min(l_idx, mmax) + 1
+
+    # Each thread accumulates its per-channel contribution
+    local_norm = float(0.0)
+    for m in range(num_valid_m):
+        w = balance_weight[l_idx, m]
+        for ri in range(2):
+            if m == 0 and ri == 1:
+                continue
+            val = x[batch_idx, l_idx, m, ri * num_channels + c]
+            local_norm = local_norm + w * val * val
+
+    # Cooperative tile reduction across channels within the block
+    t = wp.tile(local_norm)
+    s = wp.tile_sum(t)
+
+    # Store raw sum-of-squares
+    # Multiple l-blocks atomically accumulate into the same batch slot
+    wp.tile_atomic_add(norm_stats, s, offset=batch_idx)
+
+
+@wp.kernel
+def rmsnorm_grid_reduce_submean(
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    l0_mean: wp.array(dtype=float),  # [batch]
+    norm_stats: wp.array(dtype=float),  # [batch], pre-zeroed
+    balance_weight: wp.array2d(dtype=float),  # [lmax+1, mmax+1]
+    mmax: int,
+    num_channels: int,
+):
+    """Compute global norm statistics with tile reduction over channels, subtracting l=0 mean.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels), block_dim=num_channels).
+    Multiple blocks (different l) accumulate into the same norm_stats[batch] via atomics.
+
+    Parameters
+    ----------
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input features.
+    l0_mean : [batch]
+        Pre-computed mean of l=0, m=0, real channels.
+    norm_stats : [batch]
+        Output: accumulated sum-of-squares per batch. Pre-zeroed by caller.
+        Multiple l-blocks write to same batch slot via atomic add.
+    balance_weight : [lmax+1, mmax+1]
+        Degree balancing weights per (l, m).
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels (= block_dim).
+    """
+    batch_idx, l_idx, c = wp.tid()
+    num_valid_m = wp.min(l_idx, mmax) + 1
+
+    # Each thread accumulates its per-channel contribution
+    local_norm = float(0.0)
+    for m in range(num_valid_m):
+        w = balance_weight[l_idx, m]
+        for ri in range(2):
+            if m == 0 and ri == 1:
+                continue
+            val = x[batch_idx, l_idx, m, ri * num_channels + c]
+            if l_idx == 0 and m == 0 and ri == 0:
+                val = val - l0_mean[batch_idx]
+            local_norm = local_norm + w * val * val
+
+    # Cooperative tile reduction across channels within the block
+    t = wp.tile(local_norm)
+    s = wp.tile_sum(t)
+
+    # Store raw sum-of-squares
+    # Multiple l-blocks atomically accumulate into the same batch slot
+    wp.tile_atomic_add(norm_stats, s, offset=batch_idx)
+
+
+@wp.kernel
+def rmsnorm_grid_normalize(
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    norm_stats: wp.array(dtype=float),  # [batch] - raw accumulated sum
+    affine_weight: wp.array2d(dtype=float),  # [lmax+1, channels]
+    grid_mask: wp.array3d(dtype=float),  # [lmax+1, mmax+1, 2]
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+):
+    """Normalize features using global statistics. Pure SIMT, one thread per channel.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels)).
+    Computes inv_rms inline from raw norm_stats per-thread.
+
+    Parameters
+    ----------
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input features.
+    output : [batch, lmax+1, mmax+1, 2*channels]
+        Output features.
+    norm_stats : [batch]
+        Raw accumulated sum-of-squares from reduce kernel.
+    affine_weight : [lmax+1, channels]
+        Scale parameters.
+    grid_mask : [lmax+1, mmax+1, 2]
+        Validity mask combining (l,m) validity and m=0 imaginary zeroing.
+        1.0 for valid positions, 0.0 for invalid.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / (2 * num_channels) for averaging.
+    eps : float
+        Epsilon for numerical stability.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Compute inv_rms inline from raw norm_stats (redundant but cheap, value is L1-cached)
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx] * inv_num_channels + eps)
+    aw = affine_weight[l_idx, c]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            val = x[batch_idx, l_idx, m, ri * num_channels + c]
+            val = val * inv_rms_val
+            val = val * aw
+            val = val * grid_mask[l_idx, m, ri]
+            output[batch_idx, l_idx, m, ri * num_channels + c] = val
+
+
+@wp.kernel
+def rmsnorm_grid_normalize_submean(
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    l0_mean: wp.array(dtype=float),  # [batch]
+    norm_stats: wp.array(dtype=float),  # [batch] - raw accumulated sum
+    affine_weight: wp.array2d(dtype=float),  # [lmax+1, channels]
+    grid_mask: wp.array3d(dtype=float),  # [lmax+1, mmax+1, 2]
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+):
+    """Normalize features using global statistics, subtracting l=0 mean. Pure SIMT, one thread per channel.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels)).
+    Computes inv_rms inline from raw norm_stats per-thread.
+
+    Parameters
+    ----------
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input features.
+    output : [batch, lmax+1, mmax+1, 2*channels]
+        Output features.
+    l0_mean : [batch]
+        Pre-computed l=0 channel mean.
+    norm_stats : [batch]
+        Raw accumulated sum-of-squares from reduce kernel.
+    affine_weight : [lmax+1, channels]
+        Scale parameters.
+    grid_mask : [lmax+1, mmax+1, 2]
+        Validity mask combining (l,m) validity and m=0 imaginary zeroing.
+        1.0 for valid positions, 0.0 for invalid.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / (2 * num_channels) for averaging.
+    eps : float
+        Epsilon for numerical stability.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Compute inv_rms inline from raw norm_stats (redundant but cheap, value is L1-cached)
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx] * inv_num_channels + eps)
+    aw = affine_weight[l_idx, c]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            val = x[batch_idx, l_idx, m, ri * num_channels + c]
+            if l_idx == 0 and m == 0 and ri == 0:
+                val = val - l0_mean[batch_idx]
+            val = val * inv_rms_val
+            val = val * aw
+            val = val * grid_mask[l_idx, m, ri]
+            output[batch_idx, l_idx, m, ri * num_channels + c] = val
+
+
+@wp.kernel
+def rmsnorm_grid_normalize_submean_bias(
+    x: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    output: wp.array4d(dtype=float),  # [batch, lmax+1, mmax+1, 2*channels]
+    l0_mean: wp.array(dtype=float),  # [batch]
+    norm_stats: wp.array(dtype=float),  # [batch] - raw accumulated sum
+    affine_weight: wp.array2d(dtype=float),  # [lmax+1, channels]
+    affine_bias: wp.array(dtype=float),  # [channels]
+    grid_mask: wp.array3d(dtype=float),  # [lmax+1, mmax+1, 2]
+    mmax: int,
+    num_channels: int,
+    inv_num_channels: float,
+    eps: float,
+):
+    """Normalize features using global statistics, subtracting l=0 mean and adding bias. Pure SIMT, one thread per channel.
+
+    Launched with wp.launch(dim=(batch, lmax+1, num_channels)).
+    Computes inv_rms inline from raw norm_stats per-thread.
+
+    Parameters
+    ----------
+    x : [batch, lmax+1, mmax+1, 2*channels]
+        Input features.
+    output : [batch, lmax+1, mmax+1, 2*channels]
+        Output features.
+    l0_mean : [batch]
+        Pre-computed l=0 channel mean.
+    norm_stats : [batch]
+        Raw accumulated sum-of-squares from reduce kernel.
+    affine_weight : [lmax+1, channels]
+        Scale parameters.
+    affine_bias : [channels]
+        Bias for l=0.
+    grid_mask : [lmax+1, mmax+1, 2]
+        Validity mask combining (l,m) validity and m=0 imaginary zeroing.
+        1.0 for valid positions, 0.0 for invalid.
+    mmax : int
+        Maximum order.
+    num_channels : int
+        Number of channels.
+    inv_num_channels : float
+        Pre-computed 1.0 / (2 * num_channels) for averaging.
+    eps : float
+        Epsilon for numerical stability.
+    """
+    batch_idx, l_idx, c = wp.tid()
+
+    # Compute inv_rms inline from raw norm_stats (redundant but cheap, value is L1-cached)
+    inv_rms_val = 1.0 / wp.sqrt(norm_stats[batch_idx] * inv_num_channels + eps)
+    aw = affine_weight[l_idx, c]
+
+    for m in range(mmax + 1):
+        for ri in range(2):
+            val = x[batch_idx, l_idx, m, ri * num_channels + c]
+            if l_idx == 0 and m == 0 and ri == 0:
+                val = val - l0_mean[batch_idx]
+            val = val * inv_rms_val
+            val = val * aw
+            if l_idx == 0 and m == 0 and ri == 0:
+                val = val + affine_bias[c]
+            val = val * grid_mask[l_idx, m, ri]
+            output[batch_idx, l_idx, m, ri * num_channels + c] = val
