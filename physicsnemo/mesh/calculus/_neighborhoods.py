@@ -115,7 +115,7 @@ def iter_neighborhood_batches(
         n_neighbors = int(count_tensor)
 
         # Skip groups below the minimum threshold
-        if n_neighbors < min_neighbors or n_neighbors == 0:
+        if n_neighbors < min_neighbors:
             continue
 
         # Find all entities in this group

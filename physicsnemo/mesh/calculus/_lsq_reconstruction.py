@@ -134,7 +134,7 @@ def compute_point_gradient_lsq(
     mesh: "Mesh",
     point_values: torch.Tensor,
     weight_power: float = 2.0,
-    min_neighbors: int = 3,
+    min_neighbors: int = 0,
 ) -> torch.Tensor:
     """Compute gradient at vertices using weighted least-squares reconstruction.
 
@@ -152,7 +152,11 @@ def compute_point_gradient_lsq(
     weight_power : float
         Exponent for inverse distance weighting (default: 2.0)
     min_neighbors : int
-        Minimum neighbors required for reliable gradient
+        Minimum neighbors required for gradient computation. Points with
+        fewer neighbors get zero gradients. The default of 0 means all
+        points are processed: ``lstsq`` naturally returns the minimum-norm
+        solution for under-determined systems (fewer neighbors than spatial
+        dims) and zero for isolated points with no neighbors.
 
     Returns
     -------
