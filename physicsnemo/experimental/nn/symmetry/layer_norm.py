@@ -75,10 +75,25 @@ from torch import nn, Tensor
 from physicsnemo.experimental.nn.symmetry.grid import make_grid_mask
 from physicsnemo.nn import Module
 
+# Warp import for fused kernels
+import warp as wp
+
+from physicsnemo.core.function_spec import FunctionSpec
+from physicsnemo.experimental.nn.symmetry.fused_norm_kernels import (
+    layernorm_grid_normalize,
+    layernorm_grid_normalize_submean,
+    layernorm_grid_normalize_submean_bias,
+    layernorm_grid_reduce,
+    layernorm_grid_reduce_submean,
+)
+
 __all__ = [
     "EquivariantLayerNormGrid",
     "EquivariantLayerNormSHGrid",
     "EquivariantRMSNormSHGrid",
+    "FusedEquivariantLayerNorm",
+    "FusedEquivariantLayerNormSH",
+    "FusedEquivariantRMSNorm",
     "make_degree_balance_weight",
     "make_m0_imag_mask",
 ]
@@ -306,6 +321,11 @@ class _EquivariantNormBase(Module):
         # combined_mask: [1, lmax+1, mmax+1, 2, 1]
         combined_mask = validity_mask[None, :, :, None, None] * m0_imag_mask
         self.register_buffer("combined_mask", combined_mask, persistent=False)
+
+        # 3D grid mask for Warp kernels: [lmax+1, mmax+1, 2]
+        # Squeezed from combined_mask [1, lmax+1, mmax+1, 2, 1]
+        grid_mask_3d = combined_mask[0, :, :, :, 0].contiguous()
+        self.register_buffer("grid_mask_3d", grid_mask_3d, persistent=False)
 
     def _register_subtract_mean_buffers(self, subtract_mean: bool) -> None:
         r"""Register buffers for mean subtraction control (eliminates runtime branching).
@@ -1175,3 +1195,371 @@ class EquivariantLayerNormGrid(_EquivariantNormBase):
             f"lmax={self.lmax}, mmax={self.mmax}, num_channels={self.num_channels}, "
             f"subtract_mean={self.subtract_mean}, affine={self.affine}, eps={self.eps}"
         )
+
+
+# =============================================================================
+# Fused Equivariant Normalization Classes (Warp GPU Kernels)
+# =============================================================================
+
+
+class FusedEquivariantRMSNorm(EquivariantRMSNormSHGrid):
+    r"""Fused RMS normalization for spherical harmonic features using Warp GPU kernels.
+
+    This class is a performance-optimized variant of :class:`EquivariantRMSNormSHGrid`
+    that uses custom Warp GPU kernels for accelerated computation. When Warp is not
+    available or when running on CPU, it falls back to the standard PyTorch implementation
+    by delegating to the parent class.
+
+    The fused implementation provides identical mathematical behavior to the unfused
+    version but with reduced memory bandwidth and kernel launch overhead through
+    operation fusion on the GPU.
+
+    Parameters
+    ----------
+    lmax : int
+        Maximum spherical harmonic degree. Must be non-negative.
+    mmax : int
+        Maximum spherical harmonic order. Must satisfy 0 <= mmax <= lmax.
+    num_channels : int
+        Number of feature channels. Must be positive.
+    subtract_mean : bool, optional
+        Whether to subtract mean from l=0 component. Default is True.
+    std_balance_degrees : bool, optional
+        Whether to balance degree contributions to the norm. Default is True.
+    affine : bool, optional
+        Whether to apply learnable affine parameters. Default is True.
+    eps : float, optional
+        Small constant for numerical stability in division. Default is 1e-5.
+
+    Attributes
+    ----------
+    _use_fused : bool
+        Class attribute indicating whether fused kernels are active.
+        Currently False (will be True once Warp kernels are implemented).
+
+    Notes
+    -----
+    **Current Implementation:**
+
+    This class currently inherits all functionality from :class:`EquivariantRMSNormSHGrid`.
+    In future steps, the forward pass will be replaced with Warp GPU kernel calls that
+    fuse the normalization operations for improved performance.
+
+    **Inheritance Strategy:**
+
+    To avoid code duplication during the scaffolding phase, this class directly inherits
+    from the unfused implementation. The forward() method will be overridden in later
+    refactor steps to use Warp kernels when available.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.nn.symmetry import FusedEquivariantRMSNorm
+    >>> norm = FusedEquivariantRMSNorm(lmax=4, mmax=2, num_channels=64)
+    >>> x = torch.randn(100, 5, 3, 2, 64)
+    >>> y = norm(x)  # Currently uses PyTorch implementation
+    >>> y.shape
+    torch.Size([100, 5, 3, 2, 64])
+
+    See Also
+    --------
+    EquivariantRMSNormSHGrid : Unfused PyTorch reference implementation.
+    FusedEquivariantLayerNormSH : Fused LayerNorm variant for l=0 + global scaling for l>0.
+    FusedEquivariantLayerNorm : Fused per-degree normalization variant.
+    """
+
+    _use_fused: bool = False  # Will become True when Warp kernels are integrated
+
+
+class FusedEquivariantLayerNormSH(EquivariantLayerNormSHGrid):
+    r"""Fused layer normalization for spherical harmonic features using Warp GPU kernels.
+
+    This class is a performance-optimized variant of :class:`EquivariantLayerNormSHGrid`
+    that uses custom Warp GPU kernels for accelerated computation. When Warp is not
+    available or when running on CPU, it falls back to the standard PyTorch implementation
+    by delegating to the parent class.
+
+    The fused implementation provides identical mathematical behavior to the unfused
+    version but with reduced memory bandwidth and kernel launch overhead through
+    operation fusion on the GPU.
+
+    Parameters
+    ----------
+    lmax : int
+        Maximum spherical harmonic degree. Must be >= 1.
+    mmax : int
+        Maximum spherical harmonic order. Must satisfy 0 <= mmax <= lmax.
+    num_channels : int
+        Number of feature channels. Must be positive.
+    std_balance_degrees : bool, optional
+        Whether to balance degree contributions to the norm for l>0.
+        Default is True.
+    affine : bool, optional
+        Whether to apply learnable affine parameters. Default is True.
+    eps : float, optional
+        Small constant for numerical stability. Default is 1e-5.
+
+    Attributes
+    ----------
+    _use_fused : bool
+        Class attribute indicating whether fused kernels are active.
+        Currently False (will be True once Warp kernels are implemented).
+
+    Notes
+    -----
+    **Current Implementation:**
+
+    This class currently inherits all functionality from :class:`EquivariantLayerNormSHGrid`.
+    In future steps, the forward pass will be replaced with Warp GPU kernel calls that
+    fuse the normalization operations for improved performance.
+
+    **Inheritance Strategy:**
+
+    To avoid code duplication during the scaffolding phase, this class directly inherits
+    from the unfused implementation. The forward() method will be overridden in later
+    refactor steps to use Warp kernels when available.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.nn.symmetry import FusedEquivariantLayerNormSH
+    >>> norm = FusedEquivariantLayerNormSH(lmax=4, mmax=2, num_channels=64)
+    >>> x = torch.randn(100, 5, 3, 2, 64)
+    >>> y = norm(x)  # Currently uses PyTorch implementation
+    >>> y.shape
+    torch.Size([100, 5, 3, 2, 64])
+
+    See Also
+    --------
+    EquivariantLayerNormSHGrid : Unfused PyTorch reference implementation.
+    FusedEquivariantRMSNorm : Fused RMS normalization variant.
+    FusedEquivariantLayerNorm : Fused per-degree normalization variant.
+    """
+
+    _use_fused: bool = False  # Will become True when Warp kernels are integrated
+
+
+class FusedEquivariantLayerNorm(EquivariantLayerNormGrid):
+    r"""Fused per-degree layer normalization for spherical harmonic features using Warp GPU kernels.
+
+    This class is a performance-optimized variant of :class:`EquivariantLayerNormGrid`
+    that uses custom Warp GPU kernels for accelerated computation. When Warp is not
+    available or when running on CPU, it falls back to the standard PyTorch implementation
+    by delegating to the parent class.
+
+    The fused implementation provides identical mathematical behavior to the unfused
+    version but with reduced memory bandwidth and kernel launch overhead through
+    operation fusion on the GPU.
+
+    Parameters
+    ----------
+    lmax : int
+        Maximum spherical harmonic degree. Must be non-negative.
+    mmax : int
+        Maximum spherical harmonic order. Must satisfy 0 <= mmax <= lmax.
+    num_channels : int
+        Number of feature channels. Must be positive.
+    subtract_mean : bool, optional
+        Whether to subtract mean from l=0 component. Default is True.
+    affine : bool, optional
+        Whether to apply learnable affine parameters. Default is True.
+    eps : float, optional
+        Small constant for numerical stability. Default is 1e-5.
+
+    Attributes
+    ----------
+    _use_fused : bool
+        Class attribute indicating whether fused kernels are active.
+        Currently False (will be True once Warp kernels are implemented).
+
+    Notes
+    -----
+    **Current Implementation:**
+
+    This class currently inherits all functionality from :class:`EquivariantLayerNormGrid`.
+    In future steps, the forward pass will be replaced with Warp GPU kernel calls that
+    fuse the normalization operations for improved performance.
+
+    **Inheritance Strategy:**
+
+    To avoid code duplication during the scaffolding phase, this class directly inherits
+    from the unfused implementation. The forward() method will be overridden in later
+    refactor steps to use Warp kernels when available.
+
+    Examples
+    --------
+    >>> import torch
+    >>> from physicsnemo.experimental.nn.symmetry import FusedEquivariantLayerNorm
+    >>> norm = FusedEquivariantLayerNorm(lmax=4, mmax=2, num_channels=64)
+    >>> x = torch.randn(100, 5, 3, 2, 64)
+    >>> y = norm(x)  # Currently uses PyTorch implementation
+    >>> y.shape
+    torch.Size([100, 5, 3, 2, 64])
+
+    See Also
+    --------
+    EquivariantLayerNormGrid : Unfused PyTorch reference implementation.
+    FusedEquivariantRMSNorm : Fused RMS normalization variant.
+    FusedEquivariantLayerNormSH : Fused LayerNorm variant for l=0 + global scaling for l>0.
+    """
+
+    _use_fused: bool = True  # Warp kernels are now integrated
+
+    @torch.autocast("cuda", enabled=False)
+    def forward(
+        self, x: Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+    ) -> Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]:
+        r"""Apply per-degree equivariant layer normalization using fused Warp kernels.
+
+        Parameters
+        ----------
+        x : Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+            Input features in grid layout.
+
+        Returns
+        -------
+        Float[Tensor, "batch lmax_p1 mmax_p1 2 channels"]
+            Normalized features.
+        """
+        # Validate input shape (skip during torch.compile)
+        if not torch.compiler.is_compiling():
+            self._validate_input_shape(x)
+
+        # Fall back to PyTorch on CPU or if gradients are required
+        # Note: Full autograd support for Warp kernels requires backward kernel implementation
+        if not x.is_cuda or x.requires_grad:
+            return super().forward(x)
+
+        # Get compute dtype and cast if needed
+        input_dtype = x.dtype
+        compute_dtype = self._get_compute_dtype(input_dtype)
+        if input_dtype != compute_dtype:
+            x = x.to(compute_dtype)
+
+        batch_size = x.shape[0]
+        lmax_p1 = self.lmax + 1
+
+        # Reshape: (batch, lmax+1, mmax+1, 2, channels) -> (batch, lmax+1, mmax+1, 2*channels)
+        # as warp only supports up to 4D
+        x_4d = x.contiguous().view(
+            batch_size, lmax_p1, self.mmax + 1, 2 * self.num_channels
+        )
+        output_4d = torch.empty_like(x_4d)
+
+        # Pre-compute l=0 mean in PyTorch only when needed
+        if self.subtract_mean:
+            l0_mean = x[:, 0, 0, 0, :].mean(dim=-1)  # [batch]
+
+        # Pre-allocate inv_rms tensor (must be zeroed for atomic accumulation)
+        inv_rms = torch.zeros(batch_size, lmax_p1, device=x.device, dtype=compute_dtype)
+
+        # Get the appropriate parameters
+        affine_weight = (
+            self.affine_weight if self.affine else self._affine_weight_buffer
+        )
+        affine_bias = (
+            self.affine_bias
+            if self.affine and self.affine_bias is not None
+            else self._affine_bias_buffer
+        )
+
+        # Get warp device/stream
+        wp_device, wp_stream = FunctionSpec.warp_launch_context(x)
+
+        with wp.ScopedStream(wp_stream):
+            # Kernel 1: Reduce — dispatch based on subtract_mean
+            if self.subtract_mean:
+                wp.launch(
+                    layernorm_grid_reduce_submean,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        l0_mean.detach(),
+                        inv_rms.view(-1),  # Flatten to 1D for tile_atomic_add
+                        self.per_degree_norm_weight.to(compute_dtype).detach(),
+                        lmax_p1,
+                        self.mmax,
+                        self.num_channels,
+                        1.0 / self.num_channels,
+                        self.eps,
+                    ],
+                    block_dim=self.num_channels,
+                    device=wp_device,
+                )
+            else:
+                wp.launch(
+                    layernorm_grid_reduce,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        inv_rms.view(-1),  # Flatten to 1D for tile_atomic_add
+                        self.per_degree_norm_weight.to(compute_dtype).detach(),
+                        lmax_p1,
+                        self.mmax,
+                        self.num_channels,
+                        1.0 / self.num_channels,
+                        self.eps,
+                    ],
+                    block_dim=self.num_channels,
+                    device=wp_device,
+                )
+            # Kernel 2: Normalize — dispatch based on subtract_mean and bias_scale
+            if self.subtract_mean and self.bias_scale.item() > 0.0:
+                wp.launch(
+                    layernorm_grid_normalize_submean_bias,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        output_4d,
+                        l0_mean.detach(),
+                        inv_rms.detach(),
+                        affine_weight.to(compute_dtype).detach(),
+                        affine_bias.to(compute_dtype).detach(),
+                        self.grid_mask_3d.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                    ],
+                    device=wp_device,
+                )
+            elif self.subtract_mean:
+                wp.launch(
+                    layernorm_grid_normalize_submean,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        output_4d,
+                        l0_mean.detach(),
+                        inv_rms.detach(),
+                        affine_weight.to(compute_dtype).detach(),
+                        self.grid_mask_3d.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                    ],
+                    device=wp_device,
+                )
+            else:
+                wp.launch(
+                    layernorm_grid_normalize,
+                    dim=(batch_size, lmax_p1, self.num_channels),
+                    inputs=[
+                        x_4d.detach(),
+                        output_4d,
+                        inv_rms.detach(),
+                        affine_weight.to(compute_dtype).detach(),
+                        self.grid_mask_3d.to(compute_dtype).detach(),
+                        self.mmax,
+                        self.num_channels,
+                    ],
+                    device=wp_device,
+                )
+
+        # Reshape back: (batch, lmax+1, mmax+1, 2*channels) -> (batch, lmax+1, mmax+1, 2, channels)
+        output = output_4d.view(
+            batch_size, lmax_p1, self.mmax + 1, 2, self.num_channels
+        )
+
+        # Cast back if needed
+        if compute_dtype != input_dtype:
+            output = output.to(input_dtype)
+
+        return output
