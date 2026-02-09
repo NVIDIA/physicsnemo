@@ -374,6 +374,13 @@ def _draw_2d(
 
         if active_scalar_source == "cells" and cell_scalar_values is not None:
             facecolors = scalar_mapper.to_rgba(cell_scalar_values.cpu().numpy())
+        elif active_scalar_source == "points" and point_scalar_values is not None:
+            # Map per-vertex scalars to per-face colors by averaging each
+            # face's vertex RGBA values (same approach as _draw_3d).
+            vertex_colors = scalar_mapper.to_rgba(
+                point_scalar_values.cpu().numpy()
+            )  # (n_points, 4)
+            facecolors = vertex_colors[cells_np].mean(axis=1)  # (n_faces, 4)
         else:
             facecolors = cell_neutral_color
 
@@ -399,7 +406,17 @@ def _draw_2d(
         ax.add_collection(pc)
 
     ### Draw points
-    if alpha_points > 0:
+    # When point scalars have been mapped onto face colors (above), suppress the
+    # scatter overlay - the faces already carry the vertex color information and
+    # overlaid dots would be redundant. This matches _draw_3d behavior.
+    has_colored_surface = (
+        cells_np.shape[0] > 0
+        and alpha_cells > 0
+        and active_scalar_source == "points"
+        and point_scalar_values is not None
+    )
+
+    if alpha_points > 0 and not has_colored_surface:
         if active_scalar_source == "points" and point_scalar_values is not None:
             colors = scalar_mapper.to_rgba(point_scalar_values.cpu().numpy())
         else:
