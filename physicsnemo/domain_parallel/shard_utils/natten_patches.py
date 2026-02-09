@@ -16,13 +16,12 @@
 
 from __future__ import annotations
 
-import importlib.util
 from typing import Any, Callable
 
 import torch
-import wrapt
 from torch.distributed.tensor.placement_types import Shard
 
+from physicsnemo.core.version_check import OptionalImport
 from physicsnemo.domain_parallel import ShardTensor
 from physicsnemo.domain_parallel.shard_utils.halo import (
     HaloConfig,
@@ -33,6 +32,10 @@ from physicsnemo.domain_parallel.shard_utils.patch_core import (
     MissingShardPatch,
     UndeterminedShardingError,
 )
+
+wrapt = OptionalImport("wrapt")
+natten = OptionalImport("natten")
+
 
 __all__ = ["na2d_wrapper"]
 
@@ -210,9 +213,7 @@ def partial_na2d(
 
 
 # Make sure the module exists before importing it:
-
-natten_spec = importlib.util.find_spec("natten")
-if natten_spec is not None:
+if natten.available and wrapt.available:
 
     @wrapt.patch_function_wrapper(
         "natten.functional", "na2d", enabled=ShardTensor.patches_enabled
