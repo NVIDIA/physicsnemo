@@ -93,6 +93,10 @@ def _solve_batched_lsq_gradients(
         n_group = len(entity_indices)
         n_neighbors = batch.n_neighbors
 
+        ### Entities with no neighbors retain their zero-initialized gradient
+        if n_neighbors == 0:
+            continue
+
         ### Function differences (b vector)
         b = values[neighbors_flat] - values[entity_indices].unsqueeze(1)
 
