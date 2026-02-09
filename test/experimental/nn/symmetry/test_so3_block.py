@@ -323,7 +323,10 @@ class TestSO3ConvolutionBlock:
         in_channels = 32
         # compilation shouldn't be too sensitive to dtype and device
         dtype = torch.float32
-        device = "cuda"
+        if torch.cuda.is_available():
+            device = "cuda"
+        else:
+            device = "cpu"
 
         layer = SO3ConvolutionBlock(
             in_channels=in_channels, hidden_channels=64, lmax=lmax, mmax=mmax
