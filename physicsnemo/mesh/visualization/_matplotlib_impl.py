@@ -511,6 +511,7 @@ def _draw_3d(
                 edgecolors=edgecolors,
                 linewidths=linewidths,
                 alpha=alpha_cells,
+                shade=True,
                 zorder=1,
             )
             ax.add_collection3d(pc)
