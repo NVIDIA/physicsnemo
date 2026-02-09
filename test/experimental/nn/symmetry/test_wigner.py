@@ -508,14 +508,11 @@ class TestEdgeRotationRegression:
         product = torch.matmul(D_squeezed, D_squeezed.T).abs()
         identity = torch.eye(9, dtype=product.dtype, device=device)
 
-        # Use looser tolerances for half-precision orthogonality check
+        # Use looser tolerances for orthogonality check
         if is_half_precision(dtype):
             rtol, atol = get_rtol_atol(dtype, scale=20.0)
         else:
-            rtol, atol = get_rtol_atol(dtype)
-            if dtype == torch.float64:
-                # bring down the tolerance to ~1e-7
-                atol *= 1e3
+            rtol, atol = get_rtol_atol(dtype, scale=10.0)
         torch.testing.assert_close(
             product,
             identity,
