@@ -92,6 +92,27 @@ def draw_mesh_matplotlib(
     matplotlib.axes.Axes
         Matplotlib axes object.
     """
+    ### For volume meshes (3D+ manifold), reduce to a surface mesh.
+    ### Matplotlib can only render 2D facets (polygons), not volumetric cells
+    ### like tetrahedra. Extract boundary facets for clean surface visualization.
+    if mesh.n_manifold_dims >= 3:
+        mesh = mesh.get_facet_mesh(
+            manifold_codimension=mesh.n_manifold_dims - 2,
+            target_counts="boundary",
+        )
+        if cell_scalar_values is not None:
+            import warnings
+
+            warnings.warn(
+                "Cell scalar values from volume cells cannot be mapped to "
+                "surface facets in the matplotlib backend. Cell coloring will "
+                "be dropped; consider using point_scalars instead.",
+                stacklevel=2,
+            )
+            cell_scalar_values = None
+        if active_scalar_source == "cells":
+            active_scalar_source = None
+
     ### Convert mesh data to numpy
     points_np = mesh.points.cpu().detach().numpy()
     cells_np = mesh.cells.cpu().detach().numpy()
@@ -465,12 +486,14 @@ def _draw_3d(
             )
             ax.add_collection3d(pc)
 
-        elif n_manifold_dims == 3:
-            # 3D manifold (tetrahedra) in 3D: extract surface triangles
-            # For solid tetrahedra, we need to draw the 4 triangular faces
-            # This is complex; for now, we'll just show the vertices
-            # A proper implementation would extract the boundary surface
-            pass  # Handle tetrahedra by extracting surface in future version
+        else:
+            # Volume meshes (3D+ manifold) are reduced to surface meshes in
+            # draw_mesh_matplotlib() before reaching this function.
+            raise ValueError(
+                f"Cannot render {n_manifold_dims}D cells directly in matplotlib. "
+                f"Volume meshes should be converted to surface meshes via "
+                f"get_facet_mesh() before calling _draw_3d."
+            )
 
     ### Draw points
     # For 3D surface meshes, skip the scatter overlay: matplotlib cannot
