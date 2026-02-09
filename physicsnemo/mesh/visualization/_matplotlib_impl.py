@@ -502,7 +502,7 @@ def _draw_3d(
                 edgecolors = [(0, 0, 0, alpha_edges)] * len(verts)
                 linewidths = 0.25
             else:
-                edgecolors = "none"
+                edgecolors = None
                 linewidths = 0
 
             pc = Poly3DCollection(
