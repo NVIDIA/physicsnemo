@@ -114,25 +114,19 @@ class DoMINO(Module):
     Example
     -------
     >>> from physicsnemo.models.domino.model import DoMINO
-    >>> import torch, os
-    >>> from hydra import compose, initialize
-    >>> from omegaconf import OmegaConf
+    >>> from physicsnemo.models.domino.config import DEFAULT_MODEL_PARAMS
+    >>> import torch
     >>> device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    >>> cfg = OmegaConf.register_new_resolver("eval", eval)
-    >>> with initialize(version_base="1.3", config_path="examples/cfd/external_aerodynamics/domino/src/conf"):
-    ...    cfg = compose(config_name="config")
-    >>> cfg.model.model_type = "combined"
+    >>> cfg = DEFAULT_MODEL_PARAMS  # already has model_type "combined"
     >>> model = DoMINO(
     ...         input_features=3,
     ...         output_features_vol=5,
     ...         output_features_surf=4,
-    ...         model_parameters=cfg.model
+    ...         model_parameters=cfg
     ...     ).to(device)
-
-    Warp ...
     >>> bsize = 1
-    >>> nx, ny, nz = cfg.model.interp_res
-    >>> num_neigh = 7
+    >>> nx, ny, nz = cfg.interp_res
+    >>> num_neigh = cfg.num_neighbors_surface
     >>> global_features = 2
     >>> pos_normals_closest_vol = torch.randn(bsize, 100, 3).to(device)
     >>> pos_normals_com_vol = torch.randn(bsize, 100, 3).to(device)
