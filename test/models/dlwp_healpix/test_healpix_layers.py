@@ -44,7 +44,7 @@ HEALPixLayer_testdata = [
 
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
-    from physicsnemo.nn import (
+    from physicsnemo.nn.module.hpx import (
         HEALPixLayer,
     )
 
@@ -54,7 +54,7 @@ def test_HEALPixLayer_initialization(device, multiplier, pytestconfig):
 
 @pytest.mark.parametrize("multiplier", [2, 3, 4])
 def test_HEALPixLayer_forward(device, multiplier, pytestconfig):
-    from physicsnemo.nn import (
+    from physicsnemo.nn.module.hpx import (
         HEALPixLayer,
     )
 

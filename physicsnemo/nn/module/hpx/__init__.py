@@ -14,5 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_target_: physicsnemo.nn.HEALPixAvgPool
-pooling: 2
+from .layers import HEALPixLayer
+from .padding import (
+    HEALPixFoldFaces,
+    HEALPixPadding,
+    HEALPixPaddingv2,
+    HEALPixUnfoldFaces,
+)
+from .pool import HEALPixAvgPool, HEALPixMaxPool
+from .tokenizer import HEALPixPatchDetokenizer, HEALPixPatchTokenizer
