@@ -96,22 +96,34 @@ def draw_mesh_matplotlib(
     ### Matplotlib can only render 2D facets (polygons), not volumetric cells
     ### like tetrahedra. Extract boundary facets for clean surface visualization.
     if mesh.n_manifold_dims >= 3:
+        _VIZ_KEY = "_viz_cell_scalars"
+
+        ### If cell scalars are active, inject them into a cloned cell_data so
+        ### get_facet_mesh can propagate them to boundary facets via averaging.
+        ### We clone to avoid mutating the caller's mesh.
+        if cell_scalar_values is not None:
+            from physicsnemo.mesh import Mesh
+
+            augmented_cell_data = mesh.cell_data.clone()
+            augmented_cell_data[_VIZ_KEY] = cell_scalar_values
+            mesh = Mesh(
+                points=mesh.points,
+                cells=mesh.cells,
+                point_data=mesh.point_data,
+                cell_data=augmented_cell_data,
+                global_data=mesh.global_data,
+            )
+
         mesh = mesh.get_facet_mesh(
             manifold_codimension=mesh.n_manifold_dims - 2,
+            data_source="cells",
+            data_aggregation="mean",
             target_counts="boundary",
         )
-        if cell_scalar_values is not None:
-            import warnings
 
-            warnings.warn(
-                "Cell scalar values from volume cells cannot be mapped to "
-                "surface facets in the matplotlib backend. Cell coloring will "
-                "be dropped; consider using point_scalars instead.",
-                stacklevel=2,
-            )
-            cell_scalar_values = None
-        if active_scalar_source == "cells":
-            active_scalar_source = None
+        ### Extract propagated cell scalars from the facet mesh
+        if cell_scalar_values is not None:
+            cell_scalar_values = mesh.cell_data[_VIZ_KEY]
 
     ### Convert mesh data to numpy
     points_np = mesh.points.cpu().detach().numpy()
