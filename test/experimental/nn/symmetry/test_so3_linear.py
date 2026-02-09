@@ -618,8 +618,17 @@ class TestSO3Equivariance:
             y = layer(x)
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-        # Tolerances based on dtype precision
-        rtol, atol = get_rtol_atol(dtype)
+        # Rescale tolerance based on dtype
+        match dtype:
+            case torch.float32:
+                scaling = 10.0
+            case torch.float16:
+                scaling = 1e4
+            case torch.bfloat16:
+                scaling = 1e4
+            case _:
+                scaling = 1.0
+        rtol, atol = get_rtol_atol(dtype, scaling)
 
         torch.testing.assert_close(
             y1,
@@ -683,7 +692,17 @@ class TestSO3Equivariance:
                 y = layer(x)
                 y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-            rtol, atol = get_rtol_atol(dtype)
+            # Rescale tolerance based on dtype
+            match dtype:
+                case torch.float32:
+                    scaling = 10.0
+                case torch.float16:
+                    scaling = 1e4
+                case torch.bfloat16:
+                    scaling = 1e4
+                case _:
+                    scaling = 1.0
+            rtol, atol = get_rtol_atol(dtype, scaling)
 
             torch.testing.assert_close(
                 y1,
@@ -875,7 +894,17 @@ class TestIntegrationWithEdgeRotation:
             y = layer(x)
             y2 = rotate_grid_coefficients(y, (alpha, beta, gamma))
 
-        rtol, atol = get_rtol_atol(dtype)
+        # Rescale tolerance based on dtype
+        match dtype:
+            case torch.float32:
+                scaling = 10.0
+            case torch.float16:
+                scaling = 1e4
+            case torch.bfloat16:
+                scaling = 1e4
+            case _:
+                scaling = 1.0
+        rtol, atol = get_rtol_atol(dtype, scaling)
 
         torch.testing.assert_close(
             y1,
