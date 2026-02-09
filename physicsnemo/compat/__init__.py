@@ -64,6 +64,7 @@ COMPAT_MAP = {
     "physicsnemo.utils.domino": "physicsnemo.models.domino.utils",
     "physicsnemo.launch.utils.checkpoint": "physicsnemo.utils.checkpoint",
     "physicsnemo.launch.logging": "physicsnemo.utils.logging",
+    "physicsnemo.distributed.shard_tensor": "physicsnemo.domain_parallelism.shard_tensor",
 }
 
 
