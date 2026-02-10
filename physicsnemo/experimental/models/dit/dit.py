@@ -210,7 +210,7 @@ class DiT(Module):
         attention_backend: Literal["timm", "transformer_engine", "natten2d"] = "timm",
         layernorm_backend: Literal["apex", "torch"] = "torch",
         condition_dim: Optional[int] = None,
-        conditioning_embedder: ConditioningEmbedderType | ConditioningEmbedder = ConditioningEmbedderType.DIT,
+        conditioning_embedder: Literal["dit","edm","zero"] | ConditioningEmbedder = "dit",
         dit_initialization: Optional[int] = True,
         conditioning_embedder_kwargs: Dict[str, Any] = {},
         tokenizer_kwargs: Dict[str, Any] = {},
@@ -268,9 +268,9 @@ class DiT(Module):
             self.tokenizer = tokenizer
 
         # Conditioning embedder: accept enum or pre-instantiated Module
-        if isinstance(conditioning_embedder, ConditioningEmbedderType):
+        if isinstance(conditioning_embedder, str):
             self.conditioning_embedder = get_conditioning_embedder(
-                conditioning_embedder,
+                ConditioningEmbedderType[conditioning_embedder.upper()],
                 hidden_size=hidden_size,
                 condition_dim=condition_dim or 0,
                 amp_mode=self.meta.amp_gpu,
