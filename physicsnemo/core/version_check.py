@@ -32,7 +32,7 @@ Example usage::
     _pyg = OptionalImport("torch_geometric.data")
 
     def my_gnn_function(data):
-        # Import happens here; raises RuntimeError with install hint if missing
+        # Import happens here; raises ImportError with install hint if missing
         Data = _pyg.Data
         ...
 
@@ -524,12 +524,8 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
 
     Raises
     ------
-    RuntimeError
+    ImportError
         If the package is missing or does not satisfy the version requirement.
-        Always raises ``RuntimeError`` for consistency
-        with :class:`OptionalImport`, which uses ``RuntimeError`` to avoid
-        breaking ``import physicsnemo`` for users who don't need the optional
-        dependency.
 
     Example
     -------
@@ -539,7 +535,7 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
     ...     return pv.examples.download_bunny()
 
     If pyvista is not installed or the version is too low, calling the function
-    will raise ``RuntimeError`` with installation instructions.
+    will raise ``ImportError`` with installation instructions.
     """
 
     def decorator(func):
@@ -548,17 +544,12 @@ def require_version_spec(package_name: str, spec: str = "0.0.0"):
             # Use OptionalImport to get the nice error message with install hints
             opt = OptionalImport(package_name)
             if not opt.available:
-                opt._get_module()  # This will raise RuntimeError with hint
+                opt._get_module()  # This will raise ImportError with hint
             # If version specified, also check version.
-            # Catch ImportError from check_version_spec and re-raise as
-            # RuntimeError for consistency — require_version_spec always raises
-            # RuntimeError for optional-dependency issues (both missing and
-            # version-too-low), matching OptionalImport's design rationale.
+            # check_version_spec raises ImportError with hard_fail=True,
+            # which we let propagate directly.
             if spec != "0.0.0":
-                try:
-                    check_version_spec(package_name, spec, hard_fail=True)
-                except ImportError as exc:
-                    raise RuntimeError(str(exc)) from exc
+                check_version_spec(package_name, spec, hard_fail=True)
             return func(*args, **kwargs)
 
         return wrapper
@@ -576,10 +567,11 @@ class OptionalImport:
     Lazy import wrapper for optional dependencies.
 
     Delays the import of an optional module until it is actually accessed.
-    If the module is not available, raises ``RuntimeError`` with a helpful
-    message on first access. Using ``RuntimeError`` (not ``ImportError``)
-    ensures that ``import physicsnemo`` doesn't crash for users who don't
-    need specific optional dependencies.
+    If the module is not available, raises ``ImportError`` with a helpful
+    message on first access. This is safe because the import is lazy —
+    it only raises on attribute access, not at import time, so
+    ``import physicsnemo`` won't crash for users who don't need specific
+    optional dependencies.
 
     Instances are cached by module name - calling ``OptionalImport("foo")``
     multiple times returns the same instance.
@@ -604,9 +596,9 @@ class OptionalImport:
     ...     return torch_scatter.scatter(data, ...)
 
     If torch_scatter is not installed, accessing ``torch_scatter.scatter``
-    will raise ``RuntimeError`` with install instructions::
+    will raise ``ImportError`` with install instructions::
 
-        RuntimeError: Missing optional dependency: torch_scatter
+        ImportError: Missing optional dependency: torch_scatter
 
         torch_scatter is part of the [graph] optional dependency group.
         Install with:
@@ -648,7 +640,7 @@ class OptionalImport:
         object.__setattr__(self, "_module", None)
 
     def _get_module(self) -> ModuleType:
-        """Import the module, raising RuntimeError with helpful message if unavailable."""
+        """Import the module, raising ImportError with helpful message if unavailable."""
         # Use object.__getattribute__ to avoid triggering __getattr__ recursion
         module = object.__getattribute__(self, "_module")
         if module is not None:
@@ -661,10 +653,15 @@ class OptionalImport:
         if not is_package_available(root_pkg):
             package_hint = object.__getattribute__(self, "_package_hint")
             hint = package_hint or get_package_hint(root_pkg)
-            # Use RuntimeError (not ImportError) so 'import physicsnemo' doesn't
-            # crash for users who don't need this optional dependency
+            # ImportError is the standard exception for missing modules.
+            # This is safe because OptionalImport is lazy — it only raises
+            # on attribute access, not at import time, so
+            # 'import physicsnemo' won't crash for users who don't need
+            # this optional dependency.  Using ImportError also lets
+            # pytest conftest hooks (SKIPPABLE_EXCEPTIONS) auto-skip
+            # doctests when optional deps are missing.
             c = _Colors
-            raise RuntimeError(
+            raise ImportError(
                 f"\n{c.RED}{c.BOLD}Missing optional dependency: {root_pkg}{c.RESET}\n\n{hint}"
             )
 
@@ -675,6 +672,26 @@ class OptionalImport:
 
     def __getattr__(self, name: str):
         """Proxy attribute access to the lazily imported module."""
+        # For dunder (protocol) attribute probes, don't trigger a full
+        # import error.  Python's inspect, hasattr, pickle, copy, and
+        # doctest machinery probe for dunders like __wrapped__, __reduce__,
+        # __class__, etc.  If the module isn't available, these must raise
+        # AttributeError so that hasattr() returns False and introspection
+        # works correctly.
+        if name.startswith("__") and name.endswith("__"):
+            # If the module is already loaded, look up the dunder on it
+            module = object.__getattribute__(self, "_module")
+            if module is not None:
+                return getattr(module, name)
+            # Module not loaded yet — check availability without importing
+            module_name = object.__getattribute__(self, "_module_name")
+            root_pkg = module_name.split(".")[0]
+            if not is_package_available(root_pkg):
+                raise AttributeError(name)
+            # Package is available but not yet loaded; import and look up
+            module = self._get_module()
+            return getattr(module, name)
+
         module = self._get_module()
         return getattr(module, name)
 
