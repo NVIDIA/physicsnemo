@@ -115,7 +115,12 @@ def test_require_version_spec_success():
 
 
 def test_require_version_spec_failure():
-    """Decorator prevents execution when requirement is not met"""
+    """Decorator prevents execution when requirement is not met.
+
+    require_version_spec always raises RuntimeError (not ImportError) for
+    consistency with OptionalImport's design — even when the underlying
+    check_version_spec raises ImportError for a version mismatch.
+    """
     with patch(
         "physicsnemo.core.version_check.check_version_spec",
         side_effect=ImportError("not satisfied"),
@@ -125,7 +130,7 @@ def test_require_version_spec_failure():
         def fn():
             return "ok"
 
-        with pytest.raises(ImportError) as excinfo:
+        with pytest.raises(RuntimeError) as excinfo:
             fn()
     assert "not satisfied" in str(excinfo.value)
 
@@ -211,7 +216,7 @@ class TestGetInstalledVersionNormalization:
                 assert result is None
 
     def test_no_false_positive_partial_name(self):
-        """Ensures 'numpy' doesn't match 'numpy-stl'."""
+        """Ensures 'numpy' doesn't match 'numpy-stl' (different package)."""
         mock_dist = MagicMock()
         mock_dist.metadata = {"Name": "numpy-stl"}
         mock_dist.version = "3.0.0"
@@ -224,12 +229,10 @@ class TestGetInstalledVersionNormalization:
                 "physicsnemo.core.version_check.metadata.distributions",
                 return_value=[mock_dist],
             ):
-                # numpy should NOT match numpy-stl (they're different packages)
-                # This test documents current behavior - prefix match WILL find it
-                # because numpy-stl starts with "numpy-"
+                # numpy should NOT match numpy-stl — they are unrelated packages.
+                # Prefix matching is restricted to _VARIANT_BASE_PACKAGES.
                 result = get_installed_version("numpy")
-                # Current implementation would find this due to hyphen prefix match
-                assert result == "3.0.0"
+                assert result is None
 
     def test_exact_match_takes_precedence(self):
         """Exact match should be returned even if prefix match exists."""

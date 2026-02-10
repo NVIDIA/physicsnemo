@@ -16,7 +16,7 @@
 
 """Main entry point for mesh visualization with backend selection."""
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 
@@ -45,7 +45,7 @@ def draw_mesh(
     alpha_edges: float = 1.0,
     show_edges: bool = True,
     ax=None,
-    **kwargs,
+    backend_options: dict[str, Any] | None = None,
 ):
     """Draw a mesh using matplotlib or PyVista backend.
 
@@ -99,8 +99,9 @@ def draw_mesh(
     ax : matplotlib.axes.Axes, optional
         (matplotlib only) Existing matplotlib axes to plot on. If None,
         creates new figure and axes.
-    **kwargs : dict
-        Additional backend-specific keyword arguments.
+    backend_options : dict[str, Any], optional
+        Additional keyword arguments forwarded to the underlying
+        visualization backend (e.g. PyVista's ``plotter.add_mesh()``).
 
     Returns
     -------
@@ -142,7 +143,7 @@ def draw_mesh(
         validate_and_process_scalars,
     )
 
-    point_scalar_values, cell_scalar_values, active_scalar_source = (
+    point_scalar_values, cell_scalar_values, active_scalar_source, scalar_label = (
         validate_and_process_scalars(
             point_scalars=point_scalars,
             cell_scalars=cell_scalars,
@@ -191,6 +192,26 @@ def draw_mesh(
             f"Unknown {backend=!r}. Supported backends: {supported}, 'auto'."
         )
 
+    # Track the resolved backend for warning checks below
+    resolved_backend = backend
+
+    ### Warn about unsupported options
+    if backend_options and resolved_backend == "matplotlib":
+        import warnings
+
+        warnings.warn(
+            "backend_options are only supported with the 'pyvista' backend and will be ignored.",
+            stacklevel=2,
+        )
+
+    if alpha_edges != 1.0 and resolved_backend == "pyvista":
+        import warnings
+
+        warnings.warn(
+            "alpha_edges is not supported by the 'pyvista' backend and will be ignored.",
+            stacklevel=2,
+        )
+
     ### Dispatch to backend
     if backend == "matplotlib":
         from physicsnemo.mesh.visualization._matplotlib_impl import draw_mesh_matplotlib
@@ -200,6 +221,7 @@ def draw_mesh(
             point_scalar_values=point_scalar_values,
             cell_scalar_values=cell_scalar_values,
             active_scalar_source=active_scalar_source,
+            scalar_label=scalar_label,
             show=show,
             cmap=cmap,
             vmin=vmin,
@@ -209,7 +231,6 @@ def draw_mesh(
             alpha_edges=alpha_edges,
             show_edges=show_edges,
             ax=ax,
-            **kwargs,
         )
 
     elif backend == "pyvista":
@@ -226,6 +247,7 @@ def draw_mesh(
             point_scalar_values=point_scalar_values,
             cell_scalar_values=cell_scalar_values,
             active_scalar_source=active_scalar_source,
+            scalar_label=scalar_label,
             show=show,
             cmap=cmap,
             vmin=vmin,
@@ -233,7 +255,7 @@ def draw_mesh(
             alpha_points=alpha_points,
             alpha_cells=alpha_cells,
             show_edges=show_edges,
-            **kwargs,
+            **(backend_options or {}),
         )
 
     else:
