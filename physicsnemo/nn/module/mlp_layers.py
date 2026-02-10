@@ -63,6 +63,8 @@ class Mlp(nn.Module):
         Default is ``nn.GELU``.
     drop : float, optional
         Dropout rate applied after each layer. Default is ``0.0``.
+    final_dropout : bool, optional
+        Whether to apply dropout after the final linear layer. Default is ``True``.
     use_te : bool, optional
         Whether to use Transformer Engine linear layers for optimized performance.
         Requires Transformer Engine to be installed. Default is ``False``.
