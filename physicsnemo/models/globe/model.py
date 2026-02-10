@@ -15,7 +15,6 @@
 # limitations under the License.
 
 import operator
-from collections import defaultdict
 from dataclasses import dataclass
 from functools import reduce
 from typing import Literal, Sequence
@@ -27,7 +26,7 @@ from tensordict import TensorDict
 
 from physicsnemo.core.meta import ModelMetaData
 from physicsnemo.core.module import Module
-from physicsnemo.models.globe.boundary_mesh import BoundaryMesh
+from physicsnemo.mesh import Mesh
 from physicsnemo.models.globe.field_kernel import MultiscaleKernel
 from physicsnemo.models.globe.utilities.tensordict_utils import (
     combine_tensordicts,
@@ -38,8 +37,8 @@ from physicsnemo.models.globe.utilities.tensordict_utils import (
 
 @dataclass
 class MetaData(ModelMetaData):
-    jit: bool = False
-    cuda_graphs: bool = False
+    jit: bool = True
+    cuda_graphs: bool = True
     amp: bool = True
     torch_fx: bool = False
     onnx: bool = False
@@ -124,12 +123,14 @@ class GLOBE(Module):
     prediction_points : Float[torch.Tensor, "n_points n_dims"]
         Target points for field evaluation of shape :math:`(N_{points}, D)`. These
         are typically interior domain points where the solution is predicted.
-    boundary_meshes : Sequence[BoundaryMesh]
-        Sequence of :class:`~physicsnemo.models.globe.boundary_mesh.BoundaryMesh`
-        objects representing the problem boundaries. Each mesh must have a
-        ``boundary_condition_type`` matching one of the model's
-        ``boundary_condition_names``. Multiple meshes can share the same BC type
-        (they are merged automatically).
+    boundary_meshes : dict[str, Mesh]
+        Dictionary mapping boundary condition type names to
+        :class:`~physicsnemo.mesh.Mesh` objects. Each key must match one of the
+        model's ``boundary_condition_names``. Each Mesh should be pre-merged
+        (one Mesh per BC type); use :meth:`~physicsnemo.mesh.Mesh.merge` to
+        combine multiple meshes of the same BC type before passing them here.
+        Cell data (``mesh.cell_data``) should contain only the source features
+        expected by the model; the ``_cache`` key is automatically excluded.
     reference_lengths : dict[str, torch.Tensor]
         Dictionary mapping reference length names to scalar tensors. Keys must match
         the model's ``reference_length_names``.
@@ -162,9 +163,9 @@ class GLOBE(Module):
       instances.
     - ``final_field_transforms`` is a :class:`~torch.nn.ModuleDict` of per-field
       linear calibration layers.
-    - Face areas are automatically normalized by ``reference_area`` to preserve
+    - Cell areas are automatically normalized by ``reference_area`` to preserve
       discretization-invariance.
-    - The face normal vector is automatically added to ``source_vectors`` for each
+    - The cell normal vector is automatically added to ``source_vectors`` for each
       mesh.
     - Hyperlayer communication enables long-range coupling between boundary
       partitions, analogous to the influence coefficient matrix solve in traditional
@@ -185,7 +186,7 @@ class GLOBE(Module):
     ... )
     >>> result = model(
     ...     prediction_points=torch.randn(100, 3),
-    ...     boundary_meshes=[wing_mesh, fuselage_mesh],
+    ...     boundary_meshes={"no_slip": wing_mesh, "freestream": freestream_mesh},
     ...     reference_lengths={"delta_FS": torch.tensor(0.01), "chord": torch.tensor(1.0)},
     ... )
     """
@@ -309,7 +310,7 @@ class GLOBE(Module):
     def forward(
         self,
         prediction_points: Float[torch.Tensor, "n_points n_dims"],
-        boundary_meshes: Sequence[BoundaryMesh],
+        boundary_meshes: dict[str, Mesh],
         reference_lengths: dict[str, torch.Tensor],
         global_scalars: TensorDict | None = None,
         global_vectors: TensorDict | None = None,
@@ -318,16 +319,17 @@ class GLOBE(Module):
     ) -> TensorDict:
         r"""Evaluate GLOBE model to predict fields at target points.
 
-        Runs the full GLOBE forward pass: BC grouping, communication hyperlayers,
-        final evaluation, and per-field calibration. See the class docstring for
-        full input/output documentation.
+        Runs the full GLOBE forward pass: communication hyperlayers, final
+        evaluation, and per-field calibration. See the class docstring for full
+        input/output documentation.
 
         Parameters
         ----------
         prediction_points : Float[torch.Tensor, "n_points n_dims"]
             Target points of shape :math:`(N_{points}, D)`.
-        boundary_meshes : Sequence[BoundaryMesh]
-            Boundary meshes with associated BC types and face data.
+        boundary_meshes : dict[str, Mesh]
+            Dictionary mapping BC type names to pre-merged
+            :class:`~physicsnemo.mesh.Mesh` objects.
         reference_lengths : dict[str, torch.Tensor]
             Mapping of reference length names to scalar tensors.
         global_scalars : TensorDict | None, optional, default=None
@@ -353,11 +355,6 @@ class GLOBE(Module):
             global_vectors = TensorDict(
                 {}, batch_size=torch.Size([self.n_spatial_dims]), device=device
             )
-
-        # Extract boundary condition types early so we can use it for validation
-        bc_types_from_input: set[str] = set(
-            bm.boundary_condition_type for bm in boundary_meshes
-        )
 
         ### Input validation
         # Skip validation when running under torch.compile for performance
@@ -393,53 +390,41 @@ class GLOBE(Module):
                         f"but the forward-method input gives {actual} {name}."
                     )
 
-            # Check that dimensionality of all boundary meshes is consistent with the model
-            if not all(
-                bm.n_spatial_dims == self.n_spatial_dims for bm in boundary_meshes
-            ):
-                raise ValueError(
-                    f"The input gives boundary meshes with these numbers of spatial dimensions:\n"
-                    f"{list(bm.n_spatial_dims for bm in boundary_meshes)}\n"
-                    f"but the model was instantiated to expect that these should all be equal to:\n"
-                    f"{self.n_spatial_dims=!r}\n"
-                )
+            # Check that dimensionality of all boundary meshes is consistent
+            for bc_type, mesh in boundary_meshes.items():
+                if mesh.n_spatial_dims != self.n_spatial_dims:
+                    raise ValueError(
+                        f"Boundary mesh for BC type {bc_type!r} has "
+                        f"{mesh.n_spatial_dims} spatial dims, but the model expects "
+                        f"{self.n_spatial_dims}"
+                    )
 
             # Check that all boundary condition types are in the model
+            bc_types_from_input = set(boundary_meshes.keys())
             if not bc_types_from_input.issubset(self.boundary_condition_names):
                 raise ValueError(
                     f"The input gives boundary meshes with these boundary condition types:\n"
-                    f"{bc_types_from_input=!r}\n"
+                    f"{bc_types_from_input!r}\n"
                     f"but the model was instantiated to expect only these boundary condition types:\n"
-                    f"{self.boundary_condition_names=!r}\n"
+                    f"{self.boundary_condition_names!r}\n"
                     f"Please ensure that the input boundary meshes are a subset of the model's boundary condition types."
                 )
-
-        ### Group and merge boundary meshes by boundary condition type
-        # Do the grouping + merging
-        bc_meshes_list: dict[str, list[BoundaryMesh]] = defaultdict(list)
-        for bm in boundary_meshes:
-            bc_meshes_list[bm.boundary_condition_type].append(bm)
-
-        bc_meshes: dict[str, BoundaryMesh] = {
-            bc_type: BoundaryMesh.merge(meshes)
-            for bc_type, meshes in bc_meshes_list.items()
-        }
 
         ### Initialize the latent data that's passed between hyperlayers
         latent_data: dict[str, TensorDict] = {
             source_bc_type: TensorDict(
                 {
                     "strengths": {
-                        name: torch.ones(source_bc_mesh.n_faces, device=device)
+                        name: torch.ones(source_bc_mesh.n_cells, device=device)
                         for name in self.reference_length_names
                     },
                     "latent_scalars": {},
                     "latent_vectors": {},
                 },
-                batch_size=torch.Size([source_bc_mesh.n_faces]),
+                batch_size=torch.Size([source_bc_mesh.n_cells]),
                 device=device,
             )
-            for source_bc_type, source_bc_mesh in bc_meshes.items()
+            for source_bc_type, source_bc_mesh in boundary_meshes.items()
         }
 
         ### Kernel evaluations
@@ -452,15 +437,18 @@ class GLOBE(Module):
             def evaluate_hyperlayer(target_points: torch.Tensor) -> TensorDict:
                 result_pieces: list[TensorDict] = []
 
-                for source_bc_type, source_bc_mesh in bc_meshes.items():
+                for source_bc_type, source_bc_mesh in boundary_meshes.items():
                     source_latent_data: TensorDict = latent_data[source_bc_type]
                     source_strengths: TensorDict = source_latent_data["strengths"]  # ty: ignore[invalid-assignment]
                     source_strengths = source_strengths.apply(
-                        lambda x: x * (source_bc_mesh.face_areas / self.reference_area)
+                        lambda x: x
+                        * (source_bc_mesh.cell_areas / self.reference_area)
                     )
 
+                    # Exclude _cache from cell_data before splitting by rank
+                    user_cell_data = source_bc_mesh.cell_data.exclude("_cache")
                     source_data_by_rank: dict[int, TensorDict] = split_by_leaf_rank(
-                        source_bc_mesh.face_data
+                        user_cell_data
                     )
                     source_scalars = combine_tensordicts(
                         source_data_by_rank[0],
@@ -470,14 +458,14 @@ class GLOBE(Module):
                         source_data_by_rank[1],
                         source_latent_data["latent_vectors"],  # ty: ignore[invalid-argument-type]
                     )
-                    source_vectors["normals"] = source_bc_mesh.face_normals
+                    source_vectors["normals"] = source_bc_mesh.cell_normals
                     source_vectors.batch_size = torch.Size(
-                        [source_bc_mesh.n_faces, self.n_spatial_dims]
+                        [source_bc_mesh.n_cells, self.n_spatial_dims]
                     )
 
                     kernel: MultiscaleKernel = self.kernel_layers[i][source_bc_type]
                     result_from_kernel: TensorDict = kernel(
-                        source_points=source_bc_mesh.face_centers,
+                        source_points=source_bc_mesh.cell_centroids,
                         source_scalars=source_scalars,
                         source_vectors=source_vectors,
                         source_strengths=source_strengths,
@@ -497,8 +485,10 @@ class GLOBE(Module):
                 result: TensorDict = evaluate_hyperlayer(prediction_points)
             else:
                 latent_data = {
-                    target_bc_type: evaluate_hyperlayer(target_bc_mesh.face_centers)
-                    for target_bc_type, target_bc_mesh in bc_meshes.items()
+                    target_bc_type: evaluate_hyperlayer(
+                        target_bc_mesh.cell_centroids
+                    )
+                    for target_bc_type, target_bc_mesh in boundary_meshes.items()
                 }
 
         for field_name, field_tensor in result.items():

@@ -8,7 +8,9 @@ import torch
 from tensordict import TensorDict
 from torch.utils.data import Dataset
 
-from physicsnemo.models.globe.boundary_mesh import BoundaryMesh
+from physicsnemo.mesh import Mesh
+from physicsnemo.mesh.io import from_pyvista
+from physicsnemo.mesh.projections import project
 from physicsnemo.models.globe.utilities.field_kernel import vector_project
 
 
@@ -107,15 +109,18 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         patch_out_nonphysical_values: bool = True,
     ) -> tuple[dict, TensorDict]:
         pv_meshes = AirFRANSDataSet.load_pyvista_meshes(sample_path)
-        freestream = BoundaryMesh.from_polydata(
-            polydata=pv_meshes["freestream"],
-            boundary_condition_type="freestream",
-            make_2D_along_axis="z",
+
+        # Project 3D boundary meshes to 2D (drop z axis, keep x and y).
+        # transform_cell_data=True projects vector cell data (e.g., velocity
+        # "U") from 3D to 2D alongside the geometry.
+        freestream = project(
+            from_pyvista(pv_meshes["freestream"], manifold_dim=1),
+            keep_dims=[0, 1],
+            transform_cell_data=True,
         )
-        airfoil = BoundaryMesh.from_polydata(
-            polydata=pv_meshes["airfoil"],
-            boundary_condition_type="no_slip",
-            make_2D_along_axis="z",
+        airfoil = project(
+            from_pyvista(pv_meshes["airfoil"], manifold_dim=1),
+            keep_dims=[0, 1],
         )
         internal = pv_meshes["internal"]
 
@@ -135,8 +140,8 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
             indices = tuple([slice(None)] + [slice(None, 2)] * (tensor.ndim - 1))
             return tensor[indices]
 
-        # Compute freestream scaling and set normalized velocity on freestream
-        U_inf = freestream.face_data["U"].mean(dim=0)
+        # Compute freestream scaling from the (already-projected) 2D velocity
+        U_inf = freestream.cell_data["U"].mean(dim=0)
         U_inf_magnitude = torch.norm(U_inf)
         q_inf = 0.5 * RHO * U_inf_magnitude**2
 
@@ -151,15 +156,12 @@ class AirFRANSDataSet(CachedPreprocessingDataset):
         chord = 1.0
 
         ### [Assemble the input and output dictionaries]
+        # Construct a clean mesh without cell data for the model (the model
+        # expects 0 source scalars and 0 source vectors for the no_slip BC)
+        airfoil_for_model = Mesh(points=airfoil.points, cells=airfoil.cells)
         input_dict = {
             "prediction_points": get("points"),
-            "boundary_meshes": [
-                BoundaryMesh(
-                    points=airfoil.points,
-                    faces=airfoil.faces,
-                    boundary_condition_type="no_slip",
-                )
-            ],
+            "boundary_meshes": {"no_slip": airfoil_for_model},
             "reference_lengths": {
                 "chord": torch.as_tensor(chord),
                 "delta_FS": torch.as_tensor((NU / U_inf_magnitude * chord) ** 0.5),

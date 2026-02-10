@@ -13,7 +13,7 @@ from tensordict import TensorDict
 
 import physicsnemo
 from physicsnemo.distributed.manager import DistributedManager
-from physicsnemo.models.globe.boundary_mesh import BoundaryMesh
+from physicsnemo.mesh import Mesh
 
 
 def disable_autotune_printing() -> None:
@@ -252,7 +252,7 @@ def log_hyperparameters(
 
 TransferrableType = (
     torch.Tensor
-    | BoundaryMesh
+    | Mesh
     | TensorDict
     | list
     | tuple
@@ -270,13 +270,12 @@ def to(
 ) -> TransferrableType:
     """Recursively transfer data structures to a PyTorch device.
 
-    Supports nested data structures containing tensors and custom types that
-    implement a `.to(device)` method. Preserves the structure of the input.
+    Supports nested data structures containing tensors and TensorDict-based
+    objects (including Mesh). Preserves the structure of the input.
 
     Args:
         data: Data to transfer. Can be:
-            - torch.Tensor
-            - BoundaryMesh (custom type with .to() method)
+            - torch.Tensor or TensorDict (including Mesh, which is a tensorclass)
             - list/tuple/dict/set containing supported types (recursive)
         device: Target PyTorch device (e.g., torch.device('cuda:0')).
         dtype: Target dtype (e.g., torch.float32, torch.float64) or None (keep original dtype)
@@ -291,11 +290,11 @@ def to(
     Examples:
         >>> tensor = torch.randn(3, 4)
         >>> device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        >>> moved = to_device(tensor, device)
+        >>> moved = to(tensor, device)
         >>> nested = {'a': [tensor, tensor], 'b': tensor}
-        >>> moved_nested = to_device(nested, device)
+        >>> moved_nested = to(nested, device)
     """
-    if isinstance(data, (torch.Tensor, BoundaryMesh, TensorDict)):
+    if isinstance(data, (torch.Tensor, Mesh, TensorDict)):
         return data.to(device=device, dtype=dtype)
     elif isinstance(data, (float, int, bool, complex)):
         return torch.as_tensor(data, device=device)

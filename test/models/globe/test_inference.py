@@ -2,17 +2,20 @@
 import pytest
 import torch
 
+from physicsnemo.mesh.primitives.procedural import lumpy_sphere
 from physicsnemo.models.globe.model import GLOBE
-from test.models.globe.test_boundary_mesh import make_tetrahedron_mesh
+
+# Number of prediction points to evaluate at
+N_PREDICTION_POINTS = 5
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_globe_inference(device: str) -> None:
-    """Instantiate `GLOBE` and run a basic inference; validate keys and shapes."""
+    """Instantiate `GLOBE` and run inference on a lumpy-sphere boundary mesh."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA not available")
 
-    ### Create model and mesh
+    ### Create model
     model = GLOBE(
         n_spatial_dims=3,
         output_fields={
@@ -30,17 +33,13 @@ def test_globe_inference(device: str) -> None:
     ).to(device)
     model.eval()
 
-    mesh = make_tetrahedron_mesh().to(device)
+    ### Create a nontrivial boundary mesh (lumpy sphere, 1 subdivision -> 80 triangles)
+    mesh = lumpy_sphere.load(subdivisions=1, device=device)
 
-    ### Set up prediction points and reference lengths
-    # Two prediction points near the origin; non-coplanar w.r.t. the full mesh
-    prediction_points = torch.tensor(
-        [
-            [0.10, 0.10, 0.10],
-            [0.25, 0.15, 0.05],
-        ],
-        dtype=torch.float32,
-        device=device,
+    ### Prediction points scattered near the surface
+    generator = torch.Generator(device=device).manual_seed(0)
+    prediction_points = torch.randn(
+        N_PREDICTION_POINTS, 3, generator=generator, device=device
     )
     reference_lengths = {
         "test_length": torch.tensor(1.0, dtype=torch.float32, device=device)
@@ -50,15 +49,19 @@ def test_globe_inference(device: str) -> None:
     with torch.no_grad():
         outputs = model(
             prediction_points=prediction_points,
-            boundary_meshes=[mesh],
+            boundary_meshes={"no_slip": mesh},
             reference_lengths=reference_lengths,
             chunk_size=None,
             verbose=False,
         )
 
-    ### Validate outputs
+    ### Validate output structure and shapes
     assert set(outputs.keys()) == {"pressure", "velocity"}
-    assert outputs["pressure"].shape == (2,)
-    assert outputs["velocity"].shape == (2, 3)
+    assert outputs["pressure"].shape == (N_PREDICTION_POINTS,)
+    assert outputs["velocity"].shape == (N_PREDICTION_POINTS, 3)
     assert outputs["pressure"].device.type == device
     assert outputs["velocity"].device.type == device
+
+    ### Validate outputs are finite (no NaN or Inf from the forward pass)
+    assert torch.all(torch.isfinite(outputs["pressure"]))
+    assert torch.all(torch.isfinite(outputs["velocity"]))
